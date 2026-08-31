@@ -1,6 +1,7 @@
 {
 	"name": "@earendil-works/pi-telemetry",
 	"version": "0.84.4",
+	"private": true,
 	"description": "Vendor-neutral telemetry contracts and typed schema utilities for pi",
 	"type": "module",
 	"main": "./dist/index.js",

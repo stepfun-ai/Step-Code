@@ -18,6 +18,7 @@ function createSession(options: {
 	sessionName: string;
 	modelId?: string;
 	provider?: string;
+	approvalMode?: string;
 	reasoning?: boolean;
 	thinkingLevel?: string;
 	usage?: AssistantUsage;
@@ -73,6 +74,7 @@ function createSession(options: {
 			},
 			thinkingLevel: options.thinkingLevel ?? "off",
 		},
+		...(options.approvalMode === undefined ? {} : { approvalMode: options.approvalMode }),
 		sessionManager: {
 			getEntries: () => entries,
 			getSessionName: () => options.sessionName,
@@ -265,7 +267,7 @@ describe("FooterComponent width handling", () => {
 
 		const [line = ""] = footer.render(120);
 		const plain = stripAnsi(line);
-		expect(plain).toContain("⏵ ask");
+		expect(plain).toContain("⏵ Ask");
 		expect(plain).toContain("test-model");
 		expect(plain).toContain("high");
 		expect(plain).toContain("88% context left");
@@ -273,7 +275,7 @@ describe("FooterComponent width handling", () => {
 	});
 
 	it("renders the read-only permission status instead of falling back to ask", () => {
-		const session = createSession({ sessionName: "" });
+		const session = createSession({ sessionName: "", approvalMode: "strict" });
 		const footer = new FooterComponent(
 			session,
 			createFooterData(1, new Map([["step-permission", "Mode: Read Only"]])),
@@ -282,8 +284,30 @@ describe("FooterComponent width handling", () => {
 
 		const [line = ""] = footer.render(120);
 		const plain = stripAnsi(line);
-		expect(plain.startsWith("⏵ read-only")).toBe(true);
-		expect(plain.startsWith("⏵ ask")).toBe(false);
+		expect(plain.startsWith("⏵ Read-only")).toBe(true);
+		expect(plain.startsWith("⏵ Ask")).toBe(false);
+		expect(plain).not.toContain("Mode: Read Only");
+	});
+
+	it("does not duplicate the permission status while retaining other statuses", () => {
+		const session = createSession({ sessionName: "", approvalMode: "auto" });
+		const footer = new FooterComponent(
+			session,
+			createFooterData(
+				1,
+				new Map([
+					["step-permission", "Mode: Autopilot (auto-resume)"],
+					["plan-mode", "plan 1/2"],
+				]),
+			),
+			{ presentation: "step" },
+		);
+
+		const [line = ""] = footer.render(120);
+		const plain = stripAnsi(line);
+		expect(plain.startsWith("⏵ Autopilot")).toBe(true);
+		expect(plain).not.toContain("Mode: Autopilot");
+		expect(plain).toContain("plan 1/2");
 	});
 
 	it("keeps the Step footer within narrow widths", () => {

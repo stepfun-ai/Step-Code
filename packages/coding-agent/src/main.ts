@@ -174,6 +174,7 @@ async function runAuthCommand(
 	authRuntimeSetup?: AuthCheckRuntimeSetup,
 	authPath?: string,
 	agentDir?: string,
+	allowedAuthProviders?: readonly string[],
 ): Promise<boolean> {
 	if (isAuthCommandHelp(args)) {
 		printAuthCommandHelp();
@@ -203,6 +204,8 @@ async function runAuthCommand(
 		if (parsed.diagnostics.length > 0) {
 			throw new AuthCommandError(parsed.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
 		}
+		const requestedAuth = validateAuthCommandArgs(parsed, command.kind);
+		assertAllowedAuthProvider(requestedAuth, allowedAuthProviders);
 		if (command.kind !== "check") {
 			const signal = AbortSignal.timeout(15_000);
 			const modelRuntime = await ModelRuntime.create({
@@ -223,7 +226,6 @@ async function runAuthCommand(
 			return true;
 		}
 
-		const requestedAuth = validateAuthCommandArgs(parsed, command.kind);
 		let result: AuthCheckResult;
 		let credential: string | undefined;
 		try {
@@ -273,6 +275,30 @@ async function runAuthCommand(
 		process.exitCode = command.kind === "check" ? 2 : 1;
 	}
 	return true;
+}
+
+function assertAllowedAuthProvider(
+	requested: { provider?: string; model?: string },
+	allowedProviders?: readonly string[],
+): void {
+	if (!allowedProviders || allowedProviders.length === 0) return;
+	const allowed = new Set(allowedProviders.map((provider) => provider.trim().toLowerCase()).filter(Boolean));
+	if (allowed.size === 0) return;
+	const provider = requested.provider?.trim().toLowerCase();
+	const modelReference = requested.model?.trim();
+	const modelProvider = modelReference?.includes("/")
+		? modelReference.slice(0, modelReference.indexOf("/")).trim().toLowerCase()
+		: undefined;
+	const unsupported = (): never => {
+		throw new AuthCommandError(`This Step command only supports authentication for: ${[...allowed].join(", ")}`);
+	};
+	if (provider && !allowed.has(provider)) unsupported();
+	if (modelProvider && !allowed.has(modelProvider)) unsupported();
+	if (!provider && !modelProvider && modelReference) {
+		const bareModel = modelReference.replace(/:(?:off|minimal|low|medium|high|xhigh|max)$/iu, "").toLowerCase();
+		const stepModels = new Set(["step-3.7-flash", "step-3.5-flash", "step-3.5-flash-2603", "step-router-v1"]);
+		if (!stepModels.has(bareModel)) unsupported();
+	}
 }
 
 async function prepareInitialMessage(
@@ -710,6 +736,8 @@ export interface MainOptions {
 	defaultModel?: string;
 	/** Register product providers in the short-lived auth command runtime. */
 	authRuntimeSetup?: AuthCheckRuntimeSetup;
+	/** Restrict the auth command surface to product-owned providers. */
+	allowedAuthProviders?: readonly string[];
 	/**
 	 * Optionally place a product facade in front of pi's runtime host. The facade
 	 * must delegate lifecycle operations to the supplied runtime; modes continue
@@ -728,6 +756,8 @@ export interface MainOptions {
 		| "onCredentialAuthenticated"
 		| "defaultModelForProvider"
 		| "skipManagedTools"
+		| "allowedAuthProviders"
+		| "onStartup"
 		| "offline"
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */
@@ -782,7 +812,9 @@ export async function main(args: string[], options?: MainOptions) {
 		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
-	if (await runAuthCommand(args, options?.authRuntimeSetup, authPath, options?.agentDir)) {
+	if (
+		await runAuthCommand(args, options?.authRuntimeSetup, authPath, options?.agentDir, options?.allowedAuthProviders)
+	) {
 		return;
 	}
 

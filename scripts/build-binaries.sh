@@ -300,7 +300,13 @@ for platform in "${PLATFORMS[@]}"; do
         ' "$OUTPUT_DIR/$platform/package.json"
     fi
     cp README.md "$OUTPUT_DIR/$platform/"
-    cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
+    # Step Harness keeps changelogs per package; older Pi source archives also
+    # carried a repository-level CHANGELOG.md. Preserve it when present without
+    # making the standalone Step build depend on a file this repository does not
+    # have.
+    if [[ -f CHANGELOG.md ]]; then
+        cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
+    fi
     cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm "$OUTPUT_DIR/$platform/"
     mkdir -p "$OUTPUT_DIR/$platform/theme"
     cp dist/modes/interactive/theme/*.json "$OUTPUT_DIR/$platform/theme/"

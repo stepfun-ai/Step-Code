@@ -284,16 +284,16 @@ export class FooterComponent implements Component {
 			.replace(/[\s_-]+/gu, "");
 		const mode =
 			normalizedStatusPreset === "autopilot"
-				? { label: "autopilot", paint: warning }
+				? { label: "Autopilot", paint: warning }
 				: normalizedStatusPreset === "bypass"
-					? { label: "bypass", paint: warning }
+					? { label: "Bypass", paint: warning }
 					: normalizedRawMode === "auto" || normalizedRawMode === "bypasspermissions"
-						? { label: "bypass", paint: warning }
+						? { label: "Bypass", paint: warning }
 						: normalizedStatusPreset === "readonly" ||
 								normalizedRawMode === "strict" ||
 								normalizedRawMode === "readonly"
-							? { label: "read-only", paint: muted }
-							: { label: "ask", paint: accent };
+							? { label: "Read-only", paint: muted }
+							: { label: "Ask", paint: accent };
 		const segments: string[] = [mode.paint(`⏵ ${mode.label}`)];
 
 		const model = state.model?.id;
@@ -319,7 +319,10 @@ export class FooterComponent implements Component {
 
 		const extensionStatuses = this.footerData.getExtensionStatuses();
 		if (safeWidth >= 100) {
-			for (const [, status] of [...extensionStatuses.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+			for (const [key, status] of [...extensionStatuses.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+				// Permission is already the leading segment; keeping its status here
+				// duplicates the mode on wide terminals.
+				if (key === "step-permission") continue;
 				const cleaned = status
 					.replace(/[\r\n\t]+/gu, " ")
 					.replace(/ +/gu, " ")

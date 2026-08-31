@@ -840,6 +840,238 @@ export async function updateMarketplaceSource(input: {
 	return { source: { name, path: target, kind: "git", origin: await readGitOrigin(target) }, warnings: [] };
 }
 
+type PluginNotice = (message: string, type?: "info" | "warning" | "error") => void;
+
+interface InteractivePluginOptions extends StepPluginCommandOptions {
+	pluginsDir: string;
+	marketplacesDir: string;
+	marketplaceRoots: readonly string[];
+}
+
+function reportPluginWarnings(say: PluginNotice, warnings: readonly string[]): void {
+	if (warnings.length > 0) say(warnings.join("\n"), "warning");
+}
+
+function projectPluginsDir(ctx: ExtensionCommandContext): string {
+	return defaultStepPluginsDir(process.env, { cwd: ctx.cwd, project: true });
+}
+
+async function loadAvailablePlugins(
+	options: InteractivePluginOptions,
+): Promise<ListMarketplacePluginsResult & { builtinWarnings: string[] }> {
+	const builtin = await ensureBuiltinMarketplace({ marketplacesDir: options.marketplacesDir });
+	const available = await listMarketplacePlugins(options.marketplaceRoots);
+	return { ...available, builtinWarnings: builtin.warnings };
+}
+
+async function openInteractivePluginMenu(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	say: PluginNotice,
+): Promise<void> {
+	// Materialize the built-in source before reading the source list so its
+	// count is stable in the top-level menu.
+	const available = await loadAvailablePlugins(options);
+	const [installed, sources] = await Promise.all([
+		listInstalledStepPlugins({ userDir: options.pluginsDir, projectDir: projectPluginsDir(ctx) }),
+		listMarketplaceSources(options.marketplacesDir),
+	]);
+	reportPluginWarnings(say, [...installed.warnings, ...available.builtinWarnings, ...available.warnings]);
+	const choices = [
+		`Installed (${installed.plugins.length})`,
+		`Marketplace (${available.entries.length} available)`,
+		`Marketplaces (${sources.length})`,
+	];
+	const selected = await ctx.ui.select("Plugins", choices);
+	if (selected === choices[0]) await openInstalledPlugins(ctx, options, say);
+	else if (selected === choices[1]) await openMarketplacePlugins(ctx, options, say);
+	else if (selected === choices[2]) await openMarketplaceSources(ctx, options, say);
+}
+
+async function openInstalledPlugins(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	say: PluginNotice,
+): Promise<void> {
+	const listed = await listInstalledStepPlugins({
+		userDir: options.pluginsDir,
+		projectDir: projectPluginsDir(ctx),
+	});
+	reportPluginWarnings(say, listed.warnings);
+	if (listed.plugins.length === 0) {
+		say("No plugins installed.");
+		return;
+	}
+	const labels = listed.plugins.map((plugin) => {
+		const version = plugin.version ? ` v${plugin.version}` : "";
+		const scope = plugin.source === "project" ? "project" : "user";
+		return `${plugin.name}${version} · ${scope}`;
+	});
+	const selected = await ctx.ui.select(`Installed Plugins (${listed.plugins.length})`, labels);
+	if (!selected) return;
+	const index = labels.indexOf(selected);
+	const plugin = index >= 0 ? listed.plugins[index] : undefined;
+	if (plugin) await openInstalledPluginDetails(ctx, options, plugin, say);
+}
+
+async function openInstalledPluginDetails(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	plugin: InstalledStepPlugin,
+	say: PluginNotice,
+): Promise<void> {
+	const details = [
+		plugin.description ?? "No description",
+		plugin.version ? `Version: ${plugin.version}` : undefined,
+		`Scope: ${plugin.source}`,
+		`Path: ${plugin.rootPath}`,
+		plugin.mcpServers.length > 0 ? `MCP: ${plugin.mcpServers.join(", ")}` : undefined,
+	]
+		.filter((line): line is string => Boolean(line))
+		.join("\n");
+	const selected = await ctx.ui.select(`${plugin.name}\n${details}`, ["Uninstall", "Back"]);
+	if (selected !== "Uninstall") {
+		if (selected === "Back") await openInstalledPlugins(ctx, options, say);
+		return;
+	}
+	if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${plugin.name}' from Step Harness?`))) {
+		say("Uninstall cancelled.");
+		return;
+	}
+	try {
+		await uninstallPlugin(path.dirname(plugin.rootPath), plugin.id);
+		say(`Uninstalled '${plugin.name}'. Restart Step to unload it.`);
+	} catch (error) {
+		say(describe(error), "error");
+	}
+}
+
+async function openMarketplacePlugins(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	say: PluginNotice,
+): Promise<void> {
+	const available = await loadAvailablePlugins(options);
+	reportPluginWarnings(say, [...available.builtinWarnings, ...available.warnings]);
+	if (available.entries.length === 0) {
+		say("No plugins available. Add a marketplace with /plugin marketplace add <git-url|path>.", "warning");
+		return;
+	}
+	const installed = await listInstalledStepPlugins({
+		userDir: options.pluginsDir,
+		projectDir: projectPluginsDir(ctx),
+	});
+	const installedIds = new Set(installed.plugins.map((plugin) => plugin.id));
+	const labels = available.entries.map((entry) => {
+		const state = installedIds.has(entry.name) ? " · installed" : "";
+		return `${entry.name} · ${entry.marketplace}${state}`;
+	});
+	const selected = await ctx.ui.select(`Marketplace (${available.entries.length} available)`, labels);
+	if (!selected) return;
+	const index = labels.indexOf(selected);
+	const entry = index >= 0 ? available.entries[index] : undefined;
+	if (entry) await openMarketplacePluginDetails(ctx, options, entry, installedIds.has(entry.name), say);
+}
+
+async function openMarketplacePluginDetails(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	entry: MarketplacePluginEntry,
+	installed: boolean,
+	say: PluginNotice,
+): Promise<void> {
+	const details = `${entry.description ?? "No description"}\nFrom: ${entry.marketplace}`;
+	const choices = [installed ? "Already installed" : "Install", "Back"];
+	const selected = await ctx.ui.select(`${entry.name}\n${details}`, choices);
+	if (selected === "Back") {
+		await openMarketplacePlugins(ctx, options, say);
+		return;
+	}
+	if (selected !== "Install") {
+		if (selected === "Already installed") say(`'${entry.name}' is already installed.`);
+		return;
+	}
+	try {
+		const result = await installMarketplacePlugin(entry, options.pluginsDir);
+		say(
+			[
+				`Installed '${entry.name}' from ${entry.marketplace}.`,
+				"Restart Step to activate plugin contributions.",
+				...result.warnings,
+			].join("\n"),
+			result.warnings.length > 0 ? "warning" : "info",
+		);
+	} catch (error) {
+		say(describe(error), "error");
+	}
+}
+
+async function openMarketplaceSources(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	say: PluginNotice,
+): Promise<void> {
+	const builtin = await ensureBuiltinMarketplace({ marketplacesDir: options.marketplacesDir });
+	const sources = await listMarketplaceSources(options.marketplacesDir);
+	reportPluginWarnings(say, builtin.warnings);
+	const labels = sources.map((source) =>
+		source.kind === "builtin" ? `${source.name} · built in` : `${source.name} · ${source.kind}`,
+	);
+	const addLabel = "Add marketplace";
+	const selected = await ctx.ui.select(`Marketplaces (${sources.length})`, [...labels, addLabel]);
+	if (!selected) return;
+	if (selected === addLabel) {
+		const source = await ctx.ui.input("Add marketplace", "git URL, owner/repo, or local path");
+		if (!source?.trim()) return;
+		const added = await addMarketplaceSource({ source, marketplacesDir: options.marketplacesDir });
+		say(
+			[...(added.source ? [`Added marketplace '${added.source.name}'.`] : []), ...added.warnings].join("\n"),
+			added.source ? "info" : "warning",
+		);
+		return;
+	}
+	const index = labels.indexOf(selected);
+	const source = index >= 0 ? sources[index] : undefined;
+	if (source) await openMarketplaceSourceDetails(ctx, options, source, say);
+}
+
+async function openMarketplaceSourceDetails(
+	ctx: ExtensionCommandContext,
+	options: InteractivePluginOptions,
+	source: MarketplaceSource,
+	say: PluginNotice,
+): Promise<void> {
+	if (source.kind === "builtin") {
+		say(`${source.name} ships with Step Harness and cannot be updated or removed.`);
+		return;
+	}
+	const details = `${source.origin ?? source.path}\nKind: ${source.kind}`;
+	const selected = await ctx.ui.select(`${source.name}\n${details}`, ["Update", "Remove", "Back"]);
+	if (selected === "Back") {
+		await openMarketplaceSources(ctx, options, say);
+		return;
+	}
+	if (selected === "Remove") {
+		if (ctx.hasUI && !(await ctx.ui.confirm("Remove marketplace", `Remove '${source.name}'?`))) {
+			say("Marketplace removal cancelled.");
+			return;
+		}
+		const result = await removeMarketplaceSource({ name: source.name, marketplacesDir: options.marketplacesDir });
+		say(
+			[...(result.source ? [`Removed marketplace '${source.name}'.`] : []), ...result.warnings].join("\n"),
+			result.source ? "info" : "warning",
+		);
+		return;
+	}
+	if (selected === "Update") {
+		const result = await updateMarketplaceSource({ name: source.name, marketplacesDir: options.marketplacesDir });
+		say(
+			[...(result.source ? [`Updated marketplace '${source.name}'.`] : []), ...result.warnings].join("\n"),
+			result.source ? "info" : "warning",
+		);
+	}
+}
+
 /** Register `/plugin` on the Step command surface. */
 export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginCommandOptions = {}): void {
 	pi.registerCommand("plugin", {
@@ -862,8 +1094,18 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 			const storageRootDir = options.storageRootDir?.trim() || resolveStepStorageRoot(process.env);
 			const pluginsDir = options.pluginsDir ?? defaultStepPluginsDir(process.env, { storageRootDir });
 			const marketplacesDir = options.marketplacesDir ?? defaultStepMarketplacesDir(process.env, storageRootDir);
+			const marketplaceRoots =
+				options.marketplacesDir || options.storageRootDir
+					? [marketplacesDir]
+					: defaultMarketplaceRoots(process.env, { includeProject: true });
+			const interactiveOptions: InteractivePluginOptions = {
+				...options,
+				pluginsDir,
+				marketplacesDir,
+				marketplaceRoots,
+			};
 			const action = args.trim().split(/\s+/u).filter(Boolean);
-			const command = action[0]?.toLowerCase() || "list";
+			const command = action[0]?.toLowerCase() || "menu";
 			const say = (message: string, type: "info" | "warning" | "error" = "info"): void =>
 				ctx.ui.notify(message, type);
 			if (options.telemetry) {
@@ -871,44 +1113,15 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 			}
 			try {
 				switch (command) {
+					case "menu":
+						await openInteractivePluginMenu(ctx, interactiveOptions, say);
+						return;
 					case "list": {
-						const listed = await listInstalledStepPlugins({
-							userDir: pluginsDir,
-							projectDir: defaultStepPluginsDir(process.env, { cwd: ctx.cwd, project: true }),
-						});
-						const lines =
-							listed.plugins.length > 0
-								? listed.plugins.map(
-										(plugin) =>
-											`${plugin.id}${plugin.version ? ` v${plugin.version}` : ""}  ${plugin.rootPath}${plugin.mcpServers.length > 0 ? `\n  MCP: ${plugin.mcpServers.join(", ")}` : ""}`,
-									)
-								: ["No Step plugins installed."];
-						say([...lines, ...listed.warnings].join("\n"));
+						await openInstalledPlugins(ctx, interactiveOptions, say);
 						return;
 					}
 					case "browse": {
-						const builtin = await ensureBuiltinMarketplace({ marketplacesDir });
-						const available = await listMarketplacePlugins(
-							options.marketplacesDir || options.storageRootDir
-								? [marketplacesDir]
-								: defaultMarketplaceRoots(process.env, { includeProject: true }),
-						);
-						const lines =
-							available.entries.length > 0
-								? available.entries.map(
-										(entry) => `${entry.name.padEnd(16)} ${entry.description ?? ""} (${entry.marketplace})`,
-									)
-								: ["No plugins available to install."];
-						say(
-							[
-								...lines,
-								...builtin.warnings,
-								...available.warnings,
-								"",
-								"Install with: /plugin install <name>",
-							].join("\n"),
-							available.warnings.length > 0 ? "warning" : "info",
-						);
+						await openMarketplacePlugins(ctx, interactiveOptions, say);
 						return;
 					}
 					case "install": {
@@ -946,12 +1159,20 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 							say(`Usage: /plugin ${command} <name>`, "warning");
 							return;
 						}
+						if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${name}' from Step Harness?`))) {
+							say("Uninstall cancelled.");
+							return;
+						}
 						const removed = await uninstallPlugin(pluginsDir, name);
 						say(`Removed ${removed.removedPath}. Restart Step to unload it.`);
 						return;
 					}
 					case "marketplace": {
-						await handleMarketplaceCommand(action.slice(1), ctx, { ...options, marketplacesDir }, say);
+						if (action.length === 1) {
+							await openMarketplaceSources(ctx, interactiveOptions, say);
+						} else {
+							await handleMarketplaceCommand(action.slice(1), ctx, { ...options, marketplacesDir }, say);
+						}
 						return;
 					}
 					default:
@@ -1001,6 +1222,13 @@ async function handleMarketplaceCommand(
 			added.source ? "info" : "warning",
 		);
 		return;
+	}
+	if (action === "remove" && ctx.hasUI) {
+		const confirmed = await ctx.ui.confirm("Remove marketplace", `Remove '${argument}'?`);
+		if (!confirmed) {
+			say("Marketplace removal cancelled.");
+			return;
+		}
 	}
 	const operation =
 		action === "update"

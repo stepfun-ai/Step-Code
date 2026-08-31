@@ -528,11 +528,11 @@ export function createStepModelRequestObserver(
 ): ModelRequestObserver {
 	const classifyEndpoint = options.classifyEndpoint ?? classifyStepEndpoint;
 	const isObserverRouted =
-			options.isObserverRouted ??
-			((request) =>
-				options.observerBaseUrls && options.observerBaseUrls.length > 0
-					? matchesBaseUrl(request.baseUrl, options.observerBaseUrls)
-					: isStepTraceRequestAllowedForRuntime(request.provider, request.baseUrl));
+		options.isObserverRouted ??
+		((request) =>
+			options.observerBaseUrls && options.observerBaseUrls.length > 0
+				? matchesBaseUrl(request.baseUrl, options.observerBaseUrls)
+				: isStepTraceRequestAllowedForRuntime(request.provider, request.baseUrl));
 
 	return {
 		onRequestCompleted(request) {

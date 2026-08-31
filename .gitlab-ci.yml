@@ -1,0 +1,229 @@
+variables:
+  # The release builder contains Node 22, pnpm, Bun, zip and the native build
+  # toolchain used by scripts/build-binaries.sh. CI installs from the checked-in
+  # npm lockfile because the historical pnpm lock does not describe all current
+  # workspace importers.
+  RELEASE_BUILDER_IMAGE: "hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:9fbd0c9b8be64a03a46877c07850d2691487712ec2864c4146f57d0764e74141"
+  RELEASE_BUNDLE_VERSION: "v0.3.1"
+  STEP_RELEASE_BASE_URL: "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli"
+  STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcli"
+  STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
+  STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
+  STEP_HARNESS_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
+  # The default is intentionally inert. A real bump is selected explicitly in
+  # GitLab's Run pipeline form on the default branch.
+  BUMP:
+    value: "none"
+    options:
+      - "none"
+      - "patch"
+      - "minor"
+      - "major"
+    description: "Select a release bump for the default branch; leave none for a normal pipeline."
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TITLE == "edit by devops"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+default:
+  interruptible: true
+  tags:
+    - docker
+
+stages:
+  - lint
+  - test
+  - tag
+  - package
+  - publish
+
+lint:
+  stage: lint
+  image: "$RELEASE_BUILDER_IMAGE"
+  script:
+    - npm ci --ignore-scripts
+    - npm run check
+  cache:
+    key: "npm-$CI_COMMIT_REF_SLUG"
+    paths:
+      - node_modules/
+      - .npm/
+    policy: pull-push
+
+test:
+  stage: test
+  image: "$RELEASE_BUILDER_IMAGE"
+  script:
+    - npm ci --ignore-scripts
+    - npm test
+  cache:
+    key: "npm-$CI_COMMIT_REF_SLUG"
+    paths:
+      - node_modules/
+      - .npm/
+    policy: pull
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+
+# Keep native smoke tests opt-in until matching GitLab runners are provisioned.
+# A permanently pending job would block every merge request.
+.native_test:
+  stage: test
+  rules:
+    - if: '$STEP_ENABLE_NATIVE_RUNNERS == "true"'
+      when: on_success
+    - when: never
+  script:
+    - npm ci --ignore-scripts
+    - npm test
+
+test:windows:
+  extends: .native_test
+  tags:
+    - windows
+
+test:macos:
+  extends: .native_test
+  tags:
+    - macos
+
+tag_release:
+  stage: tag
+  image: "$RELEASE_BUILDER_IMAGE"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$BUMP != "none" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: on_success
+    - when: never
+  script:
+    - |
+      if [ -z "${STEP_RELEASE_TOKEN:-}" ]; then
+        echo "STEP_RELEASE_TOKEN is not set." >&2
+        echo "Add a masked project access token with the api scope." >&2
+        exit 1
+      fi
+    - node infra/release/tag-release.mjs --bump "$BUMP"
+
+# Build all six platform archives, generate latest.json/manifest.json and
+# upload the bundle plus installers to the configured TOS bucket. This remains
+# manual on tag pipelines so a tag can be validated before publication.
+release_bundle_upload:
+  stage: package
+  image: "$RELEASE_BUILDER_IMAGE"
+  needs:
+    - job: lint
+    - job: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+    - when: never
+  script:
+    - export STEP_RELEASE_VERSION="${CI_COMMIT_TAG:-$RELEASE_BUNDLE_VERSION}"
+    - npm ci --ignore-scripts
+    - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_BASE_URL" --upload
+    - |
+      base="${STEP_RELEASE_BASE_URL%/}"
+      version="${STEP_RELEASE_VERSION#v}"
+      cat > dist/release/publish.env <<EOF
+      STEP_RELEASE_VERSION=$version
+      STEP_RELEASE_TAG=${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_NAME=step-harness ${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_INSTALL_URL=$base/install.sh
+      STEP_RELEASE_INSTALL_PS1_URL=$base/install.ps1
+      STEP_RELEASE_LATEST_URL=$base/latest.json
+      STEP_RELEASE_MANIFEST_URL=$base/$version/manifest.json
+      STEP_RELEASE_DARWIN_ARM64_URL=$base/$version/step-$version-darwin-arm64.tar.gz
+      STEP_RELEASE_DARWIN_X64_URL=$base/$version/step-$version-darwin-x64.tar.gz
+      STEP_RELEASE_LINUX_ARM64_URL=$base/$version/step-$version-linux-arm64.tar.gz
+      STEP_RELEASE_LINUX_X64_URL=$base/$version/step-$version-linux-x64.tar.gz
+      STEP_RELEASE_WINDOWS_ARM64_URL=$base/$version/step-$version-windows-arm64.zip
+      STEP_RELEASE_WINDOWS_X64_URL=$base/$version/step-$version-windows-x64.zip
+      EOF
+  artifacts:
+    reports:
+      dotenv: dist/release/publish.env
+    paths:
+      - dist/release/
+    expire_in: 7 days
+
+# Production uses the same byte-identical bundle and only changes the TOS
+# destination and public base URL. Credentials are masked project variables.
+release_bundle_upload_prod:
+  stage: package
+  image: "$RELEASE_BUILDER_IMAGE"
+  needs:
+    - job: lint
+    - job: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+    - when: never
+  script:
+    - |
+      if [ -z "${STEP_TOS_PROD_ACCESS_KEY:-}" ] || [ -z "${STEP_TOS_PROD_SECRET_KEY:-}" ]; then
+        echo "STEP_TOS_PROD_ACCESS_KEY and STEP_TOS_PROD_SECRET_KEY are required." >&2
+        exit 1
+      fi
+    - export STEP_RELEASE_VERSION="${CI_COMMIT_TAG:-$RELEASE_BUNDLE_VERSION}"
+    - export STEP_TOS_BUCKET="$STEP_TOS_PROD_BUCKET"
+    - export STEP_TOS_ENDPOINT="$STEP_TOS_PROD_ENDPOINT"
+    - export STEP_TOS_ACCESS_KEY="$STEP_TOS_PROD_ACCESS_KEY"
+    - export STEP_TOS_SECRET_KEY="$STEP_TOS_PROD_SECRET_KEY"
+    - npm ci --ignore-scripts
+    - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --upload
+
+publish_release:
+  stage: publish
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: release_bundle_upload
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+    - when: never
+  script:
+    - echo "Publishing Step Harness release $STEP_RELEASE_TAG"
+  release:
+    tag_name: "$STEP_RELEASE_TAG"
+    ref: "$CI_COMMIT_SHA"
+    name: "$STEP_RELEASE_NAME"
+    description: |
+      Step Harness release artifacts uploaded to the public object store.
+
+      Install:
+      - $STEP_RELEASE_INSTALL_URL
+      - $STEP_RELEASE_INSTALL_PS1_URL
+
+      Metadata:
+      - $STEP_RELEASE_LATEST_URL
+      - $STEP_RELEASE_MANIFEST_URL
+    assets:
+      links:
+        - name: install.sh
+          url: "$STEP_RELEASE_INSTALL_URL"
+        - name: install.ps1
+          url: "$STEP_RELEASE_INSTALL_PS1_URL"
+        - name: latest.json
+          url: "$STEP_RELEASE_LATEST_URL"
+        - name: manifest.json
+          url: "$STEP_RELEASE_MANIFEST_URL"
+        - name: step-darwin-arm64.tar.gz
+          url: "$STEP_RELEASE_DARWIN_ARM64_URL"
+        - name: step-darwin-x64.tar.gz
+          url: "$STEP_RELEASE_DARWIN_X64_URL"
+        - name: step-linux-arm64.tar.gz
+          url: "$STEP_RELEASE_LINUX_ARM64_URL"
+        - name: step-linux-x64.tar.gz
+          url: "$STEP_RELEASE_LINUX_X64_URL"
+        - name: step-windows-arm64.zip
+          url: "$STEP_RELEASE_WINDOWS_ARM64_URL"
+        - name: step-windows-x64.zip
+          url: "$STEP_RELEASE_WINDOWS_X64_URL"

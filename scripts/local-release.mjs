@@ -20,8 +20,9 @@ const packages = [
 function printUsage() {
 	console.log(`Usage: node scripts/local-release.mjs [options]
 
-Builds and packs the publishable packages, then installs the tarballs into an
-isolated directory outside the repository for local release testing.
+Builds and packs internal workspace packages, then installs the tarballs into an
+isolated directory outside the repository for local runtime smoke testing. This
+is a development check only; Step Harness releases standalone binaries.
 
 Options:
   --out <dir>          Output directory. Defaults to a new directory under ${tmpdir()}

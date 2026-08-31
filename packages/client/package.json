@@ -1,6 +1,7 @@
 {
 	"name": "@earendil-works/pi-client",
 	"version": "0.84.4",
+	"private": true,
 	"description": "Transport-neutral client for remote pi sessions over framed CBOR bytes",
 	"type": "module",
 	"main": "./dist/index.js",
