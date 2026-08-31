@@ -1,0 +1,360 @@
+import { describe, expect, test, vi } from "vitest";
+import type {
+	BeforeProviderHeadersEvent,
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "../src/core/extensions/types.ts";
+import { createStepExtension, stepExtension } from "../src/extensions/step.ts";
+import { STEP_INIT_PROMPT } from "../src/step/init-prompt.ts";
+
+function commandContext(isIdle: boolean): ExtensionCommandContext {
+	return {
+		isIdle: () => isIdle,
+		ui: { notify: vi.fn(), setStatus: vi.fn() },
+	} as unknown as ExtensionCommandContext;
+}
+
+describe("Step extension", () => {
+	test("does not register the removed /effort alias", () => {
+		const registerCommand = vi.fn();
+		createStepExtension()({
+			registerProvider: vi.fn(),
+			on: vi.fn(),
+			registerCommand,
+			setThinkingLevel: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		expect(registerCommand.mock.calls.find(([name]) => name === "effort")).toBeUndefined();
+	});
+
+	test("routes /init through pi's user-message path", async () => {
+		const sendUserMessage = vi.fn();
+		const registerCommand = vi.fn();
+		stepExtension({
+			registerProvider: vi.fn(),
+			on: vi.fn(),
+			registerCommand,
+			sendUserMessage,
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "init")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		await command.handler("", commandContext(true));
+
+		expect(sendUserMessage).toHaveBeenCalledWith(STEP_INIT_PROMPT);
+	});
+
+	test("does not submit /init while pi is busy", async () => {
+		const sendUserMessage = vi.fn();
+		const registerCommand = vi.fn();
+		stepExtension({
+			registerProvider: vi.fn(),
+			on: vi.fn(),
+			registerCommand,
+			sendUserMessage,
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "init")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		const ctx = commandContext(false);
+		await command.handler("", ctx);
+
+		expect(sendUserMessage).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			"Wait for the current work to finish before initializing AGENTS.md",
+			"warning",
+		);
+	});
+
+	test("keeps only the plural permissions command and no removed aliases", () => {
+		const registerCommand = vi.fn();
+		stepExtension({
+			registerProvider: vi.fn(),
+			on: vi.fn(),
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		expect(registerCommand.mock.calls.find(([name]) => name === "permission")).toBeUndefined();
+		expect(registerCommand.mock.calls.find(([name]) => name === "permissions")).toBeDefined();
+		expect(registerCommand.mock.calls.find(([name]) => name === "mode")).toBeUndefined();
+	});
+
+	test("reports permission toggles and unrecognized slash input without arguments", async () => {
+		const on = vi.fn();
+		const registerCommand = vi.fn();
+		const track = vi.fn();
+		createStepExtension({ telemetry: { track } })({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		await command.handler("bypass", commandContext(true));
+
+		const inputHandler = on.mock.calls.find(([name]) => name === "input")?.[1] as (
+			event: { text: string },
+			ctx: ExtensionContext,
+		) => unknown;
+		await inputHandler({ text: "/unknown secret argument" }, {} as ExtensionContext);
+
+		expect(track).toHaveBeenCalledWith(
+			"slash_command_used",
+			{ command: "/permissions", recognized: true },
+			undefined,
+		);
+		expect(track).toHaveBeenCalledWith("permission_mode_toggled", { mode: "bypass", source: "command" }, undefined);
+		expect(track).toHaveBeenCalledWith("slash_command_used", { command: "/unknown", recognized: false }, undefined);
+	});
+
+	test("passes explicit CLI approval options into the native tool-call hook", async () => {
+		const on = vi.fn();
+		createStepExtension({
+			permission: {
+				approvalMode: "confirm",
+				nonInteractiveApproval: "allow",
+				toolOverrides: { write_file: "deny" },
+			},
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const handler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		const result = await handler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false });
+		expect(result).toMatchObject({ block: true, terminate: true });
+	});
+
+	test("restores and persists the Step approval triple through the settings decorator", async () => {
+		const on = vi.fn();
+		const registerCommand = vi.fn();
+		const setEffectiveStepSettings = vi.fn();
+		const settings = {
+			getStepSettings: () => ({
+				permissionPreset: "bypass" as const,
+				approvalMode: "auto" as const,
+				nonInteractiveApproval: "allow" as const,
+				autoResume: false,
+			}),
+			setEffectiveStepSettings,
+		};
+		createStepExtension({ stepSettings: () => settings })({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		expect(
+			await toolHandler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false }),
+		).toBeUndefined();
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		await command.handler("autopilot", commandContext(true));
+		expect(setEffectiveStepSettings).toHaveBeenCalledWith({
+			permissionPreset: "autopilot",
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			autoResume: true,
+		});
+	});
+
+	test("keeps explicit environment policy ahead of persisted Step settings", async () => {
+		const previousPreset = process.env.STEP_PERMISSION_PRESET;
+		process.env.STEP_PERMISSION_PRESET = "ask";
+		try {
+			const on = vi.fn();
+			const settings = {
+				getStepSettings: () => ({
+					permissionPreset: "autopilot" as const,
+					approvalMode: "auto" as const,
+					nonInteractiveApproval: "allow" as const,
+					autoResume: true,
+				}),
+				setEffectiveStepSettings: vi.fn(),
+			};
+			createStepExtension({ stepSettings: () => settings })({
+				registerProvider: vi.fn(),
+				on,
+				registerCommand: vi.fn(),
+				sendUserMessage: vi.fn(),
+			} as unknown as ExtensionAPI);
+			const handler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<unknown>;
+			expect(
+				await handler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false }),
+			).toMatchObject({ block: true, terminate: true });
+		} finally {
+			if (previousPreset === undefined) delete process.env.STEP_PERMISSION_PRESET;
+			else process.env.STEP_PERMISSION_PRESET = previousPreset;
+		}
+	});
+
+	test("keeps an explicit false auto-resume value ahead of persisted autopilot", () => {
+		const on = vi.fn();
+		const setStatus = vi.fn();
+		createStepExtension({
+			permission: { autoResume: false },
+			stepSettings: () => ({
+				getStepSettings: () => ({
+					permissionPreset: "autopilot",
+					approvalMode: "auto",
+					nonInteractiveApproval: "allow",
+					autoResume: true,
+				}),
+				setEffectiveStepSettings: vi.fn(),
+			}),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const sessionStart = on.mock.calls.find(([name]) => name === "session_start")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => void;
+		sessionStart(
+			{ type: "session_start", reason: "new" },
+			{
+				ui: { notify: vi.fn(), setStatus },
+				autoRetryEnabled: false,
+				setAutoRetryEnabled: vi.fn(),
+			},
+		);
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Bypass");
+	});
+
+	test("rehydrates project policy after the trust probe", async () => {
+		const on = vi.fn();
+		let persisted: "ask" | "autopilot" = "ask";
+		const settings = {
+			getStepSettings: () =>
+				persisted === "ask"
+					? {
+							permissionPreset: "ask" as const,
+							approvalMode: "confirm" as const,
+							nonInteractiveApproval: "deny" as const,
+							autoResume: false,
+						}
+					: {
+							permissionPreset: "autopilot" as const,
+							approvalMode: "auto" as const,
+							nonInteractiveApproval: "allow" as const,
+							autoResume: true,
+						},
+			setEffectiveStepSettings: vi.fn(),
+		};
+		createStepExtension({ stepSettings: () => settings })({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		const sessionStart = on.mock.calls.find(([name]) => name === "session_start")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => void;
+
+		const writeCall = {
+			toolName: "write_file",
+			input: { path: "x", content: "y" },
+		};
+		expect(await toolHandler(writeCall, { hasUI: false })).toMatchObject({
+			block: true,
+			terminate: true,
+		});
+		persisted = "autopilot";
+		sessionStart(
+			{ type: "session_start", reason: "new" },
+			{
+				ui: { notify: vi.fn(), setStatus: vi.fn() },
+				autoRetryEnabled: false,
+				setAutoRetryEnabled: vi.fn(),
+			},
+		);
+		expect(await toolHandler(writeCall, { hasUI: false })).toBeUndefined();
+	});
+
+	test("adds trace headers for Step and configured cloud-trace model requests", async () => {
+		const on = vi.fn();
+		stepExtension({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const handler = on.mock.calls.find(([name]) => name === "before_provider_headers")?.[1] as (
+			event: BeforeProviderHeadersEvent,
+			ctx: Pick<ExtensionContext, "model" | "cwd" | "sessionManager">,
+		) => void;
+		const headers = {} as Record<string, string | null>;
+		await handler({ type: "before_provider_headers", headers }, {
+			model: {
+				provider: "step",
+				id: "step-3.7-flash",
+				baseUrl: "https://api.stepfun.com/step_plan/v1",
+			},
+			cwd: "/workspace",
+			sessionManager: { getSessionId: () => "session-1" },
+		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
+		expect(headers).toMatchObject({
+			"x-step-client": "cli",
+			"x-step-session-id": "session-1",
+			"x-step-workspace-id": "/workspace",
+			"x-step-provider-id": "step",
+			"x-step-model": "step-3.7-flash",
+		});
+
+		const originalOrigin = process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
+		process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
+		try {
+			const otherHeaders: Record<string, string | null> = {};
+			await handler({ type: "before_provider_headers", headers: otherHeaders }, {
+				model: {
+					provider: "openai",
+					id: "gpt-4o",
+					baseUrl: "https://trace.example.test/v1/chat/completions",
+				},
+				cwd: "/workspace",
+				sessionManager: { getSessionId: () => "session-2" },
+			} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
+			expect(otherHeaders).toMatchObject({
+				"x-step-client": "cli",
+				"x-step-session-id": "session-2",
+				"x-step-provider-id": "openai",
+				"x-step-model": "gpt-4o",
+			});
+		} finally {
+			if (originalOrigin === undefined) delete process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
+			else process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = originalOrigin;
+		}
+	});
+});
