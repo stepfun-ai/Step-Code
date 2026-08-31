@@ -1,0 +1,68 @@
+{
+	"name": "@earendil-works/pi-agent-core",
+	"version": "0.84.4",
+	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./node": {
+			"types": "./dist/node.d.ts",
+			"import": "./dist/node.js"
+		},
+		"./session/testing": {
+			"types": "./dist/harness/session/testing/index.d.ts",
+			"import": "./dist/harness/session/testing/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"generate-telemetry-docs": "node scripts/generate-telemetry-docs.ts",
+		"check:telemetry-docs": "node scripts/generate-telemetry-docs.ts --check",
+		"build": "tsgo -p tsconfig.build.json",
+		"test": "vitest --run",
+		"test:harness": "vitest --run --config vitest.harness.config.ts",
+		"coverage:harness": "vitest --run --config vitest.harness.config.ts --coverage",
+		"prepublishOnly": "npm run build"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "^0.84.4",
+		"@earendil-works/pi-telemetry": "^0.84.4",
+		"diff": "8.0.4",
+		"ignore": "7.0.5",
+		"typebox": "1.3.7",
+		"yaml": "2.9.0"
+	},
+	"keywords": [
+		"ai",
+		"agent",
+		"llm",
+		"transport",
+		"state-management"
+	],
+	"author": "Mario Zechner",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/earendil-works/pi.git",
+		"directory": "packages/agent"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"devDependencies": {
+		"@types/node": "22.19.19",
+		"@vitest/coverage-v8": "4.1.9",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9"
+	}
+}
