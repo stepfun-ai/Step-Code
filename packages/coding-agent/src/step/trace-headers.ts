@@ -34,8 +34,20 @@ const TRACE_HEADER_ENV_NAMES = [
 	"STEP_TRACE_HEADER_BASE_URLS",
 ] as const;
 
-/** Providers whose product endpoint is trusted for Step attribution by default. */
-const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["step", "stepfunModelProxy", "neocodex"]);
+/**
+ * Providers whose requests are routed through the legacy ObservableServer
+ * detour.  The native Step provider is deliberately absent: its
+ * `/step_plan/v1` endpoint is a direct model endpoint, not the cloud-trace
+ * collector.  Treating every `step` URL as trusted would both leak the
+ * high-sensitivity headers to custom Step-compatible endpoints and mark every
+ * direct request as `routed_via_cloud_trace`.
+ */
+const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
+
+const BUILTIN_CLOUD_TRACE_ORIGINS = {
+	dev: "https://test-openapi-stepcliobserserver.c.stepfun-inc.net",
+	release: "https://api.stepfun.com/stepcliobserserver",
+} as const;
 
 /**
  * Add Step attribution headers in place.
@@ -105,6 +117,27 @@ export function resolveStepTraceAllowlist(
 	return resolveStepTraceHeaderBaseUrls(isStepTraceProductProvider(provider) ? modelBaseUrl : undefined, env);
 }
 
+/**
+ * Resolve the allowlist used by the live Step entrypoint.
+ *
+ * The compatibility helper above intentionally keeps its historical
+ * model-endpoint behaviour for extension hosts.  The live transport follows
+ * the old Step CLI more strictly: only explicit prefixes and the
+ * provider-specific ObservableServer origin are trusted.  In particular, a
+ * user supplied model URL is never promoted to a trace destination merely
+ * because the model uses the `step` provider id.
+ */
+export function resolveStepTraceRuntimeAllowlist(
+	provider: string | undefined,
+	env: Record<string, string | undefined> = process.env,
+): string[] {
+	const values = resolveStepTraceHeaderBaseUrls(undefined, env);
+	if (isStepTraceProductProvider(provider)) {
+		values.push(resolveBuiltinCloudTraceOrigin(env));
+	}
+	return [...new Set(values.map(normalizeUrlPrefix).filter(Boolean))];
+}
+
 /** Shared predicate for high-sensitivity trace headers and routed telemetry. */
 export function isStepTraceRequestAllowed(
 	provider: string | undefined,
@@ -112,6 +145,15 @@ export function isStepTraceRequestAllowed(
 	env: Record<string, string | undefined> = process.env,
 ): boolean {
 	return matchesStepTraceBaseUrl(requestUrl, resolveStepTraceAllowlist(provider, requestUrl, env));
+}
+
+/** Predicate paired with {@link resolveStepTraceRuntimeAllowlist}. */
+export function isStepTraceRequestAllowedForRuntime(
+	provider: string | undefined,
+	requestUrl: string,
+	env: Record<string, string | undefined> = process.env,
+): boolean {
+	return matchesStepTraceBaseUrl(requestUrl, resolveStepTraceRuntimeAllowlist(provider, env));
 }
 
 /** Match a URL against a configured prefix without widening `/v1` to `/v10`. */
@@ -171,4 +213,9 @@ function setHeader(headers: Record<string, string | null>, name: string, value: 
 
 function normalizeUrlPrefix(value: string): string {
 	return value.trim().replace(/\/+$/u, "");
+}
+
+function resolveBuiltinCloudTraceOrigin(env: Record<string, string | undefined>): string {
+	const channel = env.STEP_HARNESS_BUILD_CHANNEL ?? env.STEP_CLI_BUILD_CHANNEL;
+	return channel?.trim() === "release" ? BUILTIN_CLOUD_TRACE_ORIGINS.release : BUILTIN_CLOUD_TRACE_ORIGINS.dev;
 }

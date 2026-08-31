@@ -25,7 +25,7 @@ import type {
 	StepTelemetryEventPayloads,
 	StepTelemetryKnownEventName,
 } from "./telemetry-events.ts";
-import { isStepTraceRequestAllowed } from "./trace-headers.ts";
+import { isStepTraceRequestAllowedForRuntime } from "./trace-headers.ts";
 
 /** Event understood by the legacy Step analytics collector for model calls. */
 export type StepModelRequestEventName = Extract<StepTelemetryKnownEventName, "model_request_completed">;
@@ -528,11 +528,11 @@ export function createStepModelRequestObserver(
 ): ModelRequestObserver {
 	const classifyEndpoint = options.classifyEndpoint ?? classifyStepEndpoint;
 	const isObserverRouted =
-		options.isObserverRouted ??
-		((request) =>
-			options.observerBaseUrls && options.observerBaseUrls.length > 0
-				? matchesBaseUrl(request.baseUrl, options.observerBaseUrls)
-				: isStepTraceRequestAllowed(request.provider, request.baseUrl));
+			options.isObserverRouted ??
+			((request) =>
+				options.observerBaseUrls && options.observerBaseUrls.length > 0
+					? matchesBaseUrl(request.baseUrl, options.observerBaseUrls)
+					: isStepTraceRequestAllowedForRuntime(request.provider, request.baseUrl));
 
 	return {
 		onRequestCompleted(request) {

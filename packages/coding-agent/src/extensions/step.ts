@@ -18,7 +18,7 @@ import {
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
-import { applyStepTraceHeaders, resolveStepTraceAllowlist } from "../step/trace-headers.ts";
+import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
 import { registerStepProvider } from "./step-provider/index.ts";
 
 export interface StepExtensionOptions {
@@ -245,7 +245,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				{
 					clientType: process.env.STEP_CLIENT,
 					requestUrl: model.baseUrl,
-					allowedBaseUrls: resolveStepTraceAllowlist(model.provider, model.baseUrl),
+					allowedBaseUrls: resolveStepTraceRuntimeAllowlist(model.provider),
 				},
 			);
 		});
