@@ -2403,7 +2403,7 @@ export class InteractiveMode {
 				this.workingMessage ?? this.defaultWorkingMessage,
 				this.workingIndicatorOptions,
 				this.presentation,
-				this.workingOutputTracker,
+				this.presentation === "step" ? this.workingOutputTracker : undefined,
 			),
 		);
 	}
@@ -3445,7 +3445,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
-				this.workingOutputTracker.reset();
+				if (this.presentation === "step") this.workingOutputTracker.reset();
 				this.pendingTools.clear();
 				this.stepSpinner?.clear();
 				// Restore main escape handler if retry handler is still active
@@ -3518,8 +3518,8 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
-				if (event.message.role === "assistant") {
-					this.workingOutputTracker.update(event.message, event.assistantMessageEvent.type);
+				if (this.presentation === "step" && event.message.role === "assistant") {
+					this.workingOutputTracker.update(event.assistantMessageEvent);
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
@@ -3559,7 +3559,7 @@ export class InteractiveMode {
 
 			case "message_end":
 				if (event.message.role === "user") break;
-				if (event.message.role === "assistant") {
+				if (this.presentation === "step" && event.message.role === "assistant") {
 					this.workingOutputTracker.complete(event.message);
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
@@ -5768,8 +5768,9 @@ export class InteractiveMode {
 
 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
 		const options: AuthSelectorProvider[] = [];
-		const allowed = this.options.allowedAuthProviders
-			? new Set(this.options.allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
+		const allowedAuthProviders = this.options?.allowedAuthProviders;
+		const allowed = allowedAuthProviders
+			? new Set(allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
 			: undefined;
 		for (const provider of this.session.modelRuntime.getProviders()) {
 			if (allowed && !allowed.has(provider.id.toLowerCase())) continue;
@@ -5803,8 +5804,9 @@ export class InteractiveMode {
 	}
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		const allowed = this.options.allowedAuthProviders
-			? new Set(this.options.allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
+		const allowedAuthProviders = this.options?.allowedAuthProviders;
+		const allowed = allowedAuthProviders
+			? new Set(allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
 			: undefined;
 		const credentials = await this.session.modelRuntime.listCredentials({
 			signal: AbortSignal.timeout(15_000),
@@ -6757,6 +6759,7 @@ export class InteractiveMode {
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
+		const followUpRow = followUp ? `| \`${followUp}\` | Queue follow-up message |\n` : "";
 
 		let hotkeys = `
 **Navigation**
@@ -6798,8 +6801,7 @@ export class InteractiveMode {
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |
-| \`${followUp}\` | Queue follow-up message |
-| \`${dequeue}\` | Restore queued messages |
+${followUpRow}| \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste image or text from clipboard |
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |

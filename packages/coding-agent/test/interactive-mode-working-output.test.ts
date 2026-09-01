@@ -41,16 +41,21 @@ describe("interactive working output tracking", () => {
 	it("tracks normalized stream events across model calls and corrects each response with final usage", async () => {
 		const workingOutputTracker = new WorkingOutputTracker();
 		workingOutputTracker.reset(0);
-		workingOutputTracker.update(assistantMessage([{ type: "text", text: "x".repeat(40) }]), "text_delta");
+		workingOutputTracker.update(
+			progressEvent("text_delta", assistantMessage([{ type: "text", text: "x".repeat(40) }])),
+		);
+		const updateContent = vi.fn();
 		const fakeThis = {
 			isInitialized: true,
+			options: { tuiStyle: "step" },
+			presentation: "step",
 			footer: { invalidate: vi.fn() },
 			workingOutputTracker,
 			pendingTools: new Map(),
 			stepSpinner: undefined,
 			retryEscapeHandler: undefined,
 			defaultEditor: { onEscape: undefined },
-			streamingComponent: { updateContent: vi.fn() },
+			streamingComponent: { updateContent },
 			streamingMessage: undefined,
 			settingsManager: { getShowTerminalProgress: () => false },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
@@ -71,6 +76,7 @@ describe("interactive working output tracking", () => {
 			assistantMessageEvent: progressEvent("thinking_delta", anthropicPartial),
 		});
 		expect(workingOutputTracker.snapshot().outputTokens).toBe(2);
+		expect(updateContent).toHaveBeenCalledWith(anthropicPartial, true);
 
 		await handleEvent.call(fakeThis, {
 			type: "message_end",
@@ -98,5 +104,52 @@ describe("interactive working output tracking", () => {
 			}),
 		});
 		expect(workingOutputTracker.snapshot().outputTokens).toBe(14);
+	});
+
+	it("does not run Step output tracking for the native presentation", async () => {
+		const workingOutputTracker = new WorkingOutputTracker();
+		const reset = vi.spyOn(workingOutputTracker, "reset");
+		const update = vi.spyOn(workingOutputTracker, "update");
+		const complete = vi.spyOn(workingOutputTracker, "complete");
+		const partial = assistantMessage([{ type: "text", text: "abcdefgh" }]);
+		const updateContent = vi.fn();
+		const fakeThis = {
+			isInitialized: true,
+			options: { tuiStyle: "native" },
+			presentation: "native",
+			footer: { invalidate: vi.fn() },
+			workingOutputTracker,
+			pendingTools: new Map(),
+			stepSpinner: undefined,
+			retryEscapeHandler: undefined,
+			defaultEditor: { onEscape: undefined },
+			streamingComponent: { updateContent },
+			streamingMessage: undefined,
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+			session: { retryAttempt: 0 },
+			maybeShowCacheMissNotice: vi.fn(),
+			clearStatusIndicator: vi.fn(),
+		};
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: AgentSessionEvent,
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, { type: "agent_start" });
+		await handleEvent.call(fakeThis, {
+			type: "message_update",
+			message: partial,
+			assistantMessageEvent: progressEvent("text_delta", partial),
+		});
+		await handleEvent.call(fakeThis, {
+			type: "message_end",
+			message: assistantMessage(partial.content, { output: 2, stopReason: "stop" }),
+		});
+
+		expect(reset).not.toHaveBeenCalled();
+		expect(update).not.toHaveBeenCalled();
+		expect(complete).not.toHaveBeenCalled();
+		expect(updateContent).toHaveBeenCalledWith(partial, true);
 	});
 });

@@ -14,63 +14,59 @@ export interface WorkingOutputSnapshot {
 	phase: "thinking" | undefined;
 }
 
-function estimateAssistantOutputTokens(message: AssistantMessage): number {
-	let chars = 0;
-	for (const block of message.content) {
-		if (block.type === "text") {
-			chars += block.text.length;
-		} else if (block.type === "thinking") {
-			chars += block.thinking.length;
-		} else if (block.type === "toolCall") {
-			chars += block.name.length + JSON.stringify(block.arguments).length;
-		}
-	}
-	return Math.round(chars / 4);
-}
-
 export class WorkingOutputTracker {
 	private startedAt = Date.now();
 	private completedOutputTokens = 0;
-	private currentEstimatedOutputTokens = 0;
+	private currentOutputChars = 0;
 	private phase: "thinking" | undefined;
 
 	reset(startedAt = Date.now()): void {
 		this.startedAt = startedAt;
 		this.completedOutputTokens = 0;
-		this.currentEstimatedOutputTokens = 0;
+		this.currentOutputChars = 0;
 		this.phase = undefined;
 	}
 
-	update(message: AssistantMessage, eventType: AssistantMessageEvent["type"]): void {
-		this.currentEstimatedOutputTokens = Math.max(
-			this.currentEstimatedOutputTokens,
-			estimateAssistantOutputTokens(message),
-		);
-		if (eventType === "thinking_start" || eventType === "thinking_delta" || eventType === "thinking_end") {
-			this.phase = "thinking";
-		} else if (
-			eventType === "text_start" ||
-			eventType === "text_delta" ||
-			eventType === "text_end" ||
-			eventType === "toolcall_start" ||
-			eventType === "toolcall_delta" ||
-			eventType === "toolcall_end"
-		) {
-			this.phase = undefined;
+	update(event: AssistantMessageEvent): void {
+		switch (event.type) {
+			case "thinking_delta":
+				this.currentOutputChars += event.delta.length;
+				this.phase = "thinking";
+				break;
+			case "thinking_start":
+			case "thinking_end":
+				this.phase = "thinking";
+				break;
+			case "text_delta":
+			case "toolcall_delta":
+				this.currentOutputChars += event.delta.length;
+				this.phase = undefined;
+				break;
+			case "toolcall_start": {
+				const block = event.partial.content[event.contentIndex];
+				if (block?.type === "toolCall") this.currentOutputChars += block.name.length;
+				this.phase = undefined;
+				break;
+			}
+			case "text_start":
+			case "text_end":
+			case "toolcall_end":
+				this.phase = undefined;
+				break;
 		}
 	}
 
 	complete(message: AssistantMessage): void {
-		const estimatedTokens = Math.max(this.currentEstimatedOutputTokens, estimateAssistantOutputTokens(message));
+		const estimatedTokens = Math.round(this.currentOutputChars / 4);
 		this.completedOutputTokens += message.usage.output > 0 ? message.usage.output : estimatedTokens;
-		this.currentEstimatedOutputTokens = 0;
+		this.currentOutputChars = 0;
 		this.phase = undefined;
 	}
 
 	snapshot(now = Date.now()): WorkingOutputSnapshot {
 		return {
 			elapsedSeconds: Math.max(0, Math.floor((now - this.startedAt) / 1000)),
-			outputTokens: this.completedOutputTokens + this.currentEstimatedOutputTokens,
+			outputTokens: this.completedOutputTokens + Math.round(this.currentOutputChars / 4),
 			phase: this.phase,
 		};
 	}

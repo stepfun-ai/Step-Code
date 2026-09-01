@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +31,22 @@ function assistantMessage(
 		stopReason: "pending",
 		timestamp: 0,
 	};
+}
+
+function deltaEvent<T extends "thinking_delta" | "text_delta" | "toolcall_delta">(
+	type: T,
+	delta: string,
+	partial: AssistantMessage,
+	contentIndex = 0,
+): Extract<AssistantMessageEvent, { type: T }> {
+	return { type, contentIndex, delta, partial } as Extract<AssistantMessageEvent, { type: T }>;
+}
+
+function toolCallStartEvent(
+	partial: AssistantMessage,
+	contentIndex = 0,
+): Extract<AssistantMessageEvent, { type: "toolcall_start" }> {
+	return { type: "toolcall_start", contentIndex, partial };
 }
 
 describe("status indicators", () => {
@@ -66,7 +82,8 @@ describe("status indicators", () => {
 		vi.setSystemTime(6500);
 		const tracker = new WorkingOutputTracker();
 		tracker.reset(0);
-		tracker.update(assistantMessage([{ type: "thinking", thinking: "x".repeat(576) }]), "thinking_delta");
+		const partial = assistantMessage([{ type: "thinking", thinking: "x".repeat(576) }]);
+		tracker.update(deltaEvent("thinking_delta", "x".repeat(576), partial));
 		const tui = { requestRender: vi.fn() } as unknown as TUI;
 		const indicator = new WorkingStatusIndicator(tui, "Working...", undefined, "step", tracker);
 
@@ -80,7 +97,7 @@ describe("status indicators", () => {
 		const tracker = new WorkingOutputTracker();
 		tracker.reset(1000);
 		const anthropicPartial = assistantMessage([{ type: "thinking", thinking: "12345678" }]);
-		tracker.update(anthropicPartial, "thinking_delta");
+		tracker.update(deltaEvent("thinking_delta", "12345678", anthropicPartial));
 		expect(tracker.snapshot(2000)).toEqual({ elapsedSeconds: 1, outputTokens: 2, phase: "thinking" });
 
 		tracker.complete(assistantMessage(anthropicPartial.content, { output: 5 }));
@@ -91,7 +108,9 @@ describe("status indicators", () => {
 			],
 			{ api: "openai-completions" },
 		);
-		tracker.update(openAiPartial, "toolcall_delta");
+		tracker.update(deltaEvent("text_delta", "12345678", openAiPartial));
+		tracker.update(toolCallStartEvent(openAiPartial, 1));
+		tracker.update(deltaEvent("toolcall_delta", '{"x":"abcd"}', openAiPartial, 1));
 
 		expect(tracker.snapshot(3000)).toEqual({ elapsedSeconds: 2, outputTokens: 11, phase: undefined });
 		tracker.complete(assistantMessage(openAiPartial.content, { api: "openai-completions", output: 9 }));
@@ -102,8 +121,24 @@ describe("status indicators", () => {
 		const tracker = new WorkingOutputTracker();
 		tracker.reset(0);
 		const message = assistantMessage([{ type: "text", text: "12345678" }]);
-		tracker.update(message, "text_delta");
+		tracker.update(deltaEvent("text_delta", "12345678", message));
 		tracker.complete(message);
+
+		expect(tracker.snapshot(1000).outputTokens).toBe(2);
+	});
+
+	it("estimates from event deltas without rescanning the accumulated message", () => {
+		const tracker = new WorkingOutputTracker();
+		tracker.reset(0);
+		const partial = assistantMessage([]);
+		Object.defineProperty(partial, "content", {
+			get: () => {
+				throw new Error("accumulated content was read");
+			},
+		});
+
+		tracker.update(deltaEvent("text_delta", "1234", partial));
+		tracker.update(deltaEvent("text_delta", "5678", partial));
 
 		expect(tracker.snapshot(1000).outputTokens).toBe(2);
 	});
@@ -112,7 +147,8 @@ describe("status indicators", () => {
 		initTheme("step");
 		const tracker = new WorkingOutputTracker();
 		tracker.reset(0);
-		tracker.update(assistantMessage([{ type: "text", text: "x".repeat(400) }]), "text_delta");
+		const partial = assistantMessage([{ type: "text", text: "x".repeat(400) }]);
+		tracker.update(deltaEvent("text_delta", "x".repeat(400), partial));
 		const tui = { requestRender: vi.fn() } as unknown as TUI;
 		const native = new WorkingStatusIndicator(tui, "Working...", undefined, "native", tracker);
 		const step = new WorkingStatusIndicator(tui, "Working...", undefined, "step", tracker);

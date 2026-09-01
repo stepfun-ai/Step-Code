@@ -41,10 +41,20 @@ The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
 native layout is `~/.step-harness/agent/sessions/<encoded-cwd>`. Project-local
 resources use `.step-harness/`. When no explicit theme has been saved, the
 built-in `step-light/step` pair follows the terminal appearance; the first name
-is the light theme and the second is the dark theme.
+is the light theme and the second is the dark theme. Non-interactive
+`step --export` uses the same precedence as startup: explicit `--use-theme`,
+saved settings, then the Step product default.
 Set `STEP_PROVIDER`, `STEP_MODEL`, `STEP_API_KEY`, or the provider endpoint
 variables to override the defaults. The Step launcher also disables pi release
 and install checks so the product does not contact upstream services.
+
+The Step `Working...` row measures elapsed time from `agent_start` across model
+and tool turns. While a response streams, it estimates output tokens from the
+normalized thinking, text, and tool-call deltas at four characters per token;
+positive final `usage.output` replaces that response's estimate. Anthropic and
+OpenAI-compatible providers share this normalized event path. The `thinking`
+label follows thinking events and clears when text or tool output begins. Pi's
+native presentation does not run this tracker or display these metrics.
 
 The built-in Step provider uses pi's `anthropic-messages` adapter. Pi appends
 `/v1/messages` to the configured base URL, so the canonical Step base is
