@@ -49,6 +49,7 @@ lint:
   image: "$RELEASE_BUILDER_IMAGE"
   script:
     - npm ci --ignore-scripts
+    - npm run hydrate:model-data
     - npm run check
   cache:
     key: "npm-$CI_COMMIT_REF_SLUG"
@@ -62,6 +63,7 @@ test:
   image: "$RELEASE_BUILDER_IMAGE"
   script:
     - npm ci --ignore-scripts
+    - npm run hydrate:model-data
     - npm test
   cache:
     key: "npm-$CI_COMMIT_REF_SLUG"
@@ -81,6 +83,7 @@ test:
     - when: never
   script:
     - npm ci --ignore-scripts
+    - npm run hydrate:model-data
     - npm test
 
 test:windows:
@@ -127,6 +130,7 @@ release_bundle_upload:
   script:
     - export STEP_RELEASE_VERSION="${CI_COMMIT_TAG:-$RELEASE_BUNDLE_VERSION}"
     - npm ci --ignore-scripts
+    - npm run hydrate:model-data
     - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_BASE_URL" --upload
     - |
       base="${STEP_RELEASE_BASE_URL%/}"
@@ -177,6 +181,7 @@ release_bundle_upload_prod:
     - export STEP_TOS_ACCESS_KEY="$STEP_TOS_PROD_ACCESS_KEY"
     - export STEP_TOS_SECRET_KEY="$STEP_TOS_PROD_SECRET_KEY"
     - npm ci --ignore-scripts
+    - npm run hydrate:model-data
     - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --upload
 
 publish_release:
