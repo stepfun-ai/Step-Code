@@ -3,7 +3,7 @@ variables:
   # toolchain used by scripts/build-binaries.sh. CI installs from the checked-in
   # npm lockfile because the historical pnpm lock does not describe all current
   # workspace importers.
-  RELEASE_BUILDER_IMAGE: "hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:9fbd0c9b8be64a03a46877c07850d2691487712ec2864c4146f57d0764e74141"
+  RELEASE_BUILDER_IMAGE: "hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:c6538968b0f1d223b02016bf1689c35a6b26d6945fb273629ce66d1f3e36a7fc"
   RELEASE_BUNDLE_VERSION: "v0.3.1"
   STEP_RELEASE_BASE_URL: "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli"
   STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcli"
