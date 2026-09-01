@@ -37,6 +37,22 @@ default:
   tags:
     - docker
 
+# The pinned release-builder digest predates the Dockerfile change that added
+# git. Keep the jobs self-healing while the image is rebuilt and repinned: the
+# guard is a no-op once git is present in the image.
+.release_builder_dependencies:
+  before_script:
+    - |
+      if ! command -v git >/dev/null 2>&1; then
+        echo "git is missing from the release-builder image; installing it for this job" >&2
+        if ! { apt-get update -qq && apt-get install -y -qq --no-install-recommends git; }; then
+          echo "Could not install git in this job." >&2
+          echo "Rebuild infra/release/release-builder, publish the image, and update RELEASE_BUILDER_IMAGE." >&2
+          exit 1
+        fi
+      fi
+    - git --version
+
 stages:
   - lint
   - test
@@ -47,6 +63,7 @@ stages:
 lint:
   stage: lint
   image: "$RELEASE_BUILDER_IMAGE"
+  extends: .release_builder_dependencies
   script:
     - npm ci --ignore-scripts
     - npm run hydrate:model-data
@@ -61,6 +78,7 @@ lint:
 test:
   stage: test
   image: "$RELEASE_BUILDER_IMAGE"
+  extends: .release_builder_dependencies
   script:
     - npm ci --ignore-scripts
     - npm run hydrate:model-data
@@ -99,6 +117,7 @@ test:macos:
 tag_release:
   stage: tag
   image: "$RELEASE_BUILDER_IMAGE"
+  extends: .release_builder_dependencies
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -120,6 +139,7 @@ tag_release:
 release_bundle_upload:
   stage: package
   image: "$RELEASE_BUILDER_IMAGE"
+  extends: .release_builder_dependencies
   needs:
     - job: lint
     - job: test
@@ -162,6 +182,7 @@ release_bundle_upload:
 release_bundle_upload_prod:
   stage: package
   image: "$RELEASE_BUILDER_IMAGE"
+  extends: .release_builder_dependencies
   needs:
     - job: lint
     - job: test
