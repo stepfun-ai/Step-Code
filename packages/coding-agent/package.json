@@ -9,7 +9,7 @@
 	},
 	"bin": {
 		"pi": "dist/bundle/cli.js",
-		"step": "dist/bundle/step.js"
+		"step": "bin/step.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -27,6 +27,7 @@
 		}
 	},
 	"files": [
+		"bin",
 		"dist",
 		"docs",
 		"examples",
