@@ -43,11 +43,12 @@ default:
 # image contains the dependencies.
 .release_builder_dependencies:
   variables:
+    RELEASE_BUILDER_GIT: "false"
     RELEASE_BUILDER_SEARCH_TOOLS: "false"
   before_script:
     - |
       packages=""
-      if ! command -v git >/dev/null 2>&1; then
+      if [ "${RELEASE_BUILDER_GIT:-false}" = "true" ] && ! command -v git >/dev/null 2>&1; then
         packages="$packages git"
       fi
       if [ "${RELEASE_BUILDER_SEARCH_TOOLS:-false}" = "true" ]; then
@@ -66,7 +67,10 @@ default:
           exit 1
         fi
       fi
-    - git --version
+    - |
+      if [ "${RELEASE_BUILDER_GIT:-false}" = "true" ]; then
+        git --version
+      fi
 
 stages:
   - lint
@@ -95,6 +99,7 @@ test:
   image: "$RELEASE_BUILDER_IMAGE"
   extends: .release_builder_dependencies
   variables:
+    RELEASE_BUILDER_GIT: "true"
     RELEASE_BUILDER_SEARCH_TOOLS: "true"
   script:
     - npm ci --ignore-scripts
