@@ -32,3 +32,21 @@ describe("CustomEditor prompt history keybindings", () => {
 		expect(editor.getText()).toBe("draft");
 	});
 });
+
+describe("CustomEditor newline keybindings", () => {
+	it("inserts a newline for Alt+Enter instead of queueing a follow-up", () => {
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const editor = new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings);
+		let followUps = 0;
+		editor.onAction("app.message.followUp", () => {
+			followUps++;
+		});
+		editor.setText("first line");
+
+		editor.handleInput("\x1b[13;3u");
+
+		expect(editor.getText()).toBe("first line\n");
+		expect(followUps).toBe(0);
+	});
+});

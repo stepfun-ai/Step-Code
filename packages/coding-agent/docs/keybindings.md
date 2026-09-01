@@ -60,7 +60,7 @@ The dedicated history actions always change history entries, regardless of the c
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `tui.input.newLine` | `shift+enter`, `ctrl+j` | Insert new line |
+| `tui.input.newLine` | `shift+enter`, `alt+enter`, `ctrl+j` | Insert new line |
 | `tui.input.submit` | `enter` | Submit input |
 | `tui.input.tab` | `tab` | Tab / autocomplete |
 
@@ -158,7 +158,7 @@ This routing remains configurable through the ordinary action bindings. For exam
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
 | `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; otherwise copy the last assistant message, or the active fullscreen text selection when `fullscreenCopyOnSelect` is disabled |
-| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
+| `app.message.followUp` | _(unbound)_ | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
 
 ### Tree Navigation
@@ -218,7 +218,7 @@ On native Windows, `app.suspend` has no default binding because Windows terminal
   "tui.editor.cursorWordRight": ["alt+right", "alt+f"],
   "tui.editor.deleteCharForward": ["delete", "ctrl+d"],
   "tui.editor.deleteCharBackward": ["backspace", "ctrl+h"],
-  "tui.input.newLine": ["shift+enter", "ctrl+j"]
+  "tui.input.newLine": ["shift+enter", "alt+enter", "ctrl+j"]
 }
 ```
 
