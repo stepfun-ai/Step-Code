@@ -71,6 +71,35 @@ describe("OAuthSelectorComponent", () => {
 		]);
 	});
 
+	it("lists stored credentials when product options are absent", async () => {
+		const getLogoutProviderOptions = (
+			InteractiveMode as unknown as {
+				prototype: {
+					getLogoutProviderOptions(this: object): Promise<
+						Array<{ id: string; name: string; authType: string; status?: { source: string } }>
+					>;
+				};
+			}
+		).prototype.getLogoutProviderOptions;
+		const fakeThis = {
+			session: {
+				modelRuntime: {
+					listCredentials: async () => [{ providerId: "anthropic", type: "oauth" as const }],
+					getProvider: () => ({ name: "Anthropic" }),
+				},
+			},
+		};
+
+		expect(await getLogoutProviderOptions.call(fakeThis)).toMatchObject([
+			{
+				id: "anthropic",
+				name: "Anthropic",
+				authType: "oauth",
+				status: { source: "stored credential" },
+			},
+		]);
+	});
+
 	it("renders an option without compiled auth status as unconfigured", () => {
 		const selector = new OAuthSelectorComponent(
 			"login",
