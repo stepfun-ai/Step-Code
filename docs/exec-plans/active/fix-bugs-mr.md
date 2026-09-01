@@ -38,7 +38,7 @@ status: ready-for-review
 | `252e6aa` | 移植 Step 主题对比度改造 | 新增 `step-light`，更新深色主题和语法配色，支持自动深浅配对及 HTML 导出。 |
 | `97585a1` | 回滚源码优先启动器 | 恢复原有打包启动逻辑，撤销对应文件和依赖变更。 |
 | `c9f4084` | 增加实时 Working 输出指标 | 显示任务耗时、本地估算输出 token 数和标准化 thinking 阶段。 |
-| 本次补强 | 修复审查和验证发现的问题 | 改为 delta 增量统计、限制 tracker 仅在 Step 运行、修复 CLI 导出主题、`/hotkeys` 空行及三个基线测试。 |
+| `18c3113` | 修复审查和验证发现的问题 | 改为 delta 增量统计、限制 tracker 仅在 Step 运行、修复 CLI 导出主题、`/hotkeys` 空行及三个基线测试。 |
 
 ## 实现细节
 
@@ -82,7 +82,8 @@ status: ready-for-review
 - 覆盖 Working 增量统计、原生 Pi 隔离、流式正文即时更新、Step 主题、HTML
   导出、用户消息样式、`Alt+Enter`、快捷键、环境变量、认证 selector、trace
   header 和 `/hotkeys`。
-- `./test.sh`：通过。
+- `./test.sh`：通过；coding-agent 为 2364 个测试通过、50 个跳过，其他
+  workspace 全部通过。
 - `git diff --check`：通过。
 
 ## 风险与回滚
