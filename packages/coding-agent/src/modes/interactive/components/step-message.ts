@@ -391,7 +391,10 @@ export class StepUserMessageComponent extends UserMessageComponent {
 		const firstBodyIndex = prepared.findIndex((row) => !row.blank);
 		for (let index = 0; index < prepared.length; index += 1) {
 			const row = prepared[index]!;
-			const prefix = index === firstBodyIndex ? theme.fg("userMessageText", "› ") : "  ";
+			// The native row already starts with userMessageText. Styling the gutter
+			// again inserts a foreground reset immediately before the message body,
+			// which makes it fall back to the terminal foreground on the light bar.
+			const prefix = index === firstBodyIndex ? "› " : "  ";
 			const body = prependAfterTerminalSequences(row.body, prefix);
 			rows.push({ markers: row.markers, body });
 		}
