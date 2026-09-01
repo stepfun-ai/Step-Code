@@ -138,6 +138,7 @@ import {
 	IdleStatus,
 	RetryStatusIndicator,
 	type StatusIndicator,
+	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { StepSelectorFrame } from "./components/step-dialog.ts";
@@ -515,6 +516,7 @@ export class InteractiveMode {
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
+	private readonly workingOutputTracker = new WorkingOutputTracker();
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
@@ -2401,6 +2403,7 @@ export class InteractiveMode {
 				this.workingMessage ?? this.defaultWorkingMessage,
 				this.workingIndicatorOptions,
 				this.presentation,
+				this.workingOutputTracker,
 			),
 		);
 	}
@@ -3442,6 +3445,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.workingOutputTracker.reset();
 				this.pendingTools.clear();
 				this.stepSpinner?.clear();
 				// Restore main escape handler if retry handler is still active
@@ -3514,6 +3518,9 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
+				if (event.message.role === "assistant") {
+					this.workingOutputTracker.update(event.message, event.assistantMessageEvent.type);
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -3552,6 +3559,9 @@ export class InteractiveMode {
 
 			case "message_end":
 				if (event.message.role === "user") break;
+				if (event.message.role === "assistant") {
+					this.workingOutputTracker.complete(event.message);
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
