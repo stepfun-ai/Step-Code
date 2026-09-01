@@ -10,6 +10,10 @@
 
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
 
+### Fixed
+
+- Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
+
 ## [0.84.4] - 2026-08-28
 
 ### New Features

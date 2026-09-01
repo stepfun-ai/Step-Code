@@ -38,15 +38,30 @@ default:
     - docker
 
 # The pinned release-builder digest predates the Dockerfile change that added
-# git. Keep the jobs self-healing while the image is rebuilt and repinned: the
-# guard is a no-op once git is present in the image.
+# git (and the search tools used by the coding-agent). Keep this short-lived
+# bootstrap while the image is rebuilt and repinned; it is a no-op once the
+# image contains the dependencies.
 .release_builder_dependencies:
+  variables:
+    RELEASE_BUILDER_SEARCH_TOOLS: "false"
   before_script:
     - |
+      packages=""
       if ! command -v git >/dev/null 2>&1; then
-        echo "git is missing from the release-builder image; installing it for this job" >&2
-        if ! { apt-get update -qq && apt-get install -y -qq --no-install-recommends git; }; then
-          echo "Could not install git in this job." >&2
+        packages="$packages git"
+      fi
+      if [ "${RELEASE_BUILDER_SEARCH_TOOLS:-false}" = "true" ]; then
+        if ! command -v fd >/dev/null 2>&1 && ! command -v fdfind >/dev/null 2>&1; then
+          packages="$packages fd-find"
+        fi
+        if ! command -v rg >/dev/null 2>&1; then
+          packages="$packages ripgrep"
+        fi
+      fi
+      if [ -n "$packages" ]; then
+        echo "Installing missing release-builder dependencies:$packages" >&2
+        if ! { apt-get update -qq && apt-get install -y -qq --no-install-recommends $packages; }; then
+          echo "Could not install release-builder dependencies:$packages." >&2
           echo "Rebuild infra/release/release-builder, publish the image, and update RELEASE_BUILDER_IMAGE." >&2
           exit 1
         fi
@@ -79,9 +94,14 @@ test:
   stage: test
   image: "$RELEASE_BUILDER_IMAGE"
   extends: .release_builder_dependencies
+  variables:
+    RELEASE_BUILDER_SEARCH_TOOLS: "true"
   script:
     - npm ci --ignore-scripts
     - npm run hydrate:model-data
+    # Workspace packages expose their dist entrypoints through package.json.
+    # Build them before Vitest starts child processes that import those entrypoints.
+    - npm run build:offline
     - npm test
   cache:
     key: "npm-$CI_COMMIT_REF_SLUG"
@@ -102,6 +122,7 @@ test:
   script:
     - npm ci --ignore-scripts
     - npm run hydrate:model-data
+    - npm run build:offline
     - npm test
 
 test:windows:

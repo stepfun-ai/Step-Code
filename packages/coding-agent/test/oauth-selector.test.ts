@@ -75,9 +75,9 @@ describe("OAuthSelectorComponent", () => {
 		const getLogoutProviderOptions = (
 			InteractiveMode as unknown as {
 				prototype: {
-					getLogoutProviderOptions(this: object): Promise<
-						Array<{ id: string; name: string; authType: string; status?: { source: string } }>
-					>;
+					getLogoutProviderOptions(
+						this: object,
+					): Promise<Array<{ id: string; name: string; authType: string; status?: { source: string } }>>;
 				};
 			}
 		).prototype.getLogoutProviderOptions;

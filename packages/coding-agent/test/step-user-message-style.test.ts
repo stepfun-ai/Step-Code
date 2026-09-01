@@ -1,9 +1,20 @@
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { StepUserMessageComponent } from "../src/modes/interactive/components/step-message.ts";
 import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 describe("Step user message presentation", () => {
+	beforeEach(() => {
+		// Theme encoding follows pi-tui's detected terminal capabilities. Pin the
+		// capability in this presentation test so a headless runner does not turn
+		// the expected RGB values into an unrelated 256-color escape sequence.
+		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+	});
+
+	afterEach(() => {
+		resetCapabilitiesCache();
+	});
+
 	test("uses the Codex-style neutral full-width prompt bar", () => {
 		initTheme("step");
 		const width = 40;
