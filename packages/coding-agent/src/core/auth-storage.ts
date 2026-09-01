@@ -3,8 +3,8 @@
  * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
  */
 
-import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
+import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -45,9 +45,15 @@ let sharedAuthFileReadState: { authPath: string; readState: AuthFileReadState } 
  * snapshot when filesystem timestamp precision is coarse (notably in CI
  * overlay filesystems).
  */
+function getAuthContentRevision(content: string | Uint8Array | undefined): string {
+	return createHash("sha256")
+		.update(content ?? "")
+		.digest("hex");
+}
+
 function getAuthFileRevision(path: string): string | undefined {
 	try {
-		return createHash("sha256").update(readFileSync(path)).digest("hex");
+		return getAuthContentRevision(readFileSync(path));
 	} catch {
 		return undefined;
 	}
@@ -395,7 +401,7 @@ export class AuthStorage implements CredentialStore {
 		try {
 			this.storage.withLock((current) => {
 				content = current;
-				revision = this.authPath ? getAuthFileRevision(this.authPath) : undefined;
+				revision = this.authPath ? getAuthContentRevision(current) : undefined;
 				return { result: undefined };
 			});
 			this.updateReadState(this.parseStorageData(content), revision);
@@ -407,7 +413,7 @@ export class AuthStorage implements CredentialStore {
 	private async reloadFromStorageAsync(options?: AuthOperationOptions): Promise<AuthStorageData> {
 		return this.storage.withLockAsync(async (content) => {
 			const currentData = this.parseStorageData(content);
-			const revision = this.authPath ? getAuthFileRevision(this.authPath) : undefined;
+			const revision = this.authPath ? getAuthContentRevision(content) : undefined;
 			this.updateReadState(currentData, revision);
 			return { result: currentData };
 		}, options);
@@ -473,7 +479,7 @@ export class AuthStorage implements CredentialStore {
 			const next = await fn(currentData[provider]);
 			if (next === undefined) {
 				latestData = currentData;
-				revision = this.authPath ? getAuthFileRevision(this.authPath) : undefined;
+				revision = this.authPath ? getAuthContentRevision(content) : undefined;
 				return { result: currentData[provider] };
 			}
 
