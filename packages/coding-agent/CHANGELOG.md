@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the Step binary startup update check and native installer integration for Step Harness hosts.
+
+### Changed
+
+- Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
+
 ## [0.84.4] - 2026-08-28
 
 ### New Features

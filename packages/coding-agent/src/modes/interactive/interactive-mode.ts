@@ -386,6 +386,13 @@ export interface InteractiveModeOptions {
 	exitAfterStartupLogin?: boolean;
 	/** Skip optional fd/rg installation for auth-only command surfaces. */
 	skipManagedTools?: boolean;
+	/** Restrict login/logout selectors to product-owned providers when set. */
+	allowedAuthProviders?: readonly string[];
+	/**
+	 * Product startup hook. Returning false stops the interactive loop after the
+	 * hook has completed (used by a self-update that has relaunched the binary).
+	 */
+	onStartup?: (context: InteractiveStartupContext) => Promise<boolean | undefined>;
 	/** Best-effort notification after a credential has been persisted. */
 	onCredentialAuthenticated?: (details: { providerId: string; uid?: string }) => void;
 	/**
@@ -395,6 +402,15 @@ export interface InteractiveModeOptions {
 	 * interactive layer to their extension module.
 	 */
 	defaultModelForProvider?: (providerId: string) => string | undefined;
+}
+
+export interface InteractiveStartupContext {
+	/** Native Pi-backed extension UI methods. */
+	ui: ExtensionUIContext;
+	/** Stop the renderer and detach terminal input handlers. */
+	stop: () => void;
+	/** Dispose the active runtime/session. */
+	dispose: () => Promise<void>;
 }
 
 interface InteractiveTuiOptions {
@@ -1198,6 +1214,14 @@ export class InteractiveMode {
 	 */
 	async run(): Promise<void> {
 		await this.init();
+		if (this.options.onStartup) {
+			const continueStartup = await this.options.onStartup({
+				ui: this.createExtensionUIContext(),
+				stop: () => this.stop(),
+				dispose: () => this.runtimeHost.dispose(),
+			});
+			if (continueStartup === false) return;
+		}
 		// Keep the lifecycle hook optional for lightweight embedders and the
 		// prototype-based render tests that provide only the native mode surface.
 		try {
@@ -5734,7 +5758,11 @@ export class InteractiveMode {
 
 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
 		const options: AuthSelectorProvider[] = [];
+		const allowed = this.options.allowedAuthProviders
+			? new Set(this.options.allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
+			: undefined;
 		for (const provider of this.session.modelRuntime.getProviders()) {
+			if (allowed && !allowed.has(provider.id.toLowerCase())) continue;
 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
 			const status = authStatus.configured
 				? {
@@ -5765,11 +5793,14 @@ export class InteractiveMode {
 	}
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (
-			await this.session.modelRuntime.listCredentials({
-				signal: AbortSignal.timeout(15_000),
-			})
-		)
+		const allowed = this.options.allowedAuthProviders
+			? new Set(this.options.allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
+			: undefined;
+		const credentials = await this.session.modelRuntime.listCredentials({
+			signal: AbortSignal.timeout(15_000),
+		});
+		return credentials
+			.filter(({ providerId }) => !allowed || allowed.has(providerId.toLowerCase()))
 			.map(({ providerId, type }) => ({
 				id: providerId,
 				name: this.session.modelRuntime.getProvider(providerId)?.name ?? providerId,

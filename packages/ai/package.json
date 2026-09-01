@@ -1,6 +1,7 @@
 {
 	"name": "@earendil-works/pi-ai",
 	"version": "0.84.4",
+	"private": true,
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",

@@ -51,6 +51,8 @@ export interface Args {
 	noContextFiles?: boolean;
 	listModels?: string | true;
 	offline?: boolean;
+	/** Enable/disable the Step binary update check for this invocation. */
+	updateCheck?: boolean;
 	tuiMode?: TuiMode;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
@@ -291,6 +293,10 @@ export function parseArgs(args: string[]): Args {
 			result.projectTrustOverride = false;
 		} else if (arg === "--offline") {
 			result.offline = true;
+		} else if (arg === "--update-check") {
+			result.updateCheck = true;
+		} else if (arg === "--no-update-check") {
+			result.updateCheck = false;
 		} else if (arg === "--sdk-stdio") {
 			result.sdkStdio = true;
 		} else if (arg.startsWith("@")) {
@@ -413,6 +419,8 @@ ${stepPermissionOptionsText}
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)
+  --update-check                 Check for a newer Step binary at startup
+  --no-update-check              Skip the Step binary update check for this run
   --                             End option parsing; treat remaining arguments as messages/files
   --help, -h                     Show this help
   --version, -v                  Show version number

@@ -25,6 +25,7 @@ import {
 } from "./step/defaults.ts";
 import { readOrCreateStepDeviceId, resolveStepStorageRoot } from "./step/device-id.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./step/environment.ts";
+import { maybeUpdateStep } from "./step/local-update.ts";
 import { createStepSessionManagerFactory } from "./step/session.ts";
 import { createStepSettingsManager, type StepSettingsManager } from "./step/settings-manager.ts";
 import { StepStdioHost } from "./step/stdio-host.ts";
@@ -151,6 +152,7 @@ const stepMainOptions: MainOptions = {
 	authRuntimeSetup: (modelRuntime) => {
 		modelRuntime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig());
 	},
+	allowedAuthProviders: [STEP_PROVIDER_ID],
 	disableBackgroundServices: isStepServicesDisabled(),
 	defaultTheme: process.env.STEP_CLI_DEFAULT_THEME?.trim() || "step",
 	defaultProvider: stepConfigMigration.defaultProvider ?? STEP_DEFAULT_PROVIDER,
@@ -180,8 +182,27 @@ const stepMainOptions: MainOptions = {
 		tuiStyle: "step" as const,
 		startupLoginProvider: STEP_PROVIDER_ID,
 		defaultModelForProvider: (providerId) => (providerId === STEP_PROVIDER_ID ? STEP_DEFAULT_MODEL : undefined),
+		allowedAuthProviders: [STEP_PROVIDER_ID],
 		onCredentialAuthenticated: ({ uid }) => {
 			if (uid) telemetryRuntime.setContext({ uid });
+		},
+		onStartup: async ({ ui, stop, dispose }) => {
+			// Auth-only startup uses the same InteractiveMode for its OAuth dialog,
+			// but must never be interrupted by a binary update prompt.
+			if (process.argv[2] === "login" || process.argv[2] === "logout") return true;
+			const outcome = await maybeUpdateStep({
+				version: STEP_HARNESS_VERSION,
+				storageRootDir: resolveStepStorageRoot(),
+				updateCheckEnabled: stepHarnessPermissionArgs.updateCheck,
+				ui,
+				argv: process.argv.slice(2),
+				cwd: process.cwd(),
+				beforeRelaunch: async () => {
+					stop();
+					await dispose();
+				},
+			});
+			return outcome !== "restarted";
 		},
 	},
 	modelRequestObserver,

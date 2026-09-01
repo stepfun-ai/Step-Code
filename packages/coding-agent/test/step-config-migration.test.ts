@@ -7,6 +7,8 @@ import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createStepProviderConfig, STEP_PROVIDER_ID } from "../src/extensions/step-provider/index.ts";
 import { migrateStepConfig, readStepGlobalDefaults } from "../src/step/config-migration.ts";
 
+type FetchInput = Parameters<typeof fetch>[0];
+
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -1058,7 +1060,7 @@ describe("Step config migration", () => {
 
 		let requestUrl: string | undefined;
 		let requestInit: RequestInit | undefined;
-		const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+		const fetch = async (input: FetchInput, init?: RequestInit): Promise<Response> => {
 			requestUrl = String(input);
 			requestInit = init;
 			return new Response(
