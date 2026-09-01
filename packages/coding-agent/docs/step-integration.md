@@ -39,8 +39,9 @@ Step extension; it does not create a second event loop or a second TUI.
 The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
 `STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, Pi's
 native layout is `~/.step-harness/agent/sessions/<encoded-cwd>`. Project-local
-resources use `.step-harness/`, and the built-in `step` theme is selected only
-when no explicit theme has been saved.
+resources use `.step-harness/`. When no explicit theme has been saved, the
+built-in `step-light/step` pair follows the terminal appearance; the first name
+is the light theme and the second is the dark theme.
 Set `STEP_PROVIDER`, `STEP_MODEL`, `STEP_API_KEY`, or the provider endpoint
 variables to override the defaults. The Step launcher also disables pi release
 and install checks so the product does not contact upstream services.
@@ -67,7 +68,7 @@ Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
 These presentation/runtime switches are passed to pi's composition root as
-explicit options: `defaultTheme` selects the Step theme and
+explicit options: `defaultTheme` selects the automatic Step theme pair and
 `disableBackgroundServices` suppresses optional catalog, update, and install
 telemetry work. It is deliberately distinct from interactive `offline` mode,
 so disabling those background services does not prevent the first-run OAuth

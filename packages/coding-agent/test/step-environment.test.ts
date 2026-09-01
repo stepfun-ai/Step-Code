@@ -1,7 +1,16 @@
 import { describe, expect, test } from "vitest";
+import { getStepDefaultTheme } from "../src/step/defaults.ts";
 import { applyStepEnvironment, isStepEntrypoint, resolveStepSessionDir } from "../src/step/environment.ts";
 
 describe("Step early environment", () => {
+	test("seeds the automatic Step theme pair for a clean launch", () => {
+		const env: NodeJS.ProcessEnv = {};
+
+		applyStepEnvironment(env);
+
+		expect(getStepDefaultTheme(env)).toBe("step-light/step");
+	});
+
 	test("recognizes source, bundled, and binary launchers", () => {
 		expect(isStepEntrypoint(["node", "/tmp/step-cli.ts"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/tmp/step.js"])).toBe(true);

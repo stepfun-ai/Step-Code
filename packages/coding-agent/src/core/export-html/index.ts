@@ -2,7 +2,11 @@ import type { AgentState } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
-import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.ts";
+import {
+	getCurrentThemeName,
+	getResolvedThemeColors,
+	getThemeExportColors,
+} from "../../modes/interactive/theme/theme.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
@@ -38,6 +42,30 @@ export interface ExportOptions {
 	/** Optional tool renderer for custom tools */
 	toolRenderer?: ToolHtmlRenderer;
 }
+
+const USER_MESSAGE_COLOR_TOKENS = [
+	"text",
+	"muted",
+	"mdHeading",
+	"mdLink",
+	"mdLinkUrl",
+	"mdCode",
+	"mdCodeBlock",
+	"mdCodeBlockBorder",
+	"mdQuote",
+	"mdQuoteBorder",
+	"mdHr",
+	"mdListBullet",
+	"syntaxComment",
+	"syntaxKeyword",
+	"syntaxFunction",
+	"syntaxVariable",
+	"syntaxString",
+	"syntaxNumber",
+	"syntaxType",
+	"syntaxOperator",
+	"syntaxPunctuation",
+] as const;
 
 /** Parse a color string to RGB values. Supports hex (#RRGGBB) and rgb(r,g,b) formats. */
 function parseColor(color: string): { r: number; g: number; b: number } | undefined {
@@ -113,6 +141,11 @@ function generateThemeVars(themeName?: string): string {
 	const lines: string[] = [];
 	for (const [key, value] of Object.entries(colors)) {
 		lines.push(`--${key}: ${value};`);
+	}
+	const activeThemeName = themeName ?? getCurrentThemeName();
+	const userMessageColors = getResolvedThemeColors(activeThemeName === "step" ? "step-light" : themeName);
+	for (const token of USER_MESSAGE_COLOR_TOKENS) {
+		lines.push(`--user${token[0]!.toUpperCase()}${token.slice(1)}: ${userMessageColors[token]};`);
 	}
 
 	// Use explicit theme export colors if available, otherwise derive from userMessageBg

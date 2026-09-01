@@ -18,6 +18,7 @@ import {
 import { isStepConfigCommand, runStepConfigCommand, translateStepCommandArgs } from "./step/command-compat.ts";
 import { migrateStepConfig, readStepGlobalDefaults } from "./step/config-migration.ts";
 import {
+	getStepDefaultTheme,
 	isStepServicesDisabled,
 	STEP_DEFAULT_MODEL,
 	STEP_DEFAULT_PROVIDER,
@@ -154,7 +155,7 @@ const stepMainOptions: MainOptions = {
 	},
 	allowedAuthProviders: [STEP_PROVIDER_ID],
 	disableBackgroundServices: isStepServicesDisabled(),
-	defaultTheme: process.env.STEP_CLI_DEFAULT_THEME?.trim() || "step",
+	defaultTheme: getStepDefaultTheme(),
 	defaultProvider: stepConfigMigration.defaultProvider ?? STEP_DEFAULT_PROVIDER,
 	defaultModel: stepConfigMigration.defaultModel ?? STEP_DEFAULT_MODEL,
 	beforeRuntimeCreate: async ({ cwd, agentDir }) => {

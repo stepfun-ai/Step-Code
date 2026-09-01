@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER } from "./defaults.ts";
+import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from "./defaults.ts";
 
 /** Product-owned project directory for Step Harness state and resources. */
 export const STEP_HARNESS_CONFIG_DIR = ".step-harness";
@@ -142,7 +142,7 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 	// package fallback.
 	env.STEP_CLI_CONFIG_DIR = configDir;
 	env.STEP_HARNESS_CONFIG_DIR = configDir;
-	if (!env.STEP_CLI_DEFAULT_THEME?.trim()) env.STEP_CLI_DEFAULT_THEME = "step";
+	if (!env.STEP_CLI_DEFAULT_THEME?.trim()) env.STEP_CLI_DEFAULT_THEME = STEP_DEFAULT_THEME;
 	const agentDir =
 		options.agentDir?.trim() ||
 		chooseAliasedValue(
