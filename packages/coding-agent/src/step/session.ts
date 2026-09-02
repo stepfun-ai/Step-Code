@@ -21,7 +21,7 @@ import {
 } from "../core/session-manager.ts";
 import type { SessionManagerFactory } from "../core/session-manager-factory.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
-import { getStepSessionDirOverride, resolveStepAgentDir } from "./environment.ts";
+import { getStepSessionDirOverride, LEGACY_RENAMED_CONFIG_DIR, resolveStepAgentDir } from "./environment.ts";
 
 /** Metadata kept outside the native Pi manager. */
 interface StepSessionManagerMetadata {
@@ -34,7 +34,7 @@ const stepSessionManagerMetadata = new WeakMap<object, StepSessionManagerMetadat
 const stepSessionManagerWrappers = new WeakMap<SessionManager, SessionManager>();
 
 export interface StepSessionManagerOptions {
-	/** Global Step agent directory. Defaults to `~/.step-harness/agent`. */
+	/** Global Step agent directory. Defaults to `~/.step-cli/agent`. */
 	agentDir?: string;
 	/**
 	 * Explicit session directory. When omitted, Pi's per-cwd encoded directory
@@ -46,7 +46,7 @@ export interface StepSessionManagerOptions {
 }
 
 export interface StepSessionQueryOptions {
-	/** Global Step agent directory. Defaults to the Step Harness directory. */
+	/** Global Step agent directory. Defaults to the Step CLI directory. */
 	agentDir?: string;
 	/** Explicit session directory. When omitted, Pi's per-cwd directory is used. */
 	sessionDir?: string;
@@ -168,7 +168,7 @@ function isPathInside(root: string, target: string): boolean {
 function isLegacyPiSessionPath(sessionPath: string): boolean {
 	const resolvedPath = resolvePath(sessionPath);
 	const inspectedPath = existsSync(resolvedPath) ? canonicalizePath(resolvedPath) : resolvedPath;
-	return inspectedPath.split(/[\\/]/u).some((segment) => segment === ".pi" || segment === ".step-cli");
+	return inspectedPath.split(/[\\/]/u).some((segment) => segment === ".pi" || segment === LEGACY_RENAMED_CONFIG_DIR);
 }
 
 function readSessionHeaderCwd(sessionPath: string): string | undefined {

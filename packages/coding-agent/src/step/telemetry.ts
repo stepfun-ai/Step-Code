@@ -148,7 +148,7 @@ export interface StepLifecycleTelemetryHandlers {
  * Lifecycle adapter for Step's product telemetry.
  *
  * Pi already owns the event loop and emits a richer event stream than the old
- * Step harness. This adapter only pairs those events and projects the small,
+ * Step CLI. This adapter only pairs those events and projects the small,
  * primitive payloads consumed by Step analytics. It has no dependency on the
  * process telemetry runtime, so an extension or an embedding host can inject
  * whichever reporter it already owns.
@@ -252,7 +252,7 @@ export function createStepLifecycleTelemetry(
 		const usage = message.usage;
 		if (!usage || typeof usage !== "object") return;
 		// Accept Pi's camelCase Usage shape and the old snake_case shape. The latter
-		// keeps this adapter useful to hosts that proxy legacy harness events.
+		// keeps this adapter useful to hosts that proxy legacy Step events.
 		turn.inputTokens += readNonNegativeNumber(usage, "input", "prompt_tokens");
 		turn.cachedInputTokens +=
 			readNonNegativeNumber(usage, "cacheRead", "cache_read_input_tokens") +

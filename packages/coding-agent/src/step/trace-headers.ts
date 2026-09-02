@@ -216,6 +216,6 @@ function normalizeUrlPrefix(value: string): string {
 }
 
 function resolveBuiltinCloudTraceOrigin(env: Record<string, string | undefined>): string {
-	const channel = env.STEP_HARNESS_BUILD_CHANNEL ?? env.STEP_CLI_BUILD_CHANNEL;
+	const channel = env.STEP_CLI_BUILD_CHANNEL;
 	return channel?.trim() === "release" ? BUILTIN_CLOUD_TRACE_ORIGINS.release : BUILTIN_CLOUD_TRACE_ORIGINS.dev;
 }

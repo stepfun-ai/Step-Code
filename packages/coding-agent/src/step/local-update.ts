@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import type { ExtensionUIContext } from "../core/extensions/types.ts";
-import type { StepHarnessVersion } from "./version.ts";
+import type { StepCliVersion } from "./version.ts";
 
 /** Public release bucket used by the Step installer when no override is set. */
 export const DEFAULT_STEP_RELEASE_BASE_URL = "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli";
@@ -12,8 +12,8 @@ export const DEFAULT_STEP_RELEASE_BASE_URL = "https://capy-public-dev.tos-cn-sha
 const UPDATE_CHECK_TIMEOUT_MS = 1_500;
 const UPDATE_INSTALL_TIMEOUT_MS = 120_000;
 const UPDATE_STATE_FILE = "tui-update-state.json";
-const DISABLE_UPDATE_ENV_NAMES = ["STEP_HARNESS_DISABLE_UPDATE_CHECK", "STEP_CLI_DISABLE_TUI_UPDATE_CHECK"] as const;
-const FORCE_UPDATE_ENV_NAMES = ["STEP_HARNESS_ENABLE_UPDATE_CHECK", "STEP_CLI_ENABLE_TUI_UPDATE_CHECK"] as const;
+const DISABLE_UPDATE_ENV_NAMES = ["STEP_CLI_DISABLE_UPDATE_CHECK", "STEP_CLI_DISABLE_TUI_UPDATE_CHECK"] as const;
+const FORCE_UPDATE_ENV_NAMES = ["STEP_CLI_ENABLE_UPDATE_CHECK", "STEP_CLI_ENABLE_TUI_UPDATE_CHECK"] as const;
 const USER_AGENT_UNSAFE = /[^A-Za-z0-9._+-]/g;
 
 interface ReleaseManifest {
@@ -32,7 +32,7 @@ export type StepUpdateOutcome =
 export type StepUpdateChoice = "update-now" | "skip" | "skip-until-next-version";
 
 export interface StepUpdateInput {
-	version: StepHarnessVersion;
+	version: StepCliVersion;
 	storageRootDir: string;
 	updateCheckEnabled?: boolean;
 	executablePath?: string;
@@ -74,7 +74,6 @@ export interface StepUpdateRelaunchInput {
 /** Resolve the release bucket while retaining old launcher variable aliases. */
 export function resolveStepReleaseBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 	return (
-		env.STEP_HARNESS_RELEASE_BASE_URL?.trim() ||
 		env.STEP_RELEASE_BASE_URL?.trim() ||
 		env.STEP_CLI_RELEASE_BASE_URL?.trim() ||
 		DEFAULT_STEP_RELEASE_BASE_URL
@@ -229,18 +228,18 @@ async function fetchLatestStepVersion(manifestUrl: string, userAgent: string): P
 export function buildStepUpdateUserAgent(version: string, env: NodeJS.ProcessEnv = process.env): string {
 	const clean = (value: string, fallback: string): string =>
 		value.replace(USER_AGENT_UNSAFE, "").slice(0, 32) || fallback;
-	const channel = env.STEP_HARNESS_BUILD_CHANNEL ?? env.STEP_CLI_BUILD_CHANNEL ?? "unknown";
-	return `step-harness/${clean(version, "unknown")} (${clean(channel, "unknown")}; ${clean(process.platform, "unknown")}; ${clean(process.arch, "unknown")})`;
+	const channel = env.STEP_CLI_BUILD_CHANNEL ?? "unknown";
+	return `step-cli/${clean(version, "unknown")} (${clean(channel, "unknown")}; ${clean(process.platform, "unknown")}; ${clean(process.arch, "unknown")})`;
 }
 
 export function resolveStepExecutablePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
-	const override = env.STEP_HARNESS_BINARY_PATH?.trim() || env.STEP_CLI_BINARY_PATH?.trim();
+	const override = env.STEP_CLI_BINARY_PATH?.trim();
 	if (override) return path.resolve(override);
 	const candidates = [process.execPath, process.argv[1]];
 	for (const candidate of candidates) {
 		if (!candidate) continue;
 		const name = path.basename(candidate).toLowerCase();
-		if (name === "step" || name === "step.exe" || name === "step-harness" || name === "step-harness.exe") {
+		if (name === "step" || name === "step.exe" || name === "step-cli" || name === "step-cli.exe") {
 			return path.resolve(candidate);
 		}
 	}
@@ -248,7 +247,7 @@ export function resolveStepExecutablePath(env: NodeJS.ProcessEnv = process.env):
 }
 
 function resolveStepAgentDirForUpdate(env: NodeJS.ProcessEnv): string | undefined {
-	return env.STEP_HARNESS_CODING_AGENT_DIR?.trim() || env.STEP_CODING_AGENT_DIR?.trim();
+	return env.STEP_CODING_AGENT_DIR?.trim();
 }
 
 export function resolveStepUpdateInstallerSpec(platform: NodeJS.Platform = process.platform): {
@@ -281,7 +280,7 @@ export function resolveStepUpdateInstallerSpec(platform: NodeJS.Platform = proce
 }
 
 async function installLatestStepRelease(input: StepUpdateInstallInput): Promise<StepUpdateInstallResult> {
-	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-harness-update-"));
+	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-cli-update-"));
 	const installer = resolveStepUpdateInstallerSpec();
 	const scriptPath = path.join(tempRoot, installer.scriptName);
 	try {
@@ -297,7 +296,7 @@ async function installLatestStepRelease(input: StepUpdateInstallInput): Promise<
 			STEP_RELEASE_BASE_URL: input.releaseBaseUrl,
 			STEP_VERSION: "latest",
 			STEP_INSTALL_DIR: input.installDir,
-			...(input.agentDir ? { STEP_HARNESS_CODING_AGENT_DIR: input.agentDir } : {}),
+			...(input.agentDir ? { STEP_CODING_AGENT_DIR: input.agentDir } : {}),
 		});
 		if (code !== 0) return { ok: false, message: `${installer.scriptName} exited with code ${code}` };
 		return {

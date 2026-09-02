@@ -9,7 +9,7 @@ variables:
   STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcli"
   STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
   STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
-  STEP_HARNESS_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
+  STEP_CLI_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
   # The default is intentionally inert. A real bump is selected explicitly in
   # GitLab's Run pipeline form on the default branch.
   BUMP:
@@ -184,7 +184,7 @@ release_bundle_upload:
       cat > dist/release/publish.env <<EOF
       STEP_RELEASE_VERSION=$version
       STEP_RELEASE_TAG=${CI_COMMIT_TAG:-v$version}
-      STEP_RELEASE_NAME=step-harness ${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_NAME=step-cli ${CI_COMMIT_TAG:-v$version}
       STEP_RELEASE_INSTALL_URL=$base/install.sh
       STEP_RELEASE_INSTALL_PS1_URL=$base/install.ps1
       STEP_RELEASE_LATEST_URL=$base/latest.json
@@ -242,13 +242,13 @@ publish_release:
       when: manual
     - when: never
   script:
-    - echo "Publishing Step Harness release $STEP_RELEASE_TAG"
+    - echo "Publishing Step CLI release $STEP_RELEASE_TAG"
   release:
     tag_name: "$STEP_RELEASE_TAG"
     ref: "$CI_COMMIT_SHA"
     name: "$STEP_RELEASE_NAME"
     description: |
-      Step Harness release artifacts uploaded to the public object store.
+      Step CLI release artifacts uploaded to the public object store.
 
       Install:
       - $STEP_RELEASE_INSTALL_URL

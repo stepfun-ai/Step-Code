@@ -20,7 +20,7 @@ describe("StepWelcomeComponent", () => {
 		const lines = component.render(80);
 
 		expect(lines[0]).toContain("╭");
-		expect(lines.join("\n")).toContain("Step Harness");
+		expect(lines.join("\n")).toContain("Step CLI");
 		expect(lines.join("\n")).toContain("step-model");
 		expect(lines.join("\n")).toContain("step-model · high");
 		expect(lines.at(-2)).toContain("Your first message will start a new session.");

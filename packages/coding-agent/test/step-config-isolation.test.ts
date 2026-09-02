@@ -3,11 +3,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 const originalArgv1 = process.argv[1];
 const stepEnvNames = [
 	"STEP_CLI_APP_NAME",
-	"STEP_HARNESS_CONFIG_DIR",
 	"STEP_CLI_CONFIG_DIR",
-	"STEP_HARNESS_CODING_AGENT_DIR",
 	"STEP_CODING_AGENT_DIR",
-	"STEP_HARNESS_CODING_AGENT_SESSION_DIR",
 	"STEP_CODING_AGENT_SESSION_DIR",
 ] as const;
 const originalStepEnv = Object.fromEntries(stepEnvNames.map((name) => [name, process.env[name]]));
@@ -27,8 +24,7 @@ describe("coding-agent config distribution isolation", () => {
 	test("ordinary pi ignores stale Step app and config directory variables", async () => {
 		process.argv[1] = "/tmp/cli.js";
 		process.env.STEP_CLI_APP_NAME = "stale-step";
-		process.env.STEP_HARNESS_CONFIG_DIR = ".stale-step";
-		process.env.STEP_CLI_CONFIG_DIR = ".also-stale";
+		process.env.STEP_CLI_CONFIG_DIR = ".stale-step";
 
 		vi.resetModules();
 		const config = await import("../src/config.ts");
@@ -37,10 +33,10 @@ describe("coding-agent config distribution isolation", () => {
 		expect(config.CONFIG_DIR_NAME).toBe(".pi");
 	});
 
-	test("Step entrypoint still accepts renamed and legacy distribution overrides", async () => {
+	test("Step entrypoint accepts distribution overrides", async () => {
 		process.argv[1] = "/tmp/step";
 		process.env.STEP_CLI_APP_NAME = "step-custom";
-		process.env.STEP_HARNESS_CONFIG_DIR = ".step-custom";
+		process.env.STEP_CLI_CONFIG_DIR = ".step-custom";
 
 		vi.resetModules();
 		const config = await import("../src/config.ts");

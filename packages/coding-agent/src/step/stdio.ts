@@ -9,7 +9,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../core/agent-session.ts";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
-import type { StepHarness } from "../step-harness.ts";
+import type { StepCli } from "../step-cli-runtime.ts";
 
 /** Published Step SDK wire constants. */
 export const STEP_PROTOCOL_NAME = "step-agent-sdk" as const;
@@ -379,7 +379,7 @@ export interface PiHarnessEventBridge {
 }
 
 /** A single pi session, or a runtime that can replace its active session. */
-export type PiHarnessEventSource = AgentSession | AgentSessionRuntime | StepHarness;
+export type PiHarnessEventSource = AgentSession | AgentSessionRuntime | StepCli;
 
 /**
  * Adapt a pi AgentSession (or an AgentSessionRuntime) to Step-facing input and
@@ -472,7 +472,7 @@ export function createPiHarnessEventBridge(
 		},
 		async input(messageOrCommand: string | PiHarnessInputCommand, inputOptions?: PiHarnessInputOptions) {
 			if (closed) {
-				throw new Error("Step harness event bridge is closed");
+				throw new Error("Step CLI event bridge is closed");
 			}
 			if (typeof messageOrCommand === "string") {
 				await session.prompt(messageOrCommand, {
@@ -529,7 +529,7 @@ export function createPiHarnessEventBridge(
 	return bridge;
 }
 
-function isRuntimeSource(source: PiHarnessEventSource): source is AgentSessionRuntime | StepHarness {
+function isRuntimeSource(source: PiHarnessEventSource): source is AgentSessionRuntime | StepCli {
 	return typeof (source as { onSessionChange?: unknown }).onSessionChange === "function";
 }
 

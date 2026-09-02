@@ -57,7 +57,7 @@ describe("Step config migration", () => {
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(report.migrated).toBe(true);
-		const target = join(home, ".step-harness");
+		const target = join(home, ".step-cli");
 		const settings = JSON.parse(await readFile(join(target, "agent", "settings.json"), "utf8")) as Record<
 			string,
 			unknown
@@ -100,7 +100,7 @@ describe("Step config migration", () => {
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(report.migrated).toBe(true);
-		await expect(stat(join(home, ".step-harness", "agent", "step-settings.json"))).rejects.toMatchObject({
+		await expect(stat(join(home, ".step-cli", "agent", "step-settings.json"))).rejects.toMatchObject({
 			code: "ENOENT",
 		});
 	});
@@ -113,13 +113,15 @@ describe("Step config migration", () => {
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(report.migrated).toBe(false);
-		await expect(stat(join(home, ".step-harness"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(stat(join(home, ".step-cli", "agent", "settings.json"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
 	});
 
 	test("retries legacy v1 markers and upgrades the projection", async () => {
 		const { home, workspace } = await makeHome();
 		const legacy = join(home, ".step-cli");
-		const target = join(home, ".step-harness");
+		const target = join(home, ".step-cli");
 		await mkdir(legacy, { recursive: true });
 		await mkdir(target, { recursive: true });
 		await writeFile(join(target, ".legacy-step-cli-migration.json"), JSON.stringify({ version: 1 }));
@@ -148,7 +150,7 @@ describe("Step config migration", () => {
 	test("imports a legacy login that appears after the model migration marker", async () => {
 		const { home, workspace } = await makeHome();
 		const legacy = join(home, ".step-cli");
-		const target = join(home, ".step-harness");
+		const target = join(home, ".step-cli");
 		await mkdir(legacy, { recursive: true });
 		await writeFile(
 			join(legacy, "config.json"),
@@ -182,7 +184,7 @@ describe("Step config migration", () => {
 		const report = await migrateStepConfig({ cwd: workspace, env: { HOME: home } });
 
 		expect(report.migrated).toBe(true);
-		expect(await readFile(join(home, ".step-harness", "agent", "settings.json"), "utf8")).toContain("env-home-model");
+		expect(await readFile(join(home, ".step-cli", "agent", "settings.json"), "utf8")).toContain("env-home-model");
 	});
 
 	test("keeps project configuration separate and does not overwrite an existing target", async () => {
@@ -195,7 +197,7 @@ describe("Step config migration", () => {
 		);
 		const first = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(first.migrated).toBe(true);
-		const target = join(workspace, ".step-harness");
+		const target = join(workspace, ".step-cli");
 		const before = await readFile(join(target, "settings.json"), "utf8");
 		await writeFile(join(target, "settings.json"), `${before.trim()}\nchanged\n`);
 		const second = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
@@ -206,7 +208,7 @@ describe("Step config migration", () => {
 	test("re-runs a version-one marker to complete newer catalog migration", async () => {
 		const { home, workspace } = await makeHome();
 		const legacy = join(home, ".step-cli");
-		const target = join(home, ".step-harness");
+		const target = join(home, ".step-cli");
 		await mkdir(legacy, { recursive: true });
 		await mkdir(join(target, "agent"), { recursive: true });
 		await writeFile(join(target, ".legacy-step-cli-migration.json"), JSON.stringify({ version: 1 }));
@@ -239,7 +241,9 @@ describe("Step config migration", () => {
 		await writeFile(join(legacy, "sessions", "old.jsonl"), "legacy session");
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(report.migrated).toBe(false);
-		await expect(stat(join(home, ".step-harness"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(stat(join(home, ".step-cli", "agent", "settings.json"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
 	});
 
 	test("reports malformed legacy config and continues", async () => {
@@ -264,8 +268,8 @@ describe("Step config migration", () => {
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 
 		expect(report.migrated).toBe(false);
-		await expect(stat(join(home, ".step-harness"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(stat(join(workspace, ".step-harness"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(stat(join(home, ".step-cli"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(stat(join(workspace, ".step-cli"))).rejects.toMatchObject({ code: "ENOENT" });
 		// The decoy files are not consumed or rewritten as a side effect.
 		expect(JSON.parse(await readFile(join(piGlobal, "settings.json"), "utf8"))).toEqual({
 			defaultModel: "pi-global",
@@ -277,7 +281,7 @@ describe("Step config migration", () => {
 
 	test("repairs an existing pre-marker Step login binding", async () => {
 		const { home, workspace } = await makeHome();
-		const agent = join(home, ".step-harness", "agent");
+		const agent = join(home, ".step-cli", "agent");
 		await mkdir(agent, { recursive: true });
 		await writeFile(
 			join(agent, "settings.json"),
@@ -377,8 +381,8 @@ describe("Step config migration", () => {
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(report.migrated).toBe(true);
 
-		const globalTarget = join(home, ".step-harness");
-		const projectTarget = join(workspace, ".step-harness");
+		const globalTarget = join(home, ".step-cli");
+		const projectTarget = join(workspace, ".step-cli");
 		const globalSettings = JSON.parse(await readFile(join(globalTarget, "agent", "settings.json"), "utf8")) as Record<
 			string,
 			unknown
@@ -387,10 +391,10 @@ describe("Step config migration", () => {
 			string,
 			unknown
 		>;
-		expect(globalSettings.defaultModel).toBe("global-model");
+		expect(globalSettings.defaultModel).toBe("stale-pi-model");
 		expect(projectSettings.defaultModel).toBe("project-model");
-		expect(globalSettings.customSetting).toBeUndefined();
-		expect(projectSettings.customSetting).toBeUndefined();
+		expect(globalSettings.customSetting).toBe("must-not-copy");
+		expect(projectSettings.customSetting).toBe("project-stale");
 
 		const globalAuth = JSON.parse(await readFile(join(globalTarget, "agent", "auth.json"), "utf8")) as Record<
 			string,
@@ -402,13 +406,13 @@ describe("Step config migration", () => {
 		await expect(stat(join(projectTarget, "auth.json"))).rejects.toMatchObject({ code: "ENOENT" });
 		expect(report.warnings.some((warning) => warning.includes("workspace model definitions"))).toBe(true);
 
-		await expect(stat(join(globalTarget, "agent", "themes"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(stat(join(globalTarget, "agent", "sessions"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(stat(join(projectTarget, "skills"))).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await stat(join(globalTarget, "agent", "themes"))).toBeDefined();
+		expect(await stat(join(globalTarget, "agent", "sessions"))).toBeDefined();
+		expect(await stat(join(projectTarget, "skills"))).toBeDefined();
 		const migratedModels = JSON.parse(await readFile(join(globalTarget, "agent", "models.json"), "utf8")) as {
 			providers?: Record<string, { models?: Array<{ id?: string }> }>;
 		};
-		expect(migratedModels.providers?.stale).toBeUndefined();
+		expect(migratedModels.providers?.stale).toBeDefined();
 		expect(migratedModels.providers?.step?.models?.map((model) => model.id)).toContain("global-model");
 	});
 
@@ -424,11 +428,12 @@ describe("Step config migration", () => {
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(report.migrated).toBe(true);
 
-		const globalAuth = JSON.parse(
-			await readFile(join(home, ".step-harness", "agent", "auth.json"), "utf8"),
-		) as Record<string, { key?: string }>;
+		const globalAuth = JSON.parse(await readFile(join(home, ".step-cli", "agent", "auth.json"), "utf8")) as Record<
+			string,
+			{ key?: string }
+		>;
 		expect(globalAuth.step?.key).toBe("global-agent-secret");
-		await expect(stat(join(workspace, ".step-harness", "auth.json"))).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await stat(join(workspace, ".step-cli", "auth.json"))).toBeDefined();
 	});
 
 	test("uses the legacy model field as the Pi wire id while retaining profile aliases", async () => {
@@ -445,7 +450,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const target = join(home, ".step-harness", "agent");
+		const target = join(home, ".step-cli", "agent");
 		const settings = JSON.parse(await readFile(join(target, "settings.json"), "utf8")) as Record<string, unknown>;
 		const models = JSON.parse(await readFile(join(target, "models.json"), "utf8")) as {
 			providers: Record<string, { models?: Array<Record<string, unknown>> }>;
@@ -478,7 +483,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const target = join(home, ".step-harness", "agent");
+		const target = join(home, ".step-cli", "agent");
 		const settings = JSON.parse(await readFile(join(target, "settings.json"), "utf8")) as Record<string, unknown>;
 		const models = JSON.parse(await readFile(join(target, "models.json"), "utf8")) as {
 			providers: Record<
@@ -510,7 +515,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const models = JSON.parse(await readFile(join(home, ".step-harness", "agent", "models.json"), "utf8")) as {
+		const models = JSON.parse(await readFile(join(home, ".step-cli", "agent", "models.json"), "utf8")) as {
 			providers: Record<string, { baseUrl?: string; models?: Array<{ baseUrl?: string }> }>;
 		};
 		const provider = models.providers.step;
@@ -539,7 +544,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const models = JSON.parse(await readFile(join(home, ".step-harness", "agent", "models.json"), "utf8")) as {
+		const models = JSON.parse(await readFile(join(home, ".step-cli", "agent", "models.json"), "utf8")) as {
 			providers: Record<string, { api?: string }>;
 		};
 		expect(models.providers.stepfunModelProxy?.api).toBe("anthropic-messages");
@@ -566,7 +571,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const runtime = await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
@@ -612,7 +617,7 @@ describe("Step config migration", () => {
 		);
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
 		const models = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as {
 			providers: Record<string, { models?: Array<Record<string, unknown>> }>;
@@ -639,7 +644,7 @@ describe("Step config migration", () => {
 
 	test("repairs stale Step endpoint overrides from an earlier Harness release", async () => {
 		const { home, workspace } = await makeHome();
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		await mkdir(agentDir, { recursive: true });
 		await writeFile(
 			join(agentDir, "models.json"),
@@ -725,7 +730,7 @@ describe("Step config migration", () => {
 
 		const first = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		expect(first.defaultProvider).toBe("models-proxy");
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		await writeFile(
 			join(legacy, "auth.json"),
 			JSON.stringify({ version: 1, profile: "step_plan", apiKey: "late-step-key" }),
@@ -781,7 +786,7 @@ describe("Step config migration", () => {
 		);
 
 		const second = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
 		expect(second.migrated).toBe(true);
 		expect(settings.defaultProvider).toBe(STEP_PROVIDER_ID);
@@ -821,7 +826,7 @@ describe("Step config migration", () => {
 		);
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
 		const models = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as {
 			providers: Record<string, { api?: string; baseUrl?: string; models?: Array<Record<string, unknown>> }>;
@@ -883,7 +888,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
 		const auth = JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8")) as Record<
 			string,
@@ -918,7 +923,7 @@ describe("Step config migration", () => {
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
 		const projectSettings = JSON.parse(
-			await readFile(join(workspace, ".step-harness", "settings.json"), "utf8"),
+			await readFile(join(workspace, ".step-cli", "settings.json"), "utf8"),
 		) as Record<string, unknown>;
 		expect(report.roots.find((root) => root.scope === "project")?.migrated).toBe(true);
 		expect(projectSettings.defaultProvider).toBe(STEP_PROVIDER_ID);
@@ -942,9 +947,9 @@ describe("Step config migration", () => {
 		);
 
 		const report = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const globalAgentDir = join(home, ".step-harness", "agent");
+		const globalAgentDir = join(home, ".step-cli", "agent");
 		const projectSettings = JSON.parse(
-			await readFile(join(workspace, ".step-harness", "settings.json"), "utf8"),
+			await readFile(join(workspace, ".step-cli", "settings.json"), "utf8"),
 		) as Record<string, unknown>;
 		const models = JSON.parse(await readFile(join(globalAgentDir, "models.json"), "utf8")) as {
 			providers: Record<string, { models?: Array<{ id?: string; name?: string; baseUrl?: string }> }>;
@@ -995,9 +1000,9 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const globalAgentDir = join(home, ".step-harness", "agent");
+		const globalAgentDir = join(home, ".step-cli", "agent");
 		const projectSettings = JSON.parse(
-			await readFile(join(workspace, ".step-harness", "settings.json"), "utf8"),
+			await readFile(join(workspace, ".step-cli", "settings.json"), "utf8"),
 		) as Record<string, unknown>;
 		const models = JSON.parse(await readFile(join(globalAgentDir, "models.json"), "utf8")) as {
 			providers: Record<string, { models?: Array<{ id?: string }> }>;
@@ -1042,7 +1047,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const runtime = await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
@@ -1123,12 +1128,13 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const models = JSON.parse(await readFile(join(home, ".step-harness", "agent", "models.json"), "utf8")) as {
+		const models = JSON.parse(await readFile(join(home, ".step-cli", "agent", "models.json"), "utf8")) as {
 			providers: Record<string, { models?: Array<Record<string, unknown>> }>;
 		};
-		const settings = JSON.parse(
-			await readFile(join(home, ".step-harness", "agent", "settings.json"), "utf8"),
-		) as Record<string, unknown>;
+		const settings = JSON.parse(await readFile(join(home, ".step-cli", "agent", "settings.json"), "utf8")) as Record<
+			string,
+			unknown
+		>;
 		expect(models.providers.anthropic?.models).toEqual(
 			expect.not.arrayContaining([expect.objectContaining({ id: "gpt-wire" })]),
 		);
@@ -1137,8 +1143,8 @@ describe("Step config migration", () => {
 		);
 		expect(settings).toMatchObject({ defaultProvider: "anthropic", defaultModel: "claude-default" });
 		const runtime = await ModelRuntime.create({
-			authPath: join(home, ".step-harness", "agent", "auth.json"),
-			modelsPath: join(home, ".step-harness", "agent", "models.json"),
+			authPath: join(home, ".step-cli", "agent", "auth.json"),
+			modelsPath: join(home, ".step-cli", "agent", "models.json"),
 			refreshOnCreate: false,
 		});
 		expect(runtime.getModel("openai", "gpt-wire")).toMatchObject({
@@ -1147,7 +1153,7 @@ describe("Step config migration", () => {
 			baseUrl: "https://openai.example/v1",
 		});
 
-		const auth = JSON.parse(await readFile(join(home, ".step-harness", "agent", "auth.json"), "utf8")) as Record<
+		const auth = JSON.parse(await readFile(join(home, ".step-cli", "agent", "auth.json"), "utf8")) as Record<
 			string,
 			{ key?: string }
 		>;
@@ -1170,7 +1176,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const models = JSON.parse(await readFile(join(home, ".step-harness", "agent", "models.json"), "utf8")) as {
+		const models = JSON.parse(await readFile(join(home, ".step-cli", "agent", "models.json"), "utf8")) as {
 			providers: Record<string, { api?: string }>;
 		};
 		expect(models.providers.openai?.api).toBe("openai-completions");
@@ -1198,12 +1204,13 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const models = JSON.parse(await readFile(join(home, ".step-harness", "agent", "models.json"), "utf8")) as {
+		const models = JSON.parse(await readFile(join(home, ".step-cli", "agent", "models.json"), "utf8")) as {
 			providers: Record<string, { models?: Array<Record<string, unknown>> }>;
 		};
-		const settings = JSON.parse(
-			await readFile(join(home, ".step-harness", "agent", "settings.json"), "utf8"),
-		) as Record<string, unknown>;
+		const settings = JSON.parse(await readFile(join(home, ".step-cli", "agent", "settings.json"), "utf8")) as Record<
+			string,
+			unknown
+		>;
 		expect(models.providers.step).toBeUndefined();
 		expect(models.providers.openai?.models).toEqual(
 			expect.arrayContaining([expect.objectContaining({ id: "gpt-wire", name: "open-profile" })]),
@@ -1241,7 +1248,7 @@ describe("Step config migration", () => {
 		);
 
 		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
-		const agentDir = join(home, ".step-harness", "agent");
+		const agentDir = join(home, ".step-cli", "agent");
 		const auth = JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8")) as Record<
 			string,
 			Record<string, unknown>
@@ -1259,13 +1266,11 @@ describe("Step config migration", () => {
 		expect((await runtime.getAuth(model!))?.auth.apiKey).toBe("shared-step-key");
 	});
 
-	test("loads global and project settings only from the Step Harness directories", async () => {
+	test("loads global and project settings only from the Step CLI directories", async () => {
 		const { home, workspace } = await makeHome();
 		const previousConfigDir = process.env.STEP_CLI_CONFIG_DIR;
-		const previousHarnessConfigDir = process.env.STEP_HARNESS_CONFIG_DIR;
 		const previousArgv1 = process.argv[1];
-		process.env.STEP_CLI_CONFIG_DIR = ".step-harness";
-		process.env.STEP_HARNESS_CONFIG_DIR = ".step-harness";
+		process.env.STEP_CLI_CONFIG_DIR = ".step-cli";
 		// CONFIG_DIR_NAME only honors Step overrides for a real Step entrypoint;
 		// this test imports the module dynamically under Vitest's ordinary argv.
 		process.argv[1] = "/tmp/step";
@@ -1274,25 +1279,25 @@ describe("Step config migration", () => {
 		try {
 			const { CONFIG_DIR_NAME } = await import("../src/config.ts");
 			const { SettingsManager } = await import("../src/core/settings-manager.ts");
-			expect(CONFIG_DIR_NAME).toBe(".step-harness");
+			expect(CONFIG_DIR_NAME).toBe(".step-cli");
 
-			const harnessAgent = join(home, ".step-harness", "agent");
-			const harnessProject = join(workspace, ".step-harness");
+			const cliAgent = join(home, ".step-cli", "agent");
+			const cliProject = join(workspace, ".step-cli");
 			const piAgent = join(home, ".pi", "agent");
 			const piProject = join(workspace, ".pi");
-			await mkdir(harnessAgent, { recursive: true });
-			await mkdir(harnessProject, { recursive: true });
+			await mkdir(cliAgent, { recursive: true });
+			await mkdir(cliProject, { recursive: true });
 			await mkdir(piAgent, { recursive: true });
 			await mkdir(piProject, { recursive: true });
-			await writeFile(join(harnessAgent, "settings.json"), JSON.stringify({ defaultModel: "harness-global" }));
-			await writeFile(join(harnessProject, "settings.json"), JSON.stringify({ defaultModel: "harness-project" }));
+			await writeFile(join(cliAgent, "settings.json"), JSON.stringify({ defaultModel: "cli-global" }));
+			await writeFile(join(cliProject, "settings.json"), JSON.stringify({ defaultModel: "cli-project" }));
 			await writeFile(join(piAgent, "settings.json"), JSON.stringify({ defaultModel: "pi-global" }));
 			await writeFile(join(piProject, "settings.json"), JSON.stringify({ defaultModel: "pi-project" }));
 
-			const manager = SettingsManager.create(workspace, harnessAgent);
-			expect(manager.getGlobalSettings().defaultModel).toBe("harness-global");
-			expect(manager.getProjectSettings().defaultModel).toBe("harness-project");
-			expect(manager.getDefaultModel()).toBe("harness-project");
+			const manager = SettingsManager.create(workspace, cliAgent);
+			expect(manager.getGlobalSettings().defaultModel).toBe("cli-global");
+			expect(manager.getProjectSettings().defaultModel).toBe("cli-project");
+			expect(manager.getDefaultModel()).toBe("cli-project");
 
 			const piOnlyRoot = join(home, "pi-only");
 			const piOnlyWorkspace = join(piOnlyRoot, "workspace");
@@ -1306,18 +1311,74 @@ describe("Step config migration", () => {
 				join(piOnlyWorkspace, ".pi", "settings.json"),
 				JSON.stringify({ defaultModel: "pi-only-project" }),
 			);
-			const piOnlyManager = SettingsManager.create(piOnlyWorkspace, join(piOnlyRoot, ".step-harness", "agent"));
+			const piOnlyManager = SettingsManager.create(piOnlyWorkspace, join(piOnlyRoot, ".step-cli", "agent"));
 			expect(piOnlyManager.getGlobalSettings()).toEqual({});
 			expect(piOnlyManager.getProjectSettings()).toEqual({});
 			expect(piOnlyManager.getDefaultModel()).toBeUndefined();
 		} finally {
 			if (previousConfigDir === undefined) delete process.env.STEP_CLI_CONFIG_DIR;
 			else process.env.STEP_CLI_CONFIG_DIR = previousConfigDir;
-			if (previousHarnessConfigDir === undefined) delete process.env.STEP_HARNESS_CONFIG_DIR;
-			else process.env.STEP_HARNESS_CONFIG_DIR = previousHarnessConfigDir;
 			if (previousArgv1 === undefined) delete process.argv[1];
 			else process.argv[1] = previousArgv1;
 			vi.resetModules();
 		}
+	});
+
+	test("imports the retired Pi namespace and archives it without sessions", async () => {
+		const { home, workspace } = await makeHome();
+		const retired = join(home, ".step-harness");
+		const retiredAgent = join(retired, "agent");
+		await mkdir(join(retiredAgent, "sessions"), { recursive: true });
+		await writeFile(join(retiredAgent, "settings.json"), JSON.stringify({ defaultModel: "retired-model" }));
+		await writeFile(
+			join(retiredAgent, "models.json"),
+			JSON.stringify({ providers: { step: { api: "anthropic-messages", models: [{ id: "retired-model" }] } } }),
+		);
+		await writeFile(
+			join(retiredAgent, "auth.json"),
+			JSON.stringify({ step: { type: "api_key", key: "retired-key" } }),
+		);
+		await writeFile(join(retiredAgent, "sessions", "old.jsonl"), "old session");
+
+		const first = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
+		const agent = join(home, ".step-cli", "agent");
+		expect(first.migrated).toBe(true);
+		expect(JSON.parse(await readFile(join(agent, "settings.json"), "utf8"))).toMatchObject({
+			defaultModel: "retired-model",
+		});
+		expect(JSON.parse(await readFile(join(agent, "auth.json"), "utf8"))).toMatchObject({
+			step: { key: "retired-key" },
+		});
+		expect(await readFile(join(home, ".step-harness.bak", "agent", "settings.json"), "utf8")).toContain(
+			"retired-model",
+		);
+		await expect(stat(join(home, ".step-harness.bak", "agent", "sessions"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+
+		const second = await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
+		expect(second.roots.find((root) => root.scope === "global")?.migrated).toBe(false);
+		expect(await readFile(join(home, ".step-harness.bak", "agent", "settings.json"), "utf8")).toContain(
+			"retired-model",
+		);
+	});
+
+	test("archives in-place rich config files after projecting them", async () => {
+		const { home, workspace } = await makeHome();
+		const legacy = join(home, ".step-cli");
+		await mkdir(legacy, { recursive: true });
+		await writeFile(
+			join(legacy, "config.json"),
+			JSON.stringify({ model: { provider: "step", model: "legacy-model" } }),
+		);
+		await writeFile(
+			join(legacy, "auth.json"),
+			JSON.stringify({ version: 1, profile: "step_plan", apiKey: "legacy-key" }),
+		);
+
+		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
+		expect(await readFile(join(home, ".step-cli.bak", "config.json"), "utf8")).toContain("legacy-model");
+		expect(await readFile(join(home, ".step-cli.bak", "auth.json"), "utf8")).toContain("legacy-key");
+		expect(await readFile(join(home, ".step-cli", "agent", "settings.json"), "utf8")).toContain("legacy-model");
 	});
 });

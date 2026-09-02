@@ -230,7 +230,7 @@ describe("Step settings manager decorator", () => {
 
 		expect(manager.getStepSettingsPaths()).toEqual({
 			global: join(fixture.agentDir, "step-settings.json"),
-			project: join(fixture.projectDir, ".step-harness", "step-settings.json"),
+			project: join(fixture.projectDir, ".step-cli", "step-settings.json"),
 		});
 	});
 });
