@@ -8,7 +8,7 @@
  */
 
 import type { Dirent } from "node:fs";
-import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Credential } from "@earendil-works/pi-ai";
 import { parse as parseYaml } from "yaml";
@@ -426,6 +426,7 @@ function convertModel(
 	warnings: string[],
 	credentials: Map<string, Credential>,
 	path: string,
+	outputProvider: JsonObject = provider,
 ): JsonObject | undefined {
 	// In the old Step schema `id` was a selectable profile alias while `model`
 	// was the name sent over the wire. Pi has one identifier and sends it as the
@@ -489,7 +490,9 @@ function convertModel(
 	if (key) {
 		// Pi has no per-model apiKey field. A reference is safe to retain at the
 		// enclosing provider level; literal values were moved to auth.json above.
-		if (provider.apiKey === undefined) provider.apiKey = key;
+		// `provider` is often a source/inherited copy, so write to the provider
+		// object that will actually be emitted into models.json.
+		if (outputProvider.apiKey === undefined) outputProvider.apiKey = key;
 		else warnings.push(`${path}.apiKey: dropped because the provider already has an API key.`);
 	}
 	if (rawParams && api && api !== "openai-completions" && api !== "openai-responses") {
@@ -542,7 +545,7 @@ function convertProvider(
 		.map((entry, index) => {
 			const object = asObject(entry);
 			return object
-				? convertModel(object, raw, providerId, warnings, credentials, `${path}.models[${index}]`)
+				? convertModel(object, raw, providerId, warnings, credentials, `${path}.models[${index}]`, provider)
 				: undefined;
 		})
 		.filter((entry): entry is JsonObject => entry !== undefined);
@@ -768,7 +771,15 @@ function convertConfig(root: JsonObject): ConvertedConfig {
 	for (const [index, entry] of modelEntries.entries()) {
 		const target = providerForEntry(entry, index);
 		const inherited = target.id === providerId ? inheritedProvider : { ...model, ...target.provider };
-		const converted = convertModel(entry, inherited, target.id, warnings, credentials, `models[${index}]`);
+		const converted = convertModel(
+			entry,
+			inherited,
+			target.id,
+			warnings,
+			credentials,
+			`models[${index}]`,
+			target.provider,
+		);
 		if (converted) outputProviders[target.id] = appendConvertedModel(target.provider, converted);
 	}
 
@@ -836,6 +847,7 @@ function convertConfig(root: JsonObject): ConvertedConfig {
 			warnings,
 			credentials,
 			"model",
+			target.provider,
 		);
 		if (synthetic) {
 			outputProviders[target.id] = appendConvertedModel(target.provider, synthetic);
@@ -1433,6 +1445,7 @@ async function archiveSelectedFiles(
 			if (await pathExists(destination)) continue;
 			await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
 			await copyFile(sourcePath, destination);
+			await chmod(destination, 0o600);
 			copied.push(relativePath);
 		}
 		if (copied.length > 0) {
@@ -1478,6 +1491,7 @@ async function archiveLegacyDirectory(sourceRoot: string, warnings: string[]): P
 			try {
 				await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
 				await copyFile(sourcePath, destination);
+				await chmod(destination, 0o600);
 				copied.push(relativePath);
 			} catch (error) {
 				warnings.push(
@@ -1860,12 +1874,15 @@ async function migrateRoot(
 			.slice(projectionWarningStart)
 			.some((warning) => /(?:could not persist|not valid JSON|Migration failed)/iu.test(warning));
 		if (!projectionFailed) {
-			await writeMigrationMarker(targetRoot, sourceRoot, warnings, markerName);
+			let backupFailed = false;
 			if (sameRoot) {
 				// Only the old root-level files are legacy in an in-place upgrade;
 				// the generated Pi files under `agent/` must remain active.
+				const backupWarningCount = warnings.length;
 				await archiveSelectedFiles(sourceRoot, [...CONFIG_CANDIDATES, "auth.json"], warnings);
+				backupFailed = warnings.length > backupWarningCount;
 			}
+			if (!backupFailed) await writeMigrationMarker(targetRoot, sourceRoot, warnings, markerName);
 		}
 	} catch (error) {
 		warnings.push(`Migration failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1979,8 +1996,11 @@ async function migrateRetiredPiRoot(
 		/(?:could not persist|invalid Pi|not valid JSON)/iu.test(warning),
 	);
 	if (!projectionFailed) {
-		await writeMigrationMarker(targetRoot, sourceRoot, warnings, RETIRED_NAMESPACE_MIGRATION_MARKER);
+		const backupWarningCount = warnings.length;
 		await archiveLegacyDirectory(sourceRoot, warnings);
+		if (warnings.length === backupWarningCount) {
+			await writeMigrationMarker(targetRoot, sourceRoot, warnings, RETIRED_NAMESPACE_MIGRATION_MARKER);
+		}
 	}
 	return report;
 }

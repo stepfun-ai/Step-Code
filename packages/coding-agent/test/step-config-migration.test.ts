@@ -86,6 +86,34 @@ describe("Step config migration", () => {
 		expect(report.warnings.some((warning) => warning.includes("tools"))).toBe(true);
 	});
 
+	test("preserves a model-level credential reference on the emitted provider", async () => {
+		const { home, workspace } = await makeHome();
+		const legacy = join(home, ".step-cli");
+		await mkdir(legacy, { recursive: true });
+		await writeFile(
+			join(legacy, "config.json"),
+			JSON.stringify({
+				model: { model: "wire-model", provider: "custom" },
+				providers: {
+					custom: {
+						api: "openai-chat-completions",
+						baseUrl: "https://custom.example/v1",
+						models: [{ id: "profile", model: "wire-model", apiKey: "$CUSTOM_API_KEY" }],
+					},
+				},
+			}),
+		);
+
+		await migrateStepConfig({ homeDir: home, cwd: workspace, env: {} });
+		const agentDir = join(home, ".step-cli", "agent");
+		const models = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as {
+			providers: Record<string, { apiKey?: string }>;
+		};
+
+		expect(models.providers.custom?.apiKey).toBe("$CUSTOM_API_KEY");
+		await expect(stat(join(agentDir, "auth.json"))).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
 	test("does not migrate legacy approval policy into the Step settings sidecar", async () => {
 		const { home, workspace } = await makeHome();
 		const legacy = join(home, ".step-cli");
