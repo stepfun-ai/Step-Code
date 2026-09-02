@@ -15,6 +15,7 @@ import {
 	logoutStepCredentials,
 	migrateLegacyStepCredential,
 } from "./step/auth.ts";
+import { normalizeStepUid, readStepBuildIdentity } from "./step/build-identity.ts";
 import { isStepConfigCommand, runStepConfigCommand, translateStepCommandArgs } from "./step/command-compat.ts";
 import { migrateStepConfig, readStepGlobalDefaults } from "./step/config-migration.ts";
 import {
@@ -26,9 +27,15 @@ import {
 } from "./step/defaults.ts";
 import { readOrCreateStepDeviceId, resolveStepStorageRoot } from "./step/device-id.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./step/environment.ts";
+import { runFeedbackCommand } from "./step/feedback/command.ts";
 import { maybeUpdateStep } from "./step/local-update.ts";
 import { createStepSessionManagerFactory } from "./step/session.ts";
 import { createStepSettingsManager, type StepSettingsManager } from "./step/settings-manager.ts";
+import {
+	flushStderrDevLog,
+	installProcessStderrDevLogCapture,
+	setStderrDevLogStorageRootDirectory,
+} from "./step/stderr-dev-log.ts";
 import { StepStdioHost } from "./step/stdio-host.ts";
 import { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 import { createStepModelRequestObserver } from "./step/telemetry.ts";
@@ -36,6 +43,7 @@ import {
 	createStepSystemMetricsCollector,
 	createStepTelemetryRuntime,
 	installStepTelemetryCrashHandlers,
+	readTelemetryUsername,
 	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
 import { createStepToolProfile } from "./step/tool-profile.ts";
@@ -57,6 +65,8 @@ process.title = "step";
 process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = "step";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
+setStderrDevLogStorageRootDirectory(resolveStepStorageRoot(process.env));
+installProcessStderrDevLogCapture();
 
 // main() redirects process.stdout for headless modes so diagnostics cannot
 // corrupt machine-readable output. Capture the original byte writer for the
@@ -108,8 +118,7 @@ let telemetryExitRecorded = false;
 const telemetryProcessExitHandler = (code: number): void => {
 	if (telemetryExitRecorded) return;
 	telemetryExitRecorded = true;
-	const effectiveCode = Number.isInteger(code) ? code : (process.exitCode ?? 0);
-	const exitReason = effectiveCode === 0 ? "normal" : effectiveCode === 130 ? "interrupt" : "error";
+	const exitReason = readTelemetryExitReason(Number.isInteger(code) ? code : process.exitCode);
 	telemetryRuntime.track("cli_exited", {
 		duration_ms: Date.now() - telemetryStartedAt,
 		exit_reason: exitReason,
@@ -128,6 +137,19 @@ const telemetryIdentityReady = initializeTelemetryIdentity();
 configureHttpDispatcher();
 
 let currentStepSettingsManager: StepSettingsManager | undefined;
+const hasExplicitStepCredential =
+	process.argv.slice(2).some((arg) => arg === "--api-key" || arg.startsWith("--api-key=")) ||
+	Boolean(process.env.STEP_API_KEY?.trim());
+const readCurrentFeedbackIdentity = () => {
+	const uid = hasExplicitStepCredential
+		? undefined
+		: readCredentialUid(readStoredCredential(STEP_PROVIDER_ID, getStepAuthPath()));
+	const username = readTelemetryUsername(process.env);
+	return {
+		...(uid ? { uid } : {}),
+		...(username ? { username } : {}),
+	};
+};
 const stepMainOptions: MainOptions = {
 	agentDir: resolveStepAgentDir(),
 	configDirName: resolveStepConfigDir(),
@@ -142,6 +164,7 @@ const stepMainOptions: MainOptions = {
 		createStepExtensionInline({
 			telemetry: telemetryRuntime,
 			stepSettings: () => currentStepSettingsManager,
+			feedbackIdentity: readCurrentFeedbackIdentity,
 			permission: {
 				approvalMode: stepPermissionArgs.approvalMode,
 				nonInteractiveApproval: stepPermissionArgs.nonInteractiveApproval,
@@ -173,7 +196,6 @@ const stepMainOptions: MainOptions = {
 				const host = new StepStdioHost({
 					runtimeHost,
 					writeFrame: rawStdoutWrite,
-					onExitRequested: (code) => process.exit(code),
 				});
 				await host.run();
 			}
@@ -184,8 +206,10 @@ const stepMainOptions: MainOptions = {
 		startupLoginProvider: STEP_PROVIDER_ID,
 		defaultModelForProvider: (providerId) => (providerId === STEP_PROVIDER_ID ? STEP_DEFAULT_MODEL : undefined),
 		allowedAuthProviders: [STEP_PROVIDER_ID],
-		onCredentialAuthenticated: ({ uid }) => {
-			if (uid) telemetryRuntime.setContext({ uid });
+		onCredentialAuthenticated: ({ providerId, uid }) => {
+			if (providerId !== STEP_PROVIDER_ID) return;
+			const authenticatedUid = normalizeStepUid(uid);
+			if (authenticatedUid) telemetryRuntime.setContext({ uid: authenticatedUid });
 		},
 		onStartup: async ({ ui, stop, dispose }) => {
 			// Auth-only startup uses the same InteractiveMode for its OAuth dialog,
@@ -229,6 +253,7 @@ const stepMainOptions: MainOptions = {
 const topLevelStepCommand = process.argv[2];
 const isTopLevelLogin = topLevelStepCommand === "login";
 const isTopLevelLogout = topLevelStepCommand === "logout";
+const isTopLevelFeedback = topLevelStepCommand === "feedback";
 const topLevelAuthHelp = process.argv.slice(3).some((arg) => arg === "--help" || arg === "-h");
 
 let telemetryExitReason: "normal" | "error" = "normal";
@@ -245,12 +270,14 @@ try {
 			// direct credential migration pointed at the real legacy locations so a
 			// login file created after the migration marker is still imported.
 			legacyPath: getLegacyStepAuthPath(),
-			explicitCredential:
-				process.argv.slice(2).some((arg) => arg === "--api-key" || arg.startsWith("--api-key=")) ||
-				Boolean(process.env.STEP_API_KEY?.trim()),
+			explicitCredential: hasExplicitStepCredential,
 		});
-		const storedUid = readCredentialUid(readStoredCredential(STEP_PROVIDER_ID, getStepAuthPath()));
-		if (storedUid) telemetryRuntime.setContext({ uid: storedUid });
+		const storedUid = hasExplicitStepCredential
+			? undefined
+			: readCredentialUid(readStoredCredential(STEP_PROVIDER_ID, getStepAuthPath()));
+		if (storedUid) {
+			telemetryRuntime.setContext({ uid: storedUid });
+		}
 	}
 	if (isTopLevelLogout) {
 		if (topLevelAuthHelp) {
@@ -308,6 +335,19 @@ try {
 				},
 			);
 		}
+	} else if (isTopLevelFeedback) {
+		const feedbackSettingsManager =
+			currentStepSettingsManager ?? createStepSettingsManager(process.cwd(), resolveStepAgentDir());
+		const feedbackIdentity = readCurrentFeedbackIdentity();
+		const exitCode = await runFeedbackCommand(process.argv.slice(3), {
+			storageRootDir: resolveStepStorageRoot(process.env),
+			...(feedbackIdentity.uid ? { uid: feedbackIdentity.uid } : {}),
+			...(feedbackIdentity.username ? { username: feedbackIdentity.username } : {}),
+			telemetry: telemetryRuntime,
+			settings: feedbackSettingsManager,
+			env: process.env,
+		});
+		if (exitCode !== 0) process.exitCode = exitCode;
 	} else {
 		const rawStepArgs = process.argv.slice(2);
 		if (isStepConfigCommand(rawStepArgs)) {
@@ -341,12 +381,16 @@ try {
 		telemetryExitRecorded = true;
 		telemetryRuntime.track("cli_exited", {
 			duration_ms: Date.now() - telemetryStartedAt,
-			exit_reason: telemetryExitReason,
+			exit_reason: telemetryExitReason === "error" ? telemetryExitReason : readTelemetryExitReason(process.exitCode),
 		});
 	}
 	process.off("exit", telemetryProcessExitHandler);
 	telemetryCrashHandlers?.dispose();
-	await telemetryRuntime.shutdown();
+	try {
+		await telemetryRuntime.shutdown();
+	} finally {
+		await flushStderrDevLog();
+	}
 }
 
 function readTelemetryEntrypoint(argv: readonly string[]): string {
@@ -359,6 +403,11 @@ function readTelemetryNodeVersion(): string {
 	return `${major}.${minor}`;
 }
 
+function readTelemetryExitReason(code: number | string | null | undefined): "normal" | "interrupt" | "error" {
+	const effectiveCode = typeof code === "number" ? code : Number(code ?? 0);
+	return effectiveCode === 0 ? "normal" : effectiveCode === 130 ? "interrupt" : "error";
+}
+
 async function initializeTelemetryIdentity(): Promise<void> {
 	if (!telemetryRuntime.enabled) return;
 	try {
@@ -366,7 +415,7 @@ async function initializeTelemetryIdentity(): Promise<void> {
 		if (result.deviceId) telemetryRuntime.setContext({ deviceId: result.deviceId });
 		if (result.created) {
 			telemetryRuntime.track("first_launch", {
-				channel: process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
+				channel: readStepBuildIdentity(process.env).channel,
 			});
 		}
 	} catch {
@@ -377,5 +426,5 @@ async function initializeTelemetryIdentity(): Promise<void> {
 function readCredentialUid(credential: unknown): string | undefined {
 	if (!credential || typeof credential !== "object" || Array.isArray(credential)) return undefined;
 	const uid = (credential as Record<string, unknown>).uid;
-	return typeof uid === "string" && uid.trim() ? uid.trim() : undefined;
+	return normalizeStepUid(uid);
 }

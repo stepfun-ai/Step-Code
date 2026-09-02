@@ -636,8 +636,8 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 			diagnostics_included: "Whether bounded diagnostics were attached.",
 			surface: "CLI or TUI submission surface.",
 			delivered: "Whether the submission was accepted rather than queued.",
-			bundle_included: "Whether a session archive was attached.",
-			bundle_bytes: "Compressed archive size, or zero when absent.",
+			bundle_included: "Whether a session archive was successfully uploaded.",
+			bundle_bytes: "Successfully uploaded compressed archive size, or zero when none was uploaded.",
 		},
 	},
 	tui_input_anomaly: {

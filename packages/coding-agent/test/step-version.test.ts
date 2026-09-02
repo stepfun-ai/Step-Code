@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { resolveStepCliVersion, STEP_CLI_FALLBACK_VERSION } from "../src/step/version.ts";
+import { resolveStepCliVersion, resolveStepHarnessVersion, STEP_CLI_FALLBACK_VERSION } from "../src/step/version.ts";
 
 describe("Step product version", () => {
 	it("keeps the source fallback in lockstep with the product package", () => {
@@ -48,5 +48,16 @@ describe("Step product version", () => {
 				source: "embedded",
 			});
 		}
+	});
+
+	it("falls back to a nonblank legacy alias", () => {
+		expect(
+			resolveStepHarnessVersion({
+				STEP_HARNESS_BUILD_VERSION: " ",
+				STEP_CLI_BUILD_VERSION: "v4.5.6",
+				STEP_HARNESS_VERSION_OVERRIDE: " ",
+				STEP_CLI_VERSION_OVERRIDE: "v7.8.9",
+			}),
+		).toEqual({ value: "7.8.9", source: "override" });
 	});
 });

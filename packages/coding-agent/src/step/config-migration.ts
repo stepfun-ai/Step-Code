@@ -11,6 +11,7 @@ import type { Dirent } from "node:fs";
 import { chmod, copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Credential } from "@earendil-works/pi-ai";
+import lockfile from "proper-lockfile";
 import { parse as parseYaml } from "yaml";
 import {
 	normalizeStepAnthropicBaseUrl,
@@ -23,6 +24,7 @@ import { stripJsonComments } from "../utils/json.ts";
 import { stripBom } from "../utils/text.ts";
 import {
 	LEGACY_RENAMED_CONFIG_DIR,
+	LEGACY_STEP_CONFIG_DIR,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepHomeDir,
@@ -108,6 +110,7 @@ function readTelemetrySettings(value: JsonObject): {
 
 interface ConvertedConfig {
 	settings: JsonObject;
+	stepSettings: JsonObject;
 	models: JsonObject;
 	credentials: Map<string, Credential>;
 	warnings: string[];
@@ -120,6 +123,7 @@ interface ConvertedConfig {
 
 interface RootConversion {
 	settings: JsonObject;
+	stepSettings: JsonObject;
 	models: JsonObject;
 	credentials: Map<string, Credential>;
 	warnings: string[];
@@ -137,25 +141,51 @@ export const STEP_LEGACY_MIGRATION_MARKER = ".legacy-step-cli-migration.json";
 /** Marker used when importing the pre-rename Pi-shaped directory. */
 const RETIRED_NAMESPACE_MIGRATION_MARKER = ".legacy-step-harness-migration.json";
 /** Bump when the projection gains a new source field or merge phase. */
-const STEP_LEGACY_MIGRATION_VERSION = 4;
+const STEP_LEGACY_MIGRATION_VERSION = 5;
+/** Versions 3 and 4 completed model/settings projection but predate feedback policy. */
+const STEP_LEGACY_FEEDBACK_PREDECESSOR_VERSIONS = new Set([3, 4]);
+
+interface StepLegacyMigrationMarker {
+	version: number;
+	source?: string;
+	target?: string;
+}
+
+interface StepLegacyMigrationMarkerReadResult {
+	exists: boolean;
+	marker?: StepLegacyMigrationMarker;
+}
 
 function migrationMarkerPath(targetRoot: string, markerName = STEP_LEGACY_MIGRATION_MARKER): string {
 	return join(targetRoot, markerName);
 }
 
-async function hasMigrationMarker(
+async function readMigrationMarker(
 	targetRoot: string,
-	sourceRoot: string,
 	markerName = STEP_LEGACY_MIGRATION_MARKER,
-): Promise<boolean> {
+): Promise<StepLegacyMigrationMarkerReadResult> {
+	let content: string;
 	try {
-		const parsed = asObject(JSON.parse(await readFile(migrationMarkerPath(targetRoot, markerName), "utf8")));
-		if (parsed?.version !== STEP_LEGACY_MIGRATION_VERSION) return false;
-		const source = asString(parsed.source);
-		return source === undefined || resolve(source) === resolve(sourceRoot);
-	} catch {
-		return false;
+		content = await readFile(migrationMarkerPath(targetRoot, markerName), "utf8");
+	} catch (error) {
+		return { exists: (error as NodeJS.ErrnoException).code !== "ENOENT" };
 	}
+	try {
+		const marker = asObject(JSON.parse(stripBom(content)));
+		const version = asNumber(marker?.version);
+		if (version === undefined || !Number.isInteger(version) || version < 1) return { exists: true };
+		return {
+			exists: true,
+			marker: { version, source: asString(marker?.source), target: asString(marker?.target) },
+		};
+	} catch {
+		return { exists: true };
+	}
+}
+
+function markerMatchesSource(marker: StepLegacyMigrationMarker | undefined, sourceRoot: string): boolean {
+	if (!marker?.source) return true;
+	return resolve(marker.source) === resolve(sourceRoot);
 }
 
 async function writeMigrationMarker(
@@ -163,13 +193,19 @@ async function writeMigrationMarker(
 	sourceRoot: string,
 	warnings: string[],
 	markerName = STEP_LEGACY_MIGRATION_MARKER,
+	version = STEP_LEGACY_MIGRATION_VERSION,
 ): Promise<void> {
 	try {
 		await mkdir(targetRoot, { recursive: true, mode: 0o700 });
 		await writeFile(
 			migrationMarkerPath(targetRoot, markerName),
 			`${JSON.stringify(
-				{ version: STEP_LEGACY_MIGRATION_VERSION, source: sourceRoot, completedAt: new Date().toISOString() },
+				{
+					version,
+					source: sourceRoot,
+					target: targetRoot,
+					completedAt: new Date().toISOString(),
+				},
 				null,
 				2,
 			)}\n`,
@@ -616,10 +652,16 @@ function readLegacyRoot(root: JsonObject): {
 	return { defaults, model: flatModel, models, providers };
 }
 
+function convertStepSettings(root: JsonObject): JsonObject {
+	const feedbackEnabled = asBoolean(root.feedbackEnabled) ?? asBoolean(asObject(root.feedback)?.enabled);
+	return feedbackEnabled === undefined ? {} : { feedbackEnabled };
+}
+
 function convertConfig(root: JsonObject): ConvertedConfig {
 	const warnings: string[] = [];
 	const credentials = new Map<string, Credential>();
 	const parsed = readLegacyRoot(root);
+	const stepSettings = convertStepSettings(root);
 	const legacyProxy =
 		asObject(asObject(root.integrations)?.modelsProxy) ?? asObject(root.modelsProxy) ?? asObject(root.modelsproxy);
 	const model = parsed.model;
@@ -640,11 +682,13 @@ function convertConfig(root: JsonObject): ConvertedConfig {
 			["feedback", root.feedback],
 			["voice", root.voice],
 		] as const) {
+			if (key === "feedback" && Object.keys(stepSettings).length > 0) continue;
 			if (value !== undefined)
 				warnings.push(`${key}: no direct Pi settings equivalent; kept in the source config only.`);
 		}
 		return {
 			settings: {},
+			stepSettings,
 			models: { providers: {} },
 			credentials,
 			warnings,
@@ -899,6 +943,7 @@ function convertConfig(root: JsonObject): ConvertedConfig {
 		["feedback", root.feedback],
 		["voice", root.voice],
 	] as const) {
+		if (key === "feedback" && Object.keys(stepSettings).length > 0) continue;
 		if (value !== undefined)
 			warnings.push(`${key}: no direct Pi settings equivalent; kept in the source config only.`);
 	}
@@ -919,6 +964,7 @@ function convertConfig(root: JsonObject): ConvertedConfig {
 
 	return {
 		settings,
+		stepSettings,
 		models: modelsJson,
 		credentials,
 		warnings,
@@ -1229,7 +1275,7 @@ interface ReadJsonResult {
 async function readJson(filePath: string): Promise<ReadJsonResult> {
 	try {
 		const content = await readFile(filePath, "utf8");
-		const parsed = JSON.parse(content) as unknown;
+		const parsed = JSON.parse(stripBom(content)) as unknown;
 		const value = asObject(parsed);
 		return value ? { exists: true, value } : { exists: true, error: new Error("expected a JSON object") };
 	} catch (error) {
@@ -1403,10 +1449,10 @@ async function readConfigFile(root: string): Promise<{ path: string; value: Json
 		const path = join(root, name);
 		try {
 			const content = await readFile(path, "utf8");
-			const parsed = name.endsWith("json") ? JSON.parse(content) : parseYaml(content);
+			const parsed = name.endsWith("json") ? JSON.parse(stripBom(content)) : parseYaml(stripBom(content));
 			const value = asObject(parsed);
 			if (value) return { path, value };
-			return undefined;
+			throw new Error("expected a configuration object");
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 			throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1579,13 +1625,15 @@ async function migrateMarkedAuth(
 	sourceRoot: string,
 	targetRoot: string,
 	scope: "global" | "project",
+	targetAgentRoot: string | undefined,
+	modelsAgentRoot: string | undefined,
 	globalAuthPath: string | undefined,
 	env: Record<string, string | undefined> = process.env,
 ): Promise<{ migrated: boolean; warnings: string[] }> {
 	const warnings: string[] = [];
 
-	const targetSettingsPath =
-		scope === "global" ? join(targetRoot, "agent", "settings.json") : join(targetRoot, "settings.json");
+	const outputAgentRoot = targetAgentRoot ?? (scope === "global" ? join(targetRoot, "agent") : targetRoot);
+	const targetSettingsPath = join(outputAgentRoot, "settings.json");
 	const targetSettings = await readJson(targetSettingsPath);
 	const defaultProvider = asString(targetSettings.value?.defaultProvider) ?? STEP_PROVIDER_ID;
 	const sourceRoots = [
@@ -1603,13 +1651,11 @@ async function migrateMarkedAuth(
 		}
 		collectLegacyCredentials(result.value, source.provider, credentials, warnings, path);
 	}
-	const targetAuthPath =
-		globalAuthPath ?? join(scope === "global" ? join(targetRoot, "agent") : targetRoot, "auth.json");
+	const targetAuthPath = globalAuthPath ?? join(outputAgentRoot, "auth.json");
 	const migrated = credentials.size > 0 ? await mergeAuthFile(targetAuthPath, [], credentials, warnings) : false;
-	const targetAgentRoot = scope === "global" ? join(targetRoot, "agent") : dirname(targetAuthPath);
 	const repaired = await repairStepLoginBinding({
 		settingsPath: targetSettingsPath,
-		modelsPath: join(dirname(globalAuthPath ?? join(targetAgentRoot, "auth.json")), "models.json"),
+		modelsPath: join(modelsAgentRoot ?? outputAgentRoot, "models.json"),
 		authPath: targetAuthPath,
 		stepApiKey: env.STEP_API_KEY,
 		canonicalBaseUrl: canonicalStepBaseUrl(env),
@@ -1638,6 +1684,79 @@ async function mergeSettingsFile(targetPath: string, settings: JsonObject, warni
 			`${targetPath}: could not persist migrated defaults (${error instanceof Error ? error.message : String(error)}).`,
 		);
 		return false;
+	}
+}
+
+function readFeedbackEnabledSetting(value: JsonObject): boolean | undefined {
+	for (const candidate of [value.feedbackEnabled, asObject(value.feedback)?.enabled]) {
+		if (typeof candidate === "boolean") return candidate;
+	}
+	return undefined;
+}
+
+function acquireStepSettingsLockSyncWithRetry(path: string): () => void {
+	const maxAttempts = 10;
+	const delayMs = 20;
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		try {
+			return lockfile.lockSync(path, { realpath: false });
+		} catch (error) {
+			const code =
+				typeof error === "object" && error !== null && "code" in error
+					? String((error as { code?: unknown }).code)
+					: undefined;
+			if (code !== "ELOCKED" || attempt === maxAttempts) throw error;
+			lastError = error;
+			const started = Date.now();
+			while (Date.now() - started < delayMs) {
+				// Match StepSettingsStore's synchronous setter lock semantics.
+			}
+		}
+	}
+	throw (lastError as Error) ?? new Error("Failed to acquire Step settings lock");
+}
+
+/** Project legacy product-only policy into the Step sidecar without clobbering user edits. */
+async function mergeStepSettingsFile(targetPath: string, settings: JsonObject, warnings: string[]): Promise<boolean> {
+	if (Object.keys(settings).length === 0) return false;
+	let release: (() => void) | undefined;
+	try {
+		await mkdir(dirname(targetPath), { recursive: true, mode: 0o700 });
+		try {
+			await writeFile(targetPath, "{}\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		release = acquireStepSettingsLockSyncWithRetry(targetPath);
+		const target = await readJson(targetPath);
+		if (target.error) {
+			warnings.push(`${targetPath}: existing Step settings were not valid JSON; left untouched.`);
+			return false;
+		}
+		const current = target.value ?? {};
+		const missingSettings = structuredClone(settings);
+		// `feedbackEnabled` and `feedback.enabled` are the same setting. An existing
+		// value in either spelling wins over the retained legacy source.
+		if (readFeedbackEnabledSetting(current) !== undefined) {
+			delete missingSettings.feedbackEnabled;
+			const nestedFeedback = asObject(missingSettings.feedback);
+			if (nestedFeedback) {
+				delete nestedFeedback.enabled;
+				if (Object.keys(nestedFeedback).length === 0) delete missingSettings.feedback;
+			}
+		}
+		const merged = mergeObjects(missingSettings, current);
+		if (JSON.stringify(current) === JSON.stringify(merged)) return false;
+		await writeFile(targetPath, `${JSON.stringify(merged, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+		return true;
+	} catch (error) {
+		warnings.push(
+			`${targetPath}: could not persist migrated Step settings (${error instanceof Error ? error.message : String(error)}).`,
+		);
+		return false;
+	} finally {
+		release?.();
 	}
 }
 
@@ -1713,6 +1832,55 @@ async function writeModelsFile(targetPath: string, models: JsonObject, warnings:
 	}
 }
 
+/** Upgrade only the feedback sidecar for a completed model/settings marker. */
+async function migrateFeedbackOnly(
+	sourceRoot: string,
+	targetRoot: string,
+	scope: "global" | "project",
+	outputAgentRoot: string,
+	modelsAgentRoot: string | undefined,
+	globalAuthPath: string | undefined,
+	env: Record<string, string | undefined>,
+	markerName = STEP_LEGACY_MIGRATION_MARKER,
+): Promise<{ migrated: boolean; warnings: string[] }> {
+	const warnings: string[] = [];
+	let configInfo: { path: string; value: JsonObject } | undefined;
+	let configReadFailed = false;
+	try {
+		configInfo = await readConfigFile(sourceRoot);
+	} catch (error) {
+		configReadFailed = true;
+		warnings.push(`Could not parse legacy config: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	const persistenceWarningStart = warnings.length;
+	const stepSettings = configInfo ? convertStepSettings(configInfo.value) : {};
+	const stepSettingsChanged = await mergeStepSettingsFile(
+		join(outputAgentRoot, "step-settings.json"),
+		stepSettings,
+		warnings,
+	);
+	const persistenceFailed = warnings
+		.slice(persistenceWarningStart)
+		.some((warning) => /(?:could not persist|not valid JSON)/iu.test(warning));
+
+	// Version 3 already completed the model/settings projection. Keep its normal
+	// late-auth retry, but never replay those completed phases just to add feedback.
+	const authOnly = await migrateMarkedAuth(
+		sourceRoot,
+		targetRoot,
+		scope,
+		outputAgentRoot,
+		modelsAgentRoot,
+		globalAuthPath,
+		env,
+	);
+	warnings.push(...authOnly.warnings);
+	if (!configReadFailed && !persistenceFailed)
+		await writeMigrationMarker(targetRoot, sourceRoot, warnings, markerName, STEP_LEGACY_MIGRATION_VERSION);
+	return { migrated: stepSettingsChanged || authOnly.migrated, warnings };
+}
+
 async function migrateRoot(
 	sourceRoot: string,
 	targetRoot: string,
@@ -1722,6 +1890,8 @@ async function migrateRoot(
 	modelsAgentRoot?: string,
 	globalAuthPath?: string,
 	env: Record<string, string | undefined> = process.env,
+	/** Pre-v5 custom agent directories shared their marker with sibling instances. */
+	legacySharedMarkerRoot?: string,
 	markerName = STEP_LEGACY_MIGRATION_MARKER,
 ): Promise<StepConfigMigrationRootReport & { defaults?: { provider?: string; model?: string } }> {
 	const warnings: string[] = [];
@@ -1735,16 +1905,60 @@ async function migrateRoot(
 		defaults?: { provider?: string; model?: string };
 	};
 	const sameRoot = resolve(sourceRoot) === resolve(targetRoot);
+	const outputAgentRoot = targetAgentRoot ?? (scope === "global" ? join(targetRoot, "agent") : targetRoot);
 	// Once the model/settings projection completed, do not replay those files over
 	// user edits. Credentials are different: an old login file may be created or
 	// restored later, so perform a small idempotent auth-only pass in that case.
-	// A malformed/older marker is ignored so an interrupted migration can retry in
-	// full.
-	if (await hasMigrationMarker(targetRoot, sourceRoot, markerName)) {
-		const authOnly = await migrateMarkedAuth(sourceRoot, targetRoot, scope, globalAuthPath, env);
+	// A malformed marker is ignored so an interrupted migration can retry in full.
+	const instanceMarker = await readMigrationMarker(targetRoot, markerName);
+	if (instanceMarker.marker && !markerMatchesSource(instanceMarker.marker, sourceRoot)) {
+		// Never replay into a target owned by another source. This also preserves a
+		// future marker verbatim instead of downgrading it during a rename.
+		return report;
+	}
+	let marker = instanceMarker.marker;
+	let inheritedSharedMarker = false;
+	if (!instanceMarker.exists && legacySharedMarkerRoot && resolve(legacySharedMarkerRoot) !== resolve(targetRoot)) {
+		const sharedMarker = (await readMigrationMarker(legacySharedMarkerRoot, markerName)).marker;
+		if (
+			sharedMarker !== undefined &&
+			sharedMarker.target === undefined &&
+			markerMatchesSource(sharedMarker, sourceRoot)
+		) {
+			marker = sharedMarker;
+			inheritedSharedMarker = true;
+		}
+	}
+	if (marker && marker.version >= STEP_LEGACY_MIGRATION_VERSION) {
+		const authOnly = await migrateMarkedAuth(
+			sourceRoot,
+			targetRoot,
+			scope,
+			outputAgentRoot,
+			modelsAgentRoot,
+			globalAuthPath,
+			env,
+		);
 		report.migrated = authOnly.migrated;
 		report.warnings.push(...authOnly.warnings);
-		if (sameRoot && authOnly.migrated) await archiveSelectedFiles(sourceRoot, ["auth.json"], warnings);
+		if (inheritedSharedMarker) {
+			await writeMigrationMarker(targetRoot, sourceRoot, warnings, markerName, marker.version);
+		}
+		return report;
+	}
+	if (marker && STEP_LEGACY_FEEDBACK_PREDECESSOR_VERSIONS.has(marker.version)) {
+		const feedbackOnly = await migrateFeedbackOnly(
+			sourceRoot,
+			targetRoot,
+			scope,
+			outputAgentRoot,
+			modelsAgentRoot,
+			globalAuthPath,
+			env,
+			markerName,
+		);
+		report.migrated = feedbackOnly.migrated;
+		report.warnings.push(...feedbackOnly.warnings);
 		return report;
 	}
 	try {
@@ -1755,9 +1969,11 @@ async function migrateRoot(
 	}
 
 	let configInfo: { path: string; value: JsonObject } | undefined;
+	let configReadFailed = false;
 	try {
 		configInfo = await readConfigFile(sourceRoot);
 	} catch (error) {
+		configReadFailed = true;
 		warnings.push(`Could not parse legacy config: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	const sourceAgentRoot = join(sourceRoot, "agent");
@@ -1765,6 +1981,7 @@ async function migrateRoot(
 		? { ...convertConfig(configInfo.value) }
 		: {
 				settings: {},
+				stepSettings: {},
 				models: { providers: {} },
 				credentials: new Map(),
 				warnings: [],
@@ -1795,7 +2012,11 @@ async function migrateRoot(
 			join(source.path, "auth.json"),
 		);
 	}
-	if (!conversion.hasModelConfig && sourceCredentialMap.size === 0) {
+	if (
+		!conversion.hasModelConfig &&
+		sourceCredentialMap.size === 0 &&
+		Object.keys(conversion.stepSettings).length === 0
+	) {
 		// Keep unsupported/approval-only legacy input recoverable even though it
 		// has no direct Pi projection. The source remains untouched for callers
 		// that still inspect it, while the sibling archive captures a snapshot.
@@ -1812,12 +2033,19 @@ async function migrateRoot(
 	projectStepCredentialProvider(conversion, stepCredentialAvailable, warnings);
 	copyInheritedLegacyCredential(conversion, sourceCredentialMap, warnings);
 
-	const outputAgentRoot = targetAgentRoot ?? (scope === "global" ? join(targetRoot, "agent") : targetRoot);
 	try {
 		const projectionWarningStart = warnings.length;
 		const settingsChanged =
 			Object.keys(conversion.settings).length > 0
 				? await mergeSettingsFile(join(outputAgentRoot, "settings.json"), conversion.settings, warnings)
+				: false;
+		const stepSettingsChanged =
+			Object.keys(conversion.stepSettings).length > 0
+				? await mergeStepSettingsFile(
+						join(outputAgentRoot, "step-settings.json"),
+						conversion.stepSettings,
+						warnings,
+					)
 				: false;
 		const modelsTargetRoot = modelsAgentRoot ?? (scope === "global" ? outputAgentRoot : undefined);
 		const modelsChanged =
@@ -1863,16 +2091,18 @@ async function migrateRoot(
 			canonicalBaseUrl: canonicalStepBaseUrl(env),
 			warnings,
 		});
-		report.migrated = settingsChanged || modelsChanged || authChanged || repaired;
+		report.migrated = settingsChanged || stepSettingsChanged || modelsChanged || authChanged || repaired;
 		if (configInfo && conversion.hasModelConfig) {
 			report.defaults = { provider: conversion.defaultProvider, model: conversion.defaultModel };
 		}
 		// Do not hide a failed write behind a completed marker. Conversion warnings
 		// (for example dropped unsupported fields) are safe; persistence/parse errors
 		// mean the old source must remain eligible for a later retry.
-		const projectionFailed = warnings
-			.slice(projectionWarningStart)
-			.some((warning) => /(?:could not persist|not valid JSON|Migration failed)/iu.test(warning));
+		const projectionFailed =
+			configReadFailed ||
+			warnings
+				.slice(projectionWarningStart)
+				.some((warning) => /(?:could not persist|not valid JSON|Migration failed)/iu.test(warning));
 		if (!projectionFailed) {
 			let backupFailed = false;
 			if (sameRoot) {
@@ -1888,6 +2118,55 @@ async function migrateRoot(
 		warnings.push(`Migration failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	return report;
+}
+
+/** Upgrade only the feedback sidecar for a retired namespace marker. */
+async function migrateRetiredFeedbackOnly(
+	sourceRoot: string,
+	targetRoot: string,
+	scope: "global" | "project",
+	outputAgentRoot: string,
+	modelsAgentRoot: string | undefined,
+	globalAuthPath: string | undefined,
+	env: Record<string, string | undefined>,
+): Promise<{ migrated: boolean; warnings: string[] }> {
+	const warnings: string[] = [];
+	const sourceAgentRoot = join(sourceRoot, "agent");
+	const candidates =
+		scope === "global"
+			? [join(sourceAgentRoot, "step-settings.json"), join(sourceRoot, "step-settings.json")]
+			: [join(sourceRoot, "step-settings.json"), join(sourceAgentRoot, "step-settings.json")];
+	let sourceSettings: ReadJsonResult = { exists: false };
+	let sourceSettingsPath: string | undefined;
+	for (const candidate of candidates) {
+		const result = await readJson(candidate);
+		if (!result.exists) continue;
+		sourceSettings = result;
+		sourceSettingsPath = candidate;
+		break;
+	}
+	if (sourceSettings.error)
+		warnings.push(`${sourceSettingsPath ?? candidates[0]}: existing Step settings were not valid JSON; skipped.`);
+	const feedbackEnabled = sourceSettings.value ? readFeedbackEnabledSetting(sourceSettings.value) : undefined;
+	const changed =
+		feedbackEnabled === undefined
+			? false
+			: await mergeStepSettingsFile(join(outputAgentRoot, "step-settings.json"), { feedbackEnabled }, warnings);
+	const authOnly = await migrateMarkedAuth(
+		sourceRoot,
+		targetRoot,
+		scope,
+		outputAgentRoot,
+		modelsAgentRoot,
+		globalAuthPath,
+		env,
+	);
+	warnings.push(...authOnly.warnings);
+	const failed = warnings.some((warning) => /(?:could not persist|not valid JSON)/iu.test(warning));
+	if (!failed) {
+		await writeMigrationMarker(targetRoot, sourceRoot, warnings, RETIRED_NAMESPACE_MIGRATION_MARKER);
+	}
+	return { migrated: changed || authOnly.migrated, warnings };
 }
 
 /**
@@ -1920,11 +2199,41 @@ async function migrateRetiredPiRoot(
 		return report;
 	}
 
-	if (await hasMigrationMarker(targetRoot, sourceRoot, RETIRED_NAMESPACE_MIGRATION_MARKER)) {
-		const authOnly = await migrateMarkedAuth(sourceRoot, targetRoot, scope, globalAuthPath, env);
+	const outputAgentRoot = targetAgentRoot ?? (scope === "global" ? join(targetRoot, "agent") : targetRoot);
+	const markerResult = await readMigrationMarker(targetRoot, RETIRED_NAMESPACE_MIGRATION_MARKER);
+	if (markerResult.marker && !markerMatchesSource(markerResult.marker, sourceRoot)) {
+		// A marker belonging to another retired source must not authorize an import
+		// into this target, and a future marker must remain untouched.
+		return report;
+	}
+	const marker = markerResult.marker;
+	if (marker && marker.version >= STEP_LEGACY_MIGRATION_VERSION) {
+		const authOnly = await migrateMarkedAuth(
+			sourceRoot,
+			targetRoot,
+			scope,
+			outputAgentRoot,
+			modelsAgentRoot,
+			globalAuthPath,
+			env,
+		);
 		report.migrated = authOnly.migrated;
 		report.warnings.push(...authOnly.warnings);
 		if (authOnly.migrated) await archiveLegacyDirectory(sourceRoot, warnings);
+		return report;
+	}
+	if (marker && STEP_LEGACY_FEEDBACK_PREDECESSOR_VERSIONS.has(marker.version)) {
+		const feedbackOnly = await migrateRetiredFeedbackOnly(
+			sourceRoot,
+			targetRoot,
+			scope,
+			outputAgentRoot,
+			modelsAgentRoot,
+			globalAuthPath,
+			env,
+		);
+		report.migrated = feedbackOnly.migrated;
+		report.warnings.push(...feedbackOnly.warnings);
 		return report;
 	}
 
@@ -1965,7 +2274,6 @@ async function migrateRetiredPiRoot(
 		return report;
 	}
 
-	const outputAgentRoot = targetAgentRoot ?? (scope === "global" ? join(targetRoot, "agent") : targetRoot);
 	const targetSettingsPath = join(outputAgentRoot, "settings.json");
 	const settingsChanged = sourceSettings.value
 		? await mergeSettingsFile(targetSettingsPath, sourceSettings.value, warnings)
@@ -2011,14 +2319,22 @@ export async function migrateStepConfig(options: StepConfigMigrationOptions = {}
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const home = resolve(options.homeDir ?? resolveStepHomeDir(env));
 	const newConfigDir = resolveStepConfigDir(env);
-	const configuredAgentDir = options.agentDir?.trim() || env.STEP_CODING_AGENT_DIR?.trim();
-	const newAgentDir = configuredAgentDir ? resolve(configuredAgentDir) : join(home, newConfigDir, "agent");
-	const globalTarget = configuredAgentDir ? dirname(newAgentDir) : join(home, newConfigDir);
-	const globalAuthPath = env.STEP_CLI_AUTH_PATH?.trim() || join(newAgentDir, "auth.json");
+	const configuredAgentDir =
+		options.agentDir?.trim() || env.STEP_CODING_AGENT_DIR?.trim() || env.STEP_HARNESS_CODING_AGENT_DIR?.trim();
+	const defaultAgentDir = resolve(join(home, newConfigDir, "agent"));
+	const newAgentDir = configuredAgentDir ? resolve(configuredAgentDir) : defaultAgentDir;
+	// Preserve the historical parent marker for the standard layout, including
+	// when step-bootstrap injected that default as an explicit environment value.
+	// A custom agentDir is its own instance boundary and keeps its marker inside
+	// that directory so sibling embedded hosts cannot suppress each other.
+	const globalTarget = newAgentDir === defaultAgentDir ? dirname(defaultAgentDir) : newAgentDir;
+	const legacySharedGlobalMarkerRoot = newAgentDir === defaultAgentDir ? undefined : dirname(newAgentDir);
+	const globalAuthPath =
+		env.STEP_CLI_AUTH_PATH?.trim() || env.STEP_HARNESS_AUTH_PATH?.trim() || join(newAgentDir, "auth.json");
+	const globalSource = join(home, LEGACY_STEP_CONFIG_DIR);
 	// The canonical `.step-cli` directory may contain the pre-Pi rich config,
 	// while `.step-harness` is the Pi-shaped namespace used by older releases.
 	// Both are read explicitly; no `.pi` directory is ever treated as a source.
-	const globalSource = join(home, STEP_CLI_CONFIG_DIR);
 	const retiredGlobalSource = join(home, LEGACY_RENAMED_CONFIG_DIR);
 	const projectTarget = join(cwd, newConfigDir);
 	const projectSource = join(cwd, STEP_CLI_CONFIG_DIR);
@@ -2033,6 +2349,7 @@ export async function migrateStepConfig(options: StepConfigMigrationOptions = {}
 		newAgentDir,
 		globalAuthPath,
 		env,
+		legacySharedGlobalMarkerRoot,
 	);
 	const globalRetiredReport = await migrateRetiredPiRoot(
 		retiredGlobalSource,

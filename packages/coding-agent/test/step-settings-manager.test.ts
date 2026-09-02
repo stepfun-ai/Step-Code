@@ -130,6 +130,32 @@ describe("Step settings manager decorator", () => {
 		expect(manager.getStepAutoResume()).toBeUndefined();
 	});
 
+	it("reads and clears the feedback setting through the Step sidecar", () => {
+		const fixture = makeRoot();
+		writeFileSync(fixture.paths.global, JSON.stringify({ feedback: { enabled: false } }));
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({ feedbackEnabled: false });
+		manager.setStepSettings({ feedbackEnabled: true });
+		expect(manager.getStepSettings()).toEqual({ feedbackEnabled: true });
+		expect(JSON.parse(readFileSync(fixture.paths.global, "utf8"))).toEqual({ feedbackEnabled: true });
+
+		manager.setStepSettings({ feedbackEnabled: undefined });
+		expect(manager.getStepSettings()).toEqual({});
+		expect(JSON.parse(readFileSync(fixture.paths.global, "utf8"))).toEqual({});
+	});
+
+	it("lets a project feedback alias override the global canonical setting", () => {
+		const fixture = makeRoot();
+		writeFileSync(fixture.paths.global, JSON.stringify({ feedbackEnabled: true }));
+		writeFileSync(fixture.paths.project, JSON.stringify({ feedback: { enabled: false } }));
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepGlobalSettings()).toEqual({ feedbackEnabled: true });
+		expect(manager.getStepProjectSettings()).toEqual({ feedbackEnabled: false });
+		expect(manager.getStepSettings()).toEqual({ feedbackEnabled: false });
+	});
+
 	it("does not resurrect nested legacy approval values after clearing", () => {
 		const fixture = makeRoot();
 		writeFileSync(

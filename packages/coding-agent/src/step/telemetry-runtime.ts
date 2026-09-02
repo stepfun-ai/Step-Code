@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { appendFile, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
+import {
+	normalizeStepCommit,
+	normalizeStepDeviceId,
+	normalizeStepUid,
+	normalizeStepWireSessionId,
+	readStepBuildIdentity,
+} from "./build-identity.ts";
 import { resolveStepStorageRoot } from "./device-id.ts";
 import type {
 	StepTelemetryContextPatch,
@@ -14,7 +21,12 @@ import type {
 	StepTelemetryTrackOptions,
 } from "./telemetry.ts";
 import { isKnownStepTelemetryEvent, STEP_TELEMETRY_EVENT_PROPERTY_NAMES } from "./telemetry-events.ts";
-import { resolveStepCliVersion, STEP_CLI_VERSION } from "./version.ts";
+import {
+	normalizeStepHarnessVersionValue,
+	readStepRuntimeVersion,
+	resolveStepCliVersion,
+	STEP_CLI_VERSION,
+} from "./version.ts";
 
 /** Envelope written to the Step analytics collector and local spool. */
 export interface StepTelemetryRecord {
@@ -130,7 +142,6 @@ const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 3_000;
 const DEFAULT_RETRY_BACKOFFS_MS = [1_000, 4_000, 16_000] as const;
-const DEFAULT_CHANNEL = "dev";
 const DEFAULT_SPOOL_FILE_PREFIX = "events";
 const FAILED_SPOOL_FILE_PREFIX = "failed";
 const DEFAULT_SPOOL_RETENTION_DAYS = 7;
@@ -140,11 +151,6 @@ const MAX_USERNAME_LENGTH = 64;
 const PLAUSIBLE_USERNAME = /^[\w.@:-]+$/u;
 /** Release default from the legacy Step ObservableServer endpoint registry. */
 const RELEASE_TELEMETRY_ENDPOINT = "https://api.stepfun.com/stepcliobserserver/api/v1/events";
-// Bun's `--env` compiler only substitutes a literal `process.env.NAME` read.
-// Keep this static capture alongside the runtime override so release binaries
-// retain their channel when no runtime override is supplied.
-const INLINED_BUILD_CHANNEL = process.env.STEP_CLI_BUILD_CHANNEL;
-const INLINED_BUILD_COMMIT = process.env.STEP_CLI_BUILD_COMMIT;
 
 /**
  * Create the process-level reporter used by the Step entrypoint.
@@ -170,7 +176,9 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		resolved.spoolEnabled === false || options.config?.spool === false
 			? undefined
 			: (normalizePath(options.spoolDirectory) ??
-				normalizePath(env.STEP_CLI_TELEMETRY_DIR) ??
+				normalizePath(
+					firstNonBlank(env.STEP_CLI_TELEMETRY_DIR, env.STEP_HARNESS_TELEMETRY_DIR, env.STEPCLI_TELEMETRY_DIR),
+				) ??
 				join(resolveStepStorageRoot(env), "telemetry"));
 	const maxQueued = positiveInt(options.maxQueued, DEFAULT_MAX_QUEUED);
 	const flushThreshold = positiveInt(options.flushThreshold, DEFAULT_FLUSH_THRESHOLD);
@@ -178,10 +186,9 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 	const requestTimeoutMs = positiveInt(options.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
 	const retryBackoffsMs = options.retryBackoffsMs ?? DEFAULT_RETRY_BACKOFFS_MS;
 	const spoolRetentionDays = nonNegativeInt(options.spoolRetentionDays, DEFAULT_SPOOL_RETENTION_DAYS);
-	const sleep =
-		options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+	const sleep = options.sleep ?? defaultUnrefSleep;
 	const clock = options.clock ?? (() => new Date().toISOString());
-	const initialSessionId = options.context?.sessionId?.trim() || undefined;
+	const initialSessionId = normalizeStepWireSessionId(options.context?.sessionId);
 	let context: Omit<StepTelemetryContext, "sessionId"> = {
 		channel: normalizeContextValue(options.context?.channel) ?? readBuildChannel(env),
 		platform: normalizeContextValue(options.context?.platform ?? process.platform) ?? process.platform,
@@ -190,23 +197,43 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		// fixed Step source fallback. `resolveStepCliVersion` also knows how
 		// to read Bun's compile-time value when its runtime environment is empty.
 		version:
-			normalizeVersionContext(options.context?.version ?? env.STEP_CLI_VERSION) ??
+			normalizeVersionContext(options.context?.version) ??
+			readStepRuntimeVersion(env) ??
 			resolveStepCliVersion(env).value ??
 			STEP_CLI_VERSION.value,
 		...optionalContextValue("commit", readBuildCommit(env, options.context?.commit)),
-		...optionalContextValue("deviceId", options.context?.deviceId ?? env.STEP_CLI_DEVICE_ID ?? env.STEPCLI_DEVICE_ID),
-		...optionalContextValue("uid", options.context?.uid ?? env.STEP_CLI_UID ?? env.STEPCLI_UID),
+		...optionalContextValue(
+			"deviceId",
+			options.context?.deviceId ??
+				firstNonBlank(env.STEP_CLI_DEVICE_ID, env.STEP_HARNESS_DEVICE_ID, env.STEPCLI_DEVICE_ID),
+		),
+		...optionalContextValue(
+			"uid",
+			options.context?.uid ?? firstNonBlank(env.STEP_CLI_UID, env.STEP_HARNESS_UID, env.STEPCLI_UID),
+		),
 		...optionalContextValue("username", readTelemetryUsername(env, options.context?.username)),
 	};
 	// Session is the one context field that changes during a process. Keep it on
 	// each pending record so a later /new or /resume cannot relabel old events.
 	let foregroundSessionId = initialSessionId;
 	let buffer: PendingTelemetryRecord[] = [];
+	let trackVersion = 0;
 	let timer: ReturnType<typeof setInterval> | undefined;
 	const inFlight = new Set<Promise<void>>();
 	let stopped = false;
 	let appendTail = Promise.resolve();
 	let pruneStarted: Promise<void> | undefined;
+	type PendingSpoolWrite = {
+		readonly target: string;
+		readonly payload: string;
+		readonly records: readonly StepTelemetryRecord[];
+		completed: boolean;
+		syncWritten: boolean;
+	};
+	// A threshold/timer flush removes records from `buffer` before its async
+	// sinks run. Keep every not-yet-completed spool append here as a second,
+	// synchronous recovery queue for process.exit().
+	const pendingSpoolWrites = new Set<PendingSpoolWrite>();
 
 	const pruneSpool = (): Promise<void> => {
 		if (!spoolDirectory || spoolRetentionDays <= 0) return Promise.resolve();
@@ -225,24 +252,110 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		};
 	};
 
-	// Pi uses process.exit() for several short commands and for the interactive
-	// quit path. Node does not run async finally blocks in that case, so retain a
-	// synchronous last-resort spool handler. It never runs on the hot path; it is
-	// only invoked while the process is already exiting.
-	const syncExitSpool = (): void => {
-		if (buffer.length === 0 || !spoolDirectory) return;
+	const readSpoolEventIds = (target: string): Set<string> => {
+		const ids = new Set<string>();
+		try {
+			for (const line of readFileSync(target, "utf8").split("\n")) {
+				if (!line) continue;
+				try {
+					const record: unknown = JSON.parse(line);
+					if (
+						typeof record === "object" &&
+						record !== null &&
+						"eventId" in record &&
+						typeof record.eventId === "string"
+					) {
+						ids.add(record.eventId);
+					}
+				} catch {
+					// Preserve malformed legacy lines; only dedupe known records.
+				}
+			}
+		} catch {
+			// A missing target simply means every incoming record is new.
+		}
+		return ids;
+	};
+
+	const dedupeSpoolFileSync = (target: string): void => {
+		try {
+			const original = readFileSync(target, "utf8");
+			const seen = new Set<string>();
+			let changed = false;
+			const lines = original.split("\n");
+			const kept = lines.filter((line) => {
+				if (!line) return true;
+				try {
+					const record: unknown = JSON.parse(line);
+					if (
+						typeof record === "object" &&
+						record !== null &&
+						"eventId" in record &&
+						typeof record.eventId === "string"
+					) {
+						if (seen.has(record.eventId)) {
+							changed = true;
+							return false;
+						}
+						seen.add(record.eventId);
+					}
+				} catch {
+					// Preserve malformed legacy lines.
+				}
+				return true;
+			});
+			if (changed) writeFileSync(target, kept.join("\n"), { encoding: "utf8", mode: 0o600 });
+		} catch {
+			// Best effort only; the regular append remains the durable fallback.
+		}
+	};
+
+	const appendSync = (target: string, payload: string, records?: readonly StepTelemetryRecord[]): boolean => {
+		if (!spoolDirectory) return false;
 		try {
 			mkdirSync(spoolDirectory, { recursive: true, mode: 0o700 });
-			const target = join(spoolDirectory, `events-${buffer[0]?.at.slice(0, 10) ?? "unknown"}.jsonl`);
-			const payload = `${buffer
-				.map(materializeRecord)
-				.map((record) => JSON.stringify(record))
-				.join("\n")}\n`;
-			appendFileSync(target, payload, { encoding: "utf8", mode: 0o600 });
-			buffer = [];
+			if (!records || records.length === 0) {
+				appendFileSync(target, payload, { encoding: "utf8", mode: 0o600 });
+				return true;
+			}
+			const existingIds = readSpoolEventIds(target);
+			const freshRecords = records.filter((record) => !existingIds.has(record.eventId));
+			if (freshRecords.length > 0) {
+				const freshPayload = `${freshRecords.map((record) => JSON.stringify(record)).join("\n")}\n`;
+				appendFileSync(target, freshPayload, { encoding: "utf8", mode: 0o600 });
+			}
+			return true;
 		} catch {
 			// Telemetry must never turn a normal process exit into an error.
+			return false;
 		}
+	};
+
+	const syncExitSpool = (): void => {
+		if (!spoolDirectory) return;
+		// Batches already removed from `buffer` are the important case: their
+		// async append callbacks may never run once process.exit() starts.
+		for (const pending of pendingSpoolWrites) {
+			if (pending.completed || pending.syncWritten) continue;
+			// Mark before writing so an async continuation that is still queued will
+			// observe the state and skip a second append.
+			pending.syncWritten = true;
+			if (appendSync(pending.target, pending.payload, pending.records)) {
+				pending.completed = true;
+				pendingSpoolWrites.delete(pending);
+			} else {
+				pending.syncWritten = false;
+			}
+		}
+
+		if (buffer.length === 0) return;
+		const records = buffer.map(materializeRecord);
+		const target = join(spoolDirectory, `events-${records[0]?.at.slice(0, 10) ?? "unknown"}.jsonl`);
+		const payload = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+		if (appendSync(target, payload, records)) buffer = [];
+	};
+	const removeExitListenerIfDrained = (): void => {
+		if (buffer.length === 0 && pendingSpoolWrites.size === 0) process.off("exit", syncExitSpool);
 	};
 	process.once("exit", syncExitSpool);
 
@@ -263,14 +376,27 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		if (records.length === 0 || !spoolDirectory) return Promise.resolve();
 		const target = join(spoolDirectory, `${prefix}-${records[0]?.at.slice(0, 10) ?? "unknown"}.jsonl`);
 		const payload = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+		const pending: PendingSpoolWrite = {
+			target,
+			payload,
+			records,
+			completed: false,
+			syncWritten: false,
+		};
+		pendingSpoolWrites.add(pending);
 		// Serialize appends so concurrent threshold/timer flushes cannot interleave
 		// partial JSON lines.
 		appendTail = appendTail
 			.catch(() => undefined)
 			.then(async () => {
+				if (pending.completed || pending.syncWritten) return;
 				await pruneSpool();
 				await mkdir(spoolDirectory, { recursive: true, mode: 0o700 });
+				if (pending.completed || pending.syncWritten) return;
 				await appendFile(target, payload, { encoding: "utf8", mode: 0o600 });
+				if (pending.syncWritten) dedupeSpoolFileSync(target);
+				pending.completed = true;
+				pendingSpoolWrites.delete(pending);
 			});
 		return appendTail;
 	};
@@ -326,19 +452,21 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 	};
 
 	const flushWithOptions = async (final: boolean): Promise<void> => {
-		// Start every currently buffered batch immediately. A slow HTTP retry must
-		// not sit in front of later batches; the spool sink serializes file appends
-		// independently, matching the legacy telemetry client's in-flight set.
-		if (buffer.length > 0) {
-			const pending = buffer;
-			buffer = [];
-			startBatch(pending, final);
+		// Keep taking snapshots until no producer changed the queue while this
+		// flush was waiting. A single inFlight snapshot is insufficient: a
+		// threshold flush can finish while a second batch is queued in `buffer`,
+		// and that second batch must be part of the same explicit flush barrier.
+		for (;;) {
+			const versionAtStart = trackVersion;
+			if (buffer.length > 0) {
+				const pending = buffer;
+				buffer = [];
+				startBatch(pending, final);
+			}
+			await Promise.allSettled([...inFlight]);
+			await appendTail.catch(() => undefined);
+			if (buffer.length === 0 && inFlight.size === 0 && trackVersion === versionAtStart) return;
 		}
-		await Promise.allSettled([...inFlight]);
-		// A producer may have queued another batch while the snapshot above was
-		// settling. Drain it with the same finalness before returning.
-		if (buffer.length > 0) return flushWithOptions(final);
-		await appendTail.catch(() => undefined);
 	};
 	const flush = (): Promise<void> => flushWithOptions(false);
 
@@ -353,7 +481,7 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 			options?: StepTelemetryTrackOptions,
 		): void {
 			if (stopped) return;
-			const explicitSessionId = normalizeContextValue(options?.sessionId ?? options?.context?.sessionId);
+			const explicitSessionId = normalizeStepWireSessionId(options?.sessionId ?? options?.context?.sessionId);
 			const record: PendingTelemetryRecord = {
 				eventId: randomUUID(),
 				event,
@@ -364,11 +492,12 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 					: undefined),
 			};
 			buffer.push(record);
+			trackVersion += 1;
 			if (buffer.length > maxQueued) buffer.splice(0, buffer.length - maxQueued);
 			if (buffer.length >= flushThreshold) void flush();
 		},
 		setContext(patch: StepTelemetryContextPatch): void {
-			if (patch.sessionId !== undefined) foregroundSessionId = normalizeContextValue(patch.sessionId);
+			if (patch.sessionId !== undefined) foregroundSessionId = normalizeStepWireSessionId(patch.sessionId);
 			context = {
 				...context,
 				...(patch.channel !== undefined
@@ -386,7 +515,7 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 					: undefined),
 				...optionalContextValue("deviceId", patch.deviceId),
 				...optionalContextValue("uid", patch.uid),
-				...optionalContextValue("username", normalizeTelemetryUsername(patch.username)),
+				...optionalContextValue("username", patch.username),
 				...optionalContextValue("commit", patch.commit),
 			};
 		},
@@ -396,13 +525,16 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 			stopped = true;
 			stopTimer();
 			const timeoutMs = shutdownOptions?.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
-			try {
-				await withTimeout(flushWithOptions(true), timeoutMs);
-			} finally {
-				// Keep the listener installed while the final flush is in flight so an
-				// explicit process.exit() can still persist records left in the buffer.
-				process.off("exit", syncExitSpool);
-			}
+			let finalFlushSettled = false;
+			const finalFlush = flushWithOptions(true).finally(() => {
+				finalFlushSettled = true;
+				removeExitListenerIfDrained();
+			});
+			await withTimeout(finalFlush, timeoutMs);
+			// A completed flush no longer needs the process-level fallback. If the
+			// timeout won the race, leave the listener installed until the async
+			// sinks settle (or until process.exit() invokes the synchronous drain).
+			if (finalFlushSettled) removeExitListenerIfDrained();
 		},
 	};
 }
@@ -623,7 +755,11 @@ export function readTelemetryEndpoint(
 	env: NodeJS.ProcessEnv = process.env,
 	config?: StepTelemetryRuntimeOptions["config"],
 ): string | undefined {
-	const explicit = env.STEP_CLI_TELEMETRY_ENDPOINT?.trim() || env.STEPCLI_TELEMETRY_ENDPOINT?.trim();
+	const explicit = firstNonBlank(
+		env.STEP_CLI_TELEMETRY_ENDPOINT,
+		env.STEP_HARNESS_TELEMETRY_ENDPOINT,
+		env.STEPCLI_TELEMETRY_ENDPOINT,
+	);
 	if (explicit) return explicit;
 	// A persisted endpoint is honored only by release builds. This is the old
 	// Step safety boundary: a source checkout may spool locally, while an
@@ -648,7 +784,12 @@ export function resolveStepTelemetrySettings(
 	config?: StepTelemetryRuntimeOptions["config"],
 ): StepResolvedTelemetrySettings {
 	if (isTestRuntime(env)) return { enabled: false, spoolEnabled: false, reason: "test-runtime" };
-	if (readFlag(env.STEP_CLI_DISABLE_TELEMETRY) || readFlag(env.STEPCLI_DISABLE_TELEMETRY)) {
+	if (
+		readFlag(env.STEP_CLI_DISABLE_TELEMETRY) ||
+		readFlag(env.STEP_HARNESS_DISABLE_TELEMETRY) ||
+		readFlag(env.STEP_HARNESS_TELEMETRY_DISABLED) ||
+		readFlag(env.STEPCLI_DISABLE_TELEMETRY)
+	) {
 		return { enabled: false, spoolEnabled: false, reason: "env-opt-out" };
 	}
 	if (config?.enabled === false) return { enabled: false, spoolEnabled: false, reason: "config-opt-out" };
@@ -663,13 +804,7 @@ export function resolveStepTelemetrySettings(
 export const resolveTelemetrySettings = resolveStepTelemetrySettings;
 
 function readBuildChannel(env: NodeJS.ProcessEnv): string {
-	const runtimeValue = env.STEP_CLI_BUILD_CHANNEL;
-	const embeddedValue = INLINED_BUILD_CHANNEL;
-	// Match the legacy build-env resolver: an explicit runtime value wins over
-	// the value embedded by Bun, while the embedded value supplies the release
-	// default when no override is present.
-	const value = runtimeValue ?? embeddedValue;
-	return value?.trim() === "release" ? "release" : DEFAULT_CHANNEL;
+	return readStepBuildIdentity(env).channel;
 }
 
 /**
@@ -678,13 +813,8 @@ function readBuildChannel(env: NodeJS.ProcessEnv): string {
  * the static value is only a fallback when no runtime alias is present.
  */
 function readBuildCommit(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
-	if (explicit?.trim()) return explicit;
-	const runtimeValue = env.STEP_CLI_BUILD_COMMIT ?? env.STEP_CLI_COMMIT;
-	const embeddedValue = INLINED_BUILD_COMMIT;
-	// Keep the same precedence as the old Step CLI: a caller-provided commit
-	// alias is authoritative, and the compiled value is only a fallback.
-	const value = runtimeValue ?? embeddedValue;
-	return value?.trim() || undefined;
+	if (typeof explicit === "string" && explicit.trim()) return normalizeStepCommit(explicit);
+	return readStepBuildIdentity(env).commit;
 }
 
 function createDisabledRuntime(): StepTelemetryRuntime {
@@ -736,10 +866,27 @@ function nonNegativeInt(value: number | undefined, fallback: number): number {
 	return Number.isFinite(value) && value !== undefined && value >= 0 ? Math.trunc(value) : fallback;
 }
 
-function normalizeContextValue(value: string | undefined): string | undefined {
+/** A retry delay must not keep an otherwise idle CLI process alive. */
+function defaultUnrefSleep(milliseconds: number): Promise<void> {
+	return new Promise<void>((resolve) => {
+		const handle = setTimeout(resolve, milliseconds);
+		handle.unref?.();
+	});
+}
+
+function normalizeContextValue(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const normalized = value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
 	return normalized ? normalized.slice(0, 256) : undefined;
+}
+
+function firstNonBlank(...values: readonly (string | undefined)[]): string | undefined {
+	for (const value of values) {
+		if (typeof value !== "string") continue;
+		const trimmed = value.trim();
+		if (trimmed) return trimmed;
+	}
+	return undefined;
 }
 
 /** Prune both normal and failed batches once per runtime startup. */
@@ -767,16 +914,31 @@ async function pruneExpiredSpoolFiles(directory: string, retentionDays: number):
 }
 
 function normalizeVersionContext(value: string | undefined): string | undefined {
-	const normalized = normalizeContextValue(value);
-	return normalized?.replace(/^v(?=\d)/iu, "");
+	return normalizeStepHarnessVersionValue(value);
 }
 
 function optionalContextValue<K extends keyof Omit<StepTelemetryContext, "channel" | "platform" | "sessionId">>(
 	key: K,
 	value: string | undefined,
 ): Pick<StepTelemetryContext, K> | Record<string, never> {
-	const normalized = normalizeContextValue(value);
+	const normalized = normalizeTelemetryContextField(key, value);
 	return normalized ? ({ [key]: normalized } as Pick<StepTelemetryContext, K>) : {};
+}
+
+function normalizeTelemetryContextField(
+	key: keyof Omit<StepTelemetryContext, "channel" | "platform" | "sessionId">,
+	value: string | undefined,
+): string | undefined {
+	switch (key) {
+		case "commit":
+			return normalizeStepCommit(value);
+		case "deviceId":
+			return normalizeStepDeviceId(value);
+		case "uid":
+			return normalizeStepUid(value);
+		case "username":
+			return normalizeTelemetryUsername(value);
+	}
 }
 
 function copyProperties(event: StepTelemetryEventName, properties: StepTelemetryProperties): StepTelemetryProperties {
@@ -843,11 +1005,12 @@ export function redactTelemetryString(value: string): string {
  * channel. Keep the old 64-character limit and conservative character set while
  * accepting the Step CLI variable.
  */
-function readTelemetryUsername(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
-	return normalizeTelemetryUsername(explicit ?? env.STEP_CLI_USER);
+export function readTelemetryUsername(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
+	return normalizeTelemetryUsername(explicit ?? firstNonBlank(env.STEP_CLI_USER, env.STEP_HARNESS_USER));
 }
 
-function normalizeTelemetryUsername(value: string | undefined): string | undefined {
+function normalizeTelemetryUsername(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
 	const raw = value?.trim();
 	if (!raw || raw.length > MAX_USERNAME_LENGTH) return undefined;
 	return PLAUSIBLE_USERNAME.test(raw) ? raw : undefined;
