@@ -14,7 +14,7 @@ import type {
 	StepTelemetryTrackOptions,
 } from "./telemetry.ts";
 import { isKnownStepTelemetryEvent, STEP_TELEMETRY_EVENT_PROPERTY_NAMES } from "./telemetry-events.ts";
-import { resolveStepHarnessVersion, STEP_HARNESS_VERSION } from "./version.ts";
+import { resolveStepCliVersion, STEP_CLI_VERSION } from "./version.ts";
 
 /** Envelope written to the Step analytics collector and local spool. */
 export interface StepTelemetryRecord {
@@ -144,9 +144,7 @@ const RELEASE_TELEMETRY_ENDPOINT = "https://api.stepfun.com/stepcliobserserver/a
 // Keep this static capture alongside the runtime override so release binaries
 // retain their channel when no runtime override is supplied.
 const INLINED_BUILD_CHANNEL = process.env.STEP_CLI_BUILD_CHANNEL;
-const INLINED_STEP_HARNESS_BUILD_CHANNEL = process.env.STEP_HARNESS_BUILD_CHANNEL;
 const INLINED_BUILD_COMMIT = process.env.STEP_CLI_BUILD_COMMIT;
-const INLINED_STEP_HARNESS_BUILD_COMMIT = process.env.STEP_HARNESS_BUILD_COMMIT;
 
 /**
  * Create the process-level reporter used by the Step entrypoint.
@@ -172,7 +170,7 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		resolved.spoolEnabled === false || options.config?.spool === false
 			? undefined
 			: (normalizePath(options.spoolDirectory) ??
-				normalizePath(env.STEP_HARNESS_TELEMETRY_DIR ?? env.STEP_CLI_TELEMETRY_DIR) ??
+				normalizePath(env.STEP_CLI_TELEMETRY_DIR) ??
 				join(resolveStepStorageRoot(env), "telemetry"));
 	const maxQueued = positiveInt(options.maxQueued, DEFAULT_MAX_QUEUED);
 	const flushThreshold = positiveInt(options.flushThreshold, DEFAULT_FLUSH_THRESHOLD);
@@ -189,21 +187,15 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		platform: normalizeContextValue(options.context?.platform ?? process.platform) ?? process.platform,
 		// The old TelemetryContext requires a version. Resolve an explicit
 		// runtime override first, then the injected build version, and finally the
-		// fixed Step source fallback. `resolveStepHarnessVersion` also knows how
+		// fixed Step source fallback. `resolveStepCliVersion` also knows how
 		// to read Bun's compile-time value when its runtime environment is empty.
 		version:
-			normalizeVersionContext(options.context?.version ?? env.STEP_HARNESS_VERSION ?? env.STEP_CLI_VERSION) ??
-			resolveStepHarnessVersion(env).value ??
-			STEP_HARNESS_VERSION.value,
+			normalizeVersionContext(options.context?.version ?? env.STEP_CLI_VERSION) ??
+			resolveStepCliVersion(env).value ??
+			STEP_CLI_VERSION.value,
 		...optionalContextValue("commit", readBuildCommit(env, options.context?.commit)),
-		...optionalContextValue(
-			"deviceId",
-			options.context?.deviceId ?? env.STEP_HARNESS_DEVICE_ID ?? env.STEP_CLI_DEVICE_ID ?? env.STEPCLI_DEVICE_ID,
-		),
-		...optionalContextValue(
-			"uid",
-			options.context?.uid ?? env.STEP_HARNESS_UID ?? env.STEP_CLI_UID ?? env.STEPCLI_UID,
-		),
+		...optionalContextValue("deviceId", options.context?.deviceId ?? env.STEP_CLI_DEVICE_ID ?? env.STEPCLI_DEVICE_ID),
+		...optionalContextValue("uid", options.context?.uid ?? env.STEP_CLI_UID ?? env.STEPCLI_UID),
 		...optionalContextValue("username", readTelemetryUsername(env, options.context?.username)),
 	};
 	// Session is the one context field that changes during a process. Keep it on
@@ -631,10 +623,7 @@ export function readTelemetryEndpoint(
 	env: NodeJS.ProcessEnv = process.env,
 	config?: StepTelemetryRuntimeOptions["config"],
 ): string | undefined {
-	const explicit =
-		env.STEP_HARNESS_TELEMETRY_ENDPOINT?.trim() ||
-		env.STEP_CLI_TELEMETRY_ENDPOINT?.trim() ||
-		env.STEPCLI_TELEMETRY_ENDPOINT?.trim();
+	const explicit = env.STEP_CLI_TELEMETRY_ENDPOINT?.trim() || env.STEPCLI_TELEMETRY_ENDPOINT?.trim();
 	if (explicit) return explicit;
 	// A persisted endpoint is honored only by release builds. This is the old
 	// Step safety boundary: a source checkout may spool locally, while an
@@ -659,12 +648,7 @@ export function resolveStepTelemetrySettings(
 	config?: StepTelemetryRuntimeOptions["config"],
 ): StepResolvedTelemetrySettings {
 	if (isTestRuntime(env)) return { enabled: false, spoolEnabled: false, reason: "test-runtime" };
-	if (
-		readFlag(env.STEP_HARNESS_DISABLE_TELEMETRY) ||
-		readFlag(env.STEP_HARNESS_TELEMETRY_DISABLED) ||
-		readFlag(env.STEP_CLI_DISABLE_TELEMETRY) ||
-		readFlag(env.STEPCLI_DISABLE_TELEMETRY)
-	) {
+	if (readFlag(env.STEP_CLI_DISABLE_TELEMETRY) || readFlag(env.STEPCLI_DISABLE_TELEMETRY)) {
 		return { enabled: false, spoolEnabled: false, reason: "env-opt-out" };
 	}
 	if (config?.enabled === false) return { enabled: false, spoolEnabled: false, reason: "config-opt-out" };
@@ -679,8 +663,8 @@ export function resolveStepTelemetrySettings(
 export const resolveTelemetrySettings = resolveStepTelemetrySettings;
 
 function readBuildChannel(env: NodeJS.ProcessEnv): string {
-	const runtimeValue = env.STEP_HARNESS_BUILD_CHANNEL ?? env.STEP_CLI_BUILD_CHANNEL;
-	const embeddedValue = INLINED_STEP_HARNESS_BUILD_CHANNEL ?? INLINED_BUILD_CHANNEL;
+	const runtimeValue = env.STEP_CLI_BUILD_CHANNEL;
+	const embeddedValue = INLINED_BUILD_CHANNEL;
 	// Match the legacy build-env resolver: an explicit runtime value wins over
 	// the value embedded by Bun, while the embedded value supplies the release
 	// default when no override is present.
@@ -695,9 +679,8 @@ function readBuildChannel(env: NodeJS.ProcessEnv): string {
  */
 function readBuildCommit(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
 	if (explicit?.trim()) return explicit;
-	const runtimeValue =
-		env.STEP_HARNESS_BUILD_COMMIT ?? env.STEP_CLI_BUILD_COMMIT ?? env.STEP_HARNESS_COMMIT ?? env.STEP_CLI_COMMIT;
-	const embeddedValue = INLINED_STEP_HARNESS_BUILD_COMMIT ?? INLINED_BUILD_COMMIT;
+	const runtimeValue = env.STEP_CLI_BUILD_COMMIT ?? env.STEP_CLI_COMMIT;
+	const embeddedValue = INLINED_BUILD_COMMIT;
 	// Keep the same precedence as the old Step CLI: a caller-provided commit
 	// alias is authoritative, and the compiled value is only a fallback.
 	const value = runtimeValue ?? embeddedValue;
@@ -858,10 +841,10 @@ export function redactTelemetryString(value: string): string {
  * Usernames are copied to every telemetry envelope, so accepting arbitrary
  * strings here would turn an environment variable into an unbounded data
  * channel. Keep the old 64-character limit and conservative character set while
- * accepting the renamed Step Harness variable first.
+ * accepting the Step CLI variable.
  */
 function readTelemetryUsername(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
-	return normalizeTelemetryUsername(explicit ?? env.STEP_HARNESS_USER ?? env.STEP_CLI_USER);
+	return normalizeTelemetryUsername(explicit ?? env.STEP_CLI_USER);
 }
 
 function normalizeTelemetryUsername(value: string | undefined): string | undefined {

@@ -467,12 +467,13 @@ export {
 export {
 	applyStepEnvironment,
 	getStepSessionDirOverride,
+	LEGACY_RENAMED_CONFIG_DIR,
 	LEGACY_STEP_CONFIG_DIR,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepHomeDir,
 	resolveStepSessionDir,
-	STEP_HARNESS_CONFIG_DIR,
+	STEP_CLI_CONFIG_DIR,
 	type StepEnvironmentOptions,
 } from "./step/environment.ts";
 export { STEP_INIT_PROMPT } from "./step/init-prompt.ts";
@@ -619,20 +620,18 @@ export {
 	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
 export {
-	resolveStepHarnessVersion,
+	resolveStepCliVersion,
 	STEP_CLI_BUILD_VERSION_ENV,
+	STEP_CLI_VERSION,
 	STEP_CLI_VERSION_OVERRIDE_ENV,
-	STEP_HARNESS_BUILD_VERSION_ENV,
-	STEP_HARNESS_VERSION,
-	STEP_HARNESS_VERSION_OVERRIDE_ENV,
-	type StepHarnessVersion,
+	type StepCliVersion,
 } from "./step/version.ts";
 // Step product facade. It delegates lifecycle and input handling to pi.
 export {
-	createStepHarness,
-	type StepHarness,
-	type StepHarnessSession,
-} from "./step-harness.ts";
+	createStepCli,
+	type StepCli,
+	type StepCliSession,
+} from "./step-cli-runtime.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";

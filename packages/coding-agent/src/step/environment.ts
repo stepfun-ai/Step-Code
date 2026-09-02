@@ -2,17 +2,14 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from "./defaults.ts";
 
-/** Product-owned project directory for Step Harness state and resources. */
-export const STEP_HARNESS_CONFIG_DIR = ".step-harness";
+/** Canonical project directory for Step CLI state and resources. */
+export const STEP_CLI_CONFIG_DIR = ".step-cli";
 
-/** Previous Step CLI project directory, retained only as a migration source. */
-export const LEGACY_STEP_CONFIG_DIR = ".step-cli";
+/** Directory used by releases before the product rename. */
+export const LEGACY_RENAMED_CONFIG_DIR = ".step-harness";
 
-interface AppliedStepEnvironment {
-	configDir: string;
-	agentDir: string;
-	sessionDir?: string;
-}
+/** Historical Step CLI directory. Its legacy files are converted in place. */
+export const LEGACY_STEP_CONFIG_DIR = STEP_CLI_CONFIG_DIR;
 
 /**
  * Optional path overrides for hosts that embed the Step facade instead of
@@ -32,55 +29,24 @@ export function resolveStepHomeDir(env: Record<string, string | undefined> = pro
 	return env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
 }
 
-// `applyStepEnvironment` is intentionally idempotent, but callers sometimes
-// update one of the old STEP_CLI_* aliases between calls. Remember the values
-// we populated so a later explicit change to either spelling can be detected
-// without allowing a stale alias to override a newly supplied STEP_HARNESS_*.
-const appliedEnvironments = new WeakMap<NodeJS.ProcessEnv, AppliedStepEnvironment>();
-
-function chooseAliasedValue(
-	canonical: string | undefined,
-	legacy: string | undefined,
-	fallback: string,
-	previous: string | undefined,
-): string {
-	const canonicalValue = canonical?.trim();
-	const legacyValue = legacy?.trim();
-	if (previous !== undefined) {
-		const canonicalChanged = canonicalValue !== previous;
-		const legacyChanged = legacyValue !== previous;
-		if (canonicalChanged && !legacyChanged) return canonicalValue || fallback;
-		if (legacyChanged && !canonicalChanged) return legacyValue || fallback;
-	}
-	return canonicalValue || legacyValue || fallback;
-}
-
-/** Resolve the project directory while accepting the pre-rename override. */
+/** Resolve the canonical project directory. */
 export function resolveStepConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-	return env.STEP_HARNESS_CONFIG_DIR?.trim() || env.STEP_CLI_CONFIG_DIR?.trim() || STEP_HARNESS_CONFIG_DIR;
+	return env.STEP_CLI_CONFIG_DIR?.trim() || STEP_CLI_CONFIG_DIR;
 }
 
 /** Resolve the product's global agent directory. */
 export function resolveStepAgentDir(env: NodeJS.ProcessEnv = process.env): string {
-	return (
-		env.STEP_HARNESS_CODING_AGENT_DIR?.trim() ||
-		env.STEP_CODING_AGENT_DIR?.trim() ||
-		join(resolveStepHomeDir(env), resolveStepConfigDir(env), "agent")
-	);
+	return env.STEP_CODING_AGENT_DIR?.trim() || join(resolveStepHomeDir(env), resolveStepConfigDir(env), "agent");
 }
 
 /** Resolve the product's session directory. */
 export function resolveStepSessionDir(env: NodeJS.ProcessEnv = process.env): string {
-	return (
-		env.STEP_HARNESS_CODING_AGENT_SESSION_DIR?.trim() ||
-		env.STEP_CODING_AGENT_SESSION_DIR?.trim() ||
-		join(resolveStepAgentDir(env), "sessions")
-	);
+	return env.STEP_CODING_AGENT_SESSION_DIR?.trim() || join(resolveStepAgentDir(env), "sessions");
 }
 
 /** Return an explicitly configured session root, if one was supplied. */
 export function getStepSessionDirOverride(env: Record<string, string | undefined> = process.env): string | undefined {
-	return env.STEP_HARNESS_CODING_AGENT_SESSION_DIR?.trim() || env.STEP_CODING_AGENT_SESSION_DIR?.trim();
+	return env.STEP_CODING_AGENT_SESSION_DIR?.trim();
 }
 
 /**
@@ -94,7 +60,7 @@ export function isStepEntrypoint(argv: readonly string[] = process.argv): boolea
 	if (
 		candidates.some((candidate) => {
 			const entry = basename(candidate ?? "").toLowerCase();
-			return /^(?:step|step-cli|step-bin|step-harness)(?:\.(?:[cm]?js|ts|exe))?$/u.test(entry);
+			return /^(?:step|step-cli|step-bin)(?:\.(?:[cm]?js|ts|exe))?$/u.test(entry);
 		})
 	)
 		return true;
@@ -118,41 +84,24 @@ export function isStepEntrypoint(argv: readonly string[] = process.argv): boolea
  */
 export function isStepStorageContext(env: Record<string, string | undefined> = process.env): boolean {
 	return (
-		isStepEntrypoint() ||
-		env.AI_AGENT?.trim().toLowerCase() === "step" ||
-		Boolean(env.STEP_HARNESS_CODING_AGENT_DIR?.trim() || env.STEP_CODING_AGENT_DIR?.trim())
+		isStepEntrypoint() || env.AI_AGENT?.trim().toLowerCase() === "step" || Boolean(env.STEP_CODING_AGENT_DIR?.trim())
 	);
 }
 
 /** Apply Step's product defaults. Safe to call more than once. */
 export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, options: StepEnvironmentOptions = {}): void {
 	if (!env.STEP_CLI_APP_NAME?.trim()) env.STEP_CLI_APP_NAME = "step";
-	const previous = appliedEnvironments.get(env);
-	const configDir =
-		options.configDir?.trim() ||
-		chooseAliasedValue(
-			env.STEP_HARNESS_CONFIG_DIR,
-			env.STEP_CLI_CONFIG_DIR,
-			STEP_HARNESS_CONFIG_DIR,
-			previous?.configDir,
-		);
-	// Keep both spellings available to older callers, but let the renamed
-	// STEP_HARNESS_* variables win when both are present. Blank values must not
+	const configDir = options.configDir?.trim() || env.STEP_CLI_CONFIG_DIR?.trim() || STEP_CLI_CONFIG_DIR;
+	// Keep the canonical Step CLI variable populated. Blank values must not
 	// leak through to config.ts, where they would otherwise expose Pi's `.pi`
 	// package fallback.
 	env.STEP_CLI_CONFIG_DIR = configDir;
-	env.STEP_HARNESS_CONFIG_DIR = configDir;
 	if (!env.STEP_CLI_DEFAULT_THEME?.trim()) env.STEP_CLI_DEFAULT_THEME = STEP_DEFAULT_THEME;
 	const agentDir =
 		options.agentDir?.trim() ||
-		chooseAliasedValue(
-			env.STEP_HARNESS_CODING_AGENT_DIR,
-			env.STEP_CODING_AGENT_DIR,
-			join(resolveStepHomeDir(env), configDir, "agent"),
-			previous?.agentDir,
-		);
+		env.STEP_CODING_AGENT_DIR?.trim() ||
+		join(resolveStepHomeDir(env), configDir, "agent");
 	env.STEP_CODING_AGENT_DIR = agentDir;
-	env.STEP_HARNESS_CODING_AGENT_DIR = agentDir;
 	// A few Pi infrastructure surfaces (notably pi-tui's fallback log path)
 	// still read the historical PI_CODING_AGENT_DIR variable directly instead
 	// of going through coding-agent/config.ts. Mirror the resolved Step root for
@@ -160,27 +109,16 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 	// state. This is scoped to the Step environment object; ordinary Pi launches
 	// never call this function and retain their native default.
 	env.PI_CODING_AGENT_DIR = agentDir;
-	// Keep an explicit session override available through both the renamed and
-	// legacy spellings. When neither is supplied, leave both unset so the
+	// Keep an explicit session override available. When neither is supplied, leave it
+	// unset so the
 	// caller can use Pi's native `agentDir/sessions/<cwd>` default. The
-	// previous value lets us distinguish a later explicit alias change from the
-	// mirrored value that this function wrote on an earlier call.
+	// explicit value remains process-local.
 	const sessionDir =
-		options.sessionDir === null
-			? ""
-			: options.sessionDir?.trim() ||
-				chooseAliasedValue(
-					env.STEP_HARNESS_CODING_AGENT_SESSION_DIR,
-					env.STEP_CODING_AGENT_SESSION_DIR,
-					"",
-					previous?.sessionDir,
-				);
+		options.sessionDir === null ? "" : options.sessionDir?.trim() || env.STEP_CODING_AGENT_SESSION_DIR?.trim() || "";
 	if (sessionDir) {
 		env.STEP_CODING_AGENT_SESSION_DIR = sessionDir;
-		env.STEP_HARNESS_CODING_AGENT_SESSION_DIR = sessionDir;
 	} else {
 		delete env.STEP_CODING_AGENT_SESSION_DIR;
-		delete env.STEP_HARNESS_CODING_AGENT_SESSION_DIR;
 	}
 	if (!env.STEP_CLI_DEFAULT_PROVIDER?.trim()) {
 		env.STEP_CLI_DEFAULT_PROVIDER = env.STEP_PROVIDER?.trim() || STEP_DEFAULT_PROVIDER;
@@ -193,5 +131,4 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 	if (!env.STEP_CLI_DISABLE_PI_SERVICES?.trim()) env.STEP_CLI_DISABLE_PI_SERVICES = "1";
 	env.PI_CODING_AGENT = "true";
 	env.AI_AGENT = "step";
-	appliedEnvironments.set(env, { configDir, agentDir, sessionDir });
 }

@@ -1,9 +1,9 @@
 ---
-title: Step Harness agent capabilities
+title: Step CLI agent capabilities
 status: active
 ---
 
-# Step Harness agent capabilities
+# Step CLI agent capabilities
 
 ## Scope
 
@@ -36,7 +36,7 @@ status: active
 
 3. **Plugin marketplace**
    - 增加 Step 内置声明式 plugin manifest/marketplace 适配层，宿主路径统一为
-     `.step-harness`，同时保留旧 `.step-cli` 仅用于迁移。
+     `.step-cli`，同时保留旧 `.step-harness` 仅用于迁移。
    - 迁移内置 `playwright` 与 `steppage`（用户口中的 stoppage）manifest；插件
      发现、安装、启停和配置沿用 Pi 的 package/resource precedence。
    - MCP server 若当前 Pi runtime 没有等价执行器，先保留声明、发现和诊断能力，
@@ -67,7 +67,7 @@ status: active
 ## TODO / 最近收口
 
 - [x] 读取 `lark-drive` skill（仅读取规范，未调用飞书接口）。
-- [x] 移除重复的 `/effort`，统一使用 Pi 原生 `/thinking`。
+- [x] 将 `/effort` 作为 Pi 原生 `/thinking` 的内置别名接入，不在 Step extension 重复注册。
 - [x] 移除单数 `/permission`，保留 `/permissions` 作为唯一 Step 权限命令。
 - [x] 简化队列展示：保留 Pi 的队列语义、分隔线和 `alt+↑ edit last queued message`，去掉可见的 `queue` 标题。
 - [x] 队列编辑快捷键按当前主题高亮，说明文字保持次级颜色。
@@ -75,7 +75,7 @@ status: active
 - [x] `clarify_user` 已统一承载单题与多题问询；原 `askuser`/`questionnaire` 不再注册为独立工具，原生对话支持题号、总题数和左右/Tab 导航。
 - [x] `subagent` 已按 Pi 示例恢复 `agent`/`task`、`tasks`、`chain`、`agentScope` 和 `confirmProjectAgents` schema；模式判定按非空数组长度执行。
 - [x] Step 适配保留阻塞、并行、串行、模型继承、主题结果渲染和可选 Git worktree；后台 lane 控制仅作为宿主侧扩展能力，不进入 Pi 的模型可见 schema。
-- [x] `/plugin` marketplace facade 与内置 `playwright`、`steppage` manifest 已落地，统一使用 `.step-harness` 存储并保留 `.step-cli` 迁移兼容。
+- [x] `/plugin` marketplace facade 与内置 `playwright`、`steppage` manifest 已落地，统一使用 `.step-cli` 存储并保留 `.step-harness` 迁移兼容。
 - [x] Step 版本、发布 tag 分流和 telemetry runtime 的基础接线已完成（Step `vX.Y.Z`，Pi `pi-vX.Y.Z`）。
 - [~] 子 agent 详情切换到独立 session 画面尚未完成；当前提供实时 widget、展开结果和控制工具。
 - [~] Plugin 的 MCP 声明可发现、安装和诊断，但统一 MCP 进程 bridge 尚未接入。

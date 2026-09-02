@@ -20,13 +20,26 @@ describe("StepWelcomeComponent", () => {
 		const lines = component.render(80);
 
 		expect(lines[0]).toContain("╭");
-		expect(lines.join("\n")).toContain("Step Harness");
+		expect(lines.join("\n")).toContain("Step CLI");
 		expect(lines.join("\n")).toContain("step-model");
 		expect(lines.join("\n")).toContain("step-model · high");
 		expect(lines.at(-2)).toContain("Your first message will start a new session.");
 		for (const line of lines.slice(0, -2)) {
 			if (line.length > 0) expect(visibleWidth(line)).toBe(80);
 		}
+	});
+
+	it("shows reasoning off explicitly", () => {
+		initTheme("step");
+		const component = new StepWelcomeComponent(() => ({
+			model: "step-model",
+			thinkingLevel: "off",
+			workspaceRoot: "/tmp/project",
+		}));
+
+		const output = component.render(80).join("\n");
+		expect(output).toContain("step-model · reasoning: off");
+		expect(output).not.toContain("step-model · off");
 	});
 
 	it("removes the first-session hint after a message is projected", () => {

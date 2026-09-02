@@ -41,8 +41,8 @@ import {
 } from "./step/telemetry-runtime.ts";
 import { createStepToolProfile } from "./step/tool-profile.ts";
 import { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
-import { STEP_HARNESS_VERSION } from "./step/version.ts";
-import { createStepHarness } from "./step-harness.ts";
+import { STEP_CLI_VERSION } from "./step/version.ts";
+import { createStepCli } from "./step-cli-runtime.ts";
 
 export {
 	STEP_DEFAULT_MODEL,
@@ -65,8 +65,8 @@ process.emitWarning = (() => {}) as typeof process.emitWarning;
 const rawStdoutWrite = process.stdout.write.bind(process.stdout) as (chunk: Buffer) => boolean;
 const sdkStdioRequested = process.argv.includes("--sdk-stdio");
 
-// Migrate the old `.step-cli` layout before telemetry, device identity, or Pi's
-// SettingsManager can create `.step-harness` and make the migration ineligible.
+// Migrate old config files before telemetry, device identity, or Pi's
+// SettingsManager can create the canonical files.
 // The source is retained; warnings are surfaced without blocking startup.
 const stepConfigMigration = await migrateStepConfig();
 for (const warning of stepConfigMigration.warnings) {
@@ -76,14 +76,14 @@ const stepPersistedDefaults = await readStepGlobalDefaults();
 // Parse only the product policy flags here so the inline extension can receive
 // explicit CLI values before Pi builds its resource loader. `main()` parses the
 // same argv again for normal diagnostics and all other session options.
-const stepHarnessPermissionArgs = parseArgs(process.argv.slice(2));
+const stepPermissionArgs = parseArgs(process.argv.slice(2));
 
 // Keep the model-request observer at the Step composition root. Pi owns the
 // stream and retry loop; this reporter only receives the redacted dimensions
 // needed by the legacy Step analytics query system. The runtime is disabled in
 // test processes and can be opted out through the same Step environment flags.
 const telemetryRuntime = createStepTelemetryRuntime({
-	context: { version: STEP_HARNESS_VERSION.value },
+	context: { version: STEP_CLI_VERSION.value },
 	config: stepPersistedDefaults.telemetry,
 });
 const telemetryCrashHandlers = telemetryRuntime.enabled
@@ -144,9 +144,9 @@ const stepMainOptions: MainOptions = {
 			telemetry: telemetryRuntime,
 			stepSettings: () => currentStepSettingsManager,
 			permission: {
-				approvalMode: stepHarnessPermissionArgs.approvalMode,
-				nonInteractiveApproval: stepHarnessPermissionArgs.nonInteractiveApproval,
-				toolOverrides: stepHarnessPermissionArgs.toolOverride ?? stepHarnessPermissionArgs.toolOverrides,
+				approvalMode: stepPermissionArgs.approvalMode,
+				nonInteractiveApproval: stepPermissionArgs.nonInteractiveApproval,
+				toolOverrides: stepPermissionArgs.toolOverride ?? stepPermissionArgs.toolOverrides,
 			},
 		}),
 		createStepCapabilitiesExtensionInline({ telemetry: telemetryRuntime }),
@@ -168,7 +168,7 @@ const stepMainOptions: MainOptions = {
 			process.stderr.write(`[step migration] ${warning}\n`);
 		}
 	},
-	runtimeHostFactory: createStepHarness,
+	runtimeHostFactory: createStepCli,
 	stdioModeFactory: sdkStdioRequested
 		? async (runtimeHost) => {
 				const host = new StepStdioHost({
@@ -205,9 +205,9 @@ const stepMainOptions: MainOptions = {
 			// but must never be interrupted by a binary update prompt.
 			if (process.argv[2] === "login" || process.argv[2] === "logout") return true;
 			const outcome = await maybeUpdateStep({
-				version: STEP_HARNESS_VERSION,
+				version: STEP_CLI_VERSION,
 				storageRootDir: resolveStepStorageRoot(),
-				updateCheckEnabled: stepHarnessPermissionArgs.updateCheck,
+				updateCheckEnabled: stepPermissionArgs.updateCheck,
 				ui,
 				argv: process.argv.slice(2),
 				cwd: process.cwd(),
@@ -250,8 +250,8 @@ try {
 	if (!isTopLevelLogout && !(isTopLevelLogin && topLevelAuthHelp)) {
 		// Legacy credentials are projected by migrateStepConfig() before this
 		// point. Normalize only an old product-shaped file that is already inside
-		// the canonical Step Harness path; normal launches never fall back to
-		// reading `.step-cli` after migration.
+		// the canonical Step CLI path; normal launches never fall back to
+		// reading retired files after migration.
 		await migrateLegacyStepCredential({
 			nativePath: getStepAuthPath(),
 			// The config migration above handles the common case, but keep the
@@ -383,8 +383,7 @@ async function initializeTelemetryIdentity(): Promise<void> {
 		if (result.deviceId) telemetryRuntime.setContext({ deviceId: result.deviceId });
 		if (result.created) {
 			telemetryRuntime.track("first_launch", {
-				channel:
-					process.env.STEP_HARNESS_BUILD_CHANNEL?.trim() || process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
+				channel: process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
 			});
 		}
 	} catch {

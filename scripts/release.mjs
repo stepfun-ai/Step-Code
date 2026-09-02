@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Create a Step Harness binary release tag.
+ * Create a Step CLI binary release tag.
  *
  * Usage:
  *   node scripts/release.mjs --step <x.y.z>
- *   STEP_HARNESS_RELEASE=1 STEP_HARNESS_VERSION=<x.y.z> node scripts/release.mjs --step
+ *   STEP_CLI_RELEASE=1 STEP_CLI_VERSION=<x.y.z> node scripts/release.mjs --step
  *
  * The binary build, checksum manifest, object-store upload, and GitLab Release
  * are handled by infra/release/release-bundle.mjs and .gitlab-ci.yml after the
@@ -19,7 +19,7 @@ const CLI_ARGS = process.argv.slice(2);
 const STEP_RELEASE_MODE =
 	CLI_ARGS.includes("--step") ||
 	CLI_ARGS.some((arg) => arg.startsWith("--step=")) ||
-	isTruthy(process.env.STEP_HARNESS_RELEASE);
+	isTruthy(process.env.STEP_CLI_RELEASE);
 const STEP_VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 if (!STEP_RELEASE_MODE) {
@@ -95,9 +95,9 @@ function resolveStepReleaseVersion(args) {
 
 	const candidates = [
 		[cliValue, "command line"],
-		[process.env.STEP_HARNESS_VERSION, "STEP_HARNESS_VERSION"],
-		[process.env.STEP_HARNESS_RELEASE_VERSION, "STEP_HARNESS_RELEASE_VERSION"],
-		[process.env.STEP_HARNESS_VERSION_OVERRIDE, "STEP_HARNESS_VERSION_OVERRIDE"],
+		[process.env.STEP_CLI_VERSION, "STEP_CLI_VERSION"],
+		[process.env.STEP_CLI_RELEASE_VERSION, "STEP_CLI_RELEASE_VERSION"],
+		[process.env.STEP_CLI_VERSION_OVERRIDE, "STEP_CLI_VERSION_OVERRIDE"],
 		[process.env.GITHUB_REF_NAME, "GITHUB_REF_NAME"],
 		[process.env.CI_COMMIT_TAG, "CI_COMMIT_TAG"],
 		[process.env.RELEASE_TAG, "RELEASE_TAG"],
@@ -107,7 +107,7 @@ function resolveStepReleaseVersion(args) {
 	for (const [value, source] of candidates) {
 		if (value?.trim()) return normalizeStepVersion(value, source);
 	}
-	throw new Error("Step release requires a version. Pass --step <x.y.z> or set STEP_HARNESS_VERSION.");
+	throw new Error("Step release requires a version. Pass --step <x.y.z> or set STEP_CLI_VERSION.");
 }
 
 function assertCleanWorkingTree() {
@@ -142,8 +142,8 @@ function remoteTagExists(tag) {
 function runStepRelease(args) {
 	const version = resolveStepReleaseVersion(args);
 	const tag = `v${version}`;
-	const dryRun = args.includes("--dry-run") || isTruthy(process.env.STEP_HARNESS_RELEASE_DRY_RUN);
-	const push = !isFalsy(process.env.STEP_HARNESS_RELEASE_PUSH);
+	const dryRun = args.includes("--dry-run") || isTruthy(process.env.STEP_CLI_RELEASE_DRY_RUN);
+	const push = !isFalsy(process.env.STEP_CLI_RELEASE_PUSH);
 
 	console.log("\n=== Step Release Script ===\n");
 	console.log(`  Step version: ${version}`);
@@ -176,7 +176,7 @@ function runStepRelease(args) {
 
 	run(`git tag ${shellQuote(tag)}`);
 	if (push) run(`git push origin ${shellQuote(tag)}`);
-	else console.log("Skipping push (STEP_HARNESS_RELEASE_PUSH is disabled).");
+	else console.log("Skipping push (STEP_CLI_RELEASE_PUSH is disabled).");
 
 	console.log(`\n=== Prepared Step release ${tag}; binary CI starts after the tag push ===`);
 }

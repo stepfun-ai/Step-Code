@@ -42,11 +42,10 @@ ARCHIVE_PREFIX="pi"
 
 # Step's product identity is independent from the upstream Pi package version.
 # Release CI supplies these values from the tag; local/source builds use the
-# stable Step fallback and a dev channel. Keep the old STEP_CLI_* aliases as
-# inputs so older release jobs can invoke this script unchanged.
-STEP_BUILD_VERSION="${STEP_HARNESS_BUILD_VERSION:-${STEP_CLI_BUILD_VERSION:-0.3.1}}"
-STEP_BUILD_CHANNEL="${STEP_HARNESS_BUILD_CHANNEL:-${STEP_CLI_BUILD_CHANNEL:-dev}}"
-STEP_BUILD_COMMIT="${STEP_HARNESS_BUILD_COMMIT:-${STEP_CLI_BUILD_COMMIT:-}}"
+# stable Step fallback and a dev channel.
+STEP_BUILD_VERSION="${STEP_CLI_BUILD_VERSION:-0.3.1}"
+STEP_BUILD_CHANNEL="${STEP_CLI_BUILD_CHANNEL:-dev}"
+STEP_BUILD_COMMIT="${STEP_CLI_BUILD_COMMIT:-}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -121,12 +120,9 @@ fi
 # Keep the envelope dimension bounded and consistent with the old short-SHA
 # build metadata even when CI passes a full commit hash.
 STEP_BUILD_COMMIT="${STEP_BUILD_COMMIT:0:12}"
-export STEP_HARNESS_BUILD_VERSION="$STEP_BUILD_VERSION"
-export STEP_HARNESS_BUILD_CHANNEL="$STEP_BUILD_CHANNEL"
 export STEP_CLI_BUILD_VERSION="$STEP_BUILD_VERSION"
 export STEP_CLI_BUILD_CHANNEL="$STEP_BUILD_CHANNEL"
 if [[ -n "$STEP_BUILD_COMMIT" ]]; then
-    export STEP_HARNESS_BUILD_COMMIT="$STEP_BUILD_COMMIT"
     export STEP_CLI_BUILD_COMMIT="$STEP_BUILD_COMMIT"
 fi
 
@@ -266,16 +262,16 @@ for platform in "${PLATFORMS[@]}"; do
     # standalone binary before pi starts (see #7684).
     if [[ "$PRODUCT" != "step" ]]; then
         if [[ "$platform" == windows-* ]]; then
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_HARNESS_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
+            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
         else
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_HARNESS_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
         fi
     fi
     if [[ "$PRODUCT" != "pi" ]]; then
         if [[ "$platform" == windows-* ]]; then
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_HARNESS_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
+            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
         else
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_HARNESS_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
+            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
         fi
     fi
 done
@@ -293,14 +289,14 @@ for platform in "${PLATFORMS[@]}"; do
         node -e '
             const fs = require("fs");
             const file = process.argv[1];
-            const version = process.env.STEP_HARNESS_BUILD_VERSION;
+            const version = process.env.STEP_CLI_BUILD_VERSION;
             const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
             manifest.version = version;
             fs.writeFileSync(file, `${JSON.stringify(manifest, null, "\t")}\n`);
         ' "$OUTPUT_DIR/$platform/package.json"
     fi
     cp README.md "$OUTPUT_DIR/$platform/"
-    # Step Harness keeps changelogs per package; older Pi source archives also
+    # Step CLI keeps changelogs per package; older Pi source archives also
     # carried a repository-level CHANGELOG.md. Preserve it when present without
     # making the standalone Step build depend on a file this repository does not
     # have.

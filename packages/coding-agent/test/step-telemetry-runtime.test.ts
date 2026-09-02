@@ -345,8 +345,8 @@ describe("Step telemetry runtime", () => {
 	it("redacts the legacy sensitive shapes, including Unicode paths", () => {
 		expect(redactTelemetryString("owner@example.com")).toBe("<redacted:email>");
 		expect(redactTelemetryString("eyJheader12345.payload12345.signature12345")).toBe("<redacted:jwt>");
-		expect(redactTelemetryString("failed at /Users/张三/项目/step-harness")).toContain("<redacted:path>");
-		expect(redactTelemetryString("C:\\Users\\张三\\项目\\step-harness")).toContain("<redacted:path>");
+		expect(redactTelemetryString("failed at /Users/张三/项目/step-cli")).toContain("<redacted:path>");
+		expect(redactTelemetryString("C:\\Users\\张三\\项目\\step-cli")).toContain("<redacted:path>");
 		expect(redactTelemetryString("x".repeat(600))).toHaveLength(600);
 	});
 
@@ -354,7 +354,7 @@ describe("Step telemetry runtime", () => {
 		const directory = await mkdtemp(join(tmpdir(), "step-telemetry-runtime-"));
 		try {
 			const valid = createStepTelemetryRuntime({
-				env: { STEP_HARNESS_USER: "  kris@stepfun.com\n" },
+				env: { STEP_CLI_USER: "  kris@stepfun.com\n" },
 				spoolDirectory: directory,
 				flushThreshold: 10,
 				flushIntervalMs: 0,

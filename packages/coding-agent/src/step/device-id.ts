@@ -17,7 +17,6 @@ export interface StepDeviceIdResult {
 /** Resolve the shared Step storage root used by identity and telemetry spool. */
 export function resolveStepStorageRoot(env: NodeJS.ProcessEnv = process.env): string {
 	return (
-		env.STEP_HARNESS_STORAGE_ROOT_DIR?.trim() ||
 		env.STEP_CLI_STORAGE_ROOT_DIR?.trim() ||
 		env.STEPCLI_STORAGE_ROOT_DIR?.trim() ||
 		join(resolveStepHomeDir(env), resolveStepConfigDir(env))

@@ -43,8 +43,8 @@ describe("Step credential compatibility", () => {
 	});
 
 	test("resolves the canonical auth file from an explicit Step agent directory", () => {
-		const env = { STEP_HARNESS_CODING_AGENT_DIR: "/tmp/step-harness-agent" };
-		expect(getStepAuthPath(env)).toBe("/tmp/step-harness-agent/auth.json");
+		const env = { STEP_CODING_AGENT_DIR: "/tmp/step-cli-agent" };
+		expect(getStepAuthPath(env)).toBe("/tmp/step-cli-agent/auth.json");
 	});
 
 	test("does not inherit a host Pi agent directory when the Step root is implicit", () => {
@@ -52,7 +52,7 @@ describe("Step credential compatibility", () => {
 			HOME: "/tmp/step-home",
 			PI_CODING_AGENT_DIR: "/tmp/pi-agent",
 		};
-		expect(getStepAuthPath(env)).toBe("/tmp/step-home/.step-harness/agent/auth.json");
+		expect(getStepAuthPath(env)).toBe("/tmp/step-home/.step-cli/agent/auth.json");
 	});
 
 	test("migrates a pi-shaped credential into the canonical Step path", async () => {
@@ -147,7 +147,7 @@ describe("Step credential compatibility", () => {
 		// the helper independently testable lets embedded hosts explicitly invoke
 		// the same migration without making the normal runtime depend on it.
 		expect(getLegacyStepAuthPath({ STEP_CLI_LEGACY_AUTH_PATH: legacyPath })).toBe(legacyPath);
-		const nativePath = join(directory, ".step-harness", "agent", "auth.json");
+		const nativePath = join(directory, ".step-cli", "agent", "auth.json");
 		const result = await migrateLegacyStepCredential({ nativePath, legacyPath });
 
 		expect(result).toMatchObject({ migrated: true, nativePath, legacyPath });
