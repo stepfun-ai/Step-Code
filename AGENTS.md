@@ -157,7 +157,7 @@ Attribution:
 For any non-trivial change — a new subsystem, a multi-file refactor, or risky / hard-to-reverse work — plan before you edit:
 
 1. First search `docs/exec-plans/active/` for a related plan and read it.
-2. Before writing code or running side-effecting commands, write a short Markdown exec-plan to `docs/exec-plans/active/<kebab-name>.md`. Cover: **Step** (what you will do), **Tool** (command or edit), **Expectation** (the result that means it worked), **Rollback** (how to undo if it fails).
+2. Before writing code or running side-effecting commands, write a short Markdown exec-plan to `docs/exec-plans/active/<YYYY-MM-DD>-<kebab-name>.md`. The filename must start with the plan creation date in ISO format (`YYYY-MM-DD`), followed by a lowercase kebab-case name; for example, `2026-04-01-step-cli-context-pipeline-and-memory.md`. Do not create undated exec-plan filenames. Cover: **Step** (what you will do), **Tool** (command or edit), **Expectation** (the result that means it worked), **Rollback** (how to undo if it fails).
 3. For operations with side effects (deleting, publishing, releasing, migrating), request explicit confirmation at the end of the plan before proceeding.
 4. Prefer the scripts under `scripts/` over ad-hoc command lines.
 
