@@ -32,6 +32,8 @@ export interface StepSettings {
 	nonInteractiveApproval?: StepNonInteractiveApproval;
 	/** Enables the bounded model-error continuation ladder. */
 	autoResume?: boolean;
+	/** Enables the user feedback submission flow. Defaults to enabled. */
+	feedbackEnabled?: boolean;
 }
 
 /** Filename used for Step-only policy sidecars (Pi settings remain settings.json). */
@@ -185,6 +187,14 @@ function normalizeSettings(value: JsonObject): StepSettings {
 			break;
 		}
 	}
+
+	const feedbackEnabledCandidates = [value.feedbackEnabled, asObject(value.feedback)?.enabled];
+	for (const candidate of feedbackEnabledCandidates) {
+		if (typeof candidate === "boolean") {
+			result.feedbackEnabled = candidate;
+			break;
+		}
+	}
 	return result;
 }
 
@@ -193,6 +203,7 @@ const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
 	approvalMode: [],
 	nonInteractiveApproval: ["noninteractiveApproval"],
 	autoResume: ["autopilot"],
+	feedbackEnabled: [],
 };
 
 const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly string[])[]> = {
@@ -216,6 +227,7 @@ const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly
 		["tools", "approval", "autoResume"],
 		["tools", "approval", "autopilot"],
 	],
+	feedbackEnabled: [["feedback", "enabled"]],
 };
 
 function deleteNestedAlias(root: JsonObject, path: readonly string[]): void {
@@ -262,6 +274,9 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	}
 	if (settings.autoResume !== undefined && typeof settings.autoResume !== "boolean") {
 		throw new Error(`Invalid Step autoResume setting: ${String(settings.autoResume)}`);
+	}
+	if (settings.feedbackEnabled !== undefined && typeof settings.feedbackEnabled !== "boolean") {
+		throw new Error(`Invalid Step feedbackEnabled setting: ${String(settings.feedbackEnabled)}`);
 	}
 	const normalized = { ...settings };
 	if (settings.permissionPreset !== undefined) {
@@ -461,7 +476,14 @@ class StepSettingsDecorator {
 	}
 
 	getStepSettings(): StepSettings {
-		return normalizeSettings(this.store.getEffective());
+		// Canonicalize each scope before applying project precedence. Otherwise a
+		// global canonical field (for example `feedbackEnabled`) survives the raw
+		// object merge and outranks the equivalent project alias
+		// (`feedback.enabled`) during normalization.
+		return {
+			...normalizeSettings(this.store.getGlobal()),
+			...normalizeSettings(this.store.getProject()),
+		};
 	}
 
 	getStepGlobalSettings(): StepSettings {

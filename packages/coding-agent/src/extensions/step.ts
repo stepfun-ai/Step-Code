@@ -6,6 +6,7 @@ import type {
 	InlineExtension,
 } from "../core/extensions/types.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
+import type { FeedbackIdentity } from "../step/feedback/types.ts";
 import { STEP_INIT_PROMPT } from "../step/init-prompt.ts";
 import {
 	AUTO_RESUME_PROMPT,
@@ -28,13 +29,15 @@ export interface StepExtensionOptions {
 	stepSettings?: () => Pick<StepSettingsManager, "getStepSettings" | "setEffectiveStepSettings"> | undefined;
 	/** Optional process/host reporter for Step lifecycle projections. */
 	telemetry?: StepTelemetryReporter;
+	/** Current account identity, resolved when `/feedback` is invoked. */
+	feedbackIdentity?: () => FeedbackIdentity;
 }
 
 /** Product extension layered on pi's native coding-agent runtime. */
 export function createStepExtension(options: StepExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		registerStepProvider(pi);
-		registerStepPiCommandAdapters(pi, options.telemetry);
+		registerStepPiCommandAdapters(pi, options.telemetry, options.stepSettings, options.feedbackIdentity);
 		const builtInSlashCommands = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		// Extension commands are wrapped at registration time below. Inputs that
 		// reach Pi's normal prompt path are the remaining (usually unknown) slash

@@ -20,6 +20,11 @@ Step extension; it does not create a second event loop or a second TUI.
   `/new`, `/resume`, or `/fork`.
 - `step/stdio.ts` contains the length-prefixed frame codec and the small
   transport-neutral event bridge.
+- `step/feedback/` owns Step's user-initiated feedback contract: input
+  validation and redaction, collector endpoint selection, optional diagnostics
+  and session-bundle construction, ordered delivery, and pending retries. Pi
+  supplies the active `SessionManager` and extension UI; feedback does not own
+  session state or participate in the agent loop.
 - `step/stdio-host.ts` is the optional `step --sdk-stdio` adapter. It owns only
   framing, request validation, reverse UI requests, and wire projections. Query
   declared SDK tools and lifecycle hooks are installed as temporary wrappers
@@ -95,6 +100,30 @@ workspace directories, with the same global-then-project precedence and file
 locking. This keeps fields such as `permissionPreset` and `autoResume` out of
 Pi's native `settings.json` schema while leaving ordinary Pi startup unchanged.
 
+Top-level `step feedback` and interactive `/feedback` use a Step-owned gate,
+configured by `feedbackEnabled` in the Step sidecar and the legacy feedback
+opt-out environment variables. This gate is independent of Step telemetry:
+disabling analytics does not disable user feedback, while the optional
+`feedback_submitted` analytics event still follows the telemetry gate.
+
+The Step entrypoint mirrors stderr to
+`<storage-root>/logs/dev-YYYY-MM-DD.log` without changing the original stderr
+stream. The mirror removes credential-shaped secrets before writing, uses
+`0700` directories and `0600` files, and retains seven local calendar days.
+It is still a developer log rather than an anonymized record: it may contain
+user text, file paths, and other process output. Feedback reads only a bounded
+diagnostic or error-context excerpt from it, and uploads that excerpt only
+after the attachment consent flow has shown what will be sent.
+
+Feedback delivery uses two requests with the same client-generated
+`feedbackId`. The JSON feedback body is sent first; an optional gzip session
+bundle is then sent to the bundle endpoint after attachment consent. The two
+results remain independent: a bundle failure does not turn an accepted body
+into a failed report. Failed body/bundle files remain pending locally, and
+`step feedback --retry` can converge retryable failures. For permanent 4xx
+rejections, such as an oversized bundle, the CLI states that identical bytes
+cannot succeed and the report or archive must be changed before resubmission.
+
 Embedded Step hosts can use `createStepAgentSession()` or
 `createStepAgentSessionServices()` from the Step surface. These are thin
 wrappers around Pi's corresponding factories: they resolve the Step global
@@ -122,8 +151,9 @@ service and are not silently faked by this fork.
 | Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
+| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `step-cli.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
-| `/multi-agent`, `/connect`, `/trace`, `/feedback`, voice/realtime, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
+| `/multi-agent`, `/connect`, `/trace`, voice/realtime, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
 | Legacy top-level `models`, `serve`, `goal`, and related gateway commands | Previous command dispatcher | separate product; Pi package commands remain unchanged |
 
 This distinction is deliberate: a missing external service is reported as a
