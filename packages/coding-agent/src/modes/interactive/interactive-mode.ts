@@ -93,7 +93,13 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-import type { StepLoginHost, StepLoginOutcome } from "../../step/login-flow.ts";
+import {
+	readStepLoginCredential,
+	readStepLoginProfile,
+	type StepLoginHost,
+	type StepLoginOutcome,
+} from "../../step/login-flow.ts";
+import { resolveStepLoginProfiles } from "../../step/onboarding.ts";
 import { listAllStepSessions, listStepSessions, openStepSession } from "../../step/session.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -5892,6 +5898,14 @@ export class InteractiveMode {
 			const activeSession = this.runtimeHost?.session;
 			if (activeSession?.isStreaming || activeSession?.isCompacting) {
 				this.showWarning("Wait for the active turn to finish before signing in");
+				return;
+			}
+			if (this.options.authPath && readStepLoginCredential(this.options.authPath)) {
+				const profileId = readStepLoginProfile(this.options.authPath);
+				const profileTitle = resolveStepLoginProfiles().find((profile) => profile.id === profileId)?.title;
+				this.showStatus(
+					`Already signed in with ${profileTitle ?? "the stored profile"}. Run \`/logout\` before signing in again.`,
+				);
 				return;
 			}
 			try {

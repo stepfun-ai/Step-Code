@@ -1,5 +1,9 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { writeStepLoginCredential } from "../src/step/login-flow.ts";
 
 const handleLoginCommand = (
 	InteractiveMode.prototype as unknown as {
@@ -94,6 +98,33 @@ describe("Step login command routing", () => {
 
 		expect(stepLogin).not.toHaveBeenCalled();
 		expect(showWarning).toHaveBeenCalledWith("Wait for the active turn to finish before signing in");
+	});
+
+	it("does not reopen the Step login panel when already signed in", async () => {
+		const root = await mkdtemp(join(tmpdir(), "interactive-step-login-auth-"));
+		const stepLogin = vi.fn(async () => ({ kind: "exit" as const }));
+		const showStatus = vi.fn();
+		try {
+			const authPath = join(root, "auth.json");
+			await writeStepLoginCredential({ authPath, profile: "step_plan", apiKey: "stored-key" });
+			const context = {
+				options: { stepLogin, authPath },
+				showStatus,
+				showWarning: vi.fn(),
+				showError: vi.fn(),
+				createStepLoginHost: vi.fn(),
+			};
+
+			await handleLoginCommand.call(context);
+
+			expect(stepLogin).not.toHaveBeenCalled();
+			expect(context.createStepLoginHost).not.toHaveBeenCalled();
+			expect(showStatus).toHaveBeenCalledWith(
+				"Already signed in with Step Plan. Run `/logout` before signing in again.",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("uses the shared Step logout flow and shuts down the session", async () => {
