@@ -152,6 +152,17 @@ Attribution:
 
 4. **If binary CI publication fails**: inspect the failed build, checksum, upload, or release job and rerun that job after fixing the issue. Do not recreate an existing tag.
 
+## Execution Protocol
+
+For any non-trivial change — a new subsystem, a multi-file refactor, or risky / hard-to-reverse work — plan before you edit:
+
+1. First search `docs/exec-plans/active/` for a related plan and read it.
+2. Before writing code or running side-effecting commands, write a short Markdown exec-plan to `docs/exec-plans/active/<kebab-name>.md`. Cover: **Step** (what you will do), **Tool** (command or edit), **Expectation** (the result that means it worked), **Rollback** (how to undo if it fails).
+3. For operations with side effects (deleting, publishing, releasing, migrating), request explicit confirmation at the end of the plan before proceeding.
+4. Prefer the scripts under `scripts/` over ad-hoc command lines.
+
+Exec-plans are execution records, not user-facing docs: keep them in `docs/exec-plans/active/` while in progress and move them out when the work lands. They are not part of any published docs navigation. When a change alters runtime behavior, tool boundaries, or a cross-process contract, update the matching doc in the same change rather than leaving the plan as the only record.
+
 ## User Override
 
 If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
