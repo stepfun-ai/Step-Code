@@ -111,7 +111,7 @@ tmux kill-session -t pi-test
 
 Locations:
 
-- `CHANGELOG.md` — Step Harness product, runtime integration, release, and user-facing changes.
+- `CHANGELOG.md` — Step CLI product, runtime integration, release, and user-facing changes.
 - `packages/*/CHANGELOG.md` — package-specific runtime and API changes.
 
 Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
@@ -137,15 +137,15 @@ Attribution:
 2. **Local binary smoke test**: build the standalone Step bundle and smoke test the current-platform binary outside the repo:
    ```bash
    node infra/release/release-bundle.mjs --dry-run --version v0.3.1
-   ./scripts/build-binaries.sh --product step --offline-model-data --platform linux-x64 --out /tmp/step-harness-release
-   /tmp/step-harness-release/step --help
-   /tmp/step-harness-release/step --version
+   ./scripts/build-binaries.sh --product step --offline-model-data --platform linux-x64 --out /tmp/step-cli-release
+   /tmp/step-cli-release/step --help
+   /tmp/step-cli-release/step --version
    ```
    Verify the binary starts, reports the tag-derived version, loads native TUI resources, and completes a smoke prompt with the intended Step provider. Failures are release blockers unless the user explicitly accepts the risk.
 
 3. **Run the Step release script**:
    ```bash
-   STEP_HARNESS_RELEASE_PUSH=0 npm run release:step -- --dry-run
+   STEP_CLI_RELEASE_PUSH=0 npm run release:step -- --dry-run
    npm run release:step -- <x.y.z>
    ```
    The Step release command creates a `vX.Y.Z` tag. GitLab CI then builds six platform archives, uploads the installers and manifests to TOS, and creates the GitLab release. No npm package is published.

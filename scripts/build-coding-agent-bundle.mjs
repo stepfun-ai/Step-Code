@@ -111,13 +111,13 @@ function commonBuildOptions() {
  */
 function readStepBuildDefines() {
 	const defines = {};
+	const version = process.env.STEP_CLI_BUILD_VERSION;
+	const channel = process.env.STEP_CLI_BUILD_CHANNEL;
+	const commit = process.env.STEP_CLI_BUILD_COMMIT;
 	const aliases = [
-		["STEP_HARNESS_BUILD_VERSION", process.env.STEP_HARNESS_BUILD_VERSION],
-		["STEP_HARNESS_BUILD_CHANNEL", process.env.STEP_HARNESS_BUILD_CHANNEL],
-		["STEP_HARNESS_BUILD_COMMIT", process.env.STEP_HARNESS_BUILD_COMMIT],
-		["STEP_CLI_BUILD_VERSION", process.env.STEP_CLI_BUILD_VERSION],
-		["STEP_CLI_BUILD_CHANNEL", process.env.STEP_CLI_BUILD_CHANNEL],
-		["STEP_CLI_BUILD_COMMIT", process.env.STEP_CLI_BUILD_COMMIT],
+		["STEP_CLI_BUILD_VERSION", version],
+		["STEP_CLI_BUILD_CHANNEL", channel],
+		["STEP_CLI_BUILD_COMMIT", commit],
 	];
 	for (const [name, value] of aliases) {
 		if (typeof value === "string" && value.trim()) {

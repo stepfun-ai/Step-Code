@@ -1,9 +1,9 @@
 /**
- * Step Harness plugin marketplace facade.
+ * Step CLI plugin marketplace facade.
  *
  * Pi's package manager can install executable extensions, but Step's built-in
  * marketplace has a deliberately smaller contract: marketplace packages are
- * declarative manifests copied into `.step-harness/plugins`.  We persist and
+ * declarative manifests copied into `.step-cli/plugins`.  We persist and
  * diagnose MCP declarations here; the MCP process bridge can be added later
  * without changing the marketplace or slash-command contracts.
  */
@@ -31,7 +31,7 @@ export const MARKETPLACE_MANIFEST_CANDIDATES: readonly string[] = [
 export const MARKETPLACE_MANIFEST_RELATIVE_PATH = MARKETPLACE_MANIFEST_CANDIDATES[0]!;
 export const BUILTIN_MARKETPLACE_NAME = "builtin";
 
-const BUILTIN_FINGERPRINT_FILE = ".step-harness-builtin-fingerprint";
+const BUILTIN_FINGERPRINT_FILE = ".step-cli-builtin-fingerprint";
 const SAFE_NAME = /^[a-z0-9][a-z0-9._-]*$/iu;
 const MAX_MANIFEST_BYTES = 512 * 1024;
 
@@ -40,7 +40,7 @@ export const BUILTIN_MARKETPLACE_FILES: Readonly<Record<string, string>> = {
 	".step-plugin/marketplace.json": JSON.stringify(
 		{
 			name: BUILTIN_MARKETPLACE_NAME,
-			description: "Plugins that ship inside the Step Harness binary. Updated with the harness itself, not fetched.",
+			description: "Plugins that ship inside the Step CLI binary. Updated with the CLI itself, not fetched.",
 			plugins: [
 				{
 					name: "playwright",
@@ -525,7 +525,7 @@ export async function installMarketplacePlugin(
 	}
 	if (entry.declaration.lspServers !== undefined) {
 		warnings.push(
-			`Marketplace entry '${entry.name}' declares lspServers, which Step Harness does not host; that contribution was not installed.`,
+			`Marketplace entry '${entry.name}' declares lspServers, which Step CLI does not host; that contribution was not installed.`,
 		);
 	}
 	const diagnostics = await diagnoseStepPlugin(target);
@@ -577,9 +577,7 @@ export async function diagnoseStepPlugin(pluginDir: string): Promise<StepPluginD
 		}
 	}
 	if (mcpServers.length > 0) {
-		warnings.push(
-			`MCP declarations saved for ${mcpServers.join(", ")}; Step Harness does not start MCP processes yet.`,
-		);
+		warnings.push(`MCP declarations saved for ${mcpServers.join(", ")}; Step CLI does not start MCP processes yet.`);
 	}
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
@@ -825,7 +823,7 @@ export async function updateMarketplaceSource(input: {
 }): Promise<MarketplaceOperationResult> {
 	const name = input.name.trim();
 	if (!isSafeName(name) || name === BUILTIN_MARKETPLACE_NAME)
-		return { warnings: [`Marketplace '${name}' is built into Step Harness and cannot be updated separately.`] };
+		return { warnings: [`Marketplace '${name}' is built into Step CLI and cannot be updated separately.`] };
 	const root = input.marketplacesDir ?? defaultStepMarketplacesDir();
 	const target = path.resolve(root, name);
 	if (!(await pathExists(target))) return { warnings: [`No marketplace named '${name}' is configured.`] };
@@ -934,7 +932,7 @@ async function openInstalledPluginDetails(
 		if (selected === "Back") await openInstalledPlugins(ctx, options, say);
 		return;
 	}
-	if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${plugin.name}' from Step Harness?`))) {
+	if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${plugin.name}' from Step CLI?`))) {
 		say("Uninstall cancelled.");
 		return;
 	}
@@ -1042,7 +1040,7 @@ async function openMarketplaceSourceDetails(
 	say: PluginNotice,
 ): Promise<void> {
 	if (source.kind === "builtin") {
-		say(`${source.name} ships with Step Harness and cannot be updated or removed.`);
+		say(`${source.name} ships with Step CLI and cannot be updated or removed.`);
 		return;
 	}
 	const details = `${source.origin ?? source.path}\nKind: ${source.kind}`;
@@ -1075,7 +1073,7 @@ async function openMarketplaceSourceDetails(
 /** Register `/plugin` on the Step command surface. */
 export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginCommandOptions = {}): void {
 	pi.registerCommand("plugin", {
-		description: "Browse and manage Step Harness plugins",
+		description: "Browse and manage Step CLI plugins",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.trim().split(/\s+/u).filter(Boolean);
 			const actions = ["list", "browse", "install", "remove", "uninstall", "marketplace"];
@@ -1159,7 +1157,7 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 							say(`Usage: /plugin ${command} <name>`, "warning");
 							return;
 						}
-						if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${name}' from Step Harness?`))) {
+						if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${name}' from Step CLI?`))) {
 							say("Uninstall cancelled.");
 							return;
 						}

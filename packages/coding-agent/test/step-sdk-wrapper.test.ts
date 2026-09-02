@@ -86,7 +86,7 @@ describe("Step Pi session wrappers", () => {
 		const agentDir = join(root, "explicit-agent");
 		const staleSessionDir = join(root, "stale-session-root");
 		await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-		vi.stubEnv("STEP_HARNESS_CODING_AGENT_SESSION_DIR", staleSessionDir);
+		vi.stubEnv("STEP_CODING_AGENT_SESSION_DIR", staleSessionDir);
 		const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
 
 		const { session } = await createStepAgentSession({

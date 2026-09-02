@@ -12,7 +12,7 @@ import type { SessionManager } from "./core/session-manager.ts";
  * It intentionally contains no scheduling or state machine of its own. Input,
  * queueing, persistence, compaction, and lifecycle remain owned by pi.
  */
-export interface StepHarness extends AgentSessionRuntimeHost {
+export interface StepCli extends AgentSessionRuntimeHost {
 	readonly runtime: AgentSessionRuntime;
 	readonly session: AgentSession;
 	readonly sessionId: string;
@@ -57,7 +57,7 @@ export interface StepHarness extends AgentSessionRuntimeHost {
 	dispose(): Promise<void>;
 }
 
-export function createStepHarness(runtime: AgentSessionRuntime): StepHarness {
+export function createStepCli(runtime: AgentSessionRuntime): StepCli {
 	type Subscription = {
 		listener: AgentSessionEventListener;
 		unsubscribe: () => void;
@@ -82,7 +82,7 @@ export function createStepHarness(runtime: AgentSessionRuntime): StepHarness {
 	const removeRuntimeListener = runtime.onSessionChange(rebindSubscriptions);
 	const ensureOpen = (): void => {
 		if (disposed) {
-			throw new Error("Step harness is disposed");
+			throw new Error("step cli is disposed");
 		}
 	};
 
@@ -108,7 +108,7 @@ export function createStepHarness(runtime: AgentSessionRuntime): StepHarness {
 		},
 		input: (text, options) => {
 			ensureOpen();
-			// Step harness calls are external to the interactive TUI. Keep their
+			// step cli calls are external to the interactive TUI. Keep their
 			// source stable so input extensions, auditing, and telemetry do not
 			// depend on which convenience method the caller happened to use.
 			return runtime.session.prompt(text, {
@@ -221,4 +221,4 @@ export function createStepHarness(runtime: AgentSessionRuntime): StepHarness {
 	};
 }
 
-export type StepHarnessSession = AgentSession;
+export type StepCliSession = AgentSession;

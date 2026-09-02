@@ -39,7 +39,7 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-wrapper-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await mkdir(cwd, { recursive: true });
 
 		const manager = createStepSessionManager(cwd, { agentDir });
@@ -56,7 +56,7 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-instance-wrapper-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await mkdir(cwd, { recursive: true });
 
 		const native = SessionManager.create(cwd, join(agentDir, "sessions", "encoded"), { id: "native" });
@@ -79,7 +79,7 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-factory-wrapper-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await mkdir(cwd, { recursive: true });
 
 		const factory = createStepSessionManagerFactory(agentDir);
@@ -97,7 +97,7 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-wrapper-explicit-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const sessionDir = join(root, ".step-harness", "sessions");
+		const sessionDir = join(root, ".step-cli", "sessions");
 		await mkdir(cwd, { recursive: true });
 
 		const manager = createStepSessionManager(cwd, { sessionDir });
@@ -109,7 +109,7 @@ describe("Step Pi storage wrappers", () => {
 	test("resolves managed fd/rg binaries lazily from the active Step agent directory", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-tool-wrapper-"));
 		roots.push(root);
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		const rgPath = join(agentDir, "bin", process.platform === "win32" ? "rg.exe" : "rg");
 		await mkdir(join(agentDir, "bin"), { recursive: true });
 		await writeFile(rgPath, "placeholder");
@@ -123,7 +123,7 @@ describe("Step Pi storage wrappers", () => {
 		roots.push(root);
 		const firstCwd = join(root, "first");
 		const secondCwd = join(root, "second");
-		const stepAgentDir = join(root, ".step-harness", "agent");
+		const stepAgentDir = join(root, ".step-cli", "agent");
 		const piAgentDir = join(root, ".pi", "agent");
 		await Promise.all([mkdir(firstCwd), mkdir(secondCwd)]);
 
@@ -155,9 +155,9 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-positional-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await mkdir(cwd, { recursive: true });
-		vi.stubEnv("STEP_HARNESS_CODING_AGENT_DIR", agentDir);
+		vi.stubEnv("STEP_CODING_AGENT_DIR", agentDir);
 
 		const manager = StepSessionManager.create(cwd, undefined, { id: "positional" });
 		const path = await persistHeader(manager);
@@ -171,7 +171,7 @@ describe("Step Pi storage wrappers", () => {
 		expect(StepSessionManager.create(cwd, manager.getSessionDir(), { id: "second" }).getSessionDir()).toBe(
 			manager.getSessionDir(),
 		);
-		expect(manager.getSessionDir()).toContain(join(root, ".step-harness"));
+		expect(manager.getSessionDir()).toContain(join(root, ".step-cli"));
 	});
 
 	test("binds every static session operation to one Step agent root", async () => {
@@ -179,7 +179,7 @@ describe("Step Pi storage wrappers", () => {
 		roots.push(root);
 		const firstCwd = join(root, "first");
 		const secondCwd = join(root, "second");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await Promise.all([mkdir(firstCwd), mkdir(secondCwd)]);
 
 		const factory = createStepSessionManagerFactory(agentDir);
@@ -207,9 +207,9 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-env-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await mkdir(cwd, { recursive: true });
-		vi.stubEnv("STEP_HARNESS_CODING_AGENT_DIR", agentDir);
+		vi.stubEnv("STEP_CODING_AGENT_DIR", agentDir);
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(root, ".pi", "agent"));
 
 		const manager = StepSessionManager.create(cwd, { newSession: { id: "env-step" } });
@@ -222,10 +222,10 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-env-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await mkdir(cwd, { recursive: true });
 		await writeFile(join(cwd, "sample.txt"), "sample\n");
-		vi.stubEnv("STEP_HARNESS_CODING_AGENT_DIR", agentDir);
+		vi.stubEnv("STEP_CODING_AGENT_DIR", agentDir);
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(root, ".pi", "agent"));
 		vi.stubEnv("PI_OFFLINE", "1");
 		vi.stubEnv("PATH", join(root, "empty-path"));
@@ -256,11 +256,11 @@ describe("Step Pi storage wrappers", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-tool-migration-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-harness", "agent");
+		const agentDir = join(root, ".step-cli", "agent");
 		await Promise.all([mkdir(cwd), mkdir(join(agentDir, "tools"), { recursive: true })]);
 		await writeFile(join(agentDir, "tools", "fd"), "step-fd");
 
-		runMigrations(cwd, { agentDir, configDirName: ".step-harness" });
+		runMigrations(cwd, { agentDir, configDirName: ".step-cli" });
 
 		await expect(readFile(join(agentDir, "bin", "fd"), "utf8")).resolves.toBe("step-fd");
 		expect(existsSync(join(root, ".pi", "agent", "bin", "fd"))).toBe(false);

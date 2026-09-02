@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Install or update Step Harness on Windows.
+  Install or update Step CLI on Windows.
 
 .DESCRIPTION
   This is the Windows counterpart to infra/release/install.sh.  Release
@@ -14,12 +14,12 @@
 
 .PARAMETER InstallDir
   Directory containing step.exe. Defaults to STEP_INSTALL_DIR or
-  %USERPROFILE%\.step-harness\bin.
+  %USERPROFILE%\.step-cli\bin.
 
 .PARAMETER AgentDir
   Step agent data directory. Managed fd/rg binaries are placed in its bin
-  subdirectory. Defaults to STEP_HARNESS_CODING_AGENT_DIR, the legacy
-  STEP_CODING_AGENT_DIR alias, or %USERPROFILE%\.step-harness\agent.
+  subdirectory. Defaults to STEP_CODING_AGENT_DIR or
+  %USERPROFILE%\.step-cli\agent.
 #>
 [CmdletBinding()]
 param(
@@ -52,16 +52,14 @@ if (-not $InstallDir) {
   $InstallDir = if ($env:STEP_INSTALL_DIR) {
     $env:STEP_INSTALL_DIR
   } else {
-    Join-Path $HomeDir '.step-harness\bin'
+    Join-Path $HomeDir '.step-cli\bin'
   }
 }
 if (-not $AgentDir) {
-  $AgentDir = if ($env:STEP_HARNESS_CODING_AGENT_DIR) {
-    $env:STEP_HARNESS_CODING_AGENT_DIR
-  } elseif ($env:STEP_CODING_AGENT_DIR) {
+  $AgentDir = if ($env:STEP_CODING_AGENT_DIR) {
     $env:STEP_CODING_AGENT_DIR
-  } else {
-    Join-Path $HomeDir '.step-harness\agent'
+	} else {
+    Join-Path $HomeDir '.step-cli\agent'
   }
 }
 
@@ -132,7 +130,7 @@ function Get-TargetId {
 function Get-Manifest {
   param([Parameter(Mandatory = $true)][string]$ManifestUrl)
   try {
-    return Invoke-RestMethod -Uri $ManifestUrl -Headers @{ 'User-Agent' = 'step-harness-installer' } -UseBasicParsing
+    return Invoke-RestMethod -Uri $ManifestUrl -Headers @{ 'User-Agent' = 'step-cli-installer' } -UseBasicParsing
   } catch {
     Stop-WithError "failed to fetch release manifest $ManifestUrl ($($_.Exception.Message))"
   }
@@ -170,7 +168,7 @@ function Invoke-Download {
     [Parameter(Mandatory = $true)][string]$Destination
   )
   try {
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers @{ 'User-Agent' = 'step-harness-installer' } -UseBasicParsing
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers @{ 'User-Agent' = 'step-cli-installer' } -UseBasicParsing
   } catch {
     Stop-WithError "failed to download $Url ($($_.Exception.Message))"
   }
@@ -337,7 +335,7 @@ function Install-ManagedTool {
 
   try {
     $metadataUrl = "https://api.github.com/repos/$Repository/releases/latest"
-    $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers @{ 'User-Agent' = 'step-harness-installer'; Accept = 'application/vnd.github+json' } -UseBasicParsing
+    $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers @{ 'User-Agent' = 'step-cli-installer'; Accept = 'application/vnd.github+json' } -UseBasicParsing
     $tag = [string](Get-ObjectProperty -Object $metadata -Name 'tag_name')
     if (-not $tag) {
       throw "GitHub release metadata did not contain tag_name"
@@ -388,7 +386,7 @@ function Test-Install {
 function Write-Result {
   param([Parameter(Mandatory = $true)][string]$ResolvedVersion)
   $binaryPath = Join-Path $InstallDir 'step.exe'
-  Write-Host "  installed step-harness $ResolvedVersion to $binaryPath" -ForegroundColor Green
+  Write-Host "  installed step-cli $ResolvedVersion to $binaryPath" -ForegroundColor Green
   $pathEntries = @($env:PATH -split ';' | Where-Object { $_ })
   $managedBin = Join-Path $AgentDir 'bin'
   $missing = @($InstallDir, $managedBin) | Where-Object { $pathEntries -notcontains $_ }
@@ -408,7 +406,7 @@ if ($BaseUrl -match '__STEP_RELEASE_BASE_URL__') {
   Stop-WithError 'release base URL was not configured in this installer'
 }
 
-$workDir = Join-Path ([IO.Path]::GetTempPath()) ("step-harness-install-" + [Guid]::NewGuid().ToString('N'))
+$workDir = Join-Path ([IO.Path]::GetTempPath()) ("step-cli-install-" + [Guid]::NewGuid().ToString('N'))
 try {
   New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 

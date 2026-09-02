@@ -35,18 +35,17 @@ describe("Step early environment", () => {
 		applyStepEnvironment(env);
 
 		expect(env.STEP_CLI_APP_NAME).toBe("step");
-		expect(env.STEP_CLI_CONFIG_DIR).toBe(".step-harness");
+		expect(env.STEP_CLI_CONFIG_DIR).toBe(".step-cli");
 		expect(env.STEP_CLI_DEFAULT_THEME).toBe("custom-theme");
 		expect(env.STEP_CLI_DEFAULT_PROVIDER).toBe("custom-provider");
 		expect(env.STEP_CLI_DEFAULT_MODEL).toBe("custom-model");
-		expect(env.STEP_CODING_AGENT_DIR).toMatch(/\.step-harness[\\/]agent$/u);
+		expect(env.STEP_CODING_AGENT_DIR).toMatch(/\.step-cli[\\/]agent$/u);
 		// pi-tui still has a historical fallback that reads this alias directly;
 		// the Step bootstrap mirrors the resolved root for that wrapped surface.
 		expect(env.PI_CODING_AGENT_DIR).toBe(env.STEP_CODING_AGENT_DIR);
 		// No session override is injected: Pi's SessionManager derives the
 		// default from the resolved agent directory.
 		expect(env.STEP_CODING_AGENT_SESSION_DIR).toBeUndefined();
-		expect(env.STEP_HARNESS_CODING_AGENT_SESSION_DIR).toBeUndefined();
 		expect(env.STEP_CLI_DISABLE_PI_SERVICES).toBe("1");
 		expect(env.PI_CODING_AGENT).toBe("true");
 		expect(env.AI_AGENT).toBe("step");
@@ -60,21 +59,20 @@ describe("Step early environment", () => {
 		expect(env.STEP_CODING_AGENT_DIR).toBe("/custom/agent");
 	});
 
-	test("keeps an explicit session override and mirrors both aliases", () => {
+	test("keeps an explicit session override", () => {
 		const env: NodeJS.ProcessEnv = {
-			STEP_HARNESS_CODING_AGENT_SESSION_DIR: "/tmp/step-sessions",
+			STEP_CODING_AGENT_SESSION_DIR: "/tmp/step-sessions",
 		};
 
 		applyStepEnvironment(env);
 
-		expect(env.STEP_HARNESS_CODING_AGENT_SESSION_DIR).toBe("/tmp/step-sessions");
 		expect(env.STEP_CODING_AGENT_SESSION_DIR).toBe("/tmp/step-sessions");
 		expect(resolveStepSessionDir(env)).toBe("/tmp/step-sessions");
 	});
 
 	test("derives the default session directory below the agent directory", () => {
 		const env: NodeJS.ProcessEnv = {
-			STEP_HARNESS_CODING_AGENT_DIR: "/tmp/step-agent",
+			STEP_CODING_AGENT_DIR: "/tmp/step-agent",
 		};
 
 		expect(resolveStepSessionDir(env)).toBe("/tmp/step-agent/sessions");

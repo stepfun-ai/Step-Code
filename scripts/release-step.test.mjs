@@ -24,11 +24,11 @@ async function makeGitFixture(version) {
 }
 
 function runStepDryRun(root, args = [], overrides = {}) {
-	const env = { ...process.env, STEP_HARNESS_RELEASE_PUSH: "0", ...overrides };
+	const env = { ...process.env, STEP_CLI_RELEASE_PUSH: "0", ...overrides };
 	for (const name of [
-		"STEP_HARNESS_VERSION",
-		"STEP_HARNESS_RELEASE_VERSION",
-		"STEP_HARNESS_VERSION_OVERRIDE",
+		"STEP_CLI_VERSION",
+		"STEP_CLI_RELEASE_VERSION",
+		"STEP_CLI_VERSION_OVERRIDE",
 		"GITHUB_REF_NAME",
 		"CI_COMMIT_TAG",
 		"RELEASE_TAG",
@@ -61,6 +61,30 @@ test("an explicit Step version still overrides the package fallback", async () =
 		assert.equal(result.status, 0, result.stderr);
 		assert.match(result.stdout, /Step version: 9\.9\.0/);
 		assert.match(result.stdout, /Git tag: v9\.9\.0/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("canonical Step CLI release variables override the package fallback", async () => {
+	const root = await makeGitFixture("9.8.7");
+	try {
+		const result = runStepDryRun(root, [], { STEP_CLI_VERSION: "v1.2.3" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, /Step version: 1\.2\.3/);
+		assert.match(result.stdout, /Git tag: v1\.2\.3/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("the Step CLI override remains deterministic", async () => {
+	const root = await makeGitFixture("9.8.7");
+	try {
+		const result = runStepDryRun(root, [], { STEP_CLI_VERSION_OVERRIDE: "v2.3.4" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, /Step version: 2\.3\.4/);
+		assert.match(result.stdout, /Git tag: v2\.3\.4/);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

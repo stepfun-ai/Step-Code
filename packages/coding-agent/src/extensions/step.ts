@@ -236,7 +236,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 					sessionId: ctx.sessionManager.getSessionId(),
 					goalId: process.env.STEP_GOAL_ID,
 					attemptId: process.env.STEP_ATTEMPT_ID,
-					harnessId: process.env.STEP_HARNESS_ID,
+					harnessId: process.env.STEP_CLI_ID,
 					spanId: process.env.STEP_SPAN_ID,
 					workspaceId: process.env.STEP_WORKSPACE_ID ?? ctx.cwd,
 					provider: model.provider,

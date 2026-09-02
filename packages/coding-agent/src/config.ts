@@ -2,8 +2,8 @@ import { accessSync, constants, existsSync, readFileSync, realpathSync } from "f
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
-import { applyStepEnvironment, isStepEntrypoint, STEP_HARNESS_CONFIG_DIR } from "./step/environment.ts";
-import { STEP_HARNESS_VERSION } from "./step/version.ts";
+import { applyStepEnvironment, isStepEntrypoint, STEP_CLI_CONFIG_DIR } from "./step/environment.ts";
+import { STEP_CLI_VERSION } from "./step/version.ts";
 import { spawnProcessSync } from "./utils/child-process.ts";
 import { normalizePath } from "./utils/paths.ts";
 import { stripBom } from "./utils/text.ts";
@@ -510,18 +510,16 @@ export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 // Rebranded distributions can select their project resource directory without
 // changing the package metadata used by the upstream `pi` entrypoint. Step
-// Harness sets this to `.step-harness`; the launcher performs a one-time
-// migration from the former Step CLI directory.
-const configuredStepConfigDir = STEP_ENTRYPOINT
-	? process.env.STEP_HARNESS_CONFIG_DIR?.trim() || process.env.STEP_CLI_CONFIG_DIR?.trim()
-	: undefined;
+// Step CLI uses `.step-cli`; the launcher also imports files left by older
+// releases before Pi's managers read the directory.
+const configuredStepConfigDir = STEP_ENTRYPOINT ? process.env.STEP_CLI_CONFIG_DIR?.trim() : undefined;
 export const CONFIG_DIR_NAME: string =
-	configuredStepConfigDir || (STEP_ENTRYPOINT ? STEP_HARNESS_CONFIG_DIR : pkg.piConfig?.configDir || ".pi");
+	configuredStepConfigDir || (STEP_ENTRYPOINT ? STEP_CLI_CONFIG_DIR : pkg.piConfig?.configDir || ".pi");
 // `step` is a product facade over the upstream Pi package. Keep the native Pi
 // version for ordinary `pi` invocations, but expose the Step release identity
 // everywhere the Step entrypoint consumes this constant (CLI flags, TUI and
 // SDK metadata).
-export const VERSION: string = STEP_ENTRYPOINT ? STEP_HARNESS_VERSION.value : pkg.version || "0.0.0";
+export const VERSION: string = STEP_ENTRYPOINT ? STEP_CLI_VERSION.value : pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
@@ -543,11 +541,10 @@ export function getShareViewerUrl(gistId: string): string {
 // User Config Paths (<config-dir>/agent/*)
 // =============================================================================
 
-/** Get the agent config directory (for example, ~/.pi/agent/ or ~/.step-harness/agent/) */
+/** Get the agent config directory (for example, ~/.pi/agent/ or ~/.step-cli/agent/) */
 export function getAgentDir(): string {
 	const envDir =
-		(STEP_ENTRYPOINT ? process.env.STEP_HARNESS_CODING_AGENT_DIR?.trim() : undefined) ||
-		process.env[ENV_AGENT_DIR]?.trim();
+		(STEP_ENTRYPOINT ? process.env.STEP_CODING_AGENT_DIR?.trim() : undefined) || process.env[ENV_AGENT_DIR]?.trim();
 	if (envDir) {
 		return expandTildePath(envDir);
 	}

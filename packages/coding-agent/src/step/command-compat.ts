@@ -62,7 +62,7 @@ export interface StepConfigCommandIo {
  * Run the Step-owned config inspection/migration commands.
  *
  * The files use Pi's native schema (`settings.json`, `models.json`, and
- * `auth.json`) but live below `.step-harness`; secrets are never printed.
+ * `auth.json`) but live below `.step-cli`; secrets are never printed.
  */
 export async function runStepConfigCommand(argv: readonly string[], io: StepConfigCommandIo = {}): Promise<void> {
 	const stdout = io.stdout ?? process.stdout;

@@ -163,14 +163,14 @@ describe("buildSystemPrompt", () => {
 				...base,
 				product: {
 					name: "Step",
-					introduction: "You are step-harness, an interactive terminal coding agent developed by StepFun.",
+					introduction: "You are step-cli, an interactive terminal coding agent developed by StepFun.",
 					includeDocumentation: false,
 				},
 			});
 
-			expect(
-				prompt.startsWith("You are step-harness, an interactive terminal coding agent developed by StepFun."),
-			).toBe(true);
+			expect(prompt.startsWith("You are step-cli, an interactive terminal coding agent developed by StepFun.")).toBe(
+				true,
+			);
 			expect(prompt).not.toContain("documentation (read only");
 		});
 
