@@ -1,14 +1,21 @@
 import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { StepUserMessageComponent } from "../src/modes/interactive/components/step-message.ts";
 import { getMarkdownTheme, getThemeByName, initTheme, setTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
-afterEach(() => {
-	resetCapabilitiesCache();
-	initTheme("dark");
-});
-
 describe("Step user message presentation", () => {
+	beforeEach(() => {
+		// Theme encoding follows pi-tui's detected terminal capabilities. Pin the
+		// capability in this presentation test so a headless runner does not turn
+		// the expected RGB values into an unrelated 256-color escape sequence.
+		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+	});
+
+	afterEach(() => {
+		resetCapabilitiesCache();
+		initTheme("dark");
+	});
+
 	test("uses the Codex-style neutral full-width prompt bar", () => {
 		initTheme("step");
 		const width = 40;
@@ -20,6 +27,8 @@ describe("Step user message presentation", () => {
 		expect(visibleWidth(promptRow!)).toBe(width);
 		expect(promptRow).toContain(theme.getBgAnsi("userMessageBg"));
 		expect(promptRow).toContain(`${theme.getFgAnsi("userMessageText")}› 继续`);
+		expect(promptRow).toContain("48;2;238;238;238");
+		expect(promptRow).toContain("38;2;31;35;40");
 		expect(promptRow).not.toContain("48;2;0;0;0");
 	});
 

@@ -135,8 +135,9 @@ describe("Step message presentation", () => {
 	});
 
 	test("keeps Step gutters outside OSC-8 hyperlinks", () => {
-		// OSC-8 is intentionally disabled for unknown/headless terminals. Exercise
-		// the enabled path explicitly so this remains deterministic in CI.
+		// OSC-8 is intentionally disabled for unknown/headless terminals. This
+		// test exercises the enabled path explicitly so it remains deterministic
+		// on CI runners as well as in a real terminal.
 		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
 		initTheme("step");
 		const component = new StepAssistantMessageComponent(

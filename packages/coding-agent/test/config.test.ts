@@ -15,6 +15,10 @@ const originalPath = process.env.PATH;
 const originalPiPackageDir = process.env.PI_PACKAGE_DIR;
 const originalArgv1 = process.argv[1];
 let tempDir: string | undefined;
+// Root can write mode-0444 directories/files by design. These assertions are
+// about the non-root self-update guard and cannot be exercised faithfully in a
+// root-owned CI container.
+const runsAsRoot = process.platform !== "win32" && process.getuid?.() === 0;
 
 function setExecPath(value: string): void {
 	Object.defineProperty(process, "execPath", {
@@ -439,7 +443,7 @@ describe("detectInstallMethod", () => {
 		});
 	});
 
-	test("does not self-update when npm install path is not writable", () => {
+	test.skipIf(runsAsRoot)("does not self-update when npm install path is not writable", () => {
 		const { packageDir } = createNpmPrefixInstall();
 		chmodSync(packageDir, 0o500);
 
