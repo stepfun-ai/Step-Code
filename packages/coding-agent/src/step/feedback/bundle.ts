@@ -285,10 +285,17 @@ async function readTailEntry(filePath: string, name: string, maxBytes: number): 
 		if (size === 0) return undefined;
 		const length = Math.min(size, maxBytes);
 		const position = size - length;
+		let startsMidLine = position > 0;
+		if (startsMidLine) {
+			const previousByte = Buffer.alloc(1);
+			const { bytesRead } = await handle.read(previousByte, 0, 1, position - 1);
+			startsMidLine = bytesRead !== 1 || previousByte[0] !== 0x0a;
+		}
 		const buffer = Buffer.alloc(length);
 		const { bytesRead } = await handle.read(buffer, 0, length, position);
 		let content = buffer.subarray(0, bytesRead);
 		if (position === 0) return { name, content };
+		if (!startsMidLine) return { name, content, note: `tail only, ${formatBytes(size)} on disk` };
 		const firstNewline = content.indexOf(0x0a);
 		if (firstNewline === -1) {
 			return { name, content: Buffer.alloc(0), note: `omitted, a single line exceeds ${formatBytes(maxBytes)}` };

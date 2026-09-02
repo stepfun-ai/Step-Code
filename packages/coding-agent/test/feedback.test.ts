@@ -1146,6 +1146,51 @@ describe("feedback diagnostics and bundles", () => {
 		expect(describeFeedbackBundle(result.bundle)).not.toContain("dev.log (");
 	});
 
+	test("preserves the first diagnostic line when the tail starts after a newline", async () => {
+		const root = await makeRoot();
+		const windowBytes = 64 * 1024;
+		const prefix = "p\n".repeat(windowBytes / 2);
+		const firstLine = "Error: boundary\n";
+		const suffix = firstLine + "x".repeat(windowBytes - Buffer.byteLength(firstLine));
+		expect(Buffer.byteLength(prefix + suffix)).toBe(windowBytes * 2);
+		await mkdir(join(root, "diagnostics"), { recursive: true });
+		await writeFile(join(root, "diagnostics", "input-trace-boundary.jsonl"), prefix + suffix);
+
+		const result = await readFeedbackDiagnostics({ storageRootDir: root });
+
+		expect(result?.diagnostics.lines[0]).toBe("Error: boundary");
+		expect(result?.diagnostics.truncated).toBe(true);
+	});
+
+	test("preserves the first dev-log line when the tail starts after a newline", async () => {
+		const root = await makeRoot();
+		const at = new Date("2026-08-31T00:00:00.000Z");
+		const sessionFile = join(root, "20260831_boundary-session.jsonl");
+		await writeFile(sessionFile, '{"type":"session"}\n');
+
+		const windowBytes = 5 * 1024 * 1024;
+		const prefix = "p\n".repeat(windowBytes / 2);
+		const firstLine = "Error: boundary\n";
+		const suffix = firstLine + "x\n".repeat((windowBytes - Buffer.byteLength(firstLine)) / 2);
+		expect(Buffer.byteLength(prefix + suffix)).toBe(windowBytes * 2);
+		await mkdir(join(root, "logs"), { recursive: true });
+		await writeFile(resolveStderrDevLogPath(root, at), prefix + suffix);
+
+		const result = await buildFeedbackSessionBundle({ storageRootDir: root, sessionFile, at });
+
+		expect(result.status).toBe("ready");
+		if (result.status !== "ready") return;
+		const entries = await readBundleEntries(result.bundle.data);
+		const devLog = entries.find((entry) => entry.name === "dev.log");
+		expect(devLog?.content.toString("utf8")).toContain("Error: boundary");
+		const manifest = JSON.parse(entries.find((entry) => entry.name === "bundle.json")!.content.toString("utf8")) as {
+			files: Array<{ name: string; bytes: number }>;
+		};
+		expect(manifest.files).toContainEqual(
+			expect.objectContaining({ name: "dev.log", bytes: devLog!.content.byteLength }),
+		);
+	});
+
 	test("mirrors stderr unchanged while redacting the persisted daily log", async () => {
 		const root = await makeRoot();
 		const original = captureOutput();

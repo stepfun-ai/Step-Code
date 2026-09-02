@@ -41,16 +41,18 @@ async function readDiagnosticFile(
 	const rawLines = tail.text.split(/\r?\n/u);
 	// A trailing newline leaves an empty final element that is not a line.
 	if (rawLines.at(-1) === "") rawLines.pop();
-	const bounded = excerptFeedbackDiagnostics({ lines: rawLines, source, startsMidStream: tail.skippedBytes > 0 });
+	const bounded = excerptFeedbackDiagnostics({ lines: rawLines, source, startsMidStream: tail.startsMidStream });
 	if (bounded.lines.length === 0) return undefined;
-	return { source, lines: bounded.lines, truncated: bounded.truncated };
+	return { source, lines: bounded.lines, truncated: bounded.truncated || tail.truncated };
 }
 
 /**
  * Positional read of the last window only, so the file is never loaded whole and
  * a directory or unreadable device fails into `undefined` rather than throwing.
  */
-async function readTailWindow(logPath: string): Promise<{ text: string; skippedBytes: number } | undefined> {
+async function readTailWindow(
+	logPath: string,
+): Promise<{ text: string; skippedBytes: number; startsMidStream: boolean; truncated: boolean } | undefined> {
 	// Diagnostics are copied into a user-consented report. Do not follow a
 	// candidate file link into an unrelated path outside the storage root.
 	const linkStats = await fs.lstat(logPath).catch(() => undefined);
@@ -62,9 +64,20 @@ async function readTailWindow(logPath: string): Promise<{ text: string; skippedB
 		if (size === 0) return undefined;
 		const length = Math.min(size, TAIL_WINDOW_BYTES);
 		const position = size - length;
+		let startsMidStream = position > 0;
+		if (startsMidStream) {
+			const previousByte = Buffer.alloc(1);
+			const { bytesRead } = await handle.read(previousByte, 0, 1, position - 1);
+			startsMidStream = bytesRead !== 1 || previousByte[0] !== 0x0a;
+		}
 		const buffer = Buffer.alloc(length);
 		const { bytesRead } = await handle.read(buffer, 0, length, position);
-		return { text: buffer.subarray(0, bytesRead).toString("utf8"), skippedBytes: position };
+		return {
+			text: buffer.subarray(0, bytesRead).toString("utf8"),
+			skippedBytes: position,
+			startsMidStream,
+			truncated: position > 0,
+		};
 	} catch {
 		return undefined;
 	} finally {
