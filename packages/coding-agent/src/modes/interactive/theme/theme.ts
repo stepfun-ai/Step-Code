@@ -474,13 +474,15 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		const themesDir = getThemesDir();
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
-		const stepPath = path.join(themesDir, "step.json");
 		const themes: Record<string, ThemeJson> = {
 			dark: JSON.parse(stripBom(fs.readFileSync(darkPath, "utf-8"))) as ThemeJson,
 			light: JSON.parse(stripBom(fs.readFileSync(lightPath, "utf-8"))) as ThemeJson,
 		};
-		if (fs.existsSync(stepPath)) {
-			themes.step = JSON.parse(stripBom(fs.readFileSync(stepPath, "utf-8"))) as ThemeJson;
+		for (const name of ["step", "step-light"] as const) {
+			const themePath = path.join(themesDir, `${name}.json`);
+			if (fs.existsSync(themePath)) {
+				themes[name] = JSON.parse(stripBom(fs.readFileSync(themePath, "utf-8"))) as ThemeJson;
+			}
 		}
 		BUILTIN_THEMES = themes;
 	}
@@ -585,7 +587,8 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 				.map((color) => `  - ${color}`)
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
-			errorMessage += "\nSee the built-in themes (dark.json, light.json, step.json) for reference values.";
+			errorMessage +=
+				"\nSee the built-in themes (dark.json, light.json, step.json, step-light.json) for reference values.";
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
@@ -868,6 +871,10 @@ let themeReloadTimer: NodeJS.Timeout | undefined;
 let onThemeChangeCallback: (() => void) | undefined;
 const registeredThemes = new Map<string, Theme>();
 
+export function getCurrentThemeName(): string | undefined {
+	return currentThemeName;
+}
+
 /**
  * Optional instance boundary supplied by a product wrapper. Pi's public theme
  * helpers retain their normal defaults when this is unset; Step sets it before
@@ -1083,7 +1090,7 @@ function ansi256ToHex(index: number): string {
  */
 export function getResolvedThemeColors(themeName?: string): Record<string, string> {
 	const name = themeName ?? currentThemeName ?? getDefaultTheme();
-	const isLight = name === "light";
+	const isLight = isLightTheme(name);
 	const themeJson = loadThemeJson(name);
 	const resolved = resolveThemeColors(withThemeColorFallbacks(themeJson.colors), themeJson.vars);
 
@@ -1108,8 +1115,7 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
  * Check if a theme is a "light" theme (for CSS that needs light/dark variants).
  */
 export function isLightTheme(themeName?: string): boolean {
-	// Currently just check the name - could be extended to analyze colors
-	return themeName === "light";
+	return themeName === "light" || themeName === "step-light";
 }
 
 /**
@@ -1289,21 +1295,21 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 	return extToLang[ext];
 }
 
-export function getMarkdownTheme(): MarkdownTheme {
+export function getMarkdownTheme(activeTheme: Theme = theme): MarkdownTheme {
 	return {
-		heading: (text: string) => theme.fg("mdHeading", text),
-		link: (text: string) => theme.fg("mdLink", text),
-		linkUrl: (text: string) => theme.fg("mdLinkUrl", text),
-		code: (text: string) => theme.fg("mdCode", text),
-		codeBlock: (text: string) => theme.fg("mdCodeBlock", text),
-		codeBlockBorder: (text: string) => theme.fg("mdCodeBlockBorder", text),
-		quote: (text: string) => theme.fg("mdQuote", text),
-		quoteBorder: (text: string) => theme.fg("mdQuoteBorder", text),
-		hr: (text: string) => theme.fg("mdHr", text),
-		listBullet: (text: string) => theme.fg("mdListBullet", text),
-		bold: (text: string) => theme.bold(text),
-		italic: (text: string) => theme.italic(text),
-		underline: (text: string) => theme.underline(text),
+		heading: (text: string) => activeTheme.fg("mdHeading", text),
+		link: (text: string) => activeTheme.fg("mdLink", text),
+		linkUrl: (text: string) => activeTheme.fg("mdLinkUrl", text),
+		code: (text: string) => activeTheme.fg("mdCode", text),
+		codeBlock: (text: string) => activeTheme.fg("mdCodeBlock", text),
+		codeBlockBorder: (text: string) => activeTheme.fg("mdCodeBlockBorder", text),
+		quote: (text: string) => activeTheme.fg("mdQuote", text),
+		quoteBorder: (text: string) => activeTheme.fg("mdQuoteBorder", text),
+		hr: (text: string) => activeTheme.fg("mdHr", text),
+		listBullet: (text: string) => activeTheme.fg("mdListBullet", text),
+		bold: (text: string) => activeTheme.bold(text),
+		italic: (text: string) => activeTheme.italic(text),
+		underline: (text: string) => activeTheme.underline(text),
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		highlightCode: (code: string, lang?: string): string[] => {
 			// Validate language before highlighting to avoid stderr spam from cli-highlight
@@ -1312,17 +1318,17 @@ export function getMarkdownTheme(): MarkdownTheme {
 			// auto-detection is unreliable and can misidentify prose as AppleScript,
 			// LiveCodeServer, etc., coloring random English words as keywords.
 			if (!validLang) {
-				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
+				return code.split("\n").map((line) => activeTheme.fg("mdCodeBlock", line));
 			}
 			const opts = {
 				language: validLang,
 				ignoreIllegals: true,
-				theme: getCliHighlightTheme(theme),
+				theme: getCliHighlightTheme(activeTheme),
 			};
 			try {
 				return highlight(code, opts).split("\n");
 			} catch {
-				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
+				return code.split("\n").map((line) => activeTheme.fg("mdCodeBlock", line));
 			}
 		},
 	};

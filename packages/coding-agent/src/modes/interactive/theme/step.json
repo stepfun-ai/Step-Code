@@ -2,10 +2,10 @@
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "step",
 	"vars": {
-		"brand": "#7c6cff",
-		"accent": "#6355d6",
+		"brand": "#ab9eff",
+		"accent": "#8577ff",
 		"text": "#e8e8ea",
-		"muted": "#7a7a82",
+		"muted": "#7e7e86",
 		"dim": "#52535e",
 		"line": "#24262e",
 		"selectedBg": "#2a2247",
@@ -16,7 +16,9 @@
 		"toolErrorBg": "#2d1820",
 		"success": "#5fd08a",
 		"warning": "#e5b34a",
-		"error": "#f0616d"
+		"error": "#f0616d",
+		"syntaxKeyword": "#ff79d0",
+		"syntaxFunction": "#a3e635"
 	},
 	"colors": {
 		"accent": "brand",
@@ -43,10 +45,10 @@
 		"toolTitle": "brand",
 		"toolOutput": "muted",
 
-		"mdHeading": "accent",
-		"mdLink": "accent",
+		"mdHeading": "brand",
+		"mdLink": "brand",
 		"mdLinkUrl": "muted",
-		"mdCode": "accent",
+		"mdCode": "brand",
 		"mdCodeBlock": "text",
 		"mdCodeBlockBorder": "muted",
 		"mdQuote": "muted",
@@ -59,12 +61,12 @@
 		"toolDiffContext": "muted",
 
 		"syntaxComment": "muted",
-		"syntaxKeyword": "accent",
-		"syntaxFunction": "brand",
-		"syntaxVariable": "muted",
+		"syntaxKeyword": "syntaxKeyword",
+		"syntaxFunction": "syntaxFunction",
+		"syntaxVariable": "syntaxFunction",
 		"syntaxString": "success",
 		"syntaxNumber": "warning",
-		"syntaxType": "accent",
+		"syntaxType": "syntaxFunction",
 		"syntaxOperator": "text",
 		"syntaxPunctuation": "text",
 

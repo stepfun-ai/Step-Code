@@ -21,7 +21,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 |---------|-----|
 | File reference | Type `@` to fuzzy-search project files |
 | Path completion | Press Tab to complete paths |
-| Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
+| Multi-line input | Shift+Enter, Alt+Enter, or Ctrl+J; Ctrl+Enter also works on Windows Terminal |
 | Copy response | Ctrl+X copies the selected message in `/tree`; otherwise it copies the last assistant message, or the active fullscreen text selection when `fullscreenCopyOnSelect` is disabled |
 | Images | Paste with Ctrl+V, Alt+V on Windows, or drag into the terminal |
 | Shell command | `!command` runs and sends output to the model |
@@ -64,11 +64,12 @@ Type `/` in the editor to open command completion. Extensions can register custo
 You can submit messages while the agent is still working:
 
 - **Enter** queues a steering message, delivered after the current assistant turn finishes executing its tool calls.
-- **Alt+Enter** queues a follow-up message, delivered after the agent finishes all work.
 - **Escape** aborts and restores queued messages to the editor.
 - **Alt+Up** retrieves queued messages back to the editor.
 
-On Windows Terminal, Alt+Enter is fullscreen by default. Remap it as described in [Terminal setup](terminal-setup.md) if you want pi to receive the shortcut.
+Follow-up delivery remains available to extensions, RPC clients, and custom `app.message.followUp` keybindings, but has no default shortcut.
+
+On Windows Terminal, Alt+Enter is fullscreen by default. Remap it as described in [Terminal setup](terminal-setup.md) if you want pi to receive the newline shortcut.
 
 Configure delivery in [Settings](settings.md) with `steeringMode` and `followUpMode`.
 

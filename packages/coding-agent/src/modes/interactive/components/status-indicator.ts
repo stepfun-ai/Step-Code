@@ -1,14 +1,90 @@
+import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
+import { formatTokens } from "./footer.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary";
 
+export interface WorkingOutputSnapshot {
+	elapsedSeconds: number;
+	outputTokens: number;
+	phase: "thinking" | undefined;
+}
+
+export class WorkingOutputTracker {
+	private startedAt = Date.now();
+	private completedOutputTokens = 0;
+	private currentOutputChars = 0;
+	private phase: "thinking" | undefined;
+
+	reset(startedAt = Date.now()): void {
+		this.startedAt = startedAt;
+		this.completedOutputTokens = 0;
+		this.currentOutputChars = 0;
+		this.phase = undefined;
+	}
+
+	update(event: AssistantMessageEvent): void {
+		switch (event.type) {
+			case "thinking_delta":
+				this.currentOutputChars += event.delta.length;
+				this.phase = "thinking";
+				break;
+			case "thinking_start":
+			case "thinking_end":
+				this.phase = "thinking";
+				break;
+			case "text_delta":
+			case "toolcall_delta":
+				this.currentOutputChars += event.delta.length;
+				this.phase = undefined;
+				break;
+			case "toolcall_start": {
+				const block = event.partial.content[event.contentIndex];
+				if (block?.type === "toolCall") this.currentOutputChars += block.name.length;
+				this.phase = undefined;
+				break;
+			}
+			case "text_start":
+			case "text_end":
+			case "toolcall_end":
+				this.phase = undefined;
+				break;
+		}
+	}
+
+	complete(message: AssistantMessage): void {
+		const estimatedTokens = Math.round(this.currentOutputChars / 4);
+		this.completedOutputTokens += message.usage.output > 0 ? message.usage.output : estimatedTokens;
+		this.currentOutputChars = 0;
+		this.phase = undefined;
+	}
+
+	snapshot(now = Date.now()): WorkingOutputSnapshot {
+		return {
+			elapsedSeconds: Math.max(0, Math.floor((now - this.startedAt) / 1000)),
+			outputTokens: this.completedOutputTokens + Math.round(this.currentOutputChars / 4),
+			phase: this.phase,
+		};
+	}
+}
+
+function formatElapsedTime(totalSeconds: number): string {
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+	const hours = Math.floor(minutes / 60);
+	const remainingMinutes = minutes % 60;
+	return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+}
+
 export class StatusIndicator extends Loader {
 	readonly kind: StatusIndicatorKind;
-	private readonly presentation: "native" | "step";
+	protected readonly presentation: "native" | "step";
 
 	constructor(
 		kind: StatusIndicatorKind,
@@ -40,11 +116,14 @@ export class StatusIndicator extends Loader {
 }
 
 export class WorkingStatusIndicator extends StatusIndicator {
+	private readonly outputTracker: WorkingOutputTracker | undefined;
+
 	constructor(
 		ui: TUI,
 		message: string,
 		indicator?: WorkingIndicatorOptions,
 		presentation: "native" | "step" = "native",
+		outputTracker?: WorkingOutputTracker,
 	) {
 		super(
 			"working",
@@ -55,6 +134,21 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			indicator,
 			presentation,
 		);
+		this.outputTracker = outputTracker;
+	}
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (this.presentation !== "step" || !this.outputTracker) return lines;
+
+		const snapshot = this.outputTracker.snapshot();
+		const phase = snapshot.phase ? ` · ${snapshot.phase}` : "";
+		const suffix = theme.fg(
+			"muted",
+			` (${formatElapsedTime(snapshot.elapsedSeconds)} · ↓ ${formatTokens(snapshot.outputTokens)} tokens${phase})`,
+		);
+		const line = `${(lines[0] ?? "").trimEnd()}${suffix}`;
+		return [visibleWidth(line) > width ? truncateToWidth(line, width, "", false) : line];
 	}
 }
 

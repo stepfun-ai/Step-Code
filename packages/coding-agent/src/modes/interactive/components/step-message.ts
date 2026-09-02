@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type MarkdownTheme, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
-import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { getMarkdownTheme, getThemeByName, theme } from "../theme/theme.ts";
 import { AssistantMessageComponent } from "./assistant-message.ts";
 import { UserMessageComponent } from "./user-message.ts";
 
@@ -354,6 +354,30 @@ function addMarkerToLast(rows: Array<{ markers: string; body: string }>, markers
 	if (rows.length > 0 && markers.length > 0) rows[rows.length - 1]!.markers += markers;
 }
 
+let cachedStepLightTheme: ReturnType<typeof getThemeByName>;
+let cachedStepLightMarkdownTheme: MarkdownTheme | undefined;
+
+function getStepLightMarkdownTheme(): MarkdownTheme | undefined {
+	const colorMode = theme.getColorMode();
+	if (!cachedStepLightTheme || cachedStepLightTheme.getColorMode() !== colorMode) {
+		cachedStepLightTheme = getThemeByName("step-light");
+		cachedStepLightMarkdownTheme = cachedStepLightTheme ? getMarkdownTheme(cachedStepLightTheme) : undefined;
+	}
+	return cachedStepLightMarkdownTheme;
+}
+
+function getStepUserMessageMarkdownTheme(markdownTheme: MarkdownTheme): MarkdownTheme {
+	return new Proxy(markdownTheme, {
+		get(target, property, receiver) {
+			if (theme.name === "step") {
+				const pairedValue = Reflect.get(getStepLightMarkdownTheme() ?? target, property);
+				if (pairedValue !== undefined) return pairedValue;
+			}
+			return Reflect.get(target, property, receiver);
+		},
+	});
+}
+
 /**
  * Pi's user message already owns the background and Markdown renderer.  Step
  * only changes the gutter and removes the extra top/bottom Box padding.
@@ -368,7 +392,12 @@ export class StepUserMessageComponent extends UserMessageComponent {
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
 	) {
-		super(text, markdownTheme, normalizeOutputPadding(outputPad), markdownTransformers);
+		super(
+			text,
+			getStepUserMessageMarkdownTheme(markdownTheme),
+			normalizeOutputPadding(outputPad),
+			markdownTransformers,
+		);
 		this.outputPadding = normalizeOutputPadding(outputPad);
 		this.sourceText = text;
 	}
@@ -391,7 +420,10 @@ export class StepUserMessageComponent extends UserMessageComponent {
 		const firstBodyIndex = prepared.findIndex((row) => !row.blank);
 		for (let index = 0; index < prepared.length; index += 1) {
 			const row = prepared[index]!;
-			const prefix = index === firstBodyIndex ? theme.fg("userMessageText", "› ") : "  ";
+			// The native row already starts with userMessageText. Styling the gutter
+			// again inserts a foreground reset immediately before the message body,
+			// which makes it fall back to the terminal foreground on the light bar.
+			const prefix = index === firstBodyIndex ? "› " : "  ";
 			const body = prependAfterTerminalSequences(row.body, prefix);
 			rows.push({ markers: row.markers, body });
 		}

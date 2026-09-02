@@ -73,6 +73,10 @@ const windowsKeybindings = useWindowsKeybindings();
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
+	"tui.input.newLine": {
+		...TUI_KEYBINDINGS["tui.input.newLine"],
+		defaultKeys: ["shift+enter", "alt+enter", "ctrl+j"],
+	},
 	"tui.editor.undo": {
 		...TUI_KEYBINDINGS["tui.editor.undo"],
 		defaultKeys: process.platform === "win32" ? "ctrl+z" : windowsKeybindings ? "alt+z" : "ctrl+-",
@@ -127,7 +131,7 @@ export const KEYBINDINGS = {
 		description: "Copy message to clipboard",
 	},
 	"app.message.followUp": {
-		defaultKeys: windowsKeybindings ? "ctrl+q" : "alt+enter",
+		defaultKeys: [],
 		description: "Queue follow-up message",
 	},
 	"app.message.dequeue": {

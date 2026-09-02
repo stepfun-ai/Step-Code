@@ -1,6 +1,6 @@
 # tmux Setup
 
-Pi works inside tmux, but tmux strips modifier information from certain keys by default. Without configuration, `Shift+Enter` and `Ctrl+Enter` are usually indistinguishable from plain `Enter`.
+Pi works inside tmux, but tmux strips modifier information from certain keys by default. Without configuration, modified Enter keys may be indistinguishable from plain `Enter`.
 
 ## Recommended Configuration
 
@@ -53,7 +53,7 @@ Without tmux extended keys, modified Enter keys collapse to legacy sequences:
 | Ctrl+Enter | `\r` | `\x1b[13;5u` |
 | Alt/Option+Enter | `\x1b\r` | `\x1b[13;3u` |
 
-This affects the default keybindings (`Enter` to submit, `Shift+Enter` for newline) and any custom keybindings using modified Enter.
+This affects the default keybindings (`Enter` to submit, `Shift+Enter` or `Alt/Option+Enter` for newline) and any custom keybindings using modified Enter.
 
 ## Requirements
 

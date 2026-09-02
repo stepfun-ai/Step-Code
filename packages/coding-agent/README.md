@@ -163,7 +163,7 @@ The editor can be temporarily replaced by other UI, like built-in `/settings` or
 |---------|-----|
 | File reference | Type `@` to fuzzy-search project files |
 | Path completion | Tab to complete paths |
-| Multi-line | Shift+Enter (or Ctrl+Enter on Windows Terminal) |
+| Multi-line | Shift+Enter, Alt+Enter, or Ctrl+J (Ctrl+Enter also works on Windows Terminal) |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
 | Clipboard | Ctrl+V to paste an image or text (Alt+V on Windows), or drag images onto terminal |
 | Bash commands | `!command` runs and sends output to LLM, `!!command` runs without sending |
@@ -223,11 +223,12 @@ See `/hotkeys` for the full list. Customize via `~/.pi/agent/keybindings.json`. 
 Submit messages while the agent is working:
 
 - **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls
-- **Alt+Enter** queues a *follow-up* message, delivered only after the agent finishes all work
 - **Escape** aborts and restores queued messages to editor
 - **Alt+Up** retrieves queued messages back to editor
 
-On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so pi can receive the follow-up shortcut.
+Follow-up delivery remains available to extensions, RPC clients, and custom `app.message.followUp` keybindings, but has no default shortcut.
+
+On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so pi can receive the newline shortcut.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
@@ -400,7 +401,7 @@ Place in `~/.pi/agent/extensions/`, `.pi/extensions/`, or a [pi package](#pi-pac
 
 ### Themes
 
-Built-in: `dark`, `light`, `step`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
+Built-in: `dark`, `light`, `step`, `step-light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
 
 Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) to share with others. See [docs/themes.md](docs/themes.md).
 
@@ -408,7 +409,8 @@ Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) t
 
 The `step` binary is a thin product entrypoint over the same pi coding-agent
 runtime and native TUI. It selects the `step` provider and model by default,
-uses the built-in `step` theme, and stores sessions under `~/.step-harness/`.
+uses the built-in `step-light/step` automatic theme pair, and stores sessions
+under `~/.step-harness/`.
 
 ```bash
 STEP_API_KEY=... step

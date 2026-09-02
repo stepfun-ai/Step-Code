@@ -353,6 +353,27 @@
     }
 
     .user-message {
+      --text: var(--userText);
+      --muted: var(--userMuted);
+      --mdHeading: var(--userMdHeading);
+      --mdLink: var(--userMdLink);
+      --mdLinkUrl: var(--userMdLinkUrl);
+      --mdCode: var(--userMdCode);
+      --mdCodeBlock: var(--userMdCodeBlock);
+      --mdCodeBlockBorder: var(--userMdCodeBlockBorder);
+      --mdQuote: var(--userMdQuote);
+      --mdQuoteBorder: var(--userMdQuoteBorder);
+      --mdHr: var(--userMdHr);
+      --mdListBullet: var(--userMdListBullet);
+      --syntaxComment: var(--userSyntaxComment);
+      --syntaxKeyword: var(--userSyntaxKeyword);
+      --syntaxFunction: var(--userSyntaxFunction);
+      --syntaxVariable: var(--userSyntaxVariable);
+      --syntaxString: var(--userSyntaxString);
+      --syntaxNumber: var(--userSyntaxNumber);
+      --syntaxType: var(--userSyntaxType);
+      --syntaxOperator: var(--userSyntaxOperator);
+      --syntaxPunctuation: var(--userSyntaxPunctuation);
       background: var(--userMessageBg);
       color: var(--userMessageText);
       padding: var(--line-height);

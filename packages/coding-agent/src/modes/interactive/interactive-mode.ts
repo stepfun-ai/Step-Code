@@ -138,6 +138,7 @@ import {
 	IdleStatus,
 	RetryStatusIndicator,
 	type StatusIndicator,
+	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { StepSelectorFrame } from "./components/step-dialog.ts";
@@ -515,6 +516,7 @@ export class InteractiveMode {
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
+	private readonly workingOutputTracker = new WorkingOutputTracker();
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
@@ -2401,6 +2403,7 @@ export class InteractiveMode {
 				this.workingMessage ?? this.defaultWorkingMessage,
 				this.workingIndicatorOptions,
 				this.presentation,
+				this.presentation === "step" ? this.workingOutputTracker : undefined,
 			),
 		);
 	}
@@ -3442,6 +3445,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				if (this.presentation === "step") this.workingOutputTracker.reset();
 				this.pendingTools.clear();
 				this.stepSpinner?.clear();
 				// Restore main escape handler if retry handler is still active
@@ -3514,6 +3518,9 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
+				if (this.presentation === "step" && event.message.role === "assistant") {
+					this.workingOutputTracker.update(event.assistantMessageEvent);
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -3552,6 +3559,9 @@ export class InteractiveMode {
 
 			case "message_end":
 				if (event.message.role === "user") break;
+				if (this.presentation === "step" && event.message.role === "assistant") {
+					this.workingOutputTracker.complete(event.message);
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -6749,6 +6759,7 @@ export class InteractiveMode {
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
+		const followUpRow = followUp ? `| \`${followUp}\` | Queue follow-up message |\n` : "";
 
 		let hotkeys = `
 **Navigation**
@@ -6790,8 +6801,7 @@ export class InteractiveMode {
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |
-| \`${followUp}\` | Queue follow-up message |
-| \`${dequeue}\` | Restore queued messages |
+${followUpRow}| \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste image or text from clipboard |
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |

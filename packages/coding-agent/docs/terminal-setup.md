@@ -76,7 +76,7 @@ config.enable_kitty_keyboard = true
 return config
 ```
 
-On macOS, WezTerm binds `Option+Enter` to fullscreen by default. To use `Option+Enter` for pi follow-up queueing, add this key override:
+On macOS, WezTerm binds `Option+Enter` to fullscreen by default. To use `Option+Enter` for inserting a newline, add this key override:
 
 ```lua
 local wezterm = require 'wezterm'
@@ -97,7 +97,7 @@ On WSL, WezTerm may require a visible hardware cursor for IME candidate window p
 
 ## Alacritty
 
-Alacritty usually works out of the box for `Shift+Enter`. On macOS, `Option+Enter` may arrive as plain `Enter`. To use `Option+Enter` for pi follow-up queueing, add to `~/.config/alacritty/alacritty.toml`:
+Alacritty usually works out of the box for `Shift+Enter`. On macOS, `Option+Enter` may arrive as plain `Enter`. To use `Option+Enter` for inserting a newline, add to `~/.config/alacritty/alacritty.toml`:
 
 ```toml
 [[keyboard.bindings]]
@@ -138,9 +138,9 @@ Pi uses Windows-style keybindings when running natively on Windows or in WSL:
 - `Ctrl+F` searches the transcript in fullscreen mode, and `Ctrl+Up`/`Ctrl+Down` jump between marked messages.
 - `Alt+P` cycles to the previous model.
 - `Ctrl+Z` undoes editing on native Windows; WSL uses `Alt+Z` so `Ctrl+Z` can suspend pi.
-- `Ctrl+Q` queues a follow-up message and `Alt+Q` restores queued messages.
+- `Alt+Q` restores queued messages.
 
-Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward `Shift+Enter` for inserting a new line:
+Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward `Shift+Enter` and `Alt+Enter` for inserting a new line:
 
 ```json
 {
@@ -148,12 +148,16 @@ Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward 
     {
       "command": { "action": "sendInput", "input": "\u001b[13;2u" },
       "keys": "shift+enter"
+    },
+    {
+      "command": { "action": "sendInput", "input": "\u001b[13;3u" },
+      "keys": "alt+enter"
     }
   ]
 }
 ```
 
-Windows Terminal binds `Alt+Enter` to fullscreen by default. To use it instead of pi's `Ctrl+Q` default for follow-up queueing, configure Windows Terminal to send the key and bind `app.message.followUp` to `alt+enter` in pi.
+The `Alt+Enter` action above replaces Windows Terminal's default fullscreen binding so pi receives the newline shortcut.
 
 If you already have an `actions` array, add the object to it. Fully close and reopen Windows Terminal after changing its settings.
 

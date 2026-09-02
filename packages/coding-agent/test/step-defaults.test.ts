@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	getStepDefaultModel,
 	getStepDefaultProvider,
+	getStepDefaultTheme,
 	isStepServicesDisabled,
 	STEP_DEFAULT_MODEL,
 	STEP_DEFAULT_PROVIDER,
@@ -9,6 +10,13 @@ import {
 } from "../src/step/defaults.ts";
 
 describe("Step entrypoint defaults", () => {
+	test("uses the branded light/dark pair unless the environment overrides it", () => {
+		expect(getStepDefaultTheme({})).toBe("step-light/step");
+		expect(getStepDefaultTheme({ STEP_CLI_DEFAULT_THEME: "custom-light/custom-dark" })).toBe(
+			"custom-light/custom-dark",
+		);
+	});
+
 	test("adds the Step provider and model for a bare invocation", () => {
 		expect(withStepDefaults([], {})).toEqual(["--provider", STEP_DEFAULT_PROVIDER, "--model", STEP_DEFAULT_MODEL]);
 	});

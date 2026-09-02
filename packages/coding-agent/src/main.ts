@@ -92,7 +92,13 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/tru
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, type InteractiveModeOptions, runPrintMode, runRpcMode } from "./modes/index.ts";
-import { initTheme, setThemeStorageDir, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import {
+	detectTerminalBackgroundFromEnv,
+	initTheme,
+	resolveThemeSetting,
+	setThemeStorageDir,
+	stopThemeWatcher,
+} from "./modes/interactive/theme/theme.ts";
 import { cleanupManagedInstall, handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import {
 	continueStepSession,
@@ -886,7 +892,14 @@ export async function main(args: string[], options?: MainOptions) {
 		let result: string;
 		try {
 			const outputPath = parsed.messages.length > 0 ? parsed.messages[0] : undefined;
-			result = await exportFromFile(parsed.export, outputPath);
+			const terminalTheme = detectTerminalBackgroundFromEnv().theme;
+			const themeName =
+				resolveThemeSetting(
+					parsed.useTheme ?? bootstrapSettingsManager.getThemeSetting() ?? options?.defaultTheme,
+					terminalTheme,
+				) ?? terminalTheme;
+			setThemeStorageDir(agentDir);
+			result = await exportFromFile(parsed.export, { outputPath, themeName });
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
 			console.error(chalk.red(`Error: ${message}`));
