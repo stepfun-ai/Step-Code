@@ -190,6 +190,7 @@ export async function logoutStepCredentials(
 
 interface LegacyStepCredential {
 	apiKey: string;
+	profile?: string;
 	uid?: string;
 	refresh?: string;
 	expires?: number;
@@ -207,7 +208,8 @@ async function readLegacyStepCredential(filePath: string): Promise<LegacyStepCre
 	const topLevelKey = typeof record.apiKey === "string" ? record.apiKey.trim() : "";
 	if (topLevelKey && topLevelKey !== "<your_api_key>") {
 		const uid = typeof record.uid === "string" && record.uid.trim() ? record.uid.trim() : undefined;
-		return { apiKey: topLevelKey, ...(uid ? { uid } : undefined) };
+		const profile = typeof record.profile === "string" && record.profile.trim() ? record.profile.trim() : undefined;
+		return { apiKey: topLevelKey, ...(profile ? { profile } : undefined), ...(uid ? { uid } : undefined) };
 	}
 
 	// Also accept a pi-shaped credential from an interrupted/experimental Step
@@ -223,12 +225,15 @@ async function readLegacyStepCredential(filePath: string): Promise<LegacyStepCre
 				: "";
 	if (!apiKey || apiKey === "<your_api_key>") return undefined;
 	const uid = typeof credential.uid === "string" && credential.uid.trim() ? credential.uid.trim() : undefined;
+	const profile =
+		typeof credential.profile === "string" && credential.profile.trim() ? credential.profile.trim() : undefined;
 	const refresh =
 		typeof credential.refresh === "string" && credential.refresh.trim() ? credential.refresh.trim() : undefined;
 	const expires =
 		typeof credential.expires === "number" && Number.isFinite(credential.expires) ? credential.expires : undefined;
 	return {
 		apiKey,
+		...(profile ? { profile } : undefined),
 		...(uid ? { uid } : undefined),
 		...(refresh ? { refresh } : undefined),
 		...(expires ? { expires } : undefined),
@@ -241,6 +246,7 @@ function canonicalCredential(legacy: LegacyStepCredential): Credential {
 		access: legacy.apiKey,
 		refresh: legacy.refresh ?? STEP_STATIC_REFRESH_TOKEN,
 		expires: legacy.expires ?? Number.MAX_SAFE_INTEGER,
+		...(legacy.profile ? { profile: legacy.profile } : undefined),
 		...(legacy.uid ? { uid: legacy.uid } : undefined),
 	};
 }

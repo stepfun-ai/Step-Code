@@ -27,6 +27,7 @@ import {
 import { readOrCreateStepDeviceId, resolveStepStorageRoot } from "./step/device-id.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./step/environment.ts";
 import { maybeUpdateStep } from "./step/local-update.ts";
+import { needsStepLoginBeforeInteractive, runStepLogin, syncStepLoginProfileEndpoint } from "./step/login-flow.ts";
 import { createStepSessionManagerFactory } from "./step/session.ts";
 import { createStepSettingsManager, type StepSettingsManager } from "./step/settings-manager.ts";
 import { StepStdioHost } from "./step/stdio-host.ts";
@@ -181,9 +182,21 @@ const stepMainOptions: MainOptions = {
 	interactiveModeOptions: {
 		showChangelog: false,
 		tuiStyle: "step" as const,
-		startupLoginProvider: STEP_PROVIDER_ID,
 		defaultModelForProvider: (providerId) => (providerId === STEP_PROVIDER_ID ? STEP_DEFAULT_MODEL : undefined),
 		allowedAuthProviders: [STEP_PROVIDER_ID],
+		stepLogin: (host) =>
+			runStepLogin({ authPath: getStepAuthPath(), createHost: () => host, themeName: getStepDefaultTheme() }),
+		stepLogout: async () => {
+			const report = await logoutStepCredentials({
+				nativePath: getStepAuthPath(),
+				legacyPath: getLegacyStepAuthPath(),
+			});
+			syncStepLoginProfileEndpoint(getStepAuthPath());
+			return {
+				removed: report.removedNative || report.removedLegacy,
+				remainingSource: report.remainingSource ? "the environment (STEP_API_KEY)" : null,
+			};
+		},
 		onCredentialAuthenticated: ({ uid }) => {
 			if (uid) telemetryRuntime.setContext({ uid });
 		},
@@ -281,32 +294,15 @@ try {
 			);
 			process.exitCode = 1;
 		} else {
-			await main(
-				withStepDefaults([
-					"--no-session",
-					"--approve",
-					"--no-extensions",
-					"--no-skills",
-					"--no-prompt-templates",
-					"--no-themes",
-					"--no-context-files",
-					"--provider",
-					STEP_PROVIDER_ID,
-					"--model",
-					STEP_DEFAULT_MODEL,
-				]),
-				{
-					...stepMainOptions,
-					interactiveModeOptions: {
-						...stepMainOptions.interactiveModeOptions,
-						defaultModelForProvider: (providerId) =>
-							providerId === STEP_PROVIDER_ID ? STEP_DEFAULT_MODEL : undefined,
-						forceStartupLogin: true,
-						exitAfterStartupLogin: true,
-						skipManagedTools: true,
-					},
-				},
-			);
+			const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
+			if (outcome.kind === "completed") {
+				syncStepLoginProfileEndpoint(getStepAuthPath());
+				process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
+				if (outcome.credentialsPath) process.stdout.write(`Credential written: ${outcome.credentialsPath}\n`);
+			} else {
+				process.stderr.write("Sign-in cancelled. No credential was written.\n");
+				process.exitCode = 1;
+			}
 		}
 	} else {
 		const rawStepArgs = process.argv.slice(2);
@@ -314,18 +310,39 @@ try {
 			await runStepConfigCommand(rawStepArgs);
 		} else {
 			const compatibility = translateStepCommandArgs(rawStepArgs);
-			await main(
-				withStepDefaults(
-					compatibility?.args ?? rawStepArgs,
-					process.env,
-					{
-						provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,
-						model: stepPersistedDefaults.model ?? stepConfigMigration.defaultModel,
-					},
-					{ deferSettingsSelection: true },
-				),
-				stepMainOptions,
-			);
+			syncStepLoginProfileEndpoint(getStepAuthPath());
+			let shouldLaunchMain = true;
+			const parsedInteractiveArgs = parseArgs(compatibility?.args ?? rawStepArgs);
+			const interactiveStartup =
+				process.stdin.isTTY === true &&
+				process.stdout.isTTY === true &&
+				parsedInteractiveArgs.messages.length === 0 &&
+				parsedInteractiveArgs.fileArgs.length === 0 &&
+				parsedInteractiveArgs.print !== true &&
+				parsedInteractiveArgs.mode !== "json" &&
+				parsedInteractiveArgs.mode !== "rpc";
+			if (needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })) {
+				const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
+				if (outcome.kind === "exit") {
+					shouldLaunchMain = false;
+				} else {
+					syncStepLoginProfileEndpoint(getStepAuthPath());
+				}
+			}
+			if (shouldLaunchMain) {
+				await main(
+					withStepDefaults(
+						compatibility?.args ?? rawStepArgs,
+						process.env,
+						{
+							provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,
+							model: stepPersistedDefaults.model ?? stepConfigMigration.defaultModel,
+						},
+						{ deferSettingsSelection: true },
+					),
+					stepMainOptions,
+				);
+			}
 		}
 	}
 } catch (error: unknown) {

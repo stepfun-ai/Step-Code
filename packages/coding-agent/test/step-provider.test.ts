@@ -146,6 +146,14 @@ describe("Step provider extension", () => {
 		).toBe("https://api.example.test/step_plan");
 	});
 
+	it("uses the stored Step login profile endpoint hint after explicit overrides", () => {
+		expect(
+			resolveStepProviderOptions({
+				env: { STEP_LOGIN_PROFILE_API_URL: "https://api.stepfun.ai/v1" },
+			}).apiBaseUrl,
+		).toBe("https://api.stepfun.ai");
+	});
+
 	it("normalizes Anthropic model-level endpoint overrides without mutating input", () => {
 		const models = [
 			{

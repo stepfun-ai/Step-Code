@@ -20,6 +20,28 @@ afterEach(async () => {
 });
 
 describe("Step credential compatibility", () => {
+	test("preserves the selected Step profile in the canonical credential", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "step-auth-profile-"));
+		temporaryDirectories.push(directory);
+		const nativePath = join(directory, "agent", "auth.json");
+		const legacyPath = join(directory, "legacy", "auth.json");
+		await mkdir(join(directory, "legacy"), { recursive: true });
+		await writeFile(
+			legacyPath,
+			JSON.stringify({ version: 1, profile: "platform_cn", apiKey: "platform-key" }),
+			"utf8",
+		);
+
+		const result = await migrateLegacyStepCredential({ nativePath, legacyPath });
+
+		expect(result.migrated).toBe(true);
+		expect(await AuthStorage.create(nativePath).read(STEP_PROVIDER_ID)).toMatchObject({
+			type: "oauth",
+			access: "platform-key",
+			profile: "platform_cn",
+		});
+	});
+
 	test("resolves the canonical auth file from an explicit Step agent directory", () => {
 		const env = { STEP_CODING_AGENT_DIR: "/tmp/step-cli-agent" };
 		expect(getStepAuthPath(env)).toBe("/tmp/step-cli-agent/auth.json");

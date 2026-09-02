@@ -763,6 +763,8 @@ export interface MainOptions {
 		| "defaultModelForProvider"
 		| "skipManagedTools"
 		| "allowedAuthProviders"
+		| "stepLogin"
+		| "stepLogout"
 		| "onStartup"
 		| "offline"
 	>;
