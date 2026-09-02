@@ -47,7 +47,7 @@ const MAX_STDERR_CHARS = 32_000;
 const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
 const COLLAPSED_OUTPUT_LINES = 8;
-const CHILD_MARKER = "STEP_HARNESS_SUBAGENT_CHILD";
+const CHILD_MARKER = "STEP_CLI_SUBAGENT_CHILD";
 
 /** Tool names in agent files may use either Pi's native names or Step's
  * model-facing aliases. Child Step processes expose the latter. */
@@ -138,9 +138,9 @@ export interface StepSubagentDetails {
 }
 
 export interface StepSubagentExtensionOptions {
-	/** Global Step agent root. Defaults to `~/.step-harness/agent`. */
+	/** Global Step agent root. Defaults to `~/.step-cli/agent`. */
 	agentDir?: string;
-	/** Project resource directory. Defaults to `.step-harness`. */
+	/** Project resource directory. Defaults to `.step-cli`. */
 	configDirName?: string;
 	/** Include the built-in general/explore/review/planner roles. */
 	includeBuiltinAgents?: boolean;
@@ -429,7 +429,7 @@ async function allocateStepWorktree(baseCwd: string, label: string): Promise<Ste
 	const repositoryRoot = await runGit(baseCwd, ["rev-parse", "--show-toplevel"]);
 	if (!repositoryRoot) throw new Error("The child working directory is not a Git repository");
 
-	const parent = await mkdtemp(path.join(os.tmpdir(), "step-harness-worktree-"));
+	const parent = await mkdtemp(path.join(os.tmpdir(), "step-cli-worktree-"));
 	const worktreePath = path.join(parent, "workspace");
 	const branch = `step-agent/${sanitizeLabel(label)}-${randomUUID().slice(0, 8)}`;
 	try {
@@ -574,7 +574,7 @@ function stringifyLiveValue(value: unknown): string | undefined {
 /** Default child runner. It consumes Pi's JSON event stream and emits partial
  * snapshots so the parent Pi ToolExecutionComponent can render live progress. */
 export async function runStepSubagentProcess(input: StepSubagentRunInput): Promise<StepSubagentRunResult> {
-	const tempDir = await mkdtemp(path.join(os.tmpdir(), "step-harness-subagent-"));
+	const tempDir = await mkdtemp(path.join(os.tmpdir(), "step-cli-subagent-"));
 	const promptPath = path.join(tempDir, "system-prompt.md");
 	const args = ["--mode", "json", "-p", "--no-session"];
 	const model = input.agent.model ?? input.model;

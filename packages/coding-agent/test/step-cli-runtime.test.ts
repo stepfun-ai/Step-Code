@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentSession, AgentSessionEvent, AgentSessionEventListener } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
-import { createStepHarness } from "../src/step-harness.ts";
+import { createStepCli } from "../src/step-cli-runtime.ts";
 
 interface SessionStub {
 	session: AgentSession;
@@ -35,7 +35,7 @@ function createSessionStub(sessionId: string): SessionStub {
 	};
 }
 
-describe("Step harness", () => {
+describe("Step CLI", () => {
 	test("rebinds event subscriptions when pi replaces the session", async () => {
 		const first = createSessionStub("session-1");
 		const second = createSessionStub("session-2");
@@ -56,10 +56,10 @@ describe("Step harness", () => {
 		} as unknown as AgentSessionRuntime;
 
 		const events: AgentSessionEvent[] = [];
-		const harness = createStepHarness(runtime);
-		harness.subscribe((event) => events.push(event));
+		const cli = createStepCli(runtime);
+		cli.subscribe((event) => events.push(event));
 		const externalSessionChange = vi.fn();
-		harness.onSessionChange(externalSessionChange);
+		cli.onSessionChange(externalSessionChange);
 
 		first.emit({ type: "session_info_changed", name: "first" });
 		current = second.session;
@@ -69,16 +69,16 @@ describe("Step harness", () => {
 		second.emit({ type: "session_info_changed", name: "second" });
 
 		expect(events.map((event) => event.type)).toEqual(["session_info_changed", "session_info_changed"]);
-		expect(harness.sessionId).toBe("session-2");
+		expect(cli.sessionId).toBe("session-2");
 
-		await harness.input("hello");
+		await cli.input("hello");
 		expect(second.session.prompt).toHaveBeenCalledWith("hello", {
 			images: undefined,
 			streamingBehavior: undefined,
 			source: "rpc",
 		});
 		expect(first.session.prompt).not.toHaveBeenCalled();
-		await harness.inputContent(
+		await cli.inputContent(
 			[
 				{ type: "text", text: "with" },
 				{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
@@ -94,20 +94,20 @@ describe("Step harness", () => {
 			],
 			{ deliverAs: "followUp", source: "rpc" },
 		);
-		await harness.steer("urgent");
-		await harness.followUp("later");
+		await cli.steer("urgent");
+		await cli.followUp("later");
 		expect(second.session.steer).toHaveBeenCalledWith("urgent", undefined);
 		expect(second.session.followUp).toHaveBeenCalledWith("later", undefined);
-		const queued = harness.clearQueue();
+		const queued = cli.clearQueue();
 		expect(second.session.clearQueue).toHaveBeenCalledTimes(1);
 		expect(queued).toEqual({ steering: [], followUp: [] });
 
-		await harness.dispose();
+		await cli.dispose();
 		expect(removeSessionChange).toHaveBeenCalledTimes(2);
 		expect(runtime.dispose).toHaveBeenCalledTimes(1);
 		second.emit({ type: "session_info_changed", name: "after dispose" });
 		expect(events).toHaveLength(2);
-		expect(() => harness.clearQueue()).toThrow("disposed");
+		expect(() => cli.clearQueue()).toThrow("disposed");
 	});
 
 	test("forwards runtime lifecycle operations without owning them", async () => {
@@ -130,17 +130,17 @@ describe("Step harness", () => {
 			dispose: vi.fn(async () => {}),
 		} as unknown as AgentSessionRuntime;
 
-		const harness = createStepHarness(runtime);
+		const cli = createStepCli(runtime);
 		const rebind = vi.fn(async () => {});
 		const invalidate = vi.fn();
-		harness.setRebindSession(rebind);
-		harness.setBeforeSessionInvalidate(invalidate);
-		expect(harness.cwd).toBe("/workspace");
-		expect(harness.services.agentDir).toBe("/agent");
-		expect(await harness.newSession()).toEqual({ cancelled: false });
-		expect(await harness.switchSession("session.jsonl")).toEqual({ cancelled: false });
-		expect(await harness.fork("entry-1")).toEqual({ cancelled: false, selectedText: "picked" });
-		expect(await harness.importFromJsonl("import.jsonl", "/workspace")).toEqual({ cancelled: false });
+		cli.setRebindSession(rebind);
+		cli.setBeforeSessionInvalidate(invalidate);
+		expect(cli.cwd).toBe("/workspace");
+		expect(cli.services.agentDir).toBe("/agent");
+		expect(await cli.newSession()).toEqual({ cancelled: false });
+		expect(await cli.switchSession("session.jsonl")).toEqual({ cancelled: false });
+		expect(await cli.fork("entry-1")).toEqual({ cancelled: false, selectedText: "picked" });
+		expect(await cli.importFromJsonl("import.jsonl", "/workspace")).toEqual({ cancelled: false });
 		expect(runtime.setRebindSession).toHaveBeenCalledWith(rebind);
 		expect(runtime.setBeforeSessionInvalidate).toHaveBeenCalledWith(invalidate);
 		expect(runtime.newSession).toHaveBeenCalledTimes(1);
@@ -148,7 +148,7 @@ describe("Step harness", () => {
 		expect(runtime.fork).toHaveBeenCalledWith("entry-1", undefined);
 		expect(runtime.importFromJsonl).toHaveBeenCalledWith("import.jsonl", "/workspace");
 
-		await harness.dispose();
+		await cli.dispose();
 	});
 
 	test("shares the in-flight disposal promise across concurrent callers", async () => {
@@ -164,10 +164,10 @@ describe("Step harness", () => {
 			onSessionChange: vi.fn(() => () => {}),
 			dispose: vi.fn(() => pendingDispose),
 		} as unknown as AgentSessionRuntime;
-		const harness = createStepHarness(runtime);
+		const cli = createStepCli(runtime);
 
-		const first = harness.dispose();
-		const second = harness.dispose();
+		const first = cli.dispose();
+		const second = cli.dispose();
 		expect(second).toBe(first);
 		expect(runtime.dispose).toHaveBeenCalledTimes(1);
 

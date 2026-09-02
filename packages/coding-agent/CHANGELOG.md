@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the Step binary startup update check and native installer integration for Step Harness hosts.
+- Added the Step binary startup update check and native installer integration for Step CLI hosts.
 
 ### Changed
 

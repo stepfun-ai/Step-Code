@@ -79,11 +79,8 @@ jobs:
           build_root="$(mktemp -d)"
           trap 'rm -rf "${build_root}"' EXIT
           tar -xzf "release-assets/step-${VERSION}-source.tar.gz" -C "${build_root}"
-          STEP_HARNESS_BUILD_VERSION="${VERSION}" \
-          STEP_CLI_BUILD_VERSION="${RELEASE_TAG}" \
-          STEP_HARNESS_BUILD_CHANNEL="release" \
+          STEP_CLI_BUILD_VERSION="${VERSION}" \
           STEP_CLI_BUILD_CHANNEL="release" \
-          STEP_HARNESS_BUILD_COMMIT="${GITHUB_SHA:0:12}" \
           STEP_CLI_BUILD_COMMIT="${GITHUB_SHA:0:12}" \
           "${build_root}/pi-${VERSION}/scripts/build-binaries.sh" \
             --product step \

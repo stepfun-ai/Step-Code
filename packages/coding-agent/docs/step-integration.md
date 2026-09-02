@@ -14,7 +14,7 @@ Step extension; it does not create a second event loop or a second TUI.
 - `AgentSessionRuntime` remains the session and agent-loop authority.
 - `extensions/step-provider` supplies the Step model catalog and browser OAuth
   flow through pi's provider API.
-- `step-harness.ts` is a forwarding facade for hosts that need a Step-named
+- `step-cli.ts` is a forwarding facade for hosts that need a Step-named
   boundary; it delegates prompt, queue, model, event, and disposal operations
   directly to pi. Event subscriptions follow the active session when pi handles
   `/new`, `/resume`, or `/fork`.
@@ -38,8 +38,8 @@ Step extension; it does not create a second event loop or a second TUI.
 
 The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
 `STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, Pi's
-native layout is `~/.step-harness/agent/sessions/<encoded-cwd>`. Project-local
-resources use `.step-harness/`. When no explicit theme has been saved, the
+native layout is `~/.step-cli/agent/sessions/<encoded-cwd>`. Project-local
+resources use `.step-cli/`. When no explicit theme has been saved, the
 built-in `step-light/step` pair follows the terminal appearance; the first name
 is the light theme and the second is the dark theme. Non-interactive
 `step --export` uses the same precedence as startup: explicit `--use-theme`,
@@ -62,10 +62,10 @@ The built-in Step provider uses pi's `anthropic-messages` adapter. Pi appends
 accepts the older `.../v1` and `.../v1/messages` spellings; the provider
 normalizes them before registering the model so the version segment is never
 sent twice. Startup also repairs the same stale spellings in an existing
-`.step-harness/agent/models.json`, including model-level overrides. If an older
-legacy Step CLI projection recorded a built-in Step id as an OpenAI-compatible
+`.step-cli/agent/models.json`, including model-level overrides. If an older
+legacy Step projection recorded a built-in Step id as an OpenAI-compatible
 model, startup restores its `anthropic-messages` API and Step endpoint as well.
-Upgrading from an earlier Step Harness build therefore does not require signing
+Upgrading from an earlier Step build therefore does not require signing
 in again.
 
 Session storage is also selected through the Step wrapper. The wrapper keeps
@@ -119,8 +119,8 @@ service and are not silently faked by this fork.
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
-| Step Harness OAuth login/logout and legacy Step CLI credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
-| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-harness` |
+| Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
+| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, `/feedback`, voice/realtime, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |

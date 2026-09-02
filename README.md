@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>Step Harness</strong>
+  <strong>Step CLI</strong>
 </p>
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
@@ -8,9 +8,9 @@
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-# Step Harness
+# Step CLI
 
-Step Harness is the Step product built on the Pi runtime. The product entrypoint,
+Step CLI is the Step product built on the Pi runtime. The product entrypoint,
 defaults, OAuth provider, harness facade, and TUI presentation are Step-owned;
 the `@earendil-works/pi-*` packages remain the vendored runtime implementation
 boundary so upstream-compatible imports continue to resolve.
@@ -59,7 +59,7 @@ npm run build:offline # Rebuild using existing model data without network access
 npm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
-pnpm step            # Run the Step Harness entrypoint from sources
+pnpm step            # Run the Step CLI entrypoint from sources
 ```
 
 ## Building standalone binaries from release source

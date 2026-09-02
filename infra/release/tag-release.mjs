@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** Create the next Step Harness tag through the GitLab API. */
+/** Create the next Step CLI tag through the GitLab API. */
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";

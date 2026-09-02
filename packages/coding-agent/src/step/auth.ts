@@ -1,9 +1,9 @@
 /**
  * Step-only credential compatibility helpers.
  *
- * Pi stores credentials under `<agentDir>/auth.json`. Step Harness follows that
- * layout under `~/.step-harness/agent/`; the old product-owned
- * `~/.step-cli/auth.json` remains a migration fallback.
+ * Pi stores credentials under `<agentDir>/auth.json`. Step CLI follows that
+ * layout under `~/.step-cli/agent/`; credentials written by the retired
+ * namespace remain migration fallbacks.
  */
 
 import { existsSync } from "node:fs";
@@ -12,12 +12,11 @@ import { dirname, join, normalize } from "node:path";
 import type { Credential } from "@earendil-works/pi-ai";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../extensions/step-provider/index.ts";
-import { resolveStepAgentDir, resolveStepHomeDir } from "./environment.ts";
+import { LEGACY_RENAMED_CONFIG_DIR, resolveStepAgentDir, resolveStepHomeDir } from "./environment.ts";
 
-/** Current Pi-shaped credential path under the Step Harness agent directory. */
+/** Current Pi-shaped credential path under the Step CLI agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
 	return (
-		env.STEP_HARNESS_AUTH_PATH?.trim() ||
 		env.STEP_CLI_AUTH_PATH?.trim() ||
 		// This is a Step-only surface. Always resolve through the Step namespace,
 		// even when an embedded host has a stale PI_CODING_AGENT_DIR in its
@@ -32,16 +31,26 @@ export function getLegacyStepAuthPath(env: Record<string, string | undefined> = 
 	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 
-/** All historical locations used by Step CLI before the Pi-based runtime. */
+/** All historical locations used before this layout. */
 export function getLegacyStepAuthPaths(env: Record<string, string | undefined> = process.env): string[] {
 	const explicit = env.STEP_CLI_LEGACY_AUTH_PATH?.trim();
 	if (explicit) return [explicit];
-	const root = join(resolveStepHomeDir(env), ".step-cli");
-	return [join(root, "auth.json"), join(root, "agent", "auth.json")];
+	const home = resolveStepHomeDir(env);
+	const canonicalRoot = join(home, ".step-cli");
+	const retiredRoot = join(home, LEGACY_RENAMED_CONFIG_DIR);
+	// Keep the canonical root-level file first: this is the old pre-Pi Step CLI
+	// credential shape that needs in-place normalization. The remaining paths
+	// cover Pi-shaped files created by the previous release.
+	return [
+		join(canonicalRoot, "auth.json"),
+		join(retiredRoot, "agent", "auth.json"),
+		join(retiredRoot, "auth.json"),
+		join(canonicalRoot, "legacy-auth.json"),
+	];
 }
 
 export interface StepAuthPathOptions {
-	/** Target auth path. Defaults to Step Harness's Pi-shaped agent auth file. */
+	/** Target auth path. Defaults to Step CLI's Pi-shaped agent auth file. */
 	nativePath?: string;
 	/** Fallback auth path. Defaults to the active coding-agent path. */
 	legacyPath?: string;

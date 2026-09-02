@@ -410,7 +410,7 @@ Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) t
 The `step` binary is a thin product entrypoint over the same pi coding-agent
 runtime and native TUI. It selects the `step` provider and model by default,
 uses the built-in `step-light/step` automatic theme pair, and stores sessions
-under `~/.step-harness/`.
+under `~/.step-cli/`.
 
 ```bash
 STEP_API_KEY=... step

@@ -3,12 +3,12 @@ set -euo pipefail
 
 BASE_URL="${STEP_RELEASE_BASE_URL:-__STEP_RELEASE_BASE_URL__}"
 VERSION="${STEP_VERSION:-latest}"
-INSTALL_DIR="${STEP_INSTALL_DIR:-${HOME}/.step-harness/bin}"
-AGENT_DIR="${STEP_HARNESS_CODING_AGENT_DIR:-${HOME}/.step-harness/agent}"
+INSTALL_DIR="${STEP_INSTALL_DIR:-${HOME}/.step-cli/bin}"
+AGENT_DIR="${STEP_CODING_AGENT_DIR:-${HOME}/.step-cli/agent}"
 WORK_DIR=""
 TARGET_ID=""
 
-die() { printf 'step-harness installer: %s\n' "$*" >&2; exit 1; }
+die() { printf 'step-cli installer: %s\n' "$*" >&2; exit 1; }
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 download() {
 	if has_cmd curl; then curl -fsSL "$1" -o "$2"; return; fi
@@ -127,7 +127,7 @@ main() {
 	done
 	BASE_URL="${BASE_URL%/}"
 	detect_target
-	WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/step-harness-install.XXXXXX")"
+	WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/step-cli-install.XXXXXX")"
 	trap 'rm -rf "$WORK_DIR"' EXIT
 	local manifest="${WORK_DIR}/manifest.json" archive="${WORK_DIR}/release.archive" extract="${WORK_DIR}/extract" binary expected resolved
 	if [[ "$VERSION" == latest ]]; then
@@ -166,7 +166,7 @@ main() {
 	for dir in native theme assets export-html docs examples; do copy_runtime_dir "$archive_root" "$dir"; done
 	install_managed_tools
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
-	printf 'installed Step Harness %s to %s\n' "$VERSION" "$destination"
+	printf 'installed Step CLI %s to %s\n' "$VERSION" "$destination"
 }
 
 main "$@"

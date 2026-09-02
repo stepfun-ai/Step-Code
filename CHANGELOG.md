@@ -1,13 +1,13 @@
 # Changelog
 
-Step Harness 产品级变更记录。底层运行时包的细节继续记录在对应的
+Step CLI 产品级变更记录。底层运行时包的细节继续记录在对应的
 `packages/*/CHANGELOG.md` 中；发布时两类记录一起更新。
 
 ## [Unreleased]
 
 ### Added
 
-- Added the Step Harness standalone binary release bundle, cross-platform installers, checksum manifests, and managed `fd`/`rg` tools under `.step-harness`.
+- Added the Step CLI standalone binary release bundle, cross-platform installers, checksum manifests, and managed `fd`/`rg` tools under `.step-cli`.
 - Added the Step binary startup update check with Pi-native selection and restart behavior.
 
 ### Changed

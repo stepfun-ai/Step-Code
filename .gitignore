@@ -41,5 +41,7 @@ todo.md
 plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
+.step-cli/
+# Retired product namespace may be created while migrating older installs.
 .step-harness/
 collect.sh

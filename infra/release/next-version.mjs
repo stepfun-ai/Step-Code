@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** Compute the next stable Step Harness release tag. */
+/** Compute the next stable Step CLI release tag. */
 
 import { execFile } from "node:child_process";
 import path from "node:path";
