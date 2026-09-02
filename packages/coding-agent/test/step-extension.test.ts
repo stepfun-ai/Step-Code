@@ -302,7 +302,7 @@ describe("Step extension", () => {
 		expect(await toolHandler(writeCall, { hasUI: false })).toBeUndefined();
 	});
 
-	test("adds trace headers for Step and configured cloud-trace model requests", async () => {
+	test("limits trace headers to configured cloud-trace model requests", async () => {
 		const on = vi.fn();
 		stepExtension({
 			registerProvider: vi.fn(),
@@ -325,13 +325,10 @@ describe("Step extension", () => {
 			cwd: "/workspace",
 			sessionManager: { getSessionId: () => "session-1" },
 		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
-		expect(headers).toMatchObject({
-			"x-step-client": "cli",
-			"x-step-session-id": "session-1",
-			"x-step-workspace-id": "/workspace",
-			"x-step-provider-id": "step",
-			"x-step-model": "step-3.7-flash",
-		});
+		// The native Step endpoint is a direct model API, not the cloud-trace
+		// collector. Keep session/workspace identifiers off custom or direct
+		// provider requests; only the low-sensitivity client marker is universal.
+		expect(headers).toEqual({ "x-step-client": "cli" });
 
 		const originalOrigin = process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
 		process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
@@ -339,8 +336,8 @@ describe("Step extension", () => {
 			const otherHeaders: Record<string, string | null> = {};
 			await handler({ type: "before_provider_headers", headers: otherHeaders }, {
 				model: {
-					provider: "openai",
-					id: "gpt-4o",
+					provider: "stepfunModelProxy",
+					id: "step-proxy",
 					baseUrl: "https://trace.example.test/v1/chat/completions",
 				},
 				cwd: "/workspace",
@@ -349,8 +346,9 @@ describe("Step extension", () => {
 			expect(otherHeaders).toMatchObject({
 				"x-step-client": "cli",
 				"x-step-session-id": "session-2",
-				"x-step-provider-id": "openai",
-				"x-step-model": "gpt-4o",
+				"x-step-workspace-id": "/workspace",
+				"x-step-provider-id": "stepfunModelProxy",
+				"x-step-model": "step-proxy",
 			});
 		} finally {
 			if (originalOrigin === undefined) delete process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;

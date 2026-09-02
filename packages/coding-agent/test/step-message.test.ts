@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, describe, expect, test } from "vitest";
 import {
 	StepAssistantMessageComponent,
 	StepUserMessageComponent,
@@ -36,6 +36,10 @@ function plain(lines: string[]): string[] {
 }
 
 describe("Step message presentation", () => {
+	afterEach(() => {
+		resetCapabilitiesCache();
+	});
+
 	test("keeps thinking and answer as separate Step bullets", () => {
 		initTheme("step");
 		const component = new StepAssistantMessageComponent(
@@ -131,6 +135,10 @@ describe("Step message presentation", () => {
 	});
 
 	test("keeps Step gutters outside OSC-8 hyperlinks", () => {
+		// OSC-8 is intentionally disabled for unknown/headless terminals. This
+		// test exercises the enabled path explicitly so it remains deterministic
+		// on CI runners as well as in a real terminal.
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
 		initTheme("step");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([{ type: "text", text: "[open docs](https://example.com/docs)" }]),

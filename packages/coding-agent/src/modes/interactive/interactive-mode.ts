@@ -5758,8 +5758,9 @@ export class InteractiveMode {
 
 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
 		const options: AuthSelectorProvider[] = [];
-		const allowed = this.options.allowedAuthProviders
-			? new Set(this.options.allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
+		const allowedAuthProviders = this.options?.allowedAuthProviders;
+		const allowed = allowedAuthProviders
+			? new Set(allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
 			: undefined;
 		for (const provider of this.session.modelRuntime.getProviders()) {
 			if (allowed && !allowed.has(provider.id.toLowerCase())) continue;
@@ -5793,8 +5794,9 @@ export class InteractiveMode {
 	}
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		const allowed = this.options.allowedAuthProviders
-			? new Set(this.options.allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
+		const allowedAuthProviders = this.options?.allowedAuthProviders;
+		const allowed = allowedAuthProviders
+			? new Set(allowedAuthProviders.map((provider) => provider.trim().toLowerCase()))
 			: undefined;
 		const credentials = await this.session.modelRuntime.listCredentials({
 			signal: AbortSignal.timeout(15_000),
