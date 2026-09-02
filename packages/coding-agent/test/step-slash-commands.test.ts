@@ -38,7 +38,14 @@ describe("Step Pi slash command adapters", () => {
 		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "changelog")).toBe(false);
 	});
 
-	test("registers product aliases without replacing Pi's native commands", () => {
+	test("exposes /effort as a built-in /thinking alias", () => {
+		expect(BUILTIN_SLASH_COMMANDS.find((command) => command.name === "effort")).toMatchObject({
+			name: "effort",
+			argumentHint: "<level>",
+		});
+	});
+
+	test("registers product adapters without replacing Pi's native commands", () => {
 		const { commands } = registerCommands();
 
 		expect([...commands.keys()]).toEqual(expect.arrayContaining(["plugin", "clear", "exit", "theme", "status"]));

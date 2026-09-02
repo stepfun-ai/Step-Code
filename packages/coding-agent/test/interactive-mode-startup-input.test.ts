@@ -14,6 +14,7 @@ type SubmitContext = {
 		prompt: (text: string, options?: unknown) => Promise<void>;
 	};
 	flushPendingBashComponents: () => void;
+	handleThinkingCommand: (searchTerm?: string) => void;
 	onInputCallback?: (text: string) => void;
 	pendingUserInputs: string[];
 };
@@ -50,6 +51,7 @@ function createSubmitContext(): SubmitContext {
 			prompt: vi.fn(async () => {}),
 		},
 		flushPendingBashComponents: vi.fn(),
+		handleThinkingCommand: vi.fn(),
 		pendingUserInputs: [],
 	};
 }
@@ -76,6 +78,23 @@ describe("InteractiveMode startup input", () => {
 		expect(context.pendingUserInputs).toEqual(["early prompt"]);
 		expect(context.flushPendingBashComponents).toHaveBeenCalledTimes(1);
 		expect(context.editor.addToHistory).toHaveBeenCalledWith("early prompt");
+	});
+
+	it.each([
+		["/thinking", undefined],
+		["/effort", undefined],
+		["/thinking high", "high"],
+		["/effort high", "high"],
+	])("routes %s through the native thinking command handler", async (input, expectedSearchTerm) => {
+		const context = createSubmitContext();
+		interactiveModePrototype.setupEditorSubmitHandler.call(context);
+
+		await context.defaultEditor.onSubmit?.(input);
+
+		expect(context.handleThinkingCommand).toHaveBeenCalledOnce();
+		expect(context.handleThinkingCommand).toHaveBeenCalledWith(expectedSearchTerm);
+		expect(context.editor.setText).toHaveBeenCalledWith("");
+		expect(context.session.prompt).not.toHaveBeenCalled();
 	});
 
 	it("returns queued startup input before installing a new input callback", async () => {

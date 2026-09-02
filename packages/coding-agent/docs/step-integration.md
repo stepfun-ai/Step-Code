@@ -121,7 +121,7 @@ service and are not silently faked by this fork.
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
 | Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
-| Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/permission`, `/effort`, and `/mode` are intentionally absent; use Pi's `/thinking` |
+| Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, `/feedback`, voice/realtime, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
 | Legacy top-level `models`, `serve`, `goal`, and related gateway commands | Previous command dispatcher | separate product; Pi package commands remain unchanged |
