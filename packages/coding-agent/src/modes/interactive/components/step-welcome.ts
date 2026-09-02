@@ -19,7 +19,7 @@ import {
 export interface StepWelcomeInfo {
 	version?: string;
 	model?: string;
-	/** Current reasoning level; omitted when the model does not reason or is off. */
+	/** Current reasoning level; omitted when the model does not support reasoning. */
 	thinkingLevel?: string;
 	workspaceRoot: string;
 	sessionId?: string;
@@ -184,7 +184,12 @@ export class StepWelcomeComponent implements Component {
 			const sessionId = info.sessionId?.trim();
 			const model = info.model?.trim() || "unknown model";
 			const thinkingLevel = info.thinkingLevel?.trim();
-			const modelValue = thinkingLevel && thinkingLevel !== "off" ? `${model} · ${thinkingLevel}` : model;
+			const modelValue =
+				thinkingLevel === "off"
+					? `${model} · reasoning: off`
+					: thinkingLevel
+						? `${model} · ${thinkingLevel}`
+						: model;
 			const facts: Array<{ label: string; value: string; highlight: boolean }> = [
 				...(sessionId && !this.showFirstMessageHint
 					? [{ label: "session", value: sessionId, highlight: true }]

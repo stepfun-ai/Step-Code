@@ -401,6 +401,56 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 });
 
 describe("InteractiveMode.createBaseAutocompleteProvider", () => {
+	test("offers the same thinking-level completions for /thinking and /effort", async () => {
+		type FakeInteractiveMode = {
+			session: {
+				scopedModels: [];
+				modelRuntime: { getAvailableSnapshot: () => [] };
+				promptTemplates: [];
+				extensionRunner: { getRegisteredCommands: () => [] };
+				resourceLoader: { getSkills: () => { skills: [] } };
+				getAvailableThinkingLevels: () => string[];
+			};
+			settingsManager: { getEnableSkillCommands: () => boolean };
+			skillCommands: Map<string, string>;
+			sessionManager: { getCwd: () => string };
+			fdPath: null;
+		};
+
+		const createBaseAutocompleteProvider = (
+			InteractiveMode as unknown as {
+				prototype: { createBaseAutocompleteProvider(this: FakeInteractiveMode): AutocompleteProvider };
+			}
+		).prototype.createBaseAutocompleteProvider;
+		const getAvailableThinkingLevels = vi.fn(() => ["off", "low", "high"]);
+		const fakeThis: FakeInteractiveMode = {
+			session: {
+				scopedModels: [],
+				modelRuntime: { getAvailableSnapshot: () => [] },
+				promptTemplates: [],
+				extensionRunner: { getRegisteredCommands: () => [] },
+				resourceLoader: { getSkills: () => ({ skills: [] }) },
+				getAvailableThinkingLevels,
+			},
+			settingsManager: { getEnableSkillCommands: () => false },
+			skillCommands: new Map(),
+			sessionManager: { getCwd: () => "/tmp" },
+			fdPath: null,
+		};
+
+		const provider = createBaseAutocompleteProvider.call(fakeThis);
+		const getCompletions = (line: string) =>
+			provider.getSuggestions([line], 0, line.length, {
+				signal: new AbortController().signal,
+			});
+		const thinkingCompletions = await getCompletions("/thinking h");
+		const effortCompletions = await getCompletions("/effort h");
+
+		expect(thinkingCompletions?.items.map((item) => item.value)).toEqual(["high"]);
+		expect(effortCompletions).toEqual(thinkingCompletions);
+		expect(getAvailableThinkingLevels).toHaveBeenCalledTimes(2);
+	});
+
 	test("matches model command arguments across provider/model order", async () => {
 		type TestModel = { id: string; provider: string; name: string };
 		type FakeInteractiveMode = {

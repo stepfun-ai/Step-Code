@@ -29,6 +29,19 @@ describe("StepWelcomeComponent", () => {
 		}
 	});
 
+	it("shows reasoning off explicitly", () => {
+		initTheme("step");
+		const component = new StepWelcomeComponent(() => ({
+			model: "step-model",
+			thinkingLevel: "off",
+			workspaceRoot: "/tmp/project",
+		}));
+
+		const output = component.render(80).join("\n");
+		expect(output).toContain("step-model · reasoning: off");
+		expect(output).not.toContain("step-model · off");
+	});
+
 	it("removes the first-session hint after a message is projected", () => {
 		initTheme("step");
 		const component = new StepWelcomeComponent(() => ({

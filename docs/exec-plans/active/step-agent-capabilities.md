@@ -67,7 +67,7 @@ status: active
 ## TODO / 最近收口
 
 - [x] 读取 `lark-drive` skill（仅读取规范，未调用飞书接口）。
-- [x] 移除重复的 `/effort`，统一使用 Pi 原生 `/thinking`。
+- [x] 将 `/effort` 作为 Pi 原生 `/thinking` 的内置别名接入，不在 Step extension 重复注册。
 - [x] 移除单数 `/permission`，保留 `/permissions` 作为唯一 Step 权限命令。
 - [x] 简化队列展示：保留 Pi 的队列语义、分隔线和 `alt+↑ edit last queued message`，去掉可见的 `queue` 标题。
 - [x] 队列编辑快捷键按当前主题高亮，说明文字保持次级颜色。
