@@ -898,8 +898,14 @@ describe("feedback diagnostics and bundles", () => {
 	test("reads the newest bounded input trace", async () => {
 		const root = await makeRoot();
 		await mkdir(join(root, "diagnostics"), { recursive: true });
-		await writeFile(join(root, "diagnostics", "input-trace-1.jsonl"), "first\n");
-		await writeFile(join(root, "diagnostics", "input-trace-2.jsonl"), `\u001b[31m${"x".repeat(600)}\u001b[0m\n`);
+		const firstTrace = join(root, "diagnostics", "input-trace-1.jsonl");
+		const newestTrace = join(root, "diagnostics", "input-trace-2.jsonl");
+		await writeFile(firstTrace, "first\n");
+		await writeFile(newestTrace, `\u001b[31m${"x".repeat(600)}\u001b[0m\n`);
+		const older = new Date("2026-08-31T00:00:00.000Z");
+		const newer = new Date("2026-08-31T00:01:00.000Z");
+		await utimes(firstTrace, older, older);
+		await utimes(newestTrace, newer, newer);
 		const result = await readFeedbackDiagnostics({ storageRootDir: root });
 		expect(result?.diagnostics.source).toBe("input_trace");
 		expect(result?.diagnostics.lines[0]).toHaveLength(FEEDBACK_DIAGNOSTICS_MAX_LINE_CHARS);
