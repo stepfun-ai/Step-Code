@@ -78,6 +78,7 @@ export async function writePendingFeedback(input: {
 }): Promise<string> {
 	const target = resolveFeedbackPendingPath(input.storageRootDir, input.submission.feedbackId);
 	await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	await rejectSymbolicLink(target);
 	await fs.writeFile(target, `${JSON.stringify(input.submission, null, 2)}\n`, { mode: 0o600 });
 	await fs.chmod(target, 0o600).catch(() => undefined);
 	return target;
@@ -90,20 +91,33 @@ export async function writePendingFeedbackBundle(input: {
 }): Promise<string> {
 	const target = resolveFeedbackPendingBundlePath(input.storageRootDir, input.feedbackId);
 	await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	await rejectSymbolicLink(target);
 	await fs.writeFile(target, input.data, { mode: 0o600 });
 	await fs.chmod(target, 0o600).catch(() => undefined);
 	return target;
 }
 
-export async function readPendingFeedbackBundle(bundlePath: string): Promise<Buffer | undefined> {
+export type PendingFeedbackBundleReadResult =
+	| { status: "ready"; data: Buffer }
+	| { status: "too-large" }
+	| { status: "unreadable" };
+
+/** Reads a pending archive while preserving the reason a local read failed. */
+export async function readPendingFeedbackBundleResult(bundlePath: string): Promise<PendingFeedbackBundleReadResult> {
 	try {
-		const info = await fs.stat(bundlePath);
-		if (!info.isFile() || info.size > FEEDBACK_BUNDLE_MAX_BYTES) return undefined;
+		const info = await fs.lstat(bundlePath);
+		if (!info.isFile()) return { status: "unreadable" };
+		if (info.size > FEEDBACK_BUNDLE_MAX_BYTES) return { status: "too-large" };
 		const data = await fs.readFile(bundlePath);
-		return data.byteLength <= FEEDBACK_BUNDLE_MAX_BYTES ? data : undefined;
+		return data.byteLength <= FEEDBACK_BUNDLE_MAX_BYTES ? { status: "ready", data } : { status: "too-large" };
 	} catch {
-		return undefined;
+		return { status: "unreadable" };
 	}
+}
+
+export async function readPendingFeedbackBundle(bundlePath: string): Promise<Buffer | undefined> {
+	const result = await readPendingFeedbackBundleResult(bundlePath);
+	return result.status === "ready" ? result.data : undefined;
 }
 
 /**
@@ -215,7 +229,7 @@ async function readSubmission(
 	expectedFeedbackId: string,
 ): Promise<{ submission: FeedbackSubmission } | undefined> {
 	try {
-		const info = await fs.stat(filePath);
+		const info = await fs.lstat(filePath);
 		if (!info.isFile() || info.size > PENDING_BODY_MAX_BYTES) return undefined;
 		const raw = await fs.readFile(filePath);
 		if (raw.byteLength > PENDING_BODY_MAX_BYTES) return undefined;
@@ -253,6 +267,11 @@ async function readSubmission(
 	} catch {
 		return undefined;
 	}
+}
+
+async function rejectSymbolicLink(filePath: string): Promise<void> {
+	const stats = await fs.lstat(filePath).catch(() => undefined);
+	if (stats?.isSymbolicLink()) throw new Error("refusing to write through a symbolic link");
 }
 
 function isStrictContext(value: unknown): value is FeedbackSubmission["context"] {

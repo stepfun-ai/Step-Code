@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -6,6 +6,7 @@ import { retryPendingFeedback } from "../src/step/feedback/delivery.ts";
 import {
 	resolveFeedbackDirectory,
 	resolveFeedbackPendingPath,
+	writePendingFeedback,
 	writePendingFeedbackBundle,
 } from "../src/step/feedback/pending-store.ts";
 import type { FeedbackSubmission } from "../src/step/feedback/types.ts";
@@ -146,5 +147,70 @@ describe("pending feedback body validation", () => {
 		expect(outcomes).toEqual([{ feedbackId, body: { status: "delivered", feedbackId } }]);
 		expect(fetchImpl).toHaveBeenCalledOnce();
 		await expect(stat(pendingPath)).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
+	test.skipIf(process.platform === "win32")("does not read or overwrite a symbolic-link pending body", async () => {
+		const root = await makeRoot();
+		const outside = await mkdtemp(join(tmpdir(), "step-feedback-pending-body-outside-"));
+		roots.push(outside);
+		const feedbackId = "80000000-0000-4000-8000-000000000001";
+		const externalPath = join(outside, "external-body.json");
+		const externalContent = `${JSON.stringify(makeSubmission(feedbackId))}\n`;
+		await writeFile(externalPath, externalContent);
+		const pendingPath = resolveFeedbackPendingPath(root, feedbackId);
+		await symlink(externalPath, pendingPath);
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+
+		await expect(
+			retryPendingFeedback({
+				endpoint: "https://feedback.test/feedback",
+				storageRootDir: root,
+				fetchImpl,
+				retryBackoffsMs: [],
+			}),
+		).resolves.toEqual([]);
+		expect(fetchImpl).not.toHaveBeenCalled();
+		await expect(readFile(externalPath, "utf8")).resolves.toBe(externalContent);
+		await expect(
+			writePendingFeedback({ storageRootDir: root, submission: makeSubmission(feedbackId) }),
+		).rejects.toThrow("symbolic link");
+		await expect(readFile(externalPath, "utf8")).resolves.toBe(externalContent);
+	});
+
+	test.skipIf(process.platform === "win32")("does not read or overwrite a symbolic-link pending archive", async () => {
+		const root = await makeRoot();
+		const outside = await mkdtemp(join(tmpdir(), "step-feedback-pending-archive-outside-"));
+		roots.push(outside);
+		const feedbackId = "80000000-0000-4000-8000-000000000002";
+		const externalPath = join(outside, "external-archive.tar.gz");
+		const externalContent = Buffer.from("external archive bytes");
+		await writeFile(externalPath, externalContent);
+		const pendingPath = join(resolveFeedbackDirectory(root), `pending-${feedbackId}.tar.gz`);
+		await symlink(externalPath, pendingPath);
+		const bodyPath = await writePendingFeedback({ storageRootDir: root, submission: makeSubmission(feedbackId) });
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+
+		const outcomes = await retryPendingFeedback({
+			endpoint: "https://feedback.test/feedback",
+			bundleEndpoint: "https://feedback.test/bundle",
+			storageRootDir: root,
+			fetchImpl,
+			retryBackoffsMs: [],
+		});
+
+		expect(fetchImpl).toHaveBeenCalledOnce();
+		expect(outcomes).toMatchObject([
+			{
+				feedbackId,
+				body: { status: "delivered" },
+				bundle: { status: "pending", reason: "unreachable", pendingPath },
+			},
+		]);
+		await expect(stat(bodyPath)).resolves.toBeTruthy();
+		await expect(readFile(externalPath)).resolves.toEqual(externalContent);
+		await expect(
+			writePendingFeedbackBundle({ storageRootDir: root, feedbackId, data: Buffer.from("replacement") }),
+		).rejects.toThrow("symbolic link");
+		await expect(readFile(externalPath)).resolves.toEqual(externalContent);
 	});
 });

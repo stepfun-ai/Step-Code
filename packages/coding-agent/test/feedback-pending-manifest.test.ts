@@ -10,7 +10,7 @@ import {
 	writePendingFeedback,
 	writePendingFeedbackBundle,
 } from "../src/step/feedback/pending-store.ts";
-import type { FeedbackSubmission } from "../src/step/feedback/types.ts";
+import { FEEDBACK_BUNDLE_MAX_BYTES, type FeedbackSubmission } from "../src/step/feedback/types.ts";
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -316,6 +316,40 @@ describe("pending current bundle manifest validation", () => {
 		const oversized = await gzip(Buffer.alloc(48 * 1024 * 1024 + 1));
 
 		await expect(normalizePendingFeedbackBundle(oversized)).resolves.toBeUndefined();
+	});
+
+	test("reports an oversized pending archive as too-large without uploading it", async () => {
+		const root = await makeRoot();
+		const report = makeSubmission();
+		const bodyPath = await writePendingFeedback({ storageRootDir: root, submission: report });
+		const bundlePath = await writePendingFeedbackBundle({
+			storageRootDir: root,
+			feedbackId: report.feedbackId,
+			data: Buffer.alloc(FEEDBACK_BUNDLE_MAX_BYTES + 1),
+		});
+		const calls: string[] = [];
+		const fetchImpl: typeof fetch = async (input) => {
+			calls.push(String(input));
+			return new Response(null, { status: 204 });
+		};
+
+		const outcomes = await retryPendingFeedback({
+			endpoint: "https://feedback.test/feedback",
+			bundleEndpoint: "https://feedback.test/bundle",
+			storageRootDir: root,
+			fetchImpl,
+			retryBackoffsMs: [],
+		});
+
+		expect(calls).toEqual(["https://feedback.test/feedback"]);
+		expect(outcomes).toMatchObject([
+			{
+				body: { status: "delivered" },
+				bundle: { status: "pending", reason: "too-large", pendingPath: bundlePath },
+			},
+		]);
+		await expect(stat(bodyPath)).resolves.toBeTruthy();
+		await expect(stat(bundlePath)).resolves.toBeTruthy();
 	});
 
 	test("keeps a concatenated pending bundle unchanged and never uploads it", async () => {

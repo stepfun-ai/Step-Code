@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -93,4 +93,24 @@ describe("feedback session root", () => {
 		if (result.status !== "ready") return;
 		expect(result.bundle.sessionId).toBe("live-session");
 	});
+
+	test.skipIf(process.platform === "win32")(
+		"does not archive an explicitly selected symbolic-link session",
+		async () => {
+			const root = await makeRoot();
+			const outside = await mkdtemp(join(tmpdir(), "step-feedback-session-outside-"));
+			roots.push(outside);
+			const externalSession = join(outside, "external.jsonl");
+			await writeFile(externalSession, '{"type":"session","id":"external-session"}\n');
+			const linkedSession = join(root, "linked-session.jsonl");
+			await symlink(externalSession, linkedSession);
+
+			await expect(
+				buildFeedbackSessionBundle({
+					storageRootDir: root,
+					sessionFile: linkedSession,
+				}),
+			).resolves.toEqual({ status: "skipped", reason: "no-session" });
+		},
+	);
 });

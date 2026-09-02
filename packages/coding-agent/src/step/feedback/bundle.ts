@@ -156,6 +156,8 @@ async function readSessionEntry(filePath: string, maxBytes: number): Promise<Ses
 	try {
 		const target = entry.content.toString("utf8");
 		const collector = createSecretRedactionCollector(target);
+		const linkStats = await fs.lstat(filePath).catch(() => undefined);
+		if (!linkStats?.isFile()) return { status: "unsafe" };
 		const handle = await fs.open(filePath, "r");
 		try {
 			const decoder = new StringDecoder("utf8");
@@ -274,6 +276,8 @@ function countLines(content: Buffer): number {
 }
 
 async function readTailEntry(filePath: string, name: string, maxBytes: number): Promise<BundleEntry | undefined> {
+	const linkStats = await fs.lstat(filePath).catch(() => undefined);
+	if (!linkStats?.isFile()) return undefined;
 	const handle = await fs.open(filePath, "r").catch(() => undefined);
 	if (!handle) return undefined;
 	try {
@@ -346,7 +350,7 @@ async function findNewestSessionFile(storageRootDir: string): Promise<SelectedSe
 async function validateSessionFile(filePath: string): Promise<string | undefined> {
 	if (!filePath.endsWith(".jsonl")) return undefined;
 	const resolved = path.resolve(filePath);
-	const stats = await fs.stat(resolved).catch(() => undefined);
+	const stats = await fs.lstat(resolved).catch(() => undefined);
 	return stats?.isFile() ? resolved : undefined;
 }
 

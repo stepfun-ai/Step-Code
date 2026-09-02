@@ -36,6 +36,14 @@ describe("feedback credential redaction", () => {
 		expect(redacted).toContain(REDACTED_SECRET);
 	});
 
+	test("redacts unquoted labelled secrets that contain spaces", () => {
+		const secret = "opaque secret value 12345678";
+		const redacted = redactSecretString(`password: ${secret}\nretry echo ${secret}`);
+
+		expect(redacted).toBe(`password: ${REDACTED_SECRET}\nretry echo ${REDACTED_SECRET}`);
+		expect(redacted).not.toContain(secret);
+	});
+
 	test("redacts complete free-form header values without consuming adjacent JSON fields", () => {
 		const secret = "actual-signature-secret";
 		const signature = `Signature keyId="id",algorithm="hmac",signature="${secret}"`;

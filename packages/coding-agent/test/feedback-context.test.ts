@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveFeedbackContext } from "../src/step/feedback/context.ts";
+import { readFeedbackUsername, resolveFeedbackContext } from "../src/step/feedback/context.ts";
 
 const roots: string[] = [];
 
@@ -17,6 +17,11 @@ async function makeRoot(): Promise<string> {
 }
 
 describe("feedback context identity boundaries", () => {
+	it("reads a bounded launcher username", () => {
+		expect(readFeedbackUsername({ STEP_CLI_USER: "  account@example.test\n" })).toBe("account@example.test");
+		expect(readFeedbackUsername({ STEP_CLI_USER: "not a username" })).toBeUndefined();
+	});
+
 	it("keeps valid host and session identities after trimming", async () => {
 		const context = await resolveFeedbackContext({
 			storageRootDir: await makeRoot(),
@@ -76,9 +81,11 @@ describe("feedback context identity boundaries", () => {
 			env: {},
 			uid: 42 as unknown as string,
 			sessionId: { id: "session-1" } as unknown as string,
+			username: 42 as unknown as string,
 		});
 
 		expect(context.uid).toBeUndefined();
 		expect(context.sessionId).toBeUndefined();
+		expect(context.username).toBeUndefined();
 	});
 });

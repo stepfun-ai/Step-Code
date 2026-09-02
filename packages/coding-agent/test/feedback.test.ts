@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Writable } from "node:stream";
@@ -904,6 +904,23 @@ describe("feedback diagnostics and bundles", () => {
 		expect(result?.diagnostics.source).toBe("input_trace");
 		expect(result?.diagnostics.lines[0]).toHaveLength(FEEDBACK_DIAGNOSTICS_MAX_LINE_CHARS);
 		expect(result?.diagnostics.truncated).toBe(true);
+	});
+
+	test.skipIf(process.platform === "win32")("does not read diagnostic files through symbolic links", async () => {
+		const root = await makeRoot();
+		const outside = await mkdtemp(join(tmpdir(), "step-feedback-diagnostics-outside-"));
+		roots.push(outside);
+		const at = new Date("2026-08-31T00:00:00.000Z");
+		const externalTrace = join(outside, "external-trace.jsonl");
+		const externalLog = join(outside, "external-log.log");
+		await writeFile(externalTrace, "Error: external trace\n");
+		await writeFile(externalLog, "Error: external log\n");
+		await mkdir(join(root, "diagnostics"), { recursive: true });
+		await mkdir(join(root, "logs"), { recursive: true });
+		await symlink(externalTrace, join(root, "diagnostics", "input-trace-external.jsonl"));
+		await symlink(externalLog, resolveStderrDevLogPath(root, at));
+
+		expect(await readFeedbackDiagnostics({ storageRootDir: root, at })).toBeUndefined();
 	});
 
 	test("creates a collector-compatible archive whose bundle manifest matches its payload files", async () => {

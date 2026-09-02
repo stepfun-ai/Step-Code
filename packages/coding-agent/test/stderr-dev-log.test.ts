@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -202,6 +202,19 @@ describe("stderr dev log capture", () => {
 
 		const persisted = await readFile(resolveStderrDevLogPath(root), "utf8");
 		expect(persisted).toContain("password=<redacted:secret>");
+		expect(persisted).not.toContain(secret);
+	});
+
+	test("redacts a labeled secret with spaces and its later echo", async () => {
+		const root = await makeRoot();
+		const mirror = createStderrMirrorWrite({ baseWrite: captureWrite().write, getStorageRootDir: () => root });
+		const secret = "opaque secret value 12345678";
+
+		mirror(`password: ${secret}\nretry echo ${secret}\n`);
+		await mirror.flush();
+
+		const persisted = await readFile(resolveStderrDevLogPath(root), "utf8");
+		expect(persisted).toBe(`password: <redacted:secret>\nretry echo <redacted:secret>\n`);
 		expect(persisted).not.toContain(secret);
 	});
 
@@ -651,6 +664,20 @@ describe("stderr dev log capture", () => {
 		const fileMode = (await stat(resolveStderrDevLogPath(root))).mode & 0o777;
 		expect(directoryMode).toBe(0o700);
 		expect(fileMode).toBe(0o600);
+	});
+
+	test.skipIf(process.platform === "win32")("does not append through a symbolic-link log file", async () => {
+		const root = await makeRoot();
+		const outside = await mkdtemp(join(tmpdir(), "step-stderr-dev-log-outside-"));
+		temporaryRoots.push(outside);
+		const at = new Date("2026-08-31T00:00:00.000Z");
+		const externalPath = join(outside, "external.log");
+		await writeFile(externalPath, "outside\n");
+		await mkdir(join(root, "logs"), { recursive: true });
+		await symlink(externalPath, resolveStderrDevLogPath(root, at));
+
+		await appendStderrDevLog("should not escape\n", root);
+		await expect(readFile(externalPath, "utf8")).resolves.toBe("outside\n");
 	});
 
 	test("global flush waits for direct append operations", async () => {

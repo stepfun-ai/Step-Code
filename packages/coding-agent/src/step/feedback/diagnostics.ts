@@ -51,6 +51,10 @@ async function readDiagnosticFile(
  * a directory or unreadable device fails into `undefined` rather than throwing.
  */
 async function readTailWindow(logPath: string): Promise<{ text: string; skippedBytes: number } | undefined> {
+	// Diagnostics are copied into a user-consented report. Do not follow a
+	// candidate file link into an unrelated path outside the storage root.
+	const linkStats = await fs.lstat(logPath).catch(() => undefined);
+	if (!linkStats?.isFile()) return undefined;
 	const handle = await fs.open(logPath, "r").catch(() => undefined);
 	if (!handle) return undefined;
 	try {
@@ -83,7 +87,7 @@ async function newestFile(directory: string, prefix: string, suffix: string): Pr
 	for (const name of names) {
 		if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
 		const filePath = path.join(directory, name);
-		const stats = await fs.stat(filePath).catch(() => undefined);
+		const stats = await fs.lstat(filePath).catch(() => undefined);
 		if (!stats?.isFile() || stats.size === 0) continue;
 		if (!newest || stats.mtimeMs > newest.mtime) newest = { path: filePath, mtime: stats.mtimeMs };
 	}

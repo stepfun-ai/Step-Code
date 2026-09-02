@@ -6,7 +6,6 @@ import {
 	matchesStepTraceBaseUrl,
 	resolveStepTraceAllowlist,
 	resolveStepTraceHeaderBaseUrls,
-	resolveStepTraceRuntimeAllowlist,
 } from "../src/step/trace-headers.ts";
 
 function decode(value: string): string {
@@ -118,14 +117,5 @@ describe("Step trace headers", () => {
 				STEP_CLI_CLOUD_TRACE_ORIGIN: "https://trace.example/v1",
 			}),
 		).toBe(true);
-	});
-
-	it("uses the legacy build channel when the canonical channel is blank", () => {
-		expect(
-			resolveStepTraceRuntimeAllowlist("stepfunModelProxy", {
-				STEP_HARNESS_BUILD_CHANNEL: " ",
-				STEP_CLI_BUILD_CHANNEL: "release",
-			}),
-		).toContain("https://api.stepfun.com/stepcliobserserver");
 	});
 });

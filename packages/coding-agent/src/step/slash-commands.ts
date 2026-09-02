@@ -243,13 +243,15 @@ async function handleStepFeedbackCommand(
 	}
 	const diagnostics = includeAttachments ? diagnosticsCandidate?.diagnostics : undefined;
 	const sessionBundle = includeAttachments && bundleCandidate?.status === "ready" ? bundleCandidate : undefined;
+	const submissionSessionId =
+		sessionBundle?.status === "ready" ? sessionBundle.bundle.sessionId : ctx.sessionManager.getSessionId();
 	const result = await submitFeedback({
 		category,
 		comment,
 		...(diagnostics ? { diagnostics } : {}),
 		...(sessionBundle ? { sessionBundle } : {}),
 		storageRootDir,
-		sessionId: ctx.sessionManager.getSessionId(),
+		sessionId: submissionSessionId,
 		endpoint,
 		...(bundleEndpoint ? { bundleEndpoint } : {}),
 		telemetry,

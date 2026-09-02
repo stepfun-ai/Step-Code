@@ -468,6 +468,7 @@ async function appendToDailyDevLog(storageRootDir: string, text: string, at: Dat
 	const directory = path.dirname(logPath);
 	await fsPromises.mkdir(directory, { recursive: true, mode: 0o700 });
 	await fsPromises.chmod(directory, 0o700).catch(() => undefined);
+	await ensureRegularLogTarget(logPath);
 	await fsPromises.appendFile(logPath, text, { encoding: "utf8", mode: 0o600 });
 	await fsPromises.chmod(logPath, 0o600).catch(() => undefined);
 	await pruneExpiredDevLogsOnce(directory, at);
@@ -482,6 +483,7 @@ function appendToDailyDevLogSync(storageRootDir: string, text: string, at: Date)
 	} catch {
 		// The append may still work for a directory whose mode cannot be changed.
 	}
+	ensureRegularLogTargetSync(logPath);
 	fs.appendFileSync(logPath, text, { encoding: "utf8", mode: 0o600 });
 	try {
 		fs.chmodSync(logPath, 0o600);
@@ -489,6 +491,24 @@ function appendToDailyDevLogSync(storageRootDir: string, text: string, at: Date)
 		// The diagnostic write succeeded, so a chmod failure is non-fatal.
 	}
 	pruneExpiredDevLogsOnceSync(directory, at);
+}
+
+async function ensureRegularLogTarget(logPath: string): Promise<void> {
+	try {
+		const stats = await fsPromises.lstat(logPath);
+		if (!stats.isFile()) throw new Error("refusing to append through a non-regular log path");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
+
+function ensureRegularLogTargetSync(logPath: string): void {
+	try {
+		const stats = fs.lstatSync(logPath);
+		if (!stats.isFile()) throw new Error("refusing to append through a non-regular log path");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
 }
 
 async function pruneExpiredDevLogsOnce(directory: string, at: Date): Promise<void> {

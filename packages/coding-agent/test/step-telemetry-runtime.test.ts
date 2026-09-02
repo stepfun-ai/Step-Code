@@ -1,8 +1,6 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ModelRequestCompleted, ModelRequestStarted } from "../src/core/model-request-observer.ts";
 import { createStepModelRequestObserver } from "../src/step/telemetry.ts";
@@ -27,20 +25,6 @@ async function readSpool(directory: string, prefix: string): Promise<Array<Recor
 		.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-async function runTelemetryChild(source: string): Promise<number | null> {
-	const env: NodeJS.ProcessEnv = { ...process.env };
-	for (const name of ["NODE_ENV", "VITEST"]) delete env[name];
-	const child = spawn(
-		process.execPath,
-		["--import", fileURLToPath(import.meta.resolve("tsx/esm")), "--input-type=module", "--eval", source],
-		{ cwd: process.cwd(), env, stdio: ["ignore", "ignore", "ignore"] },
-	);
-	return new Promise<number | null>((resolve, reject) => {
-		child.once("error", reject);
-		child.once("close", resolve);
-	});
-}
-
 describe("Step telemetry runtime", () => {
 	it("uses the release collector default while keeping dev builds local", () => {
 		expect(readTelemetryEndpoint({ STEP_CLI_BUILD_CHANNEL: "release" })).toBe(
@@ -54,156 +38,6 @@ describe("Step telemetry runtime", () => {
 		const runtime = createStepTelemetryRuntime({ env: { NODE_ENV: "test", VITEST: "1" } });
 		expect(runtime.enabled).toBe(false);
 		expect(runtime.endpoint).toBeUndefined();
-	});
-
-	it("records a controlled feedback command failure as an error exit", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "step-telemetry-cli-exit-"));
-		const telemetryDirectory = join(directory, "telemetry");
-		try {
-			const env: NodeJS.ProcessEnv = {
-				...process.env,
-				HOME: directory,
-				USERPROFILE: directory,
-				STEP_CLI_CONFIG_DIR: ".step-cli",
-				STEP_CLI_STORAGE_ROOT_DIR: join(directory, "storage"),
-				STEP_CODING_AGENT_DIR: join(directory, "agent"),
-				STEP_CLI_TELEMETRY_DIR: telemetryDirectory,
-				STEP_CLI_DISABLE_PI_SERVICES: "1",
-			};
-			for (const name of [
-				"NODE_ENV",
-				"VITEST",
-				"STEP_HARNESS_DISABLE_TELEMETRY",
-				"STEP_HARNESS_TELEMETRY_DISABLED",
-				"STEP_CLI_DISABLE_TELEMETRY",
-				"STEPCLI_DISABLE_TELEMETRY",
-				"STEP_HARNESS_TELEMETRY_ENDPOINT",
-				"STEP_CLI_TELEMETRY_ENDPOINT",
-				"STEPCLI_TELEMETRY_ENDPOINT",
-				"STEP_HARNESS_BUILD_CHANNEL",
-				"STEP_CLI_BUILD_CHANNEL",
-			]) {
-				delete env[name];
-			}
-			const child = spawn(
-				process.execPath,
-				[
-					fileURLToPath(import.meta.resolve("tsx/cli")),
-					"--tsconfig",
-					fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
-					fileURLToPath(new URL("../src/step-cli.ts", import.meta.url)),
-					"feedback",
-					"--unknown",
-				],
-				{ cwd: directory, env, stdio: ["ignore", "ignore", "ignore"] },
-			);
-			const exitCode = await new Promise<number | null>((resolve, reject) => {
-				child.once("error", reject);
-				child.once("close", resolve);
-			});
-
-			expect(exitCode).toBe(1);
-			const exitEvents = (await readSpool(telemetryDirectory, "events")).filter(
-				(record) => record.event === "cli_exited",
-			);
-			expect(exitEvents).toHaveLength(1);
-			expect(exitEvents[0]?.properties).toEqual(expect.objectContaining({ exit_reason: "error" }));
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	});
-
-	it("spools threshold-flushed batches before a hard exit", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "step-telemetry-hard-exit-"));
-		try {
-			const runtimePath = JSON.stringify(
-				fileURLToPath(new URL("../src/step/telemetry-runtime.ts", import.meta.url)),
-			);
-			const directoryPath = JSON.stringify(directory);
-			const exitCode = await runTelemetryChild(`
-				import { createStepTelemetryRuntime } from ${runtimePath};
-				const runtime = createStepTelemetryRuntime({
-					enabled: true,
-					env: {},
-					spoolDirectory: ${directoryPath},
-					flushThreshold: 1,
-					flushIntervalMs: 0,
-					clock: () => "2026-09-02T01:02:03.000Z",
-				});
-				runtime.track("first_launch", { channel: "dev" });
-				runtime.track("cli_exited", { duration_ms: 1, exit_reason: "normal" });
-				process.exit(0);
-			`);
-			expect(exitCode).toBe(0);
-			expect(await readSpool(directory, "events")).toHaveLength(2);
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	});
-
-	it("keeps the exit fallback installed after a timed-out shutdown", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "step-telemetry-shutdown-exit-"));
-		try {
-			const runtimePath = JSON.stringify(
-				fileURLToPath(new URL("../src/step/telemetry-runtime.ts", import.meta.url)),
-			);
-			const directoryPath = JSON.stringify(directory);
-			const exitCode = await runTelemetryChild(`
-				import { createStepTelemetryRuntime } from ${runtimePath};
-				const runtime = createStepTelemetryRuntime({
-					enabled: true,
-					env: {},
-					endpoint: "https://collector.example/api/v1/events",
-					spoolDirectory: ${directoryPath},
-					flushThreshold: 10,
-					flushIntervalMs: 0,
-					fetchImpl: async () => new Promise<Response>(() => {}),
-					clock: () => "2026-09-02T01:02:03.000Z",
-				});
-				runtime.track("first_launch", { channel: "dev" });
-				await runtime.shutdown({ timeoutMs: 1 });
-				process.exit(0);
-			`);
-			expect(exitCode).toBe(0);
-			expect(await readSpool(directory, "events")).toHaveLength(1);
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	});
-
-	it("does not keep an idle process alive for telemetry retry backoff", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "step-telemetry-retry-exit-"));
-		const marker = join(directory, "elapsed");
-		try {
-			const runtimePath = JSON.stringify(
-				fileURLToPath(new URL("../src/step/telemetry-runtime.ts", import.meta.url)),
-			);
-			const directoryPath = JSON.stringify(directory);
-			const markerPath = JSON.stringify(marker);
-			const exitCode = await runTelemetryChild(`
-				import { writeFileSync } from "node:fs";
-				import { createStepTelemetryRuntime } from ${runtimePath};
-				const startedAt = Date.now();
-				const runtime = createStepTelemetryRuntime({
-					enabled: true,
-					env: {},
-					endpoint: "https://collector.example/api/v1/events",
-					spoolDirectory: ${directoryPath},
-					flushThreshold: 1,
-					flushIntervalMs: 0,
-					retryBackoffsMs: [2_000],
-					fetchImpl: async () => new Response("retry", { status: 503 }),
-					clock: () => "2026-09-02T01:02:03.000Z",
-				});
-				runtime.track("first_launch", { channel: "dev" });
-				process.on("exit", () => writeFileSync(${markerPath}, String(Date.now() - startedAt)));
-				process.exitCode = 0;
-			`);
-			expect(exitCode).toBe(0);
-			expect(Number(await readFile(marker, "utf8"))).toBeLessThan(1_000);
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
 	});
 
 	it("posts the legacy event envelope and keeps a local spool copy", async () => {

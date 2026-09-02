@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
-import { readStepBuildIdentity } from "./build-identity.ts";
 
 /** Values copied from the request context into Step's attribution headers. */
 export interface StepTraceContext {
@@ -217,7 +216,6 @@ function normalizeUrlPrefix(value: string): string {
 }
 
 function resolveBuiltinCloudTraceOrigin(env: Record<string, string | undefined>): string {
-	return readStepBuildIdentity(env).channel === "release"
-		? BUILTIN_CLOUD_TRACE_ORIGINS.release
-		: BUILTIN_CLOUD_TRACE_ORIGINS.dev;
+	const channel = env.STEP_CLI_BUILD_CHANNEL;
+	return channel?.trim() === "release" ? BUILTIN_CLOUD_TRACE_ORIGINS.release : BUILTIN_CLOUD_TRACE_ORIGINS.dev;
 }

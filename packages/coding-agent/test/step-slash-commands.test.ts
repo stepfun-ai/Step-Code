@@ -491,6 +491,43 @@ describe("Step Pi slash command adapters", () => {
 		expect(bundleUrl.searchParams.get("feedbackId")).toBe(body.feedbackId);
 	});
 
+	test("uses the archived session ID in the guided TUI report context", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
+		temporaryRoots.push(root);
+		const sessionFile = join(root, "20260831_filename-session.jsonl");
+		await writeFile(sessionFile, '{"type":"session","id":"header-session"}\n');
+		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const { commands } = registerCommands();
+		const select = vi
+			.fn()
+			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
+			.mockResolvedValueOnce("Yes · Include the listed files");
+
+		await getCommand(commands, "feedback").handler("", {
+			hasUI: true,
+			ui: {
+				select,
+				input: vi.fn().mockResolvedValue("The session IDs must match"),
+				confirm: vi.fn().mockResolvedValue(true),
+				notify: vi.fn(),
+			},
+			sessionManager: {
+				getSessionId: () => "manager-session",
+				getSessionFile: () => sessionFile,
+			},
+		} as unknown as ExtensionCommandContext);
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+			context: { sessionId?: string };
+		};
+		expect(body.context.sessionId).toBe("header-session");
+	});
+
 	test("submits guided feedback without any files when upload is declined", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);

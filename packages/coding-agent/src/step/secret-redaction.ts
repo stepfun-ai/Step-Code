@@ -43,7 +43,13 @@ const TRAILING_LABELED_SECRET = new RegExp(`(${SECRET_LABEL}\\s*${SECRET_SEPARAT
 
 const QUOTED_LABELED_SECRET = new RegExp(`(${SECRET_LABEL}\\s*${SECRET_SEPARATOR}\\s*)(["'\`])([^\\r\\n]*?)\\2`, "giu");
 
-const UNQUOTED_LABELED_SECRET = new RegExp(`(${SECRET_LABEL}\\s*${SECRET_SEPARATOR}\\s*)([^\\s,，;；)}\\]]+)`, "giu");
+// An unquoted password/passphrase may legitimately contain spaces. Stop only
+// at an explicit record delimiter; treating the first word as the whole value
+// would leave the remainder (and later echoes) in durable logs.
+const UNQUOTED_LABELED_SECRET = new RegExp(
+	`(${SECRET_LABEL}\\s*${SECRET_SEPARATOR}\\s*)([^\\r\\n\\u2028\\u2029,，;；)}\\]]+)`,
+	"giu",
+);
 
 // Used only on text that could not be parsed as a balanced JSON span. Parsed
 // objects take the structured path below, where keys are never string-replaced.
@@ -53,7 +59,7 @@ const QUOTED_MALFORMED_JSON_SECRET = new RegExp(
 );
 
 const UNQUOTED_MALFORMED_JSON_SECRET = new RegExp(
-	`((?:"${SECRET_LABEL}"|'${SECRET_LABEL}')\\s*:\\s*)([^\\s,，;；)}\\]]+)`,
+	`((?:"${SECRET_LABEL}"|'${SECRET_LABEL}')\\s*:\\s*)([^\\r\\n\\u2028\\u2029,，;；)}\\]]+)`,
 	"giu",
 );
 

@@ -2,7 +2,7 @@ import { isBuiltInFeedbackEndpoint } from "./endpoints.ts";
 import {
 	listPendingFeedback,
 	normalizePendingFeedbackBundle,
-	readPendingFeedbackBundle,
+	readPendingFeedbackBundleResult,
 	removePendingFeedback,
 	writePendingFeedback,
 	writePendingFeedbackBundle,
@@ -191,8 +191,9 @@ export async function retryPendingFeedback(
 			} else if (!options.bundleEndpoint) {
 				bundle = { status: "pending", reason: "unsupported-endpoint", pendingPath: entry.bundlePath };
 			} else {
-				const data = await readPendingFeedbackBundle(entry.bundlePath);
-				if (data) {
+				const readResult = await readPendingFeedbackBundleResult(entry.bundlePath);
+				if (readResult.status === "ready") {
+					const data = readResult.data;
 					const normalized = await normalizePendingFeedbackBundle(data);
 					if (!normalized) {
 						bundle = { status: "pending", reason: "rejected", pendingPath: entry.bundlePath };
@@ -217,7 +218,13 @@ export async function retryPendingFeedback(
 							};
 						}
 					}
-				} else bundle = { status: "pending", reason: "unreachable", pendingPath: entry.bundlePath };
+				} else {
+					bundle = {
+						status: "pending",
+						reason: readResult.status === "too-large" ? "too-large" : "unreachable",
+						pendingPath: entry.bundlePath,
+					};
+				}
 			}
 		}
 		if (bundle?.status === "pending" && entry.body) bundle.bodyPendingPath = entry.body.path;
