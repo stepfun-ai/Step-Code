@@ -14,6 +14,7 @@ import type {
 	AutocompleteItem,
 	AutocompleteProvider,
 	EditorComponent,
+	Focusable,
 	Keybinding,
 	KeyId,
 	MarkdownTheme,
@@ -92,6 +93,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import type { StepLoginHost, StepLoginOutcome } from "../../step/login-flow.ts";
 import { listAllStepSessions, listStepSessions, openStepSession } from "../../step/session.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -389,6 +391,10 @@ export interface InteractiveModeOptions {
 	skipManagedTools?: boolean;
 	/** Restrict login/logout selectors to product-owned providers when set. */
 	allowedAuthProviders?: readonly string[];
+	/** Shared Step onboarding flow used by the Step-only login surfaces. */
+	stepLogin?: (host: StepLoginHost) => Promise<StepLoginOutcome>;
+	/** Shared Step logout flow used by the Step-only TUI command. */
+	stepLogout?: () => Promise<{ removed: boolean; remainingSource?: string | null }>;
 	/**
 	 * Product startup hook. Returning false stops the interactive loop after the
 	 * hook has completed (used by a self-update that has relaunched the binary).
@@ -3330,8 +3336,9 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/logout") {
-				this.showOAuthSelector("logout");
 				this.editor.setText("");
+				if (this.options.stepLogout) await this.handleStepLogoutCommand();
+				else this.showOAuthSelector("logout");
 				return;
 			}
 			if (text === "/new") {
@@ -5870,6 +5877,24 @@ export class InteractiveMode {
 	}
 
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
+		if ((!providerRef || providerRef.toLowerCase() === "step") && this.options.stepLogin) {
+			const activeSession = this.runtimeHost?.session;
+			if (activeSession?.isStreaming || activeSession?.isCompacting) {
+				this.showWarning("Wait for the active turn to finish before signing in");
+				return;
+			}
+			try {
+				const outcome = await this.options.stepLogin(this.createStepLoginHost());
+				if (outcome.kind === "completed") {
+					await this.handleReloadCommand();
+				} else {
+					this.showStatus("Sign-in cancelled. No credential was written.");
+				}
+			} catch (error: unknown) {
+				this.showError(`Failed to login to Step: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return;
+		}
 		if (!providerRef) {
 			this.showLoginAuthTypeSelector();
 			return;
@@ -5890,6 +5915,82 @@ export class InteractiveMode {
 		}
 
 		this.showLoginProviderSelector(undefined, providerRef);
+	}
+
+	private createStepLoginHost(): StepLoginHost {
+		let mounted: Component | undefined;
+		let overlay: OverlayHandle | undefined;
+		return {
+			addChild: (child) => {
+				if (overlay) {
+					throw new Error("The Step login view is already mounted");
+				}
+				mounted = child as Component;
+				const fullViewport: Component & Focusable = {
+					get focused(): boolean {
+						return mounted !== undefined && "focused" in mounted
+							? (mounted as Component & Focusable).focused
+							: false;
+					},
+					set focused(value: boolean) {
+						if (mounted !== undefined && "focused" in mounted) {
+							(mounted as Component & Focusable).focused = value;
+						}
+					},
+					render: (width) => {
+						const lines = mounted?.render(width) ?? [];
+						const rows = Math.max(this.ui.terminal.rows, lines.length);
+						return [
+							...lines,
+							...Array.from({ length: rows - lines.length }, () => " ".repeat(Math.max(0, width))),
+						];
+					},
+					handleInput: (data) => mounted?.handleInput?.(data),
+					invalidate: () => mounted?.invalidate(),
+				};
+				overlay = this.ui.showOverlay(fullViewport, {
+					anchor: "top-left",
+					width: "100%",
+					maxHeight: "100%",
+				});
+			},
+			setFocus: (child) => {
+				if (child === mounted) {
+					overlay?.focus();
+					return;
+				}
+				this.ui.setFocus(child as Component);
+			},
+			requestRender: () => this.ui.requestRender(),
+			start: () => undefined,
+			stop: () => {
+				overlay?.hide();
+				overlay = undefined;
+				if (mounted) {
+					mounted = undefined;
+					this.ui.setFocus(this.editor);
+					this.ui.requestRender();
+				}
+			},
+		};
+	}
+
+	private async handleStepLogoutCommand(): Promise<void> {
+		if (this.session.isStreaming || this.session.isCompacting) {
+			this.showWarning("Wait for the active turn to finish before signing out");
+			return;
+		}
+		try {
+			const report = await this.options.stepLogout?.();
+			if (!report) return;
+			this.showStatus(report.removed ? "Signed out of Step." : "No stored Step credential.");
+			if (report.remainingSource) {
+				this.showWarning(`An API key is still active from ${report.remainingSource}.`);
+			}
+			await this.shutdown();
+		} catch (error: unknown) {
+			this.showError(`Failed to logout from Step: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {

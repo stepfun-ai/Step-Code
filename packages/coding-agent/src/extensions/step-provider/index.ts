@@ -126,6 +126,9 @@ const API_BASE_URL_ENV_NAMES = [
 	// Kept for compatibility with the endpoint override used by the legacy
 	// Step CLI. It may contain the full `/v1/messages` URL.
 	"STEPFUN_MESSAGES_ENDPOINT",
+	// Set by the shared Step login flow after reading the stored profile. It is
+	// intentionally below explicit user overrides so manual endpoint settings win.
+	"STEP_LOGIN_PROFILE_API_URL",
 	"STEP_CLI_STEP_PLAN_API_URL",
 ] as const;
 const AUTH_BASE_URL_ENV_NAMES = ["STEP_PROVIDER_AUTH_URL", "STEP_AUTH_URL", STEP_PROVIDER_ENV.authBaseUrl] as const;
