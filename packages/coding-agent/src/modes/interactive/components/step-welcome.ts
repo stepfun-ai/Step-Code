@@ -25,7 +25,7 @@ export interface StepWelcomeInfo {
 	sessionId?: string;
 }
 
-const WELCOME_TITLE = "Step Harness";
+const WELCOME_TITLE = "Step CLI";
 const WELCOME_MARK = renderStepMark();
 const WELCOME_MARK_GAP = 3;
 const WELCOME_MARK_MIN_TEXT_WIDTH = 32;

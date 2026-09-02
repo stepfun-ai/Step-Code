@@ -224,7 +224,7 @@ const stepMainOptions: MainOptions = {
 		name: "Step",
 		role: "Step, an interactive terminal coding agent developed by StepFun",
 		introduction:
-			"You are step-harness, an interactive terminal coding agent developed by StepFun. You help with software engineering tasks in the current workspace: reading and changing code, running commands, and answering questions about the codebase. Optimize for correctness first, concision second, speed third.",
+			"You are step-cli, an interactive terminal coding agent developed by StepFun. You help with software engineering tasks in the current workspace: reading and changing code, running commands, and answering questions about the codebase. Optimize for correctness first, concision second, speed third.",
 		includeDocumentation: false,
 		promptAppendix: buildStepSystemPromptAppendix,
 	},
