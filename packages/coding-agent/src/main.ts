@@ -1050,6 +1050,9 @@ export async function main(args: string[], options?: MainOptions) {
 			projectTrusted,
 			configDirName,
 		});
+		if (parsed.contextProjection !== undefined) {
+			runtimeSettingsManager.applyOverrides({ compaction: { contextProjection: parsed.contextProjection } });
+		}
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,

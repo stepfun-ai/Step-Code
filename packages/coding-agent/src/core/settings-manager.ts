@@ -8,12 +8,14 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import type { ContextProjectionMode } from "./compaction/projection.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	contextProjection?: ContextProjectionMode; // default: "off" (step.compaction.contextProjection)
 }
 
 export interface BranchSummarySettings {
@@ -851,11 +853,26 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	/**
+	 * Request-time lightweight context projection mode
+	 * (`step.compaction.contextProjection`). Defaults to "off"; unknown values
+	 * are treated as "off" so a bad config can never enable projection.
+	 */
+	getContextProjectionMode(): ContextProjectionMode {
+		return this.settings.compaction?.contextProjection === "lightweight-v1" ? "lightweight-v1" : "off";
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+		contextProjection: ContextProjectionMode;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			contextProjection: this.getContextProjectionMode(),
 		};
 	}
 
