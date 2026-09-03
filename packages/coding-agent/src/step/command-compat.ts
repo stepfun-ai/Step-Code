@@ -10,7 +10,7 @@
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { migrateStepConfig } from "./config-migration.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./environment.ts";
 
@@ -21,6 +21,58 @@ export interface StepCommandCompatibilityResult {
 	readonly args?: string[];
 	/** Whether the caller should skip Pi's normal `main()` invocation. */
 	readonly handled: boolean;
+}
+
+const STEP_DEFAULT_SESSION_FILE = "session";
+
+/**
+ * Normalize the session selector emitted by older StepCode launchers.
+ *
+ * StepCode passes a local session selector as `--session-file`, while Pi's
+ * runtime accepts a project session id via `--session-id`. The Step CLI uses
+ * the basename (without its extension) as that id; its default `session`
+ * selector deliberately means "create a fresh session".
+ */
+export function normalizeStepSessionSelectorArgs(argv: readonly string[]): string[] {
+	const separatorIndex = argv.indexOf("--");
+	const optionArgs = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+	const trailingArgs = separatorIndex === -1 ? [] : argv.slice(separatorIndex);
+	const hasExplicitSessionId = optionArgs.some((arg) => arg === "--session-id" || arg.startsWith("--session-id="));
+	const hasResume = optionArgs.includes("--resume") || optionArgs.includes("-r");
+	let sessionId: string | undefined;
+	const result: string[] = [];
+
+	for (let index = 0; index < optionArgs.length; index++) {
+		const arg = optionArgs[index];
+		let sessionFile: string | undefined;
+		if (arg === "--session-file") {
+			const value = optionArgs[index + 1];
+			if (value !== undefined && !value.startsWith("--")) {
+				sessionFile = value;
+				index++;
+			}
+		} else if (arg.startsWith("--session-file=")) {
+			sessionFile = arg.slice("--session-file=".length);
+		} else {
+			result.push(arg);
+			continue;
+		}
+
+		if (!sessionId && !hasExplicitSessionId && !hasResume && sessionFile) {
+			const trimmed = sessionFile.trim();
+			if (trimmed !== STEP_DEFAULT_SESSION_FILE) {
+				const derived = basename(trimmed, extname(trimmed));
+				if (isValidPiSessionId(derived)) sessionId = derived;
+			}
+		}
+	}
+
+	if (sessionId) result.push("--session-id", sessionId);
+	return [...result, ...trailingArgs];
+}
+
+function isValidPiSessionId(value: string): boolean {
+	return /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(value);
 }
 
 /**

@@ -15,7 +15,12 @@ import {
 	logoutStepCredentials,
 	migrateLegacyStepCredential,
 } from "./step/auth.ts";
-import { isStepConfigCommand, runStepConfigCommand, translateStepCommandArgs } from "./step/command-compat.ts";
+import {
+	isStepConfigCommand,
+	normalizeStepSessionSelectorArgs,
+	runStepConfigCommand,
+	translateStepCommandArgs,
+} from "./step/command-compat.ts";
 import { migrateStepConfig, readStepGlobalDefaults } from "./step/config-migration.ts";
 import {
 	getStepDefaultTheme,
@@ -38,6 +43,13 @@ import {
 	setStderrDevLogStorageRootDirectory,
 } from "./step/stderr-dev-log.ts";
 import { StepStdioHost } from "./step/stdio-host.ts";
+import {
+	applyStepCodeConfigDefaults,
+	createStepCodeProviderInlineExtension,
+	decorateStepCodeSettingsManager,
+	hasConfiguredStepCodeCredential,
+	loadStepCodeConfig,
+} from "./step/stepcode-config.ts";
 import { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 import { createStepModelRequestObserver } from "./step/telemetry.ts";
 import {
@@ -82,10 +94,12 @@ for (const warning of stepConfigMigration.warnings) {
 	process.stderr.write(`[step migration] ${warning}\n`);
 }
 const stepPersistedDefaults = await readStepGlobalDefaults();
+const stepCodeConfig = await loadStepCodeConfig();
+const stepCodeProviderExtension = stepCodeConfig ? createStepCodeProviderInlineExtension(stepCodeConfig) : undefined;
 // Parse only the product policy flags here so the inline extension can receive
 // explicit CLI values before Pi builds its resource loader. `main()` parses the
 // same argv again for normal diagnostics and all other session options.
-const stepPermissionArgs = parseArgs(process.argv.slice(2));
+const stepPermissionArgs = parseArgs(normalizeStepSessionSelectorArgs(process.argv.slice(2)));
 
 // Keep the model-request observer at the Step composition root. Pi owns the
 // stream and retry loop; this reporter only receives the redacted dimensions
@@ -156,7 +170,8 @@ const stepMainOptions: MainOptions = {
 	configDirName: resolveStepConfigDir(),
 	sessionManagerFactory: createStepSessionManagerFactory(resolveStepAgentDir()),
 	settingsManagerFactory: (cwd, agentDir, options) => {
-		const manager = createStepSettingsManager(cwd, agentDir, options);
+		const stepManager = createStepSettingsManager(cwd, agentDir, options);
+		const manager = stepCodeConfig ? decorateStepCodeSettingsManager(stepManager, stepCodeConfig) : stepManager;
 		currentStepSettingsManager = manager;
 		return manager;
 	},
@@ -173,15 +188,19 @@ const stepMainOptions: MainOptions = {
 			},
 		}),
 		createStepCapabilitiesExtensionInline({ telemetry: telemetryRuntime }),
+		...(stepCodeProviderExtension ? [stepCodeProviderExtension] : []),
 	],
 	authRuntimeSetup: (modelRuntime) => {
 		modelRuntime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig());
+		for (const provider of stepCodeConfig?.providers ?? []) {
+			modelRuntime.registerProvider(provider.id, provider.config);
+		}
 	},
-	allowedAuthProviders: [STEP_PROVIDER_ID],
+	allowedAuthProviders: [STEP_PROVIDER_ID, ...(stepCodeConfig?.providers.map((provider) => provider.id) ?? [])],
 	disableBackgroundServices: isStepServicesDisabled(),
 	defaultTheme: getStepDefaultTheme(),
-	defaultProvider: stepConfigMigration.defaultProvider ?? STEP_DEFAULT_PROVIDER,
-	defaultModel: stepConfigMigration.defaultModel ?? STEP_DEFAULT_MODEL,
+	defaultProvider: stepCodeConfig?.defaultProvider ?? stepConfigMigration.defaultProvider ?? STEP_DEFAULT_PROVIDER,
+	defaultModel: stepCodeConfig?.defaultModel ?? stepConfigMigration.defaultModel ?? STEP_DEFAULT_MODEL,
 	beforeRuntimeCreate: async ({ cwd, agentDir }) => {
 		// Session selectors may move the runtime to a workspace different from
 		// process.cwd(). Give that workspace the same one-time legacy projection
@@ -345,13 +364,15 @@ try {
 		if (exitCode !== 0) process.exitCode = exitCode;
 	} else {
 		const rawStepArgs = process.argv.slice(2);
-		if (isStepConfigCommand(rawStepArgs)) {
-			await runStepConfigCommand(rawStepArgs);
+		const normalizedStepArgs = normalizeStepSessionSelectorArgs(rawStepArgs);
+		const stepCodeArgs = applyStepCodeConfigDefaults(normalizedStepArgs, stepCodeConfig);
+		if (isStepConfigCommand(stepCodeArgs)) {
+			await runStepConfigCommand(stepCodeArgs);
 		} else {
-			const compatibility = translateStepCommandArgs(rawStepArgs);
+			const compatibility = translateStepCommandArgs(stepCodeArgs);
 			syncStepLoginProfileEndpoint(getStepAuthPath());
 			let shouldLaunchMain = true;
-			const parsedInteractiveArgs = parseArgs(compatibility?.args ?? rawStepArgs);
+			const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
 			const interactiveStartup =
 				process.stdin.isTTY === true &&
 				process.stdout.isTTY === true &&
@@ -360,7 +381,10 @@ try {
 				parsedInteractiveArgs.print !== true &&
 				parsedInteractiveArgs.mode !== "json" &&
 				parsedInteractiveArgs.mode !== "rpc";
-			if (needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })) {
+			if (
+				!hasConfiguredStepCodeCredential(stepCodeConfig) &&
+				needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })
+			) {
 				const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
 				if (outcome.kind === "exit") {
 					shouldLaunchMain = false;
@@ -371,7 +395,7 @@ try {
 			if (shouldLaunchMain) {
 				await main(
 					withStepDefaults(
-						compatibility?.args ?? rawStepArgs,
+						compatibility?.args ?? stepCodeArgs,
 						process.env,
 						{
 							provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,

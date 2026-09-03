@@ -142,7 +142,7 @@ export function withStepDefaults(
 }
 
 function hasExplicitEnvironmentSelection(env: Record<string, string | undefined>): boolean {
-	const provider = normalizeDefault(env.STEP_PROVIDER);
+	const provider = normalizeDefault(env.STEP_PROVIDER ?? env.STEP_MODEL_PROVIDER);
 	const model = normalizeDefault(env.STEP_MODEL);
 	if (provider || model) return true;
 	// applyStepEnvironment seeds these legacy names with the Step fallback. A
@@ -157,7 +157,7 @@ function hasExplicitEnvironmentSelection(env: Record<string, string | undefined>
 }
 
 function hasExplicitProviderEnvironment(env: Record<string, string | undefined>): boolean {
-	if (normalizeDefault(env.STEP_PROVIDER)) return true;
+	if (normalizeDefault(env.STEP_PROVIDER ?? env.STEP_MODEL_PROVIDER)) return true;
 	const legacy = normalizeDefault(env.STEP_CLI_DEFAULT_PROVIDER);
 	return Boolean(legacy && legacy !== STEP_DEFAULT_PROVIDER);
 }
@@ -193,7 +193,12 @@ function withAuthDefaults(args: readonly string[], provider: string): string[] {
 
 /** Resolve the provider used by the Step entrypoint and its help text. */
 export function getStepDefaultProvider(env: Record<string, string | undefined> = process.env): string {
-	return env.STEP_PROVIDER?.trim() || env.STEP_CLI_DEFAULT_PROVIDER?.trim() || STEP_DEFAULT_PROVIDER;
+	return (
+		env.STEP_PROVIDER?.trim() ||
+		env.STEP_MODEL_PROVIDER?.trim() ||
+		env.STEP_CLI_DEFAULT_PROVIDER?.trim() ||
+		STEP_DEFAULT_PROVIDER
+	);
 }
 
 /** Resolve the model used by the Step entrypoint and its help text. */
@@ -221,7 +226,7 @@ function resolveProviderDefault(
 	env: Record<string, string | undefined>,
 	persistedProvider: string | undefined,
 ): string {
-	const explicit = normalizeDefault(env.STEP_PROVIDER);
+	const explicit = normalizeDefault(env.STEP_PROVIDER ?? env.STEP_MODEL_PROVIDER);
 	if (explicit) return explicit;
 	const legacy = normalizeDefault(env.STEP_CLI_DEFAULT_PROVIDER);
 	if (legacy && !(legacy === STEP_DEFAULT_PROVIDER && persistedProvider)) return legacy;

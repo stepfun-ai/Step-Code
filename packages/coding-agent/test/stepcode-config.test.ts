@@ -1,0 +1,255 @@
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import type { ExtensionAPI } from "../src/core/extensions/types.ts";
+import { createStepSettingsManager } from "../src/step/settings-manager.ts";
+import {
+	applyStepCodeConfigDefaults,
+	createStepCodeProviderInlineExtension,
+	decorateStepCodeSettingsManager,
+	loadStepCodeConfig,
+} from "../src/step/stepcode-config.ts";
+
+const roots: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("StepCode config compatibility", () => {
+	test("loads providers, active model, tokens, and injected endpoint values", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					"stepcode-anthropic": {
+						api: "anthropic-messages",
+						baseUrl: "https://config.example/v1",
+						models: [
+							{
+								id: "water18",
+								model: "water18-wire",
+								reasoning: true,
+								tokens: { maxContext: 1_000_000, maxOutput: 64_000 },
+							},
+						],
+					},
+				},
+				activeModel: "water18",
+			}),
+		);
+
+		const config = await loadStepCodeConfig(
+			{
+				STEPCLI_CONFIG_PATH: configPath,
+				STEP_BASE_URL: "https://env.example/v1",
+				STEP_API_KEY: "test-key",
+				STEP_MAX_CONTEXT_TOKENS: "900000",
+				STEP_MAX_OUTPUT_TOKENS: "32000",
+			},
+			root,
+		);
+		const provider = config?.providers[0];
+		const model = provider?.config.models?.[0];
+		expect(config).toMatchObject({ defaultProvider: "stepcode-anthropic", defaultModel: "water18-wire" });
+		expect(provider?.id).toBe("stepcode-anthropic");
+		expect(provider?.config.api).toBe("anthropic-messages");
+		expect(provider?.config.apiKey).toBe("$STEP_API_KEY");
+		expect(provider?.config.baseUrl).toBe("https://env.example");
+		expect(model).toMatchObject({
+			id: "water18-wire",
+			name: "water18",
+			reasoning: true,
+			contextWindow: 900_000,
+			maxTokens: 32_000,
+			baseUrl: "https://env.example",
+		});
+	});
+
+	test("supports the STEP_CLI_CONFIG_PATH alias and explicit launch overrides", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					proxy: {
+						api: "responses",
+						baseUrl: "https://proxy.example/v1",
+						models: [{ id: "fast" }],
+					},
+				},
+				activeModel: "fast",
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEP_CLI_CONFIG_PATH: configPath }, root);
+		expect(config).toMatchObject({ defaultProvider: "proxy", defaultModel: "fast" });
+		expect(config?.providers[0]?.config.api).toBe("openai-responses");
+		expect(applyStepCodeConfigDefaults(["--print", "hello"], config, {})).toEqual([
+			"--print",
+			"hello",
+			"--provider",
+			"proxy",
+			"--model",
+			"fast",
+		]);
+		expect(applyStepCodeConfigDefaults(["--model", "explicit"], config, {})).toEqual(["--model", "explicit"]);
+	});
+
+	test("registers normalized providers through a hidden inline extension", async () => {
+		const config = {
+			path: "/tmp/stepcode-config.json",
+			providers: [
+				{
+					id: "proxy",
+					config: {
+						api: "openai-responses",
+						baseUrl: "https://proxy.example/v1",
+						apiKey: "$STEP_API_KEY",
+						models: [],
+					},
+				},
+			],
+			defaultModel: "fast",
+		};
+		const registerProvider = vi.fn();
+		const extension = createStepCodeProviderInlineExtension(config);
+		const factory = typeof extension === "function" ? extension : extension.factory;
+		factory({ registerProvider } as unknown as ExtensionAPI);
+		expect(typeof extension === "function" ? undefined : extension.hidden).toBe(true);
+		expect(registerProvider).toHaveBeenCalledWith("proxy", config.providers[0].config);
+	});
+
+	test("supports the legacy agentModels shape", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				model: "legacy-model",
+				modelSupportApis: [{ id: "chat" }],
+				agentModels: { stepcli: { model: "stepcli-model", modelSupportApis: [{ id: "claude_native" }] } },
+			}),
+		);
+		const config = await loadStepCodeConfig(
+			{ STEPCLI_CONFIG_PATH: configPath, STEP_BASE_URL: "https://proxy.example/v1" },
+			root,
+		);
+		expect(config).toMatchObject({ defaultProvider: "stepcode", defaultModel: "stepcli-model" });
+		expect(config?.providers[0]?.config.api).toBe("anthropic-messages");
+	});
+
+	test("accepts defaultProvider/defaultModel aliases", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					proxy: {
+						api: "chat",
+						baseUrl: "https://proxy.example/v1",
+						models: [{ id: "first" }, { id: "selected" }],
+					},
+				},
+				defaultProvider: "proxy",
+				defaultModel: "selected",
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		expect(config).toMatchObject({ defaultProvider: "proxy", defaultModel: "selected" });
+	});
+
+	test("keeps StepCode model and permission reads and writes in the injected config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-authority-"));
+		roots.push(root);
+		const configPath = join(root, "stepcode", "config.json");
+		const agentDir = join(root, "step-cli", "agent");
+		const projectDir = join(root, "project");
+		await mkdir(join(root, "stepcode"), { recursive: true });
+		await mkdir(agentDir, { recursive: true });
+		await mkdir(projectDir, { recursive: true });
+		await writeFile(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ defaultProvider: "step", defaultModel: "step-3.7-flash" }),
+		);
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					"stepcode-anthropic": {
+						api: "anthropic-messages",
+						baseUrl: "https://proxy.example/v1",
+						models: [{ id: "water18-new" }],
+					},
+					"stepcode-responses": {
+						api: "openai-responses",
+						baseUrl: "https://proxy.example/v1",
+						models: [{ id: "gpt-profile", model: "gpt-5.6-sol" }],
+					},
+				},
+				activeModel: "water18-new",
+				tools: { approval: { mode: "auto", nonInteractive: "allow", autoResume: false } },
+			}),
+		);
+
+		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(projectDir, agentDir), config!);
+		expect(manager.getDefaultProvider()).toBe("stepcode-anthropic");
+		expect(manager.getDefaultModel()).toBe("water18-new");
+		expect(manager.getStepSettings()).toEqual({
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			autoResume: false,
+		});
+
+		manager.setDefaultModelAndProvider("stepcode-responses", "gpt-5.6-sol");
+		manager.setEffectiveStepSettings({
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
+		});
+
+		const saved = JSON.parse(readFileSync(configPath, "utf8")) as {
+			activeModel: string;
+			tools: { approval: Record<string, unknown> };
+		};
+		expect(saved.activeModel).toBe("gpt-profile");
+		expect(saved.tools.approval).toMatchObject({
+			preset: "ask",
+			mode: "confirm",
+			nonInteractive: "deny",
+			autoResume: false,
+		});
+		expect(manager.getDefaultProvider()).toBe("stepcode-responses");
+		expect(manager.getDefaultModel()).toBe("gpt-5.6-sol");
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"))).toEqual({
+			defaultProvider: "step",
+			defaultModel: "step-3.7-flash",
+		});
+		expect(existsSync(join(agentDir, "step-settings.json"))).toBe(false);
+
+		const restartedConfig = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const restartedManager = decorateStepCodeSettingsManager(
+			createStepSettingsManager(projectDir, agentDir),
+			restartedConfig!,
+		);
+		expect(restartedManager.getDefaultProvider()).toBe("stepcode-responses");
+		expect(restartedManager.getDefaultModel()).toBe("gpt-5.6-sol");
+		expect(restartedManager.getStepSettings()).toEqual({
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
+		});
+	});
+});
