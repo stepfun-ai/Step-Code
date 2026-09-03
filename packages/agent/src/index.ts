@@ -73,6 +73,21 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";
+export {
+	type ContextProjectionMode,
+	cutTextWithSalientLines,
+	estimateProjectionTokens,
+	PROJECTION_CUT_MARKER_PREFIX,
+	PROJECTION_REPEAT_MARKER_PREFIX,
+	PROJECTION_SUMMARY_MARKER_PREFIX,
+	type ProjectionByRuleStats,
+	type ProjectionOptions,
+	type ProjectionResult,
+	type ProjectionStats,
+	projectContextForRequest,
+	shortContentHash,
+	verifyProjectionInvariants,
+} from "./harness/compaction/projection.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 // Harness

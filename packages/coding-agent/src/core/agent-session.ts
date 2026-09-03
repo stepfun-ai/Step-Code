@@ -30,6 +30,7 @@ import type {
 	AssistantMessage,
 	AuthResult,
 	ImageContent,
+	Message,
 	Model,
 	ProviderHeaders,
 	TextContent,
@@ -62,7 +63,9 @@ import {
 	estimateContextTokens,
 	estimateTokens,
 	generateBranchSummary,
+	type ProjectionByRuleStats,
 	prepareCompaction,
+	projectContextForRequest,
 	shouldCompact,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
@@ -183,7 +186,17 @@ export type AgentSessionEvent =
 	  }
 	| { type: "summarization_retry_finished" }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "bash_execution_update"; id?: string; delta: string };
+	| { type: "bash_execution_update"; id?: string; delta: string }
+	| {
+			/** Request-time lightweight context projection telemetry (step.compaction.contextProjection). */
+			type: "context_projection";
+			originalTokens: number;
+			projectedTokens: number;
+			bytesRemoved: number;
+			cutsByRule: ProjectionByRuleStats;
+			invariantsPassed: boolean;
+			invariantViolation?: string;
+	  };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -411,6 +424,7 @@ export class AgentSession {
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
+		this._installContextProjection();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -589,6 +603,53 @@ export class AgentSession {
 				thinkingLevel: this.agent.state.thinkingLevel,
 			};
 		};
+	}
+
+	/**
+	 * Wrap the agent's `convertToLlm` with request-time lightweight context
+	 * projection. Runs right before each model request, after the base
+	 * AgentMessage -> Message conversion. Controlled by
+	 * `step.compaction.contextProjection` and off by default; the session
+	 * transcript is never modified, only the outgoing request messages.
+	 */
+	private _installContextProjection(): void {
+		const baseConvertToLlm = this.agent.convertToLlm;
+		this.agent.convertToLlm = async (agentMessages: AgentMessage[]): Promise<Message[]> => {
+			const llmMessages = await baseConvertToLlm(agentMessages);
+			return this._projectLlmContext(agentMessages, llmMessages);
+		};
+	}
+
+	/** Apply lightweight projection to the outgoing LLM messages (fail-safe: never throws). */
+	private _projectLlmContext(agentMessages: AgentMessage[], llmMessages: Message[]): Message[] {
+		try {
+			if (this.settingsManager.getContextProjectionMode() !== "lightweight-v1") return llmMessages;
+			const contextWindow = this.model?.contextWindow ?? 0;
+			if (contextWindow <= 0) return llmMessages;
+			const settings = this.settingsManager.getCompactionSettings();
+			// Trigger on the unprojected context, preferring usage-derived token counts.
+			const contextTokens = estimateContextTokens(agentMessages).tokens;
+			const { messages: projected, stats } = projectContextForRequest(llmMessages, {
+				contextWindow,
+				contextTokens,
+				keepRecentTokens: settings.keepRecentTokens,
+			});
+			if (stats.applied || stats.invariantViolation !== undefined) {
+				this._emit({
+					type: "context_projection",
+					originalTokens: stats.originalTokens,
+					projectedTokens: stats.projectedTokens,
+					bytesRemoved: Math.max(0, stats.originalChars - stats.projectedChars),
+					cutsByRule: stats.byRule,
+					invariantsPassed: stats.invariantsPassed,
+					invariantViolation: stats.invariantViolation,
+				});
+			}
+			return projected;
+		} catch {
+			// convertToLlm must never throw; fall back to the unprojected messages.
+			return llmMessages;
+		}
 	}
 
 	// =========================================================================
