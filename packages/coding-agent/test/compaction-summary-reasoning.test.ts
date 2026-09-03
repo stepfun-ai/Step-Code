@@ -5,6 +5,7 @@ import {
 	type CompactionPreparation,
 	compact,
 	completeSummarization,
+	DEFAULT_COMPACTION_SETTINGS,
 	generateSummary,
 	generateSummaryWithUsage,
 } from "../src/core/compaction/index.ts";
@@ -143,7 +144,7 @@ describe("generateSummary reasoning options", () => {
 
 		const requestContext = completeSimpleMock.mock.calls[0][1] as Context;
 		const prompt = JSON.stringify(requestContext.messages);
-		expect(prompt).toContain("This is the PREFIX of a turn that was too large to keep");
+		expect(prompt).toContain("the PREFIX of a single turn that was too large to keep in context");
 		expect(prompt).toContain("<conversation>");
 	});
 
@@ -272,7 +273,7 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("refusalFallbacks");
 	});
 
-	it("clamps compaction summary maxTokens to the model output cap", async () => {
+	it("caps compaction summary maxTokens at the summary output ceiling for large-output models", async () => {
 		const preparation: CompactionPreparation = {
 			firstKeptEntryId: "entry-keep",
 			messagesToSummarize: messages,
@@ -280,7 +281,7 @@ describe("generateSummary reasoning options", () => {
 			isSplitTurn: true,
 			tokensBefore: 600000,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
+			settings: DEFAULT_COMPACTION_SETTINGS,
 		};
 
 		const result = await compact(preparation, createModel(false, 128000), "test-key");
@@ -292,6 +293,10 @@ describe("generateSummary reasoning options", () => {
 			totalTokens: 40,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		});
-		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([128000, 128000]);
+		// DEFAULT reserveTokens = 24576, so reserveBudget = floor(0.8 * 24576) = 19660
+		// (initial) and floor(0.5 * 24576) = 12288 (turn-prefix). Model exposes 128000
+		// which gets clamped to SUMMARY_OUTPUT_TOKENS_CEILING (32000). pickSummaryMaxTokens
+		// returns max(reserveBudget, clampedModelBudget) = 32000 for both.
+		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([32000, 32000]);
 	});
 });

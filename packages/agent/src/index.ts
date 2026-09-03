@@ -70,7 +70,6 @@ export {
 	generateSummaryWithUsage,
 	getLastAssistantUsage,
 	prepareCompaction,
-	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";
 export {
@@ -88,6 +87,7 @@ export {
 	shortContentHash,
 	verifyProjectionInvariants,
 } from "./harness/compaction/projection.ts";
+export { serializeConversation } from "./harness/compaction/utils.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 // Harness
