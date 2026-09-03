@@ -142,8 +142,7 @@ function generateThemeVars(themeName?: string): string {
 	for (const [key, value] of Object.entries(colors)) {
 		lines.push(`--${key}: ${value};`);
 	}
-	const activeThemeName = themeName ?? getCurrentThemeName();
-	const userMessageColors = getResolvedThemeColors(activeThemeName === "step" ? "step-light" : themeName);
+	const userMessageColors = getResolvedThemeColors(themeName ?? getCurrentThemeName());
 	for (const token of USER_MESSAGE_COLOR_TOKENS) {
 		lines.push(`--user${token[0]!.toUpperCase()}${token.slice(1)}: ${userMessageColors[token]};`);
 	}

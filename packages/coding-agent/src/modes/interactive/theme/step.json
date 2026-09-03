@@ -9,7 +9,7 @@
 		"dim": "#52535e",
 		"line": "#24262e",
 		"selectedBg": "#2a2247",
-		"userMessageBg": "#eeeeee",
+		"userMessageBg": "#3d3b39",
 		"customMessageBg": "#201b2e",
 		"toolPendingBg": "#1e1b2e",
 		"toolSuccessBg": "#14282e",
@@ -35,7 +35,7 @@
 
 		"selectedBg": "selectedBg",
 		"userMessageBg": "userMessageBg",
-		"userMessageText": "#1f2328",
+		"userMessageText": "text",
 		"customMessageBg": "customMessageBg",
 		"customMessageText": "text",
 		"customMessageLabel": "brand",

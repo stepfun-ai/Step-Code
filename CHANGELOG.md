@@ -14,6 +14,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 - Changed CI release delivery to publish only standalone Step binaries, installers, and release metadata; npm packages are not released.
 - Changed Step authentication commands to expose only the Step provider while retaining Pi's native auth flow.
+- Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
 
 ### Fixed
 

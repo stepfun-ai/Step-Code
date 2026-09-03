@@ -19,7 +19,7 @@ describe("Step HTML export theme", () => {
 		initTheme("dark");
 	});
 
-	test("uses the light Step palette for Markdown inside the light user message bar", async () => {
+	test("uses the active Step palette for Markdown inside the themed user message bar", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "step-theme-export-"));
 		tempDirs.push(tempDir);
 		const session = SessionManager.create(tempDir, tempDir, { id: "step-theme" });
@@ -34,13 +34,13 @@ describe("Step HTML export theme", () => {
 		await exportSessionToHtml(session, undefined, { outputPath, themeName: "step" });
 
 		const html = readFileSync(outputPath, "utf8");
-		expect(html).toContain("--userMdHeading: #5b21b6;");
-		expect(html).toContain("--userSyntaxKeyword: #a21caf;");
+		expect(html).toContain("--userMdHeading: #ab9eff;");
+		expect(html).toContain("--userSyntaxKeyword: #ff79d0;");
 		expect(html).toMatch(/\.user-message\s*\{[^}]*--mdHeading:\s*var\(--userMdHeading\);/s);
 		expect(html).toMatch(/\.user-message\s*\{[^}]*--syntaxKeyword:\s*var\(--userSyntaxKeyword\);/s);
 	});
 
-	test("uses the paired user palette when exporting the active Step theme", async () => {
+	test("uses the active user palette when exporting the active Step theme", async () => {
 		initTheme("step");
 		const tempDir = mkdtempSync(join(tmpdir(), "step-theme-export-"));
 		tempDirs.push(tempDir);
@@ -53,7 +53,7 @@ describe("Step HTML export theme", () => {
 
 		const html = readFileSync(outputPath, "utf8");
 		expect(html).toContain("--mdHeading: #ab9eff;");
-		expect(html).toContain("--userMdHeading: #5b21b6;");
+		expect(html).toContain("--userMdHeading: #ab9eff;");
 	});
 
 	test("resolves the Step product default theme for non-interactive CLI export", async () => {
@@ -79,6 +79,6 @@ describe("Step HTML export theme", () => {
 
 		expect(exit).toHaveBeenCalledWith(0);
 		const html = readFileSync(outputPath, "utf8");
-		expect(html).toContain("--userMdHeading: #5b21b6;");
+		expect(html).toContain("--userMdHeading: #ab9eff;");
 	});
 });
