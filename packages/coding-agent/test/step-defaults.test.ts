@@ -93,6 +93,13 @@ describe("Step entrypoint defaults", () => {
 				STEP_MODEL: "step-router-v1",
 			}),
 		).toEqual(["--provider", "step", "--model", "step-router-v1"]);
+		expect(getStepDefaultProvider({ STEP_MODEL_PROVIDER: "stepcode-anthropic" })).toBe("stepcode-anthropic");
+		expect(withStepDefaults([], { STEP_MODEL_PROVIDER: "stepcode-anthropic", STEP_MODEL: "water18-new" })).toEqual([
+			"--provider",
+			"stepcode-anthropic",
+			"--model",
+			"water18-new",
+		]);
 	});
 
 	test("uses persisted Pi defaults before the implicit Step fallback", () => {

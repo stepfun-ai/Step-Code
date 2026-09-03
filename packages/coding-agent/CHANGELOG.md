@@ -14,6 +14,9 @@
 ### Fixed
 
 - Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
+- Fixed StepCode compatibility for the legacy `--session-file` session selector.
+- Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
+- Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 
 ## [0.84.4] - 2026-08-28
 
