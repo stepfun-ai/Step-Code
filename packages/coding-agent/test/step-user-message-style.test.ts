@@ -27,19 +27,19 @@ describe("Step user message presentation", () => {
 		expect(visibleWidth(promptRow!)).toBe(width);
 		expect(promptRow).toContain(theme.getBgAnsi("userMessageBg"));
 		expect(promptRow).toContain(`${theme.getFgAnsi("userMessageText")}› 继续`);
-		expect(promptRow).toContain("48;2;238;238;238");
-		expect(promptRow).toContain("38;2;31;35;40");
-		expect(promptRow).not.toContain("48;2;0;0;0");
+		expect(promptRow).toContain("48;2;61;59;57");
+		expect(promptRow).toContain("38;2;232;232;234");
+		expect(promptRow).not.toContain("48;2;238;238;238");
 	});
 
 	test.each([
 		["truecolor", true],
 		["xterm-256", false],
-	] as const)("uses light-background Markdown and syntax colors in %s mode", (_mode, trueColor) => {
+	] as const)("uses active-theme Markdown and syntax colors in %s mode", (_mode, trueColor) => {
 		setCapabilities({ images: null, trueColor, hyperlinks: false });
 		initTheme("step");
-		const lightTheme = getThemeByName("step-light");
-		expect(lightTheme).toBeDefined();
+		const activeTheme = getThemeByName("step");
+		expect(activeTheme).toBeDefined();
 		const component = new StepUserMessageComponent(
 			[
 				"# Heading",
@@ -58,17 +58,17 @@ describe("Step user message presentation", () => {
 		const rowContaining = (text: string) => rows.find((row) => stripTerminalSequences(row).includes(text));
 
 		for (const text of ["Heading", "docs", "inline"]) {
-			expect(rowContaining(text)).toContain(lightTheme!.getFgAnsi("mdHeading"));
+			expect(rowContaining(text)).toContain(activeTheme!.getFgAnsi("mdHeading"));
 		}
 		const codeRow = rowContaining("export function greet");
-		expect(codeRow).toContain(lightTheme!.getFgAnsi("syntaxKeyword"));
-		expect(codeRow).toContain(lightTheme!.getFgAnsi("syntaxFunction"));
+		expect(codeRow).toContain(activeTheme!.getFgAnsi("syntaxKeyword"));
+		expect(codeRow).toContain(activeTheme!.getFgAnsi("syntaxFunction"));
 		expect(rows.join("\n")).toContain(theme.getBgAnsi("userMessageBg"));
 	});
 
 	test.each([
 		["step", "dark", "dark"],
-		["step-light", "step", "step-light"],
+		["step-light", "step", "step"],
 	] as const)("updates existing user message colors after switching from %s to %s", (initial, next, expected) => {
 		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
 		initTheme(initial);

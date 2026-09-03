@@ -78,6 +78,8 @@ describe("Step themes", () => {
 			accent: "#ab9eff",
 			border: "#8577ff",
 			muted: "#7e7e86",
+			userMessageBg: "#3d3b39",
+			userMessageText: "#e8e8ea",
 			mdHeading: "#ab9eff",
 			mdLink: "#ab9eff",
 			mdCode: "#ab9eff",
@@ -91,6 +93,7 @@ describe("Step themes", () => {
 			accent: "#5b21b6",
 			border: "#6d28d9",
 			muted: "#5c5c66",
+			userMessageBg: "#e4e0dc",
 			mdHeading: "#5b21b6",
 			mdLink: "#5b21b6",
 			mdCode: "#5b21b6",
@@ -163,22 +166,31 @@ describe("Step themes", () => {
 			}
 		}
 
-		const stepColors = getResolvedThemeColors("step");
-		const userMessageColors = getResolvedThemeColors("step-light");
-		const quantizedUserMessageColors = getQuantizedForegrounds("step-light");
-		const quantizedStep = loadThemeFromPath(fileURLToPath(THEME_FILES.step), "256color");
-		const backgroundMatch = /^\x1b\[48;5;(\d+)m$/.exec(quantizedStep.getBgAnsi("userMessageBg"));
-		expect(backgroundMatch, "step.userMessageBg should use an xterm-256 background").not.toBeNull();
-		const userMessageBackgrounds = [
-			["truecolor", stepColors.userMessageBg, userMessageColors],
-			["xterm-256", ansi256ToHex(Number(backgroundMatch![1])), quantizedUserMessageColors],
-		] as const;
-		for (const token of foregroundTokens) {
-			for (const [mode, background, colors] of userMessageBackgrounds) {
-				expect(
-					contrastRatio(colors[token], background),
-					`step user message ${token} via ${mode}`,
-				).toBeGreaterThanOrEqual(4.5);
+		for (const name of ["step", "step-light"] as const) {
+			const colors = getResolvedThemeColors(name);
+			const quantizedColors = getQuantizedForegrounds(name);
+			const quantizedTheme = loadThemeFromPath(fileURLToPath(THEME_FILES[name]), "256color");
+			const backgroundMatch = /^\x1b\[48;5;(\d+)m$/.exec(quantizedTheme.getBgAnsi("userMessageBg"));
+			expect(backgroundMatch, `${name}.userMessageBg should use an xterm-256 background`).not.toBeNull();
+			const userMessageBackgrounds = [
+				["truecolor", colors.userMessageBg, colors],
+				["xterm-256", ansi256ToHex(Number(backgroundMatch![1])), quantizedColors],
+			] as const;
+			for (const token of [
+				"text",
+				"accent",
+				"syntaxKeyword",
+				"syntaxFunction",
+				"syntaxString",
+				"syntaxNumber",
+				"syntaxType",
+			] as const) {
+				for (const [mode, background, palette] of userMessageBackgrounds) {
+					expect(
+						contrastRatio(palette[token], background),
+						`${name} user message ${token} via ${mode}`,
+					).toBeGreaterThanOrEqual(4.5);
+				}
 			}
 		}
 	});

@@ -9,6 +9,7 @@
 ### Changed
 
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
+- Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
 
 ### Fixed
 
