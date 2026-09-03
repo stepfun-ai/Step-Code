@@ -381,6 +381,19 @@ export {
 	stepExtension,
 	stepExtensionInline,
 } from "./extensions/step.ts";
+export {
+	type CronCreateResult,
+	type CronDelivery,
+	CronFileStore,
+	type CronFileStoreOptions,
+	type CronJob,
+	createStepCronExtension,
+	SimpleCronExpression,
+	type StepCronExtensionOptions,
+	StepCronRuntime,
+	type StepCronRuntimeOptions,
+	stepCronExtensionInline,
+} from "./extensions/step-cron.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage

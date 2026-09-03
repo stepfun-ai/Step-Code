@@ -181,6 +181,18 @@ export function buildStepSystemPromptAppendix(
 			]
 		: [];
 
+	const cronSection = hasAnyTool(active, ["cron_create", "cron_list", "cron_delete"])
+		? [
+				"# Scheduled work",
+				[
+					"- Use cron_create for five-field local-time calendar work. Set durable:true when the job must survive a session restart; durable jobs are stored in the trusted project under .step-cli/cron.",
+					"- recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed. Invalid expressions are rejected.",
+					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Running turns are never interrupted; a missed durable one-shot is surfaced when the session returns.",
+					"- Prefer schedule_wakeup for a simple relative delay within this session when that tool is available. Cron and wakeups have independent lifecycles.",
+				].join("\n"),
+			]
+		: [];
+
 	const sections = [
 		"# Step operating contract",
 		"Use the structured tools exposed by the model API. Never emit XML or pseudo tool-call syntax as assistant text; tool calls are represented by the API itself.",
@@ -220,6 +232,8 @@ export function buildStepSystemPromptAppendix(
 		...planningSection,
 
 		...taskTrackingSection,
+
+		...cronSection,
 
 		"# Code conventions",
 		"- Match surrounding style, naming, patterns, and dependencies. Check the project manifest or existing imports before assuming a dependency exists.",
