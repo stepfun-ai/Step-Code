@@ -83,4 +83,22 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).not.toContain("- write_file:");
 		expect(prompt).not.toContain("- run_command:");
 	});
+
+	it("adds event-driven delegation guidance only when the subagent tool is active", () => {
+		const withSubagent = buildStepSystemPromptAppendix(["read_file", "subagent", "agent_send"]);
+
+		expect(withSubagent).toContain("# Delegation");
+		expect(withSubagent).toContain("<agent-notification>");
+		expect(withSubagent).toContain("agent_send");
+		expect(withSubagent).toContain('subscribe:"final"');
+		// The S3-deleted tools are never mentioned: lanes are event-driven and
+		// agent_send is the only lane verb.
+		expect(withSubagent).not.toContain("agent_wait");
+		expect(withSubagent).not.toContain("agent_list");
+		expect(withSubagent).not.toContain("agent_reply");
+		expect(withSubagent).not.toContain("agent_interrupt");
+
+		const withoutSubagent = buildStepSystemPromptAppendix(["read_file"]);
+		expect(withoutSubagent).not.toContain("# Delegation");
+	});
 });
