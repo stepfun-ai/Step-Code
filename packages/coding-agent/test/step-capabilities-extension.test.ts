@@ -101,9 +101,15 @@ function createApi(): {
 			active = [...names];
 		},
 		emit: async (event, ctx) => {
+			// Mirror ExtensionRunner semantics: a block result short-circuits and
+			// handlers returning undefined do not clobber an earlier result.
 			let last: unknown;
 			for (const handler of handlers.get(event.type) ?? []) {
-				last = await handler(event as never, ctx);
+				const result = await handler(event as never, ctx);
+				if (result !== undefined && result !== null) {
+					last = result;
+					if (event.type === "tool_call" && (result as { block?: boolean }).block) return result;
+				}
 			}
 			return last;
 		},
@@ -157,7 +163,7 @@ function createContext(cwd: string, model?: Model<string>): ExtensionContext {
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
 		},
-		sessionManager: { getEntries: () => [] },
+		sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
 		modelRegistry: {} as never,
 		scopedModels: [],
 	} as unknown as ExtensionContext;
@@ -197,6 +203,16 @@ test("Step capabilities register native plan, clarify_user, and subagent tools",
 		subagent: { includeBuiltinAgents: false, agentDir: "/tmp/step-agent-test" },
 	})(api);
 	expect([...tools.keys()]).toEqual(expect.arrayContaining(["subagent", "clarify_user"]));
+	expect([...tools.keys()]).toEqual(
+		expect.arrayContaining([
+			"enter_plan_mode",
+			"exit_plan_mode",
+			"task_create",
+			"task_update",
+			"task_get",
+			"task_list",
+		]),
+	);
 	expect(tools.has("askuser")).toBe(false);
 	expect(tools.has("questionnaire")).toBe(false);
 	expect([...commands.keys()]).toEqual(expect.arrayContaining(["plan", "todos"]));
@@ -427,14 +443,13 @@ test("parallel subagents inherit the current model and receive isolated worktree
 	expect(expanded.render(100).join("\n")).toContain("Branch:");
 });
 
-test("plan adapter uses Step tool names and blocks destructive commands", async () => {
+test("plan adapter uses Step tool names and leaves run_command unrestricted", async () => {
 	const { api, activeTools, commands, emit } = createApi();
 	createStepPlanExtension()(api);
 	const ctx = createContext("/workspace");
 	await commands.get("plan")!.handler("", ctx);
-	expect(activeTools()).not.toContain("write_file");
-	expect(activeTools()).not.toContain("edit_file");
 	expect(activeTools()).toContain("run_command");
+	// Aligned with Claude Code: plan mode no longer whitelists commands.
 	await expect(
 		emit(
 			{
@@ -442,6 +457,18 @@ test("plan adapter uses Step tool names and blocks destructive commands", async 
 				toolName: "run_command",
 				toolCallId: "tool-1",
 				input: { command: "rm -rf build" },
+			},
+			ctx,
+		),
+	).resolves.toBeUndefined();
+	// File mutations outside the session plan file remain blocked.
+	await expect(
+		emit(
+			{
+				type: "tool_call",
+				toolName: "write_file",
+				toolCallId: "tool-2",
+				input: { path: "src/main.ts", content: "" },
 			},
 			ctx,
 		),
