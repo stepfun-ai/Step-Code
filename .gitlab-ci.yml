@@ -10,6 +10,11 @@ variables:
   STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
   STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
   STEP_CLI_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
+  # Test release notifications use the same built-in token as stepcli-bot when
+  # ENV_NAME=test. Both values may be overridden by masked CI variables for
+  # other environments or during token rotation.
+  STEP_RELEASE_BOT_WEBHOOK_URL: "https://test-openapi-stepcli-bot.c.stepfun-inc.net/webhooks/step-harness/release"
+  STEP_RELEASE_BOT_WEBHOOK_TOKEN: "EprwvGGOL6hOSkpROGZZOOhg9H0ghnw8IJVmNsMcieh+oazfgy9Ey0X0wo/CDYBz"
   # The default is intentionally inert. A real bump is selected explicitly in
   # GitLab's Run pipeline form on the default branch.
   BUMP:
@@ -78,6 +83,7 @@ stages:
   - tag
   - package
   - publish
+  - notify
 
 lint:
   stage: lint
@@ -279,3 +285,82 @@ publish_release:
           url: "$STEP_RELEASE_WINDOWS_ARM64_URL"
         - name: step-windows-x64.zip
           url: "$STEP_RELEASE_WINDOWS_X64_URL"
+
+# GitLab evaluates a job's `release:` block after its script succeeds. Keeping
+# this webhook in a dependent job guarantees both publish_release and the
+# GitLab Release creation completed before the bot starts writing the Wiki page.
+notify_release:
+  stage: notify
+  image: "$RELEASE_BUILDER_IMAGE"
+  needs:
+    - job: publish_release
+      artifacts: false
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
+    - when: never
+  script:
+    - |
+      node --input-type=module <<'NODE'
+      const requiredEnv = [
+        "STEP_RELEASE_BOT_WEBHOOK_URL",
+        "STEP_RELEASE_BOT_WEBHOOK_TOKEN",
+        "CI_COMMIT_TAG",
+        "CI_COMMIT_SHA",
+        "CI_PIPELINE_URL",
+        "CI_PROJECT_URL",
+        "CI_PROJECT_PATH",
+      ];
+      const missing = requiredEnv.filter((name) => !process.env[name]?.trim());
+      if (missing.length > 0) {
+        throw new Error(`Missing required release notification variables: ${missing.join(", ")}`);
+      }
+
+      let webhookURL;
+      try {
+        webhookURL = new URL(process.env.STEP_RELEASE_BOT_WEBHOOK_URL);
+      } catch {
+        throw new Error("STEP_RELEASE_BOT_WEBHOOK_URL must be a valid absolute URL");
+      }
+      if (
+        webhookURL.protocol !== "https:" ||
+        webhookURL.username ||
+        webhookURL.password ||
+        webhookURL.search ||
+        webhookURL.hash
+      ) {
+        throw new Error("STEP_RELEASE_BOT_WEBHOOK_URL must be HTTPS without user info, query, or fragment");
+      }
+
+      const payload = {
+        version: process.env.CI_COMMIT_TAG,
+        commit_sha: process.env.CI_COMMIT_SHA,
+        pipeline_url: process.env.CI_PIPELINE_URL,
+        release_url: `${process.env.CI_PROJECT_URL}/-/releases/${process.env.CI_COMMIT_TAG}`,
+        project_path: process.env.CI_PROJECT_PATH,
+      };
+      const response = await fetch(webhookURL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${process.env.STEP_RELEASE_BOT_WEBHOOK_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const responseBody = (await response.text()).slice(0, 1000);
+      if (!response.ok) {
+        throw new Error(`Release notification webhook returned HTTP ${response.status}: ${responseBody}`);
+      }
+      let result;
+      try {
+        result = JSON.parse(responseBody);
+      } catch {
+        throw new Error("Release notification webhook returned invalid JSON");
+      }
+      if (result.status !== "accepted" && result.status !== "duplicate") {
+        throw new Error(`Release notification webhook returned unexpected status: ${String(result.status)}`);
+      }
+      console.log(`Release notification accepted for ${payload.version}: ${result.status}`);
+      NODE
