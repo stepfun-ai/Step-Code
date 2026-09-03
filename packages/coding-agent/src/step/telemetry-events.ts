@@ -130,7 +130,10 @@ export interface StepTelemetryEventPayloads {
 		readonly completed_count: number;
 		readonly in_progress_count: number;
 		readonly created: boolean;
+		readonly source: string;
 	};
+	readonly plan_mode_entered: { readonly source: string };
+	readonly plan_mode_exited: { readonly source: string; readonly outcome: string };
 	readonly cron_scheduled: { readonly recurring: boolean };
 	readonly cron_deleted: { readonly found: boolean };
 	readonly cron_fired: { readonly recurring: boolean };
@@ -187,6 +190,8 @@ export const STEP_TELEMETRY_EVENT_NAMES = Object.keys({
 	permission_mode_toggled: true,
 	clarification_resolved: true,
 	plan_updated: true,
+	plan_mode_entered: true,
+	plan_mode_exited: true,
 	cron_scheduled: true,
 	cron_deleted: true,
 	cron_fired: true,
@@ -280,7 +285,9 @@ export const STEP_TELEMETRY_EVENT_PROPERTY_NAMES: Readonly<Record<StepTelemetryK
 	slash_command_used: propertyNames("command", "recognized"),
 	permission_mode_toggled: propertyNames("mode", "source"),
 	clarification_resolved: propertyNames("outcome", "option_count", "duration_ms"),
-	plan_updated: propertyNames("item_count", "completed_count", "in_progress_count", "created"),
+	plan_updated: propertyNames("item_count", "completed_count", "in_progress_count", "created", "source"),
+	plan_mode_entered: propertyNames("source"),
+	plan_mode_exited: propertyNames("source", "outcome"),
 	cron_scheduled: propertyNames("recurring"),
 	cron_deleted: propertyNames("found"),
 	cron_fired: propertyNames("recurring"),
@@ -580,6 +587,22 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 			completed_count: "Steps marked completed.",
 			in_progress_count: "Steps currently in progress.",
 			created: "Whether this was the first plan in the session.",
+			source: "Who initiated the active plan mode: user, agent, or unknown.",
+		},
+	},
+	plan_mode_entered: {
+		owner: "core",
+		comment: "Plan-mode entries split by who initiated planning.",
+		properties: {
+			source: "user for /plan or --plan, agent for enter_plan_mode.",
+		},
+	},
+	plan_mode_exited: {
+		owner: "core",
+		comment: "Plan-mode exits with the approval outcome.",
+		properties: {
+			source: "Who initiated the exited plan mode: user, agent, or unknown.",
+			outcome: "approved, toggled_off, auto_headless, or auto_rpc.",
 		},
 	},
 	cron_scheduled: {

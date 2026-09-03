@@ -6,120 +6,72 @@
  * ExtensionAPI; there is no parallel plan state machine in the Step layer.
  */
 
+import { existsSync } from "node:fs";
+import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import type { EventBus } from "../core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
+import {
+	getPlanFilePath,
+	registerPlanModeTools,
+	type StepPlanExitOutcome,
+	type StepPlanModeController,
+} from "./plan-mode-tools.ts";
+import { compareTaskIds, type StepTask } from "./step-tasks.ts";
 
 const PLAN_TOOLS = ["read_file", "find_files", "search_files", "list_directory", "run_command", "clarify_user"];
 const MUTATING_TOOLS = new Set(["write_file", "edit_file", "write", "edit"]);
 
-interface PlanItem {
-	step: number;
-	text: string;
-	completed: boolean;
-}
+/** Who put the session into plan mode. */
+export type StepPlanSource = "user" | "agent" | "unknown";
 
 interface PlanState {
 	enabled: boolean;
-	executing: boolean;
-	todos: PlanItem[];
 	toolsBeforePlanMode?: string[];
-}
-
-function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
-	return message.role === "assistant" && Array.isArray(message.content);
-}
-
-function assistantText(message: AssistantMessage): string {
-	return message.content
-		.filter((part): part is TextContent => part.type === "text")
-		.map((part) => part.text)
-		.join("\n");
-}
-
-function extractPlanItems(text: string): PlanItem[] {
-	const header = /(?:^|\n)\s*\*{0,2}Plan:\*{0,2}\s*\n/i.exec(text);
-	if (!header) return [];
-	const section = text.slice(header.index + header[0].length);
-	const items: PlanItem[] = [];
-	for (const match of section.matchAll(/^\s*\d+[.)]\s+(.+)$/gmu)) {
-		const value = match[1]
-			.replace(/\*{1,2}/gu, "")
-			.replace(/`/gu, "")
-			.trim();
-		if (value.length > 2 && items.length < 32) {
-			items.push({ step: items.length + 1, text: value, completed: false });
-		}
-	}
-	return items;
-}
-
-function isSafeCommand(command: string): boolean {
-	if (/(^|\s)(rm|rmdir|mv|cp|mkdir|touch|chmod|chown|sudo|kill|reboot)\b/iu.test(command)) return false;
-	if (
-		/(^|\s)(git\s+(add|commit|push|pull|merge|rebase|reset|checkout|stash|cherry-pick|revert)|npm\s+(install|uninstall|update|publish)|pnpm\s+(add|remove|install|publish)|yarn\s+(add|remove|install|publish))\b/iu.test(
-			command,
-		)
-	) {
-		return false;
-	}
-	if (/[<>]{1,2}/u.test(command)) return false;
-	return /^\s*(cat|head|tail|less|more|grep|find|ls|pwd|echo|printf|wc|sort|uniq|diff|file|stat|du|df|tree|which|type|env|printenv|uname|whoami|id|date|git\s+(status|log|diff|show|branch|remote)|rg|fd|sed|awk|node\s+--version|python\s+--version)\b/iu.test(
-		command,
-	);
+	planFilePath?: string;
+	/** "user" for /plan or --plan, "agent" for enter_plan_mode. */
+	planSource?: StepPlanSource;
 }
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
 }
 
-function updateStatus(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	enabled: boolean,
-	executing: boolean,
-	todos: PlanItem[],
-): void {
-	if (executing && todos.length > 0) {
-		const completed = todos.filter((item) => item.completed).length;
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `plan ${completed}/${todos.length}`));
-		ctx.ui.setWidget(
-			"plan-todos",
-			todos.map((item) =>
-				item.completed
-					? ctx.ui.theme.fg("muted", `done ${item.step}. ${item.text}`)
-					: ctx.ui.theme.fg("text", `todo ${item.step}. ${item.text}`),
-			),
-		);
-	} else if (enabled) {
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "plan"));
-		ctx.ui.setWidget("plan-todos", undefined);
+/**
+ * Status-bar chip: "Planning (user|agent|unknown)" while plan mode is on,
+ * cleared (normal) otherwise.
+ */
+function updateStatus(ctx: ExtensionContext, enabled: boolean, planSource: StepPlanSource | undefined): void {
+	if (enabled) {
+		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `Planning (${planSource ?? "unknown"})`));
 	} else {
 		ctx.ui.setStatus("plan-mode", undefined);
-		ctx.ui.setWidget("plan-todos", undefined);
 	}
-	void pi;
 }
 
-function persist(pi: ExtensionAPI, state: PlanState): void {
-	pi.appendEntry("step-plan", state);
+function recordPlanEnter(telemetry: StepTelemetryReporter | undefined, source: StepPlanSource): void {
+	if (!telemetry) return;
+	trackStepTelemetry(telemetry, "plan_mode_entered", { source });
+}
+
+function recordPlanExit(
+	telemetry: StepTelemetryReporter | undefined,
+	source: StepPlanSource | undefined,
+	outcome: StepPlanExitOutcome,
+): void {
+	if (!telemetry) return;
+	trackStepTelemetry(telemetry, "plan_mode_exited", { source: source ?? "unknown", outcome });
 }
 
 function recordPlanUpdate(
 	telemetry: StepTelemetryReporter | undefined,
-	previous: readonly PlanItem[],
-	items: readonly PlanItem[],
+	source: StepPlanSource | undefined,
+	created: boolean,
 ): void {
 	if (!telemetry) return;
-	trackStepTelemetry(telemetry, "plan_updated", {
-		item_count: items.length,
-		completed_count: items.filter((item) => item.completed).length,
-		// The compact Step plan has no explicit in-progress field. During
-		// execution the first unfinished item is the active one.
-		in_progress_count: items.some((item) => !item.completed) ? 1 : 0,
-		created: previous.length === 0 && items.length > 0,
-	});
+	trackStepTelemetry(telemetry, "plan_updated", { source: source ?? "unknown", created });
 }
 
 /** Create Step's native plan extension. */
@@ -127,14 +79,26 @@ export const createStepPlanExtension =
 	(options: { telemetry?: StepTelemetryReporter } = {}): ExtensionFactory =>
 	(pi: ExtensionAPI): void => {
 		let enabled = false;
-		let executing = false;
-		let todos: PlanItem[] = [];
 		let toolsBeforePlanMode: string[] | undefined;
+		let planFilePath: string | undefined;
+		let planSource: StepPlanSource | undefined;
+		// The event bus is optional so minimal embedder/test harnesses that stub
+		// ExtensionAPI keep working without one.
+		const events = (pi as { events?: EventBus }).events;
 
+		const persistPlanState = (): void => {
+			pi.appendEntry("step-plan", { enabled, toolsBeforePlanMode, planFilePath, planSource });
+		};
 		const enable = (): void => {
 			if (!toolsBeforePlanMode) toolsBeforePlanMode = pi.getActiveTools();
-			const active = pi.getActiveTools();
-			pi.setActiveTools(unique([...active.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
+			const activeToolNames = pi.getActiveTools();
+			pi.setActiveTools(unique([...activeToolNames.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
+		};
+		// enable() strips the mutating tools from the active set; re-add them so
+		// the plan file itself stays writable. The tool_call hook below restricts
+		// them to the plan file while plan mode is on.
+		const allowPlanFileWrites = (): void => {
+			pi.setActiveTools(unique([...pi.getActiveTools(), "write_file", "edit_file"]));
 		};
 		const restore = (): void => {
 			if (toolsBeforePlanMode) {
@@ -157,17 +121,45 @@ export const createStepPlanExtension =
 		};
 		const toggle = (ctx: ExtensionContext): void => {
 			enabled = !enabled;
-			executing = false;
-			todos = [];
 			if (enabled) {
+				planSource = "user";
 				enable();
+				recordPlanEnter(options.telemetry, "user");
 				ctx.ui.notify("Plan mode enabled. File mutation and command execution are disabled.", "info");
 			} else {
+				recordPlanExit(options.telemetry, planSource, "toggled_off");
+				planSource = undefined;
 				restore();
 				ctx.ui.notify("Plan mode disabled.", "info");
 			}
-			updateStatus(pi, ctx, enabled, executing, todos);
-			persist(pi, { enabled, executing, todos, toolsBeforePlanMode });
+			updateStatus(ctx, enabled, planSource);
+			persistPlanState();
+		};
+		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
+			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
+
+		const planModeController: StepPlanModeController = {
+			isPlanModeActive: () => enabled,
+			enterPlanMode: (ctx) => {
+				enabled = true;
+				planSource = "agent";
+				enable();
+				allowPlanFileWrites();
+				planFilePath = getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
+				recordPlanEnter(options.telemetry, "agent");
+				updateStatus(ctx, enabled, planSource);
+				persistPlanState();
+				return planFilePath;
+			},
+			exitPlanMode: (outcome, ctx) => {
+				recordPlanExit(options.telemetry, planSource, outcome);
+				enabled = false;
+				planSource = undefined;
+				restore();
+				persistPlanState();
+				updateStatus(ctx, enabled, planSource);
+			},
+			resolvePlanFilePath,
 		};
 
 		pi.registerFlag("plan", {
@@ -180,139 +172,109 @@ export const createStepPlanExtension =
 			handler: async (_args, ctx) => toggle(ctx),
 		});
 		pi.registerCommand("todos", {
-			description: "Show the current plan",
+			description: "Show session tasks tracked with the task_* tools",
 			handler: async (_args, ctx) => {
-				if (todos.length === 0) {
-					ctx.ui.notify("No plan is currently tracked.", "info");
+				// Read the step-tasks extension's latest persisted snapshot. Every
+				// task mutation persists a full snapshot, so the newest step-tasks
+				// entry is the live task list without cross-extension coupling.
+				const latestTasksEntry = [...ctx.sessionManager.getEntries()]
+					.reverse()
+					.find((candidate) => candidate.type === "custom" && candidate.customType === "step-tasks") as
+					| { data?: { tasks?: StepTask[] } }
+					| undefined;
+				const tasks = (latestTasksEntry?.data?.tasks ?? []).filter(
+					(task): task is StepTask => !!task && typeof task.id === "string" && typeof task.subject === "string",
+				);
+				if (tasks.length === 0) {
+					ctx.ui.notify("No tasks tracked. Use task_create to add some.", "info");
 					return;
 				}
-				ctx.ui.notify(
-					todos.map((item) => `${item.completed ? "done" : "todo"} ${item.step}. ${item.text}`).join("\n"),
-					"info",
-				);
+				const statusMarkers: Record<string, string> = { completed: "done", in_progress: "wip" };
+				const tasksById = new Map(tasks.map((task) => [task.id, task]));
+				const taskLines = tasks
+					.sort((a, b) => compareTaskIds(a.id, b.id))
+					.map((task) => {
+						const statusMarker = statusMarkers[task.status] ?? "todo";
+						const ownerLabel = task.owner ? ` @${task.owner}` : "";
+						// Same semantics as task_list: report only blockers that still
+						// exist and are not completed.
+						const openBlockers = (Array.isArray(task.blockedBy) ? task.blockedBy : []).filter((blockerId) => {
+							const blocker = tasksById.get(blockerId);
+							return blocker !== undefined && blocker.status !== "completed";
+						});
+						const blockersLabel = openBlockers.length > 0 ? ` (blocked by ${openBlockers.join(", ")})` : "";
+						return `${statusMarker} ${task.id}. ${task.subject}${ownerLabel}${blockersLabel}`;
+					});
+				ctx.ui.notify(taskLines.join("\n"), "info");
 			},
 		});
-		pi.on("tool_call", async (event) => {
-			if (!enabled || event.toolName !== "run_command") return;
-			const command = typeof event.input.command === "string" ? event.input.command : "";
-			if (!isSafeCommand(command)) {
-				return {
-					block: true,
-					reason: `Plan mode blocked this command. Disable plan mode first.\nCommand: ${command}`,
-				};
+		registerPlanModeTools(pi, planModeController);
+		pi.on("tool_call", async (event, ctx) => {
+			if (!enabled || !MUTATING_TOOLS.has(event.toolName)) return;
+			const planPath = resolvePlanFilePath(ctx);
+			const toolInput = event.input as Record<string, unknown>;
+			const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
+			if (targetPath && path.resolve(ctx.cwd, targetPath) === path.resolve(planPath)) {
+				// Allowed: the mutation targets the plan file itself. This runs
+				// before the write lands, so a missing file marks the plan's creation.
+				recordPlanUpdate(options.telemetry, planSource, !existsSync(planPath));
+				return;
 			}
+			return {
+				block: true,
+				reason: `Plan mode blocked this file mutation. Only the plan file may be written: ${planPath}\nTarget: ${targetPath || "(no path provided)"}`,
+			};
 		});
 
+		// Plan-mode state is carried by the enter_plan_mode/exit_plan_mode tool
+		// results; nothing is injected into the context. This hook only scrubs
+		// the hidden meta messages persisted by sessions from older versions of
+		// this extension.
 		pi.on("context", async (event) => {
-			if (enabled) return;
 			return {
 				messages: event.messages.filter((message) => {
 					const candidate = message as AgentMessage & { customType?: string };
-					if (candidate.customType === "step-plan-context") return false;
-					return !assistantTextIfPresent(message).includes("[STEP PLAN MODE ACTIVE]");
+					return (
+						candidate.customType !== "step-plan-context" && candidate.customType !== "step-plan-execution-context"
+					);
 				}),
 			};
 		});
 
-		pi.on("before_agent_start", async () => {
-			if (enabled) {
-				return {
-					message: {
-						customType: "step-plan-context",
-						content:
-							"[STEP PLAN MODE ACTIVE]\nYou are in read-only planning mode. Inspect the repository, ask focused questions with clarify_user, and return a numbered Plan:. Do not mutate files; run_command is limited to read-only commands.",
-						display: false,
-					},
-				};
-			}
-			if (executing && todos.length > 0) {
-				return {
-					message: {
-						customType: "step-plan-execution-context",
-						content: `[STEP PLAN EXECUTION]\nRemaining steps:\n${todos
-							.filter((item) => !item.completed)
-							.map((item) => `${item.step}. ${item.text}`)
-							.join("\n")}\nMark completed work with [DONE:n].`,
-						display: false,
-					},
-				};
-			}
-		});
-
-		pi.on("turn_end", async (event) => {
-			if (!executing || !isAssistantMessage(event.message)) return;
-			const previous = todos.map((item) => ({ ...item }));
-			for (const match of assistantText(event.message).matchAll(/\[DONE:(\d+)\]/giu)) {
-				const item = todos.find((candidate) => candidate.step === Number(match[1]));
-				if (item && !item.completed) item.completed = true;
-			}
-			if (previous.some((item, index) => item.completed !== todos[index]?.completed)) {
-				recordPlanUpdate(options.telemetry, previous, todos);
-			}
-			persist(pi, { enabled, executing, todos, toolsBeforePlanMode });
-		});
-
-		pi.on("agent_end", async (event, ctx) => {
-			if (executing) {
-				if (todos.length > 0 && todos.every((item) => item.completed)) {
-					const previous = todos.map((item) => ({ ...item }));
-					executing = false;
-					todos = [];
-					recordPlanUpdate(options.telemetry, previous, todos);
-					updateStatus(pi, ctx, enabled, executing, todos);
-					persist(pi, { enabled, executing, todos, toolsBeforePlanMode });
-				}
-				return;
-			}
-			if (!enabled || !ctx.hasUI) return;
-			const last = [...event.messages].reverse().find(isAssistantMessage);
-			const previous = todos.map((item) => ({ ...item }));
-			if (last) todos = extractPlanItems(assistantText(last));
-			if (todos.length === 0) return;
-			recordPlanUpdate(options.telemetry, previous, todos);
-			persist(pi, { enabled, executing, todos, toolsBeforePlanMode });
-			const choice = await ctx.ui.select("Plan ready", ["Execute the plan", "Stay in plan mode", "Refine the plan"]);
-			if (choice === "Execute the plan") {
-				enabled = false;
-				executing = true;
-				restore();
-				updateStatus(pi, ctx, enabled, executing, todos);
-				persist(pi, { enabled, executing, todos, toolsBeforePlanMode });
-				pi.sendUserMessage(
-					`Execute the plan.\n\n${todos.map((item) => `${item.step}. ${item.text}`).join("\n")}\n\nStart with step 1 and include [DONE:n] after each completed step.`,
-					{ deliverAs: "followUp" },
-				);
-			} else if (choice === "Refine the plan") {
-				const refinement = await ctx.ui.editor("Refine the plan:", "");
-				if (refinement?.trim()) pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
-			}
-		});
-
 		pi.on("session_start", async (_event, ctx) => {
-			if (pi.getFlag("plan") === true) enabled = true;
-			const entry = [...ctx.sessionManager.getEntries()]
+			const flagEnabled = pi.getFlag("plan") === true;
+			if (flagEnabled) {
+				enabled = true;
+				planSource = "user";
+			}
+			const persistedPlanEntry = [...ctx.sessionManager.getEntries()]
 				.reverse()
 				.find((candidate) => candidate.type === "custom" && candidate.customType === "step-plan") as
-				| { data?: PlanState }
+				| { data?: PlanState & LegacyPlanTodoFields }
 				| undefined;
-			if (entry?.data) {
-				enabled = entry.data.enabled;
-				executing = entry.data.executing;
-				todos = entry.data.todos ?? [];
-				toolsBeforePlanMode = entry.data.toolsBeforePlanMode;
+			const restoredPlanState = persistedPlanEntry?.data;
+			if (restoredPlanState) {
+				enabled = restoredPlanState.enabled;
+				toolsBeforePlanMode = restoredPlanState.toolsBeforePlanMode;
+				planFilePath = restoredPlanState.planFilePath;
+				planSource = restoredPlanState.planSource ?? (enabled ? "unknown" : undefined);
+				migrateLegacyPlanTodos({
+					persistedPlanState: restoredPlanState,
+					events,
+					extensionContext: ctx,
+					persistMigratedPlanState: persistPlanState,
+				});
+			} else if (flagEnabled) {
+				// A fresh session started with --plan is a real plan-mode entry;
+				// restoring a persisted state is not.
+				recordPlanEnter(options.telemetry, "user");
 			}
-			if (enabled) enable();
-			updateStatus(pi, ctx, enabled, executing, todos);
+			if (enabled) {
+				enable();
+				allowPlanFileWrites();
+			}
+			updateStatus(ctx, enabled, planSource);
 		});
 	};
 
 export const stepPlanExtension = createStepPlanExtension();
-
-function assistantTextIfPresent(message: AgentMessage): string {
-	if (isAssistantMessage(message)) return assistantText(message);
-	if (!message || typeof message !== "object" || !("content" in message)) {
-		return "";
-	}
-	const content = (message as { content?: unknown }).content;
-	return typeof content === "string" ? content : "";
-}

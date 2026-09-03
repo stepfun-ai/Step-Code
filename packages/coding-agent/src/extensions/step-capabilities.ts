@@ -1,10 +1,11 @@
-/** Step's built-in clarification, plan, and delegated-agent extensions. */
+/** Step's built-in clarification, plan, task-tracking, and delegated-agent extensions. */
 
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import { createStepPlanExtension } from "./step-plan.ts";
 import { registerStepClarifyUserExtension } from "./step-questionnaire.ts";
 import { createStepSubagentExtension, type StepSubagentExtensionOptions } from "./step-subagent.ts";
+import { createStepTasksExtension } from "./step-tasks.ts";
 
 export interface StepCapabilitiesExtensionOptions {
 	subagent?: StepSubagentExtensionOptions;
@@ -15,6 +16,7 @@ export interface StepCapabilitiesExtensionOptions {
 /** Compose Pi's native UI examples behind one Step-owned inline extension. */
 export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensionOptions = {}): ExtensionFactory {
 	const plan = createStepPlanExtension({ telemetry: options.telemetry });
+	const tasks = createStepTasksExtension();
 	const subagent = createStepSubagentExtension({
 		...options.subagent,
 		telemetry: options.telemetry,
@@ -22,6 +24,7 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 	return (pi: ExtensionAPI): void => {
 		registerStepClarifyUserExtension(pi, options.telemetry);
 		plan(pi);
+		tasks(pi);
 		subagent(pi);
 	};
 }

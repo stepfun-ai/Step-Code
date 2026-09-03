@@ -1,5 +1,17 @@
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildStepSystemPromptAppendix } from "../src/step/system-prompt.ts";
+
+const hasGit = ((): boolean => {
+	try {
+		return spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0;
+	} catch {
+		return false;
+	}
+})();
 
 describe("Step system prompt appendix", () => {
 	it("describes the native structured-call contract and active Step tools", () => {
@@ -100,5 +112,65 @@ describe("Step system prompt appendix", () => {
 
 		const withoutSubagent = buildStepSystemPromptAppendix(["read_file"]);
 		expect(withoutSubagent).not.toContain("# Delegation");
+	});
+
+	it("adds the Planning section only when enter_plan_mode is active", () => {
+		const withPlan = buildStepSystemPromptAppendix(["read_file", "enter_plan_mode", "exit_plan_mode"]);
+		expect(withPlan).toContain("# Planning");
+		expect(withPlan).toContain("There is no entry gate");
+		expect(withPlan).toContain("exit_plan_mode");
+		expect(withPlan).toContain("Skip plan mode for trivial work");
+
+		const withoutPlan = buildStepSystemPromptAppendix(["read_file", "write_file"]);
+		expect(withoutPlan).not.toContain("# Planning");
+	});
+
+	it("adds the Task tracking section and task tool rules only when task tools are active", () => {
+		const withTasks = buildStepSystemPromptAppendix(["task_create", "task_update", "task_get", "task_list"]);
+		expect(withTasks).toContain("# Task tracking");
+		expect(withTasks).toContain("independent of plan mode");
+		expect(withTasks).toContain("- task_create:");
+		expect(withTasks).toContain("- task_update:");
+		expect(withTasks).toContain("- task_get:");
+		expect(withTasks).toContain("- task_list:");
+
+		const withoutTasks = buildStepSystemPromptAppendix(["read_file"]);
+		expect(withoutTasks).not.toContain("# Task tracking");
+		expect(withoutTasks).not.toContain("- task_create:");
+	});
+
+	it("reports the operating mode inside the env block", () => {
+		const readOnly = buildStepSystemPromptAppendix(["read_file"]);
+		expect(readOnly).toContain("Operating mode: read-only");
+
+		const allTools = buildStepSystemPromptAppendix(["read_file", "write_file", "run_command"]);
+		expect(allTools).toContain("Operating mode: all-tools");
+		expect(allTools).not.toContain("Operating mode: read-only");
+	});
+
+	it.skipIf(!hasGit)(
+		"adds git branch and uncommitted count for a git workspace and omits them otherwise",
+		async () => {
+			const root = await mkdtemp(path.join(tmpdir(), "step-prompt-env-"));
+			try {
+				const plain = buildStepSystemPromptAppendix([], { cwd: root });
+				expect(plain).not.toContain("Git branch:");
+				expect(plain).not.toContain("Uncommitted changes:");
+
+				expect(spawnSync("git", ["init", "-b", "step-env-test"], { cwd: root, encoding: "utf8" }).status).toBe(0);
+				await writeFile(path.join(root, "pending.txt"), "uncommitted\n");
+				const repo = buildStepSystemPromptAppendix([], { cwd: root });
+				expect(repo).toContain("Git branch: step-env-test");
+				expect(repo).toContain("Uncommitted changes: 1");
+			} finally {
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("never crashes on a nonexistent working directory", () => {
+		const prompt = buildStepSystemPromptAppendix([], { cwd: "/nonexistent/step-prompt-env" });
+		expect(prompt).toContain("<env>");
+		expect(prompt).not.toContain("Git branch:");
 	});
 });
