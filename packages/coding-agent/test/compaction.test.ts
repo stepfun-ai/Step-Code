@@ -12,7 +12,10 @@ import {
 	estimateContextTokens,
 	findCutPoint,
 	getLastAssistantUsage,
+	getSummarizationFailure,
+	pickSummaryMaxTokens,
 	prepareCompaction,
+	SUMMARY_OUTPUT_TOKENS_CEILING,
 	shouldCompact,
 } from "../src/core/compaction/index.ts";
 import {
@@ -291,6 +294,82 @@ describe("shouldCompact", () => {
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
+	});
+});
+
+describe("summary output budget", () => {
+	it("DEFAULT_COMPACTION_SETTINGS.reserveTokens is 24576 (bumped from 16384 for rich sessions)", () => {
+		expect(DEFAULT_COMPACTION_SETTINGS.reserveTokens).toBe(24576);
+	});
+
+	it("SUMMARY_OUTPUT_TOKENS_CEILING is 32000 (safely under Anthropic per-response cap)", () => {
+		expect(SUMMARY_OUTPUT_TOKENS_CEILING).toBe(32000);
+	});
+
+	it("pickSummaryMaxTokens prefers the model output cap when it exceeds the reserve budget", () => {
+		// reserveBudget = floor(0.8 * 24576) = 19660; modelBudget = min(30000, 32000) = 30000
+		const model = { maxTokens: 30000 };
+		expect(pickSummaryMaxTokens(model, 24576, 0.8)).toBe(30000);
+	});
+
+	it("pickSummaryMaxTokens clamps the model output cap to SUMMARY_OUTPUT_TOKENS_CEILING", () => {
+		// modelBudget = min(64000, 32000) = 32000; reserveBudget = 19660
+		const model = { maxTokens: 64000 };
+		expect(pickSummaryMaxTokens(model, 24576, 0.8)).toBe(32000);
+	});
+
+	it("pickSummaryMaxTokens falls back to reserveBudget when model has no known cap", () => {
+		// modelBudget = 0 when model.maxTokens <= 0; reserveBudget = 19660
+		expect(pickSummaryMaxTokens({ maxTokens: 0 }, 24576, 0.8)).toBe(19660);
+		expect(pickSummaryMaxTokens({ maxTokens: -1 }, 24576, 0.8)).toBe(19660);
+	});
+
+	it("pickSummaryMaxTokens keeps small-model output caps as the ceiling when they beat the reserve fraction", () => {
+		// Small model with 8000 output; reserveBudget at 0.5 = floor(0.5 * 24576) = 12288
+		// modelBudget = min(8000, 32000) = 8000; smaller than reserveBudget so reserveBudget wins.
+		expect(pickSummaryMaxTokens({ maxTokens: 8000 }, 24576, 0.5)).toBe(12288);
+	});
+
+	it("pickSummaryMaxTokens uses the smaller 0.5 fraction for turn-prefix summaries", () => {
+		// Turn-prefix path: floor(0.5 * 24576) = 12288
+		expect(pickSummaryMaxTokens({ maxTokens: 0 }, 24576, 0.5)).toBe(12288);
+	});
+});
+
+describe("getSummarizationFailure length-stop diagnostics", () => {
+	const okResponse = {
+		stopReason: "stop",
+		content: [{ type: "text", text: "ok" } as const],
+	} as unknown as AssistantMessage;
+	const lengthResponse = {
+		stopReason: "length",
+		content: [{ type: "text", text: "partial" } as const],
+	} as unknown as AssistantMessage;
+	const errorResponse = {
+		stopReason: "error",
+		content: [],
+		errorMessage: "boom",
+	} as unknown as AssistantMessage;
+
+	it("returns undefined for a clean stop", () => {
+		expect(getSummarizationFailure(okResponse, "Summarization")).toBeUndefined();
+	});
+
+	it("surfaces the token cap in the length-stop message when provided", () => {
+		const message = getSummarizationFailure(lengthResponse, "Summarization", 19660);
+		expect(message).toContain("hit the token cap");
+		expect(message).toContain("19660-token output cap");
+		expect(message).toContain("raise reserveTokens");
+	});
+
+	it("omits the cap note when maxTokens is not provided", () => {
+		const message = getSummarizationFailure(lengthResponse, "Summarization");
+		expect(message).toContain("hit the token cap");
+		expect(message).not.toContain("output cap");
+	});
+
+	it("passes error-stop messages through unchanged", () => {
+		expect(getSummarizationFailure(errorResponse, "Summarization")).toBe("Summarization failed: boom");
 	});
 });
 

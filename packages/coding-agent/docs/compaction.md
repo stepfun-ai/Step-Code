@@ -216,33 +216,39 @@ See [`collectEntriesForBranchSummary()`](https://github.com/earendil-works/pi-mo
 
 ## Summary Format
 
-Both compaction and branch summarization use the same structured format:
+Branch summarization keeps a compact 6-section checkpoint format. Compaction summaries use a more detailed 8-section handoff format, written for the next model instance rather than for the user:
 
 ```markdown
-## Goal
-[What the user is trying to accomplish]
+## User Goal
+[Active objective(s) and acceptance criteria]
 
-## Constraints & Preferences
-- [Requirements mentioned by user]
-
-## Progress
+## Current State
 ### Done
-- [x] [Completed tasks]
+- [Completed item with its concrete result]
 
 ### In Progress
-- [ ] [Current work]
+- [Unfinished item with exactly where it stands]
 
 ### Blocked
-- [Issues, if any]
+- [Blocked item with the precise blocker]
 
-## Key Decisions
-- **[Decision]**: [Rationale]
+## Files & Artifacts
+- [`path` — created/modified/deleted/reverted; key functions/classes]
 
-## Next Steps
-1. [What should happen next]
+## Verification
+- [Command/test → PASS/FAIL/BLOCKED, exit code, diagnostic error lines verbatim]
 
-## Critical Context
-- [Data needed to continue]
+## Decisions & Constraints
+- [User preferences, technical decisions, environment limits; facts vs inference]
+
+## Failed Approaches
+- [What failed or was ruled out, why, and what would have to change]
+
+## Next Actions
+1. [Action + target file/command + completion criterion]
+
+## References
+- [Issue links, log/artifact paths, other resume pointers]
 
 <read-files>
 path/to/file1.ts
@@ -268,7 +274,7 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 This prevents the model from treating it as a conversation to continue.
 
-Tool results are truncated to 2000 characters during serialization. Content beyond that limit is replaced with a marker indicating how many characters were truncated. This keeps summarization requests within reasonable token budgets, since tool results (especially from `read` and `bash`) are typically the largest contributors to context size.
+Oversized tool results are truncated during serialization with a head + tail + salient-lines strategy (defaults: 800-char head, 800-char tail, up to 20 salient lines re-surfaced from the omitted middle, ~2400-char total budget). Salient lines match `error|fail|test|exit|path|diff|warning` or stack-frame patterns (`traceback`, `File "`, `-->`, and `file.ext:123` / `file.ext(123` source locations). A marker records how many characters were omitted and what was kept. This keeps summarization requests within reasonable token budgets while preserving trailing errors and diagnostic lines, since tool results (especially from `read` and `bash`) are typically the largest contributors to context size.
 
 ## Custom Summarization via Extensions
 

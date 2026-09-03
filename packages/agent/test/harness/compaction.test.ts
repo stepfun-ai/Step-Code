@@ -24,10 +24,12 @@ import {
 	generateSummary,
 	generateSummaryWithUsage,
 	getLastAssistantUsage,
+	pickSummaryMaxTokens,
 	prepareCompaction,
-	serializeConversation,
+	SUMMARY_OUTPUT_TOKENS_CEILING,
 	shouldCompact,
 } from "../../src/harness/compaction/compaction.ts";
+import { serializeConversation } from "../../src/harness/compaction/utils.ts";
 import { buildSessionContext } from "../../src/harness/session/context.ts";
 import type {
 	BranchSummaryEntry,
@@ -178,6 +180,31 @@ describe("harness compaction", () => {
 		expect(shouldCompact(95000, 100000, settings)).toBe(true);
 		expect(shouldCompact(89000, 100000, settings)).toBe(false);
 		expect(shouldCompact(95000, 100000, { ...settings, enabled: false })).toBe(false);
+	});
+
+	it("DEFAULT_COMPACTION_SETTINGS.reserveTokens is 24576 (bumped from 16384 for rich sessions)", () => {
+		expect(DEFAULT_COMPACTION_SETTINGS.reserveTokens).toBe(24576);
+	});
+
+	it("SUMMARY_OUTPUT_TOKENS_CEILING is 32000 (safely under Anthropic per-response cap)", () => {
+		expect(SUMMARY_OUTPUT_TOKENS_CEILING).toBe(32000);
+	});
+
+	it("pickSummaryMaxTokens prefers the model output cap when it exceeds the reserve budget", () => {
+		expect(pickSummaryMaxTokens({ maxTokens: 30000 }, 24576, 0.8)).toBe(30000);
+	});
+
+	it("pickSummaryMaxTokens clamps the model output cap to SUMMARY_OUTPUT_TOKENS_CEILING", () => {
+		expect(pickSummaryMaxTokens({ maxTokens: 64000 }, 24576, 0.8)).toBe(32000);
+	});
+
+	it("pickSummaryMaxTokens falls back to reserveBudget when the model does not expose a cap", () => {
+		expect(pickSummaryMaxTokens({ maxTokens: 0 }, 24576, 0.8)).toBe(19660);
+		expect(pickSummaryMaxTokens({ maxTokens: -1 }, 24576, 0.8)).toBe(19660);
+	});
+
+	it("pickSummaryMaxTokens uses the smaller 0.5 fraction for turn-prefix summaries", () => {
+		expect(pickSummaryMaxTokens({ maxTokens: 0 }, 24576, 0.5)).toBe(12288);
 	});
 
 	it("finds a cut point based on token differences", () => {
@@ -452,7 +479,47 @@ describe("harness compaction", () => {
 		]);
 		const result = serializeConversation(messages);
 		expect(result).toContain("[Tool result]:");
-		expect(result).toContain("[... 3000 more characters truncated]");
+		// Head and tail are both preserved verbatim; the middle is omitted with a marker.
+		expect(result).toContain("[... 3400 chars omitted (kept: 800-char head, 0 salient lines, 800-char tail) ...]");
+		expect(result).toContain("x".repeat(800));
+		expect(result).not.toContain("x".repeat(801));
+	});
+
+	it("re-surfaces python traceback and stack-frame lines from the omitted middle", () => {
+		// None of the asserted lines match the generic error/fail/test keywords;
+		// they are kept only by the stack-frame alternatives of SALIENT_LINE_PATTERN.
+		const headFiller = "aaaaaaaaaaaaaaaaaaa\n".repeat(45); // 900 chars, no salient matches
+		const pythonTraceback = [
+			"Traceback (most recent call last):",
+			'  File "/app/src/pipeline.py", line 88, in run_stage',
+			"    stage.execute(batch)",
+			'  File "/app/src/stage.py", line 41, in execute',
+			"    raise RuntimeSignal(signum)",
+		].join("\n");
+		const nodeStackFrame = "    at runStage (/app/src/pipeline.ts:88:12)";
+		const middleFiller = "bbbbbbbbbbbbbbbbbbb\n".repeat(60); // 1200 chars, no salient matches
+		const tailFiller = "z".repeat(900);
+		const longOutput = `${headFiller}${pythonTraceback}\n${nodeStackFrame}\n${middleFiller}${tailFiller}`;
+
+		const messages = convertMessages([
+			{
+				role: "toolResult",
+				toolCallId: "tc1",
+				toolName: "bash",
+				content: [{ type: "text", text: longOutput }],
+				isError: true,
+				timestamp: Date.now(),
+			},
+		]);
+
+		const result = serializeConversation(messages);
+
+		expect(result).toContain("chars omitted");
+		expect(result).toContain("[salient lines from omitted middle]");
+		expect(result).toContain("Traceback (most recent call last):");
+		expect(result).toContain('File "/app/src/pipeline.py", line 88, in run_stage');
+		expect(result).toContain('File "/app/src/stage.py", line 41, in execute');
+		expect(result).toContain("at runStage (/app/src/pipeline.ts:88:12)");
 	});
 
 	it("passes reasoning through generateSummary only for reasoning models with thinking enabled", async () => {
@@ -544,7 +611,7 @@ describe("harness compaction", () => {
 		expect(abortedResult).toMatchObject({ ok: false, error: { code: "aborted", message: "stopped" } });
 	});
 
-	it("clamps compaction summary maxTokens to the model output cap", async () => {
+	it("clamps compaction summary maxTokens to the summary output ceiling for large-output models", async () => {
 		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
 		const seenOptions: Array<Record<string, unknown> | undefined> = [];
 		const { faux, model } = createFauxModel(false, 128000);
@@ -565,12 +632,17 @@ describe("harness compaction", () => {
 			isSplitTurn: true,
 			tokensBefore: 600000,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
+			settings: DEFAULT_COMPACTION_SETTINGS,
 		};
 
 		getOrThrow(await compact(preparation, models, model));
 
-		expect(seenOptions.map((options) => options?.maxTokens)).toEqual([128000, 128000]);
+		// The 128k model budget is clamped to SUMMARY_OUTPUT_TOKENS_CEILING and beats
+		// both reserve budgets (floor(0.8 * 24576) = 19660, floor(0.5 * 24576) = 12288).
+		expect(seenOptions.map((options) => options?.maxTokens)).toEqual([
+			SUMMARY_OUTPUT_TOKENS_CEILING,
+			SUMMARY_OUTPUT_TOKENS_CEILING,
+		]);
 		expect(seenOptions.map((options) => options?.cacheRetention)).toEqual(["none", "none"]);
 		const sessionIds = seenOptions.map((options) => options?.sessionId);
 		expect(sessionIds[0]).not.toBe(sessionIds[1]);

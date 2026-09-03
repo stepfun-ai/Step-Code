@@ -23,6 +23,8 @@ import {
 	extractFileOpsFromMessage,
 	type FileOperations,
 	formatFileOperations,
+	SUMMARIZATION_SYSTEM_PROMPT,
+	safeJsonStringify,
 	serializeConversation,
 } from "./utils.ts";
 
@@ -32,13 +34,6 @@ export interface CompactionDetails {
 	readFiles: string[];
 	/** Files modified in the compacted history. */
 	modifiedFiles: string[];
-}
-function safeJsonStringify(value: unknown): string {
-	try {
-		return JSON.stringify(value) ?? "undefined";
-	} catch {
-		return "[unserializable]";
-	}
 }
 
 function extractFileOperations(
@@ -154,12 +149,41 @@ export interface CompactionSettings {
 	keepRecentTokens: number;
 }
 
+/**
+ * Hard upper bound on summary output tokens, regardless of `reserveTokens`.
+ * Chosen to sit under Anthropic's 32k-per-response cap while giving rich
+ * long-horizon sessions enough room to emit a full 8-section handoff without
+ * hitting the `stopReason:"length"` guard.
+ */
+export const SUMMARY_OUTPUT_TOKENS_CEILING = 32000;
+
 /** Default compaction settings used by the harness. */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
-	reserveTokens: 16384,
+	// Bumped from 16384: content-rich sessions were flirting with the
+	// 0.8 * 16384 = 13107 maxTokens cap and getting rejected on length-stop.
+	// 24576 gives ~19660-token headroom for the summary (or up to the ceiling
+	// on models that expose a larger native output cap), while still leaving
+	// ~keepRecentTokens for the retained tail.
+	reserveTokens: 24576,
 	keepRecentTokens: 20000,
 };
+
+/**
+ * Pick the summary output cap for a compaction request. Uses whichever is
+ * larger of the reserve-token budget and the model's own output cap (clamped to
+ * {@link SUMMARY_OUTPUT_TOKENS_CEILING}), so large-output models are not
+ * throttled by the conservative 0.8 * reserveTokens heuristic on rich sessions.
+ */
+export function pickSummaryMaxTokens(
+	model: { readonly maxTokens: number },
+	reserveTokens: number,
+	reserveFraction: number,
+): number {
+	const reserveBudget = Math.floor(reserveFraction * reserveTokens);
+	const modelBudget = model.maxTokens > 0 ? Math.min(model.maxTokens, SUMMARY_OUTPUT_TOKENS_CEILING) : 0;
+	return Math.max(reserveBudget, modelBudget) || reserveBudget;
+}
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
@@ -421,81 +445,73 @@ export function findCutPoint(
 	};
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+/** Shared 8-section handoff format used by every compaction summary prompt. */
+const SUMMARY_FORMAT = `## User Goal
+[The user's active objective(s) and acceptance criteria, preserving the user's own wording where it matters. List multiple goals as separate items. Do not present completed or abandoned goals as active.]
 
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
+## Current State
+### Done
+- [Completed item — with its concrete result: what changed, where, and the evidence]
 
-const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+### In Progress
+- [Started but unfinished item — with exactly where it stands and what remains]
+
+### Blocked
+- [Blocked item — with the precise blocker; or "(none)"]
+
+## Files & Artifacts
+- [\`path/to/file\` — created/modified/deleted/reverted; key functions/classes touched and why this file matters to the goal]
+
+## Verification
+- [Command or test that was run → PASS/FAIL/BLOCKED, exit code, and the most diagnostic output or error lines verbatim; or "(none run)"]
+
+## Decisions & Constraints
+- [User preference / technical decision / environment constraint — with brief rationale. Mark user-stated requirements vs your own inference (e.g. "(inferred)").]
+
+## Failed Approaches
+- [Approach that failed or was ruled out → why it failed (with the exact error where available) and what would have to change before retrying; or "(none)"]
+
+## Next Actions
+1. [Concrete next step: the action, the target file/command, and how to tell it is done]
+
+## References
+- [Issue/PR links, log or artifact paths, or other pointers that help resume the work; or "(none)"]`;
+
+/** Fidelity rules appended to every compaction summary prompt. */
+const SUMMARY_DETAIL_RULES = `Detail requirements:
+1. Preserve high-value strings EXACTLY: file paths, function/class names, commands, flags, exit codes, and error message lines must appear verbatim, never paraphrased.
+2. Prefer results over process: record outcomes and current state ("test X fails with Y"), not a play-by-play of the steps taken.
+3. Keep negative information: failures, dead ends, and disproven hypotheses are as important as successes — they stop the next model from repeating them.
+4. Separate facts from inference: if something was not directly observed in the conversation, label it as inferred or unverified.
+5. No empty statements: "fixed the bug" or "made progress" is useless — every item must say what changed, where, and what evidence supports it.
+6. If you must shorten, first cut repetition, rhetoric, and background that is closed or superseded; cut the active User Goal, Verification results, and Next Actions last.
+
+Be thorough. A complete handoff matters more than brevity, but every line must carry information the next model can act on.`;
+
+const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Produce a structured handoff summary that the next model instance will use to continue the work. The summarized messages will be discarded: your summary replaces them entirely.
 
 Use this EXACT format:
 
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+${SUMMARY_FORMAT}
 
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
+${SUMMARY_DETAIL_RULES}`;
 
-## Progress
-### Done
-- [x] [Completed tasks/changes]
+const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing handoff summary provided in <previous-summary> tags.
 
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
-
-const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
-
-Update the existing structured summary with new information. RULES:
-- PRESERVE all existing information from the previous summary
-- ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
-- UPDATE "Next Steps" based on what was accomplished
-- PRESERVE exact file paths, function names, and error messages
-- If something is no longer relevant, you may remove it
+Update the summary so it remains a complete handoff for the next model instance. RULES:
+- PRESERVE Done items from the previous summary together with their recorded results; do not drop or dilute them.
+- Move items from "In Progress" to "Done" ONLY when the new messages provide concrete evidence of completion; otherwise update where they stand.
+- Do NOT repeat or re-expand Failed Approaches already recorded; keep each recorded once and add newly failed approaches.
+- REMOVE Next Actions that were completed or are now obsolete; add new ones reflecting the current state.
+- ADD new files, verification results, decisions, and constraints from the new messages.
+- PRESERVE exact file paths, function names, commands, exit codes, and error lines.
+- Remove other content only when it is clearly superseded or no longer relevant to any active goal.
 
 Use this EXACT format:
 
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
+${SUMMARY_FORMAT}
 
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
-
-## Progress
-### Done
-- [x] [Include previously done items AND newly completed items]
-
-### In Progress
-- [ ] [Current work - update based on progress]
-
-### Blocked
-- [Current blockers - remove if resolved]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
-
-## Next Steps
-1. [Update based on current state]
-
-## Critical Context
-- [Preserve important context, add new if needed]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+${SUMMARY_DETAIL_RULES}`;
 
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
@@ -538,10 +554,7 @@ export async function generateSummaryWithUsage(
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
-	const maxTokens = Math.min(
-		Math.floor(0.8 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	);
+	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.8);
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (customInstructions) {
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
@@ -583,6 +596,14 @@ export async function generateSummaryWithUsage(
 			new CompactionError(
 				"summarization_failed",
 				`Summarization failed: ${response.errorMessage || "Unknown error"}`,
+			),
+		);
+	}
+	if (response.stopReason === "length") {
+		return err(
+			new CompactionError(
+				"summarization_failed",
+				`Summarization failed: generation hit the ${maxTokens}-token output cap and the summary is incomplete; raise reserveTokens if this recurs`,
 			),
 		);
 	}
@@ -686,22 +707,15 @@ export function prepareCompaction(
 	});
 }
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+const TURN_PREFIX_SUMMARIZATION_PROMPT = `The messages above are the PREFIX of a single turn that was too large to keep in context. The most recent part of the turn (the suffix) is retained verbatim; your summary replaces only this prefix and is read together with the retained suffix.
 
-Summarize the prefix to provide context for the retained suffix:
+Produce a structured handoff summary of the prefix so the next model instance can understand the retained suffix and finish the turn. Scope every section to this turn's prefix; use "(none)" where the prefix has nothing to report.
 
-## Original Request
-[What did the user ask for in this turn?]
+Use this EXACT format:
 
-## Early Progress
-- [Key decisions and work done in the prefix]
+${SUMMARY_FORMAT}
 
-## Context for Suffix
-- [Information needed to understand the retained recent work]
-
-Be concise. Focus on what's needed to understand the kept suffix.`;
-
-export { serializeConversation } from "./utils.ts";
+${SUMMARY_DETAIL_RULES}`;
 
 /** Generate compaction summary data from prepared session history. */
 export async function compact(
@@ -802,10 +816,9 @@ async function generateTurnPrefixSummary(
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
-	const maxTokens = Math.min(
-		Math.floor(0.5 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	);
+	// Smaller output budget for turn-prefix summaries: the suffix of the turn
+	// is retained verbatim, so the summary only needs to describe the prefix.
+	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.5);
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
@@ -837,6 +850,14 @@ async function generateTurnPrefixSummary(
 			new CompactionError(
 				"summarization_failed",
 				`Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`,
+			),
+		);
+	}
+	if (response.stopReason === "length") {
+		return err(
+			new CompactionError(
+				"summarization_failed",
+				`Turn prefix summarization failed: generation hit the ${maxTokens}-token output cap and the summary is incomplete; raise reserveTokens if this recurs`,
 			),
 		);
 	}
