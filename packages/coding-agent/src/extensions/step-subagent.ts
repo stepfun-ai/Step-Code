@@ -7,59 +7,65 @@
  * authority is created here.
  */
 
-import { execFile as execFileCallback, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import type { AgentToolResult, AgentToolUpdateCallback, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Message, StringEnum, type Usage } from "@earendil-works/pi-ai";
-import type { Component } from "@earendil-works/pi-tui";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-	ExtensionFactory,
-	InlineExtension,
-	ToolRenderResultOptions,
-} from "../core/extensions/types.ts";
-import type { Theme } from "../modes/interactive/theme/theme.ts";
-import { getMarkdownTheme } from "../modes/interactive/theme/theme.ts";
+import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
-import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import type { StepTelemetryReporter } from "../step/telemetry.ts";
+import type { StepAgentConfig, StepAgentScope } from "./step-subagent-agents.ts";
+import { executeSubagent } from "./subagent/execute.ts";
+import { allocateStepWorktree, cloneUsage, isRecordValue } from "./subagent/helpers.ts";
 import {
-	discoverStepAgents,
-	formatStepAgentCatalog,
-	type StepAgentConfig,
-	type StepAgentDiscoveryResult,
-	type StepAgentScope,
-} from "./step-subagent-agents.ts";
+	type BackgroundAgentLane,
+	controlResult,
+	createLaneLifecycle,
+	getLiveSubagentSession,
+	laneMatches,
+} from "./subagent/lane-lifecycle.ts";
+import { laneWidgetLines, renderSubagentResult } from "./subagent/rendering.ts";
+import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
 
-const execFile = promisify(execFileCallback);
+// Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
+// here to keep this module's public surface stable.
+export type { BackgroundLaneEvent, BackgroundLaneSubscribeLevel } from "./subagent/lane-events.ts";
+export { escapeXmlAttr } from "./subagent/lane-events.ts";
+// Lane lifecycle (createLane/startLane/stopLane/replyToLane) moved to
+// ./subagent/lane-lifecycle.ts; the lane shape is re-exported for the same reason.
+export type { BackgroundAgentLane } from "./subagent/lane-lifecycle.ts";
+// Rpc child plumbing (stdout pre-router + rpc session wrapper) moved to
+// ./subagent/rpc-adapter.ts; re-exported for the same reason.
+export type { StepSubagentRpcSession, SubagentRpcLineHandlers } from "./subagent/rpc-adapter.ts";
+export { routeSubagentRpcLine } from "./subagent/rpc-adapter.ts";
+
+// The blocking orchestrator (executeSubagent + its task/aggregation helpers)
+// moved to ./subagent/execute.ts and is imported above; it was never public.
+
+// TUI render helpers (statusIcon/renderRecordSummary/renderExpandedRecord/
+// renderSubagentResult/laneWidgetLines) moved to ./subagent/rendering.ts and
+// are imported above; none were public.
+
+// Pure utilities (usage math, sanitizeLabel/normalizeChildTools, the git
+// worktree allocator, currentStepInvocation, isRecordValue) moved to
+// ./subagent/helpers.ts; the public ones are re-exported for the same reason.
+export {
+	cloneUsage,
+	currentStepInvocation,
+	emptyUsage,
+	isRecordValue,
+	normalizeChildTools,
+	sanitizeLabel,
+} from "./subagent/helpers.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const DEFAULT_CONCURRENCY = 4;
-const MAX_STDERR_CHARS = 32_000;
-const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
+export const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
-const COLLAPSED_OUTPUT_LINES = 8;
-const CHILD_MARKER = "STEP_CLI_SUBAGENT_CHILD";
-
-/** Tool names in agent files may use either Pi's native names or Step's
- * model-facing aliases. Child Step processes expose the latter. */
-const TOOL_ALIASES: Readonly<Record<string, string>> = {
-	read: "read_file",
-	bash: "run_command",
-	edit: "edit_file",
-	write: "write_file",
-	find: "find_files",
-	grep: "search_files",
-	ls: "list_directory",
-};
+export const CHILD_MARKER = "STEP_CLI_SUBAGENT_CHILD";
 
 export interface StepSubagentUsage {
 	input: number;
@@ -87,6 +93,8 @@ export interface StepSubagentRunResult {
 	lastEvent?: string;
 	startedAt?: number;
 	updatedAt?: number;
+	/** True when a keep-alive rpc child is still running and can accept replies. */
+	pendingReply?: boolean;
 }
 
 export interface StepSubagentRunInput {
@@ -97,6 +105,15 @@ export interface StepSubagentRunInput {
 	thinkingLevel?: ThinkingLevel;
 	signal?: AbortSignal;
 	onUpdate?: (result: StepSubagentRunResult) => void;
+	/** Called when the child emits a `{"type":"progress-report"}` event to nag the parent. */
+	onNeedsInput?: (message: string) => void;
+	/**
+	 * Stable child session id (`--session-id`). Reusing the id across turns and
+	 * respawns continues the same on-disk transcript; generated when omitted.
+	 */
+	sessionId?: string;
+	/** Keep the rpc child alive after the turn settles so replies reuse it. */
+	keepAlive?: boolean;
 }
 
 /** Injectable runner used by embedders and tests. The default runner launches
@@ -156,44 +173,15 @@ export interface StepSubagentExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 }
 
-interface BackgroundAgentLane {
-	id: string;
-	alias?: string;
-	group?: string;
-	params: SubagentParams;
-	ctx: ExtensionContext;
-	controller: AbortController;
-	status: "running" | "completed" | "failed" | "aborted";
-	details: StepSubagentDetails;
-	result?: AgentToolResult<StepSubagentDetails>;
-	promise: Promise<AgentToolResult<StepSubagentDetails>>;
-	queuedPrompts: string[];
-	startedAt: number;
-	updatedAt: number;
-	/** Incremented whenever a lane starts a new turn; stale child callbacks are ignored. */
-	runGeneration: number;
-}
-
-interface StepSubagentTaskInput {
-	agent: string;
-	task: string;
-	cwd?: string;
-	model?: string;
-	contextMode?: "inherit" | "fresh";
-	isolateWorkspace?: boolean;
-	worktreeName?: string;
-	retainWorktree?: boolean;
-}
-
 // Keep the model-facing contract identical to Pi's subagent example. Step
 // adapts discovery, process invocation, storage, telemetry, and theme only.
-const StepTaskItem = Type.Object({
+export const StepTaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
-const StepChainItem = Type.Object({
+export const StepChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
@@ -202,6 +190,12 @@ const StepChainItem = Type.Object({
 const StepAgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
 	default: "user",
+});
+
+const StepSubscribeSchema = StringEnum(["final", "progress", "none"] as const, {
+	description:
+		'Notification level for background lanes. "final" (default) sends one completion notification, "progress" adds throttled progress updates, "none" is fire-and-forget.',
+	default: "final",
 });
 
 const StepSubagentParamsSchema = Type.Object({
@@ -214,6 +208,7 @@ const StepSubagentParamsSchema = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	subscribe: Type.Optional(StepSubscribeSchema),
 });
 
 type PublicSubagentParams = Static<typeof StepSubagentParamsSchema>;
@@ -229,23 +224,7 @@ interface StepSubagentRuntimeParams {
 	retainWorktree?: boolean;
 }
 
-type SubagentParams = PublicSubagentParams & StepSubagentRuntimeParams;
-
-function emptyUsage(): StepSubagentUsage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		cost: 0,
-		contextTokens: 0,
-		turns: 0,
-	};
-}
-
-function cloneUsage(usage: StepSubagentUsage): StepSubagentUsage {
-	return { ...usage };
-}
+export type SubagentParams = PublicSubagentParams & StepSubagentRuntimeParams;
 
 function isMessage(value: unknown): value is Message {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -268,7 +247,7 @@ function assistantText(message: Message): string {
 		.join("\n");
 }
 
-function finalOutput(messages: readonly Message[]): string {
+export function finalOutput(messages: readonly Message[]): string {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const text = assistantText(messages[index]);
 		if (text) return text;
@@ -289,190 +268,13 @@ function usageFromMessage(message: Message, usage: StepSubagentUsage): void {
 	usage.cost += messageUsage.cost?.total || 0;
 }
 
-function sanitizeLabel(value: string, fallback = "agent"): string {
-	const cleaned = value
-		.trim()
-		.replace(/[^a-zA-Z0-9._-]+/gu, "-")
-		.replace(/^-+|-+$/gu, "");
-	return cleaned || fallback;
-}
-
-function normalizeChildTools(tools: readonly string[] | undefined): string[] | undefined {
-	if (!tools || tools.length === 0) return undefined;
-	return [...new Set(tools.map((tool) => TOOL_ALIASES[tool] ?? tool).filter((tool) => tool.length > 0))];
-}
-
-function isFailed(result: Pick<StepSubagentRunResult, "exitCode" | "stopReason">): boolean {
+export function isFailed(result: Pick<StepSubagentRunResult, "exitCode" | "stopReason">): boolean {
 	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 }
 
-function statusForResult(result: StepSubagentRunResult): StepSubagentResultRecord["status"] {
-	if (result.exitCode === -1) return "running";
-	if (result.stopReason === "aborted") return "aborted";
-	return isFailed(result) ? "failed" : "completed";
-}
-
-function resultRecord(
-	agent: string,
-	task: string,
-	result: StepSubagentRunResult,
-	extra: Partial<Pick<StepSubagentResultRecord, "agentSource" | "step" | "worktreePath" | "worktreeBranch">> = {},
-): StepSubagentResultRecord {
-	return {
-		agent,
-		agentSource: extra.agentSource ?? "unknown",
-		task,
-		status: statusForResult(result),
-		...result,
-		...extra,
-		usage: cloneUsage(result.usage),
-	};
-}
-
-function makeEmptyResult(agent: string, task: string): StepSubagentResultRecord {
-	return {
-		agent,
-		agentSource: "unknown",
-		task,
-		status: "running",
-		exitCode: -1,
-		messages: [],
-		stderr: "",
-		usage: emptyUsage(),
-		startedAt: Date.now(),
-		updatedAt: Date.now(),
-	};
-}
-
-function resultText(result: StepSubagentRunResult): string {
+export function resultText(result: StepSubagentRunResult): string {
 	if (isFailed(result)) return result.errorMessage || result.stderr || finalOutput(result.messages) || "(no output)";
 	return finalOutput(result.messages) || "(no output)";
-}
-
-function truncateText(value: string, maxChars: number): string {
-	if (value.length <= maxChars) return value;
-	return `${value.slice(0, maxChars)}\n\n[output truncated]`;
-}
-
-function formatUsage(usage: StepSubagentUsage, model?: string): string {
-	const parts: string[] = [];
-	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
-	if (usage.input) parts.push(`in:${usage.input}`);
-	if (usage.output) parts.push(`out:${usage.output}`);
-	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-	if (model) parts.push(model);
-	return parts.join(" ");
-}
-
-function formatElapsed(record: StepSubagentResultRecord): string {
-	const started = record.startedAt;
-	if (!started) return "";
-	const end = record.status === "running" ? Date.now() : (record.updatedAt ?? Date.now());
-	const seconds = Math.max(0, Math.floor((end - started) / 1000));
-	return `${seconds}s`;
-}
-
-function resultDetailsText(details: StepSubagentDetails): string {
-	return details.results
-		.map((result) => {
-			const worktree = result.worktreePath ? ` worktree=${result.worktreePath}` : "";
-			return `${result.agent}: ${result.status}${worktree}`;
-		})
-		.join("; ");
-}
-
-function buildDetails(
-	mode: StepSubagentDetails["mode"],
-	discovery: StepAgentDiscoveryResult,
-	scope: StepAgentScope,
-	results: StepSubagentResultRecord[],
-): StepSubagentDetails {
-	return {
-		mode,
-		agentScope: scope,
-		userAgentsDir: discovery.userAgentsDir,
-		projectAgentsDir: discovery.projectAgentsDir,
-		results,
-	};
-}
-
-async function mapWithConcurrency<T, R>(
-	items: readonly T[],
-	concurrency: number,
-	fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let next = 0;
-	const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
-		while (true) {
-			const index = next++;
-			if (index >= items.length) return;
-			results[index] = await fn(items[index], index);
-		}
-	});
-	await Promise.all(workers);
-	return results;
-}
-
-async function runGit(cwd: string, args: string[]): Promise<string> {
-	const result = await execFile("git", ["-C", cwd, ...args], {
-		maxBuffer: 2 * 1024 * 1024,
-	});
-	return result.stdout.trim();
-}
-
-/** Create a detached branch/worktree outside the repository. Keeping the
- * worktree outside the project avoids exposing it to the parent agent's file
- * tools while still making the path available in the result for review or
- * cherry-picking. */
-async function allocateStepWorktree(baseCwd: string, label: string): Promise<StepWorktreeLease> {
-	const repositoryRoot = await runGit(baseCwd, ["rev-parse", "--show-toplevel"]);
-	if (!repositoryRoot) throw new Error("The child working directory is not a Git repository");
-
-	const parent = await mkdtemp(path.join(os.tmpdir(), "step-cli-worktree-"));
-	const worktreePath = path.join(parent, "workspace");
-	const branch = `step-agent/${sanitizeLabel(label)}-${randomUUID().slice(0, 8)}`;
-	try {
-		await runGit(repositoryRoot, ["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
-	} catch (error) {
-		await rm(parent, { recursive: true, force: true });
-		throw error;
-	}
-
-	let cleaned = false;
-	return {
-		path: worktreePath,
-		branch,
-		cleanup: async () => {
-			if (cleaned) return;
-			cleaned = true;
-			try {
-				await runGit(repositoryRoot, ["worktree", "remove", "--force", worktreePath]);
-			} finally {
-				await rm(parent, { recursive: true, force: true });
-			}
-		},
-	};
-}
-
-function currentStepInvocation(args: string[]): {
-	command: string;
-	args: string[];
-} {
-	const script = process.argv[1];
-	const virtualScript = script?.startsWith("/$bunfs/") || script?.includes("$bunfs");
-	if (script && !virtualScript && existsSync(script) && /\.(?:[cm]?js|[cm]?ts)$/iu.test(script)) {
-		// `pnpm step` and the Node distribution both expose the Step script as
-		// argv[1]. Reusing it preserves the Step provider, storage namespace, and
-		// all product-level defaults for the child.
-		return { command: process.execPath, args: [script, ...args] };
-	}
-
-	const executable = path.basename(process.execPath).toLowerCase();
-	if (!/^(?:node|bun)(?:\.exe)?$/u.test(executable)) {
-		return { command: process.execPath, args };
-	}
-	return { command: "step", args };
 }
 
 function appendMessage(messages: Message[], message: Message): void {
@@ -480,7 +282,7 @@ function appendMessage(messages: Message[], message: Message): void {
 	if (messages.length > MAX_MESSAGES) messages.splice(0, messages.length - MAX_MESSAGES);
 }
 
-function parseJsonEvent(
+export function parseJsonEvent(
 	line: string,
 	current: StepSubagentRunResult,
 	onUpdate: ((result: StepSubagentRunResult) => void) | undefined,
@@ -557,10 +359,6 @@ function parseJsonEvent(
 	});
 }
 
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function stringifyLiveValue(value: unknown): string | undefined {
 	if (value === undefined || value === null) return undefined;
 	if (typeof value === "string") return value.slice(-20_000);
@@ -571,565 +369,45 @@ function stringifyLiveValue(value: unknown): string | undefined {
 	}
 }
 
-/** Default child runner. It consumes Pi's JSON event stream and emits partial
- * snapshots so the parent Pi ToolExecutionComponent can render live progress. */
+/**
+ * Default child runner (S2a): one long-running `--mode rpc --session-id` child
+ * per subagent session. Each call sends one `{type:"prompt"}` turn and resolves
+ * when the child's run settles; with `keepAlive` the child survives the turn so
+ * follow-up replies reuse its provider cache and transcript. A dead child is
+ * respawned with the same session id and resumes the transcript from disk.
+ */
 export async function runStepSubagentProcess(input: StepSubagentRunInput): Promise<StepSubagentRunResult> {
-	const tempDir = await mkdtemp(path.join(os.tmpdir(), "step-cli-subagent-"));
-	const promptPath = path.join(tempDir, "system-prompt.md");
-	const args = ["--mode", "json", "-p", "--no-session"];
-	const model = input.agent.model ?? input.model;
-	if (model) args.push("--model", model);
-	if (input.thinkingLevel && !input.agent.model) args.push("--thinking", input.thinkingLevel);
-	const tools = normalizeChildTools(input.agent.tools);
-	if (tools && tools.length > 0) args.push("--tools", tools.join(","));
-	if (input.agent.systemPrompt.trim()) {
-		await writeFile(promptPath, input.agent.systemPrompt, {
-			encoding: "utf8",
-			mode: 0o600,
-		});
-		args.push("--append-system-prompt", promptPath);
-	}
-	args.push(`Task: ${input.task}`);
-
-	const current: StepSubagentRunResult = {
-		messages: [],
-		stderr: "",
-		exitCode: -1,
-		usage: emptyUsage(),
-		model,
-		startedAt: Date.now(),
-		updatedAt: Date.now(),
-	};
-	let processError: string | undefined;
-	let aborted = input.signal?.aborted === true;
-	let child: ReturnType<typeof spawn> | undefined;
-	let abortTimer: ReturnType<typeof setTimeout> | undefined;
-	let removeAbortListener: (() => void) | undefined;
-
-	try {
-		const invocation = currentStepInvocation(args);
-		const childEnv = { ...process.env, [CHILD_MARKER]: "1" };
-		const result = await new Promise<number>((resolve) => {
-			let settled = false;
-			const settle = (code: number): void => {
-				if (settled) return;
-				settled = true;
-				resolve(code);
-			};
-			child = spawn(invocation.command, invocation.args, {
-				cwd: input.cwd,
-				env: childEnv,
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let buffer = "";
-			child.stdout?.on("data", (chunk: Buffer | string) => {
-				buffer += chunk.toString();
-				if (Buffer.byteLength(buffer, "utf8") > MAX_JSON_LINE_BYTES * 2) {
-					processError = "Subagent emitted an oversized JSON event";
-					child?.kill("SIGTERM");
-					return;
-				}
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-				for (const line of lines) parseJsonEvent(line.trimEnd(), current, input.onUpdate);
-			});
-			child.stderr?.on("data", (chunk: Buffer | string) => {
-				if (current.stderr.length >= MAX_STDERR_CHARS) return;
-				current.stderr += chunk.toString().slice(0, MAX_STDERR_CHARS - current.stderr.length);
-			});
-			child.once("error", (error) => {
-				processError = error.message;
-				settle(1);
-			});
-			child.once("close", (code) => {
-				if (buffer.trim()) parseJsonEvent(buffer.trim(), current, input.onUpdate);
-				settle(code ?? 1);
-			});
-
-			const terminate = (): void => {
-				if (!child || child.killed) return;
-				aborted = true;
-				child.kill("SIGTERM");
-				abortTimer = setTimeout(() => {
-					if (child && child.exitCode === null && child.signalCode === null) {
-						child.kill("SIGKILL");
-					}
-				}, 5_000);
-				abortTimer.unref?.();
-			};
-			if (aborted) terminate();
-			else if (input.signal) {
-				input.signal.addEventListener("abort", terminate, { once: true });
-				removeAbortListener = () => input.signal?.removeEventListener("abort", terminate);
-			}
-		});
-		current.exitCode = result;
-		if (aborted) {
-			current.stopReason = "aborted";
-			current.errorMessage = "Subagent was aborted";
-		} else if (processError) {
-			current.stopReason = "error";
-			current.errorMessage = processError;
-		}
-		return {
-			...current,
-			messages: [...current.messages],
-			usage: cloneUsage(current.usage),
-		};
-	} finally {
-		if (abortTimer) clearTimeout(abortTimer);
-		removeAbortListener?.();
-		await rm(tempDir, { recursive: true, force: true });
-	}
+	const sessionId = input.sessionId?.trim() || `subagent-${randomUUID()}`;
+	const live = getLiveSubagentSession(sessionId);
+	if (live) return live.runTurn(input);
+	const session = await createSubagentRpcSession(input, sessionId);
+	return session.runTurn(input);
 }
 
-function makeToolResult(details: StepSubagentDetails, text: string): AgentToolResult<StepSubagentDetails> {
+export function makeToolResult(details: StepSubagentDetails, text: string): AgentToolResult<StepSubagentDetails> {
 	return { content: [{ type: "text", text }], details };
 }
 
-function makeFailureResult(
-	agent: string,
-	task: string,
-	message: string,
-	source: StepAgentConfig["source"] | "unknown" = "unknown",
-): StepSubagentResultRecord {
-	return resultRecord(
-		agent,
-		task,
-		{
-			messages: [],
-			stderr: message,
-			exitCode: 1,
-			usage: emptyUsage(),
-			stopReason: "error",
-			errorMessage: message,
-		},
-		{ agentSource: source },
-	);
-}
+const AgentSendTargetSchema = Type.Object({
+	agent_id: Type.Optional(Type.String({ description: "Background agent id" })),
+	alias: Type.Optional(Type.String({ description: "Background agent alias" })),
+	group: Type.Optional(Type.String({ description: "Background agent group (fans out to every member)" })),
+	all: Type.Optional(Type.Boolean({ description: "Address every background agent" })),
+});
 
-function taskLabel(task: StepSubagentTaskInput, index?: number): string {
-	return sanitizeLabel(task.worktreeName ?? task.agent, index === undefined ? "agent" : `agent-${index + 1}`);
-}
-
-function taskFromParams(params: SubagentParams): StepSubagentTaskInput | undefined {
-	const task = params.task?.trim();
-	const agent = params.agent?.trim();
-	if (!task || !agent) return undefined;
-	return {
-		agent,
-		task,
-		cwd: params.cwd,
-		isolateWorkspace: params.isolateWorkspace,
-		worktreeName: params.worktreeName,
-		retainWorktree: params.retainWorktree,
-	};
-}
-
-function normalizeTaskInput(task: Static<typeof StepTaskItem> | Static<typeof StepChainItem>): StepSubagentTaskInput {
-	const runtimeTask = task as Static<typeof StepTaskItem> & {
-		isolateWorkspace?: boolean;
-		worktreeName?: string;
-		retainWorktree?: boolean;
-	};
-	return {
-		agent: task.agent,
-		task: task.task,
-		cwd: task.cwd,
-		isolateWorkspace: runtimeTask.isolateWorkspace,
-		worktreeName: runtimeTask.worktreeName,
-		retainWorktree: runtimeTask.retainWorktree,
-	};
-}
-
-async function confirmProjectAgents(
-	ctx: ExtensionContext,
-	params: SubagentParams,
-	discovery: StepAgentDiscoveryResult,
-	tasks: readonly StepSubagentTaskInput[],
-): Promise<boolean> {
-	if (params.confirmProjectAgents === false || !ctx.hasUI || ctx.isProjectTrusted()) return true;
-	if (params.agentScope === "user") return true;
-	const projectNames = [...new Set(tasks.map((task) => task.agent))].filter((name) =>
-		discovery.agents.some((agent) => agent.name === name && agent.source === "project"),
-	);
-	if (projectNames.length === 0) return true;
-	return ctx.ui.confirm(
-		"Run project-local agents?",
-		`Agents: ${projectNames.join(", ")}\nSource: ${discovery.projectAgentsDir ?? "(unknown)"}\n\nProject definitions are repository-controlled. Continue only for a trusted repository.`,
-	);
-}
-
-function statusIcon(status: StepSubagentResultRecord["status"], theme: Theme): string {
-	if (status === "running") return theme.fg("warning", "~");
-	if (status === "completed") return theme.fg("success", "+");
-	return theme.fg("error", "x");
-}
-
-function renderRecordSummary(record: StepSubagentResultRecord, theme: Theme): string {
-	const output =
-		record.activeText ||
-		finalOutput(record.messages) ||
-		(record.status === "running" ? "(running...)" : resultText(record));
-	const lines = output.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-	const preview = lines.slice(-COLLAPSED_OUTPUT_LINES).join("\n");
-	const omitted = Math.max(0, lines.length - COLLAPSED_OUTPUT_LINES);
-	let text = `${statusIcon(record.status, theme)} ${theme.fg("accent", record.agent)} ${theme.fg("muted", `(${record.agentSource})`)} ${theme.fg("dim", formatElapsed(record))}`;
-	if (record.worktreePath) text += `\n  ${theme.fg("dim", `worktree: ${record.worktreePath}`)}`;
-	if (record.activeTool) {
-		text += `\n  ${theme.fg("warning", `running ${record.activeTool}`)}`;
-		if (record.activeToolArgs) text += ` ${theme.fg("dim", truncateText(record.activeToolArgs, 240))}`;
-	}
-	if (record.activeToolOutput) text += `\n  ${theme.fg("toolOutput", truncateText(record.activeToolOutput, 400))}`;
-	if (preview) text += `\n${theme.fg("toolOutput", preview)}`;
-	if (omitted > 0) text += `\n${theme.fg("dim", `... ${omitted} earlier lines`)}`;
-	return text;
-}
-
-function renderExpandedRecord(record: StepSubagentResultRecord, theme: Theme): Container {
-	const container = new Container();
-	container.addChild(
-		new Text(
-			`${statusIcon(record.status, theme)} ${theme.bold(record.agent)} ${theme.fg("muted", `(${record.agentSource})`)}`,
-			0,
-			0,
-		),
-	);
-	container.addChild(new Spacer(1));
-	container.addChild(new Text(theme.fg("muted", "Task"), 0, 0));
-	container.addChild(new Text(theme.fg("dim", record.task), 0, 0));
-	if (record.worktreePath) {
-		container.addChild(new Text(theme.fg("muted", `Worktree: ${record.worktreePath}`), 0, 0));
-		container.addChild(new Text(theme.fg("dim", `Branch: ${record.worktreeBranch ?? "detached"}`), 0, 0));
-	}
-	container.addChild(new Spacer(1));
-	const output = record.activeText || finalOutput(record.messages) || resultText(record);
-	container.addChild(new Text(theme.fg("muted", "Output"), 0, 0));
-	if (output) container.addChild(new Markdown(truncateText(output, 50_000), 0, 0, getMarkdownTheme()));
-	if (record.errorMessage) container.addChild(new Text(theme.fg("error", `Error: ${record.errorMessage}`), 0, 0));
-	const usage = formatUsage(record.usage, record.model);
-	if (usage) container.addChild(new Text(theme.fg("dim", usage), 0, 0));
-	if (record.activeTool) {
-		container.addChild(new Spacer(1));
-		container.addChild(
-			new Text(
-				theme.fg("warning", `Running ${record.activeTool}`) +
-					(record.activeToolArgs ? ` ${theme.fg("dim", truncateText(record.activeToolArgs, 1000))}` : ""),
-				0,
-				0,
-			),
-		);
-	}
-	return container;
-}
-
-function renderSubagentResult(
-	result: AgentToolResult<StepSubagentDetails>,
-	options: ToolRenderResultOptions,
-	theme: Theme,
-): Component {
-	const details = result.details;
-	if (!details || details.results.length === 0) {
-		const text = result.content.find((block) => block.type === "text");
-		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
-	}
-	const running = details.results.filter((record) => record.status === "running").length;
-	const completed = details.results.filter((record) => record.status === "completed").length;
-	const heading =
-		details.mode === "parallel"
-			? `${completed}/${details.results.length} complete${running > 0 ? `, ${running} running` : ""}`
-			: (details.results[0]?.status ?? "done");
-	if (options.expanded) {
-		const container = new Container();
-		container.addChild(new Text(`${theme.bold("agent")} ${theme.fg("accent", heading)}`, 0, 0));
-		for (const record of details.results) {
-			container.addChild(new Spacer(1));
-			container.addChild(renderExpandedRecord(record, theme));
-		}
-		return container;
-	}
-	let text = `${theme.bold("agent")} ${theme.fg("accent", heading)}`;
-	for (const record of details.results) text += `\n\n${renderRecordSummary(record, theme)}`;
-	if (running === 0) text += `\n${theme.fg("dim", "(Ctrl+O to expand)")}`;
-	return new Text(text, 0, 0);
-}
-
-async function executeSubagent(
-	params: SubagentParams,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
-	ctx: ExtensionContext,
-	options: Required<
-		Pick<
-			StepSubagentExtensionOptions,
-			"agentDir" | "configDirName" | "includeBuiltinAgents" | "maxParallelTasks" | "maxConcurrency"
-		>
-	> & {
-		worktreeManager: StepWorktreeManager;
-		runner: StepSubagentRunner;
-		telemetry?: StepTelemetryReporter;
-	},
-): Promise<AgentToolResult<StepSubagentDetails>> {
-	const scope = params.agentScope ?? "user";
-	const discovery = await discoverStepAgents(ctx.cwd, {
-		agentDir: options.agentDir,
-		configDirName: options.configDirName,
-		includeBuiltin: options.includeBuiltinAgents,
-		scope,
-	});
-	const parallelInput = params.tasks;
-	const chainInput = params.chain;
-	// This mirrors Pi's example: an empty optional array does not select a mode.
-	const hasParallelInput = (parallelInput?.length ?? 0) > 0;
-	const hasChainInput = (chainInput?.length ?? 0) > 0;
-	const single = !hasParallelInput && !hasChainInput ? taskFromParams(params) : undefined;
-	const parallel = hasParallelInput ? parallelInput!.map(normalizeTaskInput) : undefined;
-	const chain = hasChainInput ? chainInput!.map(normalizeTaskInput) : undefined;
-	const modeCount = Number(Boolean(single)) + Number(hasParallelInput) + Number(hasChainInput);
-	if (modeCount !== 1) {
-		const details = buildDetails("single", discovery, scope, []);
-		return makeToolResult(
-			details,
-			`Invalid parameters. Provide exactly one mode. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
-		);
-	}
-	if (parallel && parallel.length > options.maxParallelTasks) {
-		const details = buildDetails("parallel", discovery, scope, []);
-		return makeToolResult(
-			details,
-			`Too many parallel tasks (${parallel.length}); maximum is ${options.maxParallelTasks}.`,
-		);
-	}
-	const tasks = parallel ?? chain ?? [single!];
-	const mode: StepSubagentDetails["mode"] = chain ? "chain" : parallel ? "parallel" : "single";
-	if (!(await confirmProjectAgents(ctx, params, discovery, tasks))) {
-		const details = buildDetails(mode, discovery, scope, []);
-		return makeToolResult(details, "Canceled: project-local agents not approved.");
-	}
-
-	const records = tasks.map((task) => makeEmptyResult(task.agent, task.task));
-	const execution = parallel ? "background" : "blocking";
-	const createdAt = tasks.map(() => Date.now());
-	const createdTasks = new Set<number>();
-	const reportCreated = (agent: StepAgentConfig, index: number): void => {
-		if (!options.telemetry) return;
-		createdTasks.add(index);
-		trackStepTelemetry(options.telemetry, "subagent_task_created", {
-			execution,
-			agent_type: agent.name,
-			model_profile: agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "inherited"),
-		});
-		createdAt[index] = Date.now();
-	};
-	const reportFinished = (record: StepSubagentResultRecord, index: number): void => {
-		if (!options.telemetry || !createdTasks.has(index)) return;
-		const status =
-			record.status === "completed" ? "completed" : record.status === "aborted" ? "interrupted" : "error";
-		trackStepTelemetry(options.telemetry, "subagent_task_finished", {
-			execution,
-			status,
-			duration_ms: Math.max(0, Date.now() - (createdAt[index] ?? Date.now())),
-		});
-	};
-	const emit = (mode: StepSubagentDetails["mode"]): void => {
-		onUpdate?.(
-			makeToolResult(
-				buildDetails(
-					mode,
-					discovery,
-					scope,
-					records.map((record) => ({
-						...record,
-						messages: [...record.messages],
-						usage: cloneUsage(record.usage),
-					})),
-				),
-				resultDetailsText(buildDetails(mode, discovery, scope, records)),
-			),
-		);
-	};
-
-	const runOne = async (task: StepSubagentTaskInput, index: number): Promise<StepSubagentResultRecord> => {
-		const agent = discovery.agents.find((candidate) => candidate.name === task.agent);
-		if (!agent) {
-			const failed = makeFailureResult(
-				task.agent,
-				task.task,
-				`Unknown agent: "${task.agent}". Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
-			);
-			records[index] = failed;
-			emit(mode);
-			reportFinished(failed, index);
-			return failed;
-		}
-		reportCreated(agent, index);
-		const baseCwd = path.resolve(ctx.cwd, task.cwd ?? ".");
-		let worktree: StepWorktreeLease | undefined;
-		let childCwd = baseCwd;
-		try {
-			if (task.isolateWorkspace) {
-				worktree = await options.worktreeManager.allocate(baseCwd, taskLabel(task, index));
-				childCwd = worktree.path;
-			}
-			const update = (partial: StepSubagentRunResult): void => {
-				records[index] = resultRecord(agent.name, task.task, partial, {
-					agentSource: agent.source,
-					worktreePath: worktree?.path,
-					worktreeBranch: worktree?.branch,
-				});
-				emit(parallel ? "parallel" : "single");
-			};
-			const child = await options.runner({
-				agent,
-				task: task.task,
-				cwd: childCwd,
-				model: task.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined),
-				thinkingLevel: ctx.thinkingLevel,
-				signal,
-				onUpdate: update,
-			});
-			const completed = resultRecord(agent.name, task.task, child, {
-				agentSource: agent.source,
-				worktreePath: worktree?.path,
-				worktreeBranch: worktree?.branch,
-			});
-			records[index] = completed;
-			emit(mode);
-			if (worktree && task.retainWorktree === false) await worktree.cleanup();
-			reportFinished(completed, index);
-			return completed;
-		} catch (error) {
-			if (worktree && task.retainWorktree === false) await worktree.cleanup().catch(() => undefined);
-			const message = error instanceof Error ? error.message : String(error);
-			const failed = makeFailureResult(agent.name, task.task, message, agent.source);
-			records[index] = failed;
-			emit(mode);
-			reportFinished(failed, index);
-			return failed;
-		}
-	};
-
-	if (parallel) await mapWithConcurrency(parallel, options.maxConcurrency, runOne);
-	else if (chain) {
-		let previous = "";
-		for (let index = 0; index < chain.length; index++) {
-			const task = {
-				...chain[index],
-				task: chain[index].task.replace(/\{previous\}/g, previous),
-			};
-			const record = await runOne(task, index);
-			previous = finalOutput(record.messages) || resultText(record);
-			if (record.status !== "completed") break;
-		}
-	} else await runOne(tasks[0], 0);
-	const finalDetails = buildDetails(mode, discovery, scope, records);
-	if (mode === "parallel") {
-		const success = records.filter((record) => record.status === "completed").length;
-		const summaries = records.map(
-			(record) => `### ${record.agent} (${record.status})\n\n${truncateText(resultText(record), 50_000)}`,
-		);
-		return makeToolResult(
-			finalDetails,
-			`Parallel: ${success}/${records.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
-		);
-	}
-	const record = records[0];
-	return makeToolResult(finalDetails, record ? resultText(record) : "(no output)");
-}
-
-function laneStatusFromDetails(details: StepSubagentDetails): BackgroundAgentLane["status"] {
-	if (details.results.some((record) => record.status === "running")) {
-		return "running";
-	}
-	if (details.results.some((record) => record.status === "failed")) {
-		return "failed";
-	}
-	if (details.results.some((record) => record.status === "aborted")) {
-		return "aborted";
-	}
-	return "completed";
-}
-
-function laneMatches(
-	lane: BackgroundAgentLane,
-	selector: {
-		agentId?: string;
-		agent_id?: string;
-		alias?: string;
-		group?: string;
-	},
-): boolean {
-	const agentId = selector.agentId ?? selector.agent_id;
-	if (agentId) return lane.id === agentId;
-	if (selector.alias) return lane.alias === selector.alias;
-	if (selector.group) return lane.group === selector.group;
-	return true;
-}
-
-function laneSummary(lane: BackgroundAgentLane): string {
-	const output = lane.result?.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("\n")
-		.trim();
-	const label = lane.alias ? ` ${lane.alias}` : "";
-	return `${lane.id}${label}: ${lane.status}${output ? `\n${truncateText(output, 2_000)}` : ""}`;
-}
-
-function laneWidgetLines(lane: BackgroundAgentLane): string[] {
-	const records = lane.details.results;
-	const lines = [
-		`agent ${lane.id} ${lane.status}`,
-		...records.map((record) => {
-			const live = record.activeTool
-				? ` | ${record.activeTool}`
-				: record.activeText
-					? ` | ${record.activeText.split(/\r?\n/u).at(-1)?.slice(0, 100) ?? ""}`
-					: "";
-			return `${statusIcon(record.status, themeForWidget)} ${record.agent}${live}`;
+const AgentSendSchema = Type.Object({
+	to: AgentSendTargetSchema,
+	action: StringEnum(["reply", "stop"] as const, {
+		description: '"reply" sends prompt to the lane\'s ongoing transcript; "stop" interrupts and ends the lane.',
+	}),
+	prompt: Type.Optional(Type.String({ description: 'Message to deliver for action:"reply"' })),
+	interrupt: Type.Optional(
+		Type.Boolean({
+			description:
+				'With action:"reply": true steers the lane immediately, false (default) queues the prompt to run after the lane\'s current turn.',
 		}),
-	];
-	return lines;
-}
-
-// Widgets receive the same color callback shape as the native renderer. Keep
-// this tiny fallback local so background lanes can also be shown in test hosts.
-const themeForWidget = {
-	fg: (_color: string, text: string): string => text,
-} as unknown as Theme;
-
-const AgentSelectorSchema = Type.Object({
-	agent_id: Type.Optional(Type.String({ description: "Background agent id" })),
-	alias: Type.Optional(Type.String({ description: "Background agent alias" })),
-	group: Type.Optional(Type.String({ description: "Background agent group" })),
+	),
 });
-
-const AgentReplySchema = Type.Object({
-	agent_id: Type.Optional(Type.String({ description: "Background agent id" })),
-	alias: Type.Optional(Type.String({ description: "Background agent alias" })),
-	prompt: Type.String({ description: "Follow-up instruction" }),
-	interrupt: Type.Optional(Type.Boolean({ description: "Interrupt the current turn first" })),
-});
-
-const AgentWaitSchema = Type.Object({
-	agent_id: Type.Optional(Type.String({ description: "Background agent id" })),
-	alias: Type.Optional(Type.String({ description: "Background agent alias" })),
-	group: Type.Optional(Type.String({ description: "Background agent group" })),
-	wait_for: Type.Optional(Type.Union([Type.Literal("any"), Type.Literal("all"), Type.Literal("first_ready")])),
-	wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 120_000 })),
-});
-
-type AgentSelector = Static<typeof AgentSelectorSchema>;
-
-function controlResult(text: string): AgentToolResult<undefined>;
-function controlResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails>;
-function controlResult<TDetails>(text: string, details?: TDetails): AgentToolResult<TDetails | undefined> {
-	return {
-		content: [{ type: "text", text }],
-		details,
-	};
-}
 
 /** Construct the hidden inline extension used by the Step launcher. */
 export function createStepSubagentExtension(options: StepSubagentExtensionOptions = {}): ExtensionFactory {
@@ -1165,97 +443,14 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 				// A host may tear down its UI while a detached child is finishing.
 			}
 		};
-		const startLane = (lane: BackgroundAgentLane, params: SubagentParams): void => {
-			const generation = lane.runGeneration + 1;
-			lane.runGeneration = generation;
-			lane.controller = new AbortController();
-			lane.status = "running";
-			lane.updatedAt = Date.now();
-			const runParams = { ...params, run_in_background: undefined };
-			const onUpdate = (partial: AgentToolResult<StepSubagentDetails>): void => {
-				if (lane.runGeneration !== generation) return;
-				if (partial.details) {
-					lane.details = {
-						...partial.details,
-						agentId: lane.id,
-						status: "running",
-						startedAt: lane.startedAt,
-						updatedAt: Date.now(),
-					};
-					lane.updatedAt = Date.now();
-				}
-				updateLaneWidget(lane);
-			};
-			const promise = executeSubagent(runParams, lane.controller.signal, onUpdate, lane.ctx, resolved);
-			lane.promise = promise;
-			void promise
-				.then((result) => {
-					if (lane.runGeneration !== generation) return;
-					lane.result = result;
-					lane.details = {
-						...(result.details ?? lane.details),
-						agentId: lane.id,
-						status: result.details ? laneStatusFromDetails(result.details) : "completed",
-						startedAt: lane.startedAt,
-						updatedAt: Date.now(),
-					};
-					lane.status = lane.details.status ?? "completed";
-					lane.updatedAt = Date.now();
-					updateLaneWidget(lane);
-					const next = lane.queuedPrompts.shift();
-					if (next && lane.status !== "aborted") {
-						startLane(lane, { ...lane.params, task: next, run_in_background: undefined });
-					}
-				})
-				.catch((error: unknown) => {
-					if (lane.runGeneration !== generation) return;
-					lane.status = "failed";
-					lane.updatedAt = Date.now();
-					lane.result = controlResult(
-						`Background agent ${lane.id} failed: ${error instanceof Error ? error.message : String(error)}`,
-						lane.details,
-					);
-					updateLaneWidget(lane);
-				});
-		};
-		const createLane = (params: SubagentParams, ctx: ExtensionContext): BackgroundAgentLane => {
-			const id = randomUUID().slice(0, 8);
-			const now = Date.now();
-			const mode: StepSubagentDetails["mode"] =
-				(params.chain?.length ?? 0) > 0 ? "chain" : (params.tasks?.length ?? 0) > 0 ? "parallel" : "single";
-			const details: StepSubagentDetails = {
-				mode,
-				agentScope: params.agentScope ?? "user",
-				userAgentsDir: path.join(resolved.agentDir, "agents"),
-				projectAgentsDir: null,
-				results: [],
-				agentId: id,
-				status: "running",
-				startedAt: now,
-				updatedAt: now,
-			};
-			const lane = {
-				id,
-				...(params.alias?.trim() ? { alias: params.alias.trim() } : {}),
-				...(params.group?.trim() ? { group: params.group.trim() } : {}),
-				params,
-				ctx,
-				controller: new AbortController(),
-				status: "running" as const,
-				details,
-				promise: Promise.resolve(controlResult("pending", details)),
-				queuedPrompts: [],
-				startedAt: now,
-				updatedAt: now,
-				runGeneration: 0,
-			} satisfies BackgroundAgentLane;
-			lanes.set(id, lane);
-			return lane;
-		};
-		const findLane = (selector: AgentSelector): BackgroundAgentLane | undefined => {
-			const candidates = [...lanes.values()].filter((lane) => laneMatches(lane, selector));
-			return candidates[0];
-		};
+		const { createLane, startLane, stopLane, replyToLane } = createLaneLifecycle({
+			pi,
+			lanes,
+			agentDir: resolved.agentDir,
+			executeSubagent: (runParams, signal, onUpdate, ctx, laneRuntime) =>
+				executeSubagent(runParams, signal, onUpdate, ctx, resolved, laneRuntime),
+			updateLaneWidget,
+		});
 
 		pi.registerTool<typeof StepSubagentParamsSchema, StepSubagentDetails>({
 			name: "subagent",
@@ -1278,9 +473,13 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 						...lane.details,
 						results: [...lane.details.results],
 					};
+					const monitorHint =
+						lane.subscribe === "none"
+							? "Fire-and-forget lane: no notifications will be sent."
+							: `Lane events arrive automatically as <agent-notification> messages (subscribe: ${lane.subscribe}).`;
 					return makeToolResult(
 						details,
-						`Started background agent ${lane.id}${lane.alias ? ` (${lane.alias})` : ""}. Use agent_wait or agent_list to monitor it.`,
+						`Started background agent ${lane.id}${lane.alias ? ` (${lane.alias})` : ""}. ${monitorHint}`,
 					);
 				}
 				return executeSubagent(params as SubagentParams, signal, onUpdate, ctx, resolved);
@@ -1309,103 +508,43 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			renderResult: (result, renderOptions, theme) => renderSubagentResult(result, renderOptions, theme),
 		});
 
-		pi.registerTool<typeof AgentReplySchema>({
-			name: "agent_reply",
-			label: "Agent reply",
-			description: "Send a follow-up prompt to a background lane created by agent with run_in_background=true.",
-			parameters: AgentReplySchema,
+		pi.registerTool<typeof AgentSendSchema>({
+			name: "agent_send",
+			label: "Agent send",
+			description: [
+				"Send a message to background agents created by subagent with run_in_background=true.",
+				'action:"reply" delivers prompt into the lane\'s ongoing transcript (interrupt:false queues it after the current turn, interrupt:true steers immediately).',
+				'action:"stop" interrupts the lane and ends its child process.',
+				"Address one lane with to.agent_id or to.alias, or fan out with to.group / to.all.",
+			].join(" "),
+			parameters: AgentSendSchema,
 			executionMode: "sequential",
 			execute: async (_id, params) => {
-				const lane = findLane(params);
-				if (!lane) return controlResult("agent_reply: no matching background agent");
-				const prompt = params.prompt.trim();
-				if (!prompt) return controlResult("agent_reply: prompt must not be empty");
-				if (lane.status === "running" && params.interrupt !== true) {
-					lane.queuedPrompts.push(prompt);
-					return controlResult(`Queued follow-up for agent ${lane.id}`);
+				const to = params.to ?? {};
+				if (!to.agent_id && !to.alias && !to.group && to.all !== true) {
+					return controlResult("agent_send: provide to.agent_id, to.alias, to.group, or to.all");
 				}
-				if (lane.status === "running") lane.controller.abort();
-				if (params.interrupt === true) lane.queuedPrompts.length = 0;
-				startLane(lane, {
-					...lane.params,
-					task: prompt,
-					run_in_background: undefined,
-				});
-				return controlResult(`Started follow-up for agent ${lane.id}`, lane.details);
-			},
-		});
-
-		pi.registerTool<typeof AgentWaitSchema>({
-			name: "agent_wait",
-			label: "Agent wait",
-			description:
-				"Wait for updates from background lanes created by agent. Select one lane with agent_id or alias, a group, or omit selectors to wait across all lanes.",
-			parameters: AgentWaitSchema,
-			executionMode: "sequential",
-			execute: async (_id, params, signal) => {
-				const selected = [...lanes.values()].filter((lane) => laneMatches(lane, params));
-				if (selected.length === 0) return controlResult("No matching background agents");
-				const waitFor = params.wait_for ?? "any";
-				const waitMs = params.wait_ms ?? 30_000;
-				const pending = selected.filter((lane) => lane.status === "running");
-				if (pending.length > 0) {
-					const waitPromise =
-						waitFor === "all"
-							? Promise.all(pending.map((lane) => lane.promise))
-							: Promise.race(pending.map((lane) => lane.promise));
-					await Promise.race([
-						waitPromise,
-						new Promise<void>((resolveWait) => setTimeout(resolveWait, waitMs)),
-						new Promise<void>((_, rejectWait) => {
-							if (signal?.aborted) rejectWait(new Error("agent_wait aborted"));
-							else
-								signal?.addEventListener("abort", () => rejectWait(new Error("agent_wait aborted")), {
-									once: true,
-								});
-						}),
-					]).catch(() => undefined);
+				const selected = [...lanes.values()].filter((lane) => to.all === true || laneMatches(lane, to));
+				if (selected.length === 0) return controlResult("agent_send: no matching background agents");
+				if (params.action === "reply") {
+					const prompt = params.prompt?.trim();
+					if (!prompt) return controlResult('agent_send: prompt is required for action:"reply"');
+					return controlResult(
+						selected.map((lane) => replyToLane(lane, prompt, params.interrupt === true)).join("\n"),
+						selected.map((lane) => lane.details),
+					);
 				}
 				return controlResult(
-					selected.map(laneSummary).join("\n\n"),
+					selected.map((lane) => stopLane(lane)).join("\n"),
 					selected.map((lane) => lane.details),
 				);
 			},
 		});
 
-		pi.registerTool<typeof AgentSelectorSchema>({
-			name: "agent_interrupt",
-			label: "Agent interrupt",
-			description: "Interrupt a running background lane created by agent.",
-			parameters: AgentSelectorSchema,
-			executionMode: "sequential",
-			execute: async (_id, params) => {
-				const lane = findLane(params);
-				if (!lane) return controlResult("agent_interrupt: no matching background agent");
-				if (lane.status !== "running") return controlResult(`Agent ${lane.id} is already ${lane.status}`);
-				lane.queuedPrompts.length = 0;
-				lane.runGeneration += 1;
-				lane.controller.abort();
-				lane.status = "aborted";
-				lane.updatedAt = Date.now();
-				updateLaneWidget(lane);
-				return controlResult(`Interrupted agent ${lane.id}`, lane.details);
-			},
-		});
-
-		pi.registerTool<typeof AgentSelectorSchema>({
-			name: "agent_list",
-			label: "Agent list",
-			description: "List background lanes created by agent with their status, live step, and output preview.",
-			parameters: AgentSelectorSchema,
-			executionMode: "sequential",
-			execute: async (_id, params) => {
-				const selected = [...lanes.values()].filter((lane) => laneMatches(lane, params));
-				return controlResult(
-					selected.length > 0 ? selected.map(laneSummary).join("\n\n") : "No background agents",
-					selected.map((lane) => lane.details),
-				);
-			},
-		});
+		// S3 (docs/improvement-plan.md): agent_reply/agent_wait/agent_interrupt/
+		// agent_list are hard-deleted. agent_send covers reply (follow_up), steer
+		// (reply + interrupt), and stop (abort); lane lifecycle arrives as
+		// <agent-notification> events instead of wait/list polling.
 	};
 }
 
