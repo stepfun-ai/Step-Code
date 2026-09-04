@@ -139,6 +139,16 @@ describe("Step system prompt appendix", () => {
 		expect(withoutTasks).not.toContain("- task_create:");
 	});
 
+	it("adds calendar scheduling guidance only when cron tools are active", () => {
+		const withCron = buildStepSystemPromptAppendix(["read_file", "cron_create", "cron_list", "cron_delete"]);
+		expect(withCron).toContain("# Scheduled work");
+		expect(withCron).toContain("five-field local-time");
+		expect(withCron).toContain("schedule_wakeup");
+
+		const withoutCron = buildStepSystemPromptAppendix(["read_file"]);
+		expect(withoutCron).not.toContain("# Scheduled work");
+	});
+
 	it("reports the operating mode inside the env block", () => {
 		const readOnly = buildStepSystemPromptAppendix(["read_file"]);
 		expect(readOnly).toContain("Operating mode: read-only");

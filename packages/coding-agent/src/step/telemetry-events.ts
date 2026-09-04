@@ -138,6 +138,8 @@ export interface StepTelemetryEventPayloads {
 	readonly cron_deleted: { readonly found: boolean };
 	readonly cron_fired: { readonly recurring: boolean };
 	readonly cron_missed: { readonly trigger_count: number };
+	readonly cron_deferred: { readonly id: string; readonly defer_count: number };
+	readonly cron_expired: { readonly id: string; readonly recurring: boolean };
 	readonly goal_command_used: { readonly subcommand: string };
 	readonly error_raised: { readonly error_type: string; readonly where: string; readonly retryable: boolean };
 	readonly feedback_submitted: {
@@ -196,6 +198,8 @@ export const STEP_TELEMETRY_EVENT_NAMES = Object.keys({
 	cron_deleted: true,
 	cron_fired: true,
 	cron_missed: true,
+	cron_deferred: true,
+	cron_expired: true,
 	goal_command_used: true,
 	error_raised: true,
 	feedback_submitted: true,
@@ -292,6 +296,8 @@ export const STEP_TELEMETRY_EVENT_PROPERTY_NAMES: Readonly<Record<StepTelemetryK
 	cron_deleted: propertyNames("found"),
 	cron_fired: propertyNames("recurring"),
 	cron_missed: propertyNames("trigger_count"),
+	cron_deferred: propertyNames("id", "defer_count"),
+	cron_expired: propertyNames("id", "recurring"),
 	goal_command_used: propertyNames("subcommand"),
 	error_raised: propertyNames("error_type", "where", "retryable"),
 	feedback_submitted: propertyNames(
@@ -631,6 +637,22 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 		comment: "Fire times missed while a session was closed.",
 		properties: {
 			trigger_count: "Number of missed fire times.",
+		},
+	},
+	cron_deferred: {
+		owner: "gateway",
+		comment: "Cron jobs held until the active turn becomes idle.",
+		properties: {
+			id: "Opaque cron job identifier.",
+			defer_count: "Number of defer attempts for this job.",
+		},
+	},
+	cron_expired: {
+		owner: "gateway",
+		comment: "Recurring jobs removed at the seven-day expiry boundary.",
+		properties: {
+			id: "Opaque cron job identifier.",
+			recurring: "Whether the expired job was recurring.",
 		},
 	},
 	goal_command_used: {
