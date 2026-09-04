@@ -149,6 +149,17 @@ describe("Step system prompt appendix", () => {
 		expect(withoutCron).not.toContain("# Scheduled work");
 	});
 
+	it("adds workflow guidance only when the workflow tool is active", () => {
+		const withWorkflow = buildStepSystemPromptAppendix(["read_file", "workflow"]);
+		expect(withWorkflow).toContain("# Workflow orchestration");
+		expect(withWorkflow).toContain('"ultraloop"');
+		expect(withWorkflow).toContain("read-only Planner");
+		expect(withWorkflow).toContain("resumeFromRunId");
+
+		const withoutWorkflow = buildStepSystemPromptAppendix(["read_file"]);
+		expect(withoutWorkflow).not.toContain("# Workflow orchestration");
+	});
+
 	it("reports the operating mode inside the env block", () => {
 		const readOnly = buildStepSystemPromptAppendix(["read_file"]);
 		expect(readOnly).toContain("Operating mode: read-only");

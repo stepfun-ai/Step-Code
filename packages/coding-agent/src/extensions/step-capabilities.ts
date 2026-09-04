@@ -6,11 +6,16 @@ import { createStepPlanExtension } from "./step-plan.ts";
 import { registerStepClarifyUserExtension } from "./step-questionnaire.ts";
 import { createStepSubagentExtension, type StepSubagentExtensionOptions } from "./step-subagent.ts";
 import { createStepTasksExtension } from "./step-tasks.ts";
+import { registerWorkflowChildAcl } from "./workflow/acl-extension.ts";
+import { createStepWorkflowExtension, type StepWorkflowExtensionOptions } from "./workflow/step-workflow.ts";
+import { createUltraloopOptInExtension } from "./workflow/ultraloop-opt-in.ts";
 
 export interface StepCapabilitiesExtensionOptions {
 	subagent?: StepSubagentExtensionOptions;
 	/** Optional process reporter; capability adapters never own delivery. */
 	telemetry?: StepTelemetryReporter;
+	/** Workflow is opt-in because its native isolation dependency is optional. */
+	workflow?: StepWorkflowExtensionOptions;
 }
 
 /** Compose Pi's native UI examples behind one Step-owned inline extension. */
@@ -21,11 +26,22 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 		...options.subagent,
 		telemetry: options.telemetry,
 	});
+	const workflow = createStepWorkflowExtension({
+		...options.workflow,
+		telemetry: options.workflow?.telemetry ?? options.telemetry,
+	});
+	const ultraloopOptIn = createUltraloopOptInExtension({
+		enabled: options.workflow?.enabled,
+		vmExecutor: options.workflow?.vmExecutor,
+	});
 	return (pi: ExtensionAPI): void => {
+		registerWorkflowChildAcl(pi, options.telemetry);
 		registerStepClarifyUserExtension(pi, options.telemetry);
 		plan(pi);
 		tasks(pi);
 		subagent(pi);
+		workflow(pi);
+		ultraloopOptIn(pi);
 	};
 }
 

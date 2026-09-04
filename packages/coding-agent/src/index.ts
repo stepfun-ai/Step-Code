@@ -394,6 +394,10 @@ export {
 	type StepCronRuntimeOptions,
 	stepCronExtensionInline,
 } from "./extensions/step-cron.ts";
+// Optional Step Workflow capability. The extension remains feature-gated at
+// registration time, while the pure runtime contracts are useful to embedders
+// and tests.
+export * from "./extensions/workflow/index.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage

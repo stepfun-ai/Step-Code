@@ -140,6 +140,35 @@ export interface StepTelemetryEventPayloads {
 	readonly cron_missed: { readonly trigger_count: number };
 	readonly cron_deferred: { readonly id: string; readonly defer_count: number };
 	readonly cron_expired: { readonly id: string; readonly recurring: boolean };
+	readonly workflow_started: { readonly phase_count: number };
+	readonly workflow_phase: { readonly title_length: number; readonly phase_index: number };
+	readonly workflow_agent_started: { readonly label_length: number; readonly phase_length: number };
+	readonly workflow_agent_finished: {
+		readonly status: string;
+		readonly cached: boolean;
+		readonly token_count: number;
+	};
+	readonly workflow_schema_failed: { readonly attempt: number; readonly error_count: number };
+	readonly workflow_acl_blocked: { readonly operation: string; readonly reason_code: string };
+	readonly workflow_budget_exceeded: { readonly spent_tokens: number; readonly requested_tokens: number };
+	readonly workflow_resumed: { readonly cache_hits: number };
+	readonly workflow_finished: {
+		readonly status: string;
+		readonly agent_count: number;
+		readonly cache_hits: number;
+		readonly spent_tokens: number;
+	};
+	readonly workflow_hoh_iteration: { readonly iteration: number };
+	readonly workflow_hoh_evidence_written: {
+		readonly iteration: number;
+		readonly spec_coverage_percent: number;
+		readonly coverage_delta_percent: number;
+	};
+	readonly workflow_hoh_finished: {
+		readonly iterations: number;
+		readonly stop_reason: string;
+		readonly spec_coverage_percent: number;
+	};
 	readonly goal_command_used: { readonly subcommand: string };
 	readonly error_raised: { readonly error_type: string; readonly where: string; readonly retryable: boolean };
 	readonly feedback_submitted: {
@@ -200,6 +229,18 @@ export const STEP_TELEMETRY_EVENT_NAMES = Object.keys({
 	cron_missed: true,
 	cron_deferred: true,
 	cron_expired: true,
+	workflow_started: true,
+	workflow_phase: true,
+	workflow_agent_started: true,
+	workflow_agent_finished: true,
+	workflow_schema_failed: true,
+	workflow_acl_blocked: true,
+	workflow_budget_exceeded: true,
+	workflow_resumed: true,
+	workflow_finished: true,
+	workflow_hoh_iteration: true,
+	workflow_hoh_evidence_written: true,
+	workflow_hoh_finished: true,
 	goal_command_used: true,
 	error_raised: true,
 	feedback_submitted: true,
@@ -298,6 +339,18 @@ export const STEP_TELEMETRY_EVENT_PROPERTY_NAMES: Readonly<Record<StepTelemetryK
 	cron_missed: propertyNames("trigger_count"),
 	cron_deferred: propertyNames("id", "defer_count"),
 	cron_expired: propertyNames("id", "recurring"),
+	workflow_started: propertyNames("phase_count"),
+	workflow_phase: propertyNames("title_length", "phase_index"),
+	workflow_agent_started: propertyNames("label_length", "phase_length"),
+	workflow_agent_finished: propertyNames("status", "cached", "token_count"),
+	workflow_schema_failed: propertyNames("attempt", "error_count"),
+	workflow_acl_blocked: propertyNames("operation", "reason_code"),
+	workflow_budget_exceeded: propertyNames("spent_tokens", "requested_tokens"),
+	workflow_resumed: propertyNames("cache_hits"),
+	workflow_finished: propertyNames("status", "agent_count", "cache_hits", "spent_tokens"),
+	workflow_hoh_iteration: propertyNames("iteration"),
+	workflow_hoh_evidence_written: propertyNames("iteration", "spec_coverage_percent", "coverage_delta_percent"),
+	workflow_hoh_finished: propertyNames("iterations", "stop_reason", "spec_coverage_percent"),
 	goal_command_used: propertyNames("subcommand"),
 	error_raised: propertyNames("error_type", "where", "retryable"),
 	feedback_submitted: propertyNames(
@@ -653,6 +706,104 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 		properties: {
 			id: "Opaque cron job identifier.",
 			recurring: "Whether the expired job was recurring.",
+		},
+	},
+	workflow_started: {
+		owner: "core",
+		comment: "Isolated workflow runs started by the workflow tool.",
+		properties: {
+			phase_count: "Number of declared phases at start, without script contents.",
+		},
+	},
+	workflow_phase: {
+		owner: "core",
+		comment: "Workflow phase transitions and their ordinal position.",
+		properties: {
+			title_length: "Length of the redacted phase title.",
+			phase_index: "Zero-based phase index.",
+		},
+	},
+	workflow_agent_started: {
+		owner: "core",
+		comment: "Agent calls launched by an isolated workflow.",
+		properties: {
+			label_length: "Length of the agent label, never its contents.",
+			phase_length: "Length of the associated phase label.",
+		},
+	},
+	workflow_agent_finished: {
+		owner: "core",
+		comment: "Terminal status and token shape for workflow agent calls.",
+		properties: {
+			status: "completed, failed, or cached.",
+			cached: "Whether the result came from a resume journal.",
+			token_count: "Input plus output tokens accounted for this call.",
+		},
+	},
+	workflow_schema_failed: {
+		owner: "core",
+		comment: "Structured output validation retries.",
+		properties: {
+			attempt: "One-based validation attempt.",
+			error_count: "Number of validation errors returned.",
+		},
+	},
+	workflow_acl_blocked: {
+		owner: "security",
+		comment: "Workflow path or role access rejected by the ACL boundary.",
+		properties: {
+			operation: "Read, write, or execute operation class.",
+			reason_code: "Fixed reason category.",
+		},
+	},
+	workflow_budget_exceeded: {
+		owner: "core",
+		comment: "Workflow stopped after crossing its token budget.",
+		properties: {
+			spent_tokens: "Tokens spent before the rejected call.",
+			requested_tokens: "Tokens requested by the rejected call.",
+		},
+	},
+	workflow_resumed: {
+		owner: "core",
+		comment: "Workflow reused a verified journal prefix.",
+		properties: {
+			cache_hits: "Number of cached agent calls reused so far.",
+		},
+	},
+	workflow_finished: {
+		owner: "core",
+		comment: "Workflow run terminal status and bounded cost dimensions.",
+		properties: {
+			status: "completed, failed, aborted, or budget_exceeded.",
+			agent_count: "Logical agent calls in the run.",
+			cache_hits: "Journal results reused by resume.",
+			spent_tokens: "Input plus output tokens accounted for the run.",
+		},
+	},
+	workflow_hoh_iteration: {
+		owner: "core",
+		comment: "HoH Planner, Developer, and QA iteration count.",
+		properties: {
+			iteration: "One-based iteration number.",
+		},
+	},
+	workflow_hoh_evidence_written: {
+		owner: "core",
+		comment: "Structured HoH evidence persisted for replay and handoff.",
+		properties: {
+			iteration: "One-based iteration number.",
+			spec_coverage_percent: "QA-reported specification coverage, rounded to percent.",
+			coverage_delta_percent: "Coverage change from the previous iteration, rounded to percent.",
+		},
+	},
+	workflow_hoh_finished: {
+		owner: "core",
+		comment: "HoH iteration terminal reason and achieved coverage.",
+		properties: {
+			iterations: "Number of completed or stopped iterations.",
+			stop_reason: "Fixed termination category.",
+			spec_coverage_percent: "Final specification coverage, rounded to percent.",
 		},
 	},
 	goal_command_used: {
