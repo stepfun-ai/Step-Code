@@ -17,6 +17,7 @@
 - Fixed StepCode compatibility for the legacy `--session-file` session selector.
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
+- Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
 
 ## [0.84.4] - 2026-08-28
 

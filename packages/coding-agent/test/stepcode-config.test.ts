@@ -82,7 +82,7 @@ describe("StepCode config compatibility", () => {
 					proxy: {
 						api: "responses",
 						baseUrl: "https://proxy.example/v1",
-						models: [{ id: "fast" }],
+						models: [{ id: "fast" }, { id: "disabled", reasoning: false }],
 					},
 				},
 				activeModel: "fast",
@@ -91,6 +91,12 @@ describe("StepCode config compatibility", () => {
 		const config = await loadStepCodeConfig({ STEP_CLI_CONFIG_PATH: configPath }, root);
 		expect(config).toMatchObject({ defaultProvider: "proxy", defaultModel: "fast" });
 		expect(config?.providers[0]?.config.api).toBe("openai-responses");
+		expect(config?.providers[0]?.config.models).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "fast", reasoning: true }),
+				expect.objectContaining({ id: "disabled", reasoning: false }),
+			]),
+		);
 		expect(applyStepCodeConfigDefaults(["--print", "hello"], config, {})).toEqual([
 			"--print",
 			"hello",
