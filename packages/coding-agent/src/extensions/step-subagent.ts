@@ -114,6 +114,12 @@ export interface StepSubagentRunInput {
 	sessionId?: string;
 	/** Keep the rpc child alive after the turn settles so replies reuse it. */
 	keepAlive?: boolean;
+	/** Workflow-owned path ACL passed to the child-side tool_call hook. */
+	workflowAcl?: {
+		baseCwd: string;
+		readOnly?: string[];
+		writable?: string[];
+	};
 }
 
 /** Injectable runner used by embedders and tests. The default runner launches

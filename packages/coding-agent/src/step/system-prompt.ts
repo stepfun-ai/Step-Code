@@ -38,6 +38,8 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 		"Use task_update to set in_progress before starting a task and completed immediately after finishing it; status deleted removes a task.",
 	task_get: "Use task_get to re-read a task's full description and dependencies before working on it.",
 	task_list: "Use task_list to check progress and pick the next open, unblocked task after finishing one.",
+	workflow:
+		"Use workflow for isolated multi-agent orchestration. Keep scripts small, use phase/parallel/pipeline for structure, and use iterate for HoH-style Planner → single-writer Developer → independent QA loops.",
 };
 
 const READ_TOOLS = ["list_directory", "find_files", "search_files", "read_file", "ls", "find", "grep", "read"] as const;
@@ -193,6 +195,26 @@ export function buildStepSystemPromptAppendix(
 			]
 		: [];
 
+	const workflowSection = active.has("workflow")
+		? [
+				"# Workflow orchestration",
+				[
+					'- workflow is opt-in: reach for it only when the user\'s current message contains the keyword "ultraloop" or an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop is on for the session (a system-reminder confirms it and repeats every turn until /ultraloop off); the user invokes a saved workflow by name; or a skill instructs it. A system-reminder confirms per-turn and session-standing opt-ins (saved-workflow and skill invocations are valid without one); never infer opt-in from task shape, and never carry a per-turn opt-in forward.',
+					"- When ultraloop is on for the session that opt-in is standing: author and run a workflow for every substantive task by default, treat token cost as unconstrained, and aim for the most exhaustive correct answer. Multi-phase work often means several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits. When session mode is off, revert to the per-turn opt-in rule.",
+					"- Without any signal, prefer targeted tools — search_files, read_file, or a single subagent — and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
+					"- With opt-in, workflow fits broad multi-subsystem audits, mechanical migrations across many sites, multi-way parallel review with adversarial verification, research sweeps, and HoH convergence on a spec.",
+					"- Scripts compose agent() calls using phase() for visible milestones, parallel() and pipeline() for fan-out, iterate() for HoH loops, nested workflow() for sub-runs, log() for progress, and the budget object; pass inputs via args as real JSON values, never JSON-encoded strings.",
+					"- parallel() is a barrier that awaits every call before returning; pipeline() threads each item through the stages independently with no barrier between stages, so a stage never sees sibling items' earlier-stage output. Default to pipeline() and use a stage-wide parallel() only when a stage needs cross-item context such as dedup, early exit, or cross-referencing.",
+					"- iterate({spec, maxIterations, stopWhenSpecCoverage}) runs the HoH loop: a read-only Planner, a single-writer Developer, and an independent read-only QA, with role boundaries enforced by toolProfile and readOnly/writable mounts; it stops on spec coverage, stagnation, max iterations, an empty objective, or exhausted budget.",
+					"- Pass a JSON schema to agent() whenever a later stage consumes the result; output is forced to structured JSON and mismatches are retried up to 3 times before the call fails.",
+					"- Budgets fail closed once exhausted and budget.total is null when no limit is set, so guard scale decisions with budget.total && budget.remaining() > n. Report every drop with log() — top-N truncations, skipped retries, sampling — never cap silently.",
+					"- Resume with resumeFromRunId: the same script and args replay the unchanged call prefix as a 100% cache hit; the first mismatched call and everything after it re-run live.",
+					"- Scripts must be deterministic: Date, new Date(), and Math.random() throw in the isolated runtime, and process, require, and network access are unavailable. Pass timestamps through args and vary prompts by index.",
+					"- Default to a medium-sized run and stay under roughly 15 agents unless the user asks for scale or ultraloop is on for the session.",
+				].join("\n"),
+			]
+		: [];
+
 	const sections = [
 		"# Step operating contract",
 		"Use the structured tools exposed by the model API. Never emit XML or pseudo tool-call syntax as assistant text; tool calls are represented by the API itself.",
@@ -234,6 +256,8 @@ export function buildStepSystemPromptAppendix(
 		...taskTrackingSection,
 
 		...cronSection,
+
+		...workflowSection,
 
 		"# Code conventions",
 		"- Match surrounding style, naming, patterns, and dependencies. Check the project manifest or existing imports before assuming a dependency exists.",

@@ -25,6 +25,7 @@ import {
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
 } from "../step-subagent.ts";
+import { WORKFLOW_ACL_ENV } from "../workflow/acl-extension.ts";
 import { liveSubagentSessions } from "./lane-lifecycle.ts";
 
 const MAX_STDERR_CHARS = 32_000;
@@ -139,7 +140,14 @@ export async function createSubagentRpcSession(
 	const invocation = currentStepInvocation(args);
 	const child = spawn(invocation.command, invocation.args, {
 		cwd: input.cwd,
-		env: { ...process.env, [CHILD_MARKER]: "1" },
+		env: {
+			...process.env,
+			[CHILD_MARKER]: "1",
+			...(input.workflowAcl ? { STEP_DISABLE_WORKFLOW: "1" } : {}),
+			...(input.workflowAcl
+				? { [WORKFLOW_ACL_ENV]: JSON.stringify(input.workflowAcl) }
+				: { [WORKFLOW_ACL_ENV]: undefined }),
+		},
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
