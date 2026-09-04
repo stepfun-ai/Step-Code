@@ -160,6 +160,32 @@ describe("Step system prompt appendix", () => {
 		expect(withoutWorkflow).not.toContain("# Workflow orchestration");
 	});
 
+	it("adds coordination-primitive guidance when any orchestration tool is active", () => {
+		const withCron = buildStepSystemPromptAppendix(["read_file", "cron_create"]);
+		expect(withCron).toContain("# Coordination primitives");
+		expect(withCron).toContain("subagent");
+		expect(withCron).toContain("schedule_wakeup");
+		expect(withCron).toContain("cron_create");
+		expect(withCron).toContain("workflow");
+		expect(withCron).toContain("Do not stack primitives to look busy");
+
+		const withWorkflow = buildStepSystemPromptAppendix(["read_file", "workflow"]);
+		expect(withWorkflow).toContain("# Coordination primitives");
+
+		const withWakeup = buildStepSystemPromptAppendix(["read_file", "schedule_wakeup"]);
+		expect(withWakeup).toContain("# Coordination primitives");
+
+		const withoutOrchestration = buildStepSystemPromptAppendix(["read_file"]);
+		expect(withoutOrchestration).not.toContain("# Coordination primitives");
+	});
+
+	it("carries a cost-and-consent contract", () => {
+		const prompt = buildStepSystemPromptAppendix(["read_file"]);
+		expect(prompt).toContain("# Cost and consent");
+		expect(prompt).toContain("opt-in gate");
+		expect(prompt).toContain("necessary but not sufficient consent");
+	});
+
 	it("reports the operating mode inside the env block", () => {
 		const readOnly = buildStepSystemPromptAppendix(["read_file"]);
 		expect(readOnly).toContain("Operating mode: read-only");

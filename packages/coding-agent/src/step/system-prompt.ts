@@ -39,7 +39,7 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 	task_get: "Use task_get to re-read a task's full description and dependencies before working on it.",
 	task_list: "Use task_list to check progress and pick the next open, unblocked task after finishing one.",
 	workflow:
-		"Use workflow for isolated multi-agent orchestration. Keep scripts small, use phase/parallel/pipeline for structure, and use iterate for HoH-style Planner → single-writer Developer → independent QA loops.",
+		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create or schedule_wakeup.",
 };
 
 const READ_TOOLS = ["list_directory", "find_files", "search_files", "read_file", "ls", "find", "grep", "read"] as const;
@@ -183,6 +183,22 @@ export function buildStepSystemPromptAppendix(
 			]
 		: [];
 
+	const coordinationSection = hasAnyTool(active, ["workflow", "cron_create", "schedule_wakeup"])
+		? [
+				"# Coordination primitives",
+				[
+					"- The coordination primitives — direct tools, subagent, schedule_wakeup, cron_create, workflow — share one job (running work on your behalf) but differ on when the work runs and what the fresh actor sees.",
+					"- Reach for direct tools first (read_file, edit_file, run_command). Escalate only when a specific primitive's value applies.",
+					"- subagent (Agent tool, when available): delegate a scoped task to a fresh context. Use when the parent context is precious, the task is exploration-heavy, or you want an independent verifier. The child agent has no memory of this conversation; brief it self-contained.",
+					"- schedule_wakeup (when available): session-scoped 60–3600 second relative timer that injects a specific prompt back into a later turn. Use when waiting on wall-clock state that changes on its own (CI, deploy, external process). Dies with the session.",
+					"- cron_create (when available): five-field local-time schedule that may persist across sessions (durable:true). Use when the trigger is time-of-day or day-of-week, not a completion state. cron_create is for recurrence or restart-survival; schedule_wakeup is for a one-shot delay within this session.",
+					"- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in (see # Workflow orchestration). Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
+					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; waiting on wall-clock → schedule_wakeup (session) or cron_create (durable calendar); broad multi-agent work with per-agent budgets → workflow (opt-in only).",
+					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule a wakeup.",
+				].join("\n"),
+			]
+		: [];
+
 	const cronSection = hasAnyTool(active, ["cron_create", "cron_list", "cron_delete"])
 		? [
 				"# Scheduled work",
@@ -242,6 +258,10 @@ export function buildStepSystemPromptAppendix(
 		"- `rm -rf`, `git reset --hard`, `git clean`, force-push, and similar commands are never routine. State the exact target and intent before proceeding when the runtime permits a confirmation.",
 		"- A permission denial is final for that call. Do not retry it verbatim or disguise the same action as another tool call.",
 
+		"# Cost and consent",
+		"- Before crossing an opt-in gate (workflow, ultraloop) or committing durable side effects (cron durable:true, wide file writes), name the intended action and its rough cost so the user can steer before you spend.",
+		"- Treat 'the task benefits from scale' as necessary but not sufficient consent; the user always has the option of a smaller, cheaper answer.",
+
 		"# Workflow",
 		"1. Understand first: read relevant code and project instructions, then investigate until the root cause is clear.",
 		"2. Plan when useful: for work with several non-trivial steps or real uncertainty, keep a concise plan and update it as facts change.",
@@ -254,6 +274,8 @@ export function buildStepSystemPromptAppendix(
 		...planningSection,
 
 		...taskTrackingSection,
+
+		...coordinationSection,
 
 		...cronSection,
 
