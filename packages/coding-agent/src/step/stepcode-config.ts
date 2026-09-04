@@ -717,9 +717,19 @@ function readNonNegativeNumber(value: unknown): number | undefined {
 }
 
 function hasReasoning(model: JsonObject): boolean {
+	// StepCode's managed catalog historically omitted capability metadata for
+	// reasoning-capable models. Preserve an explicit opt-out, but default an
+	// omitted capability to enabled so the Pi selector can expose its standard
+	// thinking levels.
+	if (model.reasoning === false) return false;
 	if (model.reasoning === true) return true;
 	const reasoning = asObject(model.reasoning);
-	return reasoning !== undefined || model.thinking === true || model.supportsThinking === true;
+	return (
+		reasoning !== undefined ||
+		model.thinking === true ||
+		model.supportsThinking === true ||
+		model.reasoning === undefined
+	);
 }
 
 function readThinkingLevelMap(value: unknown): ProviderModelConfig["thinkingLevelMap"] {

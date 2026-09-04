@@ -24,3 +24,4 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Fixed StepCode launches failing when the injected `--session-file` session selector was not recognized by the Step entrypoint.
 - Fixed StepCode-launched Step sessions so `STEPCLI_CONFIG_PATH` provider catalogs, active models, API keys, and base URLs are loaded from the injected config file.
 - Fixed StepCode-launched model and permission persistence so reads and writes use the injected config file instead of mixing in `.step-cli` settings.
+- Fixed StepCode-launched models with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
