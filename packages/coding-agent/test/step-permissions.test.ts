@@ -90,8 +90,10 @@ describe("Step permission presets", () => {
 	it("allows read tools, confirms writes, and blocks writes in read-only mode", () => {
 		const ask = stepPermissionStateForPreset("ask");
 		expect(decideStepToolCall("read_file", { path: "a.txt" }, ask).action).toBe("allow");
+		expect(decideStepToolCall("search_web", { query: "current news" }, ask).action).toBe("allow");
 		expect(decideStepToolCall("write_file", { path: "a.txt", content: "x" }, ask).action).toBe("confirm");
 		const readOnly = stepPermissionStateForPreset("read-only");
+		expect(decideStepToolCall("search_web", { query: "current news" }, readOnly).action).toBe("allow");
 		expect(decideStepToolCall("write_file", { path: "a.txt", content: "x" }, readOnly).action).toBe("deny");
 	});
 

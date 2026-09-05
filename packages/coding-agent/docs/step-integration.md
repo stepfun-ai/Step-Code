@@ -73,6 +73,19 @@ model, startup restores its `anthropic-messages` API and Step endpoint as well.
 Upgrading from an earlier Step build therefore does not require signing
 in again.
 
+The Step tool profile also registers `search_web`, backed by the remote
+`stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
+resolved from `STEP_CLI_SEARCH_API_KEY`, `STEPCLI_SEARCH_API_KEY`,
+`STEP_API_KEY`, then the Step login entry in `auth.json`; it is sent only as a
+	Bearer header. `platform_oversea` login profiles use
+	`https://api.stepfun.ai/v1/mcp/web_search/mcp`; `step_plan` and
+	`platform_cn` use `https://api.stepfun.com/v1/mcp/web_search/mcp`. An
+	unrecognized profile falls back to the test endpoint
+	`https://api.c.ibasemind.com/v1/mcp/web_search/mcp`.
+	`STEP_CLI_SEARCH_WEB_MCP_URL` and `STEPCLI_SEARCH_WEB_MCP_URL` override this
+	profile-based selection. This adapter does not add a separate search
+	credential store or `integrations.search` settings surface.
+
 Session storage is also selected through the Step wrapper. The wrapper keeps
 Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
 binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
@@ -151,6 +164,7 @@ service and are not silently faked by this fork.
 | Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
+| Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
 | Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `step-cli.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, voice/realtime, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |

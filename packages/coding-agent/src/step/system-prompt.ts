@@ -23,6 +23,8 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 		"Use list_directory for one directory listing; it returns directories first and hides dotfiles by default.",
 	find_files: "Use find_files for glob searches and prefer it over recursive shell find or ls.",
 	search_files: "Use search_files for regular-expression content searches and prefer it over shell grep.",
+	search_web:
+		"Use search_web for current or external information; when it informs the answer, cite relevant URLs in a final Sources: section.",
 	read_file:
 		"Use read_file to inspect text with optional line ranges; if output is truncated, narrow the range or increase max_chars; supported image files are returned as images.",
 	edit_file:
@@ -42,7 +44,17 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create or schedule_wakeup.",
 };
 
-const READ_TOOLS = ["list_directory", "find_files", "search_files", "read_file", "ls", "find", "grep", "read"] as const;
+const READ_TOOLS = [
+	"list_directory",
+	"find_files",
+	"search_files",
+	"search_web",
+	"read_file",
+	"ls",
+	"find",
+	"grep",
+	"read",
+] as const;
 const WRITE_TOOLS = ["write_file", "edit_file", "write", "edit"] as const;
 const EXECUTE_TOOLS = ["run_command", "bash", "powershell"] as const;
 

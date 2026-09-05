@@ -37,6 +37,7 @@ describe("Step system prompt appendix", () => {
 			"list_directory",
 			"find_files",
 			"search_files",
+			"search_web",
 			"read_file",
 			"write_file",
 			"edit_file",
@@ -59,6 +60,7 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).toContain("Never print, log, commit, or transmit secrets");
 		expect(prompt).toContain("Never commit, push, create branches or tags, rebase, reset");
 		expect(prompt).toContain("Use only the structured tools exposed by the model API");
+		expect(prompt).toContain("cite relevant URLs in a final Sources: section");
 		expect(prompt).not.toContain("<tool_call>");
 	});
 

@@ -73,6 +73,7 @@ const READ_ONLY_TOOLS = new Set([
 	"list_directory",
 	"find_files",
 	"search_files",
+	"search_web",
 	"read_file",
 	"find_tools",
 	// Keep native names safe when a caller explicitly enables a native tool.

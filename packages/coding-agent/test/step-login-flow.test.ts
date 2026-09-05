@@ -2,8 +2,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parseArgs } from "../src/cli/args.ts";
 import { getCurrentThemeName } from "../src/modes/interactive/theme/theme.ts";
 import {
+	isStepInteractiveLoginStartup,
 	needsStepLoginBeforeInteractive,
 	readStepLoginCredential,
 	readStepLoginProfile,
@@ -36,6 +38,45 @@ describe("shared Step login flow storage", () => {
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
+	});
+
+	it.each([
+		["help", ["--help"]],
+		["short help", ["-h"]],
+		["version", ["--version"]],
+		["short version", ["-v"]],
+		["model listing", ["--list-models"]],
+		["filtered model listing", ["--list-models", "claude"]],
+		["session export", ["--export", "session.jsonl"]],
+		["SDK stdio host", ["--sdk-stdio"]],
+		["offline startup", ["--offline"]],
+		["print mode", ["--print"]],
+		["JSON mode", ["--mode", "json"]],
+		["RPC mode", ["--mode", "rpc"]],
+		["initial prompt", ["hello"]],
+		["initial file", ["@prompt.md"]],
+		["package installation", ["install", "pkg"]],
+		["package listing", ["list"]],
+		["config management", ["config"]],
+		["auth management", ["auth", "check"]],
+	] as const)("does not open startup login for %s", (_label, args) => {
+		expect(
+			isStepInteractiveLoginStartup({
+				stdinIsTTY: true,
+				stdoutIsTTY: true,
+				args: parseArgs([...args]),
+			}),
+		).toBe(false);
+	});
+
+	it("keeps login gating for a real empty interactive startup", () => {
+		expect(
+			isStepInteractiveLoginStartup({
+				stdinIsTTY: true,
+				stdoutIsTTY: true,
+				args: parseArgs([]),
+			}),
+		).toBe(true);
 	});
 
 	it("writes a profile-tagged credential and reads the profile back", async () => {
