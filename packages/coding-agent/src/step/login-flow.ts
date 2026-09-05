@@ -87,6 +87,40 @@ export function readStepLoginCredential(
 	return undefined;
 }
 
+/** True only when the Step entrypoint is about to open an empty interactive session. */
+export function isStepInteractiveLoginStartup(input: {
+	readonly stdinIsTTY?: boolean;
+	readonly stdoutIsTTY?: boolean;
+	readonly args: {
+		readonly help?: boolean;
+		readonly version?: boolean;
+		readonly export?: string;
+		readonly listModels?: string | true;
+		readonly sdkStdio?: boolean;
+		readonly offline?: boolean;
+		readonly messages: readonly string[];
+		readonly fileArgs: readonly string[];
+		readonly print?: boolean;
+		readonly mode?: string;
+	};
+}): boolean {
+	return (
+		input.stdinIsTTY === true &&
+		input.stdoutIsTTY === true &&
+		input.args.help !== true &&
+		input.args.version !== true &&
+		input.args.export === undefined &&
+		input.args.listModels === undefined &&
+		input.args.sdkStdio !== true &&
+		input.args.offline !== true &&
+		input.args.messages.length === 0 &&
+		input.args.fileArgs.length === 0 &&
+		input.args.print !== true &&
+		input.args.mode !== "json" &&
+		input.args.mode !== "rpc"
+	);
+}
+
 export function needsStepLoginBeforeInteractive(input: {
 	readonly authPath: string;
 	readonly interactive: boolean;
