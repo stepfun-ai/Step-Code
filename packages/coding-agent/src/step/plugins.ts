@@ -3,9 +3,9 @@
  *
  * Pi's package manager can install executable extensions, but Step's built-in
  * marketplace has a deliberately smaller contract: marketplace packages are
- * declarative manifests copied into `.step-cli/plugins`.  We persist and
- * diagnose MCP declarations here; the MCP process bridge can be added later
- * without changing the marketplace or slash-command contracts.
+ * declarative manifests copied into `.step-cli/plugins`. MCP processes are
+ * started by the Step runtime after installation; this module owns discovery
+ * and provisioning only.
  */
 
 import { execFile } from "node:child_process";
@@ -30,6 +30,7 @@ export const MARKETPLACE_MANIFEST_CANDIDATES: readonly string[] = [
 ];
 export const MARKETPLACE_MANIFEST_RELATIVE_PATH = MARKETPLACE_MANIFEST_CANDIDATES[0]!;
 export const BUILTIN_MARKETPLACE_NAME = "builtin";
+const STEPPAGE_INSTALLER_URL = "https://dl.stepfun.com/steppage-mcp/p/install.sh";
 
 const BUILTIN_FINGERPRINT_FILE = ".step-cli-builtin-fingerprint";
 const SAFE_NAME = /^[a-z0-9][a-z0-9._-]*$/iu;
@@ -528,9 +529,41 @@ export async function installMarketplacePlugin(
 			`Marketplace entry '${entry.name}' declares lspServers, which Step CLI does not host; that contribution was not installed.`,
 		);
 	}
+	if (entry.marketplace === BUILTIN_MARKETPLACE_NAME && ownManifest.manifest?.provision) {
+		const provision = await provisionPluginCommand(ownManifest.manifest.provision);
+		if (provision) warnings.push(provision);
+	}
 	const diagnostics = await diagnoseStepPlugin(target);
 	warnings.push(...diagnostics.warnings);
 	return { installedPath: target, warnings, diagnostics };
+}
+
+/** Install the executable declared by a built-in plugin, when it is missing. */
+async function provisionPluginCommand(provision: StepPluginProvision): Promise<string | undefined> {
+	if (provision.command !== "steppage-mcp" || process.platform === "win32") {
+		return undefined;
+	}
+	try {
+		await execFileAsync("sh", ["-c", `command -v ${shellQuote(provision.command)}`], { timeout: 10_000 });
+		return undefined;
+	} catch {
+		// Expected when a plugin is first installed.
+	}
+	const url = process.env.STEP_CLI_STEPPAGE_INSTALLER_URL?.trim() || STEPPAGE_INSTALLER_URL;
+	try {
+		await execFileAsync("sh", ["-c", `curl -fsSL ${shellQuote(url)} | sh`], {
+			env: process.env,
+			timeout: 120_000,
+			maxBuffer: 1_000_000,
+		});
+		return `Installed ${provision.command} from the StepPage installer.`;
+	} catch (error) {
+		return `Could not install ${provision.command} automatically: ${describe(error)}. Run the StepPage installer manually: ${url}`;
+	}
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 export async function uninstallPlugin(pluginsDir: string, name: string): Promise<{ removedPath: string }> {
@@ -577,14 +610,14 @@ export async function diagnoseStepPlugin(pluginDir: string): Promise<StepPluginD
 		}
 	}
 	if (mcpServers.length > 0) {
-		warnings.push(`MCP declarations saved for ${mcpServers.join(", ")}; Step CLI does not start MCP processes yet.`);
+		warnings.push(`MCP declarations saved for ${mcpServers.join(", ")}; the server starts after Step restarts.`);
 	}
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
 	const missingEnvironment = (read.manifest.provision?.requiresEnv ?? []).filter((name) => !process.env[name]?.trim());
 	if (missingEnvironment.length > 0) {
 		warnings.push(
-			`Plugin provisioning requires environment variables that are not set: ${missingEnvironment.join(", ")}.`,
+			`Plugin provisioning has no shell value for ${missingEnvironment.join(", ")}; a Step login credential can supply it at runtime.`,
 		);
 	}
 	return { mcpServers, warnings };
@@ -1143,7 +1176,7 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 						say(
 							[
 								`Installed ${name} from ${entry.marketplace} to ${installed.installedPath}.`,
-								"MCP declarations were saved; restart Step after the MCP bridge is available.",
+								"Restart Step to start the plugin's MCP server.",
 								...installed.warnings,
 							].join("\n"),
 							installed.warnings.length > 0 ? "warning" : "info",
