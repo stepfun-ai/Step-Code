@@ -51,6 +51,7 @@ type FooterPresentation = "native" | "step";
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
+	private bashMode = false;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 	private readonly presentation: FooterPresentation;
@@ -71,6 +72,14 @@ export class FooterComponent implements Component {
 
 	setAutoCompactEnabled(enabled: boolean): void {
 		this.autoCompactEnabled = enabled;
+	}
+
+	/**
+	 * While the composer holds a bash command (`!` prefix), the leading
+	 * permission segment shows the shell state instead of the permission mode.
+	 */
+	setBashMode(active: boolean): void {
+		this.bashMode = active;
 	}
 
 	/**
@@ -294,7 +303,8 @@ export class FooterComponent implements Component {
 								normalizedRawMode === "readonly"
 							? { label: "Read-only", paint: muted }
 							: { label: "Ask", paint: accent };
-		const segments: string[] = [mode.paint(`⏵ ${mode.label}`)];
+		const displayMode = this.bashMode ? { label: "Shell", paint: (text: string) => theme.fg("error", text) } : mode;
+		const segments: string[] = [displayMode.paint(`⏵ ${displayMode.label}`)];
 
 		const model = state.model?.id;
 		if (safeWidth >= 60 && model) {

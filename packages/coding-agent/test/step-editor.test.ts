@@ -45,6 +45,42 @@ describe("StepEditor", () => {
 		for (const line of lines) expect(visibleWidth(line)).toBe(80);
 	});
 
+	it("shows bash-mode hints for a bare ! or !! prefix", () => {
+		initTheme("step");
+		const editor = createEditor();
+
+		editor.setText("!");
+		const bangLines = editor.render(80);
+		expect(bangLines[1]).toContain("run a shell command (Esc to exit)");
+		expect(bangLines[1]).not.toContain(STEP_EDITOR_PLACEHOLDER);
+
+		editor.setText("!!");
+		const excludedLines = editor.render(80);
+		expect(excludedLines[1]).toContain("run a shell command, hidden from the model (Esc to exit)");
+
+		for (const line of [...bangLines, ...excludedLines]) expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("hides the bash hint once a command follows the prefix", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("!ls");
+		const lines = editor.render(80);
+
+		expect(lines[1]).not.toContain("run a shell command");
+		for (const line of lines) expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("paints the rounded frame with the editor's borderColor", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.borderColor = (str: string) => `<b>${str}</b>`;
+		const lines = editor.render(80);
+
+		expect(lines[0]).toContain("<b>");
+		expect(lines[2]).toContain("<b>");
+	});
+
 	it("keeps native editor text and CJK width handling inside the frame", () => {
 		initTheme("step");
 		const editor = createEditor();

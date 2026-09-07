@@ -11,7 +11,11 @@ import { theme } from "../theme/theme.ts";
 import { CustomEditor } from "./custom-editor.ts";
 
 /** The hint shown before the first prompt is typed. */
-export const STEP_EDITOR_PLACEHOLDER = "Ask Step to do anything (/ for commands, @ for files)";
+export const STEP_EDITOR_PLACEHOLDER = "Ask Step to do anything (/ for commands, @ for files, ! for shell)";
+
+/** The hints shown while the editor holds only a bash prefix. */
+const STEP_BASH_PLACEHOLDER = "run a shell command (Esc to exit)";
+const STEP_BASH_EXCLUDED_PLACEHOLDER = "run a shell command, hidden from the model (Esc to exit)";
 
 /** The side rail and one-cell inset added by the rounded frame. */
 const STEP_EDITOR_CHROME_WIDTH = 4;
@@ -143,7 +147,11 @@ export class StepEditor extends CustomEditor {
 
 	/** Insert the hint into pi-tui's already padded empty content row. */
 	private applyPlaceholder(lines: string[]): string[] {
-		if (this.getText().length !== 0 || lines.length < 2) {
+		const text = this.getText();
+		// A bare `!`/`!!` prefix keeps a bash-mode hint after the typed prefix.
+		const bashHint =
+			text === "!" ? STEP_BASH_PLACEHOLDER : text === "!!" ? STEP_BASH_EXCLUDED_PLACEHOLDER : undefined;
+		if ((text.length !== 0 && !bashHint) || lines.length < 2) {
 			return lines;
 		}
 
@@ -155,7 +163,7 @@ export class StepEditor extends CustomEditor {
 			return lines;
 		}
 
-		const placeholder = truncateToWidth(this.placeholder, budget);
+		const placeholder = truncateToWidth(bashHint ?? this.placeholder, budget);
 		const placeholderWidth = visibleWidth(placeholder);
 		if (placeholderWidth === 0) {
 			return lines;
@@ -189,7 +197,10 @@ export class StepEditor extends CustomEditor {
 			return inner;
 		}
 
-		const border = (text: string) => theme.fg("borderAccent", text);
+		// The frame follows the editor's borderColor so mode changes (bash mode,
+		// thinking level) recolor the composer; StepEditor's constructor pins the
+		// brand tone and InteractiveMode updates it per state.
+		const border = this.borderColor;
 		const interiorWidth = Math.max(0, width - STEP_EDITOR_CHROME_WIDTH);
 		const rule = "─".repeat(Math.max(0, width - 2));
 		const framed: string[] = [border(`╭${rule}╮`)];
