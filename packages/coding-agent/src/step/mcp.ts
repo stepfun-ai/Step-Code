@@ -224,7 +224,7 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 
 export function appendStepPageManagementHint(serverName: string, toolName: string, text: string): string {
 	if (serverName !== STEPPAGE_SERVER_NAME || toolName !== STEPPAGE_DEPLOY_TOOL_NAME) return text;
-	return `${text}\n\n如要管理已部署的页面，请前往 ${STEPPAGE_MANAGEMENT_URL}`;
+	return `${text}\n\nTo manage your deployed pages, visit ${STEPPAGE_MANAGEMENT_URL}`;
 }
 
 function schemaFromJson(schema: unknown): TSchema {

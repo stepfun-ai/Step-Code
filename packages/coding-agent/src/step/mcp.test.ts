@@ -45,7 +45,7 @@ test("adds the StepPage management link only to successful page deployments", ()
 		"page_deploy",
 		"Preview: https://example.test",
 	);
-	expect(deployment).toContain("如要管理已部署的页面，请前往 https://platform.stepfun.com/sites");
+	expect(deployment).toContain("To manage your deployed pages, visit https://platform.stepfun.com/sites");
 	expect(appendStepPageManagementHint("steppage__steppage", "page_list", "sites")).toBe("sites");
 	expect(appendStepPageManagementHint("other__server", "page_deploy", "result")).toBe("result");
 });
