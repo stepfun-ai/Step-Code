@@ -143,7 +143,15 @@ export class StepWelcomeComponent implements Component {
 		this.logoTimer = setTimeout(advance, BIRD_FRAME_DURATIONS_MS[0] ?? 80);
 	}
 
-	/** Stops an in-flight logo intro timer. */
+	/** Ends an in-flight intro early, settling on the static logo. */
+	stopLogoIntro(): void {
+		if (this.logoTimer === null) return;
+		clearTimeout(this.logoTimer);
+		this.logoTimer = null;
+		this.setLogoFrame(null);
+	}
+
+	/** Drops the intro timer on teardown; unlike `stopLogoIntro`, it repaints nothing. */
 	dispose(): void {
 		if (this.logoTimer !== null) {
 			clearTimeout(this.logoTimer);

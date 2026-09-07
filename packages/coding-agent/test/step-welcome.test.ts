@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
-import { StepWelcomeComponent } from "../src/modes/interactive/components/step-welcome.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BIRD_ANIMATION_DURATION_MS, StepWelcomeComponent } from "../src/modes/interactive/components/step-welcome.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 afterEach(() => {
@@ -67,6 +67,46 @@ describe("StepWelcomeComponent", () => {
 		component.setVisible(true);
 
 		expect(renderRequests).toBe(3);
+	});
+
+	it("stops the logo intro early and settles on the static logo", () => {
+		initTheme("step");
+		vi.useFakeTimers();
+		try {
+			let renderRequests = 0;
+			const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), {
+				requestRender: () => renderRequests++,
+			});
+
+			component.playLogoIntro();
+			vi.advanceTimersByTime(400);
+			const duringIntro = renderRequests;
+			expect(duringIntro).toBeGreaterThan(1);
+			const animated = component.render(80).join("\n");
+
+			component.stopLogoIntro();
+			expect(renderRequests).toBe(duringIntro + 1);
+			const settled = component.render(80).join("\n");
+			expect(settled).not.toBe(animated);
+
+			// Every remaining frame would have cost a render. None are left.
+			vi.advanceTimersByTime(BIRD_ANIMATION_DURATION_MS * 2);
+			expect(renderRequests).toBe(duringIntro + 1);
+			expect(component.render(80).join("\n")).toBe(settled);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does nothing when stopping an intro that never played", () => {
+		initTheme("step");
+		let renderRequests = 0;
+		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), {
+			requestRender: () => renderRequests++,
+		});
+
+		component.stopLogoIntro();
+		expect(renderRequests).toBe(0);
 	});
 
 	it("does not overflow a very narrow terminal", () => {
