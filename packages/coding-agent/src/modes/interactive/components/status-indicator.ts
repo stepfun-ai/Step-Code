@@ -6,6 +6,9 @@ import { CountdownTimer } from "./countdown-timer.ts";
 import { formatTokens } from "./footer.ts";
 import { keyText } from "./keybinding-hints.ts";
 
+/** Refresh cadence for the compact Step working indicator. */
+export const STEP_WORKING_INDICATOR_INTERVAL_MS = 200;
+
 export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary";
 
 export interface WorkingOutputSnapshot {

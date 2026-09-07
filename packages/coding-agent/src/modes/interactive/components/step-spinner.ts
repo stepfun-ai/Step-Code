@@ -9,7 +9,9 @@
 
 export const STEP_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
-export const STEP_SPINNER_INTERVAL_MS = 80;
+// Long-running plans can keep the working UI visible for minutes. A slower
+// animation avoids competing with streaming token renders on slower terminals.
+export const STEP_SPINNER_INTERVAL_MS = 200;
 
 export interface StepToolSpinnerState {
 	readonly frame: string;
