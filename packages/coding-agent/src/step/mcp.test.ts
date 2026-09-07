@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { resolveStepMcpEnvironment } from "./mcp.ts";
+import { describeMcpStartFailure, resolveStepMcpEnvironment } from "./mcp.ts";
 
 const roots: string[] = [];
 
@@ -37,4 +37,55 @@ test("explicit declaration wins over both shell and login credentials", async ()
 		{ env: { PATH: "/bin", STEPFUN_API_KEY: "shell-key" }, authPath },
 	);
 	expect(resolved.STEPFUN_API_KEY).toBe("declared-key");
+});
+
+test("a missing executable is reported with the installer command instead of a raw ENOENT", () => {
+	const message = describeMcpStartFailure({
+		name: "steppage__steppage",
+		command: "steppage-mcp",
+		provision: { command: "steppage-mcp", installer: "steppageInstaller" },
+		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), { code: "ENOENT" }),
+		env: {},
+	});
+
+	expect(message).toContain("'steppage-mcp' is not installed or not on PATH");
+	expect(message).toContain("curl -fsSL 'https://dl.stepfun.com/steppage-mcp/p/install.sh' | sh");
+	expect(message).toContain("restart Step");
+	expect(message).not.toContain("ENOENT");
+});
+
+test("the installer override is honoured in the guidance", () => {
+	const message = describeMcpStartFailure({
+		name: "steppage__steppage",
+		command: "steppage-mcp",
+		provision: { command: "steppage-mcp", installer: "steppageInstaller" },
+		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), { code: "ENOENT" }),
+		env: { STEP_CLI_STEPPAGE_INSTALLER_URL: "https://example.test/install.sh" },
+	});
+
+	expect(message).toContain("curl -fsSL 'https://example.test/install.sh' | sh");
+});
+
+test("a missing executable without a provisionable installer still names the command", () => {
+	const message = describeMcpStartFailure({
+		name: "playwright__playwright",
+		command: "npx",
+		error: Object.assign(new Error("spawn npx ENOENT"), { code: "ENOENT" }),
+		env: {},
+	});
+
+	expect(message).toContain("'npx' is not installed or not on PATH");
+	expect(message).not.toContain("curl -fsSL");
+});
+
+test("failures that are not a missing executable keep the underlying error", () => {
+	const message = describeMcpStartFailure({
+		name: "steppage__steppage",
+		command: "steppage-mcp",
+		provision: { command: "steppage-mcp", installer: "steppageInstaller" },
+		error: new Error("Request timed out"),
+		env: {},
+	});
+
+	expect(message).toBe("MCP server 'steppage__steppage' could not start: Request timed out");
 });

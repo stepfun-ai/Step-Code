@@ -538,27 +538,42 @@ export async function installMarketplacePlugin(
 	return { installedPath: target, warnings, diagnostics };
 }
 
+/** Resolve the StepPage installer URL, honouring the shell override. */
+export function resolveProvisionInstallerUrl(env: NodeJS.ProcessEnv = process.env): string {
+	return env.STEP_CLI_STEPPAGE_INSTALLER_URL?.trim() || STEPPAGE_INSTALLER_URL;
+}
+
+/** The shell command that installs a provisionable plugin executable, when one is declared. */
+export function provisionInstallCommand(
+	provision: StepPluginProvision,
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	if (provision.installer !== "steppageInstaller") return undefined;
+	return `curl -fsSL ${shellQuote(resolveProvisionInstallerUrl(env))} | sh`;
+}
+
 /** Install the executable declared by a built-in plugin, when it is missing. */
 async function provisionPluginCommand(provision: StepPluginProvision): Promise<string | undefined> {
 	if (provision.command !== "steppage-mcp" || process.platform === "win32") {
 		return undefined;
 	}
+	const install = provisionInstallCommand(provision);
+	if (!install) return undefined;
 	try {
 		await execFileAsync("sh", ["-c", `command -v ${shellQuote(provision.command)}`], { timeout: 10_000 });
 		return undefined;
 	} catch {
 		// Expected when a plugin is first installed.
 	}
-	const url = process.env.STEP_CLI_STEPPAGE_INSTALLER_URL?.trim() || STEPPAGE_INSTALLER_URL;
 	try {
-		await execFileAsync("sh", ["-c", `curl -fsSL ${shellQuote(url)} | sh`], {
+		await execFileAsync("sh", ["-c", install], {
 			env: process.env,
 			timeout: 120_000,
 			maxBuffer: 1_000_000,
 		});
 		return `Installed ${provision.command} from the StepPage installer.`;
 	} catch (error) {
-		return `Could not install ${provision.command} automatically: ${describe(error)}. Run the StepPage installer manually: ${url}`;
+		return `Could not install ${provision.command} automatically: ${describe(error)}. Run the StepPage installer manually: ${install}`;
 	}
 }
 
