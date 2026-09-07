@@ -136,7 +136,7 @@ export function createSearchWebTool(
 			if (!query) throw new Error("search_web query must not be empty");
 			if (!apiKey) {
 				throw new Error(
-					"search_web requires a credential; run `step login`, pass --api-key, or set STEP_CLI_SEARCH_API_KEY",
+					"search_web requires a credential; run `/login` or `step login`, pass --api-key, or set STEP_CLI_SEARCH_API_KEY",
 				);
 			}
 
