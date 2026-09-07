@@ -41,7 +41,7 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 	task_get: "Use task_get to re-read a task's full description and dependencies before working on it.",
 	task_list: "Use task_list to check progress and pick the next open, unblocked task after finishing one.",
 	workflow:
-		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create or schedule_wakeup.",
+		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create.",
 };
 
 const READ_TOOLS = [
@@ -195,18 +195,31 @@ export function buildStepSystemPromptAppendix(
 			]
 		: [];
 
-	const coordinationSection = hasAnyTool(active, ["workflow", "cron_create", "schedule_wakeup"])
+	const coordinationSection = hasAnyTool(active, ["workflow", "cron_create", "create_goal", "subagent"])
 		? [
 				"# Coordination primitives",
 				[
-					"- The coordination primitives — direct tools, subagent, schedule_wakeup, cron_create, workflow — share one job (running work on your behalf) but differ on when the work runs and what the fresh actor sees.",
+					"- The coordination primitives — direct tools, subagent, cron_create, workflow, and session goals — share one job (running work on your behalf) but differ on when the work runs and what the fresh actor sees.",
 					"- Reach for direct tools first (read_file, edit_file, run_command). Escalate only when a specific primitive's value applies.",
 					"- subagent (Agent tool, when available): delegate a scoped task to a fresh context. Use when the parent context is precious, the task is exploration-heavy, or you want an independent verifier. The child agent has no memory of this conversation; brief it self-contained.",
-					"- schedule_wakeup (when available): session-scoped 60–3600 second relative timer that injects a specific prompt back into a later turn. Use when waiting on wall-clock state that changes on its own (CI, deploy, external process). Dies with the session.",
-					"- cron_create (when available): five-field local-time schedule that may persist across sessions (durable:true). Use when the trigger is time-of-day or day-of-week, not a completion state. cron_create is for recurrence or restart-survival; schedule_wakeup is for a one-shot delay within this session.",
-					"- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in (see # Workflow orchestration). Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
-					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; waiting on wall-clock → schedule_wakeup (session) or cron_create (durable calendar); broad multi-agent work with per-agent budgets → workflow (opt-in only).",
-					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule a wakeup.",
+					"- cron_create (when available): use a five-field local-time schedule for recurrence or restart-survival; it is for calendar triggers, not completion-state work.",
+					"- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in. Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
+					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, and clear.",
+					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; calendar recurrence or restart survival → cron_create; explicit completion-state continuation → create_goal; broad multi-agent work with per-agent budgets → workflow.",
+					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule or create a goal.",
+				].join("\n"),
+			]
+		: [];
+
+	const goalSection = hasAnyTool(active, ["create_goal", "get_goal", "update_goal"])
+		? [
+				"# Long-running goals",
+				[
+					"- Do not create a goal for ordinary work. Call create_goal only when the user or system/developer instructions explicitly request a session-scoped multi-turn goal.",
+					"- The objective is the completion standard for the session. Use get_goal to inspect its status, token budget, and elapsed usage.",
+					"- update_goal accepts only complete or blocked. Use complete only after the objective is achieved and verified; use blocked only after the same blocker recurs for at least three consecutive goal turns and you are truly at an impasse. After a blocked goal is resumed, start a fresh audit and require the same blocker for three consecutive resumed turns. Do not use blocked for work that is merely hard, uncertain, incomplete, or clarification-seeking, and do not mark complete just because the turn or budget is ending.",
+					"- Active goals continue automatically at the host's idle boundary. Do not implement a client-side while loop, busy-poll, timer, or pseudo tool call; pause, resume, edit, and clear are user controls through /goal.",
+					"- A goal is session-scoped and restored from the session snapshot. Do not redefine success around a smaller task or mark it complete merely because a turn ended.",
 				].join("\n"),
 			]
 		: [];
@@ -218,7 +231,7 @@ export function buildStepSystemPromptAppendix(
 					"- Use cron_create for five-field local-time calendar work. Set durable:true when the job must survive a session restart; durable jobs are stored in the trusted project under .step-cli/cron.",
 					"- recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed. Invalid expressions are rejected.",
 					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Running turns are never interrupted; a missed durable one-shot is surfaced when the session returns.",
-					"- Prefer schedule_wakeup for a simple relative delay within this session when that tool is available. Cron and wakeups have independent lifecycles.",
+					"- Use create_goal for an explicitly requested multi-turn objective when that tool is available. Cron and goals have independent lifecycles.",
 				].join("\n"),
 			]
 		: [];
@@ -290,6 +303,7 @@ export function buildStepSystemPromptAppendix(
 		...coordinationSection,
 
 		...cronSection,
+		...goalSection,
 
 		...workflowSection,
 

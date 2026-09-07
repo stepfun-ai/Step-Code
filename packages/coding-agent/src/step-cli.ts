@@ -9,6 +9,7 @@ import { createStepExtensionInline } from "./extensions/step.ts";
 import { createStepCapabilitiesExtensionInline } from "./extensions/step-capabilities.ts";
 import { createStepCronExtension } from "./extensions/step-cron.ts";
 import { createStepProviderConfig, STEP_PROVIDER_ID } from "./extensions/step-provider/index.ts";
+import { createStepGoalExtension } from "./extensions/step-schedule.ts";
 import { type MainOptions, main } from "./main.ts";
 import {
 	getLegacyStepAuthPath,
@@ -195,6 +196,7 @@ const stepMainOptions: MainOptions = {
 		}),
 		createStepCapabilitiesExtensionInline({ telemetry: telemetryRuntime }),
 		createStepCronExtension({ telemetry: telemetryRuntime }),
+		createStepGoalExtension({ telemetry: telemetryRuntime }),
 		...(stepCodeProviderExtension ? [stepCodeProviderExtension] : []),
 	],
 	authRuntimeSetup: (modelRuntime) => {
