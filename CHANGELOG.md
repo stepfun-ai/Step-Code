@@ -18,6 +18,8 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Fixed `step --api-key <key>` so the explicit key also authenticates the built-in `search_web` MCP tool.
+- Fixed `search_web` failing under StepCode by no longer reading the injected `STEP_API_KEY`; that credential targets the StepCode model gateway, which the fixed search endpoint does not follow.
 - Fixed unauthenticated help, version, model-listing, session-export, SDK stdio, and offline invocations opening the interactive login flow.
 - Fixed release archives and installers so Pi TUI native helpers and runtime resources are copied from both wrapped Unix archives and root-level Windows archives.
 - Fixed GitLab test jobs so workspace package entrypoints are built before child-process tests run, and missing `git`, `fd`, or `rg` dependencies are reported or bootstrapped explicitly.

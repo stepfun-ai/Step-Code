@@ -39,12 +39,10 @@ describe("Step search_web tool", () => {
 		expect(resolveSearchWebServerUrl(undefined, {}, "platform_oversea")).toBe(
 			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
 		);
-		expect(resolveSearchWebServerUrl(undefined, {}, "unknown")).toBe(
-			"https://api.c.ibasemind.com/v1/mcp/web_search/mcp",
-		);
+		expect(resolveSearchWebServerUrl(undefined, {}, "unknown")).toBe("https://api.stepfun.com/v1/mcp/web_search/mcp");
 	});
 
-	it("prefers search credentials, then STEP_API_KEY, then auth.json", async () => {
+	it("prefers search credentials, then auth.json, and ignores the model credential", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-search-web-"));
 		const authPath = join(root, "auth.json");
 		try {
@@ -62,7 +60,9 @@ describe("Step search_web tool", () => {
 					authPath,
 				}),
 			).toBe("search-key");
-			expect(resolveSearchWebApiKey({ env: { STEP_API_KEY: "model-key" }, authPath })).toBe("model-key");
+			// STEP_API_KEY targets the model gateway injected by StepCode, not the fixed
+			// search endpoint, so it must never be used as the search bearer token.
+			expect(resolveSearchWebApiKey({ env: { STEP_API_KEY: "model-key" }, authPath })).toBe("stored-key");
 			expect(resolveSearchWebApiKey({ env: {}, authPath })).toBe("stored-key");
 		} finally {
 			await rm(root, { recursive: true, force: true });

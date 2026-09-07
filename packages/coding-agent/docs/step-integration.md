@@ -75,16 +75,20 @@ in again.
 
 The Step tool profile also registers `search_web`, backed by the remote
 `stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
-resolved from `STEP_CLI_SEARCH_API_KEY`, `STEPCLI_SEARCH_API_KEY`,
-`STEP_API_KEY`, then the Step login entry in `auth.json`; it is sent only as a
-	Bearer header. `platform_oversea` login profiles use
+resolved from an explicit `step --api-key`, then `STEP_CLI_SEARCH_API_KEY`,
+`STEPCLI_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
+	only as a Bearer header. `platform_oversea` login profiles use
 	`https://api.stepfun.ai/v1/mcp/web_search/mcp`; `step_plan` and
 	`platform_cn` use `https://api.stepfun.com/v1/mcp/web_search/mcp`. An
-	unrecognized profile falls back to the test endpoint
-	`https://api.c.ibasemind.com/v1/mcp/web_search/mcp`.
+	unrecognized profile falls back to that same mainland endpoint.
 	`STEP_CLI_SEARCH_WEB_MCP_URL` and `STEPCLI_SEARCH_WEB_MCP_URL` override this
 	profile-based selection. This adapter does not add a separate search
-	credential store or `integrations.search` settings surface.
+	credential store or `integrations.search` settings surface. The
+	`STEP_API_KEY` environment variable is deliberately excluded from that
+	chain: StepCode injects it together with `STEP_BASE_URL` to reach its own
+	model gateway, and because the search endpoint never follows that base URL,
+	reusing the value would authenticate a gateway key against
+	`api.stepfun.com` and fail.
 
 Session storage is also selected through the Step wrapper. The wrapper keeps
 Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
