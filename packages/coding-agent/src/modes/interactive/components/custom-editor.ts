@@ -12,6 +12,8 @@ export class CustomEditor extends Editor {
 	public onEscape?: () => void;
 	public onCtrlD?: () => void;
 	public onPasteImage?: () => void;
+	/** Whether queued messages can currently be restored ahead of editor navigation. */
+	public canDequeue?: () => boolean;
 	/** Handler for extension-registered shortcuts. Returns true if handled. */
 	public onExtensionShortcut?: (data: string) => boolean;
 
@@ -66,7 +68,16 @@ export class CustomEditor extends Editor {
 			// Fall through to editor handling for delete-char-forward when not empty
 		}
 
-		// Explicit history bindings take precedence over app actions while the editor is focused.
+		// A nonempty queue takes precedence over cursor, history, and autocomplete navigation.
+		if (this.keybindings.matches(data, "app.message.dequeue") && this.canDequeue?.()) {
+			const handler = this.actionHandlers.get("app.message.dequeue");
+			if (handler) {
+				handler();
+				return;
+			}
+		}
+
+		// Explicit history bindings take precedence over other app actions while the editor is focused.
 		// This lets users bind Ctrl+P even though it cycles models by default.
 		if (
 			this.keybindings.matches(data, "tui.editor.historyPrevious") ||
@@ -78,6 +89,7 @@ export class CustomEditor extends Editor {
 
 		// Check all other app actions
 		for (const [action, handler] of this.actionHandlers) {
+			if (action === "app.message.dequeue" && this.canDequeue) continue;
 			if (action !== "app.interrupt" && action !== "app.exit" && this.keybindings.matches(data, action)) {
 				handler();
 				return;

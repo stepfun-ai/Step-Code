@@ -106,7 +106,7 @@ describe("Step search_web tool", () => {
 			serverName: "stepsearch",
 			serverUrl: "https://search.example.com/v1/mcp/web_search/mcp",
 			toolName: "web_search",
-			args: { query: "current information", n: 10 },
+			arguments: { query: "current information", n: 10 },
 			headers: { Authorization: "Bearer search-key" },
 		});
 		expect(text(result)).toContain("[Example result](https://example.com)");

@@ -1,5 +1,6 @@
-import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
+import { formatKeyText } from "./keybinding-hints.ts";
 
 const MAX_PREVIEW_ENTRIES = 3;
 const MAX_PREVIEW_LINES = 2;
@@ -43,7 +44,11 @@ export class StepQueuedMessagesComponent implements Component {
 
 		const hidden = messages.length - preview.length;
 		if (hidden > 0) lines.push(theme.fg("dim", `+${hidden} more`));
-		lines.push(`${theme.fg("accent", "alt+↑")}${theme.fg("dim", " edit last queued message")}`);
+		const dequeueKey = getKeybindings().getKeys("app.message.dequeue")[0];
+		if (dequeueKey) {
+			const hint = dequeueKey === "up" ? "↑" : formatKeyText(dequeueKey);
+			lines.push(`${theme.fg("accent", hint)}${theme.fg("dim", " edit all queued messages")}`);
+		}
 		lines.push(theme.fg("dim", "─".repeat(Math.max(1, safeWidth))));
 
 		return lines.map((line) => (visibleWidth(line) <= safeWidth ? line : truncateToWidth(line, safeWidth, "")));
