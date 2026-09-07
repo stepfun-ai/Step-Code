@@ -697,7 +697,7 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			label: "Create cron job",
 			description: `Schedule a five-field local-time cron job. Durable jobs (durable:true) persist under .step-cli/cron and survive session restarts; session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
 
-When NOT to use: for a simple relative delay within this session use schedule_wakeup (which caps at 3600 seconds) — cron_create is for calendar or expression-based triggers that repeat or must survive a restart. For fanning work out to many subagents on schedule, cron_create only injects a follow-up prompt on trigger; the subsequent turn is where you would call workflow (with its own opt-in).
+When NOT to use: cron_create is for calendar or expression-based triggers that repeat or must survive a restart. For fanning work out to many subagents on schedule, cron_create only injects a follow-up prompt on trigger; the subsequent turn is where you would call workflow (with its own opt-in). For a multi-turn objective that should persist without a fixed calendar, use create_goal instead.
 
 Scheduling: the runtime adds ~0–10% jitter to fire times to spread load. Prefer an off-minute over :00 or :30 when the fire time is not user-critical. Missed one-shot durable jobs are surfaced as a single batched message when the session returns; missed recurring jobs advance to the next matching minute and emit cron_missed telemetry.`,
 			promptSnippet: "Schedule recurring or one-shot calendar work",
