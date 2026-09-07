@@ -14,6 +14,7 @@
 ### Fixed
 
 - Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.
+- Fixed the Step welcome logo intro playing on resumed sessions, where the welcome block starts outside the viewport and every frame forces a full-screen redraw.
 - Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
 - Fixed StepCode compatibility for the legacy `--session-file` session selector.
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
