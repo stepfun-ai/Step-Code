@@ -1,5 +1,100 @@
 # Development Rules
 
+## Architecture
+
+`step-harness` is a pnpm monorepo. The `pi` coding agent (shipped in this
+repository as StepCode) is assembled from layered packages under `packages/`.
+Dependencies flow one direction only: a lower layer must never import a higher
+one.
+
+### Package layers
+
+Foundation (no internal dependencies):
+
+- `packages/protocol` (`@earendil-works/pi-protocol`) — transport-neutral CBOR
+  protocol for remote sessions: request/response schemas, event envelopes, and
+  shared DTOs. Pure contracts, no business behavior.
+- `packages/telemetry` (`@earendil-works/pi-telemetry`) — vendor-neutral
+  telemetry contracts and typed schema utilities.
+- `packages/tui` (`@earendil-works/pi-tui`) — terminal UI library with
+  differential rendering. A standalone presentation toolkit; it must not import
+  agent, session, or product code.
+
+Core runtime:
+
+- `packages/ai` (`@earendil-works/pi-ai`, depends on `telemetry`) — unified LLM
+  API: provider adapters, model discovery, and provider configuration. All
+  provider- and model-specific code lives here.
+- `packages/agent` (`@earendil-works/pi-agent-core`, depends on `ai`,
+  `telemetry`) — the general-purpose agent: the agent loop (`agent-loop.ts`),
+  the harness (context assembly and compaction under `harness/`), transport
+  abstraction, session state, and attachments. Product-neutral — it knows
+  nothing about coding tools or the TUI.
+
+Transport pair:
+
+- `packages/client` (`@earendil-works/pi-client`, depends on `protocol`) —
+  transport-neutral client for driving a remote session over framed CBOR bytes.
+- `packages/server` (`@earendil-works/pi-server`, depends on `ai`, `protocol`) —
+  experimental server-side session host.
+
+Product:
+
+- `packages/coding-agent` (`@earendil-works/pi-coding-agent`, depends on
+  `agent-core`, `ai`, `client`, `protocol`, `tui`) — the coding-agent CLI and
+  top-level product entrypoint. Owns the read/bash/edit/write tools, session
+  management and persistence wiring (`src/core/session-*`), extensions,
+  interactive and one-shot modes, the built-in theme catalog
+  (`src/modes/interactive/theme/`), and the StepCode integration (`src/step/`).
+- `packages/evals` (`@earendil-works/pi-evals`, depends on `ai`, `coding-agent`)
+  — evaluation harness.
+
+Pluggable backends:
+
+- `packages/session-backends/*` (e.g. `sqlite-node`) — concrete session
+  persistence backends that implement the `pi-agent-core` session contract.
+
+### Ownership rules
+
+- **Agent loop:** one implementation, in `packages/agent` (`agent-loop.ts`).
+  `packages/coding-agent` composes the coding product on top of it; it must not
+  fork or reimplement the loop.
+- **Session authority:** the session model and its persistence contract belong
+  to `packages/agent`; concrete stores live in `packages/session-backends/*`;
+  `packages/coding-agent` wires session management (`src/core/session-manager.ts`)
+  for the CLI. Clients (`packages/client`, TUI) hold only projections, connection
+  state, and local input state.
+- **Provider / model contract:** provider adapters, model discovery, and model
+  types live in `packages/ai`; cross-process DTOs and event shapes live in
+  `packages/protocol`. Keep provider SDKs out of `agent`, the `coding-agent`
+  runtime, and `tui`.
+- **Tool contract:** tool schemas, registration, permission decisions, and
+  execution belong to `packages/coding-agent`. Provider adapters do not
+  implement tool orchestration.
+- **TUI / themes:** rendering primitives live in `packages/tui`; the built-in
+  theme catalog and theme resolution live in `packages/coding-agent`
+  (`src/modes/interactive/theme/`). Components consume the active theme — they
+  must not hardcode product colors or create a second theme registry.
+
+### Boundary constraints
+
+- Respect the layering: `protocol` / `telemetry` / `tui` import no other
+  internal package; `ai` depends only on `telemetry`; `agent` depends only on
+  `ai` and `telemetry`; only `coding-agent` (and `evals`) may reach the product
+  layer.
+- Do not duplicate prompt, context, or message assembly in a client — those
+  semantics belong to `packages/agent` (harness) and `packages/protocol`.
+- Do not put durable session, transcript, or checkpoint state in `packages/tui`
+  components.
+- New external integrations go behind an adapter boundary — a provider in
+  `packages/ai`, a session backend in `packages/session-backends/*`. Do not
+  import a third-party SDK from generic runtime or TUI code.
+- Validate cross-process event shapes at the `packages/protocol` boundary; a
+  renderer must not depend on server internals.
+- When a change affects agent-loop behavior, session semantics, tool
+  boundaries, provider contracts, or theme contracts, update the matching
+  document under `docs/` in the same change.
+
 ## Conversational Style
 
 - Keep answers short and concise

@@ -401,7 +401,7 @@ Place in `~/.pi/agent/extensions/`, `.pi/extensions/`, or a [pi package](#pi-pac
 
 ### Themes
 
-Built-in: `dark`, `light`, `step`, `step-light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
+Built-in: `dark`, `light`, `sage`, `step`, `step-light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
 
 Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) to share with others. See [docs/themes.md](docs/themes.md).
 
