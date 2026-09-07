@@ -126,6 +126,11 @@ main() {
 		esac
 	done
 	BASE_URL="${BASE_URL%/}"
+	# Detect an installer published without base-URL substitution. The sentinel is
+	# assembled from two literals so the release renderer's token replacement cannot
+	# rewrite this guard along with the real placeholder in the BASE_URL default.
+	unconfigured_base_url='__STEP_RELEASE''_BASE_URL__'
+	[[ "$BASE_URL" == "$unconfigured_base_url" ]] && die 'release base URL was not configured in this installer'
 	detect_target
 	WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/step-cli-install.XXXXXX")"
 	trap 'rm -rf "$WORK_DIR"' EXIT
