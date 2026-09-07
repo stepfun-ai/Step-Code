@@ -13,9 +13,10 @@ export { invokeRemoteMcpTool } from "./mcp-client.ts";
 
 export const SEARCH_WEB_SERVER_NAME = "stepsearch";
 export const SEARCH_WEB_TOOL_NAME = "web_search";
-export const SEARCH_WEB_DEFAULT_URL = "https://api.c.ibasemind.com/v1/mcp/web_search/mcp";
 export const SEARCH_WEB_MAINLAND_URL = "https://api.stepfun.com/v1/mcp/web_search/mcp";
 export const SEARCH_WEB_OVERSEA_URL = "https://api.stepfun.ai/v1/mcp/web_search/mcp";
+/** Unrecognized login profiles fall back to the mainland endpoint. */
+export const SEARCH_WEB_DEFAULT_URL = SEARCH_WEB_MAINLAND_URL;
 
 const SEARCH_WEB_MCP_PATH = "/v1/mcp/web_search/mcp";
 const SEARCH_WEB_RESULT_COUNT = 10;
@@ -87,7 +88,12 @@ export function resolveSearchWebApiKey(options: SearchWebToolOptions = {}): stri
 	const explicit = normalizeCredential(options.apiKey);
 	if (explicit) return explicit;
 
-	for (const value of [env.STEP_CLI_SEARCH_API_KEY, env.STEPCLI_SEARCH_API_KEY, env.STEP_API_KEY]) {
+	// `STEP_API_KEY` is deliberately absent. StepCode injects it together with
+	// `STEP_BASE_URL` to reach its own model gateway, but the search endpoint is fixed
+	// to the login profile and never follows that base URL, so honouring it here would
+	// send a gateway key to api.stepfun.com and fail authentication. An explicit
+	// `step --api-key` still arrives through `options.apiKey` above.
+	for (const value of [env.STEP_CLI_SEARCH_API_KEY, env.STEPCLI_SEARCH_API_KEY]) {
 		const key = normalizeCredential(value);
 		if (key) return key;
 	}
@@ -130,7 +136,7 @@ export function createSearchWebTool(
 			if (!query) throw new Error("search_web query must not be empty");
 			if (!apiKey) {
 				throw new Error(
-					"search_web requires a credential; run `step login`, set STEP_API_KEY, or set STEP_CLI_SEARCH_API_KEY",
+					"search_web requires a credential; run `step login`, pass --api-key, or set STEP_CLI_SEARCH_API_KEY",
 				);
 			}
 

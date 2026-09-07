@@ -282,7 +282,7 @@ const stepMainOptions: MainOptions = {
 	toolProfile: ({ cwd, agentDir, settingsManager }) =>
 		createStepToolProfile(cwd, {
 			agentDir,
-			searchWeb: { authPath: getStepAuthPath() },
+			searchWeb: { apiKey: stepPermissionArgs.apiKey, authPath: getStepAuthPath() },
 			read: { autoResizeImages: settingsManager.getImageAutoResize() },
 			bash: {
 				commandPrefix: settingsManager.getShellCommandPrefix(),
