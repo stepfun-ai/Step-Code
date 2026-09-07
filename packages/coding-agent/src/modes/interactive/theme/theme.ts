@@ -478,7 +478,7 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 			dark: JSON.parse(stripBom(fs.readFileSync(darkPath, "utf-8"))) as ThemeJson,
 			light: JSON.parse(stripBom(fs.readFileSync(lightPath, "utf-8"))) as ThemeJson,
 		};
-		for (const name of ["step", "step-light"] as const) {
+		for (const name of ["sage", "step", "step-light"] as const) {
 			const themePath = path.join(themesDir, `${name}.json`);
 			if (fs.existsSync(themePath)) {
 				themes[name] = JSON.parse(stripBom(fs.readFileSync(themePath, "utf-8"))) as ThemeJson;
@@ -588,7 +588,7 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
 			errorMessage +=
-				"\nSee the built-in themes (dark.json, light.json, step.json, step-light.json) for reference values.";
+				"\nSee the built-in themes (dark.json, light.json, sage.json, step.json, step-light.json) for reference values.";
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
