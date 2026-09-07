@@ -145,6 +145,7 @@ import {
 	CompactionStatusIndicator,
 	IdleStatus,
 	RetryStatusIndicator,
+	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	type StatusIndicator,
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
@@ -2415,7 +2416,8 @@ export class InteractiveMode {
 			new WorkingStatusIndicator(
 				this.ui,
 				this.workingMessage ?? this.defaultWorkingMessage,
-				this.workingIndicatorOptions,
+				this.workingIndicatorOptions ??
+					(this.presentation === "step" ? { intervalMs: STEP_WORKING_INDICATOR_INTERVAL_MS } : undefined),
 				this.presentation,
 				this.presentation === "step" ? this.workingOutputTracker : undefined,
 			),
@@ -2987,6 +2989,9 @@ export class InteractiveMode {
 				if (!customEditor.onPasteImage) {
 					customEditor.onPasteImage = () => this.defaultEditor.onPasteImage?.();
 				}
+				if (!customEditor.canDequeue) {
+					customEditor.canDequeue = () => this.defaultEditor.canDequeue?.() ?? false;
+				}
 				if (!customEditor.onExtensionShortcut) {
 					customEditor.onExtensionShortcut = (data: string) => this.defaultEditor.onExtensionShortcut?.(data);
 				}
@@ -3189,6 +3194,10 @@ export class InteractiveMode {
 				}),
 		);
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
+		this.defaultEditor.canDequeue = () => {
+			const { steering, followUp } = this.getAllQueuedMessages();
+			return steering.length > 0 || followUp.length > 0;
+		};
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
@@ -4734,9 +4743,9 @@ export class InteractiveMode {
 			}
 			return 0;
 		}
-		const queuedText = allQueued.join("\n\n");
-		const currentText = options?.currentText ?? this.editor.getText();
-		const combinedText = [queuedText, currentText].filter((t) => t.trim()).join("\n\n");
+		const queuedText = allQueued.join("\n");
+		const currentText = options?.currentText ?? this.editor.getExpandedText?.() ?? this.editor.getText();
+		const combinedText = [queuedText, currentText].filter((t) => t.trim()).join("\n");
 		this.editor.setText(combinedText);
 		this.updatePendingMessagesDisplay();
 		if (options?.abort) {

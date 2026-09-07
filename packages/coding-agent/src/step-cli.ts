@@ -9,6 +9,7 @@ import { createStepExtensionInline } from "./extensions/step.ts";
 import { createStepCapabilitiesExtensionInline } from "./extensions/step-capabilities.ts";
 import { createStepCronExtension } from "./extensions/step-cron.ts";
 import { createStepProviderConfig, STEP_PROVIDER_ID } from "./extensions/step-provider/index.ts";
+import { createStepGoalExtension } from "./extensions/step-schedule.ts";
 import { type MainOptions, main } from "./main.ts";
 import {
 	getLegacyStepAuthPath,
@@ -35,7 +36,12 @@ import { resolveStepAgentDir, resolveStepConfigDir } from "./step/environment.ts
 import { runFeedbackCommand } from "./step/feedback/command.ts";
 import { readFeedbackUsername } from "./step/feedback/context.ts";
 import { maybeUpdateStep } from "./step/local-update.ts";
-import { needsStepLoginBeforeInteractive, runStepLogin, syncStepLoginProfileEndpoint } from "./step/login-flow.ts";
+import {
+	isStepInteractiveLoginStartup,
+	needsStepLoginBeforeInteractive,
+	runStepLogin,
+	syncStepLoginProfileEndpoint,
+} from "./step/login-flow.ts";
 import { createStepSessionManagerFactory } from "./step/session.ts";
 import { createStepSettingsManager, type StepSettingsManager } from "./step/settings-manager.ts";
 import {
@@ -190,6 +196,7 @@ const stepMainOptions: MainOptions = {
 		}),
 		createStepCapabilitiesExtensionInline({ telemetry: telemetryRuntime }),
 		createStepCronExtension({ telemetry: telemetryRuntime }),
+		createStepGoalExtension({ telemetry: telemetryRuntime }),
 		...(stepCodeProviderExtension ? [stepCodeProviderExtension] : []),
 	],
 	authRuntimeSetup: (modelRuntime) => {
@@ -275,6 +282,7 @@ const stepMainOptions: MainOptions = {
 	toolProfile: ({ cwd, agentDir, settingsManager }) =>
 		createStepToolProfile(cwd, {
 			agentDir,
+			searchWeb: { apiKey: stepPermissionArgs.apiKey, authPath: getStepAuthPath() },
 			read: { autoResizeImages: settingsManager.getImageAutoResize() },
 			bash: {
 				commandPrefix: settingsManager.getShellCommandPrefix(),
@@ -375,14 +383,11 @@ try {
 			syncStepLoginProfileEndpoint(getStepAuthPath());
 			let shouldLaunchMain = true;
 			const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
-			const interactiveStartup =
-				process.stdin.isTTY === true &&
-				process.stdout.isTTY === true &&
-				parsedInteractiveArgs.messages.length === 0 &&
-				parsedInteractiveArgs.fileArgs.length === 0 &&
-				parsedInteractiveArgs.print !== true &&
-				parsedInteractiveArgs.mode !== "json" &&
-				parsedInteractiveArgs.mode !== "rpc";
+			const interactiveStartup = isStepInteractiveLoginStartup({
+				stdinIsTTY: process.stdin.isTTY,
+				stdoutIsTTY: process.stdout.isTTY,
+				args: parsedInteractiveArgs,
+			});
 			if (
 				!hasConfiguredStepCodeCredential(stepCodeConfig) &&
 				needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })

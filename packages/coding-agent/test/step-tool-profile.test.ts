@@ -50,6 +50,11 @@ describe("Step tool profile", () => {
 					"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Prefer this over shell grep.",
 				promptSnippet: "Search file contents with a regular expression",
 			},
+			search_web: {
+				description:
+					"Search the web when the answer depends on current or external information: recent news, fresh documentation, live data, or anything outside built-in knowledge.\n\nThe tool returns compact structured results with markdown links.\n\nIf this tool informs the answer, end the response with a Sources: section containing the relevant result URLs as markdown links.",
+				promptSnippet: "Search the web for current or external information",
+			},
 			read_file: {
 				description:
 					"Read a text file with optional line range; image files (PNG/JPEG/GIF/WebP) are returned as attached images. Prefer this over shell cat for token efficiency.",
@@ -307,5 +312,14 @@ describe("Step tool profile", () => {
 		const output = text(result);
 		expect(output).toContain("read_file");
 		expect(output).not.toContain("\nread\n");
+
+		const webResult = await findTools.execute(
+			"find-web",
+			{ query: "current external web information", limit: 5 },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		expect(text(webResult)).toContain("search_web");
 	});
 });

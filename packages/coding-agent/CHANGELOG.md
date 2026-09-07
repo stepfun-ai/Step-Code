@@ -13,11 +13,15 @@
 
 ### Fixed
 
+- Fixed the Step entrypoint so `--api-key <key>` also authenticates the built-in `search_web` MCP tool.
+- Fixed `search_web` credential resolution so it no longer falls back to `STEP_API_KEY`, which addresses the StepCode-injected provider base URL rather than the fixed search endpoint.
+- Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.
 - Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
 - Fixed StepCode compatibility for the legacy `--session-file` session selector.
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+- Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
 
 ## [0.84.4] - 2026-08-28
 

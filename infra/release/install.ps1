@@ -402,7 +402,11 @@ function Write-Result {
   }
 }
 
-if ($BaseUrl -match '__STEP_RELEASE_BASE_URL__') {
+# Detect an installer that was published without base-URL substitution. The
+# sentinel is assembled from two literals so the release renderer's token
+# replacement cannot rewrite this guard along with the real placeholder above.
+$unconfiguredBaseUrl = '__STEP_RELEASE' + '_BASE_URL__'
+if ($BaseUrl -eq $unconfiguredBaseUrl) {
   Stop-WithError 'release base URL was not configured in this installer'
 }
 

@@ -170,6 +170,7 @@ export interface StepTelemetryEventPayloads {
 		readonly spec_coverage_percent: number;
 	};
 	readonly goal_command_used: { readonly subcommand: string };
+	readonly goal_continued: { readonly iteration: number; readonly delivery: string };
 	readonly error_raised: { readonly error_type: string; readonly where: string; readonly retryable: boolean };
 	readonly feedback_submitted: {
 		readonly category: string;
@@ -242,6 +243,7 @@ export const STEP_TELEMETRY_EVENT_NAMES = Object.keys({
 	workflow_hoh_evidence_written: true,
 	workflow_hoh_finished: true,
 	goal_command_used: true,
+	goal_continued: true,
 	error_raised: true,
 	feedback_submitted: true,
 	tui_input_anomaly: true,
@@ -352,6 +354,7 @@ export const STEP_TELEMETRY_EVENT_PROPERTY_NAMES: Readonly<Record<StepTelemetryK
 	workflow_hoh_evidence_written: propertyNames("iteration", "spec_coverage_percent", "coverage_delta_percent"),
 	workflow_hoh_finished: propertyNames("iterations", "stop_reason", "spec_coverage_percent"),
 	goal_command_used: propertyNames("subcommand"),
+	goal_continued: propertyNames("iteration", "delivery"),
 	error_raised: propertyNames("error_type", "where", "retryable"),
 	feedback_submitted: propertyNames(
 		"category",
@@ -811,6 +814,14 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 		comment: "Which goal subcommands are used.",
 		properties: {
 			subcommand: "Subcommand invoked, root for the bare form.",
+		},
+	},
+	goal_continued: {
+		owner: "gateway",
+		comment: "Native stop-boundary continuation for an active goal.",
+		properties: {
+			iteration: "Goal iteration that requested the continuation.",
+			delivery: "queued while agent_end is settling, or immediate when idle.",
 		},
 	},
 	error_raised: {

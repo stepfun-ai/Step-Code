@@ -15,6 +15,7 @@ import {
 } from "../src/modes/interactive/theme/theme.ts";
 
 const THEME_FILES = {
+	sage: new URL("../src/modes/interactive/theme/sage.json", import.meta.url),
 	step: new URL("../src/modes/interactive/theme/step.json", import.meta.url),
 	"step-light": new URL("../src/modes/interactive/theme/step-light.json", import.meta.url),
 } as const;
@@ -72,8 +73,20 @@ afterEach(() => {
 });
 
 describe("Step themes", () => {
-	test("registers the branded light and dark palettes", () => {
-		expect(getAvailableThemes()).toEqual(expect.arrayContaining(["step", "step-light"]));
+	test("registers the sage palette and branded light/dark palettes", () => {
+		expect(getAvailableThemes()).toEqual(expect.arrayContaining(["sage", "step", "step-light"]));
+		expect(getResolvedThemeColors("sage")).toMatchObject({
+			accent: "#a3ab78",
+			border: "#bde038",
+			muted: "#818274",
+			userMessageBg: "#17343a",
+			mdHeading: "#a3ab78",
+			mdLink: "#a3ab78",
+			mdCode: "#a3ab78",
+			mdListBullet: "#a3ab78",
+			syntaxKeyword: "#bde038",
+			syntaxFunction: "#a3ab78",
+		});
 		expect(getResolvedThemeColors("step")).toMatchObject({
 			accent: "#ab9eff",
 			border: "#8577ff",
@@ -108,23 +121,26 @@ describe("Step themes", () => {
 		expect(isLightTheme("step-light")).toBe(true);
 	});
 
-	test.each(["step", "step-light"] as const)("%s prose uses one brand violet and code uses separate hues", (name) => {
-		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
-		initTheme(name);
-		const markdown = getMarkdownTheme();
-		const brandAnsi = theme.getFgAnsi("accent");
+	test.each(["sage", "step", "step-light"] as const)(
+		"%s prose uses one brand color and code uses separate slots",
+		(name) => {
+			setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+			initTheme(name);
+			const markdown = getMarkdownTheme();
+			const brandAnsi = theme.getFgAnsi("accent");
 
-		for (const render of [markdown.heading, markdown.link, markdown.code, markdown.listBullet]) {
-			expect(render("sample")).toContain(brandAnsi);
-		}
+			for (const render of [markdown.heading, markdown.link, markdown.code, markdown.listBullet]) {
+				expect(render("sample")).toContain(brandAnsi);
+			}
 
-		const highlighted = highlightCode("export function greet(name: string) { return name; }", "typescript").join(
-			"\n",
-		);
-		expect(highlighted).toContain(`${theme.getFgAnsi("syntaxKeyword")}function`);
-		expect(highlighted).toContain(`${theme.getFgAnsi("syntaxFunction")}greet`);
-		expect(highlighted).not.toContain(`${brandAnsi}function`);
-	});
+			const highlighted = highlightCode("export function greet(name: string) { return name; }", "typescript").join(
+				"\n",
+			);
+			expect(highlighted).toContain(`${theme.getFgAnsi("syntaxKeyword")}function`);
+			expect(highlighted).toContain(`${theme.getFgAnsi("syntaxFunction")}greet`);
+			expect(highlighted).not.toContain(`${brandAnsi}function`);
+		},
+	);
 
 	test("Step text colors clear WCAG AA in truecolor and xterm-256 modes", () => {
 		const foregroundTokens = [
@@ -143,7 +159,11 @@ describe("Step themes", () => {
 			"syntaxType",
 		] as const;
 
-		for (const name of ["step", "step-light"] as const) {
+		// The Step CLI sage palette is intentionally preserved as a visual
+		// palette; its original user-badge background is not an AA contract for
+		// every possible syntax foreground. Keep the stricter user-message
+		// contract for the branded Step pair below.
+		for (const name of ["sage", "step", "step-light"] as const) {
 			expect(existsSync(THEME_FILES[name]), `expected built-in ${name} theme file`).toBe(true);
 			const truecolor = getResolvedThemeColors(name);
 			const quantized = getQuantizedForegrounds(name);

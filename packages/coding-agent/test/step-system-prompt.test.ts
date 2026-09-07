@@ -37,6 +37,7 @@ describe("Step system prompt appendix", () => {
 			"list_directory",
 			"find_files",
 			"search_files",
+			"search_web",
 			"read_file",
 			"write_file",
 			"edit_file",
@@ -59,6 +60,7 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).toContain("Never print, log, commit, or transmit secrets");
 		expect(prompt).toContain("Never commit, push, create branches or tags, rebase, reset");
 		expect(prompt).toContain("Use only the structured tools exposed by the model API");
+		expect(prompt).toContain("cite relevant URLs in a final Sources: section");
 		expect(prompt).not.toContain("<tool_call>");
 	});
 
@@ -139,11 +141,21 @@ describe("Step system prompt appendix", () => {
 		expect(withoutTasks).not.toContain("- task_create:");
 	});
 
+	it("adds goal guidance only when goal tools are active", () => {
+		const withGoal = buildStepSystemPromptAppendix(["read_file", "create_goal", "get_goal", "update_goal"]);
+		expect(withGoal).toContain("# Long-running goals");
+		expect(withGoal).toContain("create_goal");
+		expect(withGoal).toContain("idle boundary");
+
+		const withoutGoal = buildStepSystemPromptAppendix(["read_file"]);
+		expect(withoutGoal).not.toContain("# Long-running goals");
+	});
+
 	it("adds calendar scheduling guidance only when cron tools are active", () => {
 		const withCron = buildStepSystemPromptAppendix(["read_file", "cron_create", "cron_list", "cron_delete"]);
 		expect(withCron).toContain("# Scheduled work");
 		expect(withCron).toContain("five-field local-time");
-		expect(withCron).toContain("schedule_wakeup");
+		expect(withCron).toContain("create_goal");
 
 		const withoutCron = buildStepSystemPromptAppendix(["read_file"]);
 		expect(withoutCron).not.toContain("# Scheduled work");
@@ -155,6 +167,8 @@ describe("Step system prompt appendix", () => {
 		expect(withWorkflow).toContain('"ultraloop"');
 		expect(withWorkflow).toContain("read-only Planner");
 		expect(withWorkflow).toContain("resumeFromRunId");
+		expect(withWorkflow).toContain("user has opted in");
+		expect(withWorkflow).not.toContain("schedule_wakeup");
 
 		const withoutWorkflow = buildStepSystemPromptAppendix(["read_file"]);
 		expect(withoutWorkflow).not.toContain("# Workflow orchestration");
@@ -164,7 +178,7 @@ describe("Step system prompt appendix", () => {
 		const withCron = buildStepSystemPromptAppendix(["read_file", "cron_create"]);
 		expect(withCron).toContain("# Coordination primitives");
 		expect(withCron).toContain("subagent");
-		expect(withCron).toContain("schedule_wakeup");
+		expect(withCron).toContain("create_goal");
 		expect(withCron).toContain("cron_create");
 		expect(withCron).toContain("workflow");
 		expect(withCron).toContain("Do not stack primitives to look busy");
@@ -172,8 +186,9 @@ describe("Step system prompt appendix", () => {
 		const withWorkflow = buildStepSystemPromptAppendix(["read_file", "workflow"]);
 		expect(withWorkflow).toContain("# Coordination primitives");
 
-		const withWakeup = buildStepSystemPromptAppendix(["read_file", "schedule_wakeup"]);
-		expect(withWakeup).toContain("# Coordination primitives");
+		const withGoal = buildStepSystemPromptAppendix(["read_file", "create_goal"]);
+		expect(withGoal).toContain("# Long-running goals");
+		expect(withGoal).toContain("# Coordination primitives");
 
 		const withoutOrchestration = buildStepSystemPromptAppendix(["read_file"]);
 		expect(withoutOrchestration).not.toContain("# Coordination primitives");

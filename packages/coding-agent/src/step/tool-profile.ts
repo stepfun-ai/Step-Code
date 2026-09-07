@@ -45,11 +45,13 @@ import type { WriteToolOptions } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { resolveStepAgentDir } from "./environment.ts";
+import { createSearchWebTool, type SearchWebToolOptions } from "./search-web-tool.ts";
 
 const STEP_TOOL_NAMES = [
 	"list_directory",
 	"find_files",
 	"search_files",
+	"search_web",
 	"read_file",
 	"write_file",
 	"edit_file",
@@ -149,6 +151,7 @@ export interface StepToolProfileOptions {
 	grep?: GrepToolOptions;
 	ls?: LsToolOptions;
 	write?: WriteToolOptions;
+	searchWeb?: SearchWebToolOptions;
 }
 
 type AnyResult = AgentToolResult<any>;
@@ -1153,6 +1156,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 	const nativeWrite = createWriteToolDefinition(cwd, options.write);
 	const nativeEdit = createEditToolDefinition(cwd, options.edit);
 	const nativeBash = createBashToolDefinition(cwd, nativeBashOptions);
+	const searchWeb = createSearchWebTool(options.searchWeb);
 
 	const listDirectoryBase = aliasDefinition(
 		{
@@ -1334,6 +1338,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		listDirectory,
 		findFiles,
 		searchFiles,
+		searchWeb,
 		readFile,
 		writeFile,
 		editFile,
