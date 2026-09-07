@@ -354,6 +354,25 @@ function addMarkerToLast(rows: Array<{ markers: string; body: string }>, markers
 	if (rows.length > 0 && markers.length > 0) rows[rows.length - 1]!.markers += markers;
 }
 
+// Cache key: the rows pi produced, the way Box keys on its child lines.  What
+// render() reads past those rows - the run sources behind hideCompleteFences, the
+// message behind the prompt-zone markers - only moves in updateContent(), which
+// drops the cache the way Markdown's setText does.
+type RenderCache = {
+	nativeRows: string[];
+	width: number;
+	lines: string[];
+};
+
+function matchesRenderCache(cache: RenderCache | undefined, nativeRows: string[], width: number): boolean {
+	return (
+		!!cache &&
+		cache.width === width &&
+		cache.nativeRows.length === nativeRows.length &&
+		cache.nativeRows.every((line, i) => line === nativeRows[i])
+	);
+}
+
 /**
  * Pi's user message already owns the background and Markdown renderer.  Step
  * only changes the gutter and removes the extra top/bottom Box padding.
@@ -361,6 +380,9 @@ function addMarkerToLast(rows: Array<{ markers: string; body: string }>, markers
 export class StepUserMessageComponent extends UserMessageComponent {
 	private outputPadding: number;
 	private readonly sourceText: string;
+
+	// Cache for rendered output
+	private cache?: RenderCache;
 
 	constructor(
 		text: string,
@@ -378,11 +400,26 @@ export class StepUserMessageComponent extends UserMessageComponent {
 		super.setOutputPad(this.outputPadding);
 	}
 
+	override invalidate(): void {
+		this.cache = undefined;
+		super.invalidate();
+	}
+
 	override render(width: number): string[] {
 		const safeWidth = Math.max(1, Math.floor(width));
-		const raw = hideCompleteFences(super.render(safeWidth), this.sourceText);
+		const nativeRows = super.render(safeWidth);
+		// Check cache
+		if (matchesRenderCache(this.cache, nativeRows, safeWidth)) {
+			return this.cache!.lines;
+		}
+
+		const raw = hideCompleteFences(nativeRows, this.sourceText);
 		const trimmed = trimOuterRows(raw);
-		if (trimmed.lines.length === 0) return [];
+		if (trimmed.lines.length === 0) {
+			// Update cache
+			this.cache = { nativeRows, width: safeWidth, lines: [] };
+			return this.cache.lines;
+		}
 
 		const prepared = collapseAdjacentBlankRows(
 			trimmed.lines.map((line) => prepareRow(line, this.outputPadding, false)),
@@ -401,7 +438,10 @@ export class StepUserMessageComponent extends UserMessageComponent {
 
 		addMarkerToFirst(rows, trimmed.leadingMarkers);
 		addMarkerToLast(rows, trimmed.trailingMarkers);
-		return [...rows.map((row) => clampRow(`${row.markers}${row.body}`, safeWidth)), ""];
+		// Update cache
+		const lines = [...rows.map((row) => clampRow(`${row.markers}${row.body}`, safeWidth)), ""];
+		this.cache = { nativeRows, width: safeWidth, lines };
+		return lines;
 	}
 }
 
@@ -424,6 +464,9 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 	private nativeRuns: NativeAssistantRun[] = [];
 	private nativeStatusComponent?: AssistantMessageComponent;
 	private nativeComponentsReady = false;
+
+	// Cache for rendered output
+	private cache?: RenderCache;
 
 	constructor(
 		message?: AssistantMessage,
@@ -452,6 +495,10 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 	}
 
 	override updateContent(message: AssistantMessage, isStreaming = this.latestStreaming): void {
+		// Not invalidate(): that re-pads and invalidates every run, rebuilding the
+		// Markdown trees rebuildNativeComponents() reuses.  render() reads the message
+		// for the prompt-zone markers, so the rendered rows still have to go.
+		this.cache = undefined;
 		this.latestMessage = message;
 		this.latestStreaming = isStreaming ?? false;
 		if (this.nativeComponentsReady) {
@@ -475,6 +522,7 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 	}
 
 	override invalidate(): void {
+		this.cache = undefined;
 		for (const run of this.nativeRuns) {
 			run.component.setOutputPad(this.outputPadding);
 			run.component.invalidate();
@@ -496,14 +544,18 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		// Reserve the two-cell Step gutter before asking pi to wrap Markdown. This
 		// guarantees that adding a prefix can never violate pi-tui's width guard.
 		const contentWidth = Math.max(1, safeWidth - 2);
-		const rows: Array<{ markers: string; body: string }> = [];
 
-		for (const run of this.nativeRuns) {
-			const prepared = this.renderNativeRun(
-				run.component,
-				contentWidth,
-				run.kind === "text" ? run.source : undefined,
-			);
+		const runRows = this.nativeRuns.map((run) => run.component.render(contentWidth));
+		const statusRows = this.nativeStatusComponent?.render(contentWidth) ?? [];
+		const nativeRows = [...runRows.flat(), ...statusRows];
+		// Check cache
+		if (matchesRenderCache(this.cache, nativeRows, safeWidth)) {
+			return this.cache!.lines;
+		}
+
+		const rows: Array<{ markers: string; body: string }> = [];
+		for (const [index, run] of this.nativeRuns.entries()) {
+			const prepared = this.renderNativeRun(runRows[index]!, run.kind === "text" ? run.source : undefined);
 			if (prepared.length === 0) continue;
 
 			if (rows.length > 0 && rows[rows.length - 1]?.body !== "") {
@@ -513,18 +565,20 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 			rows.push(...rendered);
 		}
 
-		if (this.nativeStatusComponent) {
-			const prepared = this.renderNativeRun(this.nativeStatusComponent, contentWidth);
-			if (prepared.length > 0) {
-				if (rows.length > 0 && rows[rows.length - 1]?.body !== "") {
-					rows.push({ markers: "", body: "" });
-				}
-				rows.push(...this.renderAnswerRows(prepared));
+		const statusPrepared = this.renderNativeRun(statusRows);
+		if (statusPrepared.length > 0) {
+			if (rows.length > 0 && rows[rows.length - 1]?.body !== "") {
+				rows.push({ markers: "", body: "" });
 			}
+			rows.push(...this.renderAnswerRows(statusPrepared));
 		}
 
 		while (rows.length > 0 && rows[rows.length - 1]?.body === "") rows.pop();
-		if (rows.length === 0) return [];
+		if (rows.length === 0) {
+			// Update cache
+			this.cache = { nativeRows, width: safeWidth, lines: [] };
+			return this.cache.lines;
+		}
 
 		// Pi emits prompt-zone markers around a complete assistant message. The
 		// synthetic per-run components each emit their own markers, so normalize
@@ -537,7 +591,10 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 			addMarkerToLast(rows, "\x1b]133;B\x07\x1b]133;C\x07");
 		}
 
-		return [...rows.map((row) => clampRow(`${row.markers}${row.body}`, safeWidth)), ""];
+		// Update cache
+		const lines = [...rows.map((row) => clampRow(`${row.markers}${row.body}`, safeWidth)), ""];
+		this.cache = { nativeRows, width: safeWidth, lines };
+		return lines;
 	}
 
 	private rebuildNativeComponents(): void {
@@ -607,8 +664,7 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		}
 	}
 
-	private renderNativeRun(component: AssistantMessageComponent, width: number, source?: string): PreparedRow[] {
-		const raw = component.render(width);
+	private renderNativeRun(raw: string[], source?: string): PreparedRow[] {
 		const rendered = source === undefined ? raw : hideCompleteFences(raw, source);
 		const trimmed = trimOuterRows(rendered);
 		if (trimmed.lines.length === 0) return [];
