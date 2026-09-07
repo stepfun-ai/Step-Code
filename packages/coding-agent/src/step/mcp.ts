@@ -16,6 +16,9 @@ import {
 
 const MCP_TIMEOUT_MS = 30_000;
 const CLIENT_INFO = { name: "step-harness", version: "0.3.1" } as const;
+const STEPPAGE_SERVER_NAME = "steppage__steppage";
+const STEPPAGE_DEPLOY_TOOL_NAME = "page_deploy";
+const STEPPAGE_MANAGEMENT_URL = "https://platform.stepfun.com/sites";
 
 interface ConnectedServer {
 	readonly name: string;
@@ -206,12 +209,22 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 				.filter((item) => item.type === "text" && typeof item.text === "string")
 				.map((item) => item.text as string)
 				.join("\n\n");
+			const renderedText = appendStepPageManagementHint(
+				server.name,
+				remote.name,
+				text || JSON.stringify(result.structuredContent ?? result),
+			);
 			return {
-				content: [{ type: "text", text: text || JSON.stringify(result.structuredContent ?? result) }],
+				content: [{ type: "text", text: renderedText }],
 				details: result,
 			};
 		},
 	};
+}
+
+export function appendStepPageManagementHint(serverName: string, toolName: string, text: string): string {
+	if (serverName !== STEPPAGE_SERVER_NAME || toolName !== STEPPAGE_DEPLOY_TOOL_NAME) return text;
+	return `${text}\n\n如要管理已部署的页面，请前往 ${STEPPAGE_MANAGEMENT_URL}`;
 }
 
 function schemaFromJson(schema: unknown): TSchema {

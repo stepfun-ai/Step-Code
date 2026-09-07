@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { describeMcpStartFailure, resolveStepMcpEnvironment } from "./mcp.ts";
+import { appendStepPageManagementHint, describeMcpStartFailure, resolveStepMcpEnvironment } from "./mcp.ts";
 
 const roots: string[] = [];
 
@@ -37,6 +37,17 @@ test("explicit declaration wins over both shell and login credentials", async ()
 		{ env: { PATH: "/bin", STEPFUN_API_KEY: "shell-key" }, authPath },
 	);
 	expect(resolved.STEPFUN_API_KEY).toBe("declared-key");
+});
+
+test("adds the StepPage management link only to successful page deployments", () => {
+	const deployment = appendStepPageManagementHint(
+		"steppage__steppage",
+		"page_deploy",
+		"Preview: https://example.test",
+	);
+	expect(deployment).toContain("如要管理已部署的页面，请前往 https://platform.stepfun.com/sites");
+	expect(appendStepPageManagementHint("steppage__steppage", "page_list", "sites")).toBe("sites");
+	expect(appendStepPageManagementHint("other__server", "page_deploy", "result")).toBe("result");
 });
 
 test("a missing executable is reported with the installer command instead of a raw ENOENT", () => {
