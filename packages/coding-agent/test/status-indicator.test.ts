@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	IdleStatus,
 	RetryStatusIndicator,
+	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "../src/modes/interactive/components/status-indicator.ts";
@@ -60,6 +61,10 @@ describe("status indicators", () => {
 		const lines = idleStatus.render(20);
 		expect(lines).toHaveLength(2);
 		expect(lines).toEqual([" ".repeat(20), " ".repeat(20)]);
+	});
+
+	it("uses the slower cadence reserved for Step working indicators", () => {
+		expect(STEP_WORKING_INDICATOR_INTERVAL_MS).toBe(200);
 	});
 
 	it("disposes retry countdown updates", () => {

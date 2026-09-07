@@ -9,6 +9,10 @@ describe("StepToolSpinnerClock", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
+	test("uses a 200ms animation cadence for long-running Step work", () => {
+		expect(STEP_SPINNER_INTERVAL_MS).toBe(200);
+	});
+
 	test("shares one timer across tool calls and reports elapsed seconds", () => {
 		const requestRender = vi.fn();
 		const clock = new StepToolSpinnerClock(requestRender);

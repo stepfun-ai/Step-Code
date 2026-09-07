@@ -145,6 +145,7 @@ import {
 	CompactionStatusIndicator,
 	IdleStatus,
 	RetryStatusIndicator,
+	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	type StatusIndicator,
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
@@ -2415,7 +2416,8 @@ export class InteractiveMode {
 			new WorkingStatusIndicator(
 				this.ui,
 				this.workingMessage ?? this.defaultWorkingMessage,
-				this.workingIndicatorOptions,
+				this.workingIndicatorOptions ??
+					(this.presentation === "step" ? { intervalMs: STEP_WORKING_INDICATOR_INTERVAL_MS } : undefined),
 				this.presentation,
 				this.presentation === "step" ? this.workingOutputTracker : undefined,
 			),
