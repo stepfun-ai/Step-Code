@@ -6,7 +6,7 @@
  * through {@link StepPlanModeController}, so the tools stay stateless.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
@@ -41,13 +41,9 @@ function controlResult(text: string): AgentToolResult<undefined> {
 const PLAN_PREVIEW_MAX_CHARS = 2000;
 
 function readPlanPreview(planFilePath: string): string {
-	let planContent = "";
-	try {
-		planContent = readFileSync(planFilePath, "utf8");
-	} catch {
-		return "(plan file could not be read)";
-	}
-	if (planContent.trim().length === 0) return "(plan file is empty)";
+	if (!statSync(planFilePath).isFile()) throw new Error("The plan path is not a regular file");
+	const planContent = readFileSync(planFilePath, "utf8");
+	if (planContent.trim().length === 0) throw new Error("The plan file is empty or whitespace-only");
 	if (planContent.length <= PLAN_PREVIEW_MAX_CHARS) return planContent;
 	return `${planContent.slice(0, PLAN_PREVIEW_MAX_CHARS)}\n... (truncated, full plan in file)`;
 }
@@ -75,14 +71,18 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		name: "enter_plan_mode",
 		label: "Enter plan mode",
 		description:
-			"Switch this session into read-only plan mode to explore the codebase and draft a plan. While active, file mutations are blocked except for writing the session plan file announced in the result.",
-		promptSnippet: "Enter read-only plan mode and draft a plan file",
+			"Enter plan mode to explore the codebase and draft a proposal for approval. File-editing tools are limited to the announced session plan file; commands still use normal permissions.",
+		promptSnippet: "Enter plan mode and draft a proposal for approval",
 		parameters: Type.Object({}),
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
-			if (planMode.isPlanModeActive()) return controlResult("Already in plan mode.");
+			if (planMode.isPlanModeActive()) {
+				return controlResult(
+					`Already in plan mode. Write your proposal to ${planMode.resolvePlanFilePath(ctx)} using write_file or edit_file, then call exit_plan_mode when it is ready.`,
+				);
+			}
 			const planFilePath = planMode.enterPlanMode(ctx);
 			return controlResult(
-				`Plan mode active. Explore the repository read-only, then write your plan to ${planFilePath} using write_file. Call exit_plan_mode when the plan is ready.`,
+				`Plan mode active. Explore the repository, then write your proposal to ${planFilePath} using write_file. Call exit_plan_mode when it is ready for review.`,
 			);
 		},
 	});
@@ -90,7 +90,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		name: "exit_plan_mode",
 		label: "Exit plan mode",
 		description:
-			"Exit plan mode once the session plan file has been written. The user reviews the plan and chooses to execute it, stay in plan mode, or request refinements. Fails if the plan file does not exist yet.",
+			"Exit plan mode once the session proposal is ready for review. The user chooses to execute it, stay in plan mode, or request refinements. Requires a readable, nonempty regular plan file.",
 		promptSnippet: "Exit plan mode after writing the plan file",
 		parameters: Type.Object({}),
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
@@ -98,10 +98,17 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 			const planFilePath = planMode.resolvePlanFilePath(ctx);
 			if (!existsSync(planFilePath)) {
 				return controlResult(
-					`No plan file at ${planFilePath}. Write it with write_file first, then call exit_plan_mode again.`,
+					`No plan file at ${planFilePath}. Check the path and permissions, then write it with write_file and call exit_plan_mode again.`,
 				);
 			}
-			const planPreview = readPlanPreview(planFilePath);
+			let planPreview: string;
+			try {
+				planPreview = readPlanPreview(planFilePath);
+			} catch (error) {
+				return controlResult(
+					`Cannot review the plan at ${planFilePath}: ${error instanceof Error ? error.message : String(error)}. Provide a readable, nonempty regular file containing your proposal with write_file, then call exit_plan_mode again.`,
+				);
+			}
 			if (ctx.mode === "rpc") {
 				// An rpc child has a dialog bridge (hasUI is true) but no real user
 				// behind it, so its extension_ui_request select can be auto-cancelled

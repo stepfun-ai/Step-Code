@@ -19,10 +19,26 @@ import {
 	type StepPlanExitOutcome,
 	type StepPlanModeController,
 } from "./plan-mode-tools.ts";
-import { compareTaskIds, type StepTask } from "./step-tasks.ts";
 
-const PLAN_TOOLS = ["read_file", "find_files", "search_files", "list_directory", "run_command", "clarify_user"];
+const PLAN_TOOLS = [
+	"read_file",
+	"find_files",
+	"search_files",
+	"list_directory",
+	"run_command",
+	"clarify_user",
+	"write_file",
+	"edit_file",
+];
 const MUTATING_TOOLS = new Set(["write_file", "edit_file", "write", "edit"]);
+const PLAN_TASK_TOOLS = new Set([
+	"enter_plan_mode",
+	"exit_plan_mode",
+	"task_create",
+	"task_update",
+	"task_get",
+	"task_list",
+]);
 
 /** Who put the session into plan mode. */
 export type StepPlanSource = "user" | "agent" | "unknown";
@@ -90,122 +106,61 @@ export const createStepPlanExtension =
 			pi.appendEntry("step-plan", { enabled, toolsBeforePlanMode, planFilePath, planSource });
 		};
 		const enable = (): void => {
-			if (!toolsBeforePlanMode) toolsBeforePlanMode = pi.getActiveTools();
-			const activeToolNames = pi.getActiveTools();
-			pi.setActiveTools(unique([...activeToolNames.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
+			toolsBeforePlanMode ??= pi.getActiveTools();
+			// Keep plan-file writes available; tool_call restricts their target.
+			pi.setActiveTools(unique([...toolsBeforePlanMode.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
 		};
-		// enable() strips the mutating tools from the active set; re-add them so
-		// the plan file itself stays writable. The tool_call hook below restricts
-		// them to the plan file while plan mode is on.
-		const allowPlanFileWrites = (): void => {
-			pi.setActiveTools(unique([...pi.getActiveTools(), "write_file", "edit_file"]));
-		};
-		const restore = (): void => {
-			if (toolsBeforePlanMode) {
-				pi.setActiveTools(toolsBeforePlanMode);
-			} else {
-				pi.setActiveTools(
-					unique([
-						"read_file",
-						"find_files",
-						"search_files",
-						"list_directory",
-						"run_command",
-						"write_file",
-						"edit_file",
-						...pi.getActiveTools(),
-					]),
-				);
-			}
+		const restoreTools = (): void => {
+			if (toolsBeforePlanMode) pi.setActiveTools(toolsBeforePlanMode);
 			toolsBeforePlanMode = undefined;
-		};
-		const toggle = (ctx: ExtensionContext): void => {
-			enabled = !enabled;
-			if (enabled) {
-				planSource = "user";
-				enable();
-				recordPlanEnter(options.telemetry, "user");
-				ctx.ui.notify("Plan mode enabled. File mutation and command execution are disabled.", "info");
-			} else {
-				recordPlanExit(options.telemetry, planSource, "toggled_off");
-				planSource = undefined;
-				restore();
-				ctx.ui.notify("Plan mode disabled.", "info");
-			}
-			updateStatus(ctx, enabled, planSource);
-			persistPlanState();
 		};
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
-
+		const enter = (source: StepPlanSource, ctx: ExtensionContext): string => {
+			enabled = true;
+			planSource = source;
+			planFilePath = resolvePlanFilePath(ctx);
+			enable();
+			recordPlanEnter(options.telemetry, source);
+			updateStatus(ctx, enabled, planSource);
+			persistPlanState();
+			if (source === "user") {
+				ctx.ui.notify(
+					`Plan mode enabled. Draft your proposal at ${planFilePath}; file-editing tools are limited to this path. Commands still use normal permissions.`,
+					"info",
+				);
+			}
+			return planFilePath;
+		};
+		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+			recordPlanExit(options.telemetry, planSource, outcome);
+			enabled = false;
+			planSource = undefined;
+			restoreTools();
+			persistPlanState();
+			updateStatus(ctx, enabled, planSource);
+		};
 		const planModeController: StepPlanModeController = {
 			isPlanModeActive: () => enabled,
-			enterPlanMode: (ctx) => {
-				enabled = true;
-				planSource = "agent";
-				enable();
-				allowPlanFileWrites();
-				planFilePath = getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
-				recordPlanEnter(options.telemetry, "agent");
-				updateStatus(ctx, enabled, planSource);
-				persistPlanState();
-				return planFilePath;
-			},
-			exitPlanMode: (outcome, ctx) => {
-				recordPlanExit(options.telemetry, planSource, outcome);
-				enabled = false;
-				planSource = undefined;
-				restore();
-				persistPlanState();
-				updateStatus(ctx, enabled, planSource);
-			},
+			enterPlanMode: (ctx) => enter("agent", ctx),
+			exitPlanMode: exit,
 			resolvePlanFilePath,
 		};
 
 		pi.registerFlag("plan", {
-			description: "Start in plan mode (read-only exploration)",
+			description: "Start in plan mode (draft a proposal for approval)",
 			type: "boolean",
 			default: false,
 		});
 		pi.registerCommand("plan", {
-			description: "Toggle plan mode (read-only exploration)",
-			handler: async (_args, ctx) => toggle(ctx),
-		});
-		pi.registerCommand("todos", {
-			description: "Show session tasks tracked with the task_* tools",
+			description: "Toggle plan mode (draft a proposal for approval)",
 			handler: async (_args, ctx) => {
-				// Read the step-tasks extension's latest persisted snapshot. Every
-				// task mutation persists a full snapshot, so the newest step-tasks
-				// entry is the live task list without cross-extension coupling.
-				const latestTasksEntry = [...ctx.sessionManager.getEntries()]
-					.reverse()
-					.find((candidate) => candidate.type === "custom" && candidate.customType === "step-tasks") as
-					| { data?: { tasks?: StepTask[] } }
-					| undefined;
-				const tasks = (latestTasksEntry?.data?.tasks ?? []).filter(
-					(task): task is StepTask => !!task && typeof task.id === "string" && typeof task.subject === "string",
-				);
-				if (tasks.length === 0) {
-					ctx.ui.notify("No tasks tracked. Use task_create to add some.", "info");
-					return;
+				if (enabled) {
+					exit("toggled_off", ctx);
+					ctx.ui.notify("Plan mode disabled.", "info");
+				} else {
+					enter("user", ctx);
 				}
-				const statusMarkers: Record<string, string> = { completed: "done", in_progress: "wip" };
-				const tasksById = new Map(tasks.map((task) => [task.id, task]));
-				const taskLines = tasks
-					.sort((a, b) => compareTaskIds(a.id, b.id))
-					.map((task) => {
-						const statusMarker = statusMarkers[task.status] ?? "todo";
-						const ownerLabel = task.owner ? ` @${task.owner}` : "";
-						// Same semantics as task_list: report only blockers that still
-						// exist and are not completed.
-						const openBlockers = (Array.isArray(task.blockedBy) ? task.blockedBy : []).filter((blockerId) => {
-							const blocker = tasksById.get(blockerId);
-							return blocker !== undefined && blocker.status !== "completed";
-						});
-						const blockersLabel = openBlockers.length > 0 ? ` (blocked by ${openBlockers.join(", ")})` : "";
-						return `${statusMarker} ${task.id}. ${task.subject}${ownerLabel}${blockersLabel}`;
-					});
-				ctx.ui.notify(taskLines.join("\n"), "info");
 			},
 		});
 		registerPlanModeTools(pi, planModeController);
@@ -241,40 +196,50 @@ export const createStepPlanExtension =
 			};
 		});
 
-		pi.on("session_start", async (_event, ctx) => {
-			const flagEnabled = pi.getFlag("plan") === true;
-			if (flagEnabled) {
-				enabled = true;
-				planSource = "user";
-			}
-			const persistedPlanEntry = [...ctx.sessionManager.getEntries()]
+		const restorePlanState = (ctx: ExtensionContext, startWithPlan = false): void => {
+			// Legacy tool lists predate these capabilities. Preserve only the ones
+			// already active; ordinary tools still follow the saved branch selection.
+			const activePlanTaskTools = pi.getActiveTools().filter((name) => PLAN_TASK_TOOLS.has(name));
+			// Undo the previous branch's tool restriction before reading the new one.
+			restoreTools();
+			const planStates = [...ctx.sessionManager.getBranch()]
 				.reverse()
-				.find((candidate) => candidate.type === "custom" && candidate.customType === "step-plan") as
-				| { data?: PlanState & LegacyPlanTodoFields }
-				| undefined;
-			const restoredPlanState = persistedPlanEntry?.data;
+				.flatMap((entry) =>
+					entry.type === "custom" && entry.customType === "step-plan"
+						? [entry.data as (PlanState & LegacyPlanTodoFields) | undefined]
+						: [],
+				);
+			const restoredPlanState = planStates[0];
+			// Off snapshots omit transient tools; a preceding plan entry retains the baseline.
+			const savedTools = planStates.find((state) => state?.toolsBeforePlanMode)?.toolsBeforePlanMode;
+			enabled = restoredPlanState?.enabled ?? false;
+			toolsBeforePlanMode = savedTools ? unique([...savedTools, ...activePlanTaskTools]) : undefined;
+			planFilePath = restoredPlanState?.planFilePath;
+			planSource = enabled ? (restoredPlanState?.planSource ?? "unknown") : undefined;
+			if (enabled) {
+				planFilePath = resolvePlanFilePath(ctx);
+				enable();
+			} else {
+				restoreTools();
+			}
 			if (restoredPlanState) {
-				enabled = restoredPlanState.enabled;
-				toolsBeforePlanMode = restoredPlanState.toolsBeforePlanMode;
-				planFilePath = restoredPlanState.planFilePath;
-				planSource = restoredPlanState.planSource ?? (enabled ? "unknown" : undefined);
 				migrateLegacyPlanTodos({
 					persistedPlanState: restoredPlanState,
 					events,
 					extensionContext: ctx,
 					persistMigratedPlanState: persistPlanState,
 				});
-			} else if (flagEnabled) {
-				// A fresh session started with --plan is a real plan-mode entry;
-				// restoring a persisted state is not.
-				recordPlanEnter(options.telemetry, "user");
 			}
-			if (enabled) {
-				enable();
-				allowPlanFileWrites();
+			if (startWithPlan && !enabled) {
+				enter("user", ctx);
+				return;
 			}
 			updateStatus(ctx, enabled, planSource);
+		};
+		pi.on("session_start", async (event, ctx) => {
+			restorePlanState(ctx, event.reason === "startup" && pi.getFlag("plan") === true);
 		});
+		pi.on("session_tree", async (_event, ctx) => restorePlanState(ctx));
 	};
 
 export const stepPlanExtension = createStepPlanExtension();

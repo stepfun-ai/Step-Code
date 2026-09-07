@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added extension-owned task widgets and native task tool renderers, keeping `/todos` with the task extension.
 - Added the Step binary startup update check and native installer integration for Step CLI hosts.
 
 ### Changed
@@ -13,6 +14,8 @@
 
 ### Fixed
 
+- Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
+- Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.
 - Fixed the Step entrypoint so `--api-key <key>` also authenticates the built-in `search_web` MCP tool.
 - Fixed `search_web` credential resolution so it no longer falls back to `STEP_API_KEY`, which addresses the StepCode-injected provider base URL rather than the fixed search endpoint.
 - Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.

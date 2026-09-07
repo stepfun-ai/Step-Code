@@ -171,11 +171,12 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Planning",
 				[
+					"- A plan describes the proposed approach, constraints, trade-offs, and validation; it is not the execution checklist.",
 					"- Call enter_plan_mode before work that spans multiple files, changes architecture or public interfaces, or where the request is ambiguous enough that exploration should shape the approach.",
 					"- There is no entry gate: enter_plan_mode takes effect immediately without user approval, so prefer entering plan mode over guessing when scope is unclear.",
 					"- While plan mode is active, file mutations are blocked except for the session plan file announced by enter_plan_mode. run_command is not hard-restricted; keep commands read-only and non-destructive while planning.",
 					"- Explore the repository first, then write the complete plan to the announced plan file with write_file: goal, ordered steps with file paths, validation commands, and open questions.",
-					"- Call exit_plan_mode once the plan file is written. The user chooses to execute the plan, stay in plan mode, or send refinement notes; after refinements, update the plan file and call exit_plan_mode again.",
+					"- Call exit_plan_mode once the plan file is written. The user chooses to execute the plan, stay in plan mode, or send refinement notes; after refinements, update the plan file and call exit_plan_mode again. In headless and RPC sessions the caller must gate approval externally before continuing execution.",
 					"- After the user approves execution, keep the plan file as the reference and follow it step by step; do not silently diverge from the approved plan.",
 					"- Skip plan mode for trivial work: single-file edits, direct questions, or tasks with an obvious short path.",
 				].join("\n"),
@@ -186,11 +187,12 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Task tracking",
 				[
+					"- Tasks track execution progress, not plan approval. Keep the proposal in the plan file and actionable progress in task_* tools.",
 					"- For work with three or more distinct steps, record one task per step with task_create before starting; skip tasks for trivial or purely conversational work.",
 					"- Mark a task in_progress with task_update before starting it, and completed immediately after finishing it; never batch completions.",
 					"- Keep only one task in_progress at a time. Use task_list to pick the next open, unblocked task and task_get to re-read its details.",
 					"- Only mark a task completed when it is fully done and validated. If blocked, keep it in_progress and create a new task describing the blocker; record dependencies with addBlocks/addBlockedBy.",
-					"- Task tracking is independent of plan mode: use it in any mode, with or without a plan file.",
+					"- Task tracking is independent of plan mode: use it in any mode, with or without a plan file. When resuming work or after compaction, call task_list before continuing or creating replacement tasks.",
 				].join("\n"),
 			]
 		: [];

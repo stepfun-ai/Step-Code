@@ -1,26 +1,40 @@
-import { expect, test } from "vitest";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { expect, test, vi } from "vitest";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolDefinition,
+	ToolRenderContext,
+} from "../src/core/extensions/types.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
+import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 interface TasksSnapshot {
 	tasks: StepTask[];
 	nextId: number;
 }
 
-function createApi(): {
+function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 	api: ExtensionAPI;
 	tools: Map<string, ToolDefinition>;
 	entries: TasksSnapshot[];
+	sessionManager: SessionManager;
+	commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>;
 	emit: (event: { type: string } & Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 } {
 	const tools = new Map<string, ToolDefinition>();
+	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const entries: TasksSnapshot[] = [];
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	const api = {
 		registerTool(tool: ToolDefinition) {
 			tools.set(tool.name, tool);
 		},
-		registerCommand: () => {},
+		registerCommand(name: string, command: { handler: (args: string, ctx: ExtensionContext) => unknown }) {
+			commands.set(name, command);
+		},
 		registerFlag: () => {},
 		on(event: string, handler: (event: never, ctx: ExtensionContext) => unknown) {
 			const registered = handlers.get(event) ?? [];
@@ -32,7 +46,8 @@ function createApi(): {
 		getFlag: () => false,
 		appendEntry: (customType: string, data: TasksSnapshot) => {
 			expect(customType).toBe("step-tasks");
-			entries.push(structuredClone(data));
+			entries.push(data);
+			sessionManager.appendCustomEntry(customType, data);
 		},
 		sendMessage: () => {},
 		sendUserMessage: () => {},
@@ -41,6 +56,8 @@ function createApi(): {
 		api,
 		tools,
 		entries,
+		sessionManager,
+		commands,
 		emit: async (event, ctx) => {
 			let last: unknown;
 			for (const handler of handlers.get(event.type) ?? []) {
@@ -51,21 +68,78 @@ function createApi(): {
 	};
 }
 
-function createContext(entries: Array<{ type: string; customType: string; data: unknown }> = []): ExtensionContext {
+function createContext(
+	entries: Array<{ type: string; customType: string; data: unknown }> = [],
+	sessionManager?: SessionManager,
+): ExtensionContext {
 	return {
-		hasUI: false,
+		hasUI: true,
+		mode: "tui",
+		ui: { setWidget: vi.fn(), notify: vi.fn() },
 		cwd: "/workspace",
-		sessionManager: { getEntries: () => entries, getSessionId: () => "session-test" },
+		sessionManager: sessionManager ?? {
+			getEntries: () => entries,
+			getBranch: () => entries,
+			getSessionId: () => "session-test",
+		},
 	} as unknown as ExtensionContext;
 }
 
-async function run(tools: Map<string, ToolDefinition>, name: string, params: unknown): Promise<unknown> {
+async function runResult(
+	tools: Map<string, ToolDefinition>,
+	name: string,
+	params: unknown,
+	ctx = createContext(),
+): Promise<AgentToolResult<unknown>> {
 	const tool = tools.get(name);
 	expect(tool, `tool ${name} is registered`).toBeDefined();
-	const result = (await tool!.execute(`${name}-call`, params as never, undefined, undefined, createContext())) as {
-		details: unknown;
+	return tool!.execute(`${name}-call`, params as never, undefined, undefined, ctx);
+}
+
+async function run(
+	tools: Map<string, ToolDefinition>,
+	name: string,
+	params: unknown,
+	ctx = createContext(),
+): Promise<unknown> {
+	return (await runResult(tools, name, params, ctx)).details;
+}
+
+const plainTheme = {
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+} as Theme;
+
+function renderContext(
+	expanded = false,
+	isError = false,
+): ToolRenderContext<Record<string, unknown>, Record<string, unknown>> {
+	return {
+		args: {},
+		toolCallId: "task-call",
+		invalidate: () => {},
+		lastComponent: undefined,
+		state: {},
+		cwd: "/workspace",
+		executionStarted: true,
+		argsComplete: true,
+		isPartial: false,
+		expanded,
+		showImages: false,
+		isError,
 	};
-	return result.details;
+}
+
+function renderResult(
+	tool: ToolDefinition,
+	result: AgentToolResult<unknown>,
+	expanded = false,
+	isError = false,
+): string {
+	expect(tool.renderResult).toBeTypeOf("function");
+	return tool.renderResult!(result, { expanded, isPartial: false }, plainTheme, renderContext(expanded, isError))
+		.render(120)
+		.join("\n");
 }
 
 test("task_create returns a fresh id and task_get round-trips the stored task", async () => {
@@ -247,4 +321,412 @@ test("session_start falls back to one past the highest surviving id for legacy s
 		id: string;
 	};
 	expect(created.id).toBe("6");
+});
+
+test("updates never mutate historical SessionManager snapshots or returned task details", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	await run(source.tools, "task_create", { subject: "One", description: "first", metadata: { nested: { value: 1 } } });
+	const firstSnapshot = structuredClone(source.entries[0]);
+	const fetched = await run(source.tools, "task_get", { taskId: "1" });
+	const fetchedBefore = structuredClone(fetched);
+	await run(source.tools, "task_create", { subject: "Two", description: "second" });
+	const updated = await run(source.tools, "task_update", { taskId: "1", addBlocks: ["2"] });
+	const updatedBefore = structuredClone(updated);
+	await run(source.tools, "task_update", { taskId: "1", status: "completed", metadata: { nested: { value: 2 } } });
+	await run(source.tools, "task_update", { taskId: "2", status: "deleted" });
+
+	expect(source.entries[0]).toEqual(firstSnapshot);
+	expect(fetched).toEqual(fetchedBefore);
+	expect(updated).toEqual(updatedBefore);
+	const persisted = source.sessionManager.getEntries()[0];
+	expect(persisted.type === "custom" && persisted.data).toEqual(firstSnapshot);
+});
+
+test("input metadata and returned task details do not alias live task data", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const metadata = { nested: { values: [1] } };
+	await run(source.tools, "task_create", { subject: "One", description: "first", metadata });
+	metadata.nested.values.push(2);
+	expect(((await run(source.tools, "task_get", { taskId: "1" })) as StepTask).metadata).toEqual({
+		nested: { values: [1] },
+	});
+
+	const updates = { nested: { values: [3] } };
+	await run(source.tools, "task_update", { taskId: "1", metadata: updates });
+	updates.nested.values.push(4);
+	const result = (await run(source.tools, "task_get", { taskId: "1" })) as StepTask;
+	expect(result.metadata).toEqual({ nested: { values: [3] } });
+	result.subject = "corrupted result";
+	result.blockedBy.push("missing");
+	(result.metadata?.nested as { values: number[] }).values.push(5);
+	expect(await run(source.tools, "task_get", { taskId: "1" })).toMatchObject({
+		subject: "One",
+		blockedBy: [],
+		metadata: { nested: { values: [3] } },
+	});
+});
+
+test("restored task objects and dependency arrays do not alias the stored snapshot", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	await run(source.tools, "task_create", { subject: "One", description: "first" });
+	await run(source.tools, "task_create", { subject: "Two", description: "second" });
+	const snapshot = structuredClone(source.entries.at(-1));
+	const reloaded = createApi(source.sessionManager);
+	createStepTasksExtension()(reloaded.api);
+	await reloaded.emit({ type: "session_start" }, createContext([], source.sessionManager));
+	await run(reloaded.tools, "task_update", { taskId: "1", addBlocks: ["2"] });
+	expect(source.entries.at(-1)).toEqual(snapshot);
+});
+
+test("session_start restores only the active branch and allocates IDs beyond sibling history", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	await run(source.tools, "task_create", { subject: "Base", description: "pending here" });
+	const base = source.sessionManager.getLeafId()!;
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" });
+	await run(source.tools, "task_create", { subject: "Other branch", description: "not here" });
+	source.sessionManager.branch(base);
+
+	const reloaded = createApi(source.sessionManager);
+	createStepTasksExtension()(reloaded.api);
+	await reloaded.emit({ type: "session_start" }, createContext([], source.sessionManager));
+	expect(await run(reloaded.tools, "task_list", {})).toEqual([
+		{ id: "1", subject: "Base", status: "pending", owner: undefined, blockedBy: [] },
+	]);
+	expect(await run(reloaded.tools, "task_create", { subject: "This branch", description: "new" })).toMatchObject({
+		id: "3",
+	});
+});
+
+test("session_tree restores sibling task contents without changing either branch", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext([], source.sessionManager);
+	await run(source.tools, "task_create", { subject: "Base", description: "first" });
+	const base = source.sessionManager.getLeafId()!;
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" });
+	const completedBranch = source.sessionManager.getLeafId()!;
+	source.sessionManager.branch(base);
+	await source.emit({ type: "session_tree" }, ctx);
+	expect(await run(source.tools, "task_get", { taskId: "1" })).toMatchObject({ status: "pending" });
+	await run(source.tools, "task_create", { subject: "Sibling", description: "second" });
+	const siblingBranch = source.sessionManager.getLeafId()!;
+	source.sessionManager.branch(completedBranch);
+	await source.emit({ type: "session_tree" }, ctx);
+	expect(await run(source.tools, "task_list", {})).toEqual([
+		{ id: "1", subject: "Base", status: "completed", owner: undefined, blockedBy: [] },
+	]);
+	source.sessionManager.branch(siblingBranch);
+	await source.emit({ type: "session_tree" }, ctx);
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+	expect(await run(source.tools, "task_get", { taskId: "1" })).toMatchObject({ status: "pending" });
+});
+
+test("an empty branch clears tasks but never reuses an ID from the session", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	await run(source.tools, "task_create", { subject: "Future", description: "discarded branch" });
+	source.sessionManager.resetLeaf();
+	await source.emit({ type: "session_tree" }, createContext([], source.sessionManager));
+	expect(await run(source.tools, "task_list", {})).toEqual([]);
+	expect(await run(source.tools, "task_create", { subject: "Fresh branch", description: "new" })).toMatchObject({
+		id: "2",
+	});
+});
+
+test("session_start clears stale tasks when the session has no snapshot", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	await run(source.tools, "task_create", { subject: "Old", description: "previous session" });
+	source.sessionManager.newSession();
+	await source.emit({ type: "session_start" }, createContext([], source.sessionManager));
+	expect(await run(source.tools, "task_list", {})).toEqual([]);
+	expect(await run(source.tools, "task_create", { subject: "New", description: "fresh session" })).toMatchObject({
+		id: "1",
+	});
+});
+
+test("task snapshots survive compaction even when they precede retained messages", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	await run(source.tools, "task_create", { subject: "Retained", description: "still open" });
+	const kept = source.sessionManager.appendCustomEntry("test-retained-entry", {});
+	source.sessionManager.appendCompaction("summary", kept, 1000);
+	const reloaded = createApi(source.sessionManager);
+	createStepTasksExtension()(reloaded.api);
+	await reloaded.emit({ type: "session_start" }, createContext([], source.sessionManager));
+	expect(await run(reloaded.tools, "task_get", { taskId: "1" })).toMatchObject({ subject: "Retained" });
+});
+
+test.each([
+	{ name: "reverse edge", existing: [{ taskId: "1", addBlocks: ["2"] }], update: { taskId: "2", addBlocks: ["1"] } },
+	{
+		name: "transitive cycle",
+		existing: [
+			{ taskId: "1", addBlocks: ["2"] },
+			{ taskId: "2", addBlocks: ["3"] },
+		],
+		update: { taskId: "3", addBlocks: ["1"] },
+	},
+	{
+		name: "mixed update",
+		existing: [{ taskId: "2", addBlocks: ["3"] }],
+		update: { taskId: "1", addBlocks: ["2"], addBlockedBy: ["3"] },
+	},
+	{ name: "two new opposing edges", existing: [], update: { taskId: "1", addBlocks: ["2"], addBlockedBy: ["2"] } },
+])("task_update rejects $name atomically", async ({ existing, update }) => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	for (const subject of ["One", "Two", "Three"]) {
+		await run(source.tools, "task_create", { subject, description: "test" });
+	}
+	for (const edge of existing) await run(source.tools, "task_update", edge);
+	const before = structuredClone(source.entries.at(-1));
+	const snapshots = source.entries.length;
+	await expect(
+		run(source.tools, "task_update", {
+			...update,
+			subject: "Must not change",
+			status: "in_progress",
+			metadata: { changed: true },
+		}),
+	).rejects.toThrow(/cycle/i);
+	expect(source.entries).toHaveLength(snapshots);
+	expect(source.entries.at(-1)).toEqual(before);
+	for (const task of before!.tasks) expect(await run(source.tools, "task_get", { taskId: task.id })).toEqual(task);
+});
+
+test("duplicate and converging dependencies remain valid", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	for (const subject of ["One", "Two", "Three"])
+		await run(source.tools, "task_create", { subject, description: "test" });
+	await run(source.tools, "task_update", { taskId: "1", addBlocks: ["2", "3", "2"] });
+	await run(source.tools, "task_update", { taskId: "2", addBlocks: ["3"], addBlockedBy: ["1"] });
+	expect(await run(source.tools, "task_get", { taskId: "1" })).toMatchObject({ blocks: ["2", "3"] });
+	expect(await run(source.tools, "task_get", { taskId: "3" })).toMatchObject({ blockedBy: ["1", "2"] });
+});
+
+test("/todos belongs to task tracking and lists open blockers without plan mode", async () => {
+	const { api, tools, commands } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	expect(commands.get("todos")).toBeDefined();
+	await commands.get("todos")!.handler("", ctx);
+	expect(ctx.ui.notify).toHaveBeenLastCalledWith("No tasks tracked. Use task_create to add some.", "info");
+	await run(tools, "task_create", { subject: "Write the parser", description: "tokenizer" }, ctx);
+	await run(tools, "task_create", { subject: "Add tests", description: "regression" }, ctx);
+	await run(tools, "task_update", { taskId: "1", status: "in_progress", owner: "worker-a" }, ctx);
+	await run(tools, "task_update", { taskId: "2", addBlockedBy: ["1"] }, ctx);
+	await commands.get("todos")!.handler("", ctx);
+	expect(ctx.ui.notify).toHaveBeenLastCalledWith(
+		"wip 1. Write the parser @worker-a\ntodo 2. Add tests (blocked by 1)",
+		"info",
+	);
+	await run(tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	await commands.get("todos")!.handler("", ctx);
+	expect(ctx.ui.notify).toHaveBeenLastCalledWith("done 1. Write the parser @worker-a\ntodo 2. Add tests", "info");
+});
+
+test("task widget shows bounded progress with the active label first and plain RPC lines", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = { ...createContext(), mode: "rpc" as const };
+	for (let i = 1; i <= 8; i++) {
+		await run(
+			tools,
+			"task_create",
+			{ subject: `Task ${i}`, description: "work", activeForm: `Working on ${i}` },
+			ctx,
+		);
+	}
+	await run(tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	await run(tools, "task_update", { taskId: "8", status: "in_progress" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenCalled();
+	const [key, lines] = vi.mocked(ctx.ui.setWidget).mock.calls.at(-1)!;
+	expect(key).toBe("step-tasks");
+	expect(Array.isArray(lines)).toBe(true);
+	expect(lines).toEqual([
+		"Tasks: 1/8 completed",
+		"wip 8. Working on 8",
+		"todo 2. Task 2",
+		"todo 3. Task 3",
+		"todo 4. Task 4",
+		"todo 5. Task 5",
+		"... 2 more open tasks (/todos)",
+	]);
+});
+
+test("task widget flattens and clips untrusted titles without changing stored data", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	const subject = `\u001b[31mLong\n\t${"界".repeat(150)}\u001b[0m`;
+	await run(tools, "task_create", { subject, description: "raw data stays intact" }, ctx);
+	const lines: unknown = vi.mocked(ctx.ui.setWidget).mock.calls.at(-1)?.[1];
+	expect(Array.isArray(lines)).toBe(true);
+	for (const line of lines as string[]) {
+		expect(line).not.toMatch(/[\r\n\t\u001b]/);
+		expect(visibleWidth(line)).toBeLessThanOrEqual(100);
+	}
+	expect(await run(tools, "task_get", { taskId: "1" })).toMatchObject({ subject });
+});
+
+test("task widget follows branch restores, completed tasks, deletion and fresh sessions", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext([], source.sessionManager);
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	const pending = source.sessionManager.getLeafId()!;
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 1/1 completed"]);
+	source.sessionManager.branch(pending);
+	await source.emit({ type: "session_tree" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"]);
+	await run(source.tools, "task_update", { taskId: "1", status: "deleted" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined);
+	source.sessionManager.branch(pending);
+	await source.emit({ type: "session_start" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"]);
+	source.sessionManager.newSession();
+	await source.emit({ type: "session_start" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined);
+});
+
+test("failed updates and read-only task tools do not refresh the widget", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	await run(tools, "task_create", { subject: "One", description: "first" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenCalledTimes(1);
+	await expect(run(tools, "task_update", { taskId: "1", addBlocks: ["1"] }, ctx)).rejects.toThrow();
+	await run(tools, "task_get", { taskId: "1" }, ctx);
+	await run(tools, "task_list", {}, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenCalledTimes(1);
+});
+
+test("headless task tracking needs no UI", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = { ...createContext([], source.sessionManager), hasUI: false };
+	await source.emit({ type: "session_start" }, ctx);
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+});
+
+test("all task tools own a compact native call/result renderer", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	for (const [name, tool] of tools) {
+		expect(tool.renderCall).toBeTypeOf("function");
+		expect(tool.renderResult).toBeTypeOf("function");
+		const lines = tool.renderCall!(
+			{ subject: `A\n${"界".repeat(200)}`, taskId: "1", status: "in_progress" },
+			plainTheme,
+			renderContext(),
+		).render(40);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain(name);
+		expect(visibleWidth(lines[0])).toBeLessThanOrEqual(40);
+	}
+});
+
+test("task result history renders its own snapshot and expands all task fields", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	const created = await runResult(tools, "task_create", {
+		subject: "Write parser",
+		description: "Detailed grammar",
+		metadata: { lane: "syntax" },
+	});
+	const fetched = await runResult(tools, "task_get", { taskId: "1" });
+	const updated = await runResult(tools, "task_update", { taskId: "1", status: "in_progress", owner: "worker-a" });
+	await run(tools, "task_update", { taskId: "1", status: "completed" });
+	expect(renderResult(tools.get("task_create")!, created)).toContain("todo 1. Write parser");
+	expect(renderResult(tools.get("task_get")!, fetched)).toContain("todo 1. Write parser");
+	expect(renderResult(tools.get("task_get")!, fetched)).not.toContain("Detailed grammar");
+	expect(renderResult(tools.get("task_update")!, updated)).toContain("wip 1. Write parser @worker-a");
+	const expanded = renderResult(tools.get("task_get")!, fetched, true);
+	expect(expanded).toContain("Detailed grammar");
+	expect(expanded).toContain('"lane": "syntax"');
+	expect(expanded).toContain('"blocks"');
+	const removed = await runResult(tools, "task_update", { taskId: "1", status: "deleted" });
+	expect(renderResult(tools.get("task_update")!, removed)).toContain("deleted 1. Write parser");
+});
+
+test("task list rendering is bounded when collapsed and complete when expanded", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	for (let i = 1; i <= 7; i++) await run(tools, "task_create", { subject: `Task ${i}`, description: "work" });
+	await run(tools, "task_update", { taskId: "2", addBlockedBy: ["1"] });
+	const result = await runResult(tools, "task_list", {});
+	const collapsed = renderResult(tools.get("task_list")!, result);
+	expect(collapsed).toContain("todo 2. Task 2 (blocked by 1)");
+	expect(collapsed).not.toContain("Task 6");
+	expect(collapsed).toContain("2 more tasks");
+	expect(renderResult(tools.get("task_list")!, result, true)).toContain("Task 7");
+});
+
+test("individual task summaries do not mislabel full dependency lists as open blockers", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	await run(tools, "task_create", { subject: "Done", description: "prerequisite" });
+	await run(tools, "task_create", { subject: "Ready", description: "next" });
+	await run(tools, "task_update", { taskId: "2", addBlockedBy: ["1"] });
+	await run(tools, "task_update", { taskId: "1", status: "completed" });
+	const result = await runResult(tools, "task_get", { taskId: "2" });
+	expect(renderResult(tools.get("task_get")!, result)).not.toContain("blocked by");
+	expect(renderResult(tools.get("task_get")!, result, true)).toContain('"blockedBy"');
+});
+
+test("task renderers retain empty, error and unfamiliar historical output", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	expect(renderResult(tools.get("task_list")!, await runResult(tools, "task_list", {}))).toContain("No tasks tracked");
+	for (const details of [undefined, { oldFormat: true }, [{ subject: 1 }]]) {
+		expect(
+			renderResult(tools.get("task_get")!, { content: [{ type: "text", text: "Original output" }], details }),
+		).toContain("Original output");
+	}
+	expect(
+		renderResult(
+			tools.get("task_update")!,
+			{ content: [{ type: "text", text: "No task with id 999" }], details: undefined },
+			false,
+			true,
+		),
+	).toContain("No task with id 999");
+});
+
+test.each([
+	{ name: "unknown links", links: { addBlockedBy: ["999"] }, error: /No task with id/ },
+	{ name: "self-links", links: { addBlocks: ["1"] }, error: /cannot block itself/ },
+	{ name: "cycles", links: { addBlockedBy: ["2"] }, error: /cycle/ },
+])("task deletion validates $name before any mutation", async ({ links, error }) => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext([], source.sessionManager);
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	await run(source.tools, "task_create", { subject: "Two", description: "second" }, ctx);
+	await run(source.tools, "task_update", { taskId: "1", addBlocks: ["2"] }, ctx);
+	const before = structuredClone(source.entries.at(-1)!);
+	const writes = source.entries.length;
+	const widgets = vi.mocked(ctx.ui.setWidget).mock.calls.length;
+	await expect(run(source.tools, "task_update", { taskId: "1", status: "deleted", ...links }, ctx)).rejects.toThrow(
+		error,
+	);
+	expect(source.entries).toHaveLength(writes);
+	expect(ctx.ui.setWidget).toHaveBeenCalledTimes(widgets);
+	for (const task of before.tasks) expect(await run(source.tools, "task_get", { taskId: task.id }, ctx)).toEqual(task);
+});
+
+test("task_get directs readiness checks to task_list rather than the full stored links", () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	expect(tools.get("task_get")!.description).toContain("task_list");
+	expect(tools.get("task_get")!.description).not.toContain("Verify blockedBy is clear");
 });
