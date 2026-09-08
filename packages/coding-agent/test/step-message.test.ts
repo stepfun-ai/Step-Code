@@ -193,6 +193,102 @@ describe("Step message presentation", () => {
 		expect(plain(user.render(40)).join("\n")).toContain("› hello");
 	});
 
+	test("reuses assistant rows until the message or its display state changes", () => {
+		initTheme("step");
+		const component = new StepAssistantMessageComponent(
+			assistantMessage([
+				{ type: "thinking", thinking: "a thought" },
+				{ type: "text", text: "the answer" },
+			]),
+			false,
+			getMarkdownTheme(),
+		);
+
+		const cached = component.render(80);
+		expect(component.render(80)).toBe(cached);
+		expect(component.render(60)).not.toBe(cached);
+
+		const beforeExpand = component.render(80);
+		component.setExpanded(true);
+		expect(component.render(80)).not.toBe(beforeExpand);
+
+		const beforeHide = component.render(80);
+		component.setHideThinkingBlock(true);
+		const hidden = component.render(80);
+		expect(hidden).not.toBe(beforeHide);
+		expect(plain(hidden).join("\n")).not.toContain("a thought");
+
+		component.updateContent(assistantMessage([{ type: "text", text: "streamed answer" }]), true);
+		const streamed = component.render(80);
+		expect(streamed).not.toBe(hidden);
+		expect(plain(streamed).join("\n")).toContain("• streamed answer");
+
+		component.invalidate();
+		expect(component.render(80)).not.toBe(streamed);
+	});
+
+	test("drops the OSC 133 markers when a tool call joins an already-rendered message", () => {
+		initTheme("step");
+		const answer = { type: "text", text: "the answer" } as const;
+		const component = new StepAssistantMessageComponent(assistantMessage([answer]), false, getMarkdownTheme());
+
+		expect(component.render(80).join("\n")).toContain(OSC133_ZONE_START);
+
+		// Pi's runs ignore toolCall content, so the rows and the run sources are
+		// unchanged - only latestMessage moves, and render() reads it for the
+		// prompt-zone markers.
+		component.updateContent(
+			assistantMessage([answer, { type: "toolCall", id: "call-1", name: "read", arguments: {} }]),
+			true,
+		);
+		expect(component.render(80).join("\n")).not.toContain(OSC133_ZONE_START);
+	});
+
+	test("re-renders a code block when only the closing fence arrives", () => {
+		initTheme("step");
+		const streamed = (text: string) => assistantMessage([{ type: "text", text }]);
+		const component = new StepAssistantMessageComponent(
+			streamed("```ts\nconst value = 1;"),
+			true,
+			getMarkdownTheme(),
+		);
+
+		const open = component.render(80);
+		expect(plain(open).join("\n")).toContain("```ts");
+
+		// Pi renders the unterminated fence as a finished code block, so the closing
+		// delta leaves every native row identical; only the run source moves, and
+		// hideCompleteFences reads that source.
+		component.updateContent(streamed("```ts\nconst value = 1;\n```"), true);
+		expect(plain(component.render(80)).join("\n")).not.toContain("```");
+	});
+
+	test("re-renders the pi status row that no run source reflects", () => {
+		initTheme("step");
+		const answered = assistantMessage([{ type: "text", text: "partial answer" }]);
+		const component = new StepAssistantMessageComponent(answered, false, getMarkdownTheme());
+
+		expect(plain(component.render(80)).join("\n")).not.toContain("Operation aborted");
+
+		// Aborting leaves the text run, its source and the width untouched; the only
+		// thing that moves is the status row pi appends.
+		component.updateContent({ ...answered, stopReason: "aborted" }, false);
+		expect(plain(component.render(80)).join("\n")).toContain("Operation aborted");
+	});
+
+	test("reuses user rows until output padding changes", () => {
+		initTheme("step");
+		const component = new StepUserMessageComponent("hello", getMarkdownTheme(), 1);
+
+		const cached = component.render(40);
+		expect(component.render(40)).toBe(cached);
+
+		// Pi indents by the pad and Step takes exactly that back, so the rows never
+		// move; what is worth pinning is that setOutputPad still drops the cache.
+		component.setOutputPad(0);
+		expect(component.render(40)).not.toBe(cached);
+	});
+
 	test("keeps every assistant row within the requested width", () => {
 		initTheme("step");
 		const component = new StepAssistantMessageComponent(

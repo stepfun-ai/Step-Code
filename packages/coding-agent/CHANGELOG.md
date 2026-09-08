@@ -4,22 +4,30 @@
 
 ### Added
 
+- Added extension-owned task widgets and native task tool renderers, keeping `/todos` with the task extension.
 - Added the Step binary startup update check and native installer integration for Step CLI hosts.
 
 ### Changed
 
+- Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
 - Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
 
 ### Fixed
 
+- Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
+- Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.
+- Fixed the Step entrypoint so `--api-key <key>` also authenticates the built-in `search_web` MCP tool.
+- Fixed `search_web` credential resolution so it no longer falls back to `STEP_API_KEY`, which addresses the StepCode-injected provider base URL rather than the fixed search endpoint.
 - Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.
+- Fixed the Step welcome logo intro playing on resumed sessions, where the welcome block starts outside the viewport and every frame forces a full-screen redraw.
 - Fixed the Step welcome logo intro outliving the first projected message, which forced a full-screen redraw per frame once the transcript outgrew the viewport.
 - Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
 - Fixed StepCode compatibility for the legacy `--session-file` session selector.
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+- Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
 
 ## [0.84.4] - 2026-08-28
 

@@ -1,12 +1,17 @@
+import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepPlanExtension } from "../src/extensions/step-plan.ts";
 import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
+
+// Preserve real file I/O while making the ESM read export spyable for EACCES tests.
+vi.mock("node:fs", { spy: true });
 
 interface SessionEntryStub {
 	type: string;
@@ -16,11 +21,13 @@ interface SessionEntryStub {
 
 interface Harness {
 	api: ExtensionAPI;
+	session: SessionManager;
 	tools: Map<string, ToolDefinition>;
 	commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>;
 	handlerEvents: () => string[];
 	appended: Array<{ customType: string; data: unknown }>;
 	notifications: Array<{ message: string; type?: string }>;
+	userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>>;
 	statuses: Map<string, string | undefined>;
 	activeTools: () => string[];
 	emit: (event: { type: string } & Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
@@ -30,6 +37,7 @@ interface Harness {
 const cleanups: Array<() => void> = [];
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
@@ -44,17 +52,20 @@ function createHarness(
 		entries?: SessionEntryStub[];
 		cwd?: string;
 		flags?: Record<string, boolean | string>;
-		select?: () => Promise<string | undefined>;
+		select?: (title: string, options: string[]) => Promise<string | undefined>;
+		editor?: (title: string, prefill?: string) => Promise<string | undefined>;
 	} = {},
 ): Harness {
 	const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	const appended: Array<{ customType: string; data: unknown }> = [];
-	const sessionEntries: SessionEntryStub[] = [...(options.entries ?? [])];
 	const notifications: Array<{ message: string; type?: string }> = [];
+	const userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>> = [];
 	const statuses = new Map<string, string | undefined>();
 	const cwd = options.cwd ?? "/workspace";
+	const session = SessionManager.inMemory(cwd, { id: "sess-1" });
+	for (const entry of options.entries ?? []) session.appendCustomEntry(entry.customType, entry.data);
 	let active = ["read_file", "find_files", "search_files", "list_directory", "run_command", "write_file", "edit_file"];
 
 	const api = {
@@ -77,13 +88,13 @@ function createHarness(
 		},
 		getFlag: (name: string) => options.flags?.[name] ?? false,
 		appendEntry: (customType: string, data: unknown) => {
-			appended.push({ customType, data: structuredClone(data) });
-			// Mirror the real session manager: appended custom entries become
-			// visible through sessionManager.getEntries() immediately.
-			sessionEntries.push({ type: "custom", customType, data: structuredClone(data) });
+			appended.push({ customType, data });
+			session.appendCustomEntry(customType, data);
 		},
 		sendMessage: () => {},
-		sendUserMessage: () => {},
+		sendUserMessage: (...args: Parameters<ExtensionAPI["sendUserMessage"]>) => {
+			userMessages.push(args);
+		},
 		events: createEventBus(),
 	} as unknown as ExtensionAPI;
 
@@ -99,24 +110,26 @@ function createHarness(
 					notifications.push({ message, type });
 				},
 				select: options.select ?? (async () => undefined),
-				editor: async () => undefined,
+				editor: options.editor ?? (async () => undefined),
 				setStatus: (key: string, text: string | undefined) => {
 					statuses.set(key, text);
 				},
 				setWidget: () => {},
 				theme: { fg: (_color: string, text: string) => text },
 			},
-			sessionManager: { getEntries: () => sessionEntries, getSessionId: () => "sess-1" },
+			sessionManager: session,
 			...overrides,
 		}) as unknown as ExtensionContext;
 
 	return {
 		api,
+		session,
 		tools,
 		commands,
 		handlerEvents: () => [...handlers.keys()],
 		appended,
 		notifications,
+		userMessages,
 		statuses,
 		activeTools: () => [...active],
 		emit: async (event, context) => {
@@ -500,4 +513,576 @@ test("tui-mode exit_plan_mode still gates through the UI select", async () => {
 	expect(selectCalls).toBe(1);
 	expect(result.content[0]!.text).toContain("Staying in plan mode.");
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+});
+
+// ---------------------------------------------------------------------------
+// Shared entry and branch-local restoration
+// ---------------------------------------------------------------------------
+
+test("plan extension registers only the plan command and its two model tools", () => {
+	const harness = createHarness();
+	createStepPlanExtension()(harness.api);
+	expect([...harness.commands.keys()]).toEqual(["plan"]);
+	expect([...harness.tools.keys()]).toEqual(["enter_plan_mode", "exit_plan_mode"]);
+});
+
+test.each(["/plan", "--plan", "enter_plan_mode"])(
+	"%s preserves tools and announces a writable plan path",
+	async (entry) => {
+		const cwd = makeWorkspace();
+		const { telemetry, events } = createTelemetryRecorder();
+		const harness = createHarness({ cwd, flags: { plan: entry === "--plan" } });
+		const originalTools = ["read_file", "run_command", "write", "edit", "custom_tool"];
+		harness.api.setActiveTools(originalTools);
+		createStepPlanExtension({ telemetry })(harness.api);
+		const context = harness.ctx();
+		if (entry === "/plan") await harness.commands.get("plan")!.handler("", context);
+		else if (entry === "--plan") await harness.emit({ type: "session_start", reason: "startup" }, context);
+		else await runTool(harness, "enter_plan_mode", {}, context);
+
+		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+		const source = entry === "enter_plan_mode" ? "agent" : "user";
+		expect(lastPlanEntry(harness)).toMatchObject({
+			enabled: true,
+			planSource: source,
+			planFilePath: planPath,
+			toolsBeforePlanMode: originalTools,
+		});
+		expect(harness.activeTools()).toEqual(
+			expect.arrayContaining(["write_file", "edit_file", "run_command", "custom_tool"]),
+		);
+		expect(harness.activeTools()).not.toContain("write");
+		expect(harness.activeTools()).not.toContain("edit");
+		if (source === "user") {
+			expect(harness.notifications.at(-1)?.message).toContain(planPath);
+			expect(harness.notifications.at(-1)?.message).not.toContain("command execution are disabled");
+		}
+		for (const toolName of ["write_file", "edit_file", "write", "edit"]) {
+			await expect(
+				harness.emit({ type: "tool_call", toolName, input: { path: path.relative(cwd, planPath) } }, context),
+			).resolves.toBeUndefined();
+			await expect(
+				harness.emit({ type: "tool_call", toolName, input: { path: "src/app.ts" } }, context),
+			).resolves.toMatchObject({ block: true });
+		}
+		await expect(
+			harness.emit({ type: "tool_call", toolName: "run_command", input: { command: "git status" } }, context),
+		).resolves.toBeUndefined();
+
+		const snapshotsBefore = harness.appended.length;
+		const telemetryBefore = events.length;
+		const toolsBefore = harness.activeTools();
+		const repeated = await runTool(harness, "enter_plan_mode", {}, context);
+		expect(repeated).toMatchObject({ content: [{ text: expect.stringContaining(planPath) }] });
+		expect(harness.appended).toHaveLength(snapshotsBefore);
+		expect(events).toHaveLength(telemetryBefore);
+		expect(events[0]).toEqual({ event: "plan_mode_entered", properties: { source } });
+		expect(harness.activeTools()).toEqual(toolsBefore);
+		expect(lastPlanEntry(harness).planSource).toBe(source);
+
+		await harness.commands.get("plan")!.handler("", context);
+		expect(harness.activeTools()).toEqual(originalTools);
+		if (entry === "--plan") {
+			const telemetryBeforeRestore = events.length;
+			await harness.emit({ type: "session_start", reason: "reload" }, context);
+			expect(harness.statuses.get("plan-mode")).toBeUndefined();
+			expect(events).toHaveLength(telemetryBeforeRestore);
+		}
+	},
+);
+
+async function restoreLifecycle(harness: Harness, type: "session_start" | "session_tree"): Promise<void> {
+	await harness.emit(
+		type === "session_start"
+			? { type, reason: "resume" }
+			: { type, oldLeafId: null, newLeafId: harness.session.getLeafId() },
+		harness.ctx(),
+	);
+}
+
+test.each(["session_start", "session_tree"] as const)(
+	"%s restores the active sibling's source, path and original tools without telemetry",
+	async (type) => {
+		const cwd = makeWorkspace();
+		const { telemetry, events } = createTelemetryRecorder();
+		const harness = createHarness({ cwd });
+		const root = harness.session.appendCustomEntry("branch-root");
+		const pathA = path.join(cwd, "proposal-a.md");
+		const pathB = path.join(cwd, "proposal-b.md");
+		const toolsA = ["read_file", "write", "edit", "branch_a_tool"];
+		const toolsB = ["read_file", "write_file", "branch_b_tool"];
+		const branchA = harness.session.appendCustomEntry("step-plan", {
+			enabled: true,
+			planSource: "user",
+			planFilePath: pathA,
+			toolsBeforePlanMode: toolsA,
+		});
+		harness.session.branch(root);
+		const branchB = harness.session.appendCustomEntry("step-plan", {
+			enabled: true,
+			planSource: "agent",
+			planFilePath: pathB,
+			toolsBeforePlanMode: toolsB,
+		});
+		harness.session.branch(branchA);
+		createStepPlanExtension({ telemetry })(harness.api);
+		for (const name of ["branch_a_tool", "branch_b_tool"]) {
+			harness.api.registerTool({ ...harness.tools.get("enter_plan_mode")!, name });
+		}
+		harness.api.setActiveTools([...harness.activeTools(), "branch_a_tool", "branch_b_tool"]);
+
+		await restoreLifecycle(harness, type);
+		expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+		expect(harness.activeTools()).toContain("branch_a_tool");
+		expect(harness.activeTools()).not.toContain("branch_b_tool");
+		expect(await runTool(harness, "enter_plan_mode", {}, harness.ctx())).toMatchObject({
+			content: [{ text: expect.stringContaining(pathA) }],
+		});
+		await expect(
+			harness.emit({ type: "tool_call", toolName: "edit_file", input: { path: pathA } }, harness.ctx()),
+		).resolves.toBeUndefined();
+		await expect(
+			harness.emit({ type: "tool_call", toolName: "edit_file", input: { path: pathB } }, harness.ctx()),
+		).resolves.toMatchObject({ block: true });
+		expect(harness.appended).toHaveLength(0);
+		expect(events.filter((event) => event.event !== "plan_updated")).toEqual([]);
+		await harness.commands.get("plan")!.handler("", harness.ctx());
+		expect(harness.activeTools()).toEqual(toolsA);
+		const offBranch = harness.session.getLeafId()!;
+
+		harness.session.branch(branchB);
+		await restoreLifecycle(harness, type);
+		expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+		expect(harness.activeTools()).toContain("branch_b_tool");
+		expect(harness.activeTools()).not.toContain("branch_a_tool");
+		expect(await runTool(harness, "enter_plan_mode", {}, harness.ctx())).toMatchObject({
+			content: [{ text: expect.stringContaining(pathB) }],
+		});
+		await harness.commands.get("plan")!.handler("", harness.ctx());
+		expect(harness.activeTools()).toEqual(toolsB);
+
+		// Switch directly from B-off to A-off; visiting A-on first hides stale tools.
+		harness.session.branch(offBranch);
+		const snapshotsBefore = harness.appended.length;
+		const telemetryBefore = events.length;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await restoreLifecycle(harness, type);
+			expect(harness.statuses.get("plan-mode")).toBeUndefined();
+			expect(harness.activeTools()).toEqual(toolsA);
+		}
+		expect(harness.appended).toHaveLength(snapshotsBefore);
+		expect(events).toHaveLength(telemetryBefore);
+		expect(await runTool(harness, "exit_plan_mode", {}, harness.ctx())).toMatchObject({
+			content: [{ text: "Not in plan mode." }],
+		});
+		expect(events.filter((event) => event.event === "plan_mode_entered")).toEqual([]);
+	},
+);
+
+test("legacy off snapshots recover the latest branch baseline and new entry captures current tools", async () => {
+	const originalTools = ["read_file", "saved_tool"];
+	const harness = createHarness({
+		entries: [
+			{ type: "custom", customType: "step-plan", data: { enabled: true, toolsBeforePlanMode: ["older_tool"] } },
+			{ type: "custom", customType: "step-plan", data: { enabled: false } },
+			{ type: "custom", customType: "step-plan", data: { enabled: true, toolsBeforePlanMode: originalTools } },
+			{ type: "custom", customType: "step-plan", data: { enabled: false } },
+		],
+	});
+	createStepPlanExtension()(harness.api);
+	for (const name of ["older_tool", "saved_tool", "new_tool"]) {
+		harness.api.registerTool({ ...harness.tools.get("enter_plan_mode")!, name });
+	}
+	for (let attempt = 0; attempt < 2; attempt++) {
+		await restoreLifecycle(harness, "session_start");
+		expect(harness.statuses.get("plan-mode")).toBeUndefined();
+		expect(harness.activeTools()).toEqual(originalTools);
+	}
+	expect(harness.appended).toEqual([]);
+
+	// Restoring an off snapshot must not leave a transient planning baseline.
+	const changedTools = ["read_file", "new_tool"];
+	harness.api.setActiveTools(changedTools);
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(lastPlanEntry(harness).toolsBeforePlanMode).toEqual(changedTools);
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(harness.activeTools()).toEqual(changedTools);
+});
+
+test.each(["session_start", "session_tree"] as const)(
+	"%s clears plan state on an empty branch and restores the previous tools",
+	async (type) => {
+		const cwd = makeWorkspace();
+		const { telemetry, events } = createTelemetryRecorder();
+		const harness = createHarness({ cwd, flags: { plan: true } });
+		const originalTools = ["read_file", "custom_tool"];
+		harness.session.appendCustomEntry("step-plan", {
+			enabled: true,
+			planSource: "user",
+			planFilePath: path.join(cwd, "old-plan.md"),
+			toolsBeforePlanMode: originalTools,
+		});
+		createStepPlanExtension({ telemetry })(harness.api);
+		await restoreLifecycle(harness, "session_start");
+		harness.session.resetLeaf();
+		await restoreLifecycle(harness, type);
+
+		expect(harness.statuses.get("plan-mode")).toBeUndefined();
+		expect(harness.activeTools()).toEqual(originalTools);
+		expect(harness.appended).toEqual([]);
+		expect(events).toEqual([]);
+		await expect(
+			harness.emit({ type: "tool_call", toolName: "write_file", input: { path: "src/app.ts" } }, harness.ctx()),
+		).resolves.toBeUndefined();
+		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		expect(lastPlanEntry(harness)).toMatchObject({
+			planFilePath: path.join(cwd, ".step-cli", "plans", "session-sess-1.md"),
+			planSource: "agent",
+			toolsBeforePlanMode: originalTools,
+		});
+	},
+);
+
+test("a legacy branch without saved tools does not capture the preceding branch's planning tools", async () => {
+	const harness = createHarness();
+	const originalTools = ["read_file", "write", "custom_tool"];
+	const root = harness.session.appendCustomEntry("branch-root");
+	const branchA = harness.session.appendCustomEntry("step-plan", {
+		enabled: true,
+		toolsBeforePlanMode: originalTools,
+	});
+	harness.session.branch(root);
+	const branchB = harness.session.appendCustomEntry("step-plan", { enabled: true });
+	harness.session.branch(branchA);
+	createStepPlanExtension()(harness.api);
+	await restoreLifecycle(harness, "session_start");
+	harness.session.branch(branchB);
+	await restoreLifecycle(harness, "session_tree");
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (unknown)");
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(harness.activeTools()).toEqual(originalTools);
+});
+
+test.each(["reload", "new", "resume", "fork"])("--plan does not reapply during session_start (%s)", async (reason) => {
+	const harness = createHarness({ flags: { plan: true } });
+	const { telemetry, events } = createTelemetryRecorder();
+	createStepPlanExtension({ telemetry })(harness.api);
+	await harness.emit({ type: "session_start", reason }, harness.ctx());
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
+	expect(harness.appended).toEqual([]);
+	expect(events).toEqual([]);
+});
+
+test.each([false, true])("--plan at process startup honors the flag with persisted enabled=%s", async (enabled) => {
+	const originalTools = ["read_file", "custom_tool"];
+	const harness = createHarness({
+		flags: { plan: true },
+		entries: [
+			{
+				type: "custom",
+				customType: "step-plan",
+				data: {
+					enabled,
+					toolsBeforePlanMode: originalTools,
+					planSource: enabled ? "agent" : undefined,
+				},
+			},
+		],
+	});
+	const { telemetry, events } = createTelemetryRecorder();
+	createStepPlanExtension({ telemetry })(harness.api);
+	await harness.emit({ type: "session_start", reason: "startup" }, harness.ctx());
+	expect(harness.statuses.get("plan-mode")).toBe(`Planning (${enabled ? "agent" : "user"})`);
+	expect(harness.activeTools()).toEqual(expect.arrayContaining(["custom_tool", "write_file", "edit_file"]));
+	expect(events).toEqual(enabled ? [] : [{ event: "plan_mode_entered", properties: { source: "user" } }]);
+	expect(harness.appended).toHaveLength(enabled ? 0 : 1);
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(harness.activeTools()).toEqual(originalTools);
+});
+
+for (const type of ["session_start", "session_tree"] as const) {
+	test.each([false, true])(
+		`${type} retains active plan/task tools and restores the legacy custom-tool selection (enabled=%s)`,
+		async (enabled) => {
+			const cwd = makeWorkspace();
+			const originalTools = ["read_file", "write", "edit", "selected_custom_tool"];
+			const savedTools = [...originalTools];
+			const harness = createHarness({
+				cwd,
+				select: async () => "Execute the plan",
+				entries: [
+					{
+						type: "custom",
+						customType: "step-plan",
+						data: {
+							enabled,
+							toolsBeforePlanMode: savedTools,
+							todos: [{ text: "Legacy task" }],
+						},
+					},
+				],
+			});
+			createStepPlanExtension()(harness.api);
+			createStepTasksExtension()(harness.api);
+			const currentPlanTaskTools = [...harness.tools.keys()];
+			for (const name of ["selected_custom_tool", "new_custom_tool", "disabled_custom_tool"]) {
+				harness.api.registerTool({ ...harness.tools.get("task_list")!, name });
+			}
+			// The runtime activates registered extensions before session_start. An
+			// older tool snapshot must not remove newly available control/task tools.
+			harness.api.setActiveTools([...originalTools, "list_directory", ...currentPlanTaskTools, "new_custom_tool"]);
+
+			await restoreLifecycle(harness, type);
+			expect(harness.activeTools()).toEqual(expect.arrayContaining(currentPlanTaskTools));
+			expect(harness.activeTools()).toContain("selected_custom_tool");
+			expect(harness.activeTools()).not.toContain("new_custom_tool");
+			expect(harness.activeTools()).not.toContain("disabled_custom_tool");
+			expect(await runTool(harness, "task_list", {}, harness.ctx())).toMatchObject({
+				details: [{ id: "1", subject: "Legacy task" }],
+			});
+			// A second restore must retain tools without importing the tasks twice.
+			await restoreLifecycle(harness, type);
+			expect(harness.activeTools()).toEqual(expect.arrayContaining(currentPlanTaskTools));
+			expect(await runTool(harness, "task_list", {}, harness.ctx())).toMatchObject({
+				details: [{ id: "1", subject: "Legacy task" }],
+			});
+			if (enabled) {
+				const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+				mkdirSync(path.dirname(planPath), { recursive: true });
+				writeFileSync(planPath, "A readable proposal.");
+				await runTool(harness, "exit_plan_mode", {}, harness.ctx());
+			}
+			expect(harness.activeTools()).toEqual([...originalTools, ...currentPlanTaskTools]);
+			expect(savedTools).toEqual(originalTools);
+		},
+	);
+}
+
+test("legacy plan restoration does not activate inactive plan/task tools", async () => {
+	const harness = createHarness({
+		entries: [
+			{ type: "custom", customType: "step-plan", data: { enabled: true, toolsBeforePlanMode: ["read_file"] } },
+		],
+	});
+	createStepPlanExtension()(harness.api);
+	createStepTasksExtension()(harness.api);
+	const active = ["read_file", ...[...harness.tools.keys()].filter((name) => name !== "task_get")];
+	harness.api.setActiveTools(active);
+	await restoreLifecycle(harness, "session_start");
+	expect(harness.activeTools()).toContain("exit_plan_mode");
+	expect(harness.activeTools()).toContain("task_list");
+	expect(harness.activeTools()).not.toContain("task_get");
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(harness.activeTools()).toEqual(active);
+});
+
+test("switching to a fresh session clears the preceding plan path and source", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd, flags: { plan: true } });
+	createStepPlanExtension()(harness.api);
+	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	harness.session.newSession({ id: "sess-2" });
+	await harness.emit({ type: "session_start", reason: "new" }, harness.ctx());
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(lastPlanEntry(harness)).toMatchObject({
+		enabled: true,
+		planSource: "user",
+		planFilePath: path.join(cwd, ".step-cli", "plans", "session-sess-2.md"),
+	});
+});
+
+test.each(["session_start", "session_tree"] as const)(
+	"%s migrates only active-branch legacy todos without duplicate imports",
+	async (type) => {
+		const harness = createHarness();
+		const root = harness.session.appendCustomEntry("branch-root");
+		const legacyBranch = harness.session.appendCustomEntry("step-plan", {
+			enabled: false,
+			todos: [{ text: "Active proposal task", completed: true }],
+		});
+		harness.session.branch(root);
+		harness.session.appendCustomEntry("step-plan", { enabled: false, todos: [{ text: "Abandoned future task" }] });
+		harness.session.branch(legacyBranch);
+		createStepPlanExtension()(harness.api);
+		createStepTasksExtension()(harness.api);
+		await restoreLifecycle(harness, type);
+		expect(await runTool(harness, "task_list", {}, harness.ctx())).toMatchObject({
+			details: [{ subject: "Active proposal task", status: "completed" }],
+		});
+		const migratedBranch = harness.session.getLeafId()!;
+		await restoreLifecycle(harness, type);
+		expect(await runTool(harness, "task_list", {}, harness.ctx())).toMatchObject({
+			details: [{ subject: "Active proposal task", status: "completed" }],
+		});
+		expect(harness.notifications.filter((notification) => notification.message.includes("Migrated"))).toHaveLength(1);
+
+		harness.session.branch(root);
+		await restoreLifecycle(harness, type);
+		expect(await runTool(harness, "task_list", {}, harness.ctx())).toMatchObject({ details: [] });
+		harness.session.branch(migratedBranch);
+		await restoreLifecycle(harness, type);
+		expect(await runTool(harness, "task_list", {}, harness.ctx())).toMatchObject({
+			details: [{ subject: "Active proposal task", status: "completed" }],
+		});
+		expect(harness.notifications.filter((notification) => notification.message.includes("Migrated"))).toHaveLength(1);
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Proposal validation and caller-owned approval
+// ---------------------------------------------------------------------------
+
+for (const mode of ["tui", "print", "rpc"] as const) {
+	test.each(["missing", "empty", "whitespace", "directory", "unreadable"])(
+		`exit_plan_mode refuses %s proposal files in ${mode} before approval or exit`,
+		async (invalid) => {
+			const cwd = makeWorkspace();
+			const { telemetry, events } = createTelemetryRecorder();
+			const select = vi.fn(async () => "Execute the plan");
+			const harness = createHarness({ cwd, select });
+			createStepPlanExtension({ telemetry })(harness.api);
+			const context = harness.ctx({ mode, hasUI: mode !== "print" });
+			await runTool(harness, "enter_plan_mode", {}, context);
+			const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+			mkdirSync(path.dirname(planPath), { recursive: true });
+			if (invalid === "directory") mkdirSync(planPath);
+			else if (invalid !== "missing") writeFileSync(planPath, invalid === "whitespace" ? " \n\t " : "");
+			if (invalid === "unreadable") {
+				writeFileSync(planPath, "A proposal that cannot be read.");
+				// Simulate EACCES at the read boundary so this also exercises root-run CI.
+				vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {
+					throw new Error("EACCES: permission denied");
+				});
+			}
+
+			const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+				content: Array<{ text: string }>;
+			};
+			expect(select).not.toHaveBeenCalled();
+			expect(result.content[0].text).toContain(planPath);
+			expect(result.content[0].text).toContain("exit_plan_mode");
+			expect(result.content[0].text).toMatch(/write_file|readable|regular file/i);
+			expect(lastPlanEntry(harness).enabled).toBe(true);
+			expect(harness.appended).toHaveLength(1);
+			expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+			expect(events).toEqual([{ event: "plan_mode_entered", properties: { source: "agent" } }]);
+			expect(harness.notifications).toEqual([]);
+		},
+	);
+}
+
+test.each(["Execute the plan", "Stay in plan mode", undefined])(
+	"a readable plain-text proposal preserves the %s approval choice",
+	async (choice) => {
+		const cwd = makeWorkspace();
+		const { telemetry, events } = createTelemetryRecorder();
+		const select = vi.fn(async () => choice);
+		const harness = createHarness({ cwd, select });
+		const originalTools = ["read_file", "custom_tool"];
+		harness.api.setActiveTools(originalTools);
+		createStepPlanExtension({ telemetry })(harness.api);
+		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+		mkdirSync(path.dirname(planPath), { recursive: true });
+		const proposal = "Change the parser, add focused regression coverage, then verify the result.";
+		writeFileSync(planPath, proposal);
+
+		await runTool(harness, "exit_plan_mode", {}, harness.ctx());
+		expect(select).toHaveBeenCalledWith(expect.stringContaining(proposal), [
+			"Execute the plan",
+			"Stay in plan mode",
+			"Refine the plan",
+		]);
+		if (choice === "Execute the plan") {
+			expect(lastPlanEntry(harness)).toMatchObject({ enabled: false, planSource: undefined });
+			expect(harness.activeTools()).toEqual(originalTools);
+			expect(events.at(-1)).toEqual({
+				event: "plan_mode_exited",
+				properties: { source: "agent", outcome: "approved" },
+			});
+		} else {
+			expect(lastPlanEntry(harness).enabled).toBe(true);
+			expect(harness.appended).toHaveLength(1);
+			expect(events).toHaveLength(1);
+		}
+	},
+);
+
+test.each(["  Cover the migration edge case.  ", "", " \n ", undefined])(
+	"plan refinement preserves the follow-up/cancel behavior for notes %j",
+	async (notes) => {
+		const cwd = makeWorkspace();
+		const harness = createHarness({ cwd, select: async () => "Refine the plan", editor: async () => notes });
+		createStepPlanExtension()(harness.api);
+		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+		mkdirSync(path.dirname(planPath), { recursive: true });
+		writeFileSync(planPath, "Draft proposal.");
+		const result = await runTool(harness, "exit_plan_mode", {}, harness.ctx());
+		expect(lastPlanEntry(harness).enabled).toBe(true);
+		expect(harness.appended).toHaveLength(1);
+		expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+		if (notes?.trim()) {
+			expect(harness.userMessages).toEqual([
+				[`Plan refinement requested. Update ${planPath} based on:\n\n${notes.trim()}`, { deliverAs: "followUp" }],
+			]);
+			expect(result).toMatchObject({ content: [{ text: expect.stringContaining("Awaiting user notes") }] });
+		} else {
+			expect(harness.userMessages).toEqual([]);
+			expect(result).toMatchObject({ content: [{ text: expect.stringContaining("Refinement cancelled") }] });
+		}
+	},
+);
+
+test("a valid headless proposal exits with external approval and a bounded preview", async () => {
+	const cwd = makeWorkspace();
+	const { telemetry, events } = createTelemetryRecorder();
+	const select = vi.fn(async () => "Execute the plan");
+	const harness = createHarness({ cwd, select });
+	const originalTools = harness.activeTools();
+	createStepPlanExtension({ telemetry })(harness.api);
+	const context = harness.ctx({ mode: "print", hasUI: false });
+	await runTool(harness, "enter_plan_mode", {}, context);
+	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, `${"p".repeat(2000)}not in preview`);
+
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { content: Array<{ text: string }> };
+	expect(result.content[0].text).toContain("caller must gate approval externally");
+	expect(result.content[0].text).toContain("truncated, full plan in file");
+	expect(result.content[0].text).not.toContain("not in preview");
+	expect(select).not.toHaveBeenCalled();
+	expect(lastPlanEntry(harness).enabled).toBe(false);
+	expect(harness.activeTools()).toEqual(originalTools);
+	expect(events.at(-1)).toEqual({
+		event: "plan_mode_exited",
+		properties: { source: "agent", outcome: "auto_headless" },
+	});
+});
+
+test("enter_plan_mode describes writing a proposal rather than tracking todos", () => {
+	const harness = createHarness();
+	createStepPlanExtension()(harness.api);
+	const tool = harness.tools.get("enter_plan_mode")!;
+	expect(tool.description).toContain("not to track todos");
+	expect(tool.description).toContain("Returns the proposal file path");
+	expect(tool.description).toContain("write_file or edit_file");
+	expect(tool.description).toContain("File-editing tools are limited to that file");
+	expect(tool.description).toContain("commands still use normal permissions");
+	expect(tool.promptSnippet).toContain("proposal");
+});
+
+test("exit_plan_mode describes review and mode-specific approval rather than unconditional exit", () => {
+	const harness = createHarness();
+	createStepPlanExtension()(harness.api);
+	const tool = harness.tools.get("exit_plan_mode")!;
+	expect(tool.description).toMatch(/^Submit .*proposal.*review/);
+	expect(tool.description).toContain("readable, nonempty regular plan file");
+	expect(tool.description).toContain("user approval exits planning");
+	expect(tool.description).toContain("staying, refining, or cancelling keeps it active");
+	expect(tool.description).toContain("headless and RPC");
+	expect(tool.description).toContain("exits without interactive approval");
+	expect(tool.description).toContain("caller must gate approval externally");
+	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
 });

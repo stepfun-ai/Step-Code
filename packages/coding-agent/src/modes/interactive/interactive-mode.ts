@@ -1093,7 +1093,16 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
-		if (this.options.tuiStyle === "step" && process.stdout.isTTY === true && this.runtimeHost !== undefined) {
+		// A resumed transcript scrolls the welcome block out of the viewport, and
+		// pi answers a change above the viewport by clearing the screen and
+		// scrollback and replaying the whole buffer - once per animation frame.
+		// Play the intro only while the block is what the user is looking at.
+		if (
+			this.options.tuiStyle === "step" &&
+			process.stdout.isTTY === true &&
+			this.runtimeHost !== undefined &&
+			!this.hasConversationMessages(this.sessionManager.buildContextEntries())
+		) {
 			this.stepWelcome?.playLogoIntro();
 		}
 

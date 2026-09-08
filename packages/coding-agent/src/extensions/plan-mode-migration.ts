@@ -3,10 +3,10 @@
  *
  * Older versions of the plan extension persisted a todos array inside the
  * plan state. Each todo becomes a step-tasks task, then the caller persists
- * the todo-less shape so later session starts find nothing left to migrate.
- * The import is flushed by step-tasks after its own snapshot restore (see
- * STEP_TASKS_IMPORT_CHANNEL), so it works regardless of which extension
- * restored first.
+ * the todo-less shape so later restores find nothing left to migrate.
+ * The caller supplies state from the active branch on session_start and
+ * session_tree. Register plan before tasks: step-tasks flushes the import
+ * after its own snapshot restore (see STEP_TASKS_IMPORT_CHANNEL).
  */
 
 import type { EventBus } from "../core/event-bus.ts";

@@ -13,8 +13,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { migrateStepConfig } from "./config-migration.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./environment.ts";
+import { normalizeStepStableVersion } from "./local-update.ts";
 
 export type StepTopLevelCommand = "config" | "exec" | "models" | "resume";
+
+export interface StepUpdateCommand {
+	readonly command: "update" | "upgrade";
+	readonly version?: string;
+}
 
 export interface StepCommandCompatibilityResult {
 	/** The rewritten argv for Pi's existing `main()` entry. */
@@ -96,6 +102,20 @@ export function translateStepCommandArgs(argv: readonly string[]): StepCommandCo
 		default:
 			return undefined;
 	}
+}
+
+/** Parse the intentionally small Step self-update surface. */
+export function parseStepUpdateCommand(argv: readonly string[]): StepUpdateCommand | { error: string } | undefined {
+	const command = argv[0];
+	if (command !== "update" && command !== "upgrade") return undefined;
+	const rest = argv.slice(1);
+	if (rest.length === 0) return { command };
+	if (rest.length > 1) return { error: `Usage: step ${command} [version]` };
+	const value = rest[0];
+	if (value.startsWith("-")) return { error: `Usage: step ${command} [version]` };
+	const version = normalizeStepStableVersion(value);
+	if (!version) return { error: `Invalid Step release version "${value}". Expected MAJOR.MINOR.PATCH.` };
+	return { command, version };
 }
 
 /** Return whether argv selects a Step config inspection command. */

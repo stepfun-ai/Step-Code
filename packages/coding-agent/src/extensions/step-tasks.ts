@@ -5,14 +5,15 @@
  * fully decoupled from plan mode and works in any mode. State lives in an
  * in-memory map; every mutation appends a full snapshot (tasks plus the
  * monotonic id counter) as a Pi session entry so a reloaded session restores
- * the most recent snapshot and never reuses the id of a deleted task.
+ * the active branch's most recent snapshot and never reuses the id of a deleted task.
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { EventBus } from "../core/event-bus.ts";
-import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
+import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { parseImportBatch, STEP_TASKS_IMPORT_CHANNEL, type StepTaskImportItem } from "./step-tasks-import.ts";
+import { formatTaskLine, renderTaskCall, renderTaskResult, taskWidgetLines } from "./step-tasks-render.ts";
 
 export type StepTaskStatus = "pending" | "in_progress" | "completed" | "deleted";
 
@@ -73,7 +74,8 @@ const TASK_GET_PARAMS = Type.Object({
 const TASK_LIST_PARAMS = Type.Object({});
 
 function jsonResult(payload: unknown): AgentToolResult<unknown> {
-	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+	const details = structuredClone(payload);
+	return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
 }
 
 /** Merge metadata updates into a task's existing map; a null value deletes the key. */
@@ -81,10 +83,9 @@ function mergeTaskMetadata(
 	existing: Record<string, unknown> | undefined,
 	updates: Record<string, unknown>,
 ): Record<string, unknown> {
-	const merged = { ...(existing ?? {}) };
+	const merged = { ...existing, ...structuredClone(updates) };
 	for (const [key, value] of Object.entries(updates)) {
 		if (value === null) delete merged[key];
-		else merged[key] = value;
 	}
 	return merged;
 }
@@ -99,12 +100,30 @@ export function compareTaskIds(a: string, b: string): number {
 	return a.localeCompare(b);
 }
 
+/** Validate the whole dependency batch before changing fields or either side of a link. */
+function assertNoDependencyCycle(tasks: ReadonlyMap<string, StepTask>, links: [string, string][]): void {
+	if (links.length === 0) return;
+	const graph = new Map<string, string[]>([...tasks.values()].map((task) => [task.id, [...task.blocks]]));
+	for (const [blocker, blocked] of links) graph.get(blocker)!.push(blocked);
+	for (const [blocker, blocked] of links) {
+		const pending = [blocked];
+		const seen = new Set<string>();
+		while (pending.length > 0) {
+			const id = pending.pop()!;
+			if (id === blocker) throw new Error("Task dependencies cannot form a cycle.");
+			if (seen.has(id)) continue;
+			seen.add(id);
+			pending.push(...(graph.get(id) ?? []));
+		}
+	}
+}
+
 /** Create Step's native task-tracking extension. */
 export function createStepTasksExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		const tasks = new Map<string, StepTask>();
 		let nextId = 1;
-		/** Import batches buffered until the session_start snapshot restore ran. */
+		/** Import batches buffered until the active-branch snapshot restore ran. */
 		const pendingImports: StepTaskImportItem[][] = [];
 
 		const allocateId = (): string => {
@@ -115,7 +134,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 		};
 
 		const persistTasks = (): void => {
-			pi.appendEntry("step-tasks", { tasks: [...tasks.values()], nextId });
+			pi.appendEntry("step-tasks", structuredClone({ tasks: [...tasks.values()], nextId }));
 		};
 
 		/** Create and store a task without persisting; callers persist once done. */
@@ -133,7 +152,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				description: taskFields.description,
 				status: taskFields.status ?? "pending",
 				...(taskFields.activeForm !== undefined ? { activeForm: taskFields.activeForm } : {}),
-				...(taskFields.metadata !== undefined ? { metadata: { ...taskFields.metadata } } : {}),
+				...(taskFields.metadata !== undefined ? { metadata: structuredClone(taskFields.metadata) } : {}),
 				blocks: [],
 				blockedBy: [],
 				createdAt: now,
@@ -190,14 +209,40 @@ export function createStepTasksExtension(): ExtensionFactory {
 				return blocker !== undefined && blocker.status !== "completed";
 			});
 
+		const sortedTasks = (): StepTask[] => [...tasks.values()].sort((a, b) => compareTaskIds(a.id, b.id));
+		const listTasks = () =>
+			sortedTasks().map((task) => ({
+				id: task.id,
+				subject: task.subject,
+				status: task.status,
+				owner: task.owner,
+				blockedBy: openBlockers(task),
+			}));
+		const updateWidget = (ctx: ExtensionContext): void => {
+			if (ctx.hasUI) ctx.ui.setWidget("step-tasks", taskWidgetLines(sortedTasks()));
+		};
+
+		pi.registerCommand("todos", {
+			description: "Show the session task list",
+			handler: async (_args, ctx) => {
+				const list = listTasks();
+				ctx.ui.notify(
+					list.length > 0 ? list.map(formatTaskLine).join("\n") : "No tasks tracked. Use task_create to add some.",
+					"info",
+				);
+			},
+		});
+
 		pi.registerTool({
 			name: "task_create",
 			label: "Create task",
 			description:
-				"Create a task in the session task list. Use one task per distinct step when work has three or more steps. The task starts as pending; the returned id is used with the other task_* tools.",
-			promptSnippet: "Add a task to the session task list",
+				"Create a todo item in the session execution checklist, with or without plan mode. Returns an id and starts as pending. This records work; it does not execute or delegate it.",
+			promptSnippet: "Record a todo item without executing work",
 			parameters: TASK_CREATE_PARAMS,
-			execute: async (_toolCallId, params) => {
+			renderCall: (args, theme) => renderTaskCall("task_create", args.subject, theme),
+			renderResult: renderTaskResult,
+			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
 				const task = createTask({
 					subject: params.subject,
 					description: params.description,
@@ -205,6 +250,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 					...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
 				});
 				persistTasks();
+				updateWidget(ctx);
 				return jsonResult({ id: task.id, subject: task.subject, status: task.status });
 			},
 		});
@@ -213,20 +259,28 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_update",
 			label: "Update task",
 			description:
-				"Update a task: set status (pending, in_progress, completed; deleted removes the task), edit fields, merge metadata (a null value deletes the key), or add dependencies with addBlocks/addBlockedBy. Mark a task in_progress before starting it and completed immediately after finishing it.",
-			promptSnippet: "Update a task's status, fields, or dependencies",
+				"Update a todo item's progress, details, or dependencies by id. Set in_progress when starting, completed after finishing and validating, or deleted to remove it. This only changes tracking data; it does not execute or schedule work.",
+			promptSnippet: "Update a todo item's progress, details, or dependencies",
 			parameters: TASK_UPDATE_PARAMS,
-			execute: async (_toolCallId, params) => {
+			renderCall: (args, theme) =>
+				renderTaskCall("task_update", `${args.taskId ?? ""}${args.status ? ` → ${args.status}` : ""}`, theme),
+			renderResult: renderTaskResult,
+			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
 				const { taskId, status, subject, description, activeForm, owner, metadata, addBlocks, addBlockedBy } =
 					params;
 				const task = requireTask(taskId);
+				const blocksTargets = resolveLinkTargets(task, addBlocks);
+				const blockedByTargets = resolveLinkTargets(task, addBlockedBy);
+				assertNoDependencyCycle(tasks, [
+					...blocksTargets.map((blocked): [string, string] => [task.id, blocked.id]),
+					...blockedByTargets.map((blocker): [string, string] => [blocker.id, task.id]),
+				]);
 				if (status === "deleted") {
 					removeTaskAndDropLinks(task);
 					persistTasks();
+					updateWidget(ctx);
 					return jsonResult({ id: task.id, subject: task.subject, deleted: true });
 				}
-				const blocksTargets = resolveLinkTargets(task, addBlocks);
-				const blockedByTargets = resolveLinkTargets(task, addBlockedBy);
 				if (subject !== undefined) task.subject = subject;
 				if (description !== undefined) task.description = description;
 				if (activeForm !== undefined) task.activeForm = activeForm;
@@ -237,6 +291,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				for (const blocker of blockedByTargets) linkTasks(blocker, task);
 				task.updatedAt = Date.now();
 				persistTasks();
+				updateWidget(ctx);
 				return jsonResult(task);
 			},
 		});
@@ -245,9 +300,11 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_get",
 			label: "Get task",
 			description:
-				"Get one task by id with its full description, status, owner, metadata, and dependency lists (blocks / blockedBy). Verify blockedBy is clear before starting the task.",
-			promptSnippet: "Read one task's full details",
+				"Read a todo item's full details and all recorded dependencies, including completed ones. Use task_list to check which prerequisites remain unfinished.",
+			promptSnippet: "Read a todo item's full details and recorded dependencies",
 			parameters: TASK_GET_PARAMS,
+			renderCall: (args, theme) => renderTaskCall("task_get", args.taskId, theme),
+			renderResult: renderTaskResult,
 			execute: async (_toolCallId, params) => jsonResult(requireTask(params.taskId)),
 		});
 
@@ -255,53 +312,49 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_list",
 			label: "List tasks",
 			description:
-				"List all tasks with id, subject, status, owner, and open blockers (blockedBy filtered to tasks that still exist and are not completed). Use it to check progress and pick the next available task.",
-			promptSnippet: "List session tasks with status and open blockers",
+				"List session todo items with id, subject, status, owner, and unfinished prerequisites (blockedBy). Use it to resume existing work or choose the next open, unblocked item.",
+			promptSnippet: "List todo progress and unfinished prerequisites",
 			parameters: TASK_LIST_PARAMS,
-			execute: async () =>
-				jsonResult(
-					[...tasks.values()]
-						.sort((a, b) => compareTaskIds(a.id, b.id))
-						.map((task) => ({
-							id: task.id,
-							subject: task.subject,
-							status: task.status,
-							owner: task.owner,
-							blockedBy: openBlockers(task),
-						})),
-				),
+			renderCall: (_args, theme) => renderTaskCall("task_list", undefined, theme),
+			renderResult: renderTaskResult,
+			execute: async () => jsonResult(listTasks()),
 		});
 
-		pi.on("session_start", async (_event, ctx) => {
-			const snapshotEntry = [...ctx.sessionManager.getEntries()]
+		const restoreTasks = (ctx: ExtensionContext): void => {
+			tasks.clear();
+			nextId = 1;
+			// Contents follow the active branch, but IDs must not collide with
+			// tasks referenced in sibling history (including deleted tasks).
+			for (const entry of ctx.sessionManager.getEntries()) {
+				if (entry.type !== "custom" || entry.customType !== "step-tasks") continue;
+				const snapshot = entry.data as { tasks?: StepTask[]; nextId?: number } | undefined;
+				if (typeof snapshot?.nextId === "number" && Number.isSafeInteger(snapshot.nextId) && snapshot.nextId > 0) {
+					nextId = Math.max(nextId, snapshot.nextId);
+				} else if (Array.isArray(snapshot?.tasks)) {
+					// Legacy snapshots did not persist an allocator.
+					for (const task of snapshot.tasks) {
+						const id = Number(task?.id);
+						if (Number.isSafeInteger(id) && id > 0) nextId = Math.max(nextId, id + 1);
+					}
+				}
+			}
+			const snapshotEntry = ctx.sessionManager
+				.getBranch()
 				.reverse()
 				.find((candidate) => candidate.type === "custom" && candidate.customType === "step-tasks") as
-				| { data?: { tasks?: StepTask[]; nextId?: number } }
+				| { data?: { tasks?: StepTask[] } }
 				| undefined;
-			const snapshot = snapshotEntry?.data;
-			if (snapshot?.tasks) {
-				tasks.clear();
-				let highestRestoredId = 0;
-				for (const task of snapshot.tasks) {
-					if (!task || typeof task.id !== "string" || task.id.length === 0) continue;
+			if (Array.isArray(snapshotEntry?.data?.tasks)) {
+				for (const task of structuredClone(snapshotEntry.data.tasks)) {
+					if (!task || typeof task.id !== "string" || !task.id || typeof task.subject !== "string") continue;
 					tasks.set(task.id, {
 						...task,
 						blocks: Array.isArray(task.blocks) ? task.blocks : [],
 						blockedBy: Array.isArray(task.blockedBy) ? task.blockedBy : [],
 					});
-					const numericId = Number.parseInt(task.id, 10);
-					if (Number.isFinite(numericId) && numericId > highestRestoredId) highestRestoredId = numericId;
+					const id = Number(task.id);
+					if (Number.isSafeInteger(id) && id > 0) nextId = Math.max(nextId, id + 1);
 				}
-				// Restore the persisted counter so the id of a deleted task is never
-				// reused after a reload; snapshots without a counter (legacy) fall
-				// back to one past the highest surviving id.
-				const persistedNextId = snapshot.nextId;
-				nextId = Math.max(
-					highestRestoredId + 1,
-					typeof persistedNextId === "number" && Number.isFinite(persistedNextId)
-						? Math.floor(persistedNextId)
-						: 1,
-				);
 			}
 			// Apply buffered imports only after the snapshot restore so seeded
 			// tasks extend the restored list instead of racing it.
@@ -317,6 +370,9 @@ export function createStepTasksExtension(): ExtensionFactory {
 				}
 				persistTasks();
 			}
-		});
+			updateWidget(ctx);
+		};
+		pi.on("session_start", async (_event, ctx) => restoreTasks(ctx));
+		pi.on("session_tree", async (_event, ctx) => restoreTasks(ctx));
 	};
 }

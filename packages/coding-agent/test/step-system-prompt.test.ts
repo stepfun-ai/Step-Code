@@ -141,6 +141,28 @@ describe("Step system prompt appendix", () => {
 		expect(withoutTasks).not.toContain("- task_create:");
 	});
 
+	it("distinguishes a proposal from execution progress and refreshes tasks after resume", () => {
+		const prompt = buildStepSystemPromptAppendix([
+			"enter_plan_mode",
+			"exit_plan_mode",
+			"task_create",
+			"task_update",
+			"task_get",
+			"task_list",
+		]);
+		expect(prompt).toContain("A plan is a Markdown proposal explaining how and why");
+		expect(prompt).toContain("Tasks are todo items in the session execution checklist");
+		expect(prompt).toContain("not to execute, delegate, or schedule work");
+		expect(prompt).toContain("submit the written proposal for review, not to approve it yourself");
+		expect(prompt).toContain("staying, requesting refinements, or cancelling keeps it active");
+		expect(prompt).toContain("exits without interactive approval");
+		expect(prompt).toContain("not a shell sandbox");
+		expect(prompt).toContain("resuming work or after compaction");
+		expect(prompt).toContain("caller must gate approval externally");
+		expect(prompt).not.toContain("update_plan");
+		expect(prompt).not.toContain("TodoWrite");
+	});
+
 	it("adds goal guidance only when goal tools are active", () => {
 		const withGoal = buildStepSystemPromptAppendix(["read_file", "create_goal", "get_goal", "update_goal"]);
 		expect(withGoal).toContain("# Long-running goals");

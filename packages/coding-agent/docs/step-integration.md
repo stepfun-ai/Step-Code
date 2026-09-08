@@ -75,16 +75,20 @@ in again.
 
 The Step tool profile also registers `search_web`, backed by the remote
 `stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
-resolved from `STEP_CLI_SEARCH_API_KEY`, `STEPCLI_SEARCH_API_KEY`,
-`STEP_API_KEY`, then the Step login entry in `auth.json`; it is sent only as a
-	Bearer header. `platform_oversea` login profiles use
+resolved from an explicit `step --api-key`, then `STEP_CLI_SEARCH_API_KEY`,
+`STEPCLI_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
+	only as a Bearer header. `platform_oversea` login profiles use
 	`https://api.stepfun.ai/v1/mcp/web_search/mcp`; `step_plan` and
 	`platform_cn` use `https://api.stepfun.com/v1/mcp/web_search/mcp`. An
-	unrecognized profile falls back to the test endpoint
-	`https://api.c.ibasemind.com/v1/mcp/web_search/mcp`.
+	unrecognized profile falls back to that same mainland endpoint.
 	`STEP_CLI_SEARCH_WEB_MCP_URL` and `STEPCLI_SEARCH_WEB_MCP_URL` override this
 	profile-based selection. This adapter does not add a separate search
-	credential store or `integrations.search` settings surface.
+	credential store or `integrations.search` settings surface. The
+	`STEP_API_KEY` environment variable is deliberately excluded from that
+	chain: StepCode injects it together with `STEP_BASE_URL` to reach its own
+	model gateway, and because the search endpoint never follows that base URL,
+	reusing the value would authenticate a gateway key against
+	`api.stepfun.com` and fail.
 
 Session storage is also selected through the Step wrapper. The wrapper keeps
 Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
@@ -149,6 +153,65 @@ they need to control where the Step sidecar is stored.
 normal user-message path. The model inspects the project and uses pi's native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
+
+## Plans and tasks
+
+Plans and tasks serve different purposes. A **plan** is the Markdown proposal:
+approach, constraints, trade-offs, affected files, and validation. **Tasks** are
+todo items in the session execution checklist: what needs doing and what is
+pending, in progress, or completed. The task tools track work; they do not
+execute, delegate, or schedule it. Approving a plan does not generate tasks
+from Markdown.
+
+- `enter_plan_mode`, `/plan`, and `--plan` share the same setup. Entry takes
+  effect immediately; it does not request approval. An explicit `--plan`
+  applies at process startup, including a continued session whose mode was off;
+  later reloads and session/branch navigation do not reapply it. The plan path is
+  announced, and `write_file` / `edit_file` remain available for that file.
+  Other file-write targets are blocked while planning. This is **not a shell
+  sandbox**: command tools retain the existing permission policy, and the model
+  is instructed to keep commands read-only while planning.
+- `exit_plan_mode` submits the written proposal for review, requiring a readable,
+  nonempty regular plan file. In the TUI, the user can approve execution, stay in
+  plan mode, or provide refinement notes. Cancel
+  leaves planning active. Headless and RPC runs retain their existing automatic
+  exit behavior after validation; the caller must gate approval externally
+  before allowing execution. `/plan` can still explicitly toggle planning off.
+- `task_create`, `task_update`, `task_get`, and `task_list` are the only task
+  tools and work with or without plan mode. Tasks retain their descriptions,
+  active labels, owners, metadata, and dependencies. Invalid dependency IDs,
+  self-links, and dependency cycles reject the update before changing state.
+  Status changes remain explicit; dependencies do not schedule or complete work.
+- `task_list` reports only unfinished blockers that still exist; `task_get`
+  returns the full stored dependency lists. `/todos` shows every task with its
+  status, owner, and open blockers and belongs to the task extension, not the
+  planning extension.
+- The task widget shows completion counts and at most five open task entries,
+  prioritizing in-progress tasks and their `activeForm`. Long labels are clipped;
+  `/todos` shows the full list. Tool results have compact native summaries and
+  expand to full details. Historical results render their own snapshots, never
+  the current task map. RPC widgets use plain string arrays; headless execution
+  needs no UI.
+
+Both extensions restore state from the active session branch on startup and
+branch navigation. Task snapshots are immutable, survive compaction, and use a
+session-wide ID high-water mark so deleted or sibling-branch IDs are not reused.
+The Markdown plan remains a workspace file; restoring mode does not version or
+rewind its contents. On resume or after compaction, the model should call
+`task_list` before continuing multi-step work instead of recreating tasks. The
+whole task list is not injected into every turn.
+
+Compatibility is limited to the existing six tool names and schemas, `/todos`,
+and migration of legacy plan-mode todos into tasks on the active branch. Older
+saved tool lists retain currently active plan/task tools on restore and exit;
+ordinary custom tools still follow the saved branch selection. There is no
+additional `TodoWrite` / `update_plan` alias or second checklist store.
+
+The separation follows [Claude Code's plan and task tools](https://code.claude.com/docs/en/tools-reference)
+and [permission modes](https://code.claude.com/docs/en/permission-modes). The
+[Codex checklist handler](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/plan.rs)
+also distinguishes its `update_plan` checklist from Plan mode. Step borrows the
+separation, not model-specific restrictions on which task tools are available.
 
 ## Compatibility matrix
 

@@ -8,6 +8,7 @@ import type {
 import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
 import type { FeedbackIdentity } from "../step/feedback/types.ts";
 import { STEP_INIT_PROMPT } from "../step/init-prompt.ts";
+import { createStepMcpExtension } from "../step/mcp.ts";
 import {
 	AUTO_RESUME_PROMPT,
 	getStepPermissionPreset,
@@ -37,6 +38,10 @@ export interface StepExtensionOptions {
 export function createStepExtension(options: StepExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		registerStepProvider(pi);
+		// Declarative plugins (including StepPage) contribute MCP servers. The
+		// bridge is loaded as part of the Step product extension so ordinary Pi
+		// sessions remain unchanged.
+		createStepMcpExtension()(pi);
 		registerStepPiCommandAdapters(pi, options.telemetry, options.stepSettings, options.feedbackIdentity);
 		const builtInSlashCommands = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		// Extension commands are wrapped at registration time below. Inputs that

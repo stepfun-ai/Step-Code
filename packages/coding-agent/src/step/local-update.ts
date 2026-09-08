@@ -1,13 +1,16 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, cp, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import lockfile from "proper-lockfile";
 import type { ExtensionUIContext } from "../core/extensions/types.ts";
-import type { StepCliVersion } from "./version.ts";
+import { spawnProcess, waitForChildProcess } from "../utils/child-process.ts";
+import { STEP_CLI_VERSION, type StepCliVersion } from "./version.ts";
 
 /** Public release bucket used by the Step installer when no override is set. */
-export const DEFAULT_STEP_RELEASE_BASE_URL = "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli";
+export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcli";
 
 const UPDATE_CHECK_TIMEOUT_MS = 1_500;
 const UPDATE_INSTALL_TIMEOUT_MS = 120_000;
@@ -18,6 +21,130 @@ const USER_AGENT_UNSAFE = /[^A-Za-z0-9._+-]/g;
 
 interface ReleaseManifest {
 	version?: unknown;
+	packages?: Record<string, unknown>;
+	checksums?: Record<string, unknown>;
+}
+
+const STEP_UPDATE_TARGETS = [
+	"native",
+	"theme",
+	"assets",
+	"export-html",
+	"docs",
+	"examples",
+	"node_modules",
+	"package.json",
+	"README.md",
+	"CHANGELOG.md",
+	"photon_rs_bg.wasm",
+] as const;
+
+export interface StepUpdateCommandInput {
+	version?: string;
+	env?: NodeJS.ProcessEnv;
+	executablePath?: string;
+	fetchImpl?: typeof fetch;
+}
+
+export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): Promise<number> {
+	const env = input.env ?? process.env;
+	if (env.PI_OFFLINE === "1") {
+		process.stderr.write("Step update is unavailable in offline mode.\n");
+		return 1;
+	}
+	const executablePath = await resolveUpdateExecutablePath(input.executablePath, env);
+	if (!executablePath) {
+		process.stderr.write("This installation is not a standalone Step binary and cannot self-update.\n");
+		process.stderr.write("Re-run the Step installer or update the package/source that provides this command.\n");
+		return 1;
+	}
+	const currentVersion = normalizeStepStableVersion(STEP_CLI_VERSION.value);
+	if (!currentVersion) {
+		process.stderr.write(`Cannot determine the current Step version (${STEP_CLI_VERSION.value}).\n`);
+		return 1;
+	}
+	const releaseBaseUrl = resolveStepReleaseBaseUrl(env);
+	const target = input.version ? normalizeStepStableVersion(input.version) : undefined;
+	if (input.version && !target) {
+		process.stderr.write(`Invalid Step release version "${input.version}". Expected MAJOR.MINOR.PATCH.\n`);
+		return 1;
+	}
+	const targetVersion =
+		target ?? (await fetchManifest(`${releaseBaseUrl}/latest.json`, input.fetchImpl ?? fetch))?.version;
+	if (!targetVersion) {
+		process.stderr.write("Could not resolve the latest Step release.\n");
+		return 1;
+	}
+	if (!target && compareStepReleaseVersions(targetVersion, `v${currentVersion}`) <= 0) {
+		process.stdout.write(`Step is already up to date (${currentVersion}).\n`);
+		return 0;
+	}
+	if (target === currentVersion) {
+		process.stdout.write(`Step is already at version ${currentVersion}.\n`);
+		return 0;
+	}
+
+	const manifestUrl = `${releaseBaseUrl}/${targetVersion}/manifest.json`;
+	const manifest = await fetchManifest(manifestUrl, input.fetchImpl ?? fetch);
+	if (!manifest) {
+		process.stderr.write(`Could not fetch Step release ${targetVersion}.\n`);
+		return 1;
+	}
+	const artifact = resolveReleaseArtifact(manifest, targetVersion);
+	if (!artifact) {
+		process.stderr.write(`Step release ${targetVersion} has no package for ${resolveStepTargetId()}.\n`);
+		return 1;
+	}
+	const installDir = path.dirname(executablePath);
+	await mkdir(installDir, { recursive: true });
+	let releaseLock: () => Promise<void>;
+	try {
+		releaseLock = await lockfile.lock(executablePath, { realpath: false });
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
+			process.stderr.write("Another Step update is already running.\n");
+			return 1;
+		}
+		process.stderr.write(
+			`Could not lock the Step installation: ${error instanceof Error ? error.message : String(error)}\n`,
+		);
+		return 1;
+	}
+	let tempRoot: string | undefined;
+	try {
+		tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-cli-update-"));
+		const archivePath = path.join(tempRoot, artifact.fileName);
+		const archiveResponse = await fetchWithTimeout(artifact.url, input.fetchImpl ?? fetch);
+		if (!archiveResponse.ok) throw new Error(`archive download failed (HTTP ${archiveResponse.status})`);
+		await writeFile(archivePath, Buffer.from(await archiveResponse.arrayBuffer()));
+		const actualChecksum = createHash("sha256")
+			.update(await readFile(archivePath))
+			.digest("hex");
+		if (actualChecksum !== artifact.checksum) throw new Error("archive checksum verification failed");
+		const extractDir = path.join(tempRoot, "extract");
+		await mkdir(extractDir);
+		const extractCode = await extractArchive(archivePath, extractDir);
+		if (extractCode !== 0) throw new Error("could not extract the release archive");
+		const archiveRoot = await findArchiveRoot(extractDir);
+		const binaryName = process.platform === "win32" ? "step.exe" : "step";
+		const stagedBinary = await findFile(archiveRoot, binaryName);
+		if (!stagedBinary) throw new Error("release archive does not contain the Step binary");
+		const smoke = await verifyBinary(stagedBinary, targetVersion);
+		if (!smoke.ok) throw new Error(smoke.message);
+		await replaceInstallation(installDir, stagedBinary, archiveRoot, binaryName, tempRoot);
+		process.stdout.write(`Updated Step from ${currentVersion} to ${targetVersion}.\n`);
+		return 0;
+	} catch (error) {
+		process.stderr.write(`Step update failed: ${error instanceof Error ? error.message : String(error)}\n`);
+		return 1;
+	} finally {
+		// Best-effort cleanup: on Windows the backup dir holds the still-running
+		// old binary, so deleting it throws EBUSY (which force:true does not
+		// suppress). Never let cleanup override the update result or skip the
+		// lock release.
+		if (tempRoot) await rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+		await releaseLock().catch(() => {});
+	}
 }
 
 export type StepUpdateOutcome =
@@ -308,6 +435,176 @@ async function installLatestStepRelease(input: StepUpdateInstallInput): Promise<
 		return { ok: false, message: error instanceof Error ? error.message : String(error) };
 	} finally {
 		await rm(tempRoot, { recursive: true, force: true });
+	}
+}
+
+export function normalizeStepStableVersion(value: string): string | null {
+	const normalized = normalizeStepReleaseVersion(value);
+	return normalized && /^v\d+\.\d+\.\d+$/u.test(normalized) ? normalized.slice(1) : null;
+}
+
+async function resolveUpdateExecutablePath(
+	explicit: string | undefined,
+	env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+	const candidate = explicit ?? resolveStepExecutablePath(env);
+	if (!candidate) return undefined;
+	try {
+		await access(candidate);
+		return await realpath(candidate);
+	} catch {
+		return undefined;
+	}
+}
+
+async function fetchWithTimeout(url: string, fetchImpl: typeof fetch): Promise<Response> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		try {
+			const response = await fetchImpl(url, { signal: AbortSignal.timeout(UPDATE_INSTALL_TIMEOUT_MS) });
+			if (response.ok || response.status < 500 || attempt === 1) return response;
+		} catch (error) {
+			lastError = error;
+			if (attempt === 1) throw error;
+		}
+	}
+	throw lastError instanceof Error ? lastError : new Error("request failed");
+}
+
+async function fetchManifest(
+	url: string,
+	fetchImpl: typeof fetch,
+): Promise<{ version: string; manifest: ReleaseManifest } | null> {
+	try {
+		const response = await fetchWithTimeout(url, fetchImpl);
+		if (!response.ok) return null;
+		const manifest = (await response.json()) as ReleaseManifest;
+		const version = typeof manifest.version === "string" ? normalizeStepStableVersion(manifest.version) : null;
+		return version ? { version, manifest } : null;
+	} catch {
+		return null;
+	}
+}
+
+function resolveStepTargetId(): string {
+	const osName =
+		process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "windows" : process.platform;
+	const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : process.arch;
+	return `${osName}-${arch}`;
+}
+
+function resolveReleaseArtifact(
+	result: { version: string; manifest: ReleaseManifest },
+	targetVersion: string,
+): { url: string; checksum: string; fileName: string } | null {
+	const targetId = resolveStepTargetId();
+	const packages = result.manifest.packages;
+	const checksums = result.manifest.checksums;
+	const url = packages && typeof packages[targetId] === "string" ? packages[targetId] : undefined;
+	const checksum = checksums && typeof checksums[targetId] === "string" ? checksums[targetId] : undefined;
+	if (!url || !checksum || !/^[a-f0-9]{64}$/iu.test(checksum) || result.version !== targetVersion) return null;
+	try {
+		return { url, checksum: checksum.toLowerCase(), fileName: path.basename(new URL(url).pathname) };
+	} catch {
+		return null;
+	}
+}
+
+async function extractArchive(archivePath: string, extractDir: string): Promise<number | null> {
+	if (archivePath.endsWith(".zip")) {
+		return waitForChildProcess(
+			spawnProcess(
+				"powershell",
+				[
+					"-NoProfile",
+					"-Command",
+					`Expand-Archive -LiteralPath '${archivePath.replaceAll("'", "''")}' -DestinationPath '${extractDir.replaceAll("'", "''")}' -Force`,
+				],
+				{ stdio: "inherit" },
+			),
+		);
+	}
+	return waitForChildProcess(spawnProcess("tar", ["-xzf", archivePath, "-C", extractDir], { stdio: "inherit" }));
+}
+
+async function findArchiveRoot(extractDir: string): Promise<string> {
+	const entries = await readdir(extractDir, { withFileTypes: true });
+	const directory = entries.find((entry) => entry.isDirectory());
+	return directory ? path.join(extractDir, directory.name) : extractDir;
+}
+
+async function findFile(root: string, fileName: string): Promise<string | undefined> {
+	const entries = await readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
+		const candidate = path.join(root, entry.name);
+		if (entry.isFile() && entry.name === fileName) return candidate;
+		if (entry.isDirectory()) {
+			const nested = await findFile(candidate, fileName);
+			if (nested) return nested;
+		}
+	}
+	return undefined;
+}
+
+async function verifyBinary(binaryPath: string, expectedVersion: string): Promise<{ ok: boolean; message: string }> {
+	const result = await new Promise<{ code: number | null; stderr: string; stdout: string }>((resolve, reject) => {
+		const child = spawn(binaryPath, ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		child.stdout?.on("data", (chunk) => {
+			stdout += String(chunk);
+		});
+		child.stderr?.on("data", (chunk) => {
+			stderr += String(chunk);
+		});
+		child.once("error", reject);
+		child.once("exit", (code) => resolve({ code, stderr, stdout }));
+	});
+	if (result.code !== 0)
+		return { ok: false, message: `new Step binary failed smoke test: ${result.stderr.trim() || result.code}` };
+	if (normalizeStepStableVersion(result.stdout.trim()) !== expectedVersion) {
+		return {
+			ok: false,
+			message: `new Step binary reported version ${result.stdout.trim()}; expected ${expectedVersion}`,
+		};
+	}
+	return { ok: true, message: "ok" };
+}
+
+async function replaceInstallation(
+	installDir: string,
+	stagedBinary: string,
+	archiveRoot: string,
+	binaryName: string,
+	tempRoot: string,
+): Promise<void> {
+	const backupDir = path.join(tempRoot, "backup");
+	await mkdir(backupDir);
+	const names = [binaryName, ...STEP_UPDATE_TARGETS];
+	const backedUp: string[] = [];
+	const installed: string[] = [];
+	try {
+		for (const name of names) {
+			const target = path.join(installDir, name);
+			const source = name === binaryName ? stagedBinary : path.join(archiveRoot, name);
+			try {
+				await access(source);
+			} catch {
+				continue;
+			}
+			try {
+				await rename(target, path.join(backupDir, name));
+				backedUp.push(name);
+			} catch {
+				// Target may not exist on a first install/update.
+			}
+			await cp(source, target, { recursive: true, force: true });
+			installed.push(name);
+		}
+	} catch (error) {
+		for (const name of installed) await rm(path.join(installDir, name), { recursive: true, force: true });
+		for (const name of backedUp) await rename(path.join(backupDir, name), path.join(installDir, name));
+		throw error;
 	}
 }
 
