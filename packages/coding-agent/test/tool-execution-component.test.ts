@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../src/config.ts";
@@ -832,6 +832,30 @@ describe("ToolExecutionComponent Step presentation", () => {
 		expect(rendered).toContain("□ Apply the fix");
 		expect(rendered).toContain("□ Run tests");
 		expect(rendered).not.toContain('"plan"');
+	});
+
+	test("wraps long plan text without dropping characters", () => {
+		const explanation = "先梳理一遍登录流程，把校验之前那次多余的 token 刷新调用去掉，再补上对应的回归测试。";
+		const step = "重构鉴权中间件，让已经过期的会话在查数据库之前就被直接拒绝掉，避免无谓的往返开销。";
+		const component = new ToolExecutionComponent(
+			"update_plan",
+			"step-tool-wrap",
+			{ explanation, plan: [{ step, status: "pending" }] },
+			{ presentation: "step" },
+			createBaseToolDefinition("update_plan"),
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		const lines = component.render(60).map(stripAnsi);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+
+		// Both strings wrap at this width; the old hand-rolled wrap dropped four
+		// characters at each wrap point and could blank the trailing row outright.
+		const squash = (value: string) => value.replace(/\s+/gu, "");
+		const rendered = squash(lines.join(""));
+		expect(rendered).toContain(squash(explanation));
+		expect(rendered).toContain(squash(step));
 	});
 
 	test("adds the Step gutter to a self-rendered tool without replacing its body", () => {

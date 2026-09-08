@@ -17,6 +17,7 @@
 
 - Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
 - Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.
+- Fixed the Step queued-message preview and `update_plan` rendering dropping four characters at every wrap point by wrapping through Pi's shared text wrapper.
 - Fixed the Step entrypoint so `--api-key <key>` also authenticates the built-in `search_web` MCP tool.
 - Fixed `search_web` credential resolution so it no longer falls back to `STEP_API_KEY`, which addresses the StepCode-injected provider base URL rather than the fixed search endpoint.
 - Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.
