@@ -9,6 +9,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 - Added the Step CLI standalone binary release bundle, cross-platform installers, checksum manifests, and managed `fd`/`rg` tools under `.step-cli`.
 - Added the Step binary startup update check with Pi-native selection and restart behavior.
+- Added the `step update` / `step upgrade` command that installs an exact or latest standalone Step release with checksum verification, staged smoke test, rollback, and update locking.
 
 ### Changed
 
