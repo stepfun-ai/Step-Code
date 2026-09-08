@@ -61,4 +61,33 @@ describe("StepQueuedMessagesComponent", () => {
 		expect(text).toContain("+1 more");
 		expect(text).toContain("…");
 	});
+	test("wraps a long queued message without dropping characters", () => {
+		const message = "顺便帮我把登录流程里那个多余的 token 刷新逻辑去掉，然后跑一下相关的单元测试确认没有回归";
+		const component = new StepQueuedMessagesComponent();
+		component.setMessages({ steering: [message], followUp: [] });
+
+		const lines = component.render(60).map(stripTerminalSequences);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+
+		// The message fits the two-row preview budget, so the rendered rows must
+		// reproduce it exactly; the old hand-rolled wrap ate four characters here.
+		const hintIndex = lines.findIndex((line) => line.includes("edit all queued messages"));
+		const squash = (value: string) => value.replace(/\s+/gu, "");
+		expect(squash(lines.slice(0, hintIndex).join(""))).toBe(`1.${squash(message)}`);
+	});
+
+	test("keeps the truncated preview a prefix of the original message", () => {
+		// Distinct characters on a 10-glyph cycle: a dropped run shifts the phase,
+		// so the prefix assertion below actually detects loss.
+		const message = "甲乙丙丁戊己庚辛壬癸".repeat(12);
+		const component = new StepQueuedMessagesComponent();
+		component.setMessages({ steering: [message], followUp: [] });
+
+		const lines = component.render(40).map(stripTerminalSequences);
+		const hintIndex = lines.findIndex((line) => line.includes("edit all queued messages"));
+		const shown = lines.slice(0, hintIndex).join("").replace(/\s+/gu, "");
+
+		expect(shown.endsWith("…")).toBe(true);
+		expect(`1.${message}`.startsWith(shown.slice(0, -1))).toBe(true);
+	});
 });

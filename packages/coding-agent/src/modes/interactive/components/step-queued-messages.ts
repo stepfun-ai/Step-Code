@@ -1,4 +1,10 @@
-import { type Component, getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	getKeybindings,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { formatKeyText } from "./keybinding-hints.ts";
 
@@ -57,21 +63,7 @@ export class StepQueuedMessagesComponent implements Component {
 
 function wrapQueueText(value: string, width: number): string[] {
 	const text = value.trim() || "(attachments only)";
-	const rows: string[] = [];
-	for (const source of text.split(/\r\n|\r|\n/u)) {
-		if (source.length === 0) {
-			rows.push("");
-			continue;
-		}
-		let rest = source;
-		while (visibleWidth(rest) > width) {
-			const part = truncateToWidth(rest, width, "", false);
-			if (part.length === 0) break;
-			rows.push(part);
-			rest = rest.slice(part.length);
-		}
-		rows.push(rest);
-	}
+	const rows = wrapTextWithAnsi(text, width);
 	if (rows.length <= MAX_PREVIEW_LINES) return rows;
 	const last = rows[MAX_PREVIEW_LINES - 1] ?? "";
 	return [...rows.slice(0, MAX_PREVIEW_LINES - 1), `${truncateToWidth(last, Math.max(1, width - 1), "", false)}…`];

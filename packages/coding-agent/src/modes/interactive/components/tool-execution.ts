@@ -10,6 +10,7 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
@@ -180,26 +181,7 @@ function extractStepPlan(toolName: string, args: unknown, details: unknown): Ste
 }
 
 function wrapPlainStepText(text: string, width: number): string[] {
-	const safeWidth = Math.max(1, width);
-	const rows: string[] = [];
-	for (const source of text.split(/\r?\n/u)) {
-		if (source.length === 0) {
-			rows.push("");
-			continue;
-		}
-		let rest = source;
-		while (visibleWidth(rest) > safeWidth) {
-			const part = truncateToWidth(rest, safeWidth, "", false);
-			if (part.length === 0) {
-				rows.push(truncateToWidth(rest, safeWidth, "…", false));
-				break;
-			}
-			rows.push(part);
-			rest = rest.slice(part.length);
-		}
-		rows.push(rest);
-	}
-	return rows;
+	return wrapTextWithAnsi(text, Math.max(1, width));
 }
 
 function readStringArg(args: unknown, ...keys: string[]): string | undefined {
