@@ -27,6 +27,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Fixed `search_web` failing under StepCode by no longer reading the injected `STEP_API_KEY`; that credential targets the StepCode model gateway, which the fixed search endpoint does not follow.
 - Fixed unauthenticated help, version, model-listing, session-export, SDK stdio, and offline invocations opening the interactive login flow.
 - Fixed resuming a session replaying the launch logo animation, which cleared and repainted the whole screen on every frame.
+- Fixed the launch logo animation continuing to repaint the whole screen once a new session's first output grows past the viewport.
 - Fixed release archives and installers so Pi TUI native helpers and runtime resources are copied from both wrapped Unix archives and root-level Windows archives.
 - Fixed GitLab test jobs so workspace package entrypoints are built before child-process tests run, and missing `git`, `fd`, or `rg` dependencies are reported or bootstrapped explicitly.
 - Fixed Step authentication selectors to tolerate hosts that do not provide product-specific interactive options.

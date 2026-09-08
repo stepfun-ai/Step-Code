@@ -3277,6 +3277,11 @@ export class InteractiveMode {
 			text = text.trim();
 			if (!text) return;
 
+			// Whatever this submission produces can push the transcript past the
+			// viewport, and an animating welcome block above the viewport leaves pi
+			// nothing but a full redraw per frame. The launch flourish is over.
+			this.stepWelcome?.stopLogoIntro();
+
 			// Handle commands
 			if (text === "/settings") {
 				this.showSettingsSelector();

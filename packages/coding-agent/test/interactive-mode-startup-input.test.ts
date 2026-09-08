@@ -17,6 +17,12 @@ type SubmitContext = {
 	handleThinkingCommand: (searchTerm?: string) => void;
 	onInputCallback?: (text: string) => void;
 	pendingUserInputs: string[];
+	stepWelcome?: { stopLogoIntro: () => void };
+	// Reached by the bash and slash-command branches the intro test submits.
+	handleBashCommand: (command: string, excluded: boolean) => Promise<void>;
+	handleModelCommand: (searchTerm?: string) => Promise<void>;
+	isBashMode: boolean;
+	updateEditorBorderColor: () => void;
 };
 
 type InputContext = {
@@ -53,6 +59,11 @@ function createSubmitContext(): SubmitContext {
 		flushPendingBashComponents: vi.fn(),
 		handleThinkingCommand: vi.fn(),
 		pendingUserInputs: [],
+		stepWelcome: { stopLogoIntro: vi.fn() },
+		handleBashCommand: vi.fn(async () => {}),
+		handleModelCommand: vi.fn(async () => {}),
+		isBashMode: false,
+		updateEditorBorderColor: vi.fn(),
 	};
 }
 
@@ -78,6 +89,24 @@ describe("InteractiveMode startup input", () => {
 		expect(context.pendingUserInputs).toEqual(["early prompt"]);
 		expect(context.flushPendingBashComponents).toHaveBeenCalledTimes(1);
 		expect(context.editor.addToHistory).toHaveBeenCalledWith("early prompt");
+	});
+
+	it.each([" early prompt ", "!seq 1 400", "/model"])("ends the logo intro when %j is submitted", async (input) => {
+		const context = createSubmitContext();
+		interactiveModePrototype.setupEditorSubmitHandler.call(context);
+
+		await context.defaultEditor.onSubmit?.(input);
+
+		expect(context.stepWelcome?.stopLogoIntro).toHaveBeenCalledOnce();
+	});
+
+	it("leaves the logo intro alone for an empty submission", async () => {
+		const context = createSubmitContext();
+		interactiveModePrototype.setupEditorSubmitHandler.call(context);
+
+		await context.defaultEditor.onSubmit?.("   ");
+
+		expect(context.stepWelcome?.stopLogoIntro).not.toHaveBeenCalled();
 	});
 
 	it.each([
