@@ -20,6 +20,7 @@ import {
 import {
 	isStepConfigCommand,
 	normalizeStepSessionSelectorArgs,
+	parseStepUpdateCommand,
 	runStepConfigCommand,
 	translateStepCommandArgs,
 } from "./step/command-compat.ts";
@@ -35,7 +36,7 @@ import { readOrCreateStepDeviceId, resolveStepStorageRoot } from "./step/device-
 import { resolveStepAgentDir, resolveStepConfigDir } from "./step/environment.ts";
 import { runFeedbackCommand } from "./step/feedback/command.ts";
 import { readFeedbackUsername } from "./step/feedback/context.ts";
-import { maybeUpdateStep } from "./step/local-update.ts";
+import { maybeUpdateStep, runStepUpdateCommand } from "./step/local-update.ts";
 import {
 	isStepInteractiveLoginStartup,
 	needsStepLoginBeforeInteractive,
@@ -374,44 +375,52 @@ try {
 		if (exitCode !== 0) process.exitCode = exitCode;
 	} else {
 		const rawStepArgs = process.argv.slice(2);
-		const normalizedStepArgs = normalizeStepSessionSelectorArgs(rawStepArgs);
-		const stepCodeArgs = applyStepCodeConfigDefaults(normalizedStepArgs, stepCodeConfig);
-		if (isStepConfigCommand(stepCodeArgs)) {
-			await runStepConfigCommand(stepCodeArgs);
+		const updateCommand = parseStepUpdateCommand(rawStepArgs);
+		if (updateCommand && "error" in updateCommand) {
+			process.stderr.write(`${updateCommand.error}\n`);
+			process.exitCode = 1;
+		} else if (updateCommand) {
+			process.exitCode = await runStepUpdateCommand({ version: updateCommand.version });
 		} else {
-			const compatibility = translateStepCommandArgs(stepCodeArgs);
-			syncStepLoginProfileEndpoint(getStepAuthPath());
-			let shouldLaunchMain = true;
-			const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
-			const interactiveStartup = isStepInteractiveLoginStartup({
-				stdinIsTTY: process.stdin.isTTY,
-				stdoutIsTTY: process.stdout.isTTY,
-				args: parsedInteractiveArgs,
-			});
-			if (
-				!hasConfiguredStepCodeCredential(stepCodeConfig) &&
-				needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })
-			) {
-				const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
-				if (outcome.kind === "exit") {
-					shouldLaunchMain = false;
-				} else {
-					syncStepLoginProfileEndpoint(getStepAuthPath());
+			const normalizedStepArgs = normalizeStepSessionSelectorArgs(rawStepArgs);
+			const stepCodeArgs = applyStepCodeConfigDefaults(normalizedStepArgs, stepCodeConfig);
+			if (isStepConfigCommand(stepCodeArgs)) {
+				await runStepConfigCommand(stepCodeArgs);
+			} else {
+				const compatibility = translateStepCommandArgs(stepCodeArgs);
+				syncStepLoginProfileEndpoint(getStepAuthPath());
+				let shouldLaunchMain = true;
+				const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
+				const interactiveStartup = isStepInteractiveLoginStartup({
+					stdinIsTTY: process.stdin.isTTY,
+					stdoutIsTTY: process.stdout.isTTY,
+					args: parsedInteractiveArgs,
+				});
+				if (
+					!hasConfiguredStepCodeCredential(stepCodeConfig) &&
+					needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })
+				) {
+					const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
+					if (outcome.kind === "exit") {
+						shouldLaunchMain = false;
+					} else {
+						syncStepLoginProfileEndpoint(getStepAuthPath());
+					}
 				}
-			}
-			if (shouldLaunchMain) {
-				await main(
-					withStepDefaults(
-						compatibility?.args ?? stepCodeArgs,
-						process.env,
-						{
-							provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,
-							model: stepPersistedDefaults.model ?? stepConfigMigration.defaultModel,
-						},
-						{ deferSettingsSelection: true },
-					),
-					stepMainOptions,
-				);
+				if (shouldLaunchMain) {
+					await main(
+						withStepDefaults(
+							compatibility?.args ?? stepCodeArgs,
+							process.env,
+							{
+								provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,
+								model: stepPersistedDefaults.model ?? stepConfigMigration.defaultModel,
+							},
+							{ deferSettingsSelection: true },
+						),
+						stepMainOptions,
+					);
+				}
 			}
 		}
 	}

@@ -62,6 +62,20 @@ npm run check         # Lint, format, and type check
 pnpm step            # Run the Step CLI entrypoint from sources
 ```
 
+Standalone Step binaries can update themselves from the published release
+manifests:
+
+```bash
+step update          # Install the latest stable release
+step update 0.4.0    # Install an exact stable release
+step upgrade         # Alias for step update
+step upgrade 0.4.0   # Install an exact release through the alias
+```
+
+Updates download and verify the platform archive directly. They do not require
+`curl` or `wget`; npm/pnpm/source installations must be updated through the
+tool that provided them.
+
 ## Building standalone binaries from release source
 
 GitHub releases include a versioned source archive covered by the release's `SHA256SUMS` file. Extract it and run the same build script used for the official standalone binaries:
