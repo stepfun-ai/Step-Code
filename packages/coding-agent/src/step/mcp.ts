@@ -185,7 +185,7 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 	return {
 		name,
 		label: remote.title?.trim() || remote.name,
-		description: `StepPage MCP tool '${remote.name}'. ${remote.description?.trim() || "Deploy and manage a static site."}`,
+		description: remote.description?.trim() || `MCP tool '${remote.name}' from server '${server.name}'.`,
 		parameters: schemaFromJson(remote.inputSchema),
 		execute: async (
 			_toolCallId: string,
