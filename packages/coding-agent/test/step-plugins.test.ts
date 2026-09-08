@@ -91,7 +91,7 @@ describe("Step plugin marketplace facade", () => {
 			id: "playwright",
 		});
 		expect(installed.diagnostics.mcpServers).toEqual(["playwright"]);
-		expect(installed.diagnostics.warnings.join(" ")).toContain("does not start MCP processes");
+		expect(installed.diagnostics.warnings.join(" ")).toContain("server starts after Step restarts");
 
 		await expect(installMarketplacePlugin(entry!, pluginsDir)).rejects.toThrow("already installed");
 		await expect(diagnoseStepPlugin(installed.installedPath)).resolves.toMatchObject({
