@@ -16,6 +16,7 @@
 - Fixed the Step entrypoint so `--api-key <key>` also authenticates the built-in `search_web` MCP tool.
 - Fixed `search_web` credential resolution so it no longer falls back to `STEP_API_KEY`, which addresses the StepCode-injected provider base URL rather than the fixed search endpoint.
 - Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.
+- Fixed the Step welcome logo intro playing on resumed sessions, where the welcome block starts outside the viewport and every frame forces a full-screen redraw.
 - Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
 - Fixed StepCode compatibility for the legacy `--session-file` session selector.
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
