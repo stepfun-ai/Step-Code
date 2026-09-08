@@ -32,7 +32,7 @@ The user approved continuation and an MR on 2026-09-07, emphasizing minimal code
 - [x] Task presentation: add a small pure rendering helper only if it avoids repetition, using existing extension widget/tool renderers. Add focused tests for all statuses, clipping, immutable history, and `/todos` independently of plan mode.
 - [x] Update `packages/coding-agent/src/step/system-prompt.ts` and its tests; update `packages/coding-agent/docs/step-integration.md` with the behavioral contract and official reference links; update root/package changelogs for the MR.
 - [x] Independently review spec compliance and code quality; address concrete findings and rerun verification.
-- [ ] Stage only owned files, commit, push without force, and open a GitLab MR targeting `main` with verified results and intentional limitations.
+- [x] Stage only owned files, commit, push without force, and open a GitLab MR targeting `main` with verified results and intentional limitations. Published as MR !43 at `784bc87`; the original pipeline passed.
 
 ## Tool
 
@@ -87,3 +87,30 @@ The user's instruction "接着继续 全面review 搞完之后mr" authorizes imp
 - Fresh post-review verification passed: 181/181 tests across the six explicit suites, exit 0 (449.77s total; 3.96s tests). Root `npm run check` passed again with exit 0, including browser smoke; Biome reported no fixes. These results include the off-branch fix and supersede the earlier 180-test run.
 - Independent quality re-review approved the fix and closed its sole Important finding. Task/plan spec and final code-quality reviews have no outstanding findings. The full owned diff and tool/runtime ownership boundaries were reviewed again before publication.
 - Final publication preparation re-fetched `origin/main` at `2e1eef64ab9f9dcdff6231e3ed9ddd6b94cddc1f`, confirmed the target project's default branch is `main`, and confirmed there is no existing open MR for this source branch. Publication follows this verification commit; keep this execution record active until the MR lands. No merge, release, or deployment is authorized.
+
+## 2026-09-08 follow-up: clarify model-facing descriptions
+
+**Approval:** The user approved the proposed wording upgrade and requested that it be added to the existing MR !43. That MR is open at `784bc87`; its original pipeline passed. This follow-up does not authorize merging or deploying.
+
+**Scope:** Keep all six tool names, schemas, execution functions, state and permissions unchanged. `task_*` describes a session todo/checklist, not work execution, delegation or scheduling. Plan mode describes producing and reviewing a Markdown proposal, not another checklist. Entry returns the proposal path for existing file tools; exit requests review rather than promising unconditional exit. Preserve the file-only planning restriction and explicitly describe caller-owned approval after automatic headless/RPC exit. Keep common usage policy in the system prompt and field semantics in the existing schemas.
+
+### Step / Tool / Expectation / Rollback
+
+- [x] Review this bounded follow-up plan while the main worker reads the existing tests. Independent reviewer approved with no blocking gaps; no new design document or runtime abstraction.
+- [x] RED: extend `packages/coding-agent/test/step-tasks-extension.test.ts`, `step-plan-extension.test.ts`, and `step-system-prompt.test.ts` with assertions on todo/proposal purpose, snippets, non-execution and mode-specific review semantics. Reuse their registration harnesses; assert important clauses, not snapshots of entire descriptions. Run only these three files and verify the expected wording failures.
+- [x] GREEN: update only `description` / `promptSnippet` in `src/extensions/step-tasks.ts` and `plan-mode-tools.ts`, plus the matching task/planning guidance in `src/step/system-prompt.ts`. Preserve existing policy thresholds and runtime behavior. Update the existing integration section and unreleased changelog entries to state the clearer contract.
+- [x] Verify the six explicit suites listed above and root `npm run check` using Node 22.19.0; inspect full output and `git diff --check`. Review the follow-up diff independently for inaccurate approval/security claims or accidental runtime/schema changes.
+- [ ] Stage only this follow-up's owned paths, create a new commit, push normally to `fix/plan-task-reliability`, and update MR !43 with fresh verification. Verify the remote head matches the new commit; do not create another MR or rewrite the original commit.
+
+**Tools:** The existing Vitest command under `## Tool`, narrowed to three files for RED; root `npm run check`; `git diff`; existing authenticated `glab` for MR !43. No new dependencies, full-suite/model calls, build, or release.
+
+**Expectation:** Every tool explains its own purpose; task creation cannot be mistaken for spawning work, and `exit_plan_mode` cannot be mistaken for unconditional approval. Tool snippets and system guidance use the same terms. Existing state/approval behavior tests remain green.
+
+**Rollback:** Revert only the follow-up commit if needed. It changes text, tests and documentation, not session data or runtime contracts.
+
+### Follow-up verification
+
+- RED: all three targeted suites loaded successfully; 4 expected wording assertions failed and 110 existing tests passed. Log: `/tmp/step-plan-tool-copy-red.log`.
+- GREEN: all six explicit suites passed, 184/184 (task 35, plan 61, prompt 18, capability composition 6, existing tool UI/session-tree 64). Exit 0 after formatter writes completed. Log: `/tmp/step-plan-tool-copy-green.log`.
+- Root `npm run check` passed with exit 0 on Node 22.19.0; its three formatter changes stayed in owned TS/test files. `git diff --check` passed; dependencies/lockfiles, schemas and execution functions are unchanged. Log: `/tmp/step-plan-tool-copy-check.log`.
+- Independent follow-up code/spec review approved with no blockers. Re-fetched `main` remains `2e1eef6` and the MR source remains `784bc87` before publication. The commit is prepared here; its publication is recorded in MR !43 and the worklog after push.

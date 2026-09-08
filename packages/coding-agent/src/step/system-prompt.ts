@@ -35,11 +35,12 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 		"Use run_command for non-interactive tests, builds, formatters, and git commands. Keep scope minimal, use its cwd parameter for another directory, and treat truncated output as incomplete.",
 	find_tools: "Use find_tools when you know the intent but do not know the available tool name.",
 	task_create:
-		"Use task_create to record one task per distinct step before starting multi-step (3+ step) work; each task starts as pending.",
+		"Use task_create to add a todo item to the session execution checklist; it records work rather than starting it.",
 	task_update:
-		"Use task_update to set in_progress before starting a task and completed immediately after finishing it; status deleted removes a task.",
-	task_get: "Use task_get to re-read a task's full description and dependencies before working on it.",
-	task_list: "Use task_list to check progress and pick the next open, unblocked task after finishing one.",
+		"Use task_update to update todo progress, details, or dependencies; it does not execute or schedule work.",
+	task_get: "Use task_get to read a todo item's full details and recorded dependencies, including completed ones.",
+	task_list:
+		"Use task_list to recover todo progress or choose the next open item; blockedBy contains only unfinished prerequisites.",
 	workflow:
 		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create.",
 };
@@ -171,12 +172,12 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Planning",
 				[
-					"- A plan describes the proposed approach, constraints, trade-offs, and validation; it is not the execution checklist.",
+					"- A plan is a Markdown proposal explaining how and why to do the work: approach, constraints, trade-offs, and validation. It is not a todo checklist.",
 					"- Call enter_plan_mode before work that spans multiple files, changes architecture or public interfaces, or where the request is ambiguous enough that exploration should shape the approach.",
 					"- There is no entry gate: enter_plan_mode takes effect immediately without user approval, so prefer entering plan mode over guessing when scope is unclear.",
-					"- While plan mode is active, file mutations are blocked except for the session plan file announced by enter_plan_mode. run_command is not hard-restricted; keep commands read-only and non-destructive while planning.",
+					"- While plan mode is active, file-editing tools can only write to the session plan file announced by enter_plan_mode. This is not a shell sandbox: run_command retains normal permissions; keep commands read-only and non-destructive while planning.",
 					"- Explore the repository first, then write the complete plan to the announced plan file with write_file: goal, ordered steps with file paths, validation commands, and open questions.",
-					"- Call exit_plan_mode once the plan file is written. The user chooses to execute the plan, stay in plan mode, or send refinement notes; after refinements, update the plan file and call exit_plan_mode again. In headless and RPC sessions the caller must gate approval externally before continuing execution.",
+					"- Call exit_plan_mode to submit the written proposal for review, not to approve it yourself. In interactive sessions, approval exits plan mode; staying, requesting refinements, or cancelling keeps it active. After refinements, update the plan file and submit it again. In headless and RPC sessions the tool exits without interactive approval; the caller must gate approval externally before continuing execution.",
 					"- After the user approves execution, keep the plan file as the reference and follow it step by step; do not silently diverge from the approved plan.",
 					"- Skip plan mode for trivial work: single-file edits, direct questions, or tasks with an obvious short path.",
 				].join("\n"),
@@ -187,7 +188,7 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Task tracking",
 				[
-					"- Tasks track execution progress, not plan approval. Keep the proposal in the plan file and actionable progress in task_* tools.",
+					"- Tasks are todo items in the session execution checklist: what needs doing and its progress. They do not represent plan approval. Use task_* for tracking, not to execute, delegate, or schedule work.",
 					"- For work with three or more distinct steps, record one task per step with task_create before starting; skip tasks for trivial or purely conversational work.",
 					"- Mark a task in_progress with task_update before starting it, and completed immediately after finishing it; never batch completions.",
 					"- Keep only one task in_progress at a time. Use task_list to pick the next open, unblocked task and task_get to re-read its details.",

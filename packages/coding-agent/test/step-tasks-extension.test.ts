@@ -730,3 +730,18 @@ test("task_get directs readiness checks to task_list rather than the full stored
 	expect(tools.get("task_get")!.description).toContain("task_list");
 	expect(tools.get("task_get")!.description).not.toContain("Verify blockedBy is clear");
 });
+
+test("task tool descriptions identify todos rather than work execution", () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	for (const tool of tools.values()) {
+		expect(tool.description).toMatch(/\btodo\b/i);
+		expect(tool.promptSnippet).toMatch(/\btodo\b/i);
+	}
+	expect(tools.get("task_create")!.description).toContain("with or without plan mode");
+	expect(tools.get("task_create")!.description).toContain("does not execute or delegate");
+	expect(tools.get("task_update")!.description).toContain("does not execute or schedule");
+	expect(tools.get("task_get")!.description).toContain("including completed");
+	expect(tools.get("task_list")!.description).toContain("unfinished prerequisites");
+	expect(tools.get("task_list")!.description).toContain("resume existing work");
+});

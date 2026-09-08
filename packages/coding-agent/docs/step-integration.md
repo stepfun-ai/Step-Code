@@ -158,8 +158,10 @@ write and approval flow; the prompt explicitly preserves an existing
 
 Plans and tasks serve different purposes. A **plan** is the Markdown proposal:
 approach, constraints, trade-offs, affected files, and validation. **Tasks** are
-the execution checklist: what is pending, in progress, or completed. Neither
-is a scheduler, and approving a plan does not generate tasks from Markdown.
+todo items in the session execution checklist: what needs doing and what is
+pending, in progress, or completed. The task tools track work; they do not
+execute, delegate, or schedule it. Approving a plan does not generate tasks
+from Markdown.
 
 - `enter_plan_mode`, `/plan`, and `--plan` share the same setup. Entry takes
   effect immediately; it does not request approval. An explicit `--plan`
@@ -169,8 +171,9 @@ is a scheduler, and approving a plan does not generate tasks from Markdown.
   Other file-write targets are blocked while planning. This is **not a shell
   sandbox**: command tools retain the existing permission policy, and the model
   is instructed to keep commands read-only while planning.
-- `exit_plan_mode` requires a readable, nonempty regular plan file. In the TUI,
-  the user can execute, stay in plan mode, or provide refinement notes. Cancel
+- `exit_plan_mode` submits the written proposal for review, requiring a readable,
+  nonempty regular plan file. In the TUI, the user can approve execution, stay in
+  plan mode, or provide refinement notes. Cancel
   leaves planning active. Headless and RPC runs retain their existing automatic
   exit behavior after validation; the caller must gate approval externally
   before allowing execution. `/plan` can still explicitly toggle planning off.

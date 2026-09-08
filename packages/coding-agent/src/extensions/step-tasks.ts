@@ -237,8 +237,8 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_create",
 			label: "Create task",
 			description:
-				"Create a task in the session task list. Use one task per distinct step when work has three or more steps. The task starts as pending; the returned id is used with the other task_* tools.",
-			promptSnippet: "Add a task to the session task list",
+				"Create a todo item in the session execution checklist, with or without plan mode. Returns an id and starts as pending. This records work; it does not execute or delegate it.",
+			promptSnippet: "Record a todo item without executing work",
 			parameters: TASK_CREATE_PARAMS,
 			renderCall: (args, theme) => renderTaskCall("task_create", args.subject, theme),
 			renderResult: renderTaskResult,
@@ -259,8 +259,8 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_update",
 			label: "Update task",
 			description:
-				"Update a task: set status (pending, in_progress, completed; deleted removes the task), edit fields, merge metadata (a null value deletes the key), or add dependencies with addBlocks/addBlockedBy. Mark a task in_progress before starting it and completed immediately after finishing it.",
-			promptSnippet: "Update a task's status, fields, or dependencies",
+				"Update a todo item's progress, details, or dependencies by id. Set in_progress when starting, completed after finishing and validating, or deleted to remove it. This only changes tracking data; it does not execute or schedule work.",
+			promptSnippet: "Update a todo item's progress, details, or dependencies",
 			parameters: TASK_UPDATE_PARAMS,
 			renderCall: (args, theme) =>
 				renderTaskCall("task_update", `${args.taskId ?? ""}${args.status ? ` → ${args.status}` : ""}`, theme),
@@ -300,8 +300,8 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_get",
 			label: "Get task",
 			description:
-				"Get one task by id with its full description, status, owner, metadata, and dependency lists (blocks / blockedBy). Use task_list to check open blockers before starting the task; these stored lists also include completed dependencies.",
-			promptSnippet: "Read one task's full details",
+				"Read a todo item's full details and all recorded dependencies, including completed ones. Use task_list to check which prerequisites remain unfinished.",
+			promptSnippet: "Read a todo item's full details and recorded dependencies",
 			parameters: TASK_GET_PARAMS,
 			renderCall: (args, theme) => renderTaskCall("task_get", args.taskId, theme),
 			renderResult: renderTaskResult,
@@ -312,8 +312,8 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_list",
 			label: "List tasks",
 			description:
-				"List all tasks with id, subject, status, owner, and open blockers (blockedBy filtered to tasks that still exist and are not completed). Use it to check progress and pick the next available task.",
-			promptSnippet: "List session tasks with status and open blockers",
+				"List session todo items with id, subject, status, owner, and unfinished prerequisites (blockedBy). Use it to resume existing work or choose the next open, unblocked item.",
+			promptSnippet: "List todo progress and unfinished prerequisites",
 			parameters: TASK_LIST_PARAMS,
 			renderCall: (_args, theme) => renderTaskCall("task_list", undefined, theme),
 			renderResult: renderTaskResult,

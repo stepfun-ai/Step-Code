@@ -150,8 +150,13 @@ describe("Step system prompt appendix", () => {
 			"task_get",
 			"task_list",
 		]);
-		expect(prompt).toContain("A plan describes the proposed approach, constraints, trade-offs, and validation");
-		expect(prompt).toContain("Tasks track execution progress, not plan approval");
+		expect(prompt).toContain("A plan is a Markdown proposal explaining how and why");
+		expect(prompt).toContain("Tasks are todo items in the session execution checklist");
+		expect(prompt).toContain("not to execute, delegate, or schedule work");
+		expect(prompt).toContain("submit the written proposal for review, not to approve it yourself");
+		expect(prompt).toContain("staying, requesting refinements, or cancelling keeps it active");
+		expect(prompt).toContain("exits without interactive approval");
+		expect(prompt).toContain("not a shell sandbox");
 		expect(prompt).toContain("resuming work or after compaction");
 		expect(prompt).toContain("caller must gate approval externally");
 		expect(prompt).not.toContain("update_plan");

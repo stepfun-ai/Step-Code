@@ -1060,3 +1060,29 @@ test("a valid headless proposal exits with external approval and a bounded previ
 		properties: { source: "agent", outcome: "auto_headless" },
 	});
 });
+
+test("enter_plan_mode describes writing a proposal rather than tracking todos", () => {
+	const harness = createHarness();
+	createStepPlanExtension()(harness.api);
+	const tool = harness.tools.get("enter_plan_mode")!;
+	expect(tool.description).toContain("not to track todos");
+	expect(tool.description).toContain("Returns the proposal file path");
+	expect(tool.description).toContain("write_file or edit_file");
+	expect(tool.description).toContain("File-editing tools are limited to that file");
+	expect(tool.description).toContain("commands still use normal permissions");
+	expect(tool.promptSnippet).toContain("proposal");
+});
+
+test("exit_plan_mode describes review and mode-specific approval rather than unconditional exit", () => {
+	const harness = createHarness();
+	createStepPlanExtension()(harness.api);
+	const tool = harness.tools.get("exit_plan_mode")!;
+	expect(tool.description).toMatch(/^Submit .*proposal.*review/);
+	expect(tool.description).toContain("readable, nonempty regular plan file");
+	expect(tool.description).toContain("user approval exits planning");
+	expect(tool.description).toContain("staying, refining, or cancelling keeps it active");
+	expect(tool.description).toContain("headless and RPC");
+	expect(tool.description).toContain("exits without interactive approval");
+	expect(tool.description).toContain("caller must gate approval externally");
+	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
+});

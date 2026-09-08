@@ -71,8 +71,8 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		name: "enter_plan_mode",
 		label: "Enter plan mode",
 		description:
-			"Enter plan mode to explore the codebase and draft a proposal for approval. File-editing tools are limited to the announced session plan file; commands still use normal permissions.",
-		promptSnippet: "Enter plan mode and draft a proposal for approval",
+			"Enter plan mode to research and propose an implementation approach before coding, not to track todos. Returns the proposal file path; use write_file or edit_file to record the approach, trade-offs, steps, and validation for review. File-editing tools are limited to that file; commands still use normal permissions.",
+		promptSnippet: "Enter planning to draft an implementation proposal",
 		parameters: Type.Object({}),
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
 			if (planMode.isPlanModeActive()) {
@@ -90,8 +90,8 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		name: "exit_plan_mode",
 		label: "Exit plan mode",
 		description:
-			"Exit plan mode once the session proposal is ready for review. The user chooses to execute it, stay in plan mode, or request refinements. Requires a readable, nonempty regular plan file.",
-		promptSnippet: "Exit plan mode after writing the plan file",
+			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. In interactive mode, user approval exits planning; staying, refining, or cancelling keeps it active. In headless and RPC modes, exits without interactive approval; the caller must gate approval externally before execution.",
+		promptSnippet: "Submit the written proposal for review",
 		parameters: Type.Object({}),
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
 			if (!planMode.isPlanModeActive()) return controlResult("Not in plan mode.");
