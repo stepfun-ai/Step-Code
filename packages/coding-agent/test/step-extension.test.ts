@@ -232,7 +232,7 @@ describe("Step extension", () => {
 			sendUserMessage: vi.fn(),
 		} as unknown as ExtensionAPI);
 
-		const sessionStart = on.mock.calls.find(([name]) => name === "session_start")?.[1] as (
+		const sessionStart = on.mock.calls.filter(([name]) => name === "session_start").at(-1)?.[1] as (
 			event: unknown,
 			ctx: unknown,
 		) => void;
@@ -277,7 +277,7 @@ describe("Step extension", () => {
 			event: unknown,
 			ctx: unknown,
 		) => Promise<unknown>;
-		const sessionStart = on.mock.calls.find(([name]) => name === "session_start")?.[1] as (
+		const sessionStart = on.mock.calls.filter(([name]) => name === "session_start").at(-1)?.[1] as (
 			event: unknown,
 			ctx: unknown,
 		) => void;
