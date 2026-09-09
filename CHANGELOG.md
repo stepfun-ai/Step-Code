@@ -37,3 +37,4 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Fixed StepCode-launched model and permission persistence so reads and writes use the injected config file instead of mixing in `.step-cli` settings.
 - Fixed StepCode-launched models with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
 - Fixed input, deletion, and menu lag in long sessions, where every keystroke reprocessed all settled messages before the screen could update.
+- Fixed `/feedback` leaving the editor above the bottom row when a page was cancelled; every page of the flow now renders over the transcript.

@@ -593,7 +593,9 @@ export class InteractiveMode {
 
 	// Extension UI state
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
+	private unmountExtensionSelector: (() => void) | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
+	private unmountExtensionInput: (() => void) | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputSubscriptions = new Set<{
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
@@ -2782,6 +2784,7 @@ export class InteractiveMode {
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
+			this.hideExtensionSelector();
 			this.extensionSelector = new ExtensionSelectorComponent(
 				title,
 				options,
@@ -2803,11 +2806,7 @@ export class InteractiveMode {
 				},
 			);
 
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
-			this.ui.setFocus(this.extensionSelector);
-			this.ui.requestRender();
+			this.unmountExtensionSelector = this.mountExtensionDialog(this.extensionSelector, opts);
 		});
 	}
 
@@ -2816,11 +2815,9 @@ export class InteractiveMode {
 	 */
 	private hideExtensionSelector(): void {
 		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.unmountExtensionSelector?.();
+		this.unmountExtensionSelector = undefined;
 		this.extensionSelector = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
 	}
 
 	/**
@@ -2863,6 +2860,7 @@ export class InteractiveMode {
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
+			this.hideExtensionInput();
 			this.extensionInput = new ExtensionInputComponent(
 				title,
 				placeholder,
@@ -2883,11 +2881,7 @@ export class InteractiveMode {
 				},
 			);
 
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionInput);
-			this.ui.setFocus(this.extensionInput);
-			this.ui.requestRender();
+			this.unmountExtensionInput = this.mountExtensionDialog(this.extensionInput, opts);
 		});
 	}
 
@@ -2896,11 +2890,46 @@ export class InteractiveMode {
 	 */
 	private hideExtensionInput(): void {
 		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.unmountExtensionInput?.();
+		this.unmountExtensionInput = undefined;
 		this.extensionInput = undefined;
-		this.ui.setFocus(this.editor);
+	}
+
+	/**
+	 * Show a transient extension dialog and return the call that takes it back down.
+	 *
+	 * The inline form swaps the dialog in for the editor, which is what pushes the transcript
+	 * up by the dialog's extra rows and leaves a gap at the bottom once the dialog closes. The
+	 * overlay form composites the dialog onto the rows the editor and the transcript already
+	 * occupy, so the rendered document keeps its length and nothing moves. The bottom margin
+	 * holds the overlay off the rows the dock draws under the editor, so the dialog lands on
+	 * the same rows it would have taken inline and the footer stays visible.
+	 */
+	private mountExtensionDialog(component: Component, opts?: ExtensionUIDialogOptions): () => void {
+		if (opts?.overlay) {
+			const width = this.ui.terminal.columns;
+			const rowsBelowEditor =
+				this.widgetContainerBelow.render(width).length + this.footerContainer.render(width).length;
+			const handle = this.ui.showOverlay(component, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: { bottom: rowsBelowEditor },
+			});
+			return () => handle.hide();
+		}
+
+		this.disposeActiveSelector();
+		this.editorContainer.clear();
+		this.editorContainer.addChild(component);
+		this.ui.setFocus(component);
 		this.ui.requestRender();
+		return () => {
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.editor);
+			this.ui.setFocus(this.editor);
+			this.ui.requestRender();
+		};
 	}
 
 	/**

@@ -197,17 +197,21 @@ async function handleStepFeedbackCommand(
 		return;
 	}
 
+	// Every page of this flow renders as an overlay so the transcript holds still across the
+	// whole wizard: the consent page below is one, and a page that grows the transcript instead
+	// leaves the editor above the bottom row when it is cancelled.
 	const selected = await ctx.ui.select(
 		"Feedback category",
 		FEEDBACK_CATEGORIES.map(
 			(category) =>
 				`${FEEDBACK_CATEGORY_CLI_SPELLINGS[category]}: ${FEEDBACK_CATEGORY_PRESENTATION[category].description}`,
 		),
+		{ overlay: true },
 	);
 	if (!selected) return;
 	const category = normalizeFeedbackCategory(selected.split(":", 1)[0]?.trim() ?? "");
 	if (!category) return;
-	const rawComment = await ctx.ui.input("Feedback comment", "What happened?");
+	const rawComment = await ctx.ui.input("Feedback comment", "What happened?", { overlay: true });
 	if (rawComment === undefined) return;
 	const comment = rawComment.trim();
 	const readAt = new Date();
@@ -232,10 +236,11 @@ async function handleStepFeedbackCommand(
 	].map(neutralizeFeedbackConsentMetadata);
 	let includeAttachments = false;
 	if (availableFiles.length > 0) {
-		const uploadChoice = await ctx.ui.select(`UPLOAD LOGS?\n${availableFiles.join(", ")}`, [
-			"Yes · Include the listed files",
-			"No · Send feedback without files",
-		]);
+		const uploadChoice = await ctx.ui.select(
+			`UPLOAD LOGS?\n${availableFiles.join(", ")}`,
+			["Yes · Include the listed files", "No · Send feedback without files"],
+			{ overlay: true },
+		);
 		if (!uploadChoice) return;
 		includeAttachments = uploadChoice === "Yes · Include the listed files";
 	} else if (bundleCandidate?.status !== "skipped") {

@@ -100,6 +100,16 @@ export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/**
+	 * Render the dialog over the transcript instead of inside it. Interactive mode only.
+	 *
+	 * An inline dialog replaces the editor within the rendered document, so the document
+	 * grows by the dialog's extra rows. Once the transcript is taller than the terminal that
+	 * growth scrolls the screen, and the shrink on dismissal cannot scroll it back, so the
+	 * editor is left stranded above the bottom row. Use this for multi-step flows, where the
+	 * drift is visible because no output follows the dialog to fill the gap back in.
+	 */
+	overlay?: boolean;
 }
 
 /** Placement for extension widgets. */
