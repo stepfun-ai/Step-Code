@@ -216,24 +216,35 @@ test("budget failure accounts the completed call and persists a terminal status"
 
 test("agent concurrency stays within the configured semaphore limit", async () => {
 	const cwd = await workspace();
+	const limit = 2;
 	let active = 0;
 	let peak = 0;
+	// Gate each runner until `limit` runners are concurrently active so the peak is
+	// observed deterministically instead of relying on a fixed sleep to overlap — the
+	// pre-runner progress I/O can otherwise stagger the calls and hide the true peak.
+	let releaseWhenSaturated!: () => void;
+	const saturated = new Promise<void>((resolve) => {
+		releaseWhenSaturated = resolve;
+	});
 	const { runtime, journal } = runtimeAt(
 		cwd,
 		async (input) => {
 			active += 1;
 			peak = Math.max(peak, active);
-			await new Promise((resolve) => setTimeout(resolve, 10));
+			if (active >= limit) releaseWhenSaturated();
+			// Fall back to a timeout so a broken semaphore (that never saturates) still
+			// resolves and lets the assertion fail with the observed peak.
+			await Promise.race([saturated, new Promise((resolve) => setTimeout(resolve, 200))]);
 			active -= 1;
 			return result(input.prompt);
 		},
-		{ maxConcurrency: 2 },
+		{ maxConcurrency: limit },
 	);
 	await journal.initialize("concurrency");
 
 	await Promise.all(Array.from({ length: 6 }, (_, index) => runtime.agent(`call-${index}`)));
-	expect(peak).toBe(2);
-	expect(runtime.semaphore.peak).toBe(2);
+	expect(peak).toBe(limit);
+	expect(runtime.semaphore.peak).toBe(limit);
 });
 
 test("parallel calls cannot race past the workflow agent limit", async () => {
