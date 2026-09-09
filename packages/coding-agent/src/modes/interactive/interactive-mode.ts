@@ -570,8 +570,10 @@ export class InteractiveMode {
 	private unsubscribe?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
 
-	// Track if editor is in bash mode (text starts with !)
+	// Track if editor is in bash mode (text starts with !) and whether the
+	// !! variant excludes the command output from the model's context
 	private isBashMode = false;
+	private isBashExcluded = false;
 
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
@@ -3180,6 +3182,7 @@ export class InteractiveMode {
 			} else if (this.isBashMode) {
 				this.editor.setText("");
 				this.isBashMode = false;
+				this.isBashExcluded = false;
 				this.updateEditorBorderColor();
 			} else if (!this.editor.getText().trim()) {
 				// Double-escape with empty editor triggers /tree, /fork, or nothing based on setting
@@ -3244,8 +3247,11 @@ export class InteractiveMode {
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
-			this.isBashMode = text.trimStart().startsWith("!");
-			if (wasBashMode !== this.isBashMode) {
+			const wasBashExcluded = this.isBashExcluded;
+			const trimmed = text.trimStart();
+			this.isBashMode = trimmed.startsWith("!");
+			this.isBashExcluded = trimmed.startsWith("!!");
+			if (wasBashMode !== this.isBashMode || wasBashExcluded !== this.isBashExcluded) {
 				this.updateEditorBorderColor();
 			}
 		};
@@ -3465,6 +3471,7 @@ export class InteractiveMode {
 					this.editor.addToHistory?.(text);
 					await this.handleBashCommand(command, isExcluded);
 					this.isBashMode = false;
+					this.isBashExcluded = false;
 					this.updateEditorBorderColor();
 					return;
 				}
@@ -4542,10 +4549,15 @@ export class InteractiveMode {
 	}
 
 	private updateEditorBorderColor(): void {
+		// The footer's permission segment tracks bash mode regardless of style.
+		// Guarded: partial setups (tests) may call this before the footer exists.
+		this.footer?.setBashMode(this.isBashMode);
 		if (this.options.tuiStyle === "step" && this.editor === this.defaultEditor) {
-			// Step's composer owns a fixed brand frame; thinking/bash state is
-			// still shown in the footer and status rows, not by changing the box.
-			this.editor.borderColor = (text: string) => theme.fg("borderAccent", text);
+			// Step's composer keeps a fixed brand frame for thinking/model state,
+			// but bash mode is visible before submitting: `!` switches the frame
+			// to the error tone and `!!` (excluded from context) dims it.
+			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : "borderAccent";
+			this.editor.borderColor = (str: string) => theme.fg(colorKey, str);
 			this.ui.requestRender();
 			return;
 		}
