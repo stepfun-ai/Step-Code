@@ -6,6 +6,7 @@
 
 - Added extension-owned task widgets and native task tool renderers, keeping `/todos` with the task extension.
 - Added the Step binary startup update check and native installer integration for Step CLI hosts.
+- Added an `overlay` option to the extension `select` and `input` dialogs, which renders them over the transcript instead of inside it.
 
 ### Changed
 
@@ -29,6 +30,7 @@
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
 - Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
+- Fixed `/feedback` pages growing the rendered transcript, which scrolled the screen and left the editor above the bottom row once a page closed.
 
 ## [0.84.4] - 2026-08-28
 
