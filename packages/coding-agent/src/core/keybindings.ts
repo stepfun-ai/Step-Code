@@ -20,6 +20,7 @@ export interface AppKeybindings {
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
+	"app.redraw": true;
 	"app.tools.expand": true;
 	"app.thinking.toggle": true;
 	"app.session.toggleNamedFilter": true;
@@ -113,6 +114,10 @@ export const KEYBINDINGS = {
 		description: "Cycle to previous model",
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
+	"app.redraw": {
+		defaultKeys: [],
+		description: "Repaint the screen (recovers a garbled terminal)",
+	},
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",

@@ -107,6 +107,7 @@ export interface Settings {
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
+	statusTips?: boolean; // default: true - one-line tip under the working status row, one per turn
 	showCacheMissNotices?: boolean; // default: false - show prompt-cache miss and compaction cost notices
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
@@ -935,6 +936,16 @@ export class SettingsManager {
 
 	getHideThinkingBlock(): boolean {
 		return this.settings.hideThinkingBlock ?? false;
+	}
+
+	getStatusTips(): boolean {
+		return this.settings.statusTips ?? true;
+	}
+
+	setStatusTips(enabled: boolean): void {
+		this.globalSettings.statusTips = enabled;
+		this.markModified("statusTips");
+		this.save();
 	}
 
 	getShowCacheMissNotices(): boolean {

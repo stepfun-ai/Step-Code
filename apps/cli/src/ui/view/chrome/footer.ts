@@ -16,6 +16,29 @@ function sanitizeStatusText(text: string): string {
 }
 
 /**
+ * Rough token estimate for streamed text before usage arrives (~4 chars/token,
+ * same heuristic the working row uses).
+ */
+export function estimateTokens(chars: number): number {
+	return Math.round(chars / 4);
+}
+
+/**
+ * Compact elapsed-time format shared by the working row, the turn-done marker
+ * and the thinking summary so all three read the same scale ("90s" never shows
+ * next to "1m 30s").
+ */
+export function formatElapsedTime(totalSeconds: number): string {
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+	const hours = Math.floor(minutes / 60);
+	const remainingMinutes = minutes % 60;
+	return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+}
+
+/**
  * Format token counts for compact footer display.
  */
 export function formatTokens(count: number): string {
@@ -103,23 +126,7 @@ export class FooterComponent implements Component {
 		const state = this.session.state;
 
 		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-		const usageTotals = createUsageTotals();
-		let latestCacheHitRate: number | undefined;
-
-		for (const entry of this.session.sessionManager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				addUsageToTotals(usageTotals, entry.message.usage);
-
-				const latestPromptTokens =
-					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-				latestCacheHitRate =
-					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
-			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-				addUsageToTotals(usageTotals, entry.message.usage);
-			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-				addUsageToTotals(usageTotals, entry.usage);
-			}
-		}
+		const { usageTotals, latestCacheHitRate } = this.computeUsageTotals();
 
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.
@@ -262,6 +269,33 @@ export class FooterComponent implements Component {
 	}
 
 	/**
+	 * Cumulative usage across ALL session entries (assistant messages, tool
+	 * results, compaction/branch summaries), plus the latest cache hit rate.
+	 * Shared by the native and Step footer presentations.
+	 */
+	private computeUsageTotals(): { usageTotals: ReturnType<typeof createUsageTotals>; latestCacheHitRate?: number } {
+		const usageTotals = createUsageTotals();
+		let latestCacheHitRate: number | undefined;
+
+		for (const entry of this.session.sessionManager.getEntries()) {
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				addUsageToTotals(usageTotals, entry.message.usage);
+
+				const latestPromptTokens =
+					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
+				latestCacheHitRate =
+					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
+			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
+				addUsageToTotals(usageTotals, entry.message.usage);
+			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+				addUsageToTotals(usageTotals, entry.usage);
+			}
+		}
+
+		return { usageTotals, latestCacheHitRate };
+	}
+
+	/**
 	 * Step's footer is a compact, single-line operational readout. Keep this as
 	 * a presentation branch so the Pi footer remains the default for the Pi
 	 * entrypoint and all extension APIs continue to receive the same provider.
@@ -272,6 +306,7 @@ export class FooterComponent implements Component {
 		const muted = (text: string) => theme.fg("muted", text);
 		const accent = (text: string) => theme.fg("accent", text);
 		const warning = (text: string) => theme.fg("warning", text);
+		const error = (text: string) => theme.fg("error", text);
 
 		const permissionStatus = this.footerData.getExtensionStatuses().get("step-permission");
 		const statusPreset = permissionStatus?.match(/^Mode:\s*([^()]+?)(?:\s*\(auto-resume\))?$/u)?.[1]?.trim();
@@ -340,16 +375,42 @@ export class FooterComponent implements Component {
 
 		const left = segments.join(muted(" · "));
 		const usage = this.session.getContextUsage();
-		if (usage?.percent === null || usage?.percent === undefined) {
-			return [truncateToWidth(left, safeWidth, "")];
+
+		// Right-aligned readout: session token spend, then remaining context.
+		// Tokens are first-class (省 token 是产品目标), but yield to context on
+		// narrow terminals; context turns amber/red as the window fills so the
+		// need to compact is visible before it becomes urgent.
+		const { usageTotals } = this.computeUsageTotals();
+		const spentTokens = usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
+		const rightSegments: string[] = [];
+		if (spentTokens > 0 && safeWidth >= 72) {
+			rightSegments.push(muted(`${formatTokens(spentTokens)} tok`));
 		}
-		const contextLeft = `${Math.round(Math.max(0, 100 - Math.min(100, usage.percent)))}% context left`;
-		const context = muted(contextLeft);
+
+		if (usage?.percent === null || usage?.percent === undefined) {
+			const right = rightSegments.join(muted(" · "));
+			if (!right) return [truncateToWidth(left, safeWidth, "")];
+			const rightWidth = visibleWidth(right);
+			const gapUnknown = safeWidth - visibleWidth(left) - rightWidth;
+			if (gapUnknown >= 2) return [`${left}${" ".repeat(gapUnknown)}${right}`];
+			const availableUnknown = Math.max(0, safeWidth - rightWidth - 1);
+			return [
+				`${truncateToWidth(left, availableUnknown, "")}${" ".repeat(Math.max(0, safeWidth - availableUnknown - rightWidth))}${right}`,
+			];
+		}
+
+		const usedPercent = Math.max(0, Math.min(100, usage.percent));
+		const contextLeftText = `${Math.round(100 - usedPercent)}% ctx left`;
+		// Same thresholds as the native footer: >90% used turns error, >70% warning.
+		const contextPaint = usedPercent > 90 ? error : usedPercent > 70 ? warning : muted;
+		rightSegments.push(contextPaint(contextLeftText));
+		const right = rightSegments.join(muted(" · "));
+
 		const leftWidth = visibleWidth(left);
-		const contextWidth = visibleWidth(context);
+		const contextWidth = visibleWidth(right);
 		const gap = safeWidth - leftWidth - contextWidth;
 		if (gap >= 2) {
-			return [`${left}${" ".repeat(gap)}${context}`];
+			return [`${left}${" ".repeat(gap)}${right}`];
 		}
 
 		const available = Math.max(0, safeWidth - contextWidth - 1);
@@ -357,7 +418,7 @@ export class FooterComponent implements Component {
 		const trimmedWidth = visibleWidth(trimmed);
 		const trimmedGap = safeWidth - trimmedWidth - contextWidth;
 		return trimmedGap >= 1
-			? [`${trimmed}${" ".repeat(trimmedGap)}${context}`]
+			? [`${trimmed}${" ".repeat(trimmedGap)}${right}`]
 			: [truncateToWidth(trimmed, safeWidth, "")];
 	}
 }

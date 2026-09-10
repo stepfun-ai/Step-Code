@@ -113,6 +113,11 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 	// Global debug handler on TUI (works regardless of focus)
 	ctx.ui.onDebug = () => ctx.handleDebugCommand();
 	ctx.defaultEditor.onAction("app.model.select", () => ctx.showModelSelector());
+	// Manual redraw (Ctrl+L): force a differential-renderer reset plus immediate
+	// repaint — the user-facing recovery for terminals that garble the viewport
+	// after scrolling or font changes (feedback issue-9ad367d596a230a9). The
+	// concrete renderNow(true) reset stays at the call site, not the redraw facade.
+	ctx.defaultEditor.onAction("app.redraw", () => ctx.ui.renderNow(true));
 	ctx.defaultEditor.onAction("app.tools.expand", () => ctx.toggleToolOutputExpansion());
 	ctx.defaultEditor.onAction("app.thinking.toggle", () => ctx.toggleThinkingBlockVisibility());
 	ctx.defaultEditor.onAction("app.editor.external", () => void ctx.handleOpenExternalEditor());

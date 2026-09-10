@@ -36,6 +36,7 @@ import type {
 	AssistantMessageComponent,
 	FooterComponent,
 	StatusIndicator,
+	StatusTipRotator,
 	StepToolSpinnerClock,
 	StepWelcomeComponent,
 	ToolExecutionComponent,
@@ -73,6 +74,14 @@ export interface RuntimeContext {
 	readonly sessionManager: AgentSession["sessionManager"];
 	readonly presentation: "native" | "step";
 	readonly workingOutputTracker: WorkingOutputTracker;
+	// Redesign turn-cadence state — mutated in place through the live ctx (ctx IS the host).
+	// turnEndedAbnormally: agent_start resets it, message_end sets it on aborted/error,
+	// agent_end reads it to suppress the turn-done marker.
+	turnEndedAbnormally: boolean;
+	// statusTipRotator: lazily built at turn_start; currentStatusTip is the per-turn tip
+	// read back by the host's showWorkingStatusIndicator().
+	statusTipRotator: StatusTipRotator | undefined;
+	currentStatusTip: string | undefined;
 	readonly pendingTools: Map<string, ToolExecutionComponent>;
 	readonly stepSpinner: StepToolSpinnerClock | undefined;
 	readonly workingVisible: boolean;
@@ -106,6 +115,7 @@ export interface RuntimeContext {
 	checkShutdownRequested(): Promise<void>;
 	showStatusIndicator(indicator: StatusIndicator): void;
 	showWorkingStatusIndicator(): void;
+	showTurnDoneIndicator(durationSeconds: number): void;
 	clearStatusIndicator(kind?: StatusIndicator["kind"]): void;
 	showError(errorMessage: string): void;
 	renderSessionEntries(entries: SessionEntry[], options?: { updateFooter?: boolean; populateHistory?: boolean }): void;

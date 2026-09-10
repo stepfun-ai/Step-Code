@@ -5,14 +5,14 @@
  *
  * - **The riding bird** (`renderBirdFrame` / `renderBirdStatic`): a 22x8
  *   colored sprite in the brand's violet-and-gold, decoded from
- *   `logo-sprite.generated.ts`. Every terminal renders it the same way — each
- *   source half-cell becomes a 2x2 group in a 2x4 Braille dot matrix. This
- *   started as Apple Terminal's fallback (its block-glyph rasterizer leaves
- *   visible grid lines, and whole-cell backgrounds make the artwork too heavy),
- *   and is now used everywhere so the mark looks identical across terminals
- *   rather than switching between half-block and Braille per terminal. Colors
- *   render as truecolor or quantized 256-color through `style.ts`. The welcome
- *   block plays the frames once, then settles on the static frame.
+ *   `logo-sprite.generated.ts`. Most terminals render it with CP437 half-block
+ *   glyphs (`▀` foreground + background), which keeps the source art's native
+ *   per-half-row color resolution. Apple Terminal opts out of block glyphs
+ *   (its rasterizer leaves visible grid seams), so it and bg-less painters get
+ *   the Braille dot rendering instead: every half-cell becomes a 2x2 group in
+ *   a 2x4 Braille dot matrix, softer but quantized. Colors render as truecolor
+ *   or quantized 256-color through `style.ts`. The welcome block plays the
+ *   frames once, then settles on the static frame.
  *
  * - **The CP437 block mark** (`renderStepMark`): the previous 3x3 abstract-S,
  *   kept as the monochrome fallback. It uses only space/`█`/`▀`/`▄` and emits
@@ -45,6 +45,8 @@ import {
 /** Minimal painter needed by the logo renderer. */
 export interface StepLogoTheme {
 	fg(color: string, text: string): string;
+	/** Background paint; when absent the renderer falls back to Braille cells. */
+	bg?(color: string, text: string): string;
 }
 
 type RgbColor = { r: number; g: number; b: number };
@@ -98,6 +100,20 @@ export function paintStepLogoColor(color: string, text: string): string {
 	return `${open}${text}\x1b[39m`;
 }
 
+/** Paint an arbitrary sprite background at the active Pi theme color depth. */
+export function paintStepLogoBg(color: string, text: string): string {
+	const rgb = parseHexColor(color);
+	if (rgb === null || text.length === 0) return text;
+	let mode: "truecolor" | "256color" = "truecolor";
+	try {
+		mode = theme.getColorMode();
+	} catch {
+		return text;
+	}
+	const open = mode === "truecolor" ? `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m` : `\x1b[48;5;${rgbToAnsi256(rgb)}m`;
+	return `${open}${text}\x1b[49m`;
+}
+
 /** Paint the small `STEP` badge background used by the old welcome block. */
 export function paintStepBadge(text: string): string {
 	let mode: "truecolor" | "256color" = "truecolor";
@@ -112,7 +128,7 @@ export function paintStepBadge(text: string): string {
 
 /** Adapter matching the old renderer's handle-shaped API. */
 export function createStepLogoTheme(): StepLogoTheme {
-	return { fg: paintStepLogoColor };
+	return { fg: paintStepLogoColor, bg: paintStepLogoBg };
 }
 
 /** Terminal columns the riding-bird sprite occupies. */
@@ -159,7 +175,53 @@ function renderBrailleSprite(handle: StepLogoTheme, rows: readonly string[]): st
 	});
 }
 
+/**
+ * Renders a sprite with CP437 half-block glyphs — the source art's native
+ * resolution. Each cell paints its upper and lower samples independently via
+ * `▀` foreground/background, so every half-row keeps its own color instead of
+ * being quantized into a shared Braille dot mask. Used whenever the painter
+ * can set backgrounds; Apple Terminal opts out (see `prefersBrailleSprite`).
+ */
+function renderHalfBlockSprite(handle: StepLogoTheme, rows: readonly string[]): string[] {
+	return rows.map((row) => {
+		let line = "";
+		for (let i = 0; i < row.length; i += 2) {
+			const upper = Number.parseInt(row[i]!, 16);
+			const lower = Number.parseInt(row[i + 1]!, 16);
+			const upperHex = upper > 0 ? BIRD_SPRITE_PALETTE[upper - 1] : undefined;
+			const lowerHex = lower > 0 ? BIRD_SPRITE_PALETTE[lower - 1] : undefined;
+			if (upperHex === undefined && lowerHex === undefined) {
+				line += " ";
+				continue;
+			}
+			if (lowerHex === undefined) {
+				line += handle.fg(upperHex!, "▀");
+				continue;
+			}
+			if (upperHex === undefined) {
+				line += handle.fg(lowerHex, "▄");
+				continue;
+			}
+			// ▀ with the lower sample as background paints both halves in one cell.
+			line += handle.bg!(lowerHex, handle.fg(upperHex, "▀"));
+		}
+		return line;
+	});
+}
+
+/**
+ * Apple Terminal rasterizes block glyphs with visible grid seams, which made
+ * the half-block bird look stitched together. There the Braille rendering
+ * stays the better trade: softer dots, no seams, identical everywhere else.
+ */
+function prefersBrailleSprite(): boolean {
+	return process.env.TERM_PROGRAM === "Apple_Terminal";
+}
+
 function renderSprite(handle: StepLogoTheme, rows: readonly string[]): string[] {
+	if (handle.bg && !prefersBrailleSprite()) {
+		return renderHalfBlockSprite(handle, rows);
+	}
 	return renderBrailleSprite(handle, rows);
 }
 

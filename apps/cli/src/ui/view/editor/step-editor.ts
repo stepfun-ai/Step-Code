@@ -47,7 +47,9 @@ function isEditorRule(line: string): boolean {
 
 /** Keep the selected command prominent while leaving its description muted. */
 function createStepSelectListTheme(editorTheme: EditorTheme): EditorTheme["selectList"] {
-	const selected = (text: string) => theme.fg("accent", text);
+	// Bold on top of the accent color: color alone was too easy to miss next to
+	// the default-foreground rows (feedback issue-07fd7c41454f62cc follow-up).
+	const selected = (text: string) => theme.bold(theme.fg("accent", text));
 	const muted = (text: string) => theme.fg("muted", text);
 	return {
 		selectedPrefix: (text) => selected(text),

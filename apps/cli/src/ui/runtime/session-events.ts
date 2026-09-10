@@ -27,9 +27,12 @@ import { type AgentSessionEvent, createCompactionSummaryMessage, theme } from "@
 import { Spacer, Text } from "@step-harness/pi-tui";
 import {
 	BranchSummaryStatusIndicator,
+	buildStatusTips,
 	CompactionStatusIndicator,
 	RetryStatusIndicator,
+	StatusTipRotator,
 	ToolExecutionComponent,
+	WorkingStatusIndicator,
 } from "../view/index.ts";
 import type { RuntimeContext } from "./context.ts";
 
@@ -50,6 +53,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 	switch (event.type) {
 		case "agent_start":
 			if (ctx.presentation === "step") ctx.workingOutputTracker.reset();
+			ctx.turnEndedAbnormally = false;
 			ctx.pendingTools.clear();
 			ctx.stepSpinner?.clear();
 			// Restore main escape handler if retry handler is still active
@@ -61,6 +65,10 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			break;
 
 		case "turn_start":
+			// Pick one tip per TURN (not per agent run): steering/follow-up
+			// turns fire turn_start only, without a new agent_start.
+			ctx.statusTipRotator ??= new StatusTipRotator(buildStatusTips());
+			ctx.currentStatusTip = ctx.settingsManager.getStatusTips() ? ctx.statusTipRotator.next() : undefined;
 			if (ctx.settingsManager.getShowTerminalProgress()) {
 				ctx.ui.terminal.setProgress(true);
 			}
@@ -165,6 +173,9 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			if (event.message.role === "user") break;
 			if (ctx.presentation === "step" && event.message.role === "assistant") {
 				ctx.workingOutputTracker.complete(event.message);
+				if (event.message.stopReason === "aborted" || event.message.stopReason === "error") {
+					ctx.turnEndedAbnormally = true;
+				}
 			}
 			if (ctx.streamingComponent && event.message.role === "assistant") {
 				ctx.streamingMessage = event.message;
@@ -233,7 +244,19 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				ctx.pendingTools.set(event.toolCallId, component);
 			}
 			component.markExecutionStarted();
-			ctx.stepSpinner?.start(event.toolCallId);
+			ctx.stepSpinner?.start(event.toolCallId, event.toolName);
+			ctx.workingOutputTracker.notifyToolStarted();
+			// 工具在两条 assistant 消息之间执行时 turn_start 不会再来一次，
+			// 状态行可能已不存在——这里补位，动词跟随工具才有显示之处。
+			if (ctx.workingVisible && ctx.activeStatusIndicator?.kind !== "working") {
+				ctx.showWorkingStatusIndicator();
+			}
+			// Name the action immediately on tool start — never wait for the
+			// 4s verb tick, or short tools go unnamed (also covers the
+			// freshly-created indicator above).
+			if (ctx.activeStatusIndicator instanceof WorkingStatusIndicator) {
+				ctx.activeStatusIndicator.refreshVerb();
+			}
 			ctx.redraw.requestRender();
 			break;
 		}
@@ -253,6 +276,10 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				component.updateResult({ ...event.result, isError: event.isError });
 				ctx.pendingTools.delete(event.toolCallId);
 				ctx.stepSpinner?.stop(event.toolCallId);
+				// 工具结束不立刻降级动词：瞬时工具（read ~300ms）的动词如果
+				// 立刻换回 Working... 肉眼不可感知。保持最后动作，直到下一
+				// 个工具开始 / 模型思考 / 4s tick 自然过渡——刚完成的动作
+				// 停留显示不算谎言，看不见才是问题。
 				ctx.redraw.requestRender();
 			}
 			break;
@@ -263,6 +290,12 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				ctx.ui.terminal.setProgress(false);
 			}
 			ctx.clearStatusIndicator("working");
+			// Turn-done marker: only for normally-ended turns (aborted/error
+			// turns already show an error line in the transcript); stays
+			// until the next turn replaces the status row.
+			if (ctx.presentation === "step" && !ctx.turnEndedAbnormally) {
+				ctx.showTurnDoneIndicator(ctx.workingOutputTracker.snapshot().elapsedSeconds);
+			}
 			if (ctx.streamingComponent) {
 				ctx.chatContainer.removeChild(ctx.streamingComponent);
 				ctx.streamingComponent = undefined;

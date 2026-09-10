@@ -28,7 +28,7 @@ describe("InteractiveMode compaction events", () => {
 		initTheme("dark");
 		const enabled = {
 			chatContainer: new Container(),
-			settingsManager: { getShowCacheMissNotices: () => true },
+			settingsManager: { getShowCacheMissNotices: () => true, getStatusTips: () => false },
 		};
 		addCompactionCostNotice.call(enabled, { type: "compaction_cost", kind: "compaction", usage });
 		addCompactionCostNotice.call(enabled, {
@@ -42,7 +42,7 @@ describe("InteractiveMode compaction events", () => {
 
 		const disabled = {
 			chatContainer: new Container(),
-			settingsManager: { getShowCacheMissNotices: () => false },
+			settingsManager: { getShowCacheMissNotices: () => false, getStatusTips: () => false },
 		};
 		addCompactionCostNotice.call(disabled, { type: "compaction_cost", kind: "compaction", usage });
 		expect(disabled.chatContainer.children).toHaveLength(0);
@@ -151,7 +151,7 @@ describe("InteractiveMode compaction events", () => {
 			showStatus: vi.fn(),
 			clearStatusIndicator: vi.fn(),
 			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
-			settingsManager: { getShowTerminalProgress: () => false },
+			settingsManager: { getShowTerminalProgress: () => false, getStatusTips: () => false },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
@@ -206,7 +206,7 @@ describe("InteractiveMode compaction events", () => {
 			workingVisible: true,
 			showWorkingStatusIndicator: vi.fn(),
 			clearStatusIndicator: vi.fn(),
-			settingsManager: { getShowTerminalProgress: () => true },
+			settingsManager: { getShowTerminalProgress: () => true, getStatusTips: () => false },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};

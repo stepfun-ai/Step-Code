@@ -463,6 +463,86 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	// fd 缺失时的 Node 回退：@ 补全不允许因为一个二进制不在就静默变空。
+	describe("node fallback @ suggestions (no fd)", () => {
+		let rootDir = "";
+		let baseDir = "";
+
+		beforeEach(() => {
+			rootDir = mkdtempSync(join(tmpdir(), "pi-autocomplete-fallback-"));
+			baseDir = join(rootDir, "cwd");
+			mkdirSync(baseDir, { recursive: true });
+		});
+
+		afterEach(() => {
+			rmSync(rootDir, { recursive: true, force: true });
+		});
+
+		test("lists files and directories for empty @ query without fd", async () => {
+			setupFolder(baseDir, {
+				dirs: ["src"],
+				files: { "README.md": "readme" },
+			});
+
+			const provider = new CombinedAutocompleteProvider([], baseDir, null);
+			const line = "@";
+			const result = await getSuggestions(provider, [line], 0, line.length);
+
+			const values = result?.items.map((item) => item.value);
+			assert.ok(values?.includes("@README.md"), `expected @README.md in ${JSON.stringify(values)}`);
+			assert.ok(values?.includes("@src/"), `expected @src/ in ${JSON.stringify(values)}`);
+		});
+
+		test("filters by query and returns nested paths without fd", async () => {
+			setupFolder(baseDir, {
+				files: { "src/index.ts": "export {};\n" },
+			});
+
+			const provider = new CombinedAutocompleteProvider([], baseDir, null);
+			const line = "@index";
+			const result = await getSuggestions(provider, [line], 0, line.length);
+
+			const values = result?.items.map((item) => item.value);
+			assert.ok(values?.includes("@src/index.ts"), `expected nested path in ${JSON.stringify(values)}`);
+		});
+
+		test("skips ignored directories without fd", async () => {
+			setupFolder(baseDir, {
+				dirs: ["node_modules", "dist"],
+				files: {
+					"node_modules/pkg/index.js": "",
+					"dist/bundle.js": "",
+					"main.ts": "",
+				},
+			});
+
+			const provider = new CombinedAutocompleteProvider([], baseDir, null);
+			const line = "@";
+			const result = await getSuggestions(provider, [line], 0, line.length);
+
+			const values = result?.items.map((item) => item.value);
+			assert.ok(values?.includes("@main.ts"));
+			assert.ok(!values?.some((value) => value.includes("node_modules")), JSON.stringify(values));
+			assert.ok(!values?.some((value) => value.includes("dist/")), JSON.stringify(values));
+		});
+
+		test("scopes @src/ to the directory without fd", async () => {
+			setupFolder(baseDir, {
+				files: {
+					"src/app.ts": "",
+					"lib/helper.ts": "",
+				},
+			});
+
+			const provider = new CombinedAutocompleteProvider([], baseDir, null);
+			const line = "@src/app";
+			const result = await getSuggestions(provider, [line], 0, line.length);
+
+			const values = result?.items.map((item) => item.value);
+			assert.ok(values?.includes("@src/app.ts"), `expected scoped path in ${JSON.stringify(values)}`);
+		});
+	});
+
 	describe("dot-slash path completion", () => {
 		let baseDir = "";
 

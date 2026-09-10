@@ -89,68 +89,95 @@ describe("Step themes", () => {
 		});
 		expect(getResolvedThemeColors("step")).toMatchObject({
 			accent: "#ab9eff",
-			border: "#8577ff",
+			// 2026-09-09 品牌紫收缩：边框走 line，正文标题/列表符去紫，
+			// 紫锚点只剩工具行（toolTitle/mdCode=brand）与门面
+			border: "#434751",
 			muted: "#7e7e86",
 			userMessageBg: "#3d3b39",
 			userMessageText: "#e8e8ea",
-			mdHeading: "#ab9eff",
-			mdLink: "#ab9eff",
+			mdHeading: "#e8e8ea",
+			mdLink: "#82aaff",
 			mdCode: "#ab9eff",
-			mdListBullet: "#ab9eff",
-			syntaxKeyword: "#ff79d0",
-			syntaxFunction: "#a3e635",
-			syntaxVariable: "#a3e635",
-			syntaxType: "#a3e635",
+			mdListBullet: "#7e7e86",
+			toolTitle: "#ab9eff",
+			syntaxKeyword: "#e08fdf",
+			syntaxFunction: "#82aaff",
+			syntaxVariable: "#e8e8ea",
+			syntaxType: "#e8c076",
 		});
 		expect(getResolvedThemeColors("step-light")).toMatchObject({
 			accent: "#5b21b6",
-			border: "#6d28d9",
+			border: "#d9d5e4",
 			muted: "#5c5c66",
 			userMessageBg: "#e4e0dc",
-			mdHeading: "#5b21b6",
-			mdLink: "#5b21b6",
+			mdHeading: "#1a1a22",
+			mdLink: "#1d5dc2",
 			mdCode: "#5b21b6",
-			mdListBullet: "#5b21b6",
+			mdListBullet: "#5c5c66",
+			toolTitle: "#5b21b6",
 			syntaxKeyword: "#a21caf",
-			syntaxFunction: "#4d6b00",
-			syntaxVariable: "#4d6b00",
-			syntaxType: "#4d6b00",
+			syntaxFunction: "#1d5dc2",
+			syntaxVariable: "#1a1a22",
+			syntaxType: "#8a5a00",
 		});
 		expect(getThemeExportColors("step").pageBg).toBe("#0d1017");
 		expect(getThemeExportColors("step-light").pageBg).toBe("#fbfaff");
 		expect(isLightTheme("step-light")).toBe(true);
 	});
 
-	test.each(["sage", "step", "step-light"] as const)(
-		"%s prose uses one brand color and code uses separate slots",
-		(name) => {
-			setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+	test.each(["sage"] as const)("%s prose uses one brand color and code uses separate slots", (name) => {
+		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+		initTheme(name);
+		const markdown = getMarkdownTheme();
+		const brandAnsi = theme.getFgAnsi("accent");
+
+		for (const render of [markdown.heading, markdown.link, markdown.code, markdown.listBullet]) {
+			expect(render("sample")).toContain(brandAnsi);
+		}
+
+		const highlighted = highlightCode("export function greet(name: string) { return name; }", "typescript").join(
+			"\n",
+		);
+		expect(highlighted).toContain(`${theme.getFgAnsi("syntaxKeyword")}function`);
+		expect(highlighted).toContain(`${theme.getFgAnsi("syntaxFunction")}greet`);
+		expect(highlighted).not.toContain(`${brandAnsi}function`);
+	});
+
+	test("step 系正文不再一紫——品牌紫只锚行内代码（2026-09-09 收缩）", () => {
+		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+		for (const name of ["step", "step-light"] as const) {
 			initTheme(name);
 			const markdown = getMarkdownTheme();
-			const brandAnsi = theme.getFgAnsi("accent");
 
-			for (const render of [markdown.heading, markdown.link, markdown.code, markdown.listBullet]) {
-				expect(render("sample")).toContain(brandAnsi);
-			}
+			// 行内代码是品牌锚点（用户点名保留：文件名紫）
+			expect(markdown.code("sample")).toContain(theme.getFgAnsi("accent"));
+			// 标题=前景、列表符=muted、链接=语法蓝，全部让出品牌紫
+			expect(markdown.heading("sample")).toContain(theme.getFgAnsi("text"));
+			expect(markdown.heading("sample")).not.toContain(theme.getFgAnsi("accent"));
+			expect(markdown.listBullet("sample")).toContain(theme.getFgAnsi("muted"));
+			expect(markdown.link("sample")).toContain(theme.getFgAnsi("syntaxFunction"));
+			expect(markdown.link("sample")).not.toContain(theme.getFgAnsi("accent"));
 
 			const highlighted = highlightCode("export function greet(name: string) { return name; }", "typescript").join(
 				"\n",
 			);
 			expect(highlighted).toContain(`${theme.getFgAnsi("syntaxKeyword")}function`);
 			expect(highlighted).toContain(`${theme.getFgAnsi("syntaxFunction")}greet`);
-			expect(highlighted).not.toContain(`${brandAnsi}function`);
-		},
-	);
+			expect(highlighted).not.toContain(`${theme.getFgAnsi("accent")}function`);
+		}
+	});
 
 	test("Step text colors clear WCAG AA in truecolor and xterm-256 modes", () => {
 		const foregroundTokens = [
 			"text",
 			"muted",
 			"accent",
-			"border",
+			// border 已改为装饰线色（line），不承载文字语义，不参与 4.5 文字对比度契约
 			"success",
 			"error",
 			"warning",
+			"mdHeading",
+			"mdTableHeader",
 			"syntaxKeyword",
 			"syntaxFunction",
 			"syntaxVariable",

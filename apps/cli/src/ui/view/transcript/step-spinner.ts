@@ -16,6 +16,8 @@ export const STEP_SPINNER_INTERVAL_MS = 200;
 export interface StepToolSpinnerState {
 	readonly frame: string;
 	elapsedSeconds(toolCallId: string): number | null;
+	/** Name of the most recently started still-running tool, if any. */
+	currentToolName?(): string | undefined;
 }
 
 /** A lifecycle-owned clock; callers must invoke {@link dispose} on teardown. */
@@ -23,6 +25,7 @@ export class StepToolSpinnerClock implements StepToolSpinnerState {
 	private frameIndex = 0;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private readonly runningSince = new Map<string, number>();
+	private readonly runningToolNames = new Map<string, string | undefined>();
 	private readonly requestRender: () => void;
 
 	constructor(requestRender: () => void) {
@@ -33,10 +36,11 @@ export class StepToolSpinnerClock implements StepToolSpinnerState {
 		return STEP_SPINNER_FRAMES[this.frameIndex % STEP_SPINNER_FRAMES.length] ?? STEP_SPINNER_FRAMES[0];
 	}
 
-	start(toolCallId: string): void {
+	start(toolCallId: string, toolName?: string): void {
 		if (toolCallId.length === 0) return;
 		if (!this.runningSince.has(toolCallId)) {
 			this.runningSince.set(toolCallId, Date.now());
+			this.runningToolNames.set(toolCallId, toolName);
 		}
 		if (this.timer === null) {
 			this.timer = setInterval(() => {
@@ -48,12 +52,14 @@ export class StepToolSpinnerClock implements StepToolSpinnerState {
 
 	stop(toolCallId: string): void {
 		this.runningSince.delete(toolCallId);
+		this.runningToolNames.delete(toolCallId);
 		this.stopWhenIdle();
 	}
 
 	/** Stop every active row, resetting the next run to the first frame. */
 	clear(): void {
 		this.runningSince.clear();
+		this.runningToolNames.clear();
 		this.stopWhenIdle();
 	}
 
@@ -63,8 +69,15 @@ export class StepToolSpinnerClock implements StepToolSpinnerState {
 		return Math.max(0, Math.floor((Date.now() - started) / 1000));
 	}
 
+	currentToolName(): string | undefined {
+		let name: string | undefined;
+		for (const toolName of this.runningToolNames.values()) name = toolName ?? name;
+		return name;
+	}
+
 	dispose(): void {
 		this.runningSince.clear();
+		this.runningToolNames.clear();
 		if (this.timer !== null) {
 			clearInterval(this.timer);
 			this.timer = null;

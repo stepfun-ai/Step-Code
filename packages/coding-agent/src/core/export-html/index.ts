@@ -43,6 +43,7 @@ const USER_MESSAGE_COLOR_TOKENS = [
 	"text",
 	"muted",
 	"mdHeading",
+	"mdTableHeader",
 	"mdLink",
 	"mdLinkUrl",
 	"mdCode",

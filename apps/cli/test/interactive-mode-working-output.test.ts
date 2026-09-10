@@ -57,7 +57,8 @@ describe("interactive working output tracking", () => {
 			defaultEditor: { onEscape: undefined },
 			streamingComponent: { updateContent },
 			streamingMessage: undefined,
-			settingsManager: { getShowTerminalProgress: () => false },
+			settingsManager: { getShowTerminalProgress: () => false, getStatusTips: () => true },
+			statusTipRotator: { next: () => "tip" },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			session: { retryAttempt: 0 },
@@ -126,7 +127,8 @@ describe("interactive working output tracking", () => {
 			defaultEditor: { onEscape: undefined },
 			streamingComponent: { updateContent },
 			streamingMessage: undefined,
-			settingsManager: { getShowTerminalProgress: () => false },
+			settingsManager: { getShowTerminalProgress: () => false, getStatusTips: () => true },
+			statusTipRotator: { next: () => "tip" },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			session: { retryAttempt: 0 },
@@ -154,4 +156,46 @@ describe("interactive working output tracking", () => {
 		expect(complete).not.toHaveBeenCalled();
 		expect(updateContent).toHaveBeenCalledWith(partial, true);
 	});
+});
+
+it("agent_start 先于 turn_start 不因懒构建 tip 崩溃，且一轮只取一条", async () => {
+	const fakeThis = {
+		isInitialized: true,
+		options: { tuiStyle: "step" },
+		presentation: "step",
+		footer: { invalidate: vi.fn() },
+		workingOutputTracker: new WorkingOutputTracker(),
+		turnEndedAbnormally: false,
+		// 故意不提供 statusTipRotator：懒构建必须发生在 turn_start
+		currentStatusTip: undefined,
+		statusTipRotator: undefined,
+		pendingTools: new Map(),
+		stepSpinner: undefined,
+		retryEscapeHandler: undefined,
+		defaultEditor: { onEscape: undefined },
+		settingsManager: { getShowTerminalProgress: () => false, getStatusTips: () => true },
+		ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+		redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
+		session: { retryAttempt: 0 },
+		maybeShowCacheMissNotice: vi.fn(),
+		clearStatusIndicator: vi.fn(),
+		workingVisible: false,
+	};
+	const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+		this: typeof fakeThis,
+		event: AgentSessionEvent,
+	) => Promise<void>;
+
+	// 真实事件顺序：agent_start 先来（曾经在此抛 undefined.next()）
+	await expect(handleEvent.call(fakeThis, { type: "agent_start" })).resolves.toBeUndefined();
+	expect(fakeThis.currentStatusTip).toBeUndefined();
+
+	await handleEvent.call(fakeThis, { type: "turn_start" });
+	expect(typeof fakeThis.currentStatusTip).toBe("string");
+
+	// 同一轮内再触发 turn_start 之外的路径不重复取条由 rotator 语义保证；
+	// 第二轮 turn_start 取下一条且不与第一条相同
+	const first = fakeThis.currentStatusTip;
+	await handleEvent.call(fakeThis, { type: "turn_start" });
+	expect(fakeThis.currentStatusTip).not.toBe(first);
 });

@@ -170,9 +170,11 @@ import {
 	IdleStatus,
 	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	type StatusIndicator,
+	TurnDoneIndicator,
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./view/chrome/status-indicator.ts";
+import type { StatusTipRotator } from "./view/chrome/status-tips.ts";
 import { StepWelcomeComponent } from "./view/chrome/step-welcome.ts";
 import { ExtensionEditorComponent } from "./view/dialogs/extension-editor.ts";
 import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
@@ -210,6 +212,37 @@ import { UserMessageComponent } from "./view/transcript/user-message.ts";
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
 	setExpanded(expanded: boolean): void;
+}
+
+/**
+ * Step's presentation trades the Ctrl+L model selector for a full screen
+ * repaint, giving users a manual recovery path when a terminal garbles after
+ * scrolling or resize (feedback issue-9ad367d596a230a9). The selector stays
+ * reachable through /model and Ctrl+P model cycling. An explicit user binding
+ * for either action always wins over this remap.
+ */
+/** Exported for the acceptance test suite (tui-acceptance-interactions.test.ts). */
+// 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/input-dispatch.ts —— 键位语义属于交互编排。
+export function applyStepKeybindingRemap(keybindings: KeybindingsManager): void {
+	const userBindings = keybindings.getUserBindings();
+	if (userBindings["app.redraw"] !== undefined || userBindings["app.model.select"] !== undefined) return;
+	keybindings.setUserBindings({ ...userBindings, "app.redraw": "ctrl+l", "app.model.select": [] });
+}
+
+/**
+ * Commands pinned to the top of Step's "/" completion list. Users reach for
+ * model/effort/mode switches most often, so they lead the list instead of
+ * following builtin registration order (feedback issue-c6b8e3bb543482b7).
+ */
+const STEP_SLASH_COMMAND_PRIORITY: readonly string[] = ["model", "permissions", "effort", "thinking", "plan"];
+
+/** Exported for the acceptance test suite (tui-acceptance-interactions.test.ts). */
+// 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/input-dispatch.ts —— 斜杠命令分派属于交互编排。
+export function orderStepSlashCommands<T extends { name: string }>(commands: readonly T[]): T[] {
+	const priority = new Map(STEP_SLASH_COMMAND_PRIORITY.map((name, index) => [name, index]));
+	return [...commands].sort(
+		(a, b) => (priority.get(a.name) ?? priority.size) - (priority.get(b.name) ?? priority.size),
+	);
 }
 
 function isExpandable(obj: unknown): obj is Expandable {
@@ -479,6 +512,17 @@ export class InteractiveMode {
 	workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	readonly workingOutputTracker = new WorkingOutputTracker();
+	// Set when the last assistant message ended aborted/error; the turn-done
+	// marker is suppressed for such turns. Mutated by the session-events runtime
+	// (agent_start/message_end) and read at agent_end through RuntimeContext.
+	turnEndedAbnormally = false;
+	// One tip per turn under the working row (CC spinner-tip position). Pool is
+	// built lazily: field initializers run before the constructor applies custom
+	// keybindings, and tips render key names via keyText(). The rotator is
+	// advanced by the session-events runtime at turn_start; currentStatusTip is
+	// read back here by showWorkingStatusIndicator().
+	statusTipRotator: StatusTipRotator | undefined = undefined;
+	currentStatusTip: string | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
@@ -663,6 +707,7 @@ export class InteractiveMode {
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create(this.agentDir);
+		if (options.tuiStyle === "step") applyStepKeybindingRemap(this.keybindings);
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
@@ -846,8 +891,9 @@ export class InteractiveMode {
 			}
 		}
 
+		const combinedCommands = [...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList];
 		return new CombinedAutocompleteProvider(
-			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
+			this.presentation === "step" ? orderStepSlashCommands(combinedCommands) : combinedCommands,
 			this.sessionManager.getCwd(),
 			this.fdPath,
 		);
@@ -2369,17 +2415,30 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Turn-done marker replacing the working row after agent_end (duration + clock). */
+	showTurnDoneIndicator(durationSeconds: number): void {
+		// Defensive: dispose any lingering indicator (retry/compaction) so its
+		// timers cannot outlive the marker replacing it.
+		this.activeStatusIndicator?.dispose();
+		this.activeStatusIndicator = undefined;
+		this.statusContainer.clear();
+		this.statusContainer.addChild(new TurnDoneIndicator(durationSeconds));
+	}
+
 	showWorkingStatusIndicator(): void {
-		this.showStatusIndicator(
-			new WorkingStatusIndicator(
-				this.ui,
-				this.workingMessage ?? this.defaultWorkingMessage,
-				this.workingIndicatorOptions ??
-					(this.presentation === "step" ? { intervalMs: STEP_WORKING_INDICATOR_INTERVAL_MS } : undefined),
-				this.presentation,
-				this.presentation === "step" ? this.workingOutputTracker : undefined,
-			),
+		const indicator = new WorkingStatusIndicator(
+			this.ui,
+			this.workingMessage ?? this.defaultWorkingMessage,
+			this.workingIndicatorOptions ??
+				(this.presentation === "step" ? { intervalMs: STEP_WORKING_INDICATOR_INTERVAL_MS } : undefined),
+			this.presentation,
+			this.presentation === "step" ? this.workingOutputTracker : undefined,
+			// The working verb follows the actually-running tool; the mood
+			// rotation only fills the gaps between tools.
+			this.presentation === "step" ? () => this.stepSpinner?.currentToolName() : undefined,
 		);
+		indicator.setStatusTip(this.currentStatusTip);
+		this.showStatusIndicator(indicator);
 	}
 
 	private setWorkingVisible(visible: boolean): void {
@@ -2847,6 +2906,8 @@ export class InteractiveMode {
 	 * occupy, so the rendered document keeps its length and nothing moves. The bottom margin
 	 * holds the overlay off the rows the dock draws under the editor, so the dialog lands on
 	 * the same rows it would have taken inline and the footer stays visible.
+	 * Belongs to approval/dialog-mounting when interactive-mode.ts is split
+	 * (structure plan step 4).
 	 */
 	private mountExtensionDialog(component: Component, opts?: ExtensionUIDialogOptions): () => void {
 		if (opts?.overlay) {
@@ -4262,6 +4323,7 @@ export class InteractiveMode {
 					quietStartup: this.settingsManager.getQuietStartup(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
+					statusTips: this.settingsManager.getStatusTips(),
 					tuiMode: this.ui.mode,
 					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
@@ -4420,6 +4482,10 @@ export class InteractiveMode {
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
+					},
+					onStatusTipsChange: (enabled) => {
+						this.settingsManager.setStatusTips(enabled);
+						// Applies next turn: the tip is picked in turn_start.
 					},
 					onTuiModeChange: (mode) => {
 						if (!this.switchTuiMode(mode)) {

@@ -9,8 +9,11 @@ export {
 	CompactionStatusIndicator,
 	RetryStatusIndicator,
 	StatusIndicator,
+	TurnDoneIndicator,
 	WorkingOutputTracker,
+	WorkingStatusIndicator,
 } from "./chrome/status-indicator.ts";
+export { buildStatusTips, StatusTipRotator } from "./chrome/status-tips.ts";
 export { StepWelcomeComponent } from "./chrome/step-welcome.ts";
 export { AssistantMessageComponent } from "./transcript/assistant-message.ts";
 export { StepToolSpinnerClock } from "./transcript/step-spinner.ts";
