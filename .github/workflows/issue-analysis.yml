@@ -281,8 +281,9 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: ${{ steps.workdir.outputs.name }}/package-lock.json
+
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Install system dependencies (Linux)
         if: needs.authorize.outputs.runner_os == 'linux'
@@ -323,11 +324,11 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ steps.workdir.outputs.name }}
-        run: npm ci --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
         working-directory: ${{ steps.workdir.outputs.name }}
-        run: npm run build
+        run: pnpm run build
 
       - name: Write auth.json
         id: write_auth

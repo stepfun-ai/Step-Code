@@ -7,7 +7,7 @@
 #   ./scripts/build-binaries.sh [--product <step>] [--skip-install] [--skip-deps] [--skip-build] [--offline-model-data] [--platform <platform>] [--out <dir>]
 #
 # Options:
-#   --skip-install       Skip npm ci
+#   --skip-install       Skip pnpm install
 #   --skip-deps          Skip installing cross-platform dependencies
 #   --skip-build         Skip the package build
 #   --offline-model-data Build with bundled model data instead of refreshing it
@@ -144,17 +144,19 @@ fi
 
 if [[ "$SKIP_INSTALL" == "false" ]]; then
     echo "==> Installing dependencies..."
-    npm ci --ignore-scripts
+    pnpm install --frozen-lockfile --ignore-scripts
 else
-    echo "==> Skipping npm ci (--skip-install)"
+    echo "==> Skipping pnpm install (--skip-install)"
 fi
 
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
-    # npm ci only installs optional deps for the current platform. Install the
-    # cross-platform packages in isolation so npm does not re-resolve and mutate
-    # the workspace dependency graph, which can trigger npm/arborist failures.
+    # A workspace install only installs optional deps for the current platform.
+    # Install the cross-platform packages in isolation so the package manager does
+    # not re-resolve and mutate the workspace dependency graph. npm is used here
+    # deliberately for this throwaway, lockfile-free fetch of platform-specific
+    # optional binaries; it never touches the pnpm workspace.
     NATIVE_DEPS_DIR=$(mktemp -d)
     cleanup_native_deps() {
         rm -rf "$NATIVE_DEPS_DIR"
@@ -191,10 +193,10 @@ fi
 if [[ "$SKIP_BUILD" == "false" ]]; then
     if [[ "$OFFLINE_MODEL_DATA" == "true" ]]; then
         echo "==> Building all packages with bundled model data..."
-        npm run build:offline
+        pnpm run build:offline
     else
         echo "==> Building all packages..."
-        npm run build
+        pnpm run build
     fi
 else
     echo "==> Skipping package build (--skip-build)"
@@ -290,7 +292,7 @@ for platform in "${PLATFORMS[@]}"; do
     if [[ -f CHANGELOG.md ]]; then
         cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
     fi
-    cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm "$OUTPUT_DIR/$platform/"
+    node ../../scripts/copy-photon-wasm.mjs "$OUTPUT_DIR/$platform"
     mkdir -p "$OUTPUT_DIR/$platform/theme"
     cp dist/modes/interactive/theme/*.json "$OUTPUT_DIR/$platform/theme/"
     mkdir -p "$OUTPUT_DIR/$platform/assets"

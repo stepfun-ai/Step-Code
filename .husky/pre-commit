@@ -10,7 +10,7 @@ fi
 
 # Run the check script (formatting, linting, and type checking)
 echo "Running formatting, linting, and type checking..."
-npm run check
+pnpm run check
 if [ $? -ne 0 ]; then
   echo "❌ Checks failed. Please fix the errors before committing."
   exit 1
@@ -19,7 +19,7 @@ fi
 RUN_BROWSER_SMOKE=0
 for file in $STAGED_FILES; do
   case "$file" in
-    packages/ai/*|packages/web-ui/*|package.json|package-lock.json)
+    packages/ai/*|packages/web-ui/*|package.json|pnpm-lock.yaml)
       RUN_BROWSER_SMOKE=1
       break
       ;;
@@ -28,7 +28,7 @@ done
 
 if [ $RUN_BROWSER_SMOKE -eq 1 ]; then
   echo "Running browser smoke check..."
-  npm run check:browser-smoke
+  pnpm run check:browser-smoke
   if [ $? -ne 0 ]; then
     echo "❌ Browser smoke check failed."
     exit 1

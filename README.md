@@ -53,10 +53,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.m
 ## Development
 
 ```bash
-npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
-npm run build         # Refresh model data, then build all packages
-npm run build:offline # Rebuild using existing model data without network access
-npm run check         # Lint, format, and type check
+pnpm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
+pnpm run build         # Refresh model data, then build all packages
+pnpm run build:offline # Rebuild using existing model data without network access
+pnpm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
 pnpm step            # Run the Step CLI entrypoint from sources
@@ -91,16 +91,16 @@ The source archive includes the generated provider model data used for the relea
 
 ## Distribution and supply-chain hardening
 
-We treat npm dependency changes as reviewed code changes.
+We treat pnpm dependency changes as reviewed code changes.
 
 - Direct external dependencies are pinned to exact versions. Internal workspace packages remain version-ranged.
-- `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during npm resolution.
-- `package-lock.json` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
-- `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
+- `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during resolution, and `link-workspace-packages=true` / `prefer-workspace-packages=true` so range-specified internal packages link to local workspace source under pnpm.
+- `pnpm-lock.yaml` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
+- `pnpm run check` verifies pinned direct deps and native TypeScript import compatibility. `pnpm install --frozen-lockfile` guards lockfile drift.
 - Release artifacts are standalone Step binaries and platform installers; this repository does not publish npm packages.
-- `npm run release:local` is retained for internal runtime smoke tests and dependency validation, not for distribution.
+- `pnpm run release:local` is retained for internal runtime smoke tests and dependency validation, not for distribution.
 - Internal build and smoke-test installs use `--ignore-scripts` where supported.
-- CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
+- CI installs with `pnpm install --frozen-lockfile --ignore-scripts`, and a scheduled GitHub workflow runs `pnpm audit --prod`.
 - Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 
 ## Share your OSS coding agent sessions

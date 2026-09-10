@@ -120,7 +120,7 @@ tar -tzf "$temporary_archive" > "$manifest"
 
 required_paths=(
     "package.json"
-    "package-lock.json"
+    "pnpm-lock.yaml"
     "scripts/build-binaries.sh"
     "packages/ai/src/models.generated.ts"
     "packages/ai/src/image-models.generated.ts"

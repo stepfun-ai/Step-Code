@@ -12,16 +12,15 @@
 		"packages/coding-agent/examples/extensions/sandbox",
 		"packages/coding-agent/examples/extensions/gondolin"
 	],
+	"packageManager": "pnpm@9.15.9",
 	"scripts": {
-		"clean": "npm run clean --workspaces",
+		"clean": "pnpm -r --if-present clean",
 		"build": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
 		"build:offline": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../ai && npm run build:offline && cd ../agent && npm run build && cd ../coding-agent && npm run build",
 		"build:binaries": "bash scripts/build-binaries.sh --product step --offline-model-data",
-		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:layer-direction && npm run check:workspace-registry && npm run check:tui-no-ai && npm run check:coding-agent-entry-freeze && npm run check:shrinkwrap && npm run check:install-lock:coding-agent && tsgo --noEmit && npm run check:browser-smoke",
+		"check": "biome check --write --error-on-warnings . && pnpm run check:pinned-deps && pnpm run check:ts-imports && pnpm run check:layer-direction && pnpm run check:workspace-registry && pnpm run check:tui-no-ai && pnpm run check:coding-agent-entry-freeze && tsgo --noEmit && pnpm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
-		"check:shrinkwrap": "node scripts/generate-coding-agent-shrinkwrap.mjs --check",
-		"check:install-lock:coding-agent": "node scripts/generate-coding-agent-install-lock.mjs --check",
 		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",
 		"check:layer-direction": "node scripts/check-layer-direction.mjs",
 		"check:workspace-registry": "node scripts/check-workspace-registry.mjs",
@@ -37,15 +36,13 @@
 		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
 		"profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
 		"step": "tsx --tsconfig tsconfig.json packages/coding-agent/src/step-cli.ts",
-		"test": "npm run test:scripts && npm run test --workspaces --if-present",
+		"test": "pnpm run test:scripts && pnpm -r --if-present test",
 		"test:scripts": "node --test scripts/*.test.mjs",
-		"version:patch": "npm version patch --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
-		"version:minor": "npm version minor --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
-		"version:major": "npm version major --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
-		"version:set": "npm version --workspaces --no-workspaces-update",
+		"version:patch": "pnpm -r exec npm version patch --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:minor": "pnpm -r exec npm version minor --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:major": "pnpm -r exec npm version major --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:set": "pnpm -r exec npm version --no-git-tag-version",
 		"release:local": "node scripts/local-release.mjs",
-		"shrinkwrap:coding-agent": "node scripts/generate-coding-agent-shrinkwrap.mjs",
-		"install-lock:coding-agent": "node scripts/generate-coding-agent-install-lock.mjs",
 		"release:step": "node scripts/release.mjs --step",
 		"release:bundle": "node infra/release/release-bundle.mjs",
 		"release:fix-links": "node scripts/release-notes.mjs fix-github-releases",
@@ -61,17 +58,18 @@
 		"husky": "9.1.7",
 		"shx": "0.4.0",
 		"tsx": "4.22.1",
-		"typescript": "5.9.3"
+		"typescript": "5.9.3",
+		"yaml": "2.9.0"
 	},
 	"engines": {
 		"node": ">=22.19.0"
 	},
 	"version": "0.3.1",
-	"overrides": {
-		"protobufjs": "7.6.5",
-		"rimraf": "6.1.2",
-		"gaxios": {
-			"rimraf": "6.1.2"
+	"pnpm": {
+		"overrides": {
+			"protobufjs": "7.6.5",
+			"rimraf": "6.1.2",
+			"gaxios>rimraf": "6.1.2"
 		}
 	}
 }

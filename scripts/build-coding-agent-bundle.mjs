@@ -9,7 +9,8 @@ import { build } from "esbuild";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const codingAgentDir = join(repoRoot, "packages", "coding-agent");
-const aiDistDir = join(repoRoot, "packages", "ai", "dist");
+const aiDir = join(repoRoot, "packages", "ai");
+const aiDistDir = join(aiDir, "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
 const bundleDir = join(codingAgentDistDir, "bundle");
 const stepBuildDefines = readStepBuildDefines();
@@ -70,7 +71,7 @@ const httpsProxyAgentNamedExportPlugin = {
 			() => ({
 				contents: 'export { HttpsProxyAgent } from "https-proxy-agent";',
 				loader: "js",
-				resolveDir: repoRoot,
+				resolveDir: aiDir,
 			}),
 		);
 	},
