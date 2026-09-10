@@ -119,7 +119,7 @@ install_managed_tools() {
 path_hint() {
 	# Emit the manual instruction used both when PATH edits are opted out and as
 	# the reminder for the current (already-started) shell.
-	printf 'add %s to PATH for the current shell:\n  export PATH="%s:$PATH"\n' "$INSTALL_DIR" "$INSTALL_DIR" >&2
+	printf 'add %s to PATH for the current shell:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >&2
 }
 
 profile_targets() {
@@ -185,11 +185,11 @@ configure_shell_path() {
 	if [[ -n "${STEP_NO_MODIFY_PATH:-}" ]]; then path_hint; return 0; fi
 
 	# The install dir is interpolated into a shell-sourced file. Refuse to edit an
-	# rc when the path contains characters that could break quoting or inject a
+	# rc when a path contains characters that could break quoting or inject a
 	# command, and fall back to a manual hint instead.
-	case "$INSTALL_DIR" in
+	case "${INSTALL_DIR}:${AGENT_DIR}/bin" in
 		*'"'* | *'`'* | *'$'* | *$'\n'*)
-			printf 'note: install dir contains characters unsafe to write into a shell profile; add it to PATH manually:\n  export PATH="%s:$PATH"\n' "$INSTALL_DIR" >&2
+			printf 'note: install dir contains characters unsafe to write into a shell profile; add it to PATH manually:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$AGENT_DIR" >&2
 			return 0
 			;;
 	esac
@@ -205,7 +205,7 @@ configure_shell_path() {
 			if mkdir -p "$(dirname "$fishcfg")" 2>/dev/null; then
 				if [[ -f "$fishcfg" ]] && grep -qxF '# step-cli' "$fishcfg" 2>/dev/null && ! strip_step_block "$fishcfg"; then
 					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$fishcfg" >&2
-				elif printf '\n# step-cli\nfish_add_path "%s"\n# step-cli end\n' "$INSTALL_DIR" >>"$fishcfg"; then
+				elif printf '\n# step-cli\nfish_add_path "%s" "%s/bin"\n# step-cli end\n' "$INSTALL_DIR" "$AGENT_DIR" >>"$fishcfg"; then
 					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$fishcfg"
 					updated=1
 				fi
@@ -213,7 +213,7 @@ configure_shell_path() {
 			;;
 		csh | tcsh)
 			# csh/tcsh use a separate rc and `setenv` syntax we do not manage.
-			printf 'note: %s is not auto-configured; add this to your ~/.%src:\n  setenv PATH "%s:$PATH"\n' "$shell_name" "$shell_name" "$INSTALL_DIR" >&2
+			printf 'note: %s is not auto-configured; add this to your ~/.%src:\n  setenv PATH "%s:%s/bin:$PATH"\n' "$shell_name" "$shell_name" "$INSTALL_DIR" "$AGENT_DIR" >&2
 			return 0
 			;;
 		*)
@@ -227,7 +227,7 @@ configure_shell_path() {
 					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$rc" >&2
 					continue
 				fi
-				if printf '\n# step-cli\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:$PATH" ;;\nesac\n# step-cli end\n' "$INSTALL_DIR" "$INSTALL_DIR" >>"$rc"; then
+				if printf '\n# step-cli\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:%s/bin:$PATH" ;;\nesac\n# step-cli end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >>"$rc"; then
 					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$rc"
 					updated=1
 				fi

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Changed the default permission preset to Bypass when no CLI flag, `STEP_*` env var, or persisted preset is set; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
 - Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
