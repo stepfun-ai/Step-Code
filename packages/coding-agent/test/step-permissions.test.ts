@@ -16,11 +16,11 @@ describe("Step permission presets", () => {
 	it("exposes the four stable presets in cycle order", () => {
 		expect(STEP_PERMISSION_PRESETS.map((preset) => preset.id)).toEqual(["ask", "read-only", "bypass", "autopilot"]);
 		const controller = new StepPermissionController({ env: {} });
-		expect(controller.getState().preset).toBe("ask");
-		expect(controller.cycle().preset).toBe("read-only");
-		expect(controller.cycle().preset).toBe("bypass");
+		expect(controller.getState().preset).toBe("bypass");
 		expect(controller.cycle().preset).toBe("autopilot");
 		expect(controller.cycle().preset).toBe("ask");
+		expect(controller.cycle().preset).toBe("read-only");
+		expect(controller.cycle().preset).toBe("bypass");
 		expect(
 			new StepPermissionController({
 				env: { STEP_PERMISSION_PRESET: "confirm" },
