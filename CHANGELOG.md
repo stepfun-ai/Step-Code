@@ -21,6 +21,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Fixed the Windows and Unix installers not persisting PATH, so `step` was not runnable in a new shell after `irm .../install.ps1 | iex` (or `curl | sh`). The installers now add the install dir and managed tools bin to the user PATH idempotently: `install.ps1` writes `HKCU\Environment` directly (preserving `%VAR%` entries un-expanded, avoiding `setx` truncation) and broadcasts `WM_SETTINGCHANGE`; `install.sh` appends a marker-guarded `export PATH` to the shell rc. Both honor `STEP_INSTALL_DIR`/`STEP_CODING_AGENT_DIR` and degrade to a printed advisory when persistence fails.
 - Fixed task history and branch restoration, ID reuse across sibling branches, and acceptance of cyclic dependencies.
 - Fixed inconsistent plan entry paths and approval of missing or empty plans; plan mode now follows the active session branch.
 - Fixed the Step queued-message preview and `update_plan` plan text dropping four characters at every wrap point in narrow terminals.

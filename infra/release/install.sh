@@ -116,6 +116,39 @@ install_managed_tools() {
 	install_managed_tool rg rg "$rg_asset" BurntSushi/ripgrep ''
 }
 
+append_path_line() {
+	# Append a marker-guarded line to a shell rc file, creating it if needed.
+	# The marker is grepped for FIRST so re-runs / self-update never duplicate it.
+	local rc_file="$1" marker="$2" line="$3"
+	[[ -n "$rc_file" ]] || return 0
+	if [[ -f "$rc_file" ]] && grep -qF -- "$marker" "$rc_file"; then return 0; fi
+	mkdir -p "$(dirname "$rc_file")"
+	printf '\n%s\n%s\n' "$marker" "$line" >>"$rc_file"
+}
+
+persist_path() {
+	# Persist INSTALL_DIR + AGENT_DIR/bin onto PATH for *future* shells by editing
+	# the user's shell rc, and ALWAYS print a source-able snippet below: rc edits
+	# only affect newly opened shells, and under `curl | sh` we cannot mutate the
+	# parent shell (there is no WM_SETTINGCHANGE analog as on Windows).
+	local marker='# added by step-cli installer'
+	local line="export PATH=\"${INSTALL_DIR}:${AGENT_DIR}/bin:\$PATH\""
+	local shell_name
+	shell_name="$(basename "${SHELL:-}")"
+	case "$shell_name" in
+		zsh) append_path_line "${HOME}/.zshrc" "$marker" "$line" ;;
+		bash) append_path_line "${HOME}/.bashrc" "$marker" "$line" ;;
+		*)
+			# $SHELL unset or unrecognized: edit ~/.profile, plus the rc of the shell
+			# we are actually running under when that is still determinable.
+			append_path_line "${HOME}/.profile" "$marker" "$line"
+			if [[ -n "${ZSH_VERSION:-}" ]]; then append_path_line "${HOME}/.zshrc" "$marker" "$line"
+			elif [[ -n "${BASH_VERSION:-}" ]]; then append_path_line "${HOME}/.bashrc" "$marker" "$line"; fi
+			;;
+	esac
+	printf 'to use step in the current shell, run:\n  %s\n' "$line"
+}
+
 main() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -172,6 +205,7 @@ main() {
 	install_managed_tools
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
 	printf 'installed Step CLI %s to %s\n' "$VERSION" "$destination"
+	persist_path
 }
 
 main "$@"
