@@ -9,7 +9,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createSessionManager } from "../src/main.ts";
 
-const cliPath = resolve(__dirname, "../src/cli.ts");
+const cliPath = resolve(__dirname, "../src/step-cli.ts");
 const tempDirs: string[] = [];
 
 afterEach(() => {

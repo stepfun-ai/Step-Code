@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
-const cliPath = resolve(__dirname, "../src/cli.ts");
+const cliPath = resolve(__dirname, "../src/step-cli.ts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -57,7 +57,7 @@ describe("--session invalid file handling", () => {
 		const result = await runCli(["--session", sessionFile, "-p", "hi"], projectDir, agentDir);
 
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain(`Error: Session file is not a valid pi session: ${sessionFile}`);
+		expect(result.stderr).toContain(`Error: Session file is not a valid step session: ${sessionFile}`);
 		expect(result.stderr).not.toContain("SessionManager.open");
 		expect(result.stderr).not.toContain("at ");
 		expect(readFileSync(sessionFile, "utf8")).toBe(originalContent);

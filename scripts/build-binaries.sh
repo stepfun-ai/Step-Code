@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
 #
-# Build Pi and/or Step binaries for all platforms locally.
-# Mirrors .github/workflows/build-binaries.yml
+# Build Step binaries for all platforms locally.
+# Mirrors .github/workflows/build-step-binaries.yml
 #
 # Usage:
-#   ./scripts/build-binaries.sh [--product <pi|step|both>] [--skip-install] [--skip-deps] [--skip-build] [--offline-model-data] [--platform <platform>] [--out <dir>]
+#   ./scripts/build-binaries.sh [--product <step>] [--skip-install] [--skip-deps] [--skip-build] [--offline-model-data] [--platform <platform>] [--out <dir>]
 #
 # Options:
 #   --skip-install       Skip npm ci
 #   --skip-deps          Skip installing cross-platform dependencies
 #   --skip-build         Skip the package build
 #   --offline-model-data Build with bundled model data instead of refreshing it
-#   --product <name>     Executables to build/archive (default: both; pi, step, or both)
+#   --product <name>     Executables to build/archive (default: step)
 #   --platform <name>    Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64)
 #   --out <dir>          Output directory (default: packages/coding-agent/binaries)
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
-#     pi-windows-arm64.zip
+#     step-darwin-arm64.tar.gz
+#     step-darwin-x64.tar.gz
+#     step-linux-x64.tar.gz
+#     step-linux-arm64.tar.gz
+#     step-windows-x64.zip
+#     step-windows-arm64.zip
 #
-# With --product step, the same platform set is emitted as step-*.tar.gz/zip
-# and contains only the Step executable.
+# Each archive contains only the Step executable.
 
 set -euo pipefail
 
@@ -37,8 +36,8 @@ SKIP_BUILD=false
 OFFLINE_MODEL_DATA=false
 PLATFORM=""
 OUTPUT_DIR=""
-PRODUCT="both"
-ARCHIVE_PREFIX="pi"
+PRODUCT="step"
+ARCHIVE_PREFIX="step"
 
 # Step's product identity is independent from the upstream Pi package version.
 # Release CI supplies these values from the tag; local/source builds use the
@@ -89,17 +88,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PRODUCT" in
-    pi|step|both)
+    step)
         ;;
     *)
         echo "Invalid product: $PRODUCT"
-        echo "Valid products: pi, step, both"
+        echo "Valid products: step"
         exit 1
         ;;
 esac
-if [[ "$PRODUCT" == "step" ]]; then
-    ARCHIVE_PREFIX="step"
-fi
 
 # A source archive does not contain `.git`, so a commit is optional there. For
 # local builds, include a short commit when it is available. These canonical
@@ -259,20 +255,11 @@ for platform in "${PLATFORMS[@]}"; do
     # worker must be present in the compiled executable.
     #
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
-    # standalone binary before pi starts (see #7684).
-    if [[ "$PRODUCT" != "step" ]]; then
-        if [[ "$platform" == windows-* ]]; then
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
-        else
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
-        fi
-    fi
-    if [[ "$PRODUCT" != "pi" ]]; then
-        if [[ "$platform" == windows-* ]]; then
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
-        else
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
-        fi
+    # standalone binary before step starts (see #7684).
+    if [[ "$platform" == windows-* ]]; then
+        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
+    else
+        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
     fi
 done
 
@@ -369,10 +356,8 @@ echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
-        if [[ "$PRODUCT" != "step" ]]; then echo "  $OUTPUT_DIR/$platform/pi.exe"; fi
-        if [[ "$PRODUCT" != "pi" ]]; then echo "  $OUTPUT_DIR/$platform/step.exe"; fi
+        echo "  $OUTPUT_DIR/$platform/step.exe"
     else
-        if [[ "$PRODUCT" != "step" ]]; then echo "  $OUTPUT_DIR/$platform/pi"; fi
-        if [[ "$PRODUCT" != "pi" ]]; then echo "  $OUTPUT_DIR/$platform/step"; fi
+        echo "  $OUTPUT_DIR/$platform/step"
     fi
 done

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
-const cliPath = resolve(__dirname, "../src/cli.ts");
+const cliPath = resolve(__dirname, "../src/step-cli.ts");
 
 const tempDirs: string[] = [];
 
@@ -30,7 +30,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	const tempRoot = createTempDir();
 	const agentDir = join(tempRoot, "agent");
 	const projectDir = join(tempRoot, "project");
-	const projectConfigDir = join(projectDir, ".pi");
+	const projectConfigDir = join(projectDir, ".step-cli");
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(projectConfigDir, { recursive: true });
 
