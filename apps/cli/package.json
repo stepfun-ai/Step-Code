@@ -1,0 +1,22 @@
+{
+	"name": "@step-harness/cli",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#*": "./src/*.ts"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "npm run build:unbundled",
+		"build:unbundled": "tsgo -p tsconfig.build.json",
+		"typecheck": "tsgo -p tsconfig.build.json --noEmit",
+		"dev": "tsx --tsconfig ../../tsconfig.json src/main.ts",
+		"test": "vitest --run --passWithNoTests",
+		"smoke": "node ../../scripts/smoke-apps-cli.mjs"
+	}
+}

@@ -168,7 +168,6 @@ for (const entry of [
 	join(codingAgentDistDir, "step-cli.js"),
 	join(codingAgentDistDir, "index.js"),
 	join(codingAgentDistDir, "rpc-entry.js"),
-	join(codingAgentDistDir, "client", "index.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
 	join(aiDistDir, "api", "bedrock-converse-stream.js"),
 	join(aiDistDir, "auth", "oauth", "anthropic.js"),
@@ -187,7 +186,6 @@ const mainResult = await build({
 	entryPoints: {
 		cli: join(codingAgentDistDir, "cli.js"),
 		step: join(codingAgentDistDir, "step-cli.js"),
-		client: join(codingAgentDistDir, "client", "index.js"),
 		index: join(codingAgentDistDir, "index.js"),
 		"rpc-entry": join(codingAgentDistDir, "rpc-entry.js"),
 	},

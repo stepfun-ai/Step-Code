@@ -1,0 +1,29 @@
+{
+	"note": "S0-4 workspace registry. Every workspace member matched by the workspaces globs must have a row here (matched by package name). New packages must use the @step-harness/* scope; the ten @earendil-works/pi-* packages are grandfathered; example extensions are exempt. Checked by scripts/check-workspace-registry.mjs.",
+	"grandfatheredScope": "@earendil-works/pi-",
+	"requiredScope": "@step-harness/",
+	"baseline": [
+		"@earendil-works/pi-agent-core",
+		"@earendil-works/pi-ai",
+		"@earendil-works/pi-coding-agent",
+		"@earendil-works/pi-evals",
+		"@earendil-works/pi-telemetry",
+		"@earendil-works/pi-tui",
+		"@earendil-works/pi-session-backend-sqlite-node"
+	],
+	"members": [
+		{ "name": "@earendil-works/pi-agent-core", "dir": "packages/agent", "role": "engine", "reason": "通用 Agent loop 与工具调用时序" },
+		{ "name": "@earendil-works/pi-ai", "dir": "packages/ai", "role": "engine", "reason": "模型 API/provider、dialect/catalog" },
+		{ "name": "@earendil-works/pi-coding-agent", "dir": "packages/coding-agent", "role": "product", "reason": "编码 Agent 产品逻辑(prompt/tools/permissions)" },
+		{ "name": "@earendil-works/pi-evals", "dir": "packages/evals", "role": "tooling", "reason": "评测脚本与 fixture" },
+		{ "name": "@earendil-works/pi-telemetry", "dir": "packages/telemetry", "role": "engine", "reason": "通用 telemetry contract/实现" },
+		{ "name": "@earendil-works/pi-tui", "dir": "packages/tui", "role": "renderer", "reason": "终端渲染原语，保持零 AI 依赖" },
+		{ "name": "@earendil-works/pi-session-backend-sqlite-node", "dir": "packages/session-backends/sqlite-node", "role": "storage-backend", "reason": "备用 SQLite backend，步骤 1 块 B 删除" },
+		{ "name": "@step-harness/cli", "dir": "apps/cli", "role": "app", "reason": "唯一进程入口宿主骨架(S0 起)；进程生命周期/argv/退出码" },
+		{ "name": "pi-extension-with-deps", "dir": "packages/coding-agent/examples/extensions/with-deps", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-custom-provider-anthropic", "dir": "packages/coding-agent/examples/extensions/custom-provider-anthropic", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-custom-provider-gitlab-duo", "dir": "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-sandbox", "dir": "packages/coding-agent/examples/extensions/sandbox", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-gondolin", "dir": "packages/coding-agent/examples/extensions/gondolin", "role": "example", "reason": "扩展示例(tsconfig 排除)" }
+	]
+}
