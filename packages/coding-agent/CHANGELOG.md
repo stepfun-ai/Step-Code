@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. `grep.ts` and `find.ts` now walk a ladder — injected custom search → downloaded/PATH rg/fd → `git grep`/`git ls-files` when the search path is inside a worktree → POSIX `grep`/`find` — and only throw when nothing at all is available. `GrepOperations` gains an optional `search` primitive so remote injectors can substitute text search the way `FindOperations.glob` already substitutes file listing.
 - Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
 - Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.
 - Fixed the Step queued-message preview and `update_plan` rendering dropping four characters at every wrap point by wrapping through Pi's shared text wrapper.
