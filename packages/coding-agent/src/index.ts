@@ -434,7 +434,7 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
-export { getTextOutput, renderToolPath } from "./core/tools/render-utils.ts";
+export { getTextOutput, renderToolPath, replaceTabs } from "./core/tools/render-utils.ts";
 export {
 	getProjectTrustOptions,
 	hasTrustRequiringProjectResources,

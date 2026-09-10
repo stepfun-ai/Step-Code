@@ -4,7 +4,7 @@
  */
 
 import { DynamicBorder, keyHint, rawKeyHint, theme } from "@step-harness/coding-agent";
-import { Container, getKeybindings, type SelectItem, SelectList, Spacer, Text, type TUI } from "@step-harness/pi-tui";
+import { Container, getKeybindings, type SelectItem, SelectList, Spacer, Text, type TUI, wrapTextWithAnsi } from "@step-harness/pi-tui";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
@@ -132,13 +132,16 @@ export class ExtensionSelectorComponent extends Container {
 		rows.push(...this.selectList.render(contentWidth));
 		rows.push("");
 		rows.push(
-			theme.fg(
-				"muted",
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("tui.select.confirm", "select") +
-					"  " +
-					keyHint("tui.select.cancel", "cancel"),
+			...wrapTextWithAnsi(
+				theme.fg(
+					"muted",
+					rawKeyHint("↑↓", "navigate") +
+						"  " +
+						keyHint("tui.select.confirm", "select") +
+						"  " +
+						keyHint("tui.select.cancel", "cancel"),
+				),
+				contentWidth,
 			),
 		);
 		return renderStepDialogFrame(rows, safeWidth);

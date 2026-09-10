@@ -17,6 +17,8 @@
 
 ### Fixed
 
+- Fixed extension select/input dialogs leaving unresolved promises or stale waiting state after cancellation, replacement, reset, stop, or reentrant focus restoration.
+- Fixed Step approval presentation with per-call identity and reversible waiting indicators, and kept multiline tool titles/summaries within one physical terminal row without changing execution arguments.
 - Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. `grep.ts` and `find.ts` now walk a ladder — injected custom search → downloaded/PATH rg/fd → `git grep`/`git ls-files` when the search path is inside a worktree → POSIX `grep`/`find` — and only throw when nothing at all is available. `GrepOperations` gains an optional `search` primitive so remote injectors can substitute text search the way `FindOperations.glob` already substitutes file listing.
 - Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
 - Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.

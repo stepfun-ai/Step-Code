@@ -6,6 +6,7 @@ import {
 	keyHint,
 	renderDiff,
 	renderToolPath,
+	replaceTabs,
 	type ToolName,
 	theme,
 } from "@step-harness/coding-agent";
@@ -66,7 +67,11 @@ function trimRenderedRows(lines: string[]): string[] {
 }
 
 function clampStepLine(line: string, width: number): string {
-	return visibleWidth(line) <= width ? line : truncateToWidth(line, width, "", false);
+	// Projected titles/summaries can contain raw argument whitespace after the
+	// native renderer has split its rows. One array entry must remain one
+	// physical terminal line, or spinner redraws corrupt cursor accounting.
+	const singleLine = replaceTabs(line).replace(/[\r\n]+/gu, " ");
+	return visibleWidth(singleLine) <= width ? singleLine : truncateToWidth(singleLine, width, "", false);
 }
 
 /** Remove Pi's full-width self-shell fill for the Step edit presentation. */

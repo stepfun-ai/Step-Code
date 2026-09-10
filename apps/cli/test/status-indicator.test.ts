@@ -98,6 +98,74 @@ describe("status indicators", () => {
 		indicator.dispose();
 	});
 
+	it("shows a static approval state without running tokens, elapsed time, or tips", () => {
+		initTheme("step");
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const tui = { requestRender } as unknown as TUI;
+		const tracker = new WorkingOutputTracker();
+		const indicator = new WorkingStatusIndicator(tui, "Custom work", undefined, "step", tracker);
+		indicator.setStatusTip("A running tip");
+		indicator.setWaitingForApproval(true);
+		indicator.setWaitingForApproval(true);
+		const before = indicator.render(80);
+		const renders = requestRender.mock.calls.length;
+
+		vi.advanceTimersByTime(30_000);
+		indicator.refreshVerb();
+		expect(indicator.render(80)).toEqual(before);
+		expect(stripTerminalSequences(before.join("\n"))).toContain("Waiting for approval");
+		expect(stripTerminalSequences(before.join("\n"))).not.toMatch(/tokens|Custom work|tip:/u);
+		expect(requestRender).toHaveBeenCalledTimes(renders);
+		expect(vi.getTimerCount()).toBe(0);
+		expect(visibleWidth(indicator.render(16)[0] ?? "")).toBeLessThanOrEqual(16);
+		indicator.dispose();
+	});
+
+	it("preserves working preferences changed while approval pauses both timers", () => {
+		initTheme("step");
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const tui = { requestRender } as unknown as TUI;
+		const indicator = new WorkingStatusIndicator(
+			tui,
+			"Original work",
+			{ frames: ["A", "B"], intervalMs: 500 },
+			"step",
+			new WorkingOutputTracker(),
+		);
+		indicator.setWaitingForApproval(true);
+		indicator.setMessage("Updated work");
+		indicator.setIndicator({ frames: ["X", "Y"], intervalMs: 1_000 });
+		indicator.setStatusTip("Updated tip");
+		const renders = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(10_000);
+		expect(requestRender).toHaveBeenCalledTimes(renders);
+		expect(vi.getTimerCount()).toBe(0);
+		expect(stripTerminalSequences(indicator.render(80).join("\n"))).not.toContain("Updated");
+
+		indicator.setWaitingForApproval(false);
+		indicator.setWaitingForApproval(false);
+		expect(vi.getTimerCount()).toBe(2);
+		expect(stripTerminalSequences(indicator.render(80).join("\n"))).toContain("X Updated work");
+		vi.advanceTimersByTime(1_000);
+		expect(stripTerminalSequences(indicator.render(80).join("\n"))).toContain("Y Updated work");
+		expect(stripTerminalSequences(indicator.render(80).join("\n"))).toContain("tip: Updated tip");
+		indicator.dispose();
+	});
+
+	it("does not restart a disposed working indicator on late approval cleanup", () => {
+		initTheme("step");
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() } as unknown as TUI;
+		const indicator = new WorkingStatusIndicator(tui, "Work", undefined, "step", new WorkingOutputTracker());
+		indicator.setWaitingForApproval(true);
+		indicator.dispose();
+		indicator.setWaitingForApproval(false);
+		indicator.setIndicator({ frames: ["X", "Y"] });
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("accumulates normalized Anthropic and OpenAI responses and replaces estimates with final usage", () => {
 		const tracker = new WorkingOutputTracker();
 		tracker.reset(1000);

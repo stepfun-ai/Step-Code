@@ -154,32 +154,6 @@ normal user-message path. The model inspects the project and uses pi's native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
 
-## Incomplete stream recovery
-
-Step guides the model to create large source files and reports incrementally,
-with roughly 100 lines or a few kilobytes of generated tool arguments per
-response when practical. This is prompt guidance, not an enforced size limit;
-Step never truncates a tool argument to meet it.
-
-When Pi retries an incomplete response such as `Anthropic stream ended before
-message_stop`, the Step extension adds a temporary recovery note through the
-`context` hook. It asks for one focused call with a smaller payload, preserves
-work confirmed by earlier tool results, and instructs the model to finish the
-remaining sections and validation. This also works when the server buffered
-all tool arguments and no tool delta reached the client.
-
-The note is derived from the latest message on the current session branch and
-only changes the request projection. It is not a persisted user message, and
-it disappears after a successful response or a new user prompt. Pi continues
-to own retry enablement, budgets, backoff, cancellation, and tool permission
-checks. Calls from an incomplete assistant response remain unexecuted.
-
-These measures can reduce repeated failures caused by buffering large model
-outputs. They cannot guarantee model compliance or prevent an upstream idle
-timeout; service-side heartbeats and flushing are still required to keep a
-buffered response alive. HTTP timeout defaults and terminal-event validation
-are unchanged.
-
 ## Interactive tool rendering
 
 Step's projected tool titles and collapsed summaries are single physical
@@ -228,16 +202,6 @@ cleanup or reset/stop is running, a simple dialog requested synchronously by an
 editor refocus/disposal callback is cancelled before mounting. This prevents
 an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
 refocused editor to open the next dialog.
-
-## File search
-
-The `search_files` adapter recognizes native grep matches by their
-`path:line: text` structure, not by a filename prefix. Paths beginning with
-`[` (including `[slug]`, `[...slug]`, and `[[...slug]]` route directories)
-or `WARNING:` remain valid results, with or without context lines.
-Native limit/truncation notices are not match rows: `matches` and
-`filesMatched` count accepted matches and files, while native limit metadata
-still contributes to `truncated` in the tool details.
 
 ## Plans and tasks
 
