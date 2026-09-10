@@ -633,7 +633,7 @@ function parseNativeSearchRows(text: string): SearchRow[] {
 	const rows: SearchRow[] = [];
 	for (const rawLine of text.split("\n")) {
 		const line = rawLine.trimEnd();
-		if (!line || line.startsWith("[") || line.startsWith("WARNING:")) continue;
+		// Match the row shape, not a prefix: "[" and "WARNING:" can start valid paths.
 		const match = /^(.*):(\d+): (.*)$/u.exec(line);
 		if (match) {
 			rows.push({ display: match[1] ?? "", line: Number(match[2]), text: match[3] ?? "" });

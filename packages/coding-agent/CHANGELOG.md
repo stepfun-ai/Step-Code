@@ -32,6 +32,7 @@
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
 - Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
 - Fixed `/feedback` pages growing the rendered transcript, which scrolled the screen and left the editor above the bottom row once a page closed.
+- Fixed Step `search_files` discarding valid match rows with `[`- or `WARNING:`-prefixed paths; native notices remain excluded and match/truncation metadata is preserved.
 
 ## [0.84.4] - 2026-08-28
 
