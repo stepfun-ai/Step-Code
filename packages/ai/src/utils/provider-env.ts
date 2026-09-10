@@ -8,7 +8,7 @@ let procEnvCache: Map<string, string> | null = null;
  * even though /proc/self/environ contains the environment.
  *
  * This intentionally duplicates restoreSandboxEnv() in
- * packages/coding-agent/src/bun/restore-sandbox-env.ts. The ai package can be
+ * apps/cli/src/bun/restore-sandbox-env.ts. The ai package can be
  * used directly, without going through that entrypoint, so provider env lookup
  * must not depend on process.env having been patched.
  */

@@ -4,11 +4,11 @@
 set -u
 ROOT="${STEP_HARNESS_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"; cd "$ROOT" || exit 2
 export STEP_PROVIDER="${STEP_PROVIDER:-step}" STEP_MODEL="${STEP_MODEL:-step-3.7-flash}"
-SD="$(mktemp -d)"; STEP=(node_modules/.bin/tsx --tsconfig tsconfig.json packages/coding-agent/src/step-cli.ts)
+SD="$(mktemp -d)"; STEP=(node_modules/.bin/tsx --tsconfig tsconfig.json apps/cli/src/main.ts)
 pass=0; fail=0
 cap() { local secs="$1" out="$2"; shift 2                          # 墙钟上限杀(macOS 无 timeout)
   ( "$@" >"$out" 2>&1 ) & local p=$!
-  ( sleep "$secs"; kill -9 "$p" 2>/dev/null; pkill -f step-cli.ts 2>/dev/null ) & local w=$!
+  ( sleep "$secs"; kill -9 "$p" 2>/dev/null; pkill -f apps/cli/src/main.ts 2>/dev/null ) & local w=$!
   wait "$p" 2>/dev/null; kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; }
 runq() { local name="$1" want="$2"; shift 2; [ "$1" = "--" ] && shift   # 非模型:自退快
   local o; o="$("${STEP[@]}" "$@" 2>&1)"
@@ -23,4 +23,4 @@ runq "help-usage" "Usage:"           -- --help
 runq "auth-check" '"status":"ready"' -- auth check --provider step --json
 runm "print-text" "PONG"        60   -- --provider step --model "$STEP_MODEL" -p "Reply with exactly the word PONG and nothing else."
 runm "print-json" '"agent_end"' 60   -- --provider step --model "$STEP_MODEL" -p "hi" --mode json
-echo "---- direct smoke: PASS=$pass FAIL=$fail ----"; rm -rf "$SD"; pkill -f step-cli.ts 2>/dev/null; [ "$fail" -eq 0 ]
+echo "---- direct smoke: PASS=$pass FAIL=$fail ----"; rm -rf "$SD"; pkill -f apps/cli/src/main.ts 2>/dev/null; [ "$fail" -eq 0 ]

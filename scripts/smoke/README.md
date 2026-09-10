@@ -30,7 +30,7 @@ bash scripts/smoke/tui-matrix.sh
 python3 scripts/smoke/pty-drive.py --wait 7 \
   --expect "Ask Step to do anything" --expect "step-3.7-flash" --reject "Error" \
   --keys 'hello|SLEEP:0.4|C-c|C-c' \
-  -- node_modules/.bin/tsx --tsconfig tsconfig.json packages/coding-agent/src/step-cli.ts
+  -- node_modules/.bin/tsx --tsconfig tsconfig.json apps/cli/src/main.ts
 ```
 
 ## 踩过的坑(已写进脚本)

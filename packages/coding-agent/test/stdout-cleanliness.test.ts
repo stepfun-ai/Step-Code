@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
-const cliPath = resolve(__dirname, "../src/step-cli.ts");
+const cliPath = resolve(__dirname, "../../../apps/cli/src/main.ts");
 
 const tempDirs: string[] = [];
 
@@ -64,6 +64,10 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 			env: {
 				...process.env,
 				[ENV_AGENT_DIR]: agentDir,
+				// The @step-harness/cli entry resolves the Step storage namespace, so
+				// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
+				// from this test process's APP_NAME, which may differ from the child's).
+				STEP_CODING_AGENT_DIR: agentDir,
 				TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 			},
 			stdio: ["ignore", "pipe", "pipe"],

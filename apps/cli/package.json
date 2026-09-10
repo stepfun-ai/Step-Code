@@ -2,6 +2,9 @@
 	"name": "@step-harness/cli",
 	"private": true,
 	"type": "module",
+	"bin": {
+		"step": "./dist/main.js"
+	},
 	"imports": {
 		"#*": "./src/*.ts"
 	},
@@ -12,11 +15,20 @@
 		}
 	},
 	"scripts": {
+		"clean": "shx rm -rf dist",
 		"build": "npm run build:unbundled",
 		"build:unbundled": "tsgo -p tsconfig.build.json",
 		"typecheck": "tsgo -p tsconfig.build.json --noEmit",
 		"dev": "tsx --tsconfig ../../tsconfig.json src/main.ts",
 		"test": "vitest --run --passWithNoTests",
 		"smoke": "node ../../scripts/smoke-apps-cli.mjs"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "^0.84.4",
+		"@earendil-works/pi-coding-agent": "^0.84.4",
+		"@step-harness/config": "workspace:*"
+	},
+	"devDependencies": {
+		"vitest": "4.1.9"
 	}
 }

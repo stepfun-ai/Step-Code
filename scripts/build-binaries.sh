@@ -259,9 +259,9 @@ for platform in "${PLATFORMS[@]}"; do
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
     # standalone binary before step starts (see #7684).
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
+        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
     else
-        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
+        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
     fi
 done
 

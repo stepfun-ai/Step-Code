@@ -49,6 +49,7 @@ import {
 	getPackageDir,
 	VERSION,
 } from "./config.ts";
+import type { AgentSession } from "./core/agent-session.ts";
 import {
 	type AgentSessionRuntime,
 	type AgentSessionRuntimeHost,
@@ -70,6 +71,7 @@ import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/mod
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import type { ResourceLoader } from "./core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -149,7 +151,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
+export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
 	if (parsed.sdkStdio) {
 		// The Step SDK host has its own framed stdin protocol. Treat it as a
 		// headless mode so normal piped-prompt handling never consumes the stream.
@@ -167,7 +169,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
+export function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -791,7 +793,64 @@ export interface MainOptions {
 	}) => Array<ToolDefinition<any, any, any>>;
 }
 
-export async function main(args: string[], options?: MainOptions) {
+/**
+ * Outcome of the argv → assembly → mode-resolution pipeline that pi's `main()`
+ * runs before it dispatches into a run mode.
+ *
+ * `prepareMain()` performs every step of the former `main()` body up to (but not
+ * including) the final `switch (appMode)`: it parses argv, runs the short-lived
+ * metadata/auth/package/config commands, builds the runtime, resolves the final
+ * `appMode` (including the piped-stdin → print flip), and applies the same
+ * module-global side effects (timings buffer, stdout takeover, theme watcher).
+ *
+ *  - `kind: "completed"` — a short-command path already produced all output and
+ *    the process should stop. `exitCode` encodes pi's historical exit contract:
+ *    a command that always called `process.exit(n)` reports that `n` (including
+ *    an explicit `0` for `--version` / `--help` / `--export` / `--list-models`),
+ *    while the soft-return commands that only set `process.exitCode` (auth,
+ *    config, sdk-stdio, the Windows `update` drain) omit `exitCode` entirely.
+ *    `main()` hard-exits when `exitCode` is defined; a product shell treats a
+ *    zero/undefined `exitCode` as "return, do not exit" so telemetry/finally
+ *    blocks always run. `--sdk-stdio` reports this kind *after* its framed host
+ *    has run, so its byte-exact framing is never routed through the switch.
+ *  - `kind: "dispatch"` — everything needed to run a full session mode. The
+ *    `appMode` field is the final value (already flipped for piped stdin); the
+ *    dispatcher must use it verbatim and never re-resolve it.
+ */
+export type MainPreparation =
+	| { kind: "completed"; exitCode?: number }
+	| {
+			kind: "dispatch";
+			appMode: AppMode;
+			runtimeHost: AgentSessionRuntimeHost;
+			session: AgentSession;
+			modelFallbackMessage: string | undefined;
+			settingsManager: SettingsManager;
+			resourceLoader: ResourceLoader;
+			modelRuntime: ModelRuntime;
+			migratedProviders: string[];
+			startupDiagnostics: AgentSessionRuntimeDiagnostic[];
+			autoTrustOnReloadCwd: string | undefined;
+			initialMessage: string | undefined;
+			initialImages: ImageContent[] | undefined;
+			sessionRoot: string | undefined;
+			explicitOfflineMode: boolean;
+			offlineMode: boolean;
+			startupBenchmark: boolean;
+			parsed: Args;
+			// Computed here (not raw options) so the dispatcher and an embedding
+			// shell build InteractiveMode from the same resolved values pi uses.
+			configDirName: string;
+			authPath: string | undefined;
+	  };
+
+/**
+ * Run everything pi's `main()` does before the run-mode `switch`, returning a
+ * {@link MainPreparation}. Product shells (apps/cli) call this directly and then
+ * own their own dispatch switch, bypassing `main()` so their process-lifecycle
+ * bookkeeping (telemetry finally blocks) is never skipped by a `process.exit()`.
+ */
+export async function prepareMain(args: string[], options?: MainOptions): Promise<MainPreparation> {
 	resetTimings();
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
 	const configDirName = options?.configDirName?.trim() || CONFIG_DIR_NAME;
@@ -823,7 +882,9 @@ export async function main(args: string[], options?: MainOptions) {
 	if (
 		await runAuthCommand(args, options?.authRuntimeSetup, authPath, options?.agentDir, options?.allowedAuthProviders)
 	) {
-		return;
+		// runAuthCommand set process.exitCode (0 ready / 1 not_ready / 2 invalid);
+		// carry that side effect through the completed result unchanged.
+		return { kind: "completed" };
 	}
 
 	if (process.platform === "win32") {
@@ -850,16 +911,17 @@ export async function main(args: string[], options?: MainOptions) {
 			configDirName,
 		})
 	) {
-		const exitCode = process.exitCode ?? 0;
+		// process.exitCode is typed `number | string | undefined`; handlePackageCommand
+		// only ever sets a numeric code, so normalize to a number for the result.
+		const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
 		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
 			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
 			// one-shot commands alive. On Windows, Node can assert after fetch() if process.exit(0)
 			// runs during teardown; let successful `pi update` drain naturally instead.
 			// https://github.com/nodejs/node/issues/56645
-			return;
+			return { kind: "completed" };
 		}
-		process.exit(exitCode);
-		return;
+		return { kind: "completed", exitCode };
 	}
 
 	if (
@@ -870,7 +932,7 @@ export async function main(args: string[], options?: MainOptions) {
 			configDirName,
 		})
 	) {
-		return;
+		return { kind: "completed" };
 	}
 
 	const parsed = parseArgs(args);
@@ -880,14 +942,14 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(color(`${d.type === "error" ? "Error" : "Warning"}: ${d.message}`));
 		}
 		if (parsed.diagnostics.some((d) => d.type === "error")) {
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 	}
 	time("parseArgs");
 
 	if (parsed.version) {
 		console.log(VERSION);
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	if (parsed.export) {
@@ -905,10 +967,10 @@ export async function main(args: string[], options?: MainOptions) {
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
 			console.error(chalk.red(`Error: ${message}`));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 		console.log(`Exported to: ${result}`);
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
@@ -919,7 +981,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		console.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 
 	validateForkFlags(parsed);
@@ -990,7 +1052,7 @@ export async function main(args: string[], options?: MainOptions) {
 				configDirName,
 			});
 			if (!selectedCwd) {
-				process.exit(0);
+				return { kind: "completed", exitCode: 0 };
 			}
 			sessionManager = agentDir
 				? openStepSession(missingSessionCwdIssue.sessionFile!, {
@@ -1001,14 +1063,14 @@ export async function main(args: string[], options?: MainOptions) {
 				: SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
 			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 	}
 	if (parsed.name !== undefined) {
 		const name = normalizeSessionName(parsed.name);
 		if (name === undefined) {
 			console.error(chalk.red("Error: --name requires a non-empty value"));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 		sessionManager.appendSessionInfo(name);
 	}
@@ -1202,14 +1264,14 @@ export async function main(args: string[], options?: MainOptions) {
 			.getExtensions()
 			.extensions.flatMap((extension) => Array.from(extension.flags.values()));
 		printHelp(extensionFlags);
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	if (parsed.listModels !== undefined) {
 		reportDiagnostics(startupSettingsDiagnostics);
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRuntime, searchPattern, AbortSignal.timeout(15_000));
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
@@ -1247,28 +1309,31 @@ export async function main(args: string[], options?: MainOptions) {
 		if (runtime.diagnostics.some((diagnostic) => diagnostic.message.includes("Failed to load extension"))) {
 			console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT));
 		}
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 	time("createAgentSession");
 
 	if (appMode !== "interactive" && !session.model) {
 		console.error(chalk.red(formatNoModelsAvailableMessage()));
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 
 	if (parsed.sdkStdio) {
 		if (!options?.stdioModeFactory) {
 			console.error(chalk.red("Error: --sdk-stdio is only available from the step entrypoint"));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
+		// The framed stdio host runs entirely inside the preparation step so its
+		// byte-exact length-prefixed protocol is never routed through the dispatch
+		// switch (which would risk interleaving diagnostics with frames).
 		await options.stdioModeFactory(runtimeHost);
-		return;
+		return { kind: "completed" };
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
 	if (startupBenchmark && appMode !== "interactive") {
 		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 
 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
@@ -1281,30 +1346,65 @@ export async function main(args: string[], options?: MainOptions) {
 			.finally(() => clearTimeout(timeout));
 	}
 
+	return {
+		kind: "dispatch",
+		appMode,
+		runtimeHost,
+		session,
+		modelFallbackMessage,
+		settingsManager,
+		resourceLoader,
+		modelRuntime,
+		migratedProviders,
+		startupDiagnostics,
+		autoTrustOnReloadCwd,
+		initialMessage,
+		initialImages,
+		sessionRoot,
+		explicitOfflineMode,
+		offlineMode,
+		startupBenchmark,
+		parsed,
+		configDirName,
+		authPath,
+	};
+}
+
+/**
+ * Run the full session mode selected during {@link prepareMain}. This holds the
+ * exact `switch (appMode)` pi's `main()` has always run; it is a private helper
+ * so `main()` stays a thin `prepare → dispatch` wrapper while product shells run
+ * their own dispatch against the returned {@link MainPreparation}.
+ */
+async function dispatchAppMode(
+	prep: Extract<MainPreparation, { kind: "dispatch" }>,
+	options?: MainOptions,
+): Promise<void> {
+	const { appMode, runtimeHost } = prep;
 	if (appMode === "rpc") {
 		printTimings();
 		await runRpcMode(runtimeHost);
 	} else if (appMode === "interactive") {
 		const interactiveMode = new InteractiveMode(runtimeHost, {
-			configDirName,
-			authPath,
-			migratedProviders,
-			startupDiagnostics,
-			modelFallbackMessage,
-			autoTrustOnReloadCwd,
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-			tuiMode: parsed.tuiMode,
-			initialThemeSetting: parsed.useTheme,
+			configDirName: prep.configDirName,
+			authPath: prep.authPath,
+			migratedProviders: prep.migratedProviders,
+			startupDiagnostics: prep.startupDiagnostics,
+			modelFallbackMessage: prep.modelFallbackMessage,
+			autoTrustOnReloadCwd: prep.autoTrustOnReloadCwd,
+			initialMessage: prep.initialMessage,
+			initialImages: prep.initialImages,
+			initialMessages: prep.parsed.messages,
+			verbose: prep.parsed.verbose,
+			tuiMode: prep.parsed.tuiMode,
+			initialThemeSetting: prep.parsed.useTheme,
 			defaultTheme: options?.defaultTheme,
 			disableBackgroundServices: options?.disableBackgroundServices,
 			...options?.interactiveModeOptions,
-			sessionRoot,
-			offline: explicitOfflineMode || options?.interactiveModeOptions?.offline === true,
+			sessionRoot: prep.sessionRoot,
+			offline: prep.explicitOfflineMode || options?.interactiveModeOptions?.offline === true,
 		});
-		if (startupBenchmark) {
+		if (prep.startupBenchmark) {
 			await interactiveMode.init();
 			time("interactiveMode.init");
 			// Give the TUI's stdin handler a brief chance to consume terminal query replies
@@ -1328,15 +1428,36 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		const exitCode = await runPrintMode(runtimeHost, {
 			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
+			messages: prep.parsed.messages,
+			initialMessage: prep.initialMessage,
+			initialImages: prep.initialImages,
 		});
 		stopThemeWatcher();
 		restoreStdout();
 		if (exitCode !== 0) {
 			process.exitCode = exitCode;
 		}
+	}
+}
+
+/**
+ * Entry point kept for embedders and tests: prepare, then dispatch. Short
+ * commands that finish inside {@link prepareMain} return here without a session
+ * mode. `main()` reproduces pi's historical exit contract for direct callers:
+ * any `completed` result with a defined `exitCode` (including an explicit `0`
+ * for the short commands that always ran `process.exit(0)`) is applied with
+ * `process.exit`, while the soft-return commands (auth/config/sdk-stdio, which
+ * only set `process.exitCode`) omit `exitCode` and return without exiting. A
+ * product shell instead reads `exitCode` off the result and never hard-exits, so
+ * its process-lifecycle bookkeeping is preserved.
+ */
+export async function main(args: string[], options?: MainOptions): Promise<void> {
+	const prep = await prepareMain(args, options);
+	if (prep.kind === "completed") {
+		if (prep.exitCode !== undefined) {
+			process.exit(prep.exitCode);
+		}
 		return;
 	}
+	await dispatchAppMode(prep, options);
 }

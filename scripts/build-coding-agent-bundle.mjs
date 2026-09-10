@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,11 @@ import { build } from "esbuild";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const codingAgentDir = join(repoRoot, "packages", "coding-agent");
+// The process entry moved to the @step-harness/cli app (S3). The bundle's `step`
+// entry is that app's compiled main; the `index` library entry stays here. The
+// package directory is parameterised so a future move only touches this const.
+const appEntryDir = join(repoRoot, "apps", "cli");
+const appEntryDistDir = join(appEntryDir, "dist");
 const aiDir = join(repoRoot, "packages", "ai");
 const aiDistDir = join(aiDir, "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
@@ -164,8 +170,15 @@ function outputBytes(metafiles) {
 	);
 }
 
+// The bundle's `step` entry is the compiled app. Compile it here (against the
+// coding-agent dist produced by build:unbundled) so coding-agent's `build`
+// stays self-contained despite the entry now living in the app package. Always
+// rebuild rather than trusting a pre-existing dist/main.js: a stale app compile
+// from an earlier checkout would otherwise be baked into the bundle.
+execFileSync("npm", ["--prefix", appEntryDir, "run", "build"], { stdio: "inherit", cwd: repoRoot });
+
 for (const entry of [
-	join(codingAgentDistDir, "step-cli.js"),
+	join(appEntryDistDir, "main.js"),
 	join(codingAgentDistDir, "index.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
 	join(aiDistDir, "api", "bedrock-converse-stream.js"),
@@ -183,7 +196,7 @@ const mainResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
 	entryPoints: {
-		step: join(codingAgentDistDir, "step-cli.js"),
+		step: join(appEntryDistDir, "main.js"),
 		index: join(codingAgentDistDir, "index.js"),
 	},
 	outdir: bundleDir,

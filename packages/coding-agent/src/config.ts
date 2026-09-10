@@ -11,7 +11,12 @@ import { stripBom } from "./utils/text.ts";
 // This runs while config's static dependency graph is being evaluated, before
 // APP_NAME and CONFIG_DIR_NAME are derived below. It keeps the Step launcher
 // compatible with ordinary static imports and bundled entrypoints alike.
-const STEP_ENTRYPOINT = isStepEntrypoint();
+//
+// The @step-harness/cli entry file is named main.ts, so it is not detected by
+// isStepEntrypoint()'s filename heuristic. That app sets STEP_CLI_ENTRYPOINT=1
+// as its very first side effect (before this module is evaluated), which is an
+// explicit, additive opt-in signal. Ordinary `pi` launches never set it.
+const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEP_CLI_ENTRYPOINT?.trim() === "1";
 if (STEP_ENTRYPOINT) applyStepEnvironment();
 
 // =============================================================================

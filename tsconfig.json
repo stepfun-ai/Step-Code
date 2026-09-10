@@ -28,7 +28,8 @@
 			"@earendil-works/pi-agent-old/*": ["./packages/agent-old/src/*"],
 			"@step-harness/cli": ["./apps/cli/src/index.ts"],
 			"@step-harness/contracts": ["./packages/contracts/src/in-process/index.ts"],
-			"@step-harness/contracts/wire": ["./packages/contracts/src/wire/index.ts"]
+			"@step-harness/contracts/wire": ["./packages/contracts/src/wire/index.ts"],
+			"@step-harness/config": ["./packages/config/src/index.ts"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "apps/cli/src/**/*"],

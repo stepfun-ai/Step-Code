@@ -8,7 +8,8 @@
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
 			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
 			"@earendil-works/pi-tui": ["../tui/dist/index.d.ts"],
-			"@earendil-works/pi-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"]
+			"@earendil-works/pi-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"],
+			"@step-harness/config": ["../config/dist/index.d.ts"]
 		},
 		"rootDir": "./src"
 	},

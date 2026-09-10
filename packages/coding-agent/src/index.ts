@@ -1,6 +1,6 @@
 // Core session management
 
-export { type Args, parseArgs } from "./cli/args.ts";
+export { type Args, type Mode, parseArgs } from "./cli/args.ts";
 
 // Config paths
 export {
@@ -176,6 +176,22 @@ export {
 } from "./core/extensions/index.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
+// -----------------------------------------------------------------------------
+// Entry-composition surface (S3).
+//
+// The process entry, argv dispatch and mode selection now live in the
+// @step-harness/cli app. These are the product-side pieces that the app's
+// composition root imports to build MainOptions, resolve the run mode, and run
+// its own dispatch switch. They stay in this product package (product
+// behaviour, not shell), and are re-exported through the single "." export
+// subpath (no new export subpath, so the entry-freeze gate stays green).
+//
+// printTimings / restoreStdout / stopThemeWatcher operate on module-global state
+// owned here (the timings buffer, the stdout takeover installed by prepareMain,
+// and the theme file watcher). The shell MUST call these exported functions
+// rather than reimplement them, or it would act on empty/detached local state.
+// -----------------------------------------------------------------------------
+export { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export {
@@ -204,6 +220,7 @@ export {
 	ModelRuntime,
 	type ModelRuntimeAuthOverrides,
 } from "./core/model-runtime.ts";
+export { restoreStdout } from "./core/output-guard.ts";
 export type {
 	PackageManager,
 	PathMetadata,
@@ -213,6 +230,7 @@ export type {
 	ResolvedResource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
+export type { AppMode } from "./core/project-trust.ts";
 export type {
 	ResourceCollision,
 	ResourceDiagnostic,
@@ -304,6 +322,7 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export { printTimings, time } from "./core/timings.ts";
 export {
 	type EditDiffResult,
 	generateDiffString,
@@ -381,6 +400,7 @@ export {
 	stepExtension,
 	stepExtensionInline,
 } from "./extensions/step.ts";
+export { createStepCapabilitiesExtensionInline } from "./extensions/step-capabilities.ts";
 export {
 	type CronCreateResult,
 	type CronDelivery,
@@ -394,6 +414,7 @@ export {
 	type StepCronRuntimeOptions,
 	stepCronExtensionInline,
 } from "./extensions/step-cron.ts";
+export { createStepProviderConfig, STEP_PROVIDER_ID } from "./extensions/step-provider/index.ts";
 export {
 	CreateGoalParams,
 	continuationPrompt,
@@ -413,13 +434,19 @@ export {
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
 } from "./extensions/step-schedule.ts";
-
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.
 export * from "./extensions/workflow/index.ts";
 // Main entry point
-export { type MainOptions, main } from "./main.ts";
+export {
+	type MainOptions,
+	type MainPreparation,
+	main,
+	prepareMain,
+	resolveAppMode,
+	toPrintOutputMode,
+} from "./main.ts";
 // Run modes for programmatic SDK usage
 export {
 	InteractiveMode,
@@ -478,15 +505,37 @@ export {
 	type VisualTruncateResult,
 } from "./modes/interactive/components/index.ts";
 export {
+	getLegacyStepAuthPath,
+	getStepAuthPath,
+	logoutStepCredentials,
+	migrateLegacyStepCredential,
+} from "./step/auth.ts";
+export {
+	isStepConfigCommand,
+	normalizeStepSessionSelectorArgs,
+	parseStepUpdateCommand,
+	runStepConfigCommand,
+	translateStepCommandArgs,
+} from "./step/command-compat.ts";
+export {
 	migrateStepConfig,
+	readStepGlobalDefaults,
 	type StepConfigMigrationOptions,
 	type StepConfigMigrationReport,
 	type StepConfigMigrationRootReport,
 } from "./step/config-migration.ts";
 export {
+	getStepDefaultTheme,
+	isStepServicesDisabled,
+	STEP_DEFAULT_MODEL,
+	STEP_DEFAULT_PROVIDER,
+	withStepDefaults,
+} from "./step/defaults.ts";
+export {
 	readOrCreateStepDeviceId,
 	readStepDeviceId,
 	resolveStepDeviceIdPath,
+	resolveStepStorageRoot,
 	type StepDeviceIdResult,
 } from "./step/device-id.ts";
 export {
@@ -501,7 +550,16 @@ export {
 	STEP_CLI_CONFIG_DIR,
 	type StepEnvironmentOptions,
 } from "./step/environment.ts";
+export { runFeedbackCommand } from "./step/feedback/command.ts";
+export { readFeedbackUsername } from "./step/feedback/context.ts";
 export { STEP_INIT_PROMPT } from "./step/init-prompt.ts";
+export { maybeUpdateStep, runStepUpdateCommand } from "./step/local-update.ts";
+export {
+	isStepInteractiveLoginStartup,
+	needsStepLoginBeforeInteractive,
+	runStepLogin,
+	syncStepLoginProfileEndpoint,
+} from "./step/login-flow.ts";
 export {
 	AUTO_RESUME_PROMPT,
 	decideStepToolCall,
@@ -562,6 +620,11 @@ export {
 	type StepSettingsManagerCreateOptions,
 	type StepSettingsPaths,
 } from "./step/settings-manager.ts";
+export {
+	flushStderrDevLog,
+	installProcessStderrDevLogCapture,
+	setStderrDevLogStorageRootDirectory,
+} from "./step/stderr-dev-log.ts";
 export type {
 	PiHarnessEvent,
 	PiHarnessEventBridge,
@@ -600,6 +663,15 @@ export {
 	StepStdioProtocolViolation,
 } from "./step/stdio.ts";
 export { StepStdioHost, type StepStdioHostOptions } from "./step/stdio-host.ts";
+export {
+	applyStepCodeConfigDefaults,
+	createStepCodeProviderInlineExtension,
+	decorateStepCodeSettingsManager,
+	hasConfiguredStepCodeCredential,
+	loadStepCodeConfig,
+	type StepCodeConfig,
+} from "./step/stepcode-config.ts";
+export { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 export {
 	classifyStepEndpoint,
 	createStepLifecycleTelemetry,
@@ -644,6 +716,8 @@ export {
 	trackStepTelemetryCrash,
 	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
+export { createStepToolProfile } from "./step/tool-profile.ts";
+export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {
 	resolveStepCliVersion,
 	STEP_CLI_BUILD_VERSION_ENV,
@@ -666,6 +740,7 @@ export {
 	highlightCode,
 	initTheme,
 	setThemeStorageDir,
+	stopThemeWatcher,
 	Theme,
 	type ThemeColor,
 } from "./theme/theme.ts";

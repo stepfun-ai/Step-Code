@@ -48,6 +48,6 @@ describe("theme picker", () => {
 	it("includes the Step palette as a built-in theme", () => {
 		expect(getAvailableThemes()).toContain("step");
 		const stepTheme = getAvailableThemesWithPaths().find((theme) => theme.name === "step");
-		expect(stepTheme?.path?.endsWith(join("modes", "interactive", "theme", "step.json"))).toBe(true);
+		expect(stepTheme?.path?.endsWith(join("theme", "step.json"))).toBe(true);
 	});
 });

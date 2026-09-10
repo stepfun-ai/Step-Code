@@ -4,8 +4,8 @@
 #   pty-drive.py --wait 6 --cols 120 --rows 40 \
 #     --expect "Ask Step to do anything" --expect "step-3.7-flash" --reject "Error" \
 #     --keys 'hello|SLEEP:0.4|ESC|SLEEP:0.3|C-c|C-c' \
-#     -- node_modules/.bin/tsx --tsconfig tsconfig.json packages/coding-agent/src/step-cli.ts
-# 按键 token: 普通串=原样输入; ENTER=\r; ESC=\x1b; TAB=\t; C-c=\x03; C-p=\x10; C-d=\x04; BS=\x7f; SLEEP:x=停 x 秒
+#     -- node_modules/.bin/tsx --tsconfig tsconfig.json apps/cli/src/main.ts
+# 按键 token: 普通串=原样输入; ENTER=\r; ESC=\x1b; TAB=\t; C-c=\x03; C-p=\x10; C-d=\x04; BS=\x7f; SLEEP:x=停 x 秒; RESIZE:CxR=改窗口尺寸并发 SIGWINCH
 import os, pty, select, time, signal, re, sys, argparse, fcntl, termios, struct
 
 ap = argparse.ArgumentParser()
@@ -46,6 +46,12 @@ TOK = {"ENTER": b"\r", "ESC": b"\x1b", "TAB": b"\t", "C-c": b"\x03",
 def send(tok):
     if tok.startswith("SLEEP:"):
         time.sleep(float(tok.split(":", 1)[1])); drain(0.1); return
+    if tok.startswith("RESIZE:"):                          # 改窗口尺寸压重绘/缓存
+        cols, rows = (int(x) for x in tok.split(":", 1)[1].lower().split("x"))
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        try: os.killpg(os.getpgid(pid), signal.SIGWINCH)   # 内核也会自动发,这里显式补一发
+        except Exception: pass
+        drain(0.2); return
     os.write(fd, TOK.get(tok, tok.encode()))
 
 try:

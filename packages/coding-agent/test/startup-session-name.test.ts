@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
-const cliPath = resolve(__dirname, "../src/step-cli.ts");
+const cliPath = resolve(__dirname, "../../../apps/cli/src/main.ts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -70,6 +70,10 @@ async function runCli(args: string[], dirs: CliDirs): Promise<CliResult> {
 		env: {
 			...process.env,
 			[ENV_AGENT_DIR]: dirs.agentDir,
+			// The @step-harness/cli entry resolves the Step storage namespace, so
+			// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
+			// from this test process's APP_NAME, which may differ from the child's).
+			STEP_CODING_AGENT_DIR: dirs.agentDir,
 			PI_OFFLINE: "1",
 			TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 		},

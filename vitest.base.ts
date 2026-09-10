@@ -11,6 +11,7 @@ export const workspaceSourcePaths = {
 	agentIndex: fileURLToPath(new URL("./packages/agent-loop/src/index.ts", import.meta.url)),
 	codingAgentIndex: fileURLToPath(new URL("./packages/coding-agent/src/index.ts", import.meta.url)),
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
+	configIndex: fileURLToPath(new URL("./packages/config/src/index.ts", import.meta.url)),
 } as const;
 
 export default defineConfig({
@@ -27,6 +28,7 @@ export default defineConfig({
 			},
 			{ find: /^@earendil-works\/pi-agent-core$/, replacement: workspaceSourcePaths.agentIndex },
 			{ find: /^@earendil-works\/pi-tui$/, replacement: workspaceSourcePaths.tuiIndex },
+			{ find: /^@step-harness\/config$/, replacement: workspaceSourcePaths.configIndex },
 		],
 	},
 });
