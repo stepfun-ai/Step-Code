@@ -9,8 +9,8 @@ import { createReadTool, createReadToolDefinition } from "../src/core/tools/read
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { StepToolSpinnerClock } from "../src/modes/interactive/components/step-spinner.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { createStepToolProfile } from "../src/step/tool-profile.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {

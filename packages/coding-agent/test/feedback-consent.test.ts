@@ -4,7 +4,6 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { ExtensionCommandContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { createInteractiveTui } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import {
 	confirmFeedbackSubmission,
 	formatFeedbackConsentPreview,
@@ -12,6 +11,7 @@ import {
 	ScrollableConsentComponent,
 } from "../src/step/feedback/consent.ts";
 import type { FeedbackBundle, FeedbackSubmission } from "../src/step/feedback/types.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 
 class RecordingVirtualTerminal extends VirtualTerminal {
 	readonly writes: string[] = [];

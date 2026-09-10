@@ -477,18 +477,6 @@ export {
 	UserMessageSelectorComponent,
 	type VisualTruncateResult,
 } from "./modes/interactive/components/index.ts";
-// Theme utilities for custom tools and extensions
-export {
-	getLanguageFromPath,
-	getMarkdownTheme,
-	getSelectListTheme,
-	getSettingsListTheme,
-	highlightCode,
-	initTheme,
-	setThemeStorageDir,
-	Theme,
-	type ThemeColor,
-} from "./modes/interactive/theme/theme.ts";
 export {
 	migrateStepConfig,
 	type StepConfigMigrationOptions,
@@ -669,6 +657,18 @@ export {
 	type StepCli,
 	type StepCliSession,
 } from "./step-cli-runtime.ts";
+// Theme utilities for custom tools and extensions
+export {
+	getLanguageFromPath,
+	getMarkdownTheme,
+	getSelectListTheme,
+	getSettingsListTheme,
+	highlightCode,
+	initTheme,
+	setThemeStorageDir,
+	Theme,
+	type ThemeColor,
+} from "./theme/theme.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";

@@ -9,8 +9,8 @@ import { getAuthCredential } from "../../cli/auth-command.ts";
 import { APP_NAME, getShareViewerUrl } from "../../config.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
 import { exportSessionToJsonl } from "../../core/session-export.ts";
+import { theme } from "../../theme/theme.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
-import { theme } from "./theme/theme.ts";
 
 interface SessionShareContext {
 	session: AgentSession;

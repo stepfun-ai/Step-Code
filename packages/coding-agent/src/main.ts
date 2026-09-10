@@ -92,13 +92,6 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/tru
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, type InteractiveModeOptions, runPrintMode, runRpcMode } from "./modes/index.ts";
-import {
-	detectTerminalBackgroundFromEnv,
-	initTheme,
-	resolveThemeSetting,
-	setThemeStorageDir,
-	stopThemeWatcher,
-} from "./modes/interactive/theme/theme.ts";
 import { cleanupManagedInstall, handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import {
 	continueStepSession,
@@ -108,6 +101,13 @@ import {
 	listStepSessions,
 	openStepSession,
 } from "./step/session.ts";
+import {
+	detectTerminalBackgroundFromEnv,
+	initTheme,
+	resolveThemeSetting,
+	setThemeStorageDir,
+	stopThemeWatcher,
+} from "./theme/theme.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 

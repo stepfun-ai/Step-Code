@@ -19,9 +19,9 @@ import type {
 	TuiMode,
 	WarningSettings,
 } from "../../../core/settings-manager.ts";
-import { getSettingsListTheme, parseAutoThemeSetting, type TerminalTheme, theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyDisplayText } from "./keybinding-hints.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyDisplayText } from "../../../render/keybinding-hints.ts";
+import { getSettingsListTheme, parseAutoThemeSetting, type TerminalTheme, theme } from "../../../theme/theme.ts";
 import { SelectSubmenu, SteppedSubmenu, type SteppedSubmenuStep } from "./settings-submenu.ts";
 
 const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };

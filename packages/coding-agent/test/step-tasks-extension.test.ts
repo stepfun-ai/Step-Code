@@ -9,7 +9,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import type { Theme } from "../src/theme/theme.ts";
 
 interface TasksSnapshot {
 	tasks: StepTask[];

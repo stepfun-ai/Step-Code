@@ -2,7 +2,7 @@ import { setKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { StepQueuedMessagesComponent } from "../src/modes/interactive/components/step-queued-messages.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 
 beforeEach(() => {
 	initTheme("step");

@@ -4,9 +4,9 @@ import {
 	type ProjectTrustOption,
 	type ProjectTrustStoreEntry,
 } from "../../../core/trust-manager.ts";
-import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyHint, rawKeyHint } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 
 export type TrustSelection = Pick<ProjectTrustOption, "trusted" | "updates">;
 

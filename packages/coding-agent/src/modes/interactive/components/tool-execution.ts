@@ -15,10 +15,10 @@ import {
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput, renderToolPath } from "../../../core/tools/render-utils.ts";
+import { renderDiff } from "../../../render/diff.ts";
+import { keyHint } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
-import { theme } from "../theme/theme.ts";
-import { renderDiff } from "./diff.ts";
-import { keyHint } from "./keybinding-hints.ts";
 import { prependAfterTerminalSequences } from "./step-message.ts";
 import type { StepToolSpinnerState } from "./step-spinner.ts";
 

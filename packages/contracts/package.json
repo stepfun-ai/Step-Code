@@ -1,0 +1,41 @@
+{
+	"name": "@step-harness/contracts",
+	"version": "0.84.4",
+	"private": true,
+	"description": "Host-to-agent contracts: in-process facade types and wire framing for the step-agent SDK",
+	"type": "module",
+	"main": "./dist/in-process/index.js",
+	"types": "./dist/in-process/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/in-process/index.d.ts",
+			"import": "./dist/in-process/index.js"
+		},
+		"./wire": {
+			"types": "./dist/wire/index.d.ts",
+			"import": "./dist/wire/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json",
+		"test": "vitest --run"
+	},
+	"keywords": [
+		"contracts",
+		"protocol",
+		"agent"
+	],
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"devDependencies": {
+		"@types/node": "22.19.19",
+		"vitest": "4.1.9"
+	}
+}

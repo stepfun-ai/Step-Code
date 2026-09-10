@@ -12,7 +12,7 @@ import { type KeybindingsConfig, KeybindingsManager } from "../src/core/keybindi
 import { StepEditor } from "../src/modes/interactive/components/step-editor.ts";
 import { StepQueuedMessagesComponent } from "../src/modes/interactive/components/step-queued-messages.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { getEditorTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getEditorTheme, initTheme } from "../src/theme/theme.ts";
 
 interface QueueModeFixture {
 	editor: StepEditor;

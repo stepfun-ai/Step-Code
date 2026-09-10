@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MarkdownTransformContext } from "../src/core/extensions/types.ts";
 import type { MermaidRenderingMode } from "../src/core/settings-manager.ts";
 import { createMermaidMarkdownTransformer } from "../src/modes/interactive/components/mermaid.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import type { Theme } from "../src/theme/theme.ts";
 
 interface TransformOptions {
 	maxWidth?: number;

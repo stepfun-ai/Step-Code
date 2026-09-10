@@ -1,4 +1,12 @@
 // UI Components for extensions
+
+export { type RenderDiffOptions, renderDiff } from "../../../render/diff.ts";
+export { DynamicBorder } from "../../../render/dynamic-border.ts";
+export { keyHint, keyText, rawKeyHint } from "../../../render/keybinding-hints.ts";
+export {
+	truncateToVisualLines,
+	type VisualTruncateResult,
+} from "../../../render/visual-truncate.ts";
 export { ArminComponent } from "./armin.ts";
 export { AssistantMessageComponent } from "./assistant-message.ts";
 export { BashExecutionComponent } from "./bash-execution.ts";
@@ -8,8 +16,6 @@ export { CompactionSummaryMessageComponent } from "./compaction-summary-message.
 export { CustomEditor } from "./custom-editor.ts";
 export { CustomMessageComponent } from "./custom-message.ts";
 export { DaxnutsComponent } from "./daxnuts.ts";
-export { type RenderDiffOptions, renderDiff } from "./diff.ts";
-export { DynamicBorder } from "./dynamic-border.ts";
 export { ExtensionEditorComponent } from "./extension-editor.ts";
 export { ExtensionInputComponent } from "./extension-input.ts";
 export { ExtensionSelectorComponent } from "./extension-selector.ts";
@@ -19,7 +25,6 @@ export {
 	type FirstTimeSetupResult,
 } from "./first-time-setup.ts";
 export { FooterComponent } from "./footer.ts";
-export { keyHint, keyText, rawKeyHint } from "./keybinding-hints.ts";
 export { LoginDialogComponent } from "./login-dialog.ts";
 export { ModelSelectorComponent } from "./model-selector.ts";
 export { OAuthSelectorComponent } from "./oauth-selector.ts";
@@ -51,7 +56,3 @@ export { TreeSelectorComponent } from "./tree-selector.ts";
 export { TrustSelectorComponent } from "./trust-selector.ts";
 export { UserMessageComponent } from "./user-message.ts";
 export { UserMessageSelectorComponent } from "./user-message-selector.ts";
-export {
-	truncateToVisualLines,
-	type VisualTruncateResult,
-} from "./visual-truncate.ts";

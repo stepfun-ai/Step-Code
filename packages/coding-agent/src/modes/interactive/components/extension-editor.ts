@@ -14,10 +14,10 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyHint } from "../../../render/keybinding-hints.ts";
+import { getEditorTheme, theme } from "../../../theme/theme.ts";
 import { editInExternalEditor } from "../external-editor.ts";
-import { getEditorTheme, theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint } from "./keybinding-hints.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
 export class ExtensionEditorComponent extends Container implements Focusable {

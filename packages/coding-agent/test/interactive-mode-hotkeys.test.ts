@@ -1,7 +1,7 @@
 import { type Component, Markdown, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme } from "../src/theme/theme.ts";
 
 describe("interactive hotkey help", () => {
 	it("omits the follow-up row when the action has no keybinding", () => {

@@ -1,10 +1,10 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
-import { theme } from "../theme/theme.ts";
+import { keyText } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { formatTokens } from "./footer.ts";
-import { keyText } from "./keybinding-hints.ts";
 
 /** Refresh cadence for the compact Step working indicator. */
 export const STEP_WORKING_INDICATOR_INTERVAL_MS = 200;

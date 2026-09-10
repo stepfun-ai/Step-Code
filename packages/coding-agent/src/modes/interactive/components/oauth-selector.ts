@@ -11,9 +11,9 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyHint, rawKeyHint } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
 export type AuthSelectorProvider = {

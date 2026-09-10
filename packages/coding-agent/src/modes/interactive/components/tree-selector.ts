@@ -13,9 +13,9 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { SessionTreeNode } from "../../../core/session-manager.ts";
-import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { formatKeyText, keyHint } from "./keybinding-hints.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { formatKeyText, keyHint } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 
 /** Gutter info: position (displayIndent where connector was) and whether to show │ */
 interface GutterInfo {

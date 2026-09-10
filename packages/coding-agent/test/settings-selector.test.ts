@@ -6,7 +6,7 @@ import {
 	type SettingsConfig,
 	SettingsSelectorComponent,
 } from "../src/modes/interactive/components/settings-selector.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme } from "../src/theme/theme.ts";
 
 describe("SettingsSelectorComponent", () => {
 	beforeAll(() => {

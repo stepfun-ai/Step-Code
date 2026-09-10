@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { exportSessionToHtml } from "../src/core/export-html/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { main } from "../src/main.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme } from "../src/theme/theme.ts";
 import { assistantMsg } from "./utilities.ts";
 
 describe("Step HTML export theme", () => {

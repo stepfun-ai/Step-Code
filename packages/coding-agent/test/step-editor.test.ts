@@ -2,7 +2,7 @@ import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@earendil-works/pi-
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "../src/modes/interactive/components/step-editor.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme } from "../src/theme/theme.ts";
 
 function createEditor(width = 80, rows = 24): StepEditor {
 	const keybindings = new KeybindingsManager();

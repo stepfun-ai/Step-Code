@@ -14,7 +14,7 @@ import {
 } from "../src/modes/interactive/components/status-indicator.ts";
 import { StepSelectorFrame } from "../src/modes/interactive/components/step-dialog.ts";
 import { TrustSelectorComponent } from "../src/modes/interactive/components/trust-selector.ts";
-import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme } from "../src/theme/theme.ts";
 
 const fakeTui = {
 	requestRender: () => {},

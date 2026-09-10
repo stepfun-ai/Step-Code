@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
-import { getCurrentThemeName } from "../src/modes/interactive/theme/theme.ts";
 import {
 	isStepInteractiveLoginStartup,
 	needsStepLoginBeforeInteractive,
@@ -12,6 +11,7 @@ import {
 	runStepLogin,
 	writeStepLoginCredential,
 } from "../src/step/login-flow.ts";
+import { getCurrentThemeName } from "../src/theme/theme.ts";
 
 describe("shared Step login flow storage", () => {
 	it("resolves an automatic Step theme before rendering standalone login", async () => {

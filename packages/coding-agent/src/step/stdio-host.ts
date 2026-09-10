@@ -23,7 +23,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../core/extensions/types.ts";
-import type { Theme } from "../modes/interactive/theme/theme.ts";
+import type { Theme } from "../theme/theme.ts";
 import { STEP_DEFAULT_PROVIDER } from "./defaults.ts";
 import { listStepSessions } from "./session.ts";
 import {

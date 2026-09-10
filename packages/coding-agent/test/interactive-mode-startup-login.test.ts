@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import * as themeModule from "../src/modes/interactive/theme/theme.ts";
+import * as themeModule from "../src/theme/theme.ts";
 
 type StartupLoginContext = {
 	options: {

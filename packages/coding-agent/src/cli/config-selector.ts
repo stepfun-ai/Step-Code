@@ -6,7 +6,7 @@ import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui
 import { CONFIG_DIR_NAME } from "../config.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { ConfigSelectorComponent, type ScopedResolvedPaths } from "../modes/interactive/components/config-selector.ts";
-import { initTheme, setThemeStorageDir, stopThemeWatcher } from "../modes/interactive/theme/theme.ts";
+import { initTheme, setThemeStorageDir, stopThemeWatcher } from "../theme/theme.ts";
 
 export interface ConfigSelectorOptions {
 	resolvedPaths: ScopedResolvedPaths;

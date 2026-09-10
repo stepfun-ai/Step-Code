@@ -9,7 +9,7 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { ToolRenderContext, ToolRenderResultOptions } from "../core/extensions/types.ts";
-import type { Theme } from "../modes/interactive/theme/theme.ts";
+import type { Theme } from "../theme/theme.ts";
 import type { StepTask, StepTaskStatus } from "./step-tasks.ts";
 
 type TaskSummary = Pick<StepTask, "id" | "subject" | "status" | "owner"> & Partial<Pick<StepTask, "blockedBy">>;

@@ -26,7 +26,9 @@
 			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"],
 			"@earendil-works/pi-agent-old": ["./packages/agent-old/src/index.ts"],
 			"@earendil-works/pi-agent-old/*": ["./packages/agent-old/src/*"],
-			"@step-harness/cli": ["./apps/cli/src/index.ts"]
+			"@step-harness/cli": ["./apps/cli/src/index.ts"],
+			"@step-harness/contracts": ["./packages/contracts/src/in-process/index.ts"],
+			"@step-harness/contracts/wire": ["./packages/contracts/src/wire/index.ts"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "apps/cli/src/**/*"],

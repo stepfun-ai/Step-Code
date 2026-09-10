@@ -13,8 +13,8 @@ import {
 	type StepWorktreeLease,
 } from "../src/extensions/step-subagent.ts";
 import { discoverStepAgents } from "../src/extensions/step-subagent-agents.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import type { StepTelemetryEventName, StepTelemetryProperties } from "../src/step/telemetry.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 
 function agentFile(name: string, description: string, body = "Do the task."): string {
 	return `---\nname: ${name}\ndescription: ${description}\ntools: read_file, find_files\n---\n${body}\n`;

@@ -1,7 +1,7 @@
 /** Step-only slash command adapters built on Pi's public extension actions. */
 
 import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "../core/extensions/types.ts";
-import { getAvailableThemes } from "../modes/interactive/theme/theme.ts";
+import { getAvailableThemes } from "../theme/theme.ts";
 import { resolveStepStorageRoot } from "./device-id.ts";
 import { buildFeedbackSessionBundle } from "./feedback/bundle.ts";
 import {

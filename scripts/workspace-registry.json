@@ -18,6 +18,7 @@
 		{ "name": "@earendil-works/pi-telemetry", "dir": "packages/telemetry", "role": "engine", "reason": "通用 telemetry contract/实现" },
 		{ "name": "@earendil-works/pi-tui", "dir": "packages/tui", "role": "renderer", "reason": "终端渲染原语，保持零 AI 依赖" },
 		{ "name": "@step-harness/cli", "dir": "apps/cli", "role": "app", "reason": "唯一进程入口宿主骨架(S0 起)；进程生命周期/argv/退出码" },
+		{ "name": "@step-harness/contracts", "dir": "packages/contracts", "role": "contract", "reason": "host 到 agent 的稳定契约(in-process facade 类型 + wire 帧),依赖为空" },
 		{ "name": "pi-extension-with-deps", "dir": "packages/coding-agent/examples/extensions/with-deps", "role": "example", "reason": "扩展示例" },
 		{ "name": "pi-extension-custom-provider-anthropic", "dir": "packages/coding-agent/examples/extensions/custom-provider-anthropic", "role": "example", "reason": "扩展示例" },
 		{ "name": "pi-extension-custom-provider-gitlab-duo", "dir": "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo", "role": "example", "reason": "扩展示例" },

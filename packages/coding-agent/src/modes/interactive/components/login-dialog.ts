@@ -12,10 +12,10 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyHint } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 import { openBrowser } from "../../../utils/open-browser.ts";
-import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint } from "./keybinding-hints.ts";
 import { renderStepDialogFrame } from "./step-dialog.ts";
 
 const FIXED_SECRET_MASK = "••••••••";

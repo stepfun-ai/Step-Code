@@ -8,7 +8,7 @@ import {
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "../src/modes/interactive/components/status-indicator.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme } from "../src/theme/theme.ts";
 
 function assistantMessage(
 	content: AssistantMessage["content"],

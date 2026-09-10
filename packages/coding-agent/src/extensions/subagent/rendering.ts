@@ -8,8 +8,8 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ToolRenderResultOptions } from "../../core/extensions/types.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { getMarkdownTheme } from "../../modes/interactive/theme/theme.ts";
+import type { Theme } from "../../theme/theme.ts";
+import { getMarkdownTheme } from "../../theme/theme.ts";
 import {
 	finalOutput,
 	resultText,

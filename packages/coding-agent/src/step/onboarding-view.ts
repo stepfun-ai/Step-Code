@@ -11,8 +11,8 @@ import {
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { DynamicBorder } from "../modes/interactive/components/dynamic-border.ts";
-import { initTheme, theme } from "../modes/interactive/theme/theme.ts";
+import { DynamicBorder } from "../render/dynamic-border.ts";
+import { initTheme, theme } from "../theme/theme.ts";
 import type { StepLoginProfile, StepLoginStep } from "./onboarding.ts";
 
 export interface StepOnboardingViewCallbacks {

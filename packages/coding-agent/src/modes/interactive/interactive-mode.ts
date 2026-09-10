@@ -93,6 +93,8 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { DynamicBorder } from "../../render/dynamic-border.ts";
+import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "../../render/keybinding-hints.ts";
 import {
 	readStepLoginCredential,
 	readStepLoginProfile,
@@ -101,6 +103,21 @@ import {
 } from "../../step/login-flow.ts";
 import { resolveStepLoginProfiles } from "../../step/onboarding.ts";
 import { listAllStepSessions, listStepSessions, openStepSession } from "../../step/session.ts";
+import {
+	getAvailableThemes,
+	getAvailableThemesWithPaths,
+	getEditorTheme,
+	getMarkdownTheme,
+	getThemeByName,
+	onThemeChange,
+	setRegisteredThemes,
+	setThemeStorageDir,
+	stopThemeWatcher,
+	Theme,
+	type ThemeColor,
+	theme,
+} from "../../theme/theme.ts";
+import { InteractiveThemeController } from "../../theme/theme-controller.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -121,13 +138,11 @@ import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
-import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
@@ -166,21 +181,6 @@ import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { shareSession } from "./session-share.ts";
-import {
-	getAvailableThemes,
-	getAvailableThemesWithPaths,
-	getEditorTheme,
-	getMarkdownTheme,
-	getThemeByName,
-	onThemeChange,
-	setRegisteredThemes,
-	setThemeStorageDir,
-	stopThemeWatcher,
-	Theme,
-	type ThemeColor,
-	theme,
-} from "./theme/theme.ts";
-import { InteractiveThemeController } from "./theme/theme-controller.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {

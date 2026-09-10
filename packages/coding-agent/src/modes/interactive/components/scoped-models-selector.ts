@@ -10,10 +10,10 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyText } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 import { getModelSearchText } from "../model-search.ts";
-import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyText } from "./keybinding-hints.ts";
 
 // EnabledIds: null = all enabled (no filter), string[] = explicit ordered list
 type EnabledIds = string[] | null;

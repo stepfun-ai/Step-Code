@@ -7,7 +7,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../theme/theme.ts";
 import { CustomEditor } from "./custom-editor.ts";
 
 /** The hint shown before the first prompt is typed. */

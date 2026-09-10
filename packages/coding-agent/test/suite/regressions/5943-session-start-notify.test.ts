@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { ExtensionUIContext } from "../../../src/core/extensions/index.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
-import { initTheme, type Theme, theme } from "../../../src/modes/interactive/theme/theme.ts";
+import { initTheme, type Theme, theme } from "../../../src/theme/theme.ts";
 import { createHarness } from "../harness.ts";
 
 function createUiContext(

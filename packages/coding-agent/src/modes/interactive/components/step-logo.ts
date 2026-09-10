@@ -32,7 +32,7 @@
  */
 
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../theme/theme.ts";
 import {
 	BIRD_SPRITE_COLUMNS,
 	BIRD_SPRITE_FRAME_DURATIONS_MS,

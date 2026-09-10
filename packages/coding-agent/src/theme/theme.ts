@@ -12,11 +12,11 @@ import {
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
-import type { SourceInfo } from "../../../core/source-info.ts";
-import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
-import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
-import { stripBom } from "../../../utils/text.ts";
+import { getCustomThemesDir, getThemesDir } from "../config.ts";
+import type { SourceInfo } from "../core/source-info.ts";
+import { closeWatcher, watchWithErrorHandler } from "../utils/fs-watch.ts";
+import { highlight, supportsLanguage } from "../utils/syntax-highlight.ts";
+import { stripBom } from "../utils/text.ts";
 
 // ============================================================================
 // Types & Schema

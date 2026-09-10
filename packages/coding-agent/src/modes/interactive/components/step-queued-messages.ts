@@ -5,8 +5,8 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { theme } from "../theme/theme.ts";
-import { formatKeyText } from "./keybinding-hints.ts";
+import { formatKeyText } from "../../../render/keybinding-hints.ts";
+import { theme } from "../../../theme/theme.ts";
 
 const MAX_PREVIEW_ENTRIES = 3;
 const MAX_PREVIEW_LINES = 2;

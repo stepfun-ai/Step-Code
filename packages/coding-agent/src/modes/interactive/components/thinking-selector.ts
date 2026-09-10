@@ -12,9 +12,9 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import { getSelectListTheme, theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyDisplayText } from "./keybinding-hints.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { keyDisplayText } from "../../../render/keybinding-hints.ts";
+import { getSelectListTheme, theme } from "../../../theme/theme.ts";
 
 const THINKING_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,

@@ -17,6 +17,7 @@ import {
 	FirstTimeSetupComponent,
 	type FirstTimeSetupResult,
 } from "../modes/interactive/components/first-time-setup.ts";
+import { resolveStepAgentDir } from "../step/environment.ts";
 import {
 	detectTerminalBackgroundFromEnv,
 	detectTerminalThemeForAuto,
@@ -28,8 +29,7 @@ import {
 	setTheme,
 	setThemeStorageDir,
 	type Theme,
-} from "../modes/interactive/theme/theme.ts";
-import { resolveStepAgentDir } from "../step/environment.ts";
+} from "../theme/theme.ts";
 
 const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const OFFICIAL_APP_NAME = "pi";

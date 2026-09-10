@@ -1,12 +1,7 @@
 import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../extensions/step-provider/index.ts";
-import {
-	detectTerminalBackgroundFromEnv,
-	initTheme,
-	resolveThemeSetting,
-	theme,
-} from "../modes/interactive/theme/theme.ts";
+import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import {
 	INITIAL_STEP_LOGIN_STEP,

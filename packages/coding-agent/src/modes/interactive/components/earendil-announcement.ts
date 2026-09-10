@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import { Container, Image, Spacer, Text } from "@earendil-works/pi-tui";
 import { getBundledInteractiveAssetPath } from "../../../config.ts";
-import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
+import { DynamicBorder } from "../../../render/dynamic-border.ts";
+import { theme } from "../../../theme/theme.ts";
 
 const BLOG_URL = "https://mariozechner.at/posts/2026-04-08-ive-sold-out/";
 const IMAGE_FILENAME = "clankolas.png";

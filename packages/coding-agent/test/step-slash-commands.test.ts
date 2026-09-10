@@ -7,9 +7,9 @@ import type { ExtensionAPI, ExtensionCommandContext } from "../src/core/extensio
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../src/core/slash-commands.ts";
 import { createStepExtension } from "../src/extensions/step.ts";
-import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { formatStepStatus, registerStepPiCommandAdapters } from "../src/step/slash-commands.ts";
 import { resolveStderrDevLogPath } from "../src/step/stderr-dev-log.ts";
+import { initTheme, type Theme, theme } from "../src/theme/theme.ts";
 
 const temporaryRoots: string[] = [];
 

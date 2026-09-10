@@ -5,7 +5,7 @@ import {
 	StepAssistantMessageComponent,
 	StepUserMessageComponent,
 } from "../src/modes/interactive/components/step-message.ts";
-import { getMarkdownTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme, theme } from "../src/theme/theme.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
