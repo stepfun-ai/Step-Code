@@ -32,6 +32,6 @@
 			"@step-harness/config": ["./packages/config/src/index.ts"]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "apps/cli/src/**/*"],
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "apps/cli/src/**/*", "apps/cli/test/**/*"],
 	"exclude": ["**/dist/**", "packages/coding-agent/examples/extensions/gondolin/**"]
 }
