@@ -237,7 +237,12 @@ export function resolveInitialStepPermissionPreset(
 	}
 	if (mode === "confirm" || mode === "ask") return "ask";
 	if (isTruthy(env.STEP_AUTOPILOT)) return "autopilot";
-	return "ask";
+	// Default to bypass: tools run without approval prompts. Explicit CLI flags,
+	// STEP_* env vars, and any persisted preset are all resolved above this line,
+	// so they continue to override the default. Dangerous commands (see
+	// decideStepToolCall / isDangerousCommand) still require confirmation even
+	// under bypass.
+	return "bypass";
 }
 
 export function stepPermissionStateForPreset(presetId: StepPermissionPresetId): StepPermissionState {
