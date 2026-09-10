@@ -64,7 +64,7 @@ const ThemeJsonSchema = Type.Object({
 		toolOutput: ColorValueSchema,
 		// Markdown (11 colors)
 		mdHeading: ColorValueSchema,
-		mdTableHeader: ColorValueSchema,
+		mdTableHeader: Type.Optional(ColorValueSchema),
 		mdLink: ColorValueSchema,
 		mdLinkUrl: ColorValueSchema,
 		mdCode: ColorValueSchema,
@@ -173,7 +173,7 @@ export type ThemeBg =
 	| "toolSuccessBg"
 	| "toolErrorBg";
 
-type OptionalThemeColor = "thinkingMax" | "searchMatchText";
+type OptionalThemeColor = "thinkingMax" | "searchMatchText" | "mdTableHeader";
 type OptionalThemeBg = "scrollbarThumb" | "searchMatchBg" | "codeInlineBg";
 
 type ColorMode = "truecolor" | "256color";
@@ -339,6 +339,7 @@ function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeJson["colors
 	searchMatchBg: ColorValue;
 	searchMatchText: ColorValue;
 	codeInlineBg: ColorValue;
+	mdTableHeader: ColorValue;
 } {
 	return {
 		...colors,
@@ -347,6 +348,7 @@ function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeJson["colors
 		searchMatchBg: colors.searchMatchBg ?? colors.selectedBg,
 		searchMatchText: colors.searchMatchText ?? colors.text,
 		codeInlineBg: colors.codeInlineBg ?? colors.customMessageBg,
+		mdTableHeader: colors.mdTableHeader ?? colors.mdHeading,
 	};
 }
 
@@ -379,6 +381,7 @@ export class Theme {
 			...fgColors,
 			thinkingMax: fgColors.thinkingMax ?? fgColors.thinkingXhigh,
 			searchMatchText: fgColors.searchMatchText ?? fgColors.text,
+			mdTableHeader: fgColors.mdTableHeader ?? fgColors.mdHeading,
 		};
 		for (const [key, value] of Object.entries(colors) as [ThemeColor, string | number][]) {
 			this.fgColors.set(key, fgAnsi(value, mode));

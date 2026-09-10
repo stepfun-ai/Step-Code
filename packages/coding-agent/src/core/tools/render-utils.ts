@@ -43,7 +43,12 @@ export function collapseCarriageReturns(text: string): string {
 		.split("\n")
 		.map((line) => {
 			const frames = line.split("\r");
-			return frames[frames.length - 1] ?? "";
+			// Take the last non-empty frame: a line ending in a bare \r
+			// (e.g. "[####] 100%\r") splits into a trailing "" that would
+			// otherwise blank out the whole line.
+			let i = frames.length - 1;
+			while (i > 0 && frames[i] === "") i--;
+			return frames[i] ?? "";
 		})
 		.join("\n");
 }
