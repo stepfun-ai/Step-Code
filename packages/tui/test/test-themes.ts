@@ -17,6 +17,7 @@ export const defaultSelectListTheme: SelectListTheme = {
 
 export const defaultMarkdownTheme: MarkdownTheme = {
 	heading: (text: string) => chalk.bold.cyan(text),
+	headingPrefix: (text: string) => chalk.dim(text),
 	link: (text: string) => chalk.blue(text),
 	linkUrl: (text: string) => chalk.dim(text),
 	code: (text: string) => chalk.yellow(text),
@@ -26,6 +27,7 @@ export const defaultMarkdownTheme: MarkdownTheme = {
 	quoteBorder: (text: string) => chalk.dim(text),
 	hr: (text: string) => chalk.dim(text),
 	listBullet: (text: string) => chalk.cyan(text),
+	tableHeader: (text: string) => chalk.bold.yellow(text),
 	bold: (text: string) => chalk.bold(text),
 	italic: (text: string) => chalk.italic(text),
 	strikethrough: (text: string) => chalk.strikethrough(text),

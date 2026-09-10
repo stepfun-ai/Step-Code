@@ -57,9 +57,10 @@ describe("Step user message presentation", () => {
 		const rows = component.render(100);
 		const rowContaining = (text: string) => rows.find((row) => stripTerminalSequences(row).includes(text));
 
-		for (const text of ["Heading", "docs", "inline"]) {
-			expect(rowContaining(text)).toContain(activeTheme!.getFgAnsi("mdHeading"));
-		}
+		// 标题/链接/行内代码各有专属 token（2026-09-09 品牌紫收缩后不再同色）
+		expect(rowContaining("Heading")).toContain(activeTheme!.getFgAnsi("mdHeading"));
+		expect(rowContaining("docs")).toContain(activeTheme!.getFgAnsi("mdLink"));
+		expect(rowContaining("inline")).toContain(activeTheme!.getFgAnsi("mdCode"));
 		const codeRow = rowContaining("export function greet");
 		expect(codeRow).toContain(activeTheme!.getFgAnsi("syntaxKeyword"));
 		expect(codeRow).toContain(activeTheme!.getFgAnsi("syntaxFunction"));

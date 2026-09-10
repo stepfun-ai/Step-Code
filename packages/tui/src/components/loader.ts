@@ -61,6 +61,12 @@ export class Loader extends Text {
 		this.updateDisplay();
 	}
 
+	/** Swaps the indicator paint at runtime (e.g. a color pulse between frames). */
+	setSpinnerColor(colorFn: (str: string) => string): void {
+		this.spinnerColorFn = colorFn;
+		this.updateDisplay();
+	}
+
 	setIndicator(indicator?: LoaderIndicatorOptions): void {
 		this.renderIndicatorVerbatim = indicator !== undefined;
 		this.frames = indicator?.frames !== undefined ? [...indicator.frames] : [...DEFAULT_FRAMES];

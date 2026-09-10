@@ -34,8 +34,8 @@ describe("Step HTML export theme", () => {
 		await exportSessionToHtml(session, undefined, { outputPath, themeName: "step" });
 
 		const html = readFileSync(outputPath, "utf8");
-		expect(html).toContain("--userMdHeading: #ab9eff;");
-		expect(html).toContain("--userSyntaxKeyword: #ff79d0;");
+		expect(html).toContain("--userMdHeading: #e8e8ea;");
+		expect(html).toContain("--userSyntaxKeyword: #e08fdf;");
 		expect(html).toMatch(/\.user-message\s*\{[^}]*--mdHeading:\s*var\(--userMdHeading\);/s);
 		expect(html).toMatch(/\.user-message\s*\{[^}]*--syntaxKeyword:\s*var\(--userSyntaxKeyword\);/s);
 	});
@@ -52,8 +52,8 @@ describe("Step HTML export theme", () => {
 		await exportSessionToHtml(session, undefined, { outputPath });
 
 		const html = readFileSync(outputPath, "utf8");
-		expect(html).toContain("--mdHeading: #ab9eff;");
-		expect(html).toContain("--userMdHeading: #ab9eff;");
+		expect(html).toContain("--mdHeading: #e8e8ea;");
+		expect(html).toContain("--userMdHeading: #e8e8ea;");
 	});
 
 	test("resolves the Step product default theme for non-interactive CLI export", async () => {
@@ -79,6 +79,6 @@ describe("Step HTML export theme", () => {
 
 		expect(exit).toHaveBeenCalledWith(0);
 		const html = readFileSync(outputPath, "utf8");
-		expect(html).toContain("--userMdHeading: #ab9eff;");
+		expect(html).toContain("--userMdHeading: #e8e8ea;");
 	});
 });

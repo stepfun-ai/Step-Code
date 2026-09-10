@@ -147,9 +147,11 @@ import {
 	RetryStatusIndicator,
 	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	type StatusIndicator,
+	TurnDoneIndicator,
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { buildStatusTips, StatusTipRotator } from "./components/status-tips.ts";
 import { StepSelectorFrame } from "./components/step-dialog.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "./components/step-editor.ts";
 import { StepAssistantMessageComponent, StepUserMessageComponent } from "./components/step-message.ts";
@@ -185,6 +187,37 @@ import { InteractiveThemeController } from "./theme/theme-controller.ts";
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
 	setExpanded(expanded: boolean): void;
+}
+
+/**
+ * Step's presentation trades the Ctrl+L model selector for a full screen
+ * repaint, giving users a manual recovery path when a terminal garbles after
+ * scrolling or resize (feedback issue-9ad367d596a230a9). The selector stays
+ * reachable through /model and Ctrl+P model cycling. An explicit user binding
+ * for either action always wins over this remap.
+ */
+/** Exported for the acceptance test suite (tui-acceptance-interactions.test.ts). */
+// 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/input-dispatch.ts —— 键位语义属于交互编排。
+export function applyStepKeybindingRemap(keybindings: KeybindingsManager): void {
+	const userBindings = keybindings.getUserBindings();
+	if (userBindings["app.redraw"] !== undefined || userBindings["app.model.select"] !== undefined) return;
+	keybindings.setUserBindings({ ...userBindings, "app.redraw": "ctrl+l", "app.model.select": [] });
+}
+
+/**
+ * Commands pinned to the top of Step's "/" completion list. Users reach for
+ * model/effort/mode switches most often, so they lead the list instead of
+ * following builtin registration order (feedback issue-c6b8e3bb543482b7).
+ */
+const STEP_SLASH_COMMAND_PRIORITY: readonly string[] = ["model", "permissions", "effort", "thinking", "plan"];
+
+/** Exported for the acceptance test suite (tui-acceptance-interactions.test.ts). */
+// 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/input-dispatch.ts —— 斜杠命令分派属于交互编排。
+export function orderStepSlashCommands<T extends { name: string }>(commands: readonly T[]): T[] {
+	const priority = new Map(STEP_SLASH_COMMAND_PRIORITY.map((name, index) => [name, index]));
+	return [...commands].sort(
+		(a, b) => (priority.get(a.name) ?? priority.size) - (priority.get(b.name) ?? priority.size),
+	);
 }
 
 function isExpandable(obj: unknown): obj is Expandable {
@@ -530,10 +563,18 @@ export class InteractiveMode {
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private readonly workingOutputTracker = new WorkingOutputTracker();
+	// Set when the last assistant message ended aborted/error; the turn-done
+	// marker is suppressed for such turns. Belongs to session-events (O1).
+	private turnEndedAbnormally = false;
+	// One tip per turn under the working row (CC spinner-tip position).
+	// Belongs to session-events (O1). Pool is built lazily: field initializers
+	// run before the constructor applies custom keybindings, and tips render
+	// key names via keyText().
+	private statusTipRotator: StatusTipRotator | undefined = undefined;
+	private currentStatusTip: string | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
-
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
 	private changelogMarkdown: string | undefined = undefined;
@@ -573,6 +614,8 @@ export class InteractiveMode {
 	// Track if editor is in bash mode (text starts with !) and whether the
 	// !! variant excludes the command output from the model's context
 	private isBashMode = false;
+	// Tracks "!!"-prefixed bash exclusion across submissions; wiring belongs to
+	// input-dispatch when interactive-mode.ts is split (structure plan step 4).
 	private isBashExcluded = false;
 
 	// Track current bash execution component
@@ -715,6 +758,7 @@ export class InteractiveMode {
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create(this.agentDir);
+		if (options.tuiStyle === "step") applyStepKeybindingRemap(this.keybindings);
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
@@ -898,8 +942,9 @@ export class InteractiveMode {
 			}
 		}
 
+		const combinedCommands = [...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList];
 		return new CombinedAutocompleteProvider(
-			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
+			this.presentation === "step" ? orderStepSlashCommands(combinedCommands) : combinedCommands,
 			this.sessionManager.getCwd(),
 			this.fdPath,
 		);
@@ -2424,17 +2469,30 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Turn-done marker replacing the working row after agent_end (duration + clock). */
+	private showTurnDoneIndicator(durationSeconds: number): void {
+		// Defensive: dispose any lingering indicator (retry/compaction) so its
+		// timers cannot outlive the marker replacing it.
+		this.activeStatusIndicator?.dispose();
+		this.activeStatusIndicator = undefined;
+		this.statusContainer.clear();
+		this.statusContainer.addChild(new TurnDoneIndicator(durationSeconds));
+	}
+
 	private showWorkingStatusIndicator(): void {
-		this.showStatusIndicator(
-			new WorkingStatusIndicator(
-				this.ui,
-				this.workingMessage ?? this.defaultWorkingMessage,
-				this.workingIndicatorOptions ??
-					(this.presentation === "step" ? { intervalMs: STEP_WORKING_INDICATOR_INTERVAL_MS } : undefined),
-				this.presentation,
-				this.presentation === "step" ? this.workingOutputTracker : undefined,
-			),
+		const indicator = new WorkingStatusIndicator(
+			this.ui,
+			this.workingMessage ?? this.defaultWorkingMessage,
+			this.workingIndicatorOptions ??
+				(this.presentation === "step" ? { intervalMs: STEP_WORKING_INDICATOR_INTERVAL_MS } : undefined),
+			this.presentation,
+			this.presentation === "step" ? this.workingOutputTracker : undefined,
+			// The working verb follows the actually-running tool; the mood
+			// rotation only fills the gaps between tools.
+			this.presentation === "step" ? () => this.stepSpinner?.currentToolName() : undefined,
 		);
+		indicator.setStatusTip(this.currentStatusTip);
+		this.showStatusIndicator(indicator);
 	}
 
 	private setWorkingVisible(visible: boolean): void {
@@ -2906,6 +2964,8 @@ export class InteractiveMode {
 	 * occupy, so the rendered document keeps its length and nothing moves. The bottom margin
 	 * holds the overlay off the rows the dock draws under the editor, so the dialog lands on
 	 * the same rows it would have taken inline and the footer stays visible.
+	 * Belongs to approval/dialog-mounting when interactive-mode.ts is split
+	 * (structure plan step 4).
 	 */
 	private mountExtensionDialog(component: Component, opts?: ExtensionUIDialogOptions): () => void {
 		if (opts?.overlay) {
@@ -3223,6 +3283,7 @@ export class InteractiveMode {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
+		this.defaultEditor.onAction("app.redraw", () => this.handleManualRedraw());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
@@ -3529,6 +3590,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				if (this.presentation === "step") this.workingOutputTracker.reset();
+				this.turnEndedAbnormally = false;
 				this.pendingTools.clear();
 				this.stepSpinner?.clear();
 				// Restore main escape handler if retry handler is still active
@@ -3540,6 +3602,10 @@ export class InteractiveMode {
 				break;
 
 			case "turn_start":
+				// Pick one tip per TURN (not per agent run): steering/follow-up
+				// turns fire turn_start only, without a new agent_start.
+				this.statusTipRotator ??= new StatusTipRotator(buildStatusTips());
+				this.currentStatusTip = this.settingsManager.getStatusTips() ? this.statusTipRotator.next() : undefined;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3644,6 +3710,9 @@ export class InteractiveMode {
 				if (event.message.role === "user") break;
 				if (this.presentation === "step" && event.message.role === "assistant") {
 					this.workingOutputTracker.complete(event.message);
+					if (event.message.stopReason === "aborted" || event.message.stopReason === "error") {
+						this.turnEndedAbnormally = true;
+					}
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
@@ -3712,7 +3781,19 @@ export class InteractiveMode {
 					this.pendingTools.set(event.toolCallId, component);
 				}
 				component.markExecutionStarted();
-				this.stepSpinner?.start(event.toolCallId);
+				this.stepSpinner?.start(event.toolCallId, event.toolName);
+				this.workingOutputTracker.notifyToolStarted();
+				// 工具在两条 assistant 消息之间执行时 turn_start 不会再来一次，
+				// 状态行可能已不存在——这里补位，动词跟随工具才有显示之处。
+				if (this.workingVisible && this.activeStatusIndicator?.kind !== "working") {
+					this.showWorkingStatusIndicator();
+				}
+				// Name the action immediately on tool start — never wait for the
+				// 4s verb tick, or short tools go unnamed (also covers the
+				// freshly-created indicator above).
+				if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+					this.activeStatusIndicator.refreshVerb();
+				}
 				this.ui.requestRender();
 				break;
 			}
@@ -3732,6 +3813,10 @@ export class InteractiveMode {
 					component.updateResult({ ...event.result, isError: event.isError });
 					this.pendingTools.delete(event.toolCallId);
 					this.stepSpinner?.stop(event.toolCallId);
+					// 工具结束不立刻降级动词：瞬时工具（read ~300ms）的动词如果
+					// 立刻换回 Working... 肉眼不可感知。保持最后动作，直到下一
+					// 个工具开始 / 模型思考 / 4s tick 自然过渡——刚完成的动作
+					// 停留显示不算谎言，看不见才是问题。
 					this.ui.requestRender();
 				}
 				break;
@@ -3742,6 +3827,12 @@ export class InteractiveMode {
 					this.ui.terminal.setProgress(false);
 				}
 				this.clearStatusIndicator("working");
+				// Turn-done marker: only for normally-ended turns (aborted/error
+				// turns already show an error line in the transcript); stays
+				// until the next turn replaces the status row.
+				if (this.presentation === "step" && !this.turnEndedAbnormally) {
+					this.showTurnDoneIndicator(this.workingOutputTracker.snapshot().elapsedSeconds);
+				}
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
@@ -5007,6 +5098,7 @@ export class InteractiveMode {
 					quietStartup: this.settingsManager.getQuietStartup(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
+					statusTips: this.settingsManager.getStatusTips(),
 					tuiMode: this.ui.mode,
 					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
@@ -5165,6 +5257,10 @@ export class InteractiveMode {
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
+					},
+					onStatusTipsChange: (enabled) => {
+						this.settingsManager.setStatusTips(enabled);
+						// Applies next turn: the tip is picked in turn_start.
 					},
 					onTuiModeChange: (mode) => {
 						if (!this.switchTuiMode(mode)) {
@@ -5396,6 +5492,17 @@ export class InteractiveMode {
 			});
 			return { component: selector, focus: selector };
 		});
+	}
+
+	/**
+	 * Forces a differential-renderer reset plus immediate repaint. This is the
+	 * user-facing recovery for terminals that garble the viewport after
+	 * scrolling or font changes — VS Code's own redraw works the same way
+	 * (feedback issue-9ad367d596a230a9).
+	 */
+	// 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/redraw.ts —— 重绘时机属于交互编排。
+	private handleManualRedraw(): void {
+		this.ui.renderNow(true);
 	}
 
 	private showModelSelector(initialSearchInput?: string): void {
