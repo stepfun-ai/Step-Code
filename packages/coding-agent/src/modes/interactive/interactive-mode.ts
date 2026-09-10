@@ -561,6 +561,7 @@ export class InteractiveMode {
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
+	private waitingForApproval = false;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private readonly workingOutputTracker = new WorkingOutputTracker();
 	// Set when the last assistant message ended aborted/error; the turn-done
@@ -637,10 +638,11 @@ export class InteractiveMode {
 	private shutdownRequested = false;
 
 	// Extension UI state
+	private extensionDialogsBlocked = false;
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
-	private unmountExtensionSelector: (() => void) | undefined = undefined;
+	private cancelExtensionSelector: (() => void) | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
-	private unmountExtensionInput: (() => void) | undefined = undefined;
+	private cancelExtensionInput: (() => void) | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputSubscriptions = new Set<{
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
@@ -2492,7 +2494,18 @@ export class InteractiveMode {
 			this.presentation === "step" ? () => this.stepSpinner?.currentToolName() : undefined,
 		);
 		indicator.setStatusTip(this.currentStatusTip);
+		indicator.setWaitingForApproval(this.waitingForApproval);
 		this.showStatusIndicator(indicator);
+	}
+
+	private setWaitingForApproval(waiting: boolean): void {
+		if (this.waitingForApproval === waiting) return;
+		this.waitingForApproval = waiting;
+		this.stepSpinner?.setPaused(waiting);
+		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+			this.activeStatusIndicator.setWaitingForApproval(waiting);
+		}
+		this.ui.requestRender();
 	}
 
 	private setWorkingVisible(visible: boolean): void {
@@ -2586,37 +2599,46 @@ export class InteractiveMode {
 		this.renderWidgets();
 	}
 
+	/** Refocusing an editor during cleanup must not create an ownerless dialog. */
+	private withExtensionDialogsBlocked(action: () => void): void {
+		const wasBlocked = this.extensionDialogsBlocked;
+		this.extensionDialogsBlocked = true;
+		try {
+			action();
+		} finally {
+			this.extensionDialogsBlocked = wasBlocked;
+		}
+	}
+
 	private resetExtensionUI(): void {
-		if (this.extensionSelector) {
+		this.withExtensionDialogsBlocked(() => {
 			this.hideExtensionSelector();
-		}
-		if (this.extensionInput) {
 			this.hideExtensionInput();
-		}
-		if (this.extensionEditor) {
-			this.hideExtensionEditor();
-		}
-		this.ui.hideOverlay();
-		this.clearExtensionTerminalInputListeners();
-		this.setExtensionFooter(undefined);
-		this.setExtensionHeader(undefined);
-		this.clearExtensionWidgets();
-		this.footerDataProvider.clearExtensionStatuses();
-		this.footer.invalidate();
-		this.autocompleteProviderWrappers = [];
-		this.setCustomEditorComponent(undefined);
-		this.setupAutocompleteProvider();
-		this.defaultEditor.onExtensionShortcut = undefined;
-		this.updateTerminalTitle();
-		this.workingMessage = undefined;
-		this.workingVisible = true;
-		this.setWorkingIndicator();
-		if (this.activeStatusIndicator?.kind === "working") {
-			this.activeStatusIndicator.setMessage(
-				`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`,
-			);
-		}
-		this.setHiddenThinkingLabel();
+			if (this.extensionEditor) {
+				this.hideExtensionEditor();
+			}
+			this.ui.hideOverlay();
+			this.clearExtensionTerminalInputListeners();
+			this.setExtensionFooter(undefined);
+			this.setExtensionHeader(undefined);
+			this.clearExtensionWidgets();
+			this.footerDataProvider.clearExtensionStatuses();
+			this.footer.invalidate();
+			this.autocompleteProviderWrappers = [];
+			this.setCustomEditorComponent(undefined);
+			this.setupAutocompleteProvider();
+			this.defaultEditor.onExtensionShortcut = undefined;
+			this.updateTerminalTitle();
+			this.workingMessage = undefined;
+			this.workingVisible = true;
+			this.setWorkingIndicator();
+			if (this.activeStatusIndicator?.kind === "working") {
+				this.activeStatusIndicator.setMessage(
+					`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`,
+				);
+			}
+			this.setHiddenThinkingLabel();
+		});
 	}
 
 	// Maximum total widget lines to prevent viewport overflow
@@ -2831,53 +2853,73 @@ export class InteractiveMode {
 		title: string,
 		options: string[],
 		opts?: ExtensionUIDialogOptions,
+		waitingForApproval = false,
 	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
+		return new Promise((resolve, reject) => {
+			if (this.extensionDialogsBlocked || opts?.signal?.aborted) {
 				resolve(undefined);
 				return;
 			}
 
-			const onAbort = () => {
+			this.withExtensionDialogsBlocked(() => {
 				this.hideExtensionSelector();
-				resolve(undefined);
+				this.hideExtensionInput();
+			});
+			let settled = false;
+			let selector: ExtensionSelectorComponent | undefined;
+			let unmount: (() => void) | undefined;
+			const finish = (complete: () => void) => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
+				try {
+					if (this.extensionSelector === selector) {
+						this.cancelExtensionSelector = undefined;
+						this.extensionSelector = undefined;
+						// Release this dialog's pause before restoring focus, which can
+						// synchronously open a new confirmation in a custom editor.
+						if (waitingForApproval) this.setWaitingForApproval(false);
+					}
+					selector?.dispose();
+					unmount?.();
+				} catch (error) {
+					reject(error);
+				} finally {
+					complete();
+				}
 			};
+			const onAbort = () => finish(() => resolve(undefined));
+			this.cancelExtensionSelector = onAbort;
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			this.hideExtensionSelector();
-			this.extensionSelector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(option);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(undefined);
-				},
-				{
-					tui: this.ui,
-					timeout: opts?.timeout,
-					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
-					presentation: this.options.tuiStyle === "step" ? "step" : "native",
-				},
-			);
-
-			this.unmountExtensionSelector = this.mountExtensionDialog(this.extensionSelector, opts);
+			try {
+				selector = new ExtensionSelectorComponent(
+					title,
+					options,
+					(option) => finish(() => resolve(option)),
+					onAbort,
+					{
+						tui: this.ui,
+						timeout: opts?.timeout,
+						onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
+						presentation: this.presentation,
+					},
+				);
+				this.extensionSelector = selector;
+				if (waitingForApproval) this.setWaitingForApproval(true);
+				unmount = this.mountExtensionDialog(selector, opts);
+				// A signal can abort inside the mount's widget/render callbacks.
+				if (settled) unmount();
+				else if (opts?.signal?.aborted) onAbort();
+			} catch (error) {
+				finish(() => reject(error));
+			}
 		});
 	}
 
-	/**
-	 * Hide the extension selector.
-	 */
+	/** Dismissal is cancellation, not just unmounting: callers must be released. */
 	private hideExtensionSelector(): void {
-		this.extensionSelector?.dispose();
-		this.unmountExtensionSelector?.();
-		this.unmountExtensionSelector = undefined;
-		this.extensionSelector = undefined;
+		this.cancelExtensionSelector?.();
 	}
 
 	/**
@@ -2888,7 +2930,7 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
+		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts, true);
 		return result === "Yes";
 	}
 
@@ -2908,51 +2950,57 @@ export class InteractiveMode {
 		placeholder?: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
+		return new Promise((resolve, reject) => {
+			if (this.extensionDialogsBlocked || opts?.signal?.aborted) {
 				resolve(undefined);
 				return;
 			}
 
-			const onAbort = () => {
+			this.withExtensionDialogsBlocked(() => {
+				this.hideExtensionSelector();
 				this.hideExtensionInput();
-				resolve(undefined);
+			});
+			let settled = false;
+			let input: ExtensionInputComponent | undefined;
+			let unmount: (() => void) | undefined;
+			const finish = (complete: () => void) => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
+				if (this.extensionInput === input) {
+					this.cancelExtensionInput = undefined;
+					this.extensionInput = undefined;
+				}
+				try {
+					input?.dispose();
+					unmount?.();
+					complete();
+				} catch (error) {
+					reject(error);
+				}
 			};
+			const onAbort = () => finish(() => resolve(undefined));
+			this.cancelExtensionInput = onAbort;
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			this.hideExtensionInput();
-			this.extensionInput = new ExtensionInputComponent(
-				title,
-				placeholder,
-				(value) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(value);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(undefined);
-				},
-				{
+			try {
+				input = new ExtensionInputComponent(title, placeholder, (value) => finish(() => resolve(value)), onAbort, {
 					tui: this.ui,
 					timeout: opts?.timeout,
-					presentation: this.options.tuiStyle === "step" ? "step" : "native",
-				},
-			);
-
-			this.unmountExtensionInput = this.mountExtensionDialog(this.extensionInput, opts);
+					presentation: this.presentation,
+				});
+				this.extensionInput = input;
+				unmount = this.mountExtensionDialog(input, opts);
+				if (settled) unmount();
+				else if (opts?.signal?.aborted) onAbort();
+			} catch (error) {
+				finish(() => reject(error));
+			}
 		});
 	}
 
-	/**
-	 * Hide the extension input.
-	 */
 	private hideExtensionInput(): void {
-		this.extensionInput?.dispose();
-		this.unmountExtensionInput?.();
-		this.unmountExtensionInput = undefined;
-		this.extensionInput = undefined;
+		this.cancelExtensionInput?.();
 	}
 
 	/**
@@ -7300,24 +7348,28 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
-		this.stepWelcome?.dispose();
-		this.stepSpinner?.dispose();
-		this.disposeActiveSelector();
-		if (this.settingsManager.getShowTerminalProgress()) {
-			this.ui.terminal.setProgress(false);
-		}
-		this.clearStatusIndicator();
-		this.themeController.disableAutoSync();
-		this.clearExtensionTerminalInputListeners();
-		this.footer.dispose();
-		this.footerDataProvider.dispose();
-		if (this.unsubscribe) {
-			this.unsubscribe();
-		}
-		if (this.isInitialized) {
-			this.stopInteractiveTui(fullscreenExitOutput);
-			this.isInitialized = false;
-		}
-		this.unregisterSignalHandlers();
+		this.withExtensionDialogsBlocked(() => {
+			this.stepWelcome?.dispose();
+			this.stepSpinner?.dispose();
+			this.clearStatusIndicator();
+			this.hideExtensionSelector();
+			this.hideExtensionInput();
+			this.disposeActiveSelector();
+			if (this.settingsManager.getShowTerminalProgress()) {
+				this.ui.terminal.setProgress(false);
+			}
+			this.themeController.disableAutoSync();
+			this.clearExtensionTerminalInputListeners();
+			this.footer.dispose();
+			this.footerDataProvider.dispose();
+			if (this.unsubscribe) {
+				this.unsubscribe();
+			}
+			if (this.isInitialized) {
+				this.stopInteractiveTui(fullscreenExitOutput);
+				this.isInitialized = false;
+			}
+			this.unregisterSignalHandlers();
+		});
 	}
 }

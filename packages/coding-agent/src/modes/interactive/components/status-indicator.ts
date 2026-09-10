@@ -179,6 +179,9 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	private verbTimer: ReturnType<typeof setInterval> | null = null;
 	private verbIndex = 0;
 	private statusTip: string | undefined;
+	private waitingForApproval = false;
+	private disposed = false;
+	private readonly requestRender: () => void;
 
 	constructor(
 		ui: TUI,
@@ -200,9 +203,41 @@ export class WorkingStatusIndicator extends StatusIndicator {
 		);
 		this.outputTracker = outputTracker;
 		this.toolNamer = toolNamer;
-		if (presentation === "step" && outputTracker) {
+		this.requestRender = () => ui.requestRender();
+		this.startVerbTimer();
+	}
+
+	/** Temporary presentation state; the saved working message and frames stay intact. */
+	setWaitingForApproval(waiting: boolean): void {
+		if (this.disposed || this.waitingForApproval === waiting) return;
+		this.waitingForApproval = waiting;
+		if (waiting) {
+			this.stop();
+			this.stopVerbTimer();
+		} else {
+			this.start();
+			this.startVerbTimer();
+		}
+		this.requestRender();
+	}
+
+	// Loader.setIndicator calls start(). Store preference changes during a wait
+	// without allowing that call to restart the animation (or a disposed row).
+	override start(): void {
+		if (this.waitingForApproval || this.disposed) return;
+		super.start();
+	}
+
+	private startVerbTimer(): void {
+		if (this.presentation === "step" && this.outputTracker && this.verbTimer === null) {
 			this.verbTimer = setInterval(() => this.rotateWorkingVerb(), STEP_WORKING_VERB_INTERVAL_MS);
 		}
+	}
+
+	private stopVerbTimer(): void {
+		if (this.verbTimer === null) return;
+		clearInterval(this.verbTimer);
+		this.verbTimer = null;
 	}
 
 	/** Reads the most recently started still-running tool, when wired. */
@@ -253,6 +288,10 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	}
 
 	override render(width: number): string[] {
+		if (this.waitingForApproval) {
+			const line = truncateToWidth(` ${theme.fg("muted", "Waiting for approval…")}`, width, "", false);
+			return this.presentation === "step" ? [line] : ["", line];
+		}
 		const lines = super.render(width);
 		if (this.presentation !== "step" || !this.outputTracker) return lines;
 
@@ -272,10 +311,8 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	}
 
 	override dispose(): void {
-		if (this.verbTimer !== null) {
-			clearInterval(this.verbTimer);
-			this.verbTimer = null;
-		}
+		this.disposed = true;
+		this.stopVerbTimer();
 		super.dispose();
 	}
 }

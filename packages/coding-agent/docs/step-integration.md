@@ -154,6 +154,55 @@ normal user-message path. The model inspects the project and uses pi's native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
 
+## Interactive tool rendering
+
+Step's projected tool titles and collapsed summaries are single physical
+terminal rows. Row-control whitespace in command, path, and query previews is
+normalized before width clipping: CR/LF becomes a space and tabs use the same
+space expansion as the native text renderer. This prevents multiline scripts
+from advancing the terminal cursor outside the differential renderer's row
+accounting during spinner updates. The executed arguments, persisted messages,
+and native expanded call/result bodies remain unchanged.
+
+## Interactive tool approval
+
+When its policy requires confirmation, Step asks for tool approval in an
+overlay. The heading contains the tool name and the last eight characters of
+its call ID; the body includes the full ID, the policy reason, and a bounded
+input summary. Long body lines can be clipped
+to the terminal width. The short ID helps distinguish consecutive prompts;
+compare full call IDs when diagnosing whether calls are actually identical.
+Navigation, confirm, and cancel keys come from the existing keybindings. Step
+wraps their hints on narrow terminals instead of clipping the cancel hint.
+
+A parallel tool batch prepares its approvals one at a time before executing
+approved tools. For example, approving `run_command [12345678]` can immediately
+show `run_command [87654321]` while the first command has not executed yet.
+Two prompts with the same tool name do not establish repeated execution.
+Check the distinct call IDs and their eventual tool results, not just the
+number of dialogs or the duration of a tool-start event.
+
+During a confirmation, an existing working row shows static
+`Waiting for approval…`, without a running verb, token count, elapsed time, or
+tip. Step tool-row animation pauses too, and its elapsed suffix excludes this
+approval wait. After the dialog closes, running presentation resumes with the
+saved working settings, including changes made during the wait. A hidden
+working row stays hidden. Turn-wide elapsed time and runtime/telemetry durations
+remain wall-clock measurements; their semantics are not changed by this UI
+pause. Native result text such as `Took ...` may therefore include the approval
+wait. Ordinary select/input dialogs do not enable the approval-wait state.
+
+Approval policy and batch scheduling are unchanged. Each Yes applies to that
+call; No, cancel, abort, or an explicitly configured timeout do not approve it.
+There is no new default timeout and no automatic approval. Replacing a simple
+select/confirm/input dialog, resetting extension UI, or stopping the TUI
+cancels its pending promise. Old callbacks cannot dismiss a replacement dialog;
+a mount failure cleans up and rejects the pending request. While replacement
+cleanup or reset/stop is running, a simple dialog requested synchronously by an
+editor refocus/disposal callback is cancelled before mounting. This prevents
+an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
+refocused editor to open the next dialog.
+
 ## Plans and tasks
 
 Plans and tasks serve different purposes. A **plan** is the Markdown proposal:
