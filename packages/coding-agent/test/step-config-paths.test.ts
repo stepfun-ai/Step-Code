@@ -109,7 +109,7 @@ describe("Step config path resolution", () => {
 		expect(packageManager.getInstalledPath("extensions/local.ts", "project")).toBe(projectExtension);
 	});
 
-	test("derives the Step sidecar next to the injected project config directory", async () => {
+	test("derives the Step config next to the injected agent and project directories", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-config-paths-sidecar-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
@@ -119,8 +119,25 @@ describe("Step config path resolution", () => {
 		const manager = createStepSettingsManager(cwd, agentDir, { configDirName: ".step-custom" });
 
 		expect(manager.getStepSettingsPaths()).toEqual({
-			global: join(agentDir, "step-settings.json"),
-			project: join(cwd, ".step-custom", "step-settings.json"),
+			global: join(root, "config.toml"),
+			project: join(cwd, ".step-custom", "config.toml"),
 		});
+	});
+
+	test("keeps the wrapped Pi manager on the injected config, not the real home", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-config-paths-shared-"));
+		roots.push(root);
+		const cwd = join(root, "workspace");
+		const agentDir = join(root, "agent");
+		await mkdir(cwd, { recursive: true });
+
+		const manager = createStepSettingsManager(cwd, agentDir, { configDirName: ".step-custom" });
+		manager.setDefaultModel("injected-model");
+		await manager.flush();
+
+		// The global config is the file the decorator reports, not ~/.step-cli.
+		const globalPath = manager.getStepSettingsPaths().global;
+		expect(globalPath).toBe(join(root, "config.toml"));
+		expect(await readFile(globalPath, "utf8")).toContain("injected-model");
 	});
 });

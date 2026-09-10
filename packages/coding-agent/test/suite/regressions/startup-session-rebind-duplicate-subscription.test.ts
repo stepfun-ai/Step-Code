@@ -11,6 +11,7 @@ type RebindContext = {
 	updateAvailableProviderCount: () => Promise<void>;
 	updateEditorBorderColor: () => void;
 	updateTerminalTitle: () => void;
+	ui: { renderNow: () => void };
 };
 
 type InteractiveModePrototype = {
@@ -49,6 +50,8 @@ describe("overlapping startup and replacement session rebinds", () => {
 			updateAvailableProviderCount: async () => {},
 			updateEditorBorderColor: () => {},
 			updateTerminalTitle,
+			// renderBeforeBind commits the startup frame before binding extensions.
+			ui: { renderNow: () => {} },
 		};
 
 		const startupRebind = interactiveModePrototype.rebindCurrentSession.call(context);

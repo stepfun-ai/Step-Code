@@ -1240,11 +1240,12 @@ export class InteractiveMode {
 		this.setupEditorSubmitHandler();
 		this.ui.requestRender();
 
-		// Initialize extensions first so resources are shown before messages
-		await this.rebindCurrentSession();
-
-		// Render initial messages AFTER showing loaded resources
-		this.renderInitialMessages();
+		// Paint the committed startup frame before binding extensions. Extension
+		// startup (MCP discovery, connections, tool registration) is unbounded in
+		// time, and the loaded-resources container is mounted above the chat
+		// container, so resources still appear above messages regardless of which
+		// is populated first. renderCurrentSessionState renders initial messages.
+		await this.rebindCurrentSession({ renderBeforeBind: true });
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -2292,6 +2293,10 @@ export class InteractiveMode {
 		if (options.renderBeforeBind) {
 			this.renderCurrentSessionState();
 			this.subscribeToAgent();
+			// Commit the frame here rather than relying on a queued render to flush
+			// during an await. Binding extensions is unbounded in time, so this is
+			// the guarantee that the header and the editor are visible first.
+			this.ui.renderNow();
 		}
 
 		await this.bindCurrentSessionExtensions();

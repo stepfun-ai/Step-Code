@@ -1,11 +1,15 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import { type TSchema, Type } from "typebox";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { getStepAuthPath } from "./auth.ts";
+import { readGlobalStepConfig } from "./config-toml.ts";
+import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
 import {
 	defaultStepPluginsDir,
 	listStepPluginDirectories,
@@ -14,7 +18,8 @@ import {
 	type StepPluginProvision,
 } from "./plugins.ts";
 
-const MCP_TIMEOUT_MS = 30_000;
+const MCP_STARTUP_TIMEOUT_SEC = 30;
+const MCP_CALL_TIMEOUT_SEC = 300;
 const CLIENT_INFO = { name: "step-harness", version: "0.3.1" } as const;
 const STEPPAGE_SERVER_NAME = "steppage__steppage";
 const STEPPAGE_DEPLOY_TOOL_NAME = "page_deploy";
@@ -23,15 +28,27 @@ const STEPPAGE_MANAGEMENT_URL = "https://platform.stepfun.com/sites";
 interface ConnectedServer {
 	readonly name: string;
 	readonly client: Client;
-	readonly transport: StdioClientTransport;
+	readonly transport: StdioClientTransport | StreamableHTTPClientTransport;
 	readonly tools: McpTool[];
+	/** Per-call timeout for this server, from `tool_timeout_sec`. */
+	readonly callTimeoutMs: number;
 }
 
 interface ServerDeclaration {
-	command: string;
+	command?: string;
 	args?: string[];
 	cwd?: string;
 	env?: Record<string, string>;
+	url?: string;
+	bearer_token_env_var?: string;
+	http_headers?: Record<string, string>;
+	env_http_headers?: Record<string, string>;
+	enabled?: boolean;
+	startup_timeout_sec?: number;
+	tool_timeout_sec?: number;
+	enabled_tools?: string[];
+	disabled_tools?: string[];
+	oauth?: { client_id?: string; client_secret?: string; scopes?: string[]; callback_port?: number };
 }
 
 interface DiscoveredServer {
@@ -40,56 +57,137 @@ interface DiscoveredServer {
 	provision?: StepPluginProvision;
 }
 
+export interface StepMcpStatus {
+	name: string;
+	status: "connecting" | "connected" | "failed" | "disabled";
+	toolCount: number;
+}
+
+let currentMcpStatuses: StepMcpStatus[] = [];
+
+export function getStepMcpStatuses(): StepMcpStatus[] {
+	return currentMcpStatuses.map((status) => ({ ...status }));
+}
+
+export function formatStepMcpStatuses(statuses: readonly StepMcpStatus[] = currentMcpStatuses): string {
+	const lines =
+		statuses.length === 0
+			? ["No MCP servers configured."]
+			: statuses.map((server) => {
+					const state = server.status === "connected" ? "connected" : server.status;
+					return `• ${server.name}: ${state} (${server.toolCount} tools)`;
+				});
+	return ["MCP Tools", ...lines].join("\n");
+}
+
 /** Load installed declarative MCP servers and expose their tools to Pi. */
 export function createStepMcpExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		let servers: ConnectedServer[] = [];
+		let startup: Promise<void> | undefined;
+		let cancellation: AbortController | undefined;
+		let statuses: StepMcpStatus[] = [];
 
 		pi.on("session_start", async (_event, ctx) => {
-			if (servers.length > 0) return;
-			const discovered = await discoverServers(ctx.cwd, ctx.isProjectTrusted());
-			for (const item of discovered) {
-				try {
-					const connected = await connectServer(item);
-					servers.push(connected);
-					for (const tool of connected.tools) {
-						pi.registerTool(createRemoteTool(connected, tool));
-					}
-				} catch (error) {
-					ctx.ui.notify(
-						describeMcpStartFailure({
+			if (startup) return;
+			const controller = new AbortController();
+			cancellation = controller;
+			statuses = [];
+			currentMcpStatuses = statuses;
+			startup = (async () => {
+				// Finish mounting the interactive session before doing discovery or
+				// spawning processes. Awaiting Promise.all in session_start kept the
+				// entire initialization path behind the slowest server.
+				await yieldToEventLoop();
+				if (controller.signal.aborted) return;
+				const discovered = await discoverStepMcpServers(ctx.cwd, ctx.isProjectTrusted());
+				if (controller.signal.aborted) return;
+				statuses.push(
+					...discovered.map(
+						(item): StepMcpStatus => ({
 							name: item.name,
-							command: item.declaration.command,
-							provision: item.provision,
-							error,
+							status: "connecting",
+							toolCount: 0,
 						}),
+					),
+				);
+				await Promise.all(
+					discovered.map(async (item, index) => {
+						let connected: ConnectedServer | undefined;
+						try {
+							const server = await connectStepMcpServer(item, controller.signal);
+							connected = server;
+							const remoteTools = server.tools.map((tool) => createRemoteTool(server, tool));
+							// Publishing a server's catalog refreshes the registry and the
+							// Step prompt once. Yield first so a server that finished while
+							// the loop was busy cannot preempt input or rendering.
+							await yieldToEventLoop();
+							controller.signal.throwIfAborted();
+							pi.registerTools(remoteTools);
+							servers.push(server);
+							statuses[index] = { name: item.name, status: "connected", toolCount: server.tools.length };
+						} catch (error) {
+							if (connected) await closeStepMcpServer(connected);
+							if (controller.signal.aborted) return;
+							statuses[index] = { name: item.name, status: "failed", toolCount: 0 };
+							ctx.ui.notify(
+								describeMcpStartFailure({
+									name: item.name,
+									command: item.declaration.command ?? item.declaration.url ?? "configured server",
+									provision: item.provision,
+									error,
+								}),
+								"warning",
+							);
+						}
+					}),
+				);
+			})().catch((error: unknown) => {
+				if (!controller.signal.aborted)
+					ctx.ui.notify(
+						`MCP discovery failed: ${error instanceof Error ? error.message : String(error)}`,
 						"warning",
 					);
-				}
-			}
+			});
+			// Print/RPC callers expect the initial tool catalog before submitting
+			// work. Only the interactive TUI detaches startup from session binding.
+			if (ctx.mode !== "tui") await startup;
 		});
 
 		pi.on("session_shutdown", async () => {
+			cancellation?.abort();
+			await startup;
 			const closing = servers;
 			servers = [];
-			await Promise.all(
-				closing.map(async (server) => {
-					try {
-						await server.client.close();
-					} catch {
-						await server.transport.close().catch(() => undefined);
-					}
-				}),
-			);
+			startup = undefined;
+			if (currentMcpStatuses === statuses) currentMcpStatuses = [];
+			await Promise.all(closing.map(closeStepMcpServer));
 		});
 	};
 }
 
-async function discoverServers(cwd: string, projectTrusted: boolean): Promise<DiscoveredServer[]> {
+async function closeStepMcpServer(server: Pick<ConnectedServer, "client" | "transport">): Promise<void> {
+	try {
+		await server.client.close();
+	} catch {
+		await server.transport.close().catch(() => undefined);
+	}
+}
+
+export async function discoverStepMcpServers(cwd: string, projectTrusted: boolean): Promise<DiscoveredServer[]> {
 	const roots = [defaultStepPluginsDir(process.env)];
 	if (projectTrusted) roots.push(defaultStepPluginsDir(process.env, { cwd, project: true }));
 	const result: DiscoveredServer[] = [];
 	const seen = new Set<string>();
+	const config = readGlobalStepConfig(process.env);
+	for (const [name, declaration] of Object.entries(config.mcp_servers ?? {})) {
+		if (!isRecord(declaration) || declaration.enabled === false) continue;
+		if (typeof declaration.command !== "string" && typeof declaration.url !== "string") continue;
+		const normalized = normalizeDeclaration(declaration);
+		if (typeof normalized.command !== "string" && typeof normalized.url !== "string") continue;
+		seen.add(name);
+		result.push({ name, declaration: normalized });
+	}
 	for (const root of roots) {
 		for (const pluginDir of await listStepPluginDirectories(root)) {
 			const parsed = await readStepPluginManifest(pluginDir);
@@ -111,7 +209,9 @@ async function discoverServers(cwd: string, projectTrusted: boolean): Promise<Di
 }
 
 function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration {
-	const declaration: ServerDeclaration = { command: String(value.command).trim() };
+	const declaration: ServerDeclaration = {};
+	if (typeof value.command === "string" && value.command.trim()) declaration.command = value.command.trim();
+	if (typeof value.url === "string" && value.url.trim()) declaration.url = value.url.trim();
 	if (Array.isArray(value.args)) declaration.args = value.args.filter(isString);
 	if (typeof value.cwd === "string" && value.cwd.trim()) declaration.cwd = value.cwd.trim();
 	if (isRecord(value.env)) {
@@ -119,24 +219,126 @@ function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration
 		for (const [key, entry] of Object.entries(value.env)) if (typeof entry === "string") env[key] = entry;
 		declaration.env = env;
 	}
+	for (const key of ["bearer_token_env_var", "startup_timeout_sec", "tool_timeout_sec"] as const) {
+		if (key === "bearer_token_env_var" && typeof value[key] === "string")
+			declaration.bearer_token_env_var = value[key];
+		if (key === "startup_timeout_sec" && typeof value[key] === "number") declaration.startup_timeout_sec = value[key];
+		if (key === "tool_timeout_sec" && typeof value[key] === "number") declaration.tool_timeout_sec = value[key];
+	}
+	for (const key of ["http_headers", "env_http_headers"] as const) {
+		if (isRecord(value[key]))
+			declaration[key] = Object.fromEntries(
+				Object.entries(value[key]).filter(([, v]) => typeof v === "string"),
+			) as Record<string, string>;
+	}
+	for (const key of ["enabled_tools", "disabled_tools"] as const) {
+		if (Array.isArray(value[key])) declaration[key] = value[key].filter(isString);
+	}
+	if (isRecord(value.oauth)) {
+		declaration.oauth = {
+			...(typeof value.oauth.client_id === "string" ? { client_id: value.oauth.client_id } : {}),
+			...(typeof value.oauth.client_secret === "string" ? { client_secret: value.oauth.client_secret } : {}),
+			...(Array.isArray(value.oauth.scopes) ? { scopes: value.oauth.scopes.filter(isString) } : {}),
+			...(typeof value.oauth.callback_port === "number" ? { callback_port: value.oauth.callback_port } : {}),
+		};
+	}
 	return declaration;
 }
 
-async function connectServer(input: DiscoveredServer): Promise<ConnectedServer> {
-	const env = resolveStepMcpEnvironment(input.declaration.env);
-	const transport = new StdioClientTransport({
-		command: input.declaration.command,
-		args: input.declaration.args,
-		cwd: input.declaration.cwd,
-		env,
-		stderr: "pipe",
-	});
-	// Drain server diagnostics so a chatty MCP process cannot block on a full pipe.
-	transport.stderr?.on("data", () => undefined);
+export async function connectStepMcpServer(
+	input: DiscoveredServer,
+	abortSignal?: AbortSignal,
+): Promise<ConnectedServer> {
+	abortSignal?.throwIfAborted();
+	const timeout = timeoutMs(input.declaration.startup_timeout_sec, MCP_STARTUP_TIMEOUT_SEC);
+	const callTimeoutMs = timeoutMs(input.declaration.tool_timeout_sec, MCP_CALL_TIMEOUT_SEC);
+	let transport: StdioClientTransport | StreamableHTTPClientTransport;
+	if (input.declaration.command) {
+		const env = resolveStepMcpEnvironment(input.declaration.env);
+		transport = new StdioClientTransport({
+			command: input.declaration.command,
+			args: input.declaration.args,
+			cwd: input.declaration.cwd,
+			env,
+			stderr: "pipe",
+		});
+		transport.stderr?.on("data", () => undefined);
+	} else if (input.declaration.url) {
+		const headers = resolveHttpHeaders(input.declaration);
+		transport = new StreamableHTTPClientTransport(new URL(input.declaration.url), {
+			requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
+			...(hasStoredMcpOAuthCredential(input.name, input.declaration.url, process.env)
+				? { authProvider: createStoredMcpOAuthProvider(input.name, input.declaration.url, process.env) }
+				: {}),
+		});
+	} else {
+		throw new Error("MCP server must define command or url");
+	}
 	const client = new Client(CLIENT_INFO, { capabilities: {} });
-	await client.connect(transport, { timeout: MCP_TIMEOUT_MS });
-	const listed = await client.listTools(undefined, { timeout: MCP_TIMEOUT_MS });
-	return { name: input.name, client, transport, tools: listed.tools };
+	const signal = AbortSignal.any([AbortSignal.timeout(timeout), ...(abortSignal ? [abortSignal] : [])]);
+	const closeOnAbort = () => {
+		void closeStepMcpServer({ client, transport });
+	};
+	signal.addEventListener("abort", closeOnAbort, { once: true });
+	try {
+		signal.throwIfAborted();
+		await client.connect(transport, { timeout, signal });
+		const listed = await client.listTools(undefined, { timeout, signal });
+		signal.throwIfAborted();
+		return {
+			name: input.name,
+			client,
+			transport,
+			tools: selectDeclaredTools(listed.tools, input.declaration),
+			callTimeoutMs,
+		};
+	} catch (error) {
+		await closeStepMcpServer({ client, transport });
+		throw error;
+	} finally {
+		signal.removeEventListener("abort", closeOnAbort);
+	}
+}
+
+/** Clamp a declared timeout to a usable range, falling back to the product default. */
+function timeoutMs(declared: number | undefined, fallbackSec: number): number {
+	const seconds = typeof declared === "number" && Number.isFinite(declared) && declared > 0 ? declared : fallbackSec;
+	return Math.max(1_000, seconds * 1_000);
+}
+
+/**
+ * Apply the server's allow/deny lists.
+ *
+ * These are a safety control: a user who lists `enabled_tools` expects every
+ * other tool to stay unreachable, so filter here, before the catalog reaches
+ * the registry, rather than relying on the model to avoid a name.
+ */
+function selectDeclaredTools(tools: readonly McpTool[], declaration: ServerDeclaration): McpTool[] {
+	const allowed = declaration.enabled_tools;
+	const denied = new Set(declaration.disabled_tools ?? []);
+	return tools.filter((tool) => {
+		if (denied.has(tool.name)) return false;
+		return allowed === undefined || allowed.includes(tool.name);
+	});
+}
+
+function resolveHttpHeaders(declaration: ServerDeclaration): Record<string, string> {
+	const headers = { ...(declaration.http_headers ?? {}) };
+	for (const [name, envName] of Object.entries(declaration.env_http_headers ?? {})) {
+		// The value is the name of an environment variable, not the header value.
+		// Fail loudly, as `bearer_token_env_var` does: dropping the header would
+		// send an unauthenticated request and report an opaque server error.
+		const value = process.env[envName]?.trim();
+		if (!value) throw new Error(`MCP header environment variable '${envName}' for '${name}' is missing`);
+		headers[name] = value;
+	}
+	if (declaration.bearer_token_env_var) {
+		const token = process.env[declaration.bearer_token_env_var]?.trim();
+		if (!token)
+			throw new Error(`MCP bearer token environment variable '${declaration.bearer_token_env_var}' is missing`);
+		headers.Authorization = `Bearer ${token}`;
+	}
+	return headers;
 }
 
 /** Turn a failed server start into a message the user can act on. */
@@ -195,7 +397,7 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 			const result = (await server.client.callTool(
 				{ name: remote.name, arguments: isRecord(params) ? params : {} },
 				CallToolResultSchema,
-				{ timeout: MCP_TIMEOUT_MS, resetTimeoutOnProgress: true, signal },
+				{ timeout: server.callTimeoutMs, resetTimeoutOnProgress: true, signal },
 			)) as { content?: Array<{ type?: string; text?: string }>; structuredContent?: unknown };
 			if ((result as { isError?: boolean }).isError === true) {
 				const errorText = (result.content ?? [])

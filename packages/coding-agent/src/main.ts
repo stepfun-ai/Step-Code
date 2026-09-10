@@ -725,6 +725,8 @@ export interface MainOptions {
 	configDirName?: string;
 	/** Optional credential file override for product entrypoints. */
 	authPath?: string;
+	/** Optional model catalog path for product entrypoints. */
+	modelsPath?: string;
 	/** Session construction facade used by replacement flows such as /new and /fork. */
 	sessionManagerFactory?: SessionManagerFactory;
 	/**
@@ -1056,6 +1058,7 @@ export async function main(args: string[], options?: MainOptions) {
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,
+			modelCatalogPath: options?.modelsPath,
 			configDirName,
 			authPath,
 			settingsManager: runtimeSettingsManager,

@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { migrateStepConfig } from "./config-migration.ts";
-import { resolveStepAgentDir, resolveStepConfigDir } from "./environment.ts";
+import { resolveStepAgentDir, resolveStepConfigDir, resolveStepConfigRoot } from "./environment.ts";
 import { normalizeStepStableVersion } from "./local-update.ts";
 
 export type StepTopLevelCommand = "config" | "exec" | "models" | "resume";
@@ -142,13 +142,14 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 	const cwd = resolve(io.cwd ?? process.cwd());
 	const env = io.homeEnv ?? process.env;
 	const agentDir = resolveStepAgentDir(env);
+	const configRoot = resolveStepConfigRoot(env);
 	const configDirName = resolveStepConfigDir(env);
 	const projectDir = join(cwd, configDirName);
 	const paths = {
 		agentDir,
 		globalSettings: join(agentDir, "settings.json"),
-		globalModels: join(agentDir, "models.json"),
-		globalAuth: join(agentDir, "auth.json"),
+		globalModels: join(configRoot, "models.json"),
+		globalAuth: join(configRoot, "auth.json"),
 		projectDir,
 		projectSettings: join(projectDir, "settings.json"),
 	};

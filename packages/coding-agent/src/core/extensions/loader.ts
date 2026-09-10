@@ -295,6 +295,18 @@ function createExtensionAPI(
 			runtime.refreshTools();
 		},
 
+		registerTools(tools: readonly ToolDefinition[]): void {
+			assertActive();
+			if (tools.length === 0) return;
+			for (const tool of tools) {
+				extension.tools.set(tool.name, {
+					definition: tool,
+					sourceInfo: extension.sourceInfo,
+				});
+			}
+			runtime.refreshTools();
+		},
+
 		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void {
 			assertActive();
 			extension.commands.set(name, {

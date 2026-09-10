@@ -567,7 +567,6 @@ export {
 export {
 	createStepSettingsManager,
 	decorateStepSettingsManager,
-	STEP_SETTINGS_FILE_NAME,
 	type StepSettings,
 	type StepSettingsDecoratorOptions,
 	type StepSettingsManager,

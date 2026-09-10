@@ -112,13 +112,14 @@ does not pass these options and keeps its upstream defaults.
 Step also injects a settings decorator through `settingsManagerFactory`. The
 decorator delegates Pi's complete `SettingsManager` API, including global and
 project merging, trust, reload, and flush. Product-only permission policy is
-kept in separate `step-settings.json` sidecars under the Step global agent and
-workspace directories, with the same global-then-project precedence and file
-locking. This keeps fields such as `permissionPreset` and `autoResume` out of
-Pi's native `settings.json` schema while leaving ordinary Pi startup unchanged.
+kept in the unified `config.toml` files at `~/.step-cli/config.toml` and
+`<cwd>/.step-cli/config.toml`, with the same global-then-project precedence and
+file locking. This keeps fields such as `permissionPreset` and `autoResume` out
+of Pi's native `settings.json` schema while leaving ordinary Pi startup
+unchanged.
 
 Top-level `step feedback` and interactive `/feedback` use a Step-owned gate,
-configured by `feedbackEnabled` in the Step sidecar and the legacy feedback
+configured by `feedbackEnabled` in the Step config and the legacy feedback
 opt-out environment variables. This gate is independent of Step telemetry:
 disabling analytics does not disable user feedback, while the optional
 `feedback_submitted` analytics event still follows the telemetry gate.

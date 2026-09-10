@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import "./step-bootstrap.ts";
+import { join } from "node:path";
 
 import { parseArgs } from "./cli/args.ts";
 import { readStoredCredential } from "./core/auth-storage.ts";
@@ -24,7 +25,12 @@ import {
 	runStepConfigCommand,
 	translateStepCommandArgs,
 } from "./step/command-compat.ts";
-import { migrateStepConfig, readStepGlobalDefaults } from "./step/config-migration.ts";
+import {
+	ensureStepGlobalConfig,
+	readGlobalStepConfig,
+	readGlobalStepDefaults,
+	updateGlobalMcpConfig,
+} from "./step/config-toml.ts";
 import {
 	getStepDefaultTheme,
 	isStepServicesDisabled,
@@ -33,7 +39,7 @@ import {
 	withStepDefaults,
 } from "./step/defaults.ts";
 import { readOrCreateStepDeviceId, resolveStepStorageRoot } from "./step/device-id.ts";
-import { resolveStepAgentDir, resolveStepConfigDir } from "./step/environment.ts";
+import { resolveStepAgentDir, resolveStepConfigDir, resolveStepConfigRoot } from "./step/environment.ts";
 import { runFeedbackCommand } from "./step/feedback/command.ts";
 import { readFeedbackUsername } from "./step/feedback/context.ts";
 import { maybeUpdateStep, runStepUpdateCommand } from "./step/local-update.ts";
@@ -43,6 +49,7 @@ import {
 	runStepLogin,
 	syncStepLoginProfileEndpoint,
 } from "./step/login-flow.ts";
+import { loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
 import { createStepSessionManagerFactory } from "./step/session.ts";
 import { createStepSettingsManager, type StepSettingsManager } from "./step/settings-manager.ts";
 import {
@@ -85,6 +92,7 @@ process.title = "step";
 process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = "step";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
+ensureStepGlobalConfig(process.env);
 setStderrDevLogStorageRootDirectory(resolveStepStorageRoot(process.env));
 installProcessStderrDevLogCapture();
 
@@ -94,14 +102,11 @@ installProcessStderrDevLogCapture();
 const rawStdoutWrite = process.stdout.write.bind(process.stdout) as (chunk: Buffer) => boolean;
 const sdkStdioRequested = process.argv.includes("--sdk-stdio");
 
-// Migrate old config files before telemetry, device identity, or Pi's
-// SettingsManager can create the canonical files.
-// The source is retained; warnings are surfaced without blocking startup.
-const stepConfigMigration = await migrateStepConfig();
-for (const warning of stepConfigMigration.warnings) {
-	process.stderr.write(`[step migration] ${warning}\n`);
-}
-const stepPersistedDefaults = await readStepGlobalDefaults();
+// Read persisted defaults before telemetry, device identity, or Pi's
+// SettingsManager exist. Telemetry in particular is constructed below, so a
+// user's saved `telemetry.enabled = false` has to be visible here or reporting
+// silently turns itself back on at every launch.
+const stepPersistedDefaults = readGlobalStepDefaults(process.env);
 const stepCodeConfig = await loadStepCodeConfig();
 const stepCodeProviderExtension = stepCodeConfig ? createStepCodeProviderInlineExtension(stepCodeConfig) : undefined;
 // Parse only the product policy flags here so the inline extension can receive
@@ -175,6 +180,7 @@ const readCurrentFeedbackIdentity = () => {
 };
 const stepMainOptions: MainOptions = {
 	agentDir: resolveStepAgentDir(),
+	modelsPath: join(resolveStepConfigRoot(), "models.json"),
 	configDirName: resolveStepConfigDir(),
 	sessionManagerFactory: createStepSessionManagerFactory(resolveStepAgentDir()),
 	settingsManagerFactory: (cwd, agentDir, options) => {
@@ -209,17 +215,8 @@ const stepMainOptions: MainOptions = {
 	allowedAuthProviders: [STEP_PROVIDER_ID, ...(stepCodeConfig?.providers.map((provider) => provider.id) ?? [])],
 	disableBackgroundServices: isStepServicesDisabled(),
 	defaultTheme: getStepDefaultTheme(),
-	defaultProvider: stepCodeConfig?.defaultProvider ?? stepConfigMigration.defaultProvider ?? STEP_DEFAULT_PROVIDER,
-	defaultModel: stepCodeConfig?.defaultModel ?? stepConfigMigration.defaultModel ?? STEP_DEFAULT_MODEL,
-	beforeRuntimeCreate: async ({ cwd, agentDir }) => {
-		// Session selectors may move the runtime to a workspace different from
-		// process.cwd(). Give that workspace the same one-time legacy projection
-		// before Pi loads its project-scoped settings and resources.
-		const report = await migrateStepConfig({ cwd, agentDir });
-		for (const warning of report.warnings) {
-			process.stderr.write(`[step migration] ${warning}\n`);
-		}
-	},
+	defaultProvider: stepCodeConfig?.defaultProvider ?? stepPersistedDefaults.provider ?? STEP_DEFAULT_PROVIDER,
+	defaultModel: stepCodeConfig?.defaultModel ?? stepPersistedDefaults.model ?? STEP_DEFAULT_MODEL,
 	runtimeHostFactory: createStepCli,
 	stdioModeFactory: sdkStdioRequested
 		? async (runtimeHost) => {
@@ -237,7 +234,11 @@ const stepMainOptions: MainOptions = {
 		defaultModelForProvider: (providerId) => (providerId === STEP_PROVIDER_ID ? STEP_DEFAULT_MODEL : undefined),
 		allowedAuthProviders: [STEP_PROVIDER_ID],
 		stepLogin: (host) =>
-			runStepLogin({ authPath: getStepAuthPath(), createHost: () => host, themeName: getStepDefaultTheme() }),
+			runStepLogin({
+				authPath: getStepAuthPath(),
+				createHost: () => host,
+				themeName: getStepDefaultTheme(),
+			}),
 		stepLogout: async () => {
 			const report = await logoutStepCredentials({
 				nativePath: getStepAuthPath(),
@@ -283,7 +284,10 @@ const stepMainOptions: MainOptions = {
 	toolProfile: ({ cwd, agentDir, settingsManager }) =>
 		createStepToolProfile(cwd, {
 			agentDir,
-			searchWeb: { apiKey: stepPermissionArgs.apiKey, authPath: getStepAuthPath() },
+			searchWeb: {
+				apiKey: stepPermissionArgs.apiKey,
+				authPath: getStepAuthPath(),
+			},
 			read: { autoResizeImages: settingsManager.getImageAutoResize() },
 			bash: {
 				commandPrefix: settingsManager.getShellCommandPrefix(),
@@ -293,6 +297,7 @@ const stepMainOptions: MainOptions = {
 };
 
 const topLevelStepCommand = process.argv[2];
+const isTopLevelMcp = topLevelStepCommand === "mcp";
 const isTopLevelLogin = topLevelStepCommand === "login";
 const isTopLevelLogout = topLevelStepCommand === "logout";
 const isTopLevelFeedback = topLevelStepCommand === "feedback";
@@ -341,6 +346,119 @@ try {
 				process.stdout.write("Run `step login` to sign in again.\n");
 			}
 		}
+	} else if (isTopLevelMcp) {
+		const args = process.argv.slice(3);
+		const subcommand = args[0] ?? "list";
+		const json = args.includes("--json");
+		const config = readGlobalStepConfig(process.env);
+		const servers = config.mcp_servers ?? {};
+		if (subcommand === "list" || subcommand === "get") {
+			const name = subcommand === "get" ? args[1] : undefined;
+			const selected = name ? (servers[name] ? { [name]: servers[name] } : {}) : servers;
+			if (json) process.stdout.write(`${JSON.stringify(selected)}\n`);
+			else
+				for (const [serverName, declaration] of Object.entries(selected))
+					process.stdout.write(`${serverName}: ${declaration.command ?? declaration.url ?? "invalid"}\n`);
+			if (name && !servers[name]) process.exitCode = 1;
+		} else if (subcommand === "remove") {
+			const name = args[1];
+			if (!name || !servers[name]) {
+				process.stderr.write("Usage: step mcp remove <name>\n");
+				process.exitCode = 1;
+			} else {
+				updateGlobalMcpConfig(process.env, (current) => {
+					const next = { ...current };
+					delete next[name];
+					return next;
+				});
+				process.stdout.write(`Removed MCP server '${name}'. Restart Step to apply.\n`);
+			}
+		} else if (subcommand === "add") {
+			const name = args[1];
+			const separator = args.indexOf("--");
+			// Everything after `--` is the server's own argv. Scanning past it
+			// would let a server flag named `--url` or `--env` rewrite the entry
+			// Step is about to store.
+			const flags = separator >= 0 ? args.slice(0, separator) : args;
+			const urlIndex = flags.indexOf("--url");
+			const url = urlIndex >= 0 ? flags[urlIndex + 1] : undefined;
+			const bearerIndex = flags.indexOf("--bearer-token-env-var");
+			const bearerTokenEnvVar = bearerIndex >= 0 ? flags[bearerIndex + 1] : undefined;
+			const envValues: Record<string, string> = {};
+			for (let index = 2; index < flags.length; index += 1) {
+				if (flags[index] !== "--env") continue;
+				const pair = flags[index + 1];
+				const separatorIndex = pair?.indexOf("=") ?? -1;
+				if (separatorIndex > 0 && pair) envValues[pair.slice(0, separatorIndex)] = pair.slice(separatorIndex + 1);
+			}
+			const command = separator >= 0 ? args[separator + 1] : undefined;
+			const commandArgs = separator >= 0 ? args.slice(separator + 2) : [];
+			// `--env` sets literal process environment variables, so it belongs to
+			// stdio servers only. Silently reinterpreting it as an HTTP header
+			// name would store values the transport never sends.
+			const envOnUrl = Boolean(url) && Object.keys(envValues).length > 0;
+			if (
+				!name ||
+				servers[name] ||
+				(!url && !command) ||
+				(url && command) ||
+				(bearerTokenEnvVar && !url) ||
+				envOnUrl
+			) {
+				process.stderr.write(
+					"Usage: step mcp add <name> --url <url> [--bearer-token-env-var VAR] | [--env KEY=VALUE]... -- <command> [args...]\n",
+				);
+				process.exitCode = 1;
+			} else {
+				updateGlobalMcpConfig(process.env, (current) => ({
+					...current,
+					[name]: url
+						? {
+								url,
+								...(bearerTokenEnvVar ? { bearer_token_env_var: bearerTokenEnvVar } : {}),
+							}
+						: {
+								command,
+								args: commandArgs,
+								...(Object.keys(envValues).length ? { env: envValues } : {}),
+							},
+				}));
+				process.stdout.write(`Added MCP server '${name}'. Restart Step to apply.\n`);
+			}
+		} else if (subcommand === "login" || subcommand === "logout") {
+			const name = args[1];
+			const server = name ? servers[name] : undefined;
+			if (!name || !server) {
+				process.stderr.write("Usage: step mcp login|logout <http-server-name>\n");
+				process.exitCode = 1;
+			} else if (!server.url) {
+				process.stderr.write(
+					`"${name}" doesn't support OAuth login — it's only available for HTTP and SSE servers.\n`,
+				);
+				process.exitCode = 1;
+			} else if (subcommand === "login") {
+				try {
+					await loginMcpServer(name, server.url, server.oauth, process.env);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					if (message.includes("403") && name.toLowerCase().includes("figma")) {
+						throw new Error(
+							"Step does not support figma mcp. You can use https://github.com/GLips/Figma-Context-MCP in Step CLI as an alternative to the official Figma MCP.",
+						);
+					}
+					throw error;
+				}
+			} else {
+				process.stdout.write(
+					logoutMcpServer(name, server.url, process.env)
+						? `Logged out of MCP server '${name}'.\n`
+						: `No stored credentials for MCP server '${name}'.\n`,
+				);
+			}
+		} else {
+			process.stderr.write("Usage: step mcp list|get|add|remove|login|logout\n");
+			process.exitCode = 1;
+		}
 	} else if (isTopLevelLogin) {
 		if (topLevelAuthHelp) {
 			process.stdout.write("Usage: step login\nSign in with the Step account and store a credential.\n");
@@ -350,7 +468,10 @@ try {
 			);
 			process.exitCode = 1;
 		} else {
-			const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
+			const outcome = await runStepLogin({
+				authPath: getStepAuthPath(),
+				themeName: getStepDefaultTheme(),
+			});
 			if (outcome.kind === "completed") {
 				syncStepLoginProfileEndpoint(getStepAuthPath());
 				process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
@@ -380,7 +501,9 @@ try {
 			process.stderr.write(`${updateCommand.error}\n`);
 			process.exitCode = 1;
 		} else if (updateCommand) {
-			process.exitCode = await runStepUpdateCommand({ version: updateCommand.version });
+			process.exitCode = await runStepUpdateCommand({
+				version: updateCommand.version,
+			});
 		} else {
 			const normalizedStepArgs = normalizeStepSessionSelectorArgs(rawStepArgs);
 			const stepCodeArgs = applyStepCodeConfigDefaults(normalizedStepArgs, stepCodeConfig);
@@ -398,9 +521,15 @@ try {
 				});
 				if (
 					!hasConfiguredStepCodeCredential(stepCodeConfig) &&
-					needsStepLoginBeforeInteractive({ authPath: getStepAuthPath(), interactive: interactiveStartup })
+					needsStepLoginBeforeInteractive({
+						authPath: getStepAuthPath(),
+						interactive: interactiveStartup,
+					})
 				) {
-					const outcome = await runStepLogin({ authPath: getStepAuthPath(), themeName: getStepDefaultTheme() });
+					const outcome = await runStepLogin({
+						authPath: getStepAuthPath(),
+						themeName: getStepDefaultTheme(),
+					});
 					if (outcome.kind === "exit") {
 						shouldLaunchMain = false;
 					} else {
@@ -413,8 +542,8 @@ try {
 							compatibility?.args ?? stepCodeArgs,
 							process.env,
 							{
-								provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,
-								model: stepPersistedDefaults.model ?? stepConfigMigration.defaultModel,
+								provider: stepPersistedDefaults.provider,
+								model: stepPersistedDefaults.model,
 							},
 							{ deferSettingsSelection: true },
 						),

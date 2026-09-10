@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { SettingsManager, type SettingsManagerCreateOptions } from "../core/settings-manager.ts";
 import { stripBom } from "../utils/text.ts";
+import { readStepConfig, StepTomlSettingsStorage, writeStepConfig } from "./config-toml.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./environment.ts";
 import {
 	getStepPermissionPreset,
@@ -35,9 +36,6 @@ export interface StepSettings {
 	/** Enables the user feedback submission flow. Defaults to enabled. */
 	feedbackEnabled?: boolean;
 }
-
-/** Filename used for Step-only policy sidecars (Pi settings remain settings.json). */
-export const STEP_SETTINGS_FILE_NAME = "step-settings.json";
 
 type JsonObject = Record<string, unknown>;
 
@@ -109,6 +107,11 @@ function clone<T>(value: T): T {
 
 function readJson(path: string): ReadResult {
 	try {
+		if (path.endsWith(".toml")) {
+			const parsed = readStepConfig(path);
+			delete parsed.mcp_servers;
+			return { exists: true, value: parsed as JsonObject };
+		}
 		const parsed = JSON.parse(stripBom(readFileSync(path, "utf8"))) as unknown;
 		const value = asObject(parsed);
 		return value ? { exists: true, value } : { exists: true, error: new Error("expected a JSON object") };
@@ -293,8 +296,8 @@ function derivePaths(options: StepSettingsDecoratorOptions): StepSettingsPaths {
 	const agentDir = resolve(options.agentDir ?? resolveStepAgentDir());
 	const configDirName = options.configDirName?.trim() || resolveStepConfigDir();
 	return {
-		global: resolve(options.paths?.global ?? join(agentDir, STEP_SETTINGS_FILE_NAME)),
-		project: resolve(options.paths?.project ?? join(cwd, configDirName, STEP_SETTINGS_FILE_NAME)),
+		global: resolve(options.paths?.global ?? join(dirname(agentDir), "config.toml")),
+		project: resolve(options.paths?.project ?? join(cwd, configDirName, "config.toml")),
 	};
 }
 
@@ -401,9 +404,9 @@ class StepSettingsStore {
 		try {
 			const directory = dirname(path);
 			mkdirSync(directory, { recursive: true, mode: 0o700 });
-			// proper-lockfile expects the target to exist. Creating an empty object
-			// here is part of a write operation, so it does not affect read-only use.
-			if (!existsSync(path)) writeFileSync(path, "{}\n", { encoding: "utf8", mode: 0o600 });
+			// Initialize with valid content for the selected format only on writes.
+			if (!existsSync(path))
+				writeFileSync(path, path.endsWith(".toml") ? "" : "{}\n", { encoding: "utf8", mode: 0o600 });
 			release = this.acquireLockSyncWithRetry(path);
 			const current = readJson(path);
 			if (current.error) {
@@ -421,7 +424,8 @@ class StepSettingsStore {
 				if (value === undefined) delete next[rawKey];
 				else next[rawKey] = clone(value);
 			}
-			writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+			if (path.endsWith(".toml")) writeStepConfig(path, { ...readStepConfig(path), ...next });
+			else writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 			if (scope === "global") this.global = next;
 			else this.project = next;
 		} catch (error) {
@@ -635,11 +639,13 @@ export function createStepSettingsManager(
 	options: StepSettingsManagerCreateOptions = {},
 ): StepSettingsManager {
 	const resolvedAgentDir = resolve(options.agentDir ?? agentDir ?? resolveStepAgentDir());
-	const pi =
-		/* static method keeps ordinary Pi construction untouched */
-		SettingsManager.create(cwd, resolvedAgentDir, {
-			projectTrusted: options.projectTrusted,
-			configDirName: options.configDirName ?? resolveStepConfigDir(),
-		});
-	return decorateStepSettingsManager(pi, { ...options, cwd, agentDir: resolvedAgentDir });
+	// Both halves of the manager must address the same document. Deriving the
+	// paths once and handing them to the storage keeps an injected agent or
+	// config directory from splitting Pi settings and Step settings across files.
+	const decoratorOptions: StepSettingsDecoratorOptions = { ...options, cwd, agentDir: resolvedAgentDir };
+	const paths = derivePaths(decoratorOptions);
+	const pi = SettingsManager.fromStorage(new StepTomlSettingsStorage(cwd, process.env, paths), {
+		projectTrusted: options.projectTrusted,
+	});
+	return decorateStepSettingsManager(pi, { ...decoratorOptions, paths });
 }

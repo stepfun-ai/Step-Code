@@ -23,6 +23,7 @@ import {
 	type FeedbackIdentity,
 } from "./feedback/types.ts";
 import { normalizeFeedbackCategory } from "./feedback/validate.ts";
+import { formatStepMcpStatuses } from "./mcp.ts";
 import { registerStepPluginCommand } from "./plugins.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -41,6 +42,17 @@ export function registerStepPiCommandAdapters(
 	feedbackIdentity?: () => FeedbackIdentity,
 ): void {
 	registerStepPluginCommand(pi, { telemetry });
+	registerTrackedCommand(
+		pi,
+		"mcp",
+		{
+			description: "Show configured MCP servers and loaded tools",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatStepMcpStatuses(), "info");
+			},
+		},
+		telemetry,
+	);
 
 	registerTrackedCommand(
 		pi,

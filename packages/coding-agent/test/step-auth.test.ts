@@ -42,9 +42,16 @@ describe("Step credential compatibility", () => {
 		});
 	});
 
-	test("resolves the canonical auth file from an explicit Step agent directory", () => {
+	test("resolves the canonical auth file at the Step root", () => {
 		const env = { STEP_CODING_AGENT_DIR: "/tmp/step-cli-agent" };
-		expect(getStepAuthPath(env)).toBe("/tmp/step-cli-agent/auth.json");
+		expect(getStepAuthPath(env)).toBe("/tmp/auth.json");
+	});
+
+	test("keeps the credential inside the namespace when the agent directory is relative", () => {
+		const env = { HOME: "/tmp/step-home", STEP_CODING_AGENT_DIR: "agent" };
+		// A textual ".." hop would resolve against the process working directory
+		// and write the credential wherever `step` happened to be launched.
+		expect(getStepAuthPath(env)).toBe(join(process.cwd(), "auth.json"));
 	});
 
 	test("does not inherit a host Pi agent directory when the Step root is implicit", () => {
@@ -52,7 +59,7 @@ describe("Step credential compatibility", () => {
 			HOME: "/tmp/step-home",
 			PI_CODING_AGENT_DIR: "/tmp/pi-agent",
 		};
-		expect(getStepAuthPath(env)).toBe("/tmp/step-home/.step-cli/agent/auth.json");
+		expect(getStepAuthPath(env)).toBe("/tmp/step-home/.step-cli/auth.json");
 	});
 
 	test("migrates a pi-shaped credential into the canonical Step path", async () => {

@@ -121,6 +121,21 @@ interface GitEnvironment {
 }
 
 /**
+ * Git state changes far more slowly than the prompt is rebuilt. A single MCP
+ * server registering N tools rebuilds the prompt N times within a few hundred
+ * milliseconds, and each rebuild used to pay two synchronous git spawns
+ * (~29 ms). Cache per working directory so a registration burst pays once.
+ */
+const GIT_ENVIRONMENT_TTL_MS = 5_000;
+const gitEnvironmentCache = new Map<string, { readonly value: GitEnvironment; readonly expiresAt: number }>();
+
+/** Drop cached git facts so the next prompt build re-reads the repository. */
+export function invalidateGitEnvironmentCache(cwd?: string): void {
+	if (cwd === undefined) gitEnvironmentCache.clear();
+	else gitEnvironmentCache.delete(cwd.trim());
+}
+
+/**
  * Best-effort git facts for the environment block. Every failure path —
  * missing git binary, not a repository, nonexistent cwd, timeout — returns
  * an empty object so prompt construction can never crash on git state.
@@ -128,6 +143,15 @@ interface GitEnvironment {
 function collectGitEnvironment(cwd: string | undefined): GitEnvironment {
 	const workingDirectory = cwd?.trim();
 	if (!workingDirectory) return {};
+	const now = Date.now();
+	const cached = gitEnvironmentCache.get(workingDirectory);
+	if (cached && cached.expiresAt > now) return cached.value;
+	const value = readGitEnvironment(workingDirectory);
+	gitEnvironmentCache.set(workingDirectory, { value, expiresAt: now + GIT_ENVIRONMENT_TTL_MS });
+	return value;
+}
+
+function readGitEnvironment(workingDirectory: string): GitEnvironment {
 	const runGitCommand = (gitArguments: string[]): string | undefined => {
 		try {
 			const spawnResult = spawnSync("git", gitArguments, {

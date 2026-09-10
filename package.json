@@ -68,5 +68,8 @@
 		"gaxios": {
 			"rimraf": "6.1.2"
 		}
+	},
+	"dependencies": {
+		"smol-toml": "1.8.0"
 	}
 }
