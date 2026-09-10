@@ -1,7 +1,6 @@
 packages:
   - "apps/*"
   - "packages/*"
-  - "packages/session-backends/*"
   - "extensions/*"
   - "packages/coding-agent/examples/extensions/with-deps"
   - "packages/coding-agent/examples/extensions/custom-provider-anthropic"

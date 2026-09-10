@@ -8,8 +8,7 @@
 		"@earendil-works/pi-coding-agent",
 		"@earendil-works/pi-evals",
 		"@earendil-works/pi-telemetry",
-		"@earendil-works/pi-tui",
-		"@earendil-works/pi-session-backend-sqlite-node"
+		"@earendil-works/pi-tui"
 	],
 	"members": [
 		{ "name": "@earendil-works/pi-agent-core", "dir": "packages/agent", "role": "engine", "reason": "通用 Agent loop 与工具调用时序" },
@@ -18,7 +17,6 @@
 		{ "name": "@earendil-works/pi-evals", "dir": "packages/evals", "role": "tooling", "reason": "评测脚本与 fixture" },
 		{ "name": "@earendil-works/pi-telemetry", "dir": "packages/telemetry", "role": "engine", "reason": "通用 telemetry contract/实现" },
 		{ "name": "@earendil-works/pi-tui", "dir": "packages/tui", "role": "renderer", "reason": "终端渲染原语，保持零 AI 依赖" },
-		{ "name": "@earendil-works/pi-session-backend-sqlite-node", "dir": "packages/session-backends/sqlite-node", "role": "storage-backend", "reason": "备用 SQLite backend，步骤 1 块 B 删除" },
 		{ "name": "@step-harness/cli", "dir": "apps/cli", "role": "app", "reason": "唯一进程入口宿主骨架(S0 起)；进程生命周期/argv/退出码" },
 		{ "name": "pi-extension-with-deps", "dir": "packages/coding-agent/examples/extensions/with-deps", "role": "example", "reason": "扩展示例" },
 		{ "name": "pi-extension-custom-provider-anthropic", "dir": "packages/coding-agent/examples/extensions/custom-provider-anthropic", "role": "example", "reason": "扩展示例" },
