@@ -21,6 +21,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. Both tools now fall back to `git grep` / `git ls-files` when the search path is inside a worktree, and to POSIX `grep` / `find` otherwise; `GrepOperations` gains an optional `search` primitive symmetric to `FindOperations.glob` for remote injectors.
 - Fixed task history and branch restoration, ID reuse across sibling branches, and acceptance of cyclic dependencies.
 - Fixed inconsistent plan entry paths and approval of missing or empty plans; plan mode now follows the active session branch.
 - Fixed the Step queued-message preview and `update_plan` plan text dropping four characters at every wrap point in narrow terminals.
