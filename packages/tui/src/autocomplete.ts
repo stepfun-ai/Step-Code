@@ -221,6 +221,55 @@ async function walkDirectoryWithFd(
 	});
 }
 
+// Bounded synchronous fallback for when fd is unavailable (offline first run,
+// stripped-down PATH). Ignores the heavy directories the fd query also excludes
+// so @ completion never goes silently empty just because a binary is missing.
+const FALLBACK_IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".turbo", "target"]);
+
+function walkDirectoryWithNode(
+	baseDir: string,
+	maxResults: number,
+	maxDepth: number,
+): Array<{ path: string; isDirectory: boolean }> {
+	const results: Array<{ path: string; isDirectory: boolean }> = [];
+	const queue: Array<{ dir: string; rel: string; depth: number }> = [{ dir: baseDir, rel: "", depth: 0 }];
+
+	while (queue.length > 0 && results.length < maxResults) {
+		const item = queue.shift();
+		if (!item) break;
+		const { dir, rel, depth } = item;
+		// Structural shape, not `ReturnType<typeof readdirSync>`: the @types/node
+		// readdir overloads return Dirent<Buffer> vs Dirent<string> depending on
+		// the encoding option, and the union fights every entry.name use below.
+		let entries: Array<{ name: string; isDirectory(): boolean; isSymbolicLink(): boolean }>;
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			if (results.length >= maxResults) break;
+			if (FALLBACK_IGNORED_DIRS.has(entry.name)) continue;
+			let isDirectory = entry.isDirectory();
+			if (!isDirectory && entry.isSymbolicLink()) {
+				try {
+					isDirectory = statSync(join(dir, entry.name)).isDirectory();
+				} catch {
+					// Broken symlink or unreadable target - treat as file
+				}
+			}
+			const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+			// fd emits trailing slashes on directories; match that contract so the
+			// shared scoring/display pipeline slices correctly.
+			results.push({ path: isDirectory ? `${relPath}/` : relPath, isDirectory });
+			if (isDirectory && depth + 1 <= maxDepth) {
+				queue.push({ dir: join(dir, entry.name), rel: relPath, depth: depth + 1 });
+			}
+		}
+	}
+	return results;
+}
+
 export interface AutocompleteItem {
 	value: string;
 	label: string;
@@ -733,30 +782,33 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		return await walkDirectoryWithFd(baseDir, this.fdPath, query, 100, signal, 1);
 	}
 
-	// Fuzzy file search using fd (fast, respects .gitignore)
+	// Fuzzy file search using fd (fast, respects .gitignore); falls back to a
+	// bounded Node walk when fd is unavailable so @ completion still works.
 	private async getFuzzyFileSuggestions(
 		query: string,
 		options: { isQuotedPrefix: boolean; signal: AbortSignal },
 	): Promise<AutocompleteItem[]> {
-		if (!this.fdPath || options.signal.aborted) {
-			return [];
-		}
-
 		try {
 			const scopedQuery = this.resolveScopedFuzzyQuery(query);
 			const fdBaseDir = scopedQuery?.baseDir ?? this.basePath;
 			const fdQuery = scopedQuery?.query ?? query;
-			const baseDirEntries = await this.getBaseDirSuggestions(fdBaseDir, fdQuery, options.signal);
-			const recursiveEntries = await walkDirectoryWithFd(fdBaseDir, this.fdPath, fdQuery, 100, options.signal);
-			const seenPaths = new Set(baseDirEntries.map((entry) => entry.path));
-			const entries = [
-				...baseDirEntries,
-				...recursiveEntries.filter((entry) => {
-					if (seenPaths.has(entry.path)) return false;
-					seenPaths.add(entry.path);
-					return true;
-				}),
-			];
+
+			let entries: Array<{ path: string; isDirectory: boolean }>;
+			if (this.fdPath && !options.signal.aborted) {
+				const baseDirEntries = await this.getBaseDirSuggestions(fdBaseDir, fdQuery, options.signal);
+				const recursiveEntries = await walkDirectoryWithFd(fdBaseDir, this.fdPath, fdQuery, 100, options.signal);
+				const seenPaths = new Set(baseDirEntries.map((entry) => entry.path));
+				entries = [
+					...baseDirEntries,
+					...recursiveEntries.filter((entry) => {
+						if (seenPaths.has(entry.path)) return false;
+						seenPaths.add(entry.path);
+						return true;
+					}),
+				];
+			} else {
+				entries = walkDirectoryWithNode(fdBaseDir, 400, 4);
+			}
 			if (options.signal.aborted) {
 				return [];
 			}

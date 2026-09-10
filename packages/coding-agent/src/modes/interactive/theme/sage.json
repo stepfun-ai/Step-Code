@@ -44,6 +44,7 @@
 		"toolOutput": "muted",
 
 		"mdHeading": "brand",
+		"mdTableHeader": "warning",
 		"mdLink": "brand",
 		"mdLinkUrl": "muted",
 		"mdCode": "brand",

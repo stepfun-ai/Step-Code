@@ -54,6 +54,7 @@ const ThemeJsonSchema = Type.Object({
 		userMessageBg: ColorValueSchema,
 		userMessageText: ColorValueSchema,
 		customMessageBg: ColorValueSchema,
+		codeInlineBg: Type.Optional(ColorValueSchema),
 		customMessageText: ColorValueSchema,
 		customMessageLabel: ColorValueSchema,
 		toolPendingBg: ColorValueSchema,
@@ -61,8 +62,9 @@ const ThemeJsonSchema = Type.Object({
 		toolErrorBg: ColorValueSchema,
 		toolTitle: ColorValueSchema,
 		toolOutput: ColorValueSchema,
-		// Markdown (10 colors)
+		// Markdown (11 colors)
 		mdHeading: ColorValueSchema,
+		mdTableHeader: ColorValueSchema,
 		mdLink: ColorValueSchema,
 		mdLinkUrl: ColorValueSchema,
 		mdCode: ColorValueSchema,
@@ -129,6 +131,7 @@ export type ThemeColor =
 	| "toolTitle"
 	| "toolOutput"
 	| "mdHeading"
+	| "mdTableHeader"
 	| "mdLink"
 	| "mdLinkUrl"
 	| "mdCode"
@@ -165,12 +168,13 @@ export type ThemeBg =
 	| "searchMatchBg"
 	| "userMessageBg"
 	| "customMessageBg"
+	| "codeInlineBg"
 	| "toolPendingBg"
 	| "toolSuccessBg"
 	| "toolErrorBg";
 
 type OptionalThemeColor = "thinkingMax" | "searchMatchText";
-type OptionalThemeBg = "scrollbarThumb" | "searchMatchBg";
+type OptionalThemeBg = "scrollbarThumb" | "searchMatchBg" | "codeInlineBg";
 
 type ColorMode = "truecolor" | "256color";
 
@@ -334,6 +338,7 @@ function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeJson["colors
 	scrollbarThumb: ColorValue;
 	searchMatchBg: ColorValue;
 	searchMatchText: ColorValue;
+	codeInlineBg: ColorValue;
 } {
 	return {
 		...colors,
@@ -341,6 +346,7 @@ function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeJson["colors
 		scrollbarThumb: colors.scrollbarThumb ?? colors.selectedBg,
 		searchMatchBg: colors.searchMatchBg ?? colors.selectedBg,
 		searchMatchText: colors.searchMatchText ?? colors.text,
+		codeInlineBg: colors.codeInlineBg ?? colors.customMessageBg,
 	};
 }
 
@@ -382,6 +388,7 @@ export class Theme {
 			...bgColors,
 			scrollbarThumb: bgColors.scrollbarThumb ?? bgColors.selectedBg,
 			searchMatchBg: bgColors.searchMatchBg ?? bgColors.selectedBg,
+			codeInlineBg: bgColors.codeInlineBg ?? bgColors.customMessageBg,
 		};
 		for (const [key, value] of Object.entries(backgrounds) as [ThemeBg, string | number][]) {
 			this.bgColors.set(key, bgAnsi(value, mode));
@@ -400,16 +407,20 @@ export class Theme {
 		return `${ansi}${text}\x1b[49m`; // Reset only background color
 	}
 
+	// Attribute helpers emit raw SGR instead of delegating to Chalk, which
+	// disables attributes for captured/non-TTY output — the same reason the
+	// Step welcome title bolds explicitly. Raw sequences keep bold visible (and
+	// testable) in piped output, exported transcripts, and unit tests alike.
 	bold(text: string): string {
-		return chalk.bold(text);
+		return `\x1b[1m${text}\x1b[22m`;
 	}
 
 	italic(text: string): string {
-		return chalk.italic(text);
+		return `\x1b[3m${text}\x1b[23m`;
 	}
 
 	underline(text: string): string {
-		return chalk.underline(text);
+		return `\x1b[4m${text}\x1b[24m`;
 	}
 
 	inverse(text: string): string {
@@ -645,6 +656,7 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 		"searchMatchBg",
 		"userMessageBg",
 		"customMessageBg",
+		"codeInlineBg",
 		"toolPendingBg",
 		"toolSuccessBg",
 		"toolErrorBg",
@@ -1298,11 +1310,25 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 export function getMarkdownTheme(activeTheme: Theme = theme): MarkdownTheme {
 	return {
 		heading: (text: string) => activeTheme.fg("mdHeading", text),
+		// The literal `#` markers are syntax noise, not content — dim them so the
+		// colored heading text carries the hierarchy (Codex / reference style).
+		headingPrefix: (text: string) => activeTheme.fg("muted", text),
+		// Table headers get their own hue so the head/body boundary reads at a
+		// glance, matching the two-tone emphasis of the reference rendering.
+		tableHeader: (text: string) => activeTheme.bold(activeTheme.fg("mdTableHeader", text)),
 		link: (text: string) => activeTheme.fg("mdLink", text),
 		linkUrl: (text: string) => activeTheme.fg("mdLinkUrl", text),
-		code: (text: string) => activeTheme.fg("mdCode", text),
+		// Inline code gets a one-cell chip: bg fill plus a breathing space on
+		// each side, matching the inline-code look of Claude Code / GitHub.
+		code: (text: string) => activeTheme.bg("codeInlineBg", activeTheme.fg("mdCode", ` ${text} `)),
 		codeBlock: (text: string) => activeTheme.fg("mdCodeBlock", text),
-		codeBlockBorder: (text: string) => activeTheme.fg("mdCodeBlockBorder", text),
+		// The opening fence doubles as the language label; tint the tag with the
+		// accent so the block's language is scannable at a glance.
+		codeBlockBorder: (text: string) => {
+			const match = text.match(/^(```+)(.*)$/u);
+			if (!match || match[2] === undefined || match[2] === "") return activeTheme.fg("mdCodeBlockBorder", text);
+			return `${activeTheme.fg("mdCodeBlockBorder", match[1]!)}${activeTheme.fg("mdCode", match[2])}`;
+		},
 		quote: (text: string) => activeTheme.fg("mdQuote", text),
 		quoteBorder: (text: string) => activeTheme.fg("mdQuoteBorder", text),
 		hr: (text: string) => activeTheme.fg("mdHr", text),
@@ -1336,8 +1362,9 @@ export function getMarkdownTheme(activeTheme: Theme = theme): MarkdownTheme {
 
 export function getSelectListTheme(): SelectListTheme {
 	return {
-		selectedPrefix: (text: string) => theme.fg("accent", text),
-		selectedText: (text: string) => theme.fg("accent", text),
+		// 选中态靠 → 前缀 + 加粗识别，不再占品牌紫（紫只锚在工具行与门面）
+		selectedPrefix: (text: string) => theme.bold(theme.fg("text", text)),
+		selectedText: (text: string) => theme.bold(theme.fg("text", text)),
 		description: (text: string) => theme.fg("muted", text),
 		scrollInfo: (text: string) => theme.fg("muted", text),
 		noMatch: (text: string) => theme.fg("muted", text),
@@ -1353,10 +1380,11 @@ export function getEditorTheme(): EditorTheme {
 
 export function getSettingsListTheme(): SettingsListTheme {
 	return {
-		label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
-		value: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : theme.fg("muted", text)),
+		label: (text: string, selected: boolean) => (selected ? theme.bold(theme.fg("text", text)) : text),
+		value: (text: string, selected: boolean) =>
+			selected ? theme.bold(theme.fg("text", text)) : theme.fg("muted", text),
 		description: (text: string) => theme.fg("dim", text),
-		cursor: theme.fg("accent", "→ "),
+		cursor: theme.fg("text", "→ "),
 		hint: (text: string) => theme.fg("dim", text),
 	};
 }

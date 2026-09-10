@@ -103,7 +103,14 @@ describe("status indicators", () => {
 		tracker.reset(1000);
 		const anthropicPartial = assistantMessage([{ type: "thinking", thinking: "12345678" }]);
 		tracker.update(deltaEvent("thinking_delta", "12345678", anthropicPartial));
-		expect(tracker.snapshot(2000)).toEqual({ elapsedSeconds: 1, outputTokens: 2, phase: "thinking" });
+		// snapshot() 契约含第 4 字段 idleVerbAllowed（工具动词黏性的降级门控）：
+		// reset 后为 true，text/thinking 输出解锁，tool_execution_start 上锁。
+		expect(tracker.snapshot(2000)).toEqual({
+			elapsedSeconds: 1,
+			outputTokens: 2,
+			phase: "thinking",
+			idleVerbAllowed: true,
+		});
 
 		tracker.complete(assistantMessage(anthropicPartial.content, { output: 5 }));
 		const openAiPartial = assistantMessage(
@@ -117,9 +124,19 @@ describe("status indicators", () => {
 		tracker.update(toolCallStartEvent(openAiPartial, 1));
 		tracker.update(deltaEvent("toolcall_delta", '{"x":"abcd"}', openAiPartial, 1));
 
-		expect(tracker.snapshot(3000)).toEqual({ elapsedSeconds: 2, outputTokens: 11, phase: undefined });
+		expect(tracker.snapshot(3000)).toEqual({
+			elapsedSeconds: 2,
+			outputTokens: 11,
+			phase: undefined,
+			idleVerbAllowed: true,
+		});
 		tracker.complete(assistantMessage(openAiPartial.content, { api: "openai-completions", output: 9 }));
-		expect(tracker.snapshot(4000)).toEqual({ elapsedSeconds: 3, outputTokens: 14, phase: undefined });
+		expect(tracker.snapshot(4000)).toEqual({
+			elapsedSeconds: 3,
+			outputTokens: 14,
+			phase: undefined,
+			idleVerbAllowed: true,
+		});
 	});
 
 	it("keeps the local estimate when a completed response has zero usage", () => {

@@ -19,6 +19,7 @@ import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { renderDiff } from "./diff.ts";
 import { keyHint } from "./keybinding-hints.ts";
+import { stepErrorHint } from "./step-error-hints.ts";
 import { prependAfterTerminalSequences } from "./step-message.ts";
 import type { StepToolSpinnerState } from "./step-spinner.ts";
 
@@ -658,11 +659,17 @@ export class ToolExecutionComponent extends Container {
 		let resultLines: string[] = [];
 		if (this.hasRendererDefinition()) {
 			callLines = this.stepCallComponent ? trimRenderedRows(this.stepCallComponent.render(callWidth)) : [];
-			resultLines = this.getResultRenderer()
-				? this.stepResultComponent
-					? trimRenderedRows(this.stepResultComponent.render(bodyWidth))
-					: []
-				: this.renderStepFallbackOutput();
+			// Failed runs bypass the result renderer: native renderers format
+			// success payloads ("3 matches") and would bury the actual error
+			// text — the why must never be replaced by a success-shaped body.
+			resultLines =
+				!this.isPartial && this.result?.isError
+					? this.renderStepFallbackOutput()
+					: this.getResultRenderer()
+						? this.stepResultComponent
+							? trimRenderedRows(this.stepResultComponent.render(bodyWidth))
+							: []
+						: this.renderStepFallbackOutput();
 		} else {
 			const fallback = trimRenderedRows(this.contentText.render(safeWidth));
 			callLines = fallback.length > 0 ? [fallback[0]!] : [];
@@ -714,6 +721,12 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		const body = this.buildStepBodyLines(resultLines, bodyWidth);
+		// 错误呈现三要素收尾：what（✗ 标题行）/ why（错误文本）之后补 how——
+		// 一行可执行的恢复建议，让失败不只是被报告，还能被处理。
+		if (!this.isPartial && this.result?.isError) {
+			const hint = stepErrorHint(this.getTextOutput());
+			body.push(clampStepLine(`    ${theme.fg("muted", `↳ ${hint}`)}`, safeWidth));
+		}
 		const lines = [...header, ...body];
 		this.appendImages(lines, safeWidth);
 		return lines.length > 0 ? [...lines, ""] : [];
@@ -805,7 +818,12 @@ export class ToolExecutionComponent extends Container {
 		if (!this.result) return existing ?? [];
 		const output = this.getTextOutput();
 		if (!output) return existing ?? [];
-		return output.split(/\r?\n/u).map((line) => theme.fg("toolOutput", line));
+		// Failed runs paint their output with the error color so the why is
+		// scannable at a glance, mirroring the ✗ glyph in the header row.
+		const paint = this.result.isError
+			? (line: string) => theme.fg("error", line)
+			: (line: string) => theme.fg("toolOutput", line);
+		return output.split(/\r?\n/u).map(paint);
 	}
 
 	private renderStepPlan(plan: StepPlan, width: number): string[] {
