@@ -55,7 +55,7 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/earendil-works/pi.git",
-		"directory": "packages/agent"
+		"directory": "packages/agent-loop"
 	},
 	"engines": {
 		"node": ">=22.19.0"

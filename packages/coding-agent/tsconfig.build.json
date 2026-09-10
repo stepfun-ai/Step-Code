@@ -3,8 +3,8 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
-			"@earendil-works/pi-agent-core": ["../agent/dist/index.d.ts"],
-			"@earendil-works/pi-agent-core/*": ["../agent/dist/*.d.ts"],
+			"@earendil-works/pi-agent-core": ["../agent-loop/dist/index.d.ts"],
+			"@earendil-works/pi-agent-core/*": ["../agent-loop/dist/*.d.ts"],
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
 			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
 			"@earendil-works/pi-tui": ["../tui/dist/index.d.ts"],
