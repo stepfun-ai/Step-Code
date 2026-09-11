@@ -74,6 +74,7 @@ import { createStepExtensionFactories } from "#bootstrap/extensions";
 import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
 import { InteractiveMode, runPrintMode, runRpcMode } from "#modes/index";
 import { createSdkStdioMode } from "#modes/sdk-stdio";
+import { selectConfig, selectSession, showFirstTimeSetup, showStartupInput, showStartupSelector } from "#ui/index";
 
 /**
  * Step's product entrypoint. The process still runs pi's main implementation;
@@ -276,6 +277,16 @@ const stepMainOptions: MainOptions = {
 				shellPath: settingsManager.getShellPath(),
 			},
 		}),
+	// Startup UI selectors injected into prepareMain (dependency inversion). The
+	// selectors live in this shell's #ui; coding-agent calls them through this
+	// bag so it never imports @step-harness/cli (which would be a reverse dep).
+	uiHooks: {
+		selectSession,
+		showFirstTimeSetup,
+		selectConfig,
+		showStartupSelector,
+		showStartupInput,
+	},
 };
 
 const topLevelStepCommand = process.argv[2];

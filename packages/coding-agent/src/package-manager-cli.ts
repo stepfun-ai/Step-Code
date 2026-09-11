@@ -12,7 +12,6 @@ import { join, resolve } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import lockfile from "proper-lockfile";
-import { selectConfig } from "./cli/config-selector.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import {
 	APP_NAME,
@@ -34,6 +33,7 @@ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager, type SettingsManagerCreateOptions } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import type { StartupUiHooks } from "./modes/interactive-contract.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "./step/environment.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
@@ -739,6 +739,13 @@ export interface PackageCommandRuntimeOptions {
 	configDirName?: string;
 	/** Product override for the Pi settings manager (Step decorates it). */
 	settingsManagerFactory?: (cwd: string, agentDir: string, options?: SettingsManagerCreateOptions) => SettingsManager;
+	/**
+	 * Startup UI selectors injected by the product shell. `config` uses
+	 * `selectConfig`; project-trust prompts use `showStartupSelector`/
+	 * `showStartupInput`. Absent when coding-agent's own `main()` runs a
+	 * non-interactive command.
+	 */
+	uiHooks?: StartupUiHooks;
 }
 
 interface CommandSettingsResult {
@@ -764,6 +771,7 @@ async function createCommandSettingsManager(options: {
 	extensionFactories?: InlineExtension[];
 	configDirName?: string;
 	settingsManagerFactory?: PackageCommandRuntimeOptions["settingsManagerFactory"];
+	uiHooks?: StartupUiHooks;
 }): Promise<CommandSettingsResult> {
 	const createSettingsManager = options.settingsManagerFactory ?? SettingsManager.create;
 	const settingsManager = createSettingsManager(options.cwd, options.agentDir, {
@@ -807,6 +815,12 @@ async function createCommandSettingsManager(options: {
 			settingsManager,
 			hasUI: appMode === "interactive",
 			paths: { agentDir: options.agentDir, configDirName: options.configDirName },
+			ui: options.uiHooks
+				? {
+						showStartupSelector: options.uiHooks.showStartupSelector,
+						showStartupInput: options.uiHooks.showStartupInput,
+					}
+				: undefined,
 		}),
 		onExtensionError: (message) => projectTrustWarnings.push(message),
 	});
@@ -859,6 +873,7 @@ export async function handleConfigCommand(
 		configDirName: runtimeOptions.configDirName,
 		extensionFactories: runtimeOptions.extensionFactories,
 		settingsManagerFactory: runtimeOptions.settingsManagerFactory,
+		uiHooks: runtimeOptions.uiHooks,
 	});
 	reportProjectTrustWarnings(projectTrustWarnings);
 	if (local && !settingsManager.isProjectTrusted()) {
@@ -886,7 +901,10 @@ export async function handleConfigCommand(
 			}).resolve()
 		: globalResolvedPaths;
 
-	await selectConfig({
+	if (!runtimeOptions.uiHooks?.selectConfig) {
+		throw new Error("The config selector (uiHooks.selectConfig) is required to run the `config` command.");
+	}
+	await runtimeOptions.uiHooks.selectConfig({
 		resolvedPaths: { global: globalResolvedPaths, project: projectResolvedPaths },
 		settingsManager,
 		cwd,
@@ -971,6 +989,7 @@ export async function handlePackageCommand(
 		extensionFactories: runtimeOptions.extensionFactories,
 		settingsManagerFactory: runtimeOptions.settingsManagerFactory,
 		configDirName: runtimeOptions.configDirName,
+		uiHooks: runtimeOptions.uiHooks,
 	});
 	reportProjectTrustWarnings(projectTrustWarnings);
 	if (!settingsManager.isProjectTrusted() && writesProjectPackageConfig) {

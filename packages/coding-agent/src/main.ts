@@ -33,13 +33,6 @@ import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import { selectSession } from "./cli/session-picker.ts";
-import {
-	type StartupTuiPathOptions,
-	shouldRunFirstTimeSetup,
-	showFirstTimeSetup,
-	showStartupSelector,
-} from "./cli/startup-ui.ts";
 import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
@@ -65,6 +58,7 @@ import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension, ToolDefinition } from "./core/extensions/types.ts";
+import { shouldRunFirstTimeSetup } from "./core/first-time-setup-gate.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import type { ModelRequestObserver } from "./core/model-request-observer.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
@@ -93,7 +87,8 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, type InteractiveModeOptions, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { runPrintMode, runRpcMode } from "./modes/index.ts";
+import type { InteractiveModeOptions, StartupTuiPathOptions, StartupUiHooks } from "./modes/interactive-contract.ts";
 import { cleanupManagedInstall, handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import {
 	continueStepSession,
@@ -504,6 +499,7 @@ export async function createSessionManager(
 	settingsManager: SettingsManager,
 	startupTuiPaths?: StartupTuiPathOptions,
 	sessionRoot?: string,
+	selectSession?: StartupUiHooks["selectSession"],
 ): Promise<SessionManager> {
 	const agentDir = startupTuiPaths?.agentDir;
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
@@ -559,6 +555,9 @@ export async function createSessionManager(
 
 	if (parsed.resume) {
 		try {
+			if (!selectSession) {
+				throw new Error("The interactive session selector (uiHooks.selectSession) is required to --resume.");
+			}
 			const selectedPath = await selectSession(
 				(onProgress) =>
 					agentDir
@@ -706,6 +705,7 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 async function promptForMissingSessionCwd(
 	issue: SessionCwdIssue,
 	settingsManager: SettingsManager,
+	showStartupSelector: StartupUiHooks["showStartupSelector"],
 	paths?: StartupTuiPathOptions,
 ): Promise<string | undefined> {
 	return showStartupSelector(
@@ -772,6 +772,13 @@ export interface MainOptions {
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */
 	stdioModeFactory?: (runtimeHost: AgentSessionRuntimeHost) => Promise<void>;
+	/**
+	 * Startup UI selectors injected by the product shell (dependency inversion).
+	 * The interactive selectors live in @step-harness/cli; `prepareMain` calls
+	 * them through this bag so this package never imports the shell. Absent when
+	 * coding-agent's own `main()` runs a non-interactive command.
+	 */
+	uiHooks?: StartupUiHooks;
 	/** Optional best-effort observer for provider request lifecycle metrics. */
 	modelRequestObserver?: ModelRequestObserver;
 	/** Optional product identity used by the default system prompt. */
@@ -909,6 +916,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			agentDir,
 			settingsManagerFactory: options?.settingsManagerFactory,
 			configDirName,
+			uiHooks: options?.uiHooks,
 		})
 	) {
 		// process.exitCode is typed `number | string | undefined`; handlePackageCommand
@@ -930,6 +938,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			agentDir,
 			settingsManagerFactory: options?.settingsManagerFactory,
 			configDirName,
+			uiHooks: options?.uiHooks,
 		})
 	) {
 		return { kind: "completed" };
@@ -1005,7 +1014,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		parsed.listModels === undefined &&
 		shouldRunFirstTimeSetup(join(agentDir, "settings.json"))
 	) {
-		await showFirstTimeSetup(startupSettingsManager, { agentDir, configDirName });
+		await options?.uiHooks?.showFirstTimeSetup(startupSettingsManager, { agentDir, configDirName });
 		time("firstTimeSetup");
 	}
 
@@ -1043,14 +1052,25 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		startupSettingsManager,
 		productStoragePaths,
 		sessionRoot,
+		options?.uiHooks?.selectSession,
 	);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
-			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager, {
-				agentDir,
-				configDirName,
-			});
+			if (!options?.uiHooks?.showStartupSelector) {
+				throw new Error(
+					"The startup selector (uiHooks.showStartupSelector) is required to resolve a missing session cwd.",
+				);
+			}
+			const selectedCwd = await promptForMissingSessionCwd(
+				missingSessionCwdIssue,
+				startupSettingsManager,
+				options.uiHooks.showStartupSelector,
+				{
+					agentDir,
+					configDirName,
+				},
+			);
 			if (!selectedCwd) {
 				return { kind: "completed", exitCode: 0 };
 			}
@@ -1141,6 +1161,12 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 										settingsManager: startupSettingsManager,
 										hasUI: isInitialRuntime && trustPromptMode === "interactive",
 										paths: { agentDir, configDirName },
+										ui: options?.uiHooks
+											? {
+													showStartupSelector: options.uiHooks.showStartupSelector,
+													showStartupInput: options.uiHooks.showStartupInput,
+												}
+											: undefined,
 									}),
 								onExtensionError: (message) => projectTrustDiagnostics.push({ type: "warning", message }),
 							});
@@ -1378,52 +1404,17 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
  */
 async function dispatchAppMode(
 	prep: Extract<MainPreparation, { kind: "dispatch" }>,
-	options?: MainOptions,
+	_options?: MainOptions,
 ): Promise<void> {
 	const { appMode, runtimeHost } = prep;
 	if (appMode === "rpc") {
 		printTimings();
 		await runRpcMode(runtimeHost);
 	} else if (appMode === "interactive") {
-		const interactiveMode = new InteractiveMode(runtimeHost, {
-			configDirName: prep.configDirName,
-			authPath: prep.authPath,
-			migratedProviders: prep.migratedProviders,
-			startupDiagnostics: prep.startupDiagnostics,
-			modelFallbackMessage: prep.modelFallbackMessage,
-			autoTrustOnReloadCwd: prep.autoTrustOnReloadCwd,
-			initialMessage: prep.initialMessage,
-			initialImages: prep.initialImages,
-			initialMessages: prep.parsed.messages,
-			verbose: prep.parsed.verbose,
-			tuiMode: prep.parsed.tuiMode,
-			initialThemeSetting: prep.parsed.useTheme,
-			defaultTheme: options?.defaultTheme,
-			disableBackgroundServices: options?.disableBackgroundServices,
-			...options?.interactiveModeOptions,
-			sessionRoot: prep.sessionRoot,
-			offline: prep.explicitOfflineMode || options?.interactiveModeOptions?.offline === true,
-		});
-		if (prep.startupBenchmark) {
-			await interactiveMode.init();
-			time("interactiveMode.init");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-			await new Promise((resolve) => setTimeout(resolve, 150));
-			interactiveMode.stop();
-			stopThemeWatcher();
-			printTimings();
-			if (process.stdout.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
-			}
-			if (process.stderr.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
-			}
-			return;
-		}
-
-		printTimings();
-		await interactiveMode.run();
+		// The interactive TUI moved to @step-harness/cli (S4-0). coding-agent's own
+		// main() no longer dispatches it; product shells construct InteractiveMode
+		// from the returned MainPreparation and run their own dispatch switch.
+		throw new Error("interactive mode moved to @step-harness/cli; coding-agent main() no longer dispatches the TUI");
 	} else {
 		printTimings();
 		const exitCode = await runPrintMode(runtimeHost, {
