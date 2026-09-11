@@ -160,11 +160,9 @@ export function describeStepMcpImportOutcome(outcome: StepMcpImportPromptOutcome
 	if (result.imported.length > 0) {
 		const target = result.configPath ?? "config.toml";
 		const count = result.imported.length === 1 ? "1 MCP server" : `${result.imported.length} MCP servers`;
+		// No restart advice: the prompt runs before init(), so session_start — and
+		// with it MCP discovery — has not happened yet and picks these up.
 		parts.push(`Imported ${count} into ${target}`, `  ${result.imported.join(", ")}`);
-		// MCP discovery runs once, during session_start, which is already over by
-		// the time this prompt is answered. Without this line the servers are in
-		// the file but absent from /mcp, which reads as the import having failed.
-		parts.push("Restart Step to connect them — they will not appear in /mcp until then.");
 	}
 	for (const entry of result.skipped) {
 		parts.push(`Skipped ${entry.name}: ${entry.reason}`);

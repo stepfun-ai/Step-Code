@@ -22,6 +22,10 @@ The editor and `/mcp` do not wait for every server to finish initializing.
 with its tool count, or `failed` when initialization fails. Each server publishes
 independently, so a slow server does not delay a ready server's tools.
 
+When startup fails with HTTP 401 or an SDK authentication error, the warning
+includes `step mcp login <name>`. Run that command to authenticate, then restart
+Step to reconnect the server. The warning preserves the original error details.
+
 Each server publishes its whole catalog in one registry refresh, after yielding to
 terminal input, so publication cost does not grow with the number of tools. Tools
 becoming available after a model request has started are available to subsequent

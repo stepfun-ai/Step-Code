@@ -1,12 +1,14 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import { type TSchema, Type } from "typebox";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
+import { theme } from "../modes/interactive/theme/theme.ts";
 import { getStepAuthPath } from "./auth.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
@@ -48,7 +50,12 @@ interface ServerDeclaration {
 	tool_timeout_sec?: number;
 	enabled_tools?: string[];
 	disabled_tools?: string[];
-	oauth?: { client_id?: string; client_secret?: string; scopes?: string[]; callback_port?: number };
+	oauth?: {
+		client_id?: string;
+		client_secret?: string;
+		scopes?: string[];
+		callback_port?: number;
+	};
 }
 
 interface DiscoveredServer {
@@ -74,8 +81,10 @@ export function formatStepMcpStatuses(statuses: readonly StepMcpStatus[] = curre
 		statuses.length === 0
 			? ["No MCP servers configured."]
 			: statuses.map((server) => {
-					const state = server.status === "connected" ? "connected" : server.status;
-					return `• ${server.name}: ${state} (${server.toolCount} tools)`;
+					const connected = server.status === "connected";
+					const bullet = connected ? theme.fg("success", "•") : theme.fg("dim", "•");
+					const state = connected ? theme.fg("success", "connected") : theme.fg("dim", server.status);
+					return `${bullet} ${server.name}: ${state} ${theme.fg("dim", `(${server.toolCount} tools)`)}`;
 				});
 	return ["MCP Tools", ...lines].join("\n");
 }
@@ -125,11 +134,19 @@ export function createStepMcpExtension(): ExtensionFactory {
 							controller.signal.throwIfAborted();
 							pi.registerTools(remoteTools);
 							servers.push(server);
-							statuses[index] = { name: item.name, status: "connected", toolCount: server.tools.length };
+							statuses[index] = {
+								name: item.name,
+								status: "connected",
+								toolCount: server.tools.length,
+							};
 						} catch (error) {
 							if (connected) await closeStepMcpServer(connected);
 							if (controller.signal.aborted) return;
-							statuses[index] = { name: item.name, status: "failed", toolCount: 0 };
+							statuses[index] = {
+								name: item.name,
+								status: "failed",
+								toolCount: 0,
+							};
 							ctx.ui.notify(
 								describeMcpStartFailure({
 									name: item.name,
@@ -199,7 +216,10 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 				const name = `${parsed.manifest.id}__${serverName}`;
 				if (seen.has(name)) continue;
 				seen.add(name);
-				const discovered: DiscoveredServer = { name, declaration: normalizeDeclaration(value) };
+				const discovered: DiscoveredServer = {
+					name,
+					declaration: normalizeDeclaration(value),
+				};
 				if (parsed.manifest.provision) discovered.provision = parsed.manifest.provision;
 				result.push(discovered);
 			}
@@ -268,7 +288,9 @@ export async function connectStepMcpServer(
 		transport = new StreamableHTTPClientTransport(new URL(input.declaration.url), {
 			requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
 			...(hasStoredMcpOAuthCredential(input.name, input.declaration.url, process.env)
-				? { authProvider: createStoredMcpOAuthProvider(input.name, input.declaration.url, process.env) }
+				? {
+						authProvider: createStoredMcpOAuthProvider(input.name, input.declaration.url, process.env),
+					}
 				: {}),
 		});
 	} else {
@@ -350,6 +372,13 @@ export function describeMcpStartFailure(input: {
 	env?: NodeJS.ProcessEnv;
 }): string {
 	const detail = input.error instanceof Error ? input.error.message : String(input.error);
+	if (
+		input.error instanceof UnauthorizedError ||
+		(input.error instanceof StreamableHTTPError && input.error.code === 401)
+	) {
+		const name = /^[\w.-]+$/u.test(input.name) ? input.name : `'${input.name.replace(/'/gu, "'\\''")}'`;
+		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${name}, then restart Step.`;
+	}
 	if (!isMissingExecutable(input.error)) return `MCP server '${input.name}' could not start: ${detail}`;
 	const install = input.provision ? provisionInstallCommand(input.provision, input.env ?? process.env) : undefined;
 	const remedy = install ? `Install it with: ${install}, then restart Step.` : "Install it, then restart Step.";
@@ -398,7 +427,10 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 				{ name: remote.name, arguments: isRecord(params) ? params : {} },
 				CallToolResultSchema,
 				{ timeout: server.callTimeoutMs, resetTimeoutOnProgress: true, signal },
-			)) as { content?: Array<{ type?: string; text?: string }>; structuredContent?: unknown };
+			)) as {
+				content?: Array<{ type?: string; text?: string }>;
+				structuredContent?: unknown;
+			};
 			if ((result as { isError?: boolean }).isError === true) {
 				const errorText = (result.content ?? [])
 					.filter((item) => item.type === "text" && typeof item.text === "string")

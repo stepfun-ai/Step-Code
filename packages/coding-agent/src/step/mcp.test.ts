@@ -1,10 +1,46 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, test } from "vitest";
 import { appendStepPageManagementHint, describeMcpStartFailure, resolveStepMcpEnvironment } from "./mcp.ts";
 
 const roots: string[] = [];
+
+test.each([
+	new StreamableHTTPError(401, "Error POSTing to endpoint: Unauthorized"),
+	new StreamableHTTPError(401, "Credentials expired"),
+	new UnauthorizedError(),
+])("authentication failures include the server login command: %s", (error) => {
+	const message = describeMcpStartFailure({
+		name: "figma",
+		command: "https://example.test/mcp",
+		error,
+	});
+	expect(message).toContain(error.message);
+	expect(message).toContain("Authenticate with: step mcp login figma, then restart Step.");
+});
+
+test("HTTP permission failures do not suggest login", () => {
+	const error = new StreamableHTTPError(403, "Insufficient permissions");
+	expect(
+		describeMcpStartFailure({
+			name: "figma",
+			command: "https://example.test/mcp",
+			error,
+		}),
+	).toBe(`MCP server 'figma' could not start: ${error.message}`);
+});
+
+test("login guidance quotes server names containing shell syntax", () => {
+	const message = describeMcpStartFailure({
+		name: "team's mcp",
+		command: "https://example.test/mcp",
+		error: new UnauthorizedError(),
+	});
+	expect(message).toContain("step mcp login 'team'\\''s mcp'");
+});
 
 afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -16,10 +52,20 @@ test("uses the logged-in Step credential only as a server env fallback", async (
 	const authPath = path.join(root, "auth.json");
 	await writeFile(
 		authPath,
-		JSON.stringify({ step: { type: "oauth", access: "login-key", refresh: "step-static-credential", expires: 1 } }),
+		JSON.stringify({
+			step: {
+				type: "oauth",
+				access: "login-key",
+				refresh: "step-static-credential",
+				expires: 1,
+			},
+		}),
 	);
 
-	const resolved = resolveStepMcpEnvironment(undefined, { env: { PATH: "/bin" }, authPath });
+	const resolved = resolveStepMcpEnvironment(undefined, {
+		env: { PATH: "/bin" },
+		authPath,
+	});
 	expect(resolved.STEPFUN_API_KEY).toBe("login-key");
 });
 
@@ -29,7 +75,14 @@ test("explicit declaration wins over both shell and login credentials", async ()
 	const authPath = path.join(root, "auth.json");
 	await writeFile(
 		authPath,
-		JSON.stringify({ step: { type: "oauth", access: "login-key", refresh: "step-static-credential", expires: 1 } }),
+		JSON.stringify({
+			step: {
+				type: "oauth",
+				access: "login-key",
+				refresh: "step-static-credential",
+				expires: 1,
+			},
+		}),
 	);
 
 	const resolved = resolveStepMcpEnvironment(
@@ -55,7 +108,9 @@ test("a missing executable is reported with the installer command instead of a r
 		name: "steppage__steppage",
 		command: "steppage-mcp",
 		provision: { command: "steppage-mcp", installer: "steppageInstaller" },
-		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), { code: "ENOENT" }),
+		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), {
+			code: "ENOENT",
+		}),
 		env: {},
 	});
 
@@ -70,7 +125,9 @@ test("the installer override is honoured in the guidance", () => {
 		name: "steppage__steppage",
 		command: "steppage-mcp",
 		provision: { command: "steppage-mcp", installer: "steppageInstaller" },
-		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), { code: "ENOENT" }),
+		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), {
+			code: "ENOENT",
+		}),
 		env: { STEP_CLI_STEPPAGE_INSTALLER_URL: "https://example.test/install.sh" },
 	});
 

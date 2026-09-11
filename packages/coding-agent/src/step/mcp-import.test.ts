@@ -350,8 +350,8 @@ describe("describeStepMcpImportOutcome", () => {
 		});
 		expect(notice).toContain("Imported 2 MCP servers into /home/u/.step-cli/config.toml");
 		expect(notice).toContain("docs, shared-codex");
-		// A write the running process cannot pick up must say so.
-		expect(notice).toContain("Restart Step");
+		// The prompt runs before MCP discovery, so nothing asks for a restart.
+		expect(notice).not.toContain("Restart");
 		expect(notice).toContain("Skipped broken: neither command nor url");
 
 		// A failed write arrives as imported:[] plus a skip reason; it must not be silent.
@@ -363,7 +363,6 @@ describe("describeStepMcpImportOutcome", () => {
 			},
 		});
 		expect(failed).toBe("Skipped docs: could not write config.toml (EACCES)");
-		expect(failed).not.toContain("Restart Step");
 	});
 });
 
