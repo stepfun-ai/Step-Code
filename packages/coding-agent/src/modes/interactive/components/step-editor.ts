@@ -17,8 +17,15 @@ export const STEP_EDITOR_PLACEHOLDER = "Ask Step to do anything (/ for commands,
 const STEP_BASH_PLACEHOLDER = "run a shell command (Esc to exit)";
 const STEP_BASH_EXCLUDED_PLACEHOLDER = "run a shell command, hidden from the model (Esc to exit)";
 
-/** The side rail and one-cell inset added by the rounded frame. */
+/** The two-cell inset the frame keeps on each side of the content. */
 const STEP_EDITOR_CHROME_WIDTH = 4;
+
+/**
+ * The frame insets its content but draws no side rails. A terminal text
+ * selection copies whole screen rows, so rails would be dragged into the
+ * clipboard with the prompt and pasted back as `│` noise.
+ */
+const STEP_EDITOR_CONTENT_INSET = "  ";
 
 /** A frame this narrow is less useful than pi-tui's compact native editor. */
 const STEP_EDITOR_MIN_FRAME_WIDTH = 8;
@@ -179,9 +186,10 @@ export class StepEditor extends CustomEditor {
 	}
 
 	/**
-	 * Turn pi-tui's two horizontal rules into the Step rounded rectangle. The
-	 * scan stops at the last rule before autocomplete, so completion rows remain
-	 * native and are not accidentally given box rails.
+	 * Widen pi-tui's two horizontal rules to the full terminal width, paint them
+	 * with the Step border tone, and inset the rows between them. The scan stops
+	 * at the last rule before autocomplete, so completion rows remain native and
+	 * are not accidentally indented.
 	 */
 	private frameBox(inner: string[], width: number): string[] {
 		if (inner.length < 2) {
@@ -204,14 +212,14 @@ export class StepEditor extends CustomEditor {
 		// brand tone and InteractiveMode updates it per state.
 		const border = this.borderColor;
 		const interiorWidth = Math.max(0, width - STEP_EDITOR_CHROME_WIDTH);
-		const rule = "─".repeat(Math.max(0, width - 2));
-		const framed: string[] = [border(`╭${rule}╮`)];
+		const rule = border("─".repeat(Math.max(0, width)));
+		const framed: string[] = [rule];
 		for (let index = 1; index < bottom; index += 1) {
 			const row = inner[index] ?? "";
 			const padding = " ".repeat(Math.max(0, interiorWidth - visibleWidth(row)));
-			framed.push(`${border("│")} ${row}${padding} ${border("│")}`);
+			framed.push(`${STEP_EDITOR_CONTENT_INSET}${row}${padding}${STEP_EDITOR_CONTENT_INSET}`);
 		}
-		framed.push(border(`╰${rule}╯`));
+		framed.push(rule);
 
 		// Preserve pi-tui's autocomplete block byte-for-byte after the frame.
 		for (let index = bottom + 1; index < inner.length; index += 1) {
