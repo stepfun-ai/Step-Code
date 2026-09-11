@@ -8,9 +8,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
 import type {
-	AgentSessionRuntimeDiagnostic,
 	AutocompleteProviderFactory,
 	EditorFactory,
 	ExtensionCommandContext,
@@ -20,6 +19,8 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 	FullscreenExitOutput,
+	InteractiveModeOptions,
+	InteractiveStartupContext,
 	MarkdownTransformer,
 	ProjectTrustContext,
 	ResourceDiagnostic,
@@ -100,7 +101,6 @@ import {
 	SessionImportFileNotFoundError,
 	SessionManager,
 	type StepLoginHost,
-	type StepLoginOutcome,
 	sessionEntryToContextMessages,
 	setRegisteredThemes,
 	setThemeStorageDir,
@@ -375,87 +375,10 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
 	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
 
-/**
- * Options for InteractiveMode initialization.
- */
-export interface InteractiveModeOptions {
-	/** Project resource directory name for this runtime instance. */
-	configDirName?: string;
-	/** Credential path used by the active product runtime (for status text). */
-	authPath?: string;
-	/** Providers that were migrated to auth.json (shows warning) */
-	migratedProviders?: string[];
-	/** Diagnostics collected before the interactive TUI was initialized. */
-	startupDiagnostics?: AgentSessionRuntimeDiagnostic[];
-	/** Warning message if session model couldn't be restored */
-	modelFallbackMessage?: string;
-	/** Cwd to trust after reload if it gained a .pi directory during this implicitly trusted session. */
-	autoTrustOnReloadCwd?: string;
-	/** Initial message to send on startup (can include @file content) */
-	initialMessage?: string;
-	/** Images to attach to the initial message */
-	initialImages?: ImageContent[];
-	/** Additional messages to send after the initial message */
-	initialMessages?: string[];
-	/** Force verbose startup (overrides quietStartup setting) */
-	verbose?: boolean;
-	/** TUI layout mode. */
-	tuiMode?: TuiMode;
-	/** Initial interactive theme setting for this invocation. */
-	initialThemeSetting?: string;
-	/** Fallback theme when no saved setting or explicit theme was supplied. */
-	defaultTheme?: string;
-	/** Skip optional network, catalog, update, and install telemetry services. */
-	disableBackgroundServices?: boolean;
-	/** Explicit offline mode (`--offline` or `PI_OFFLINE`), distinct from service suppression. */
-	offline?: boolean;
-	/** Whether to show the package changelog on startup. Defaults to true. */
-	showChangelog?: boolean;
-	/** Product presentation variant for the native interactive surface. */
-	tuiStyle?: "native" | "step";
-	/** Root used by the product session selector when listing all workspaces. */
-	sessionRoot?: string;
-	/**
-	 * Provider to offer during a fresh interactive startup when no credential is
-	 * configured. The login itself continues through Pi's native selector/dialog.
-	 */
-	startupLoginProvider?: string;
-	/** Force the startup provider login even when a credential is already stored. */
-	forceStartupLogin?: boolean;
-	/** Return after the one-shot startup login flow (used by `step login`). */
-	exitAfterStartupLogin?: boolean;
-	/** Skip optional fd/rg installation for auth-only command surfaces. */
-	skipManagedTools?: boolean;
-	/** Restrict login/logout selectors to product-owned providers when set. */
-	allowedAuthProviders?: readonly string[];
-	/** Shared Step onboarding flow used by the Step-only login surfaces. */
-	stepLogin?: (host: StepLoginHost) => Promise<StepLoginOutcome>;
-	/** Shared Step logout flow used by the Step-only TUI command. */
-	stepLogout?: () => Promise<{ removed: boolean; remainingSource?: string | null }>;
-	/**
-	 * Product startup hook. Returning false stops the interactive loop after the
-	 * hook has completed (used by a self-update that has relaunched the binary).
-	 */
-	onStartup?: (context: InteractiveStartupContext) => Promise<boolean | undefined>;
-	/** Best-effort notification after a credential has been persisted. */
-	onCredentialAuthenticated?: (details: { providerId: string; uid?: string }) => void;
-	/**
-	 * Product default model used after a provider login.  Pi's built-in
-	 * provider catalog supplies defaults for its known providers; product
-	 * providers such as Step can supply the same policy without coupling this
-	 * interactive layer to their extension module.
-	 */
-	defaultModelForProvider?: (providerId: string) => string | undefined;
-}
-
-export interface InteractiveStartupContext {
-	/** Native Pi-backed extension UI methods. */
-	ui: ExtensionUIContext;
-	/** Stop the renderer and detach terminal input handlers. */
-	stop: () => void;
-	/** Dispose the active runtime/session. */
-	dispose: () => Promise<void>;
-}
+// InteractiveModeOptions / InteractiveStartupContext: single source of truth lives in
+// @earendil-works/pi-coding-agent (interactive-contract.ts). Imported at top, re-exported
+// here so the ui barrel and InteractiveMode construction share ONE definition (no drift).
+export type { InteractiveModeOptions, InteractiveStartupContext };
 
 interface InteractiveTuiOptions {
 	tuiMode: TuiMode;
