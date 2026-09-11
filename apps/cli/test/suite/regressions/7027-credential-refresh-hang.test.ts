@@ -100,6 +100,7 @@ describe("issues #7027 and #7113 credential refresh hang", () => {
 			showWarning,
 			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 		const complete = Reflect.get(InteractiveMode.prototype, "completeProviderAuthentication") as (
 			this: object,
@@ -120,5 +121,6 @@ describe("issues #7027 and #7113 credential refresh hang", () => {
 		expect(showWarning).toHaveBeenCalledWith(
 			"Saved API key for Stalled Login, but its model catalog refresh timed out; using cached models.",
 		);
+		expect(showWarning).toHaveBeenCalledTimes(1);
 	});
 });

@@ -208,6 +208,7 @@ describe("InteractiveMode startup login", () => {
 			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
 			ui: { requestRender: vi.fn() },
 			showWarning: vi.fn(),
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 
 		await completeProviderAuthentication.call(context, "step", "Step", "oauth", {

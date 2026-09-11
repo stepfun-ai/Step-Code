@@ -11,6 +11,7 @@ type CloneCommandContext = {
 	showStatus: (message: string) => void;
 	showError: (message: string) => void;
 	ui: { requestRender: () => void };
+	redraw: { requestRender: () => void; forceRender: () => void; renderNow: () => void };
 };
 
 type InteractiveModePrototype = {
@@ -36,6 +37,7 @@ describe("InteractiveMode /clone", () => {
 			showStatus,
 			showError,
 			ui: { requestRender },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 
 		await interactiveModePrototype.handleCloneCommand.call(context);
@@ -61,6 +63,7 @@ describe("InteractiveMode /clone", () => {
 			showStatus,
 			showError,
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 
 		await interactiveModePrototype.handleCloneCommand.call(context);
