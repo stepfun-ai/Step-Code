@@ -203,6 +203,16 @@ editor refocus/disposal callback is cancelled before mounting. This prevents
 an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
 refocused editor to open the next dialog.
 
+## File search
+
+The `search_files` adapter recognizes native grep matches by their
+`path:line: text` structure, not by a filename prefix. Paths beginning with
+`[` (including `[slug]`, `[...slug]`, and `[[...slug]]` route directories)
+or `WARNING:` remain valid results, with or without context lines.
+Native limit/truncation notices are not match rows: `matches` and
+`filesMatched` count accepted matches and files, while native limit metadata
+still contributes to `truncated` in the tool details.
+
 ## Plans and tasks
 
 Plans and tasks serve different purposes. A **plan** is the Markdown proposal:
