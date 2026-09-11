@@ -40,6 +40,64 @@ describe("StepToolSpinnerClock", () => {
 		expect(clock.elapsedSeconds("a")).toBeNull();
 	});
 
+	test("pauses animation and excludes approval wait from displayed execution time", () => {
+		const requestRender = vi.fn();
+		const clock = new StepToolSpinnerClock(requestRender);
+		clock.start("a", "run_command");
+		vi.advanceTimersByTime(1_200);
+		clock.setPaused(true);
+		clock.setPaused(true);
+		const frame = clock.frame;
+		const renders = requestRender.mock.calls.length;
+
+		vi.advanceTimersByTime(30_000);
+		expect(clock.frame).toBe(frame);
+		expect(clock.elapsedSeconds("a")).toBe(1);
+		expect(clock.currentToolName()).toBe("run_command");
+		expect(requestRender).toHaveBeenCalledTimes(renders);
+		expect(vi.getTimerCount()).toBe(0);
+
+		clock.setPaused(false);
+		clock.setPaused(false);
+		expect(vi.getTimerCount()).toBe(1);
+		vi.advanceTimersByTime(1_000);
+		expect(clock.elapsedSeconds("a")).toBe(2);
+		clock.dispose();
+	});
+
+	test("keeps tools started or cleared during approval paused until it ends", () => {
+		const clock = new StepToolSpinnerClock(vi.fn());
+		clock.setPaused(true);
+		vi.advanceTimersByTime(5_000);
+		clock.start("a", "run_command");
+		vi.advanceTimersByTime(5_000);
+		expect(clock.elapsedSeconds("a")).toBe(0);
+		expect(vi.getTimerCount()).toBe(0);
+		clock.clear();
+		expect(clock.elapsedSeconds("a")).toBeNull();
+		expect(clock.currentToolName()).toBeUndefined();
+		clock.start("b", "write_file");
+		vi.advanceTimersByTime(10_000);
+		expect(clock.elapsedSeconds("b")).toBe(0);
+		expect(vi.getTimerCount()).toBe(0);
+		clock.setPaused(false);
+		vi.advanceTimersByTime(1_000);
+		expect(clock.elapsedSeconds("b")).toBe(1);
+		clock.stop("b");
+		expect(clock.frame).toBe(STEP_SPINNER_FRAMES[0]);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test("does not restart disposed rows when an approval finishes late", () => {
+		const clock = new StepToolSpinnerClock(vi.fn());
+		clock.start("a");
+		clock.setPaused(true);
+		clock.dispose();
+		clock.setPaused(false);
+		expect(clock.elapsedSeconds("a")).toBeNull();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	test("dispose clears active rows and resets the frame", () => {
 		const clock = new StepToolSpinnerClock(() => {});
 		clock.start("a");

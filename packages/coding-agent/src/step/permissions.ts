@@ -237,7 +237,12 @@ export function resolveInitialStepPermissionPreset(
 	}
 	if (mode === "confirm" || mode === "ask") return "ask";
 	if (isTruthy(env.STEP_AUTOPILOT)) return "autopilot";
-	return "ask";
+	// Default to bypass: tools run without approval prompts. Explicit CLI flags,
+	// STEP_* env vars, and any persisted preset are all resolved above this line,
+	// so they continue to override the default. Dangerous commands (see
+	// decideStepToolCall / isDangerousCommand) still require confirmation even
+	// under bypass.
+	return "bypass";
 }
 
 export function stepPermissionStateForPreset(presetId: StepPermissionPresetId): StepPermissionState {
@@ -437,9 +442,9 @@ export class StepPermissionController {
 		}
 
 		const approved = await context.ui.confirm(
-			decision.hazardous ? "Confirm dangerous tool call" : "Approve tool call",
-			`${decision.reason}\n\n${summarizeToolInput(event.toolName, input)}`,
-			{ signal: context.signal },
+			`${decision.hazardous ? "Dangerous" : "Approve"} ${event.toolName} [${event.toolCallId.slice(-8)}]`,
+			`Call: ${event.toolCallId}\n${decision.reason}\n\n${summarizeToolInput(event.toolName, input)}\n\nBatch calls may ask separately\nbefore approved tools begin running.`,
+			{ signal: context.signal, overlay: true },
 		);
 		if (approved) return undefined;
 		return { block: true, reason: `Tool call denied: ${event.toolName}` };

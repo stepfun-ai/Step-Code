@@ -14,6 +14,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Changed
 
+- Changed the default permission preset to Bypass, so a fresh run with no CLI flag, `STEP_*` env var, or persisted preset runs tools without approval prompts; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed CI release delivery to publish only standalone Step binaries, installers, and release metadata; npm packages are not released.
 - Changed Step authentication commands to expose only the Step provider while retaining Pi's native auth flow.
@@ -21,7 +22,9 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Fixed Step approval dialogs appearing to loop: show distinct call IDs and a static waiting state, settle cancelled or replaced dialogs once, and prevent multiline tool titles from corrupting terminal redraws.
 - Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. Both tools now fall back to `git grep` / `git ls-files` when the search path is inside a worktree, and to POSIX `grep` / `find` otherwise; `GrepOperations` gains an optional `search` primitive symmetric to `FindOperations.glob` for remote injectors.
+- Fixed the Windows and Unix installers not persisting PATH, so `step` was not runnable in a new shell after `irm .../install.ps1 | iex` (or `curl | sh`). The install dir and managed-tools bin are now added to the user PATH idempotently: `install.ps1` writes `HKCU\Environment` directly (preserving `%VAR%` entries un-expanded, avoiding `setx` truncation) and broadcasts `WM_SETTINGCHANGE`; `install.sh` writes a self-guarded `# step-cli` block to the login-shell rc (zsh/bash/POSIX), configures fish via `fish_add_path`, never truncates an rc on an unterminated marker, and refuses paths with shell-unsafe characters. Both honor `STEP_INSTALL_DIR`/`STEP_CODING_AGENT_DIR` and degrade to a printed advisory when persistence fails.
 - Fixed task history and branch restoration, ID reuse across sibling branches, and acceptance of cyclic dependencies.
 - Fixed inconsistent plan entry paths and approval of missing or empty plans; plan mode now follows the active session branch.
 - Fixed the Step queued-message preview and `update_plan` plan text dropping four characters at every wrap point in narrow terminals.
