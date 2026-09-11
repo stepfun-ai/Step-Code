@@ -14,7 +14,11 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
-import { getTextOutput as getRenderedTextOutput, renderToolPath } from "../../../core/tools/render-utils.ts";
+import {
+	getTextOutput as getRenderedTextOutput,
+	renderToolPath,
+	replaceTabs,
+} from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { renderDiff } from "./diff.ts";
@@ -62,7 +66,11 @@ function trimRenderedRows(lines: string[]): string[] {
 }
 
 function clampStepLine(line: string, width: number): string {
-	return visibleWidth(line) <= width ? line : truncateToWidth(line, width, "", false);
+	// Projected titles/summaries can contain raw argument whitespace after the
+	// native renderer has split its rows. One array entry must remain one
+	// physical terminal line, or spinner redraws corrupt cursor accounting.
+	const singleLine = replaceTabs(line).replace(/[\r\n]+/gu, " ");
+	return visibleWidth(singleLine) <= width ? singleLine : truncateToWidth(singleLine, width, "", false);
 }
 
 /** Remove Pi's full-width self-shell fill for the Step edit presentation. */
