@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import * as themeModule from "../../../packages/coding-agent/src/theme/theme.ts";
+import { createFakeInteractiveContext } from "./support/fake-interactive-context.ts";
 
 type StartupLoginContext = {
 	options: {
@@ -188,7 +189,7 @@ describe("InteractiveMode startup login", () => {
 			maxTokens: 32_000,
 		};
 		const setModel = vi.fn(async () => {});
-		const context = {
+		const context = createFakeInteractiveContext({
 			options: {
 				defaultModelForProvider: (providerId: string) => (providerId === "step" ? "step-3.7-flash" : undefined),
 				authPath: "/tmp/step-auth.json",
@@ -200,16 +201,7 @@ describe("InteractiveMode startup login", () => {
 				},
 				setModel,
 			},
-			updateAvailableProviderCount: vi.fn(async () => {}),
-			footer: { invalidate: vi.fn() },
-			updateEditorBorderColor: vi.fn(),
-			showStatus: vi.fn(),
-			showError: vi.fn(),
-			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
-			ui: { requestRender: vi.fn() },
-			showWarning: vi.fn(),
-			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
-		};
+		});
 
 		await completeProviderAuthentication.call(context, "step", "Step", "oauth", {
 			provider: "models-proxy",

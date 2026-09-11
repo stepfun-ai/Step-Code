@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../../../../../packages/coding-agent/src/core/auth-storage.ts";
 import { ModelRuntime } from "../../../../../packages/coding-agent/src/core/model-runtime.ts";
 import { InteractiveMode } from "../../../src/ui/interactive-mode.ts";
+import { createFakeInteractiveContext } from "../../support/fake-interactive-context.ts";
 import { createHarness, type Harness } from "../../../../../packages/coding-agent/test/suite/harness.ts";
 
 const dynamicModel: Model<"openai-completions"> = {
@@ -90,18 +91,10 @@ describe("issues #7027 and #7113 credential refresh hang", () => {
 				}),
 		);
 		const showWarning = vi.fn();
-		const context = {
+		const context = createFakeInteractiveContext({
 			session: harness.session,
-			updateAvailableProviderCount: vi.fn(),
-			footer: { invalidate: vi.fn() },
-			updateEditorBorderColor: vi.fn(),
-			showStatus: vi.fn(),
-			showError: vi.fn(),
 			showWarning,
-			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
-			ui: { requestRender: vi.fn() },
-			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
-		};
+		});
 		const complete = Reflect.get(InteractiveMode.prototype, "completeProviderAuthentication") as (
 			this: object,
 			providerId: string,
