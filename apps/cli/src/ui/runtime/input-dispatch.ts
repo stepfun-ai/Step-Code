@@ -278,16 +278,6 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			ctx.editor.setText("");
 			return;
 		}
-		if (text === "/arminsayshi") {
-			ctx.handleArminSaysHi();
-			ctx.editor.setText("");
-			return;
-		}
-		if (text === "/dementedelves") {
-			ctx.handleDementedDelves();
-			ctx.editor.setText("");
-			return;
-		}
 		if (text === "/resume") {
 			ctx.showSessionSelector();
 			ctx.editor.setText("");

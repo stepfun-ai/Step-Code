@@ -204,7 +204,6 @@ describe("InteractiveMode startup login", () => {
 			showStatus: vi.fn(),
 			showError: vi.fn(),
 			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
-			checkDaxnutsEasterEgg: vi.fn(),
 			ui: { requestRender: vi.fn() },
 		};
 

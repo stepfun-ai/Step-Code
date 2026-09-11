@@ -196,14 +196,11 @@ import { TrustSelectorComponent } from "./view/dialogs/trust-selector.ts";
 import { UserMessageSelectorComponent } from "./view/dialogs/user-message-selector.ts";
 import { CustomEntryComponent } from "./view/editor/custom-entry.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "./view/editor/step-editor.ts";
-import { ArminComponent } from "./view/transcript/armin.ts";
 import { AssistantMessageComponent } from "./view/transcript/assistant-message.ts";
 import { BashExecutionComponent } from "./view/transcript/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./view/transcript/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./view/transcript/compaction-summary-message.ts";
 import { CustomMessageComponent } from "./view/transcript/custom-message.ts";
-import { DaxnutsComponent } from "./view/transcript/daxnuts.ts";
-import { EarendilAnnouncementComponent } from "./view/transcript/earendil-announcement.ts";
 import { createMermaidMarkdownTransformer } from "./view/transcript/mermaid.ts";
 import { SkillInvocationMessageComponent } from "./view/transcript/skill-invocation-message.ts";
 import { StepAssistantMessageComponent, StepUserMessageComponent } from "./view/transcript/step-message.ts";
@@ -4523,7 +4520,6 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
@@ -4669,7 +4665,6 @@ export class InteractiveMode {
 					done();
 					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
 					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-					this.checkDaxnutsEasterEgg(model);
 				} catch (error) {
 					done();
 					this.showError(error instanceof Error ? error.message : String(error));
@@ -5572,7 +5567,6 @@ export class InteractiveMode {
 		if (selectedModel) {
 			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${authPath}`);
 			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
-			this.checkDaxnutsEasterEgg(selectedModel);
 		} else {
 			this.showStatus(`${actionLabel}. Credentials saved to ${authPath}`);
 			if (selectionError) {
@@ -6327,30 +6321,6 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			new Text(`${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
 		this.redraw.requestRender();
-	}
-
-	handleArminSaysHi(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.redraw.requestRender();
-	}
-
-	handleDementedDelves(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new EarendilAnnouncementComponent());
-		this.redraw.requestRender();
-	}
-
-	private handleDaxnuts(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
-		this.redraw.requestRender();
-	}
-
-	private checkDaxnutsEasterEgg(model: { provider: string; id: string }): void {
-		if (model.provider === "opencode" && model.id.toLowerCase().includes("kimi-k2.5")) {
-			this.handleDaxnuts();
-		}
 	}
 
 	async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {

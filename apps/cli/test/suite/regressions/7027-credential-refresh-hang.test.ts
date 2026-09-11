@@ -99,7 +99,6 @@ describe("issues #7027 and #7113 credential refresh hang", () => {
 			showError: vi.fn(),
 			showWarning,
 			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
-			checkDaxnutsEasterEgg: vi.fn(),
 			ui: { requestRender: vi.fn() },
 		};
 		const complete = Reflect.get(InteractiveMode.prototype, "completeProviderAuthentication") as (

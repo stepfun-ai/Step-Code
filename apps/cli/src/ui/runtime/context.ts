@@ -137,7 +137,6 @@ export interface RuntimeContext {
 	cycleThinkingLevel(): void;
 	flushPendingBashComponents(): void;
 	getAllQueuedMessages(): { steering: string[]; followUp: string[] };
-	handleArminSaysHi(): void;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handleClearCommand(): Promise<void>;
 	handleClipboardPaste(): Promise<void>;
@@ -148,7 +147,6 @@ export interface RuntimeContext {
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	handleDebugCommand(): void;
-	handleDementedDelves(): void;
 	handleDequeue(): void;
 	handleExportCommand(text: string): Promise<void>;
 	handleFollowUp(): Promise<void>;
