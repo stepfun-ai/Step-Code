@@ -9,6 +9,7 @@ type FakeUi = {
 
 type HandleCtrlZThis = {
 	ui: FakeUi;
+	redraw: { requestRender: () => void; forceRender: () => void; renderNow: () => void };
 };
 
 type ProcessSignalHandler = () => void;
@@ -35,7 +36,11 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			requestRender: vi.fn(),
 		};
 		const showStatus = vi.fn();
-		const context: HandleCtrlZThis & { showStatus: (message: string) => void } = { ui, showStatus };
+		const context: HandleCtrlZThis & { showStatus: (message: string) => void } = {
+			ui,
+			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+			showStatus,
+		};
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 		Object.defineProperty(process, "platform", {
 			configurable: true,
@@ -68,7 +73,10 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			stop: vi.fn(),
 			requestRender: vi.fn(),
 		};
-		const context: HandleCtrlZThis = { ui };
+		const context: HandleCtrlZThis = {
+			ui,
+			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+		};
 		const keepAliveHandle = setTimeout(() => undefined, 0);
 		clearTimeout(keepAliveHandle);
 
@@ -118,7 +126,10 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			stop: vi.fn(),
 			requestRender: vi.fn(),
 		};
-		const context: HandleCtrlZThis = { ui };
+		const context: HandleCtrlZThis = {
+			ui,
+			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+		};
 		const keepAliveHandle = setTimeout(() => undefined, 0);
 		clearTimeout(keepAliveHandle);
 		const suspendError = new Error("suspend failed");

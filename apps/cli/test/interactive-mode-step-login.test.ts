@@ -64,7 +64,12 @@ describe("Step login command routing", () => {
 			clear: vi.fn(),
 			addChild: vi.fn(),
 		};
-		const host = createStepLoginHost.call({ ui, editor, editorContainer });
+		const host = createStepLoginHost.call({
+			ui,
+			editor,
+			editorContainer,
+			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+		});
 
 		host.addChild(view);
 		host.setFocus(view);

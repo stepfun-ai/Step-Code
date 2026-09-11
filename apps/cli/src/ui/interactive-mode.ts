@@ -3,7 +3,6 @@
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,14 +46,12 @@ import {
 	computeCacheWaste,
 	configureHttpDispatcher,
 	copyToClipboard,
-	createCompactionSummaryMessage,
 	DEFAULT_THINKING_LEVEL,
 	DefaultPackageManager,
 	DynamicBorder,
 	defaultModelPerProvider,
 	detectCacheMiss,
 	ensureTool,
-	extensionForImageMimeType,
 	FooterDataProvider,
 	findExactModelReferenceMatch,
 	formatHttpIdleTimeoutMs,
@@ -95,8 +92,6 @@ import {
 	parseSkillBlock,
 	type ReadonlyFooterDataProvider,
 	rawKeyHint,
-	readClipboardImage,
-	readClipboardText,
 	readStepLoginCredential,
 	readStepLoginProfile,
 	resolveModelScopeFromModels,
@@ -181,9 +176,7 @@ import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	BranchSummaryStatusIndicator,
-	CompactionStatusIndicator,
 	IdleStatus,
-	RetryStatusIndicator,
 	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	type StatusIndicator,
 	WorkingOutputTracker,
@@ -193,7 +186,7 @@ import { StepSelectorFrame } from "./components/step-dialog.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "./components/step-editor.ts";
 import { StepAssistantMessageComponent, StepUserMessageComponent } from "./components/step-message.ts";
 import { StepQueuedMessagesComponent } from "./components/step-queued-messages.ts";
-import { StepToolSpinnerClock } from "./components/step-spinner.ts";
+import type { StepToolSpinnerClock } from "./components/step-spinner.ts";
 import { StepWelcomeComponent } from "./components/step-welcome.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
@@ -204,6 +197,19 @@ import { UserMessageSelectorComponent } from "./components/user-message-selector
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { createApprovalProvider } from "./runtime/approval.ts";
+import { wireInteractiveRuntime, wireStartupInput } from "./runtime/index.ts";
+import {
+	clipboardPaste,
+	handleStartupSubmit,
+	isExtensionCommand,
+	rightClickPaste,
+	wireKeyHandlers,
+	wireSubmitHandler,
+} from "./runtime/input-dispatch.ts";
+import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
+import { createRedraw, type Redraw } from "./runtime/redraw.ts";
+import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
 import { shareSession } from "./session-share.ts";
 
 /** Interface for components that can be expanded/collapsed */
@@ -517,21 +523,22 @@ export function createInteractiveTuiReference(getTui: () => TUI): TUI {
 
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntimeHost;
-	private renderer: TuiMainScreen | TuiAltScreen;
-	private ui: TUI;
+	renderer: TuiMainScreen | TuiAltScreen;
+	ui: TUI;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
-	private chatContainer: Container;
+	chatContainer: Container;
 	private documentContainer: Container;
-	private stepWelcome: StepWelcomeComponent | undefined;
-	private stepSpinner: StepToolSpinnerClock | undefined;
+	stepWelcome: StepWelcomeComponent | undefined;
+	stepSpinner: StepToolSpinnerClock | undefined;
+	redraw: Redraw;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private stepQueuedMessages: StepQueuedMessagesComponent | undefined;
 	private statusContainer: Container;
-	private defaultEditor: CustomEditor;
-	private editor: EditorComponent;
+	defaultEditor: CustomEditor;
+	editor: EditorComponent;
 	private editorComponentFactory: EditorFactory | undefined;
 	private autocompleteProvider: AutocompleteProvider | undefined;
 	private autocompleteProviderWrappers: AutocompleteProviderFactory[] = [];
@@ -539,27 +546,27 @@ export class InteractiveMode {
 	private editorContainer: Container;
 	private activeSelectorToken?: object;
 	private activeSelectorDispose?: () => void;
-	private footer: FooterComponent;
+	footer: FooterComponent;
 	private footerContainer: Container;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
 	private version: string;
-	private isInitialized = false;
-	private onInputCallback?: (text: string) => void;
-	private pendingUserInputs: string[] = [];
-	private activeStatusIndicator: StatusIndicator | undefined = undefined;
+	isInitialized = false;
+	onInputCallback?: (text: string) => void;
+	pendingUserInputs: string[] = [];
+	activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
-	private workingVisible = true;
+	workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
-	private readonly workingOutputTracker = new WorkingOutputTracker();
+	readonly workingOutputTracker = new WorkingOutputTracker();
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
-	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
+	hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
-	private lastSigintTime = 0;
-	private lastEscapeTime = 0;
+	lastSigintTime = 0;
+	lastEscapeTime = 0;
 	private changelogMarkdown: string | undefined = undefined;
 	private startupNoticesShown = false;
 	private anthropicSubscriptionWarningShown = false;
@@ -570,18 +577,18 @@ export class InteractiveMode {
 	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
-	private streamingComponent: AssistantMessageComponent | undefined = undefined;
-	private streamingMessage: AssistantMessage | undefined = undefined;
+	streamingComponent: AssistantMessageComponent | undefined = undefined;
+	streamingMessage: AssistantMessage | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
-	private pendingTools = new Map<string, ToolExecutionComponent>();
+	pendingTools = new Map<string, ToolExecutionComponent>();
 
 	// Tool output expansion state
-	private toolOutputExpanded = false;
+	toolOutputExpanded = false;
 
 	// Thinking block visibility state
-	private hideThinkingBlock = false;
-	private outputPad = 1;
+	hideThinkingBlock = false;
+	outputPad = 1;
 	private readonly mermaidMarkdownTransformer: MarkdownTransformer = createMermaidMarkdownTransformer({
 		getMode: () => this.settingsManager.getMermaidRenderingMode(),
 		theme,
@@ -591,13 +598,13 @@ export class InteractiveMode {
 	private skillCommands = new Map<string, string>();
 
 	// Agent subscription unsubscribe function
-	private unsubscribe?: () => void;
+	unsubscribe?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !) and whether the
 	// !! variant excludes the command output from the model's context
-	private isBashMode = false;
-	private isBashExcluded = false;
+	isBashMode = false;
+	isBashExcluded = false;
 
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
@@ -606,10 +613,10 @@ export class InteractiveMode {
 	private pendingBashComponents: BashExecutionComponent[] = [];
 
 	// Auto-compaction state
-	private autoCompactionEscapeHandler?: () => void;
+	autoCompactionEscapeHandler?: () => void;
 
 	// Auto-retry state
-	private retryEscapeHandler?: () => void;
+	retryEscapeHandler?: () => void;
 
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -646,7 +653,7 @@ export class InteractiveMode {
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
 
-	private options: InteractiveModeOptions;
+	options: InteractiveModeOptions;
 	private readonly onRightClickPaste = (): void => {
 		void this.handleRightClickPaste();
 	};
@@ -654,16 +661,16 @@ export class InteractiveMode {
 	private themeController: InteractiveThemeController;
 
 	// Convenience accessors
-	private get session(): AgentSession {
+	get session(): AgentSession {
 		return this.runtimeHost.session;
 	}
 	private get agent() {
 		return this.session.agent;
 	}
-	private get sessionManager() {
+	get sessionManager() {
 		return this.session.sessionManager;
 	}
-	private get settingsManager() {
+	get settingsManager() {
 		return this.session.settingsManager;
 	}
 	private get agentDir(): string {
@@ -675,7 +682,7 @@ export class InteractiveMode {
 	private get configDirName(): string {
 		return this.runtimeHost?.services?.configDirName ?? this.options?.configDirName ?? CONFIG_DIR_NAME;
 	}
-	private get presentation(): "native" | "step" {
+	get presentation(): "native" | "step" {
 		return this.options?.tuiStyle === "step" ? "step" : "native";
 	}
 	private get stepSessionRoot(): string {
@@ -706,9 +713,8 @@ export class InteractiveMode {
 		});
 		this.ui = createInteractiveTuiReference(() => this.renderer);
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
-		if (options.tuiStyle === "step") {
-			this.stepSpinner = new StepToolSpinnerClock(() => this.ui.requestRender());
-		}
+		this.redraw = createRedraw(this.ui, { withSpinner: options.tuiStyle === "step" });
+		this.stepSpinner = this.redraw.spinner;
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new Container();
@@ -723,7 +729,7 @@ export class InteractiveMode {
 					workspaceRoot: this.sessionManager.getCwd(),
 					sessionId: this.sessionManager.getSessionId(),
 				}),
-				{ requestRender: () => this.ui.requestRender() },
+				{ requestRender: () => this.redraw.requestRender() },
 			);
 			this.stepWelcome.setFirstMessageHint(!this.hasConversationMessages(this.sessionManager.buildContextEntries()));
 			this.documentContainer.addChild(this.stepWelcome);
@@ -1113,9 +1119,7 @@ export class InteractiveMode {
 			this.footerContainer,
 		]);
 		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
-		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
-		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
-		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
+		wireStartupInput(this);
 		this.ui.setFocus(this.editor);
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
@@ -1200,7 +1204,7 @@ export class InteractiveMode {
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 
 		if (!this.options.skipManagedTools) {
 			// Ensure fd and rg are available after mounting the TUI (downloads if
@@ -1215,9 +1219,8 @@ export class InteractiveMode {
 		}
 
 		// Enable the remaining input handlers only after managed-tool setup completes.
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
-		this.ui.requestRender();
+		wireInteractiveRuntime(this);
+		this.redraw.requestRender();
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
@@ -1229,30 +1232,30 @@ export class InteractiveMode {
 		onThemeChange(() => {
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		});
 
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		});
 
 		// Initialize available provider count for footer display
 		await this.updateAvailableProviderCount();
 
 		// Flush the completed startup state before loading the remaining syntax grammars.
-		this.ui.renderNow();
+		this.redraw.renderNow();
 		void loadAllHighlightLanguages().then(() => {
 			if (!this.isInitialized) return;
 			this.ui.invalidate();
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		});
 	}
 
 	/**
 	 * Update terminal title with session name and cwd.
 	 */
-	private updateTerminalTitle(): void {
+	updateTerminalTitle(): void {
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
@@ -1532,7 +1535,7 @@ export class InteractiveMode {
 			.catch(() => undefined);
 	}
 
-	private getMarkdownThemeWithSettings(): MarkdownTheme {
+	getMarkdownThemeWithSettings(): MarkdownTheme {
 		return {
 			...getMarkdownTheme(),
 			codeBlockIndent: this.settingsManager.getCodeBlockIndent(),
@@ -2311,12 +2314,12 @@ export class InteractiveMode {
 	/**
 	 * Get a registered tool definition by name (for custom rendering).
 	 */
-	private getRegisteredToolDefinition(toolName: string) {
+	getRegisteredToolDefinition(toolName: string) {
 		return this.session.getToolDefinition(toolName);
 	}
 
 	/** Construct the native message component with the selected product skin. */
-	private createAssistantMessageComponent(
+	createAssistantMessageComponent(
 		message?: AssistantMessage,
 		hideThinkingBlock = this.hideThinkingBlock,
 		markdownTheme: MarkdownTheme = this.getMarkdownThemeWithSettings(),
@@ -2357,7 +2360,7 @@ export class InteractiveMode {
 		return new UserMessageComponent(text, markdownTheme, outputPad, markdownTransformers);
 	}
 
-	private getMarkdownTransformers(): MarkdownTransformer[] {
+	getMarkdownTransformers(): MarkdownTransformer[] {
 		return [this.mermaidMarkdownTransformer, ...this.session.extensionRunner.getMarkdownTransformers()];
 	}
 
@@ -2425,17 +2428,17 @@ export class InteractiveMode {
 	 */
 	private setExtensionStatus(key: string, text: string | undefined): void {
 		this.footerDataProvider.setExtensionStatus(key, text);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private showStatusIndicator(indicator: StatusIndicator): void {
+	showStatusIndicator(indicator: StatusIndicator): void {
 		this.activeStatusIndicator?.dispose();
 		this.activeStatusIndicator = indicator;
 		this.statusContainer.clear();
 		this.statusContainer.addChild(indicator);
 	}
 
-	private clearStatusIndicator(kind?: StatusIndicator["kind"]): void {
+	clearStatusIndicator(kind?: StatusIndicator["kind"]): void {
 		if (kind && this.activeStatusIndicator?.kind !== kind) {
 			return;
 		}
@@ -2448,7 +2451,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private showWorkingStatusIndicator(): void {
+	showWorkingStatusIndicator(): void {
 		this.showStatusIndicator(
 			new WorkingStatusIndicator(
 				this.ui,
@@ -2465,13 +2468,13 @@ export class InteractiveMode {
 		this.workingVisible = visible;
 		if (!visible) {
 			this.clearStatusIndicator("working");
-			this.ui.requestRender();
+			this.redraw.requestRender();
 			return;
 		}
 		if (this.session.isStreaming && this.activeStatusIndicator?.kind !== "working") {
 			this.showWorkingStatusIndicator();
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private setWorkingIndicator(options?: WorkingIndicatorOptions): void {
@@ -2479,7 +2482,7 @@ export class InteractiveMode {
 		if (this.activeStatusIndicator?.kind === "working") {
 			this.activeStatusIndicator.setIndicator(options);
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private setHiddenThinkingLabel(label?: string): void {
@@ -2492,7 +2495,7 @@ export class InteractiveMode {
 		if (this.streamingComponent) {
 			this.streamingComponent.setHiddenThinkingLabel(this.hiddenThinkingLabel);
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -2595,7 +2598,7 @@ export class InteractiveMode {
 		if (!this.widgetContainerAbove || !this.widgetContainerBelow) return;
 		this.renderWidgetContainer(this.widgetContainerAbove, this.extensionWidgetsAbove, true, true);
 		this.renderWidgetContainer(this.widgetContainerBelow, this.extensionWidgetsBelow, false, false);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private renderWidgetContainer(
@@ -2645,7 +2648,7 @@ export class InteractiveMode {
 			this.footerContainer.addChild(this.footer);
 		}
 
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -2689,7 +2692,7 @@ export class InteractiveMode {
 			}
 		}
 
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private addExtensionTerminalInputListener(
@@ -2739,7 +2742,7 @@ export class InteractiveMode {
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
 			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
+			confirm: createApprovalProvider(this).confirm,
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
@@ -2849,11 +2852,7 @@ export class InteractiveMode {
 	/**
 	 * Show a confirmation dialog for extensions.
 	 */
-	private async showExtensionConfirm(
-		title: string,
-		message: string,
-		opts?: ExtensionUIDialogOptions,
-	): Promise<boolean> {
+	async showExtensionConfirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean> {
 		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
 		return result === "Yes";
 	}
@@ -2949,12 +2948,12 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(component);
 		this.ui.setFocus(component);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 		return () => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 	}
 
@@ -2985,7 +2984,7 @@ export class InteractiveMode {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionEditor);
 			this.ui.setFocus(this.extensionEditor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		});
 	}
 
@@ -2997,7 +2996,7 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor);
 		this.extensionEditor = undefined;
 		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -3074,7 +3073,7 @@ export class InteractiveMode {
 
 		this.editorContainer.addChild(this.editor as Component);
 		this.ui.setFocus(this.editor as Component);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -3112,7 +3111,7 @@ export class InteractiveMode {
 			this.editorContainer.addChild(this.editor);
 			this.editor.setText(savedText);
 			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 
 		return new Promise((resolve, reject) => {
@@ -3159,7 +3158,7 @@ export class InteractiveMode {
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
 						this.ui.setFocus(component);
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					}
 				})
 				.catch((err) => {
@@ -3188,718 +3187,45 @@ export class InteractiveMode {
 				this.chatContainer.addChild(new Text(stackLines, 1, 0));
 			}
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	// =========================================================================
 	// Key Handlers
 	// =========================================================================
 
-	private setupKeyHandlers(): void {
-		// Set up handlers on defaultEditor - they use this.editor for text access
-		// so they work correctly regardless of which editor is active
-		this.defaultEditor.onEscape = () => {
-			if (this.session.isStreaming) {
-				this.restoreQueuedMessagesToEditor({ abort: true });
-			} else if (this.session.isBashRunning) {
-				this.session.abortBash();
-			} else if (this.isBashMode) {
-				this.editor.setText("");
-				this.isBashMode = false;
-				this.isBashExcluded = false;
-				this.updateEditorBorderColor();
-			} else if (!this.editor.getText().trim()) {
-				// Double-escape with empty editor triggers /tree, /fork, or nothing based on setting
-				const action = this.settingsManager.getDoubleEscapeAction();
-				if (action !== "none") {
-					const now = Date.now();
-					if (now - this.lastEscapeTime < 500) {
-						if (action === "tree") {
-							this.showTreeSelector();
-						} else {
-							this.showUserMessageSelector();
-						}
-						this.lastEscapeTime = 0;
-					} else {
-						this.lastEscapeTime = now;
-					}
-				}
-			}
-		};
-
-		// Register app action handlers
-		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
-		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
-		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
-		this.defaultEditor.onAction("app.thinking.cycle", () => {
-			// Step keeps pi's keybinding id and native editor dispatch, but uses
-			// Shift+Tab for its permission preset cycle. The command is handled by
-			// the Step extension; ordinary pi sessions retain thinking-level cycling.
-			if (this.options.tuiStyle === "step" && this.session.extensionRunner.getCommand("permissions")) {
-				void this.session.prompt("/permissions --cycle");
-				return;
-			}
-			this.cycleThinkingLevel();
-		});
-		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
-		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
-
-		// Global debug handler on TUI (works regardless of focus)
-		this.ui.onDebug = () => this.handleDebugCommand();
-		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
-		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
-		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
-		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
-		this.defaultEditor.onAction(
-			"app.message.copy",
-			() =>
-				void this.handleCopyCommand({
-					flashConfirmation: true,
-					preferSelection: true,
-				}),
-		);
-		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
-		this.defaultEditor.canDequeue = () => {
-			const { steering, followUp } = this.getAllQueuedMessages();
-			return steering.length > 0 || followUp.length > 0;
-		};
-		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
-		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
-		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
-		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
-
-		this.defaultEditor.onChange = (text: string) => {
-			const wasBashMode = this.isBashMode;
-			const wasBashExcluded = this.isBashExcluded;
-			const trimmed = text.trimStart();
-			this.isBashMode = trimmed.startsWith("!");
-			this.isBashExcluded = trimmed.startsWith("!!");
-			if (wasBashMode !== this.isBashMode || wasBashExcluded !== this.isBashExcluded) {
-				this.updateEditorBorderColor();
-			}
-		};
-
-		// Handle clipboard paste (triggered on Ctrl+V). Images are attached by path;
-		// otherwise, paste plain text from the system clipboard.
-		this.defaultEditor.onPasteImage = () => {
-			void this.handleClipboardPaste();
-		};
-	}
-
 	private async handleRightClickPaste(): Promise<void> {
-		const target = this.renderer.getFocusedComponent();
-		const handleInput = target?.handleInput;
-		if (!target || !handleInput) return;
-		try {
-			const text = await readClipboardText();
-			if (!text || this.renderer.getFocusedComponent() !== target) return;
-			handleInput.call(target, `\x1b[200~${text}\x1b[201~`);
-			this.ui.requestRender();
-		} catch {
-			// Silently ignore clipboard errors (may not have permission, etc.)
-		}
+		return rightClickPaste(this);
 	}
 
-	private async handleClipboardPaste(): Promise<void> {
-		try {
-			const image = await readClipboardImage();
-			if (image) {
-				const tmpDir = os.tmpdir();
-				const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-				const fileName = `${APP_NAME}-clipboard-${crypto.randomUUID()}.${ext}`;
-				const filePath = path.join(tmpDir, fileName);
-				fs.writeFileSync(filePath, Buffer.from(image.bytes));
-
-				this.editor.insertTextAtCursor?.(filePath);
-				this.ui.requestRender();
-				return;
-			}
-
-			const text = await readClipboardText();
-			if (text) {
-				this.editor.insertTextAtCursor?.(text);
-				this.ui.requestRender();
-			}
-		} catch {
-			// Silently ignore clipboard errors (may not have permission, etc.)
-		}
-	}
-
-	private handleStartupSubmit(text: string): void {
-		this.editor.setText(text);
-		this.showStatus("Startup is still in progress");
-	}
-
-	private setupEditorSubmitHandler(): void {
-		this.defaultEditor.onSubmit = async (text: string) => {
-			text = text.trim();
-			if (!text) return;
-
-			// Whatever this submission produces can push the transcript past the
-			// viewport, and an animating welcome block above the viewport leaves pi
-			// nothing but a full redraw per frame. The launch flourish is over.
-			this.stepWelcome?.stopLogoIntro();
-
-			// Handle commands
-			if (text === "/settings") {
-				this.showSettingsSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/scoped-models") {
-				this.editor.setText("");
-				await this.showModelsSelector();
-				return;
-			}
-			if (text === "/model" || text.startsWith("/model ")) {
-				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
-				this.editor.setText("");
-				await this.handleModelCommand(searchTerm);
-				return;
-			}
-			if (
-				text === "/thinking" ||
-				text.startsWith("/thinking ") ||
-				text === "/effort" ||
-				text.startsWith("/effort ")
-			) {
-				const searchTerm = text.startsWith("/thinking ")
-					? text.slice(10).trim()
-					: text.startsWith("/effort ")
-						? text.slice(8).trim()
-						: undefined;
-				this.editor.setText("");
-				this.handleThinkingCommand(searchTerm);
-				return;
-			}
-			if (text === "/export" || text.startsWith("/export ")) {
-				await this.handleExportCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/import" || text.startsWith("/import ")) {
-				await this.handleImportCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/share") {
-				await this.handleShareCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/copy") {
-				await this.handleCopyCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/name" || text.startsWith("/name ")) {
-				this.handleNameCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/session") {
-				this.handleSessionCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/hotkeys") {
-				this.handleHotkeysCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/fork") {
-				this.showUserMessageSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/clone") {
-				this.editor.setText("");
-				await this.handleCloneCommand();
-				return;
-			}
-			if (text === "/tree") {
-				this.showTreeSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/trust") {
-				this.showTrustSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/login" || text.startsWith("/login ")) {
-				const providerRef = text.startsWith("/login ") ? text.slice(7).trim() : undefined;
-				this.editor.setText("");
-				await this.handleLoginCommand(providerRef);
-				return;
-			}
-			if (text === "/logout") {
-				this.editor.setText("");
-				if (this.options.stepLogout) await this.handleStepLogoutCommand();
-				else this.showOAuthSelector("logout");
-				return;
-			}
-			if (text === "/new") {
-				this.editor.setText("");
-				await this.handleClearCommand();
-				return;
-			}
-			if (text === "/compact" || text.startsWith("/compact ")) {
-				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
-				this.editor.setText("");
-				await this.handleCompactCommand(customInstructions);
-				return;
-			}
-			if (text === "/reload") {
-				this.editor.setText("");
-				await this.handleReloadCommand();
-				return;
-			}
-			if (text === "/debug") {
-				this.handleDebugCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/arminsayshi") {
-				this.handleArminSaysHi();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/dementedelves") {
-				this.handleDementedDelves();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/resume") {
-				this.showSessionSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/quit") {
-				this.editor.setText("");
-				await this.shutdown();
-				return;
-			}
-
-			// Handle bash command (! for normal, !! for excluded from context)
-			if (text.startsWith("!")) {
-				const isExcluded = text.startsWith("!!");
-				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
-				if (command) {
-					if (this.session.isBashRunning) {
-						this.showWarning("A bash command is already running. Press Esc to cancel it first.");
-						this.editor.setText(text);
-						return;
-					}
-					this.editor.addToHistory?.(text);
-					await this.handleBashCommand(command, isExcluded);
-					this.isBashMode = false;
-					this.isBashExcluded = false;
-					this.updateEditorBorderColor();
-					return;
-				}
-			}
-
-			// Queue input during compaction (extension commands execute immediately)
-			if (this.session.isCompacting) {
-				if (this.isExtensionCommand(text)) {
-					this.editor.addToHistory?.(text);
-					this.editor.setText("");
-					await this.session.prompt(text);
-				} else {
-					this.queueCompactionMessage(text, "steer");
-				}
-				return;
-			}
-
-			// If streaming, use prompt() with steer behavior
-			// This handles extension commands (execute immediately), prompt template expansion, and queueing
-			if (this.session.isStreaming) {
-				this.editor.addToHistory?.(text);
-				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
-				this.updatePendingMessagesDisplay();
-				this.ui.requestRender();
-				return;
-			}
-
-			// Normal message submission
-			// First, move any pending bash components to chat
-			this.flushPendingBashComponents();
-
-			if (this.onInputCallback) {
-				this.onInputCallback(text);
-			} else {
-				this.pendingUserInputs.push(text);
-			}
-			this.editor.addToHistory?.(text);
-		};
+	async handleClipboardPaste(): Promise<void> {
+		return clipboardPaste(this);
 	}
 
 	private subscribeToAgent(): void {
-		this.unsubscribe = this.session.subscribe(async (event) => {
-			await this.handleEvent(event);
-		});
+		subscribeToAgent(this);
 	}
 
-	private async handleEvent(event: AgentSessionEvent): Promise<void> {
-		if (!this.isInitialized) {
-			await this.init();
-		}
+	/**
+	 * Thin delegators kept on the class so the composition root's runtime wiring can also
+	 * be reached through the prototype (used by the white-box interaction tests). Production
+	 * wiring goes through runtime/index.ts (wireStartupInput/wireInteractiveRuntime); these
+	 * forward to the same moved free functions.
+	 */
+	setupKeyHandlers(): void {
+		wireKeyHandlers(this);
+	}
 
-		this.footer.invalidate();
+	setupEditorSubmitHandler(): void {
+		wireSubmitHandler(this);
+	}
 
-		switch (event.type) {
-			case "agent_start":
-				if (this.presentation === "step") this.workingOutputTracker.reset();
-				this.pendingTools.clear();
-				this.stepSpinner?.clear();
-				// Restore main escape handler if retry handler is still active
-				// (retry success event fires later, but we need main handler now)
-				if (this.retryEscapeHandler) {
-					this.defaultEditor.onEscape = this.retryEscapeHandler;
-					this.retryEscapeHandler = undefined;
-				}
-				break;
+	handleStartupSubmit(text: string): void {
+		handleStartupSubmit(this, text);
+	}
 
-			case "turn_start":
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(true);
-				}
-				if (this.workingVisible) {
-					if (this.activeStatusIndicator?.kind !== "working") {
-						this.showWorkingStatusIndicator();
-					}
-				} else {
-					this.clearStatusIndicator();
-				}
-				this.ui.requestRender();
-				break;
-
-			case "queue_update":
-				this.updatePendingMessagesDisplay();
-				this.ui.requestRender();
-				break;
-
-			case "entry_appended":
-				if (event.entry.type === "custom") {
-					this.addCustomEntryToChat(event.entry);
-					this.ui.requestRender();
-				}
-				break;
-
-			case "session_info_changed":
-				this.updateTerminalTitle();
-				this.footer.invalidate();
-				this.ui.requestRender();
-				break;
-
-			case "thinking_level_changed":
-				this.footer.invalidate();
-				this.updateEditorBorderColor();
-				break;
-
-			case "message_start":
-				if (event.message.role === "custom") {
-					this.addMessageToChat(event.message);
-					this.ui.requestRender();
-				} else if (event.message.role === "user") {
-					this.addMessageToChat(event.message);
-					this.updatePendingMessagesDisplay();
-					this.ui.requestRender();
-				} else if (event.message.role === "assistant") {
-					this.streamingComponent = this.createAssistantMessageComponent(
-						undefined,
-						this.hideThinkingBlock,
-						this.getMarkdownThemeWithSettings(),
-						this.hiddenThinkingLabel,
-						this.outputPad,
-						this.getMarkdownTransformers(),
-					);
-					this.streamingMessage = event.message;
-					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage, true);
-					this.ui.requestRender();
-				}
-				break;
-
-			case "message_update":
-				if (this.presentation === "step" && event.message.role === "assistant") {
-					this.workingOutputTracker.update(event.assistantMessageEvent);
-				}
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage, true);
-
-					for (const content of this.streamingMessage.content) {
-						if (content.type === "toolCall") {
-							if (!this.pendingTools.has(content.id)) {
-								const component = new ToolExecutionComponent(
-									content.name,
-									content.id,
-									content.arguments,
-									{
-										showImages: this.settingsManager.getShowImages(),
-										imageWidthCells: this.settingsManager.getImageWidthCells(),
-										presentation: this.options.tuiStyle === "step" ? "step" : "native",
-										spinner: this.stepSpinner,
-									},
-									this.getRegisteredToolDefinition(content.name),
-									this.ui,
-									this.sessionManager.getCwd(),
-								);
-								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
-								this.pendingTools.set(content.id, component);
-							} else {
-								const component = this.pendingTools.get(content.id);
-								if (component) {
-									component.updateArgs(content.arguments);
-								}
-							}
-						}
-					}
-					this.ui.requestRender();
-				}
-				break;
-
-			case "message_end":
-				if (event.message.role === "user") break;
-				if (this.presentation === "step" && event.message.role === "assistant") {
-					this.workingOutputTracker.complete(event.message);
-				}
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					let errorMessage: string | undefined;
-					if (this.streamingMessage.stopReason === "aborted") {
-						const retryAttempt = this.session.retryAttempt;
-						errorMessage =
-							retryAttempt > 0
-								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-								: "Operation aborted";
-						this.streamingMessage.errorMessage = errorMessage;
-					}
-					this.streamingComponent.updateContent(this.streamingMessage, false);
-
-					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
-						if (!errorMessage) {
-							errorMessage = this.streamingMessage.errorMessage || "Error";
-						}
-						for (const [, component] of this.pendingTools.entries()) {
-							component.updateResult({
-								content: [{ type: "text", text: errorMessage }],
-								isError: true,
-							});
-						}
-						for (const toolCallId of this.pendingTools.keys()) {
-							this.stepSpinner?.stop(toolCallId);
-						}
-						this.pendingTools.clear();
-					} else {
-						// Args are now complete - trigger diff computation for edit tools
-						for (const [, component] of this.pendingTools.entries()) {
-							component.setArgsComplete();
-						}
-						this.maybeShowCacheMissNotice(this.streamingMessage);
-					}
-					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
-					this.footer.invalidate();
-				}
-				this.ui.requestRender();
-				break;
-
-			case "bash_execution_update":
-				// The bash execution callback handles TUI output rendering.
-				break;
-
-			case "tool_execution_start": {
-				let component = this.pendingTools.get(event.toolCallId);
-				if (!component) {
-					component = new ToolExecutionComponent(
-						event.toolName,
-						event.toolCallId,
-						event.args,
-						{
-							showImages: this.settingsManager.getShowImages(),
-							imageWidthCells: this.settingsManager.getImageWidthCells(),
-							presentation: this.options.tuiStyle === "step" ? "step" : "native",
-							spinner: this.stepSpinner,
-						},
-						this.getRegisteredToolDefinition(event.toolName),
-						this.ui,
-						this.sessionManager.getCwd(),
-					);
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
-					this.pendingTools.set(event.toolCallId, component);
-				}
-				component.markExecutionStarted();
-				this.stepSpinner?.start(event.toolCallId);
-				this.ui.requestRender();
-				break;
-			}
-
-			case "tool_execution_update": {
-				const component = this.pendingTools.get(event.toolCallId);
-				if (component) {
-					component.updateResult({ ...event.partialResult, isError: false }, true);
-					this.ui.requestRender();
-				}
-				break;
-			}
-
-			case "tool_execution_end": {
-				const component = this.pendingTools.get(event.toolCallId);
-				if (component) {
-					component.updateResult({ ...event.result, isError: event.isError });
-					this.pendingTools.delete(event.toolCallId);
-					this.stepSpinner?.stop(event.toolCallId);
-					this.ui.requestRender();
-				}
-				break;
-			}
-
-			case "agent_end":
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(false);
-				}
-				this.clearStatusIndicator("working");
-				if (this.streamingComponent) {
-					this.chatContainer.removeChild(this.streamingComponent);
-					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
-				}
-				this.pendingTools.clear();
-				this.stepSpinner?.clear();
-
-				this.ui.requestRender();
-				break;
-
-			case "agent_settled":
-				await this.checkShutdownRequested();
-				break;
-
-			case "compaction_start": {
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(true);
-				}
-				// Keep editor active; submissions are queued during compaction.
-				this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
-				this.defaultEditor.onEscape = () => {
-					this.session.abortCompaction();
-				};
-				this.showStatusIndicator(new CompactionStatusIndicator(this.ui, event.reason, this.presentation));
-				this.ui.requestRender();
-				break;
-			}
-
-			case "compaction_end": {
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(false);
-				}
-				if (this.autoCompactionEscapeHandler) {
-					this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
-					this.autoCompactionEscapeHandler = undefined;
-				}
-				this.clearStatusIndicator("compaction");
-				if (event.aborted) {
-					if (event.reason === "manual") {
-						this.showError("Compaction cancelled");
-					} else {
-						this.showStatus("Auto-compaction cancelled");
-					}
-				} else if (event.result) {
-					const entries = this.sessionManager.buildContextEntries();
-					if (entries[0]?.type !== "compaction") {
-						throw new Error("Completed compaction is missing from the session context");
-					}
-					this.chatContainer.clear();
-					// The latest compaction is prepended for model context; append it below at its chronological position.
-					this.renderSessionEntries(entries.slice(1));
-					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
-					);
-					if (event.result.usage) {
-						this.addCompactionCostNotice({
-							type: "compaction_cost",
-							kind: "compaction",
-							usage: event.result.usage,
-						});
-					}
-					this.footer.invalidate();
-				} else if (event.errorMessage) {
-					if (event.reason === "manual") {
-						this.showError(event.errorMessage);
-					} else {
-						this.chatContainer.addChild(new Spacer(1));
-						this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
-					}
-				}
-				void this.flushCompactionQueue({ willRetry: event.willRetry });
-				this.ui.requestRender();
-				break;
-			}
-
-			case "auto_retry_start": {
-				// Set up escape to abort retry
-				this.retryEscapeHandler = this.defaultEditor.onEscape;
-				this.defaultEditor.onEscape = () => {
-					this.session.abortRetry();
-				};
-				this.showStatusIndicator(
-					new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs, this.presentation),
-				);
-				this.ui.requestRender();
-				break;
-			}
-
-			case "auto_retry_end": {
-				// Restore escape handler
-				if (this.retryEscapeHandler) {
-					this.defaultEditor.onEscape = this.retryEscapeHandler;
-					this.retryEscapeHandler = undefined;
-				}
-				this.clearStatusIndicator("retry");
-				// Show error only on final failure (success shows normal response)
-				if (!event.success) {
-					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
-				}
-				this.ui.requestRender();
-				break;
-			}
-
-			case "summarization_retry_scheduled": {
-				this.showError(event.errorMessage);
-				this.showStatusIndicator(
-					new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs, this.presentation),
-				);
-				this.ui.requestRender();
-				break;
-			}
-
-			case "summarization_retry_attempt_start": {
-				this.clearStatusIndicator("retry");
-				if (event.source === "branchSummary") {
-					this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui, this.presentation));
-				} else {
-					this.showStatusIndicator(new CompactionStatusIndicator(this.ui, event.reason, this.presentation));
-				}
-				this.ui.requestRender();
-				break;
-			}
-
-			case "summarization_retry_finished": {
-				this.clearStatusIndicator("retry");
-				this.ui.requestRender();
-				break;
-			}
-		}
+	async handleEvent(event: AgentSessionEvent): Promise<void> {
+		await handleSessionEvent(this, event);
 	}
 
 	/** Extract text content from a user message */
@@ -3923,7 +3249,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Text(theme.fg(color, message), 1, 0));
 		this.lastStatusSpacer = undefined;
 		this.lastStatusText = undefined;
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -3932,14 +3258,14 @@ export class InteractiveMode {
 	 * If multiple status messages are emitted back-to-back (without anything else being added to the chat),
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
-	private showStatus(message: string): void {
+	showStatus(message: string): void {
 		const children = this.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
 
 		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
 			this.lastStatusText.setText(theme.fg("dim", message));
-			this.ui.requestRender();
+			this.redraw.requestRender();
 			return;
 		}
 
@@ -3949,10 +3275,10 @@ export class InteractiveMode {
 		this.chatContainer.addChild(text);
 		this.lastStatusSpacer = spacer;
 		this.lastStatusText = text;
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
+	addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
 			return;
@@ -3974,7 +3300,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(component);
 	}
 
-	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		// The welcome block remains pinned above the transcript, but its
 		// first-session hint ends as soon as a live message is projected.
 		this.stepWelcome?.setFirstMessageHint(false);
@@ -4185,7 +3511,7 @@ export class InteractiveMode {
 			this.pendingTools.set(toolCallId, component);
 			this.stepSpinner?.start(toolCallId);
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -4194,7 +3520,7 @@ export class InteractiveMode {
 	 * @param options.updateFooter Update footer state
 	 * @param options.populateHistory Add user messages to editor history
 	 */
-	private renderSessionEntries(
+	renderSessionEntries(
 		entries: SessionEntry[],
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
@@ -4215,7 +3541,7 @@ export class InteractiveMode {
 	 * Render billing usage for a compaction or branch summary. The notice is derived
 	 * from persisted summary usage and is not stored as a separate session entry.
 	 */
-	private addCompactionCostNotice(notice: CompactionCostNotice): void {
+	addCompactionCostNotice(notice: CompactionCostNotice): void {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
 		const { usage } = notice;
@@ -4243,7 +3569,7 @@ export class InteractiveMode {
 	 * significant cache miss. Only states observable facts: the miss itself,
 	 * a model switch, or an idle gap past the cache TTL.
 	 */
-	private maybeShowCacheMissNotice(message: AssistantMessage): void {
+	maybeShowCacheMissNotice(message: AssistantMessage): void {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
 		// Entries don't contain `message` yet: message_end fires before persistence.
@@ -4333,19 +3659,12 @@ export class InteractiveMode {
 	// Key handlers
 	// =========================================================================
 
-	private handleCtrlC(): void {
-		const now = Date.now();
-		if (now - this.lastSigintTime < 500) {
-			void this.shutdown();
-		} else {
-			this.clearEditor();
-			this.lastSigintTime = now;
-		}
+	handleCtrlC(): void {
+		handleCtrlC(this);
 	}
 
-	private handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor)
-		void this.shutdown();
+	handleCtrlD(): void {
+		handleCtrlD(this);
 	}
 
 	/**
@@ -4355,7 +3674,7 @@ export class InteractiveMode {
 	 */
 	private isShuttingDown = false;
 
-	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
+	async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
 		// Keep signal handlers registered until terminal cleanup has completed.
@@ -4442,7 +3761,7 @@ export class InteractiveMode {
 	/**
 	 * Check if shutdown was requested and perform shutdown if so.
 	 */
-	private async checkShutdownRequested(): Promise<void> {
+	async checkShutdownRequested(): Promise<void> {
 		if (!this.shutdownRequested) return;
 		await this.shutdown();
 	}
@@ -4494,7 +3813,7 @@ export class InteractiveMode {
 		this.signalCleanupHandlers = [];
 	}
 
-	private handleCtrlZ(): void {
+	handleCtrlZ(): void {
 		if (process.platform === "win32") {
 			this.showStatus("Suspend to background is not supported on Windows");
 			return;
@@ -4515,7 +3834,7 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
-			this.ui.requestRender(true);
+			this.redraw.forceRender();
 		});
 
 		try {
@@ -4531,7 +3850,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleFollowUp(): Promise<void> {
+	async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
 
@@ -4554,7 +3873,7 @@ export class InteractiveMode {
 			this.editor.setText("");
 			await this.session.prompt(text, { streamingBehavior: "followUp" });
 			this.updatePendingMessagesDisplay();
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		}
 		// If not streaming, Alt+Enter acts like regular Enter (trigger onSubmit)
 		else if (this.editor.onSubmit) {
@@ -4563,7 +3882,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private handleDequeue(): void {
+	handleDequeue(): void {
 		const restored = this.restoreQueuedMessagesToEditor();
 		if (restored === 0) {
 			this.showStatus("No queued messages to restore");
@@ -4572,7 +3891,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private updateEditorBorderColor(): void {
+	updateEditorBorderColor(): void {
 		// The footer's permission segment tracks bash mode regardless of style.
 		// Guarded: partial setups (tests) may call this before the footer exists.
 		this.footer?.setBashMode(this.isBashMode);
@@ -4582,7 +3901,7 @@ export class InteractiveMode {
 			// to the error tone and `!!` (excluded from context) dims it.
 			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : "borderAccent";
 			this.editor.borderColor = (str: string) => theme.fg(colorKey, str);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 			return;
 		}
 		if (this.isBashMode) {
@@ -4591,10 +3910,10 @@ export class InteractiveMode {
 			const level = this.session.thinkingLevel || "off";
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private cycleThinkingLevel(): void {
+	cycleThinkingLevel(): void {
 		const newLevel = this.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
 			this.showStatus("Current model does not support thinking");
@@ -4605,7 +3924,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
+	async cycleModel(direction: "forward" | "backward"): Promise<void> {
 		try {
 			const result = await this.session.cycleModel(direction);
 			if (result === undefined) {
@@ -4624,7 +3943,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private toggleToolOutputExpansion(): void {
+	toggleToolOutputExpansion(): void {
 		this.setToolsExpanded(!this.toolOutputExpanded);
 	}
 
@@ -4653,17 +3972,17 @@ export class InteractiveMode {
 				child.setHideThinkingBlock(this.hideThinkingBlock);
 			}
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private toggleThinkingBlockVisibility(): void {
+	toggleThinkingBlockVisibility(): void {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 		this.updateThinkingBlockVisibility();
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 
-	private async handleOpenExternalEditor(): Promise<void> {
+	async handleOpenExternalEditor(): Promise<void> {
 		const editorCmd = this.settingsManager.getExternalEditorCommand();
 		const content = this.editor.getExpandedText?.() ?? this.editor.getText();
 		this.ui.stop();
@@ -4677,7 +3996,7 @@ export class InteractiveMode {
 			}
 		} finally {
 			this.ui.start();
-			this.ui.requestRender(true);
+			this.redraw.forceRender();
 		}
 	}
 
@@ -4687,19 +4006,19 @@ export class InteractiveMode {
 
 	clearEditor(): void {
 		this.editor.setText("");
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	showError(errorMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), this.outputPad, 0));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	showWarning(warningMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	showNewVersionNotification(release: LatestPiRelease): void {
@@ -4728,7 +4047,7 @@ export class InteractiveMode {
 		}
 		this.chatContainer.addChild(new Text(changelogLine, 1, 0));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	showPackageUpdateNotification(packages: string[]): void {
@@ -4746,14 +4065,14 @@ export class InteractiveMode {
 			),
 		);
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
 	 * Get all queued messages (read-only).
 	 * Combines session queue and compaction queue.
 	 */
-	private getAllQueuedMessages(): { steering: string[]; followUp: string[] } {
+	getAllQueuedMessages(): { steering: string[]; followUp: string[] } {
 		return {
 			steering: [
 				...this.session.getSteeringMessages(),
@@ -4785,7 +4104,7 @@ export class InteractiveMode {
 		};
 	}
 
-	private updatePendingMessagesDisplay(): void {
+	updatePendingMessagesDisplay(): void {
 		this.pendingMessagesContainer.clear();
 		const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
 		if (this.options.tuiStyle === "step") {
@@ -4812,7 +4131,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
+	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
 		const { steering, followUp } = this.clearAllQueues();
 		const allQueued = [...steering, ...followUp];
 		if (allQueued.length === 0) {
@@ -4833,7 +4152,7 @@ export class InteractiveMode {
 		return allQueued.length;
 	}
 
-	private queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
+	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
 		this.compactionQueuedMessages.push({ text, mode });
 		this.editor.addToHistory?.(text);
 		this.editor.setText("");
@@ -4841,17 +4160,11 @@ export class InteractiveMode {
 		this.showStatus("Queued message for after compaction");
 	}
 
-	private isExtensionCommand(text: string): boolean {
-		if (!text.startsWith("/")) return false;
-
-		const extensionRunner = this.session.extensionRunner;
-
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		return !!extensionRunner.getCommand(commandName);
+	isExtensionCommand(text: string): boolean {
+		return isExtensionCommand(this.session.extensionRunner, text);
 	}
 
-	private async flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {
+	async flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {
 		if (this.compactionQueuedMessages.length === 0) {
 			return;
 		}
@@ -4931,7 +4244,7 @@ export class InteractiveMode {
 	}
 
 	/** Move pending bash components from pending area to chat */
-	private flushPendingBashComponents(): void {
+	flushPendingBashComponents(): void {
 		for (const component of this.pendingBashComponents) {
 			this.pendingMessagesContainer.removeChild(component);
 			this.chatContainer.addChild(component);
@@ -4986,10 +4299,10 @@ export class InteractiveMode {
 			this.presentation === "step" ? new StepSelectorFrame(created.component) : created.component;
 		this.editorContainer.addChild(mountedComponent);
 		this.ui.setFocus(created.focus);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private showSettingsSelector(): void {
+	showSettingsSelector(): void {
 		this.showSelector((done) => {
 			let selector: SettingsSelectorComponent | undefined;
 			const defaultProvider = this.settingsManager.getDefaultProvider();
@@ -5117,7 +4430,7 @@ export class InteractiveMode {
 					onMermaidRenderingModeChange: (mode) => {
 						this.settingsManager.setMermaidRenderingMode(mode);
 						this.chatContainer.invalidate();
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					},
 					onShowCacheMissNoticesChange: (shown) => {
 						this.settingsManager.setShowCacheMissNotices(shown);
@@ -5168,7 +4481,7 @@ export class InteractiveMode {
 							if (this.streamingComponent) {
 								this.streamingComponent.setOutputPad(padding);
 							}
-							this.ui.requestRender();
+							this.redraw.requestRender();
 							return;
 						}
 						this.rebuildChatFromMessages();
@@ -5216,7 +4529,7 @@ export class InteractiveMode {
 					},
 					onCancel: () => {
 						done();
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					},
 				},
 			);
@@ -5224,7 +4537,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private handleThinkingCommand(searchTerm?: string): void {
+	handleThinkingCommand(searchTerm?: string): void {
 		const availableLevels = this.session.getAvailableThinkingLevels();
 		if (!searchTerm) {
 			this.showThinkingSelector();
@@ -5264,7 +4577,7 @@ export class InteractiveMode {
 				(level) => selectLevel(level, false),
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				(level) => selectLevel(level, true),
 				this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
@@ -5273,7 +4586,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleModelCommand(searchTerm?: string): Promise<void> {
+	async handleModelCommand(searchTerm?: string): Promise<void> {
 		if (!searchTerm) {
 			this.showModelSelector();
 			return;
@@ -5397,7 +4710,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private showTrustSelector(): void {
+	showTrustSelector(): void {
 		const cwd = this.sessionManager.getCwd();
 		const trustStore = new ProjectTrustStore(this.runtimeHost.services.agentDir);
 		const savedDecision = trustStore.getEntry(cwd);
@@ -5415,14 +4728,14 @@ export class InteractiveMode {
 				},
 				onCancel: () => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 			});
 			return { component: selector, focus: selector };
 		});
 	}
 
-	private showModelSelector(initialSearchInput?: string): void {
+	showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
 				try {
@@ -5449,7 +4762,7 @@ export class InteractiveMode {
 				(model) => selectModel(model, false),
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				initialSearchInput,
 				(model) => selectModel(model, true),
@@ -5463,7 +4776,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private showModelsSelector(): void {
+	showModelsSelector(): void {
 		let availableModels = [...this.session.modelRuntime.getAvailableSnapshot()];
 		let availableModelIds = new Set(availableModels.map((model) => `${model.provider}/${model.id}`));
 		const configuredPatterns = this.settingsManager.getEnabledModels();
@@ -5501,7 +4814,7 @@ export class InteractiveMode {
 				this.session.setScopedModels([]);
 			}
 			this.updateAvailableProviderCount();
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 
 		this.showSelector((done) => {
@@ -5534,7 +4847,7 @@ export class InteractiveMode {
 					},
 					onCancel: () => {
 						done();
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					},
 				},
 			);
@@ -5560,7 +4873,7 @@ export class InteractiveMode {
 					} else {
 						selector.setRefreshStatus("Model catalogs refreshed.", "success");
 					}
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				})
 				.catch((error: unknown) => {
 					if (disposed) return;
@@ -5570,7 +4883,7 @@ export class InteractiveMode {
 							: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`,
 						"warning",
 					);
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				})
 				.finally(() => clearTimeout(timeout));
 			return {
@@ -5585,7 +4898,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
+	showUserMessageSelector(): void {
 		const userMessages = this.session.getUserMessagesForForking();
 
 		if (userMessages.length === 0) {
@@ -5603,7 +4916,7 @@ export class InteractiveMode {
 					try {
 						const result = await this.runtimeHost.fork(entryId);
 						if (result.cancelled) {
-							this.ui.requestRender();
+							this.redraw.requestRender();
 							return;
 						}
 
@@ -5615,7 +4928,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				initialSelectedId,
 			);
@@ -5623,7 +4936,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleCloneCommand(): Promise<void> {
+	async handleCloneCommand(): Promise<void> {
 		const leafId = this.sessionManager.getLeafId();
 		if (!leafId) {
 			this.showStatus("Nothing to clone yet");
@@ -5633,7 +4946,7 @@ export class InteractiveMode {
 		try {
 			const result = await this.runtimeHost.fork(leafId, { position: "at" });
 			if (result.cancelled) {
-				this.ui.requestRender();
+				this.redraw.requestRender();
 				return;
 			}
 
@@ -5644,7 +4957,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private showTreeSelector(initialSelectedId?: string): void {
+	showTreeSelector(initialSelectedId?: string): void {
 		const tree = this.sessionManager.getTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
@@ -5721,7 +5034,7 @@ export class InteractiveMode {
 						this.chatContainer.addChild(new Spacer(1));
 						this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui, this.presentation));
 						showingSummaryIndicator = true;
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					}
 
 					try {
@@ -5760,11 +5073,11 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				(entryId, label) => {
 					this.sessionManager.appendLabelChange(entryId, label);
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				initialSelectedId,
 				initialFilterMode,
@@ -5785,7 +5098,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private showSessionSelector(): void {
+	showSessionSelector(): void {
 		this.showSelector((done) => {
 			const selector = new SessionSelectorComponent(
 				(onProgress) =>
@@ -5812,12 +5125,12 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				() => {
 					void this.shutdown();
 				},
-				() => this.ui.requestRender(),
+				() => this.redraw.requestRender(),
 				{
 					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
 						const next = (nextName ?? "").trim();
@@ -5981,7 +5294,7 @@ export class InteractiveMode {
 		await this.handleLoginCommand(providerId);
 	}
 
-	private async handleLoginCommand(providerRef?: string): Promise<void> {
+	async handleLoginCommand(providerRef?: string): Promise<void> {
 		if ((!providerRef || providerRef.toLowerCase() === "step") && this.options.stepLogin) {
 			const activeSession = this.runtimeHost?.session;
 			if (activeSession?.isStreaming || activeSession?.isCompacting) {
@@ -6074,7 +5387,7 @@ export class InteractiveMode {
 				}
 				this.ui.setFocus(child as Component);
 			},
-			requestRender: () => this.ui.requestRender(),
+			requestRender: () => this.redraw.requestRender(),
 			start: () => undefined,
 			stop: () => {
 				overlay?.hide();
@@ -6082,13 +5395,13 @@ export class InteractiveMode {
 				if (mounted) {
 					mounted = undefined;
 					this.ui.setFocus(this.editor);
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				}
 			},
 		};
 	}
 
-	private async handleStepLogoutCommand(): Promise<void> {
+	async handleStepLogoutCommand(): Promise<void> {
 		if (this.session.isStreaming || this.session.isCompacting) {
 			this.showWarning("Wait for the active turn to finish before signing out");
 			return;
@@ -6167,7 +5480,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				{ presentation: this.options.tuiStyle === "step" ? "step" : "native" },
 			);
@@ -6209,7 +5522,7 @@ export class InteractiveMode {
 					if (authType) {
 						this.showLoginAuthTypeSelector();
 					} else {
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					}
 				},
 				initialSearchInput,
@@ -6219,7 +5532,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
+	async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
 		if (mode === "login") {
 			this.showLoginAuthTypeSelector();
 			return;
@@ -6272,7 +5585,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.ui.requestRender();
+					this.redraw.requestRender();
 				},
 				undefined,
 				{ presentation: this.options.tuiStyle === "step" ? "step" : "native" },
@@ -6358,7 +5671,7 @@ export class InteractiveMode {
 				}
 				this.updateAvailableProviderCount();
 				this.footer.invalidate();
-				this.ui.requestRender();
+				this.redraw.requestRender();
 			})
 			.catch((error: unknown) => {
 				this.showWarning(
@@ -6373,7 +5686,7 @@ export class InteractiveMode {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 
 		const dialog = new LoginDialogComponent(
@@ -6393,7 +5706,7 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);
 		this.ui.setFocus(dialog);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private async showApiKeyLoginDialog(providerId: string, providerName: string): Promise<void> {
@@ -6421,13 +5734,13 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);
 		this.ui.setFocus(dialog);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 
 		const restoreEditor = () => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 
 		try {
@@ -6456,7 +5769,7 @@ export class InteractiveMode {
 				this.editorContainer.clear();
 				this.editorContainer.addChild(dialog);
 				this.ui.setFocus(dialog);
-				this.ui.requestRender();
+				this.redraw.requestRender();
 			};
 			const labels = prompt.options.map((option) => option.label);
 			const selector = new ExtensionSelectorComponent(
@@ -6477,7 +5790,7 @@ export class InteractiveMode {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(selector);
 			this.ui.setFocus(selector);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		});
 	}
 
@@ -6568,13 +5881,13 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);
 		this.ui.setFocus(dialog);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 
 		const restoreEditor = () => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 
 		try {
@@ -6604,7 +5917,7 @@ export class InteractiveMode {
 	// Command handlers
 	// =========================================================================
 
-	private async handleReloadCommand(): Promise<void> {
+	async handleReloadCommand(): Promise<void> {
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before reloading.");
 			return;
@@ -6634,14 +5947,14 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(reloadBox);
 		this.ui.setFocus(reloadBox);
-		this.ui.requestRender(true);
+		this.redraw.forceRender();
 		await new Promise((resolve) => process.nextTick(resolve));
 
 		const dismissReloadBox = (editor: Component) => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(editor);
 			this.ui.setFocus(editor);
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		};
 
 		let chatRestoredBeforeSessionStart = false;
@@ -6696,7 +6009,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleExportCommand(text: string): Promise<void> {
+	async handleExportCommand(text: string): Promise<void> {
 		const outputPath = this.getPathCommandArgument(text, "/export");
 
 		try {
@@ -6743,7 +6056,7 @@ export class InteractiveMode {
 		return argsString.slice(0, firstWhitespaceIndex);
 	}
 
-	private async handleImportCommand(text: string): Promise<void> {
+	async handleImportCommand(text: string): Promise<void> {
 		const inputPath = this.getPathCommandArgument(text, "/import");
 		if (!inputPath) {
 			this.showError("Usage: /import <path.jsonl>");
@@ -6787,7 +6100,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleShareCommand(): Promise<void> {
+	async handleShareCommand(): Promise<void> {
 		await shareSession({
 			session: this.session,
 			ui: this.ui,
@@ -6798,9 +6111,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleCopyCommand(
-		options: { flashConfirmation?: boolean; preferSelection?: boolean } = {},
-	): Promise<void> {
+	async handleCopyCommand(options: { flashConfirmation?: boolean; preferSelection?: boolean } = {}): Promise<void> {
 		if (
 			options.preferSelection &&
 			this.ui instanceof TuiAltScreen &&
@@ -6829,7 +6140,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private handleNameCommand(text: string): void {
+	handleNameCommand(text: string): void {
 		const name = text.replace(/^\/name\s*/, "").trim();
 		if (!name) {
 			const currentName = this.sessionManager.getSessionName();
@@ -6839,7 +6150,7 @@ export class InteractiveMode {
 			} else {
 				this.showWarning("Usage: /name <name>");
 			}
-			this.ui.requestRender();
+			this.redraw.requestRender();
 			return;
 		}
 
@@ -6850,10 +6161,10 @@ export class InteractiveMode {
 		}
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private handleSessionCommand(): void {
+	handleSessionCommand(): void {
 		const stats = this.session.getSessionStats();
 		const sessionName = this.sessionManager.getSessionName();
 		const entries = this.sessionManager.getEntries();
@@ -6913,7 +6224,7 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	/**
@@ -6930,7 +6241,7 @@ export class InteractiveMode {
 		return keyDisplayText(action);
 	}
 
-	private handleHotkeysCommand(): void {
+	handleHotkeysCommand(): void {
 		// Navigation keybindings
 		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
 		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");
@@ -7044,10 +6355,10 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private async handleClearCommand(): Promise<void> {
+	async handleClearCommand(): Promise<void> {
 		this.clearStatusIndicator();
 		try {
 			const result = await this.runtimeHost.newSession();
@@ -7056,13 +6367,13 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			}
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
-			this.ui.requestRender();
+			this.redraw.requestRender();
 		} catch (error: unknown) {
 			await this.handleFatalRuntimeError("Failed to create session", error);
 		}
 	}
 
-	private handleDebugCommand(): void {
+	handleDebugCommand(): void {
 		const width = this.ui.terminal.columns;
 		const height = this.ui.terminal.rows;
 		const allLines = this.ui.render(width);
@@ -7092,25 +6403,25 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		this.chatContainer.addChild(
 			new Text(`${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private handleArminSaysHi(): void {
+	handleArminSaysHi(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private handleDementedDelves(): void {
+	handleDementedDelves(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new EarendilAnnouncementComponent());
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private handleDaxnuts(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
 	private checkDaxnutsEasterEgg(model: { provider: string; id: string }): void {
@@ -7119,7 +6430,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		}
 	}
 
-	private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
+	async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
 		const extensionRunner = this.session.extensionRunner;
 
 		// Emit user_bash event to let extensions intercept
@@ -7157,7 +6468,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			// Record the result in session
 			this.session.recordBashResult(command, result, { excludeFromContext });
 			this.bashComponent = undefined;
-			this.ui.requestRender();
+			this.redraw.requestRender();
 			return;
 		}
 
@@ -7173,7 +6484,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			// Show in chat immediately when agent is idle
 			this.chatContainer.addChild(this.bashComponent);
 		}
-		this.ui.requestRender();
+		this.redraw.requestRender();
 
 		try {
 			const result = await this.session.executeBash(
@@ -7181,7 +6492,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 				(chunk) => {
 					if (this.bashComponent) {
 						this.bashComponent.appendOutput(chunk);
-						this.ui.requestRender();
+						this.redraw.requestRender();
 					}
 				},
 				{ excludeFromContext, operations: eventResult?.operations },
@@ -7203,10 +6514,10 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		}
 
 		this.bashComponent = undefined;
-		this.ui.requestRender();
+		this.redraw.requestRender();
 	}
 
-	private async handleCompactCommand(customInstructions?: string): Promise<void> {
+	async handleCompactCommand(customInstructions?: string): Promise<void> {
 		this.clearStatusIndicator();
 
 		try {

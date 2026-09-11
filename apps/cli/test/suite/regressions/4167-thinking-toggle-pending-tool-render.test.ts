@@ -38,6 +38,7 @@ type RenderSessionContextThis = {
 	chatContainer: Container;
 	footer: { invalidate(): void };
 	ui: TUI;
+	redraw: { requestRender(): void; forceRender(): void; renderNow(): void };
 	settingsManager: {
 		getShowImages(): boolean;
 		getImageWidthCells(): number;
@@ -68,6 +69,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		chatContainer,
 		footer: { invalidate: vi.fn() },
 		ui: { requestRender: vi.fn() } as unknown as TUI,
+		redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		settingsManager: {
 			getShowImages: () => false,
 			getImageWidthCells: () => 60,

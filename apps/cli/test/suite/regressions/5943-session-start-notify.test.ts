@@ -115,6 +115,7 @@ type ReloadCommandContext = {
 		setShowHardwareCursor: (enabled: boolean) => void;
 		setClearOnShrink: (enabled: boolean) => void;
 	};
+	redraw: { requestRender: () => void; forceRender: () => void; renderNow: () => void };
 	editor: unknown;
 	defaultEditor: { setPaddingX: (padding: number) => void; setAutocompleteMaxVisible: (maxVisible: number) => void };
 	themeController: { applyFromSettings: () => Promise<void> };
@@ -187,6 +188,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 			setClearOnShrink: () => {},
 			...overrides.ui,
 		},
+		redraw: { requestRender: () => {}, forceRender: () => {}, renderNow: () => {} },
 		editor,
 		defaultEditor: { setPaddingX: () => {}, setAutocompleteMaxVisible: () => {}, ...overrides.defaultEditor },
 		themeController: { applyFromSettings: async () => {}, ...overrides.themeController },

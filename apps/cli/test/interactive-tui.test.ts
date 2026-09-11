@@ -139,6 +139,7 @@ describe("InteractiveMode right-click paste", () => {
 		const context = {
 			renderer: { getFocusedComponent: () => target },
 			ui: { requestRender },
+			redraw: { requestRender, forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 		const prototype = InteractiveMode.prototype as unknown as {
 			handleRightClickPaste(this: typeof context): Promise<void>;

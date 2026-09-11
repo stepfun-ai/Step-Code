@@ -14,6 +14,7 @@ describe("interactive hotkey help", () => {
 			keybindings: { getEffectiveConfig: () => ({}) },
 			chatContainer: { addChild: (component: Component) => children.push(component) },
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			getMarkdownThemeWithSettings: () => getMarkdownTheme(),
 		};
 		const handleHotkeysCommand = Reflect.get(InteractiveMode.prototype, "handleHotkeysCommand") as (

@@ -46,6 +46,7 @@ function createQueueEditor(bindings: KeybindingsConfig = {}, fullscreen = false)
 		},
 		options: { tuiStyle: "step" },
 		ui,
+		redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: () => ui.renderNow() },
 		keybindings,
 		defaultEditor: editor,
 		editor,

@@ -153,6 +153,7 @@ describe("InteractiveMode compaction events", () => {
 			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
 			settingsManager: { getShowTerminalProgress: () => false },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 
 		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
@@ -207,6 +208,7 @@ describe("InteractiveMode compaction events", () => {
 			clearStatusIndicator: vi.fn(),
 			settingsManager: { getShowTerminalProgress: () => true },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
 			this: typeof fakeThis,
@@ -218,14 +220,14 @@ describe("InteractiveMode compaction events", () => {
 		expect(fakeThis.ui.terminal.setProgress).toHaveBeenCalledWith(true);
 		expect(fakeThis.showWorkingStatusIndicator).toHaveBeenCalledTimes(1);
 		expect(fakeThis.clearStatusIndicator).not.toHaveBeenCalled();
-		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
+		expect(fakeThis.redraw.requestRender).toHaveBeenCalledTimes(1);
 
 		fakeThis.workingVisible = false;
 		await handleEvent.call(fakeThis, { type: "turn_start" });
 
 		expect(fakeThis.showWorkingStatusIndicator).toHaveBeenCalledTimes(1);
 		expect(fakeThis.clearStatusIndicator).toHaveBeenCalledTimes(1);
-		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(2);
+		expect(fakeThis.redraw.requestRender).toHaveBeenCalledTimes(2);
 	});
 
 	test("preserves steering behavior when flushing into an active agent run", async () => {

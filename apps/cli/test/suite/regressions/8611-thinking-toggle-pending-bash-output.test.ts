@@ -52,6 +52,7 @@ describe("thinking visibility while a bash tool is running (#8611)", () => {
 			settingsManager: { setHideThinkingBlock: vi.fn() },
 			chatContainer,
 			ui,
+			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
 			updateThinkingBlockVisibility() {
 				updateThinkingBlockVisibility.call(this);
 			},

@@ -35,6 +35,7 @@ function createInteractiveContext(options: {
 		},
 		updateAvailableProviderCount: vi.fn(),
 		ui: { requestRender: vi.fn() },
+		redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 	};
 	return { context, getAvailableSnapshot, getSelector: () => selector, setScopedModels };
 }

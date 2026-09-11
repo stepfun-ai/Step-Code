@@ -44,6 +44,7 @@ function openSelector(harness: Harness, initialModels: readonly Model<Api>[]) {
 		},
 		updateAvailableProviderCount: vi.fn(),
 		ui: { requestRender: vi.fn() } as unknown as TUI,
+		redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 	};
 
 	showModelsSelector.call(context);

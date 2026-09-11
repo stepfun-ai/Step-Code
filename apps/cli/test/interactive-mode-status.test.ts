@@ -81,6 +81,7 @@ describe("InteractiveMode.showStatus", () => {
 		const fakeThis: any = {
 			chatContainer: new Container(),
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
 		};
@@ -100,6 +101,7 @@ describe("InteractiveMode.showStatus", () => {
 		const fakeThis: any = {
 			chatContainer: new Container(),
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
 		};
@@ -125,6 +127,7 @@ describe("InteractiveMode.showManagedToolStatus", () => {
 		const fakeThis: any = {
 			chatContainer: new Container(),
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			managedToolStatusStarted: false,
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
@@ -154,6 +157,7 @@ describe("InteractiveMode.setToolsExpanded", () => {
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: { children: [chatChild] },
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			showStatus: vi.fn(),
 		};
 
@@ -189,6 +193,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 				}),
 			},
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 
 		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
@@ -216,6 +221,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 				setThemeName: vi.fn(() => ({ success: false, error: "Theme not found" })),
 			},
 			ui: { requestRender: vi.fn() },
+			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};
 
 		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
@@ -252,6 +258,7 @@ describe("InteractiveMode.showExtensionCustom", () => {
 			editorContainer,
 			keybindings: {},
 			ui,
+			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: () => ui.renderNow() },
 			disposeActiveSelector: vi.fn(),
 		};
 		const showExtensionCustom = <T>(
