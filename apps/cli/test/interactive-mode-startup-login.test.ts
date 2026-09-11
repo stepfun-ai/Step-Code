@@ -19,6 +19,7 @@ type StartupLoginContext = {
 	getLoginProviderOptions: (authType?: "oauth" | "api_key") => readonly { id: string }[];
 	startProviderLogin: (provider: { id: string }) => Promise<void>;
 	handleLoginCommand: (providerId: string) => Promise<void>;
+	showWarning?: (message: string) => void;
 };
 
 const completeProviderAuthentication = (
@@ -46,6 +47,7 @@ function createContext(overrides: Partial<StartupLoginContext> = {}): StartupLog
 		getLoginProviderOptions: () => [{ id: "step" }],
 		startProviderLogin: async () => {},
 		handleLoginCommand: async () => {},
+		showWarning: vi.fn(),
 		...overrides,
 	};
 }
@@ -205,6 +207,7 @@ describe("InteractiveMode startup login", () => {
 			showError: vi.fn(),
 			maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(),
 			ui: { requestRender: vi.fn() },
+			showWarning: vi.fn(),
 		};
 
 		await completeProviderAuthentication.call(context, "step", "Step", "oauth", {

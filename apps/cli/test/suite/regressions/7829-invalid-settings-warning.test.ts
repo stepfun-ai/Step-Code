@@ -30,6 +30,7 @@ describe("issue #7829 invalid settings warning", () => {
 				chatContainer,
 				outputPad: 1,
 				ui: { requestRender: vi.fn() },
+				redraw: { requestRender: vi.fn() },
 				version: "test",
 				showWarning: (InteractiveMode.prototype as unknown as { showWarning(message: string): void }).showWarning,
 				session: harness.session,
