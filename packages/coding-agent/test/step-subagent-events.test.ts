@@ -7,7 +7,7 @@ import {
 	routeSubagentRpcLine,
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
-} from "../src/extensions/step-subagent.ts";
+} from "../src/features/step-subagent.ts";
 
 interface SentMessage {
 	customType: string;

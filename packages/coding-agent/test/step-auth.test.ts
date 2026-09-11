@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../src/extensions/step-provider/index.ts";
+import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../src/features/step-provider/index.ts";
 import {
 	getLegacyStepAuthPath,
 	getStepAuthPath,

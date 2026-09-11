@@ -451,8 +451,8 @@ export {
 	type StepExtensionOptions,
 	stepExtension,
 	stepExtensionInline,
-} from "./extensions/step.ts";
-export { createStepCapabilitiesExtensionInline } from "./extensions/step-capabilities.ts";
+} from "./features/step.ts";
+export { createStepCapabilitiesExtensionInline } from "./features/step-capabilities.ts";
 export {
 	type CronCreateResult,
 	type CronDelivery,
@@ -465,8 +465,8 @@ export {
 	StepCronRuntime,
 	type StepCronRuntimeOptions,
 	stepCronExtensionInline,
-} from "./extensions/step-cron.ts";
-export { createStepProviderConfig, STEP_PROVIDER_ID } from "./extensions/step-provider/index.ts";
+} from "./features/step-cron.ts";
+export { createStepProviderConfig, STEP_PROVIDER_ID } from "./features/step-provider/index.ts";
 export {
 	CreateGoalParams,
 	continuationPrompt,
@@ -485,11 +485,11 @@ export {
 	stepGoalExtensionInline,
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
-} from "./extensions/step-schedule.ts";
+} from "./features/step-schedule.ts";
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.
-export * from "./extensions/workflow/index.ts";
+export * from "./features/workflow/index.ts";
 // Main entry point
 export {
 	type MainOptions,

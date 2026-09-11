@@ -85,7 +85,7 @@ import { SettingsManager, type SettingsManagerCreateOptions } from "./core/setti
 import type { SystemPromptProduct } from "./core/system-prompt.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { builtInExtensions } from "./extensions/index.ts";
+import { builtInExtensions } from "./features/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { runPrintMode, runRpcMode } from "./modes/index.ts";
 import type { InteractiveModeOptions, StartupTuiPathOptions, StartupUiHooks } from "./modes/interactive-contract.ts";

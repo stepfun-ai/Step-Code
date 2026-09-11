@@ -10,7 +10,7 @@ import {
 	createStepCronExtension,
 	SimpleCronExpression,
 	StepCronRuntime,
-} from "../src/extensions/step-cron.ts";
+} from "../src/features/step-cron.ts";
 
 const temporaryDirectories: string[] = [];
 

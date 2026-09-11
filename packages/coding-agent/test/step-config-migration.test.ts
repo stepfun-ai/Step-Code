@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
-import { createStepProviderConfig, STEP_PROVIDER_ID } from "../src/extensions/step-provider/index.ts";
+import { createStepProviderConfig, STEP_PROVIDER_ID } from "../src/features/step-provider/index.ts";
 import { migrateStepConfig, readStepGlobalDefaults } from "../src/step/config-migration.ts";
 
 type FetchInput = Parameters<typeof fetch>[0];

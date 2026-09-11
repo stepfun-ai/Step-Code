@@ -18,7 +18,7 @@ import {
 	STEP_PROVIDER_DEFAULTS,
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
-} from "../extensions/step-provider/index.ts";
+} from "../features/step-provider/index.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { stripBom } from "../utils/text.ts";
 import {

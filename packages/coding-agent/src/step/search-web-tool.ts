@@ -4,7 +4,7 @@ import type { Credential } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionContext, ToolDefinition } from "../core/extensions/types.ts";
-import { STEP_PROVIDER_ID } from "../extensions/step-provider/index.ts";
+import { STEP_PROVIDER_ID } from "../features/step-provider/index.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { readStepLoginProfile } from "./login-flow.ts";
 import { invokeRemoteMcpTool, type RemoteMcpToolInvocation, type RemoteMcpToolResult } from "./mcp-client.ts";

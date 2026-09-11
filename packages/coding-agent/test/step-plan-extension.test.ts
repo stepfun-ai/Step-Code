@@ -6,8 +6,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { createStepPlanExtension } from "../src/extensions/step-plan.ts";
-import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
+import { createStepPlanExtension } from "../src/features/step-plan.ts";
+import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 // Preserve real file I/O while making the ESM read export spyable for EACCES tests.

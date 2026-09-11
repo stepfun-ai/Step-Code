@@ -7,7 +7,7 @@ import {
 	type StepGoalRecord,
 	StepGoalRuntime,
 	type StepGoalSnapshot,
-} from "../src/extensions/step-schedule.ts";
+} from "../src/features/step-schedule.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 function assistant(

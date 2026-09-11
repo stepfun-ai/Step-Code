@@ -5,14 +5,14 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type Model, validateToolArguments } from "@earendil-works/pi-ai";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
-import { createStepCapabilitiesExtension } from "../src/extensions/step-capabilities.ts";
-import { createStepPlanExtension } from "../src/extensions/step-plan.ts";
+import { createStepCapabilitiesExtension } from "../src/features/step-capabilities.ts";
+import { createStepPlanExtension } from "../src/features/step-plan.ts";
 import {
 	createStepSubagentExtension,
 	type StepSubagentRunResult,
 	type StepWorktreeLease,
-} from "../src/extensions/step-subagent.ts";
-import { discoverStepAgents } from "../src/extensions/step-subagent-agents.ts";
+} from "../src/features/step-subagent.ts";
+import { discoverStepAgents } from "../src/features/step-subagent-agents.ts";
 import type { StepTelemetryEventName, StepTelemetryProperties } from "../src/step/telemetry.ts";
 import { initTheme, theme } from "../src/theme/theme.ts";
 

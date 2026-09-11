@@ -7,7 +7,7 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionAPI, InlineExtension } from "../src/core/extensions/types.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { InMemoryCodingAgentModelsStore } from "../src/core/models-store.ts";
-import type { StepCallbackResult } from "../src/extensions/step-provider/callback-server.ts";
+import type { StepCallbackResult } from "../src/features/step-provider/callback-server.ts";
 import {
 	buildStepAuthorizationUrl,
 	buildStepCallbackUrl,
@@ -22,7 +22,7 @@ import {
 	STEP_STATIC_REFRESH_TOKEN,
 	startStepCallbackServer,
 	stepProviderInlineExtension,
-} from "../src/extensions/step-provider/index.ts";
+} from "../src/features/step-provider/index.ts";
 
 async function request(port: number, path: string): Promise<Response> {
 	return fetch(`http://127.0.0.1:${port}${path}`);
