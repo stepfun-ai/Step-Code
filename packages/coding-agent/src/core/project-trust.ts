@@ -19,25 +19,74 @@ export interface ResolveProjectTrustedOptions {
 	trustOverride?: boolean;
 	defaultProjectTrust?: DefaultProjectTrust;
 	extensionsResult?: LoadExtensionsResult;
+	/**
+	 * Ask even when the directory ships no project config.
+	 *
+	 * Two different questions share this resolver. A session asks "may I read
+	 * what is here", and that matters for any directory with files in it, because
+	 * a file can be written to instruct the model. `step package` asks "may I
+	 * write project config here", which is moot until project config exists —
+	 * refusing there would make it impossible to create the first one. Session
+	 * callers set this; the package CLI does not.
+	 */
+	alwaysAsk?: boolean;
 	projectTrustContext: ProjectTrustContext;
 	onExtensionError?: (message: string) => void;
 }
 
 function formatProjectTrustPrompt(cwd: string, configDirName: string): string {
-	return `Trust project folder?\n${cwd}\n\nThis allows ${APP_NAME} to load ${configDirName} settings and resources, install missing project packages, and execute project extensions.`;
+	// Two risks, and the second is why this is asked for every directory rather
+	// than only those shipping a config: whatever is in these files reaches the
+	// model, and text in a file can be written to give the model instructions.
+	return [
+		"Do you trust the contents of this folder?",
+		cwd,
+		"",
+		`Working with untrusted contents carries a risk of prompt injection: text in a file can be written to instruct ${APP_NAME}.`,
+		`Trusting also allows ${APP_NAME} to load ${configDirName} settings and resources, install missing project packages, and execute project extensions.`,
+	].join("\n");
 }
 
+/**
+ * Raised when the user answers "no" to the startup trust prompt.
+ *
+ * Declining has to end the launch. The prompt warns that the directory's files
+ * could carry instructions for the model; continuing in an untrusted session
+ * would still read those files, so "no" would protect nothing and the warning
+ * would be theatre. `main` catches this and exits quietly.
+ */
+export class ProjectTrustDeclinedError extends Error {
+	readonly cwd: string;
+
+	constructor(cwd: string) {
+		super(`Project trust declined for ${cwd}`);
+		this.name = "ProjectTrustDeclinedError";
+		this.cwd = cwd;
+	}
+}
+
+const TRUST_YES_LABEL = "Yes, continue";
+const TRUST_NO_LABEL = "No, quit";
+
+/**
+ * Two answers, matching what the other agent CLIs ask.
+ *
+ * The per-session and parent-folder variants remain on the `/trust` command,
+ * where the user has gone looking for them; offering five branches to someone
+ * who has just launched in a new folder asks them to make a policy decision
+ * before they have a question.
+ */
 async function selectProjectTrustOption(
 	cwd: string,
 	ctx: ProjectTrustContext,
 	configDirName: string,
 ): Promise<ProjectTrustOption | undefined> {
-	const options = getProjectTrustOptions(cwd, { includeSessionOnly: true });
-	const selected = await ctx.ui.select(
-		formatProjectTrustPrompt(cwd, configDirName),
-		options.map((option) => option.label),
-	);
-	return options.find((option) => option.label === selected);
+	const selected = await ctx.ui.select(formatProjectTrustPrompt(cwd, configDirName), [
+		TRUST_YES_LABEL,
+		TRUST_NO_LABEL,
+	]);
+	if (selected !== TRUST_YES_LABEL) return undefined;
+	return getProjectTrustOptions(cwd).find((option) => option.trusted);
 }
 
 function saveProjectTrustPromptResult(trustStore: ProjectTrustStore, result: ProjectTrustOption): void {
@@ -51,10 +100,9 @@ export async function resolveProjectTrusted(options: ResolveProjectTrustedOption
 	if (options.trustOverride !== undefined) {
 		return options.trustOverride;
 	}
-	if (!hasTrustRequiringProjectResources(options.cwd, configDirName)) {
+	if (!options.alwaysAsk && !hasTrustRequiringProjectResources(options.cwd, configDirName)) {
 		return true;
 	}
-
 	if (options.extensionsResult) {
 		const { result, errors } = await emitProjectTrustEvent(
 			options.extensionsResult,
@@ -92,9 +140,12 @@ export async function resolveProjectTrusted(options: ResolveProjectTrustedOption
 	}
 
 	const selected = await selectProjectTrustOption(options.cwd, options.projectTrustContext, configDirName);
-	if (selected !== undefined) {
-		saveProjectTrustPromptResult(options.trustStore, selected);
-		return selected.trusted;
+	if (selected === undefined) {
+		// "No, quit" and Escape are the same answer. Escape used to drop the user
+		// into an untrusted session, which looked like the prompt had been skipped.
+		if (options.alwaysAsk) throw new ProjectTrustDeclinedError(options.cwd);
+		return false;
 	}
-	return false;
+	saveProjectTrustPromptResult(options.trustStore, selected);
+	return selected.trusted;
 }

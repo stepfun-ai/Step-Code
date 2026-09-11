@@ -165,22 +165,34 @@ export function writeStepConfig(path: string, document: StepConfigDocument): voi
 	renameSync(temporary, path);
 }
 
-export function updateGlobalMcpConfig(
+/**
+ * Read-modify-write the global config under the settings lock.
+ *
+ * Every writer shares one critical section: a concurrent `step mcp add` and a
+ * settings save must not overwrite each other's half of the document.
+ */
+export function updateGlobalStepConfig(
 	env: NodeJS.ProcessEnv,
-	update: (servers: Record<string, StepMcpServerConfig>) => Record<string, StepMcpServerConfig>,
+	update: (document: StepConfigDocument) => StepConfigDocument,
 ): string {
 	const path = ensureStepGlobalConfig(env);
-	// Same critical section as settings writes: a concurrent `step mcp add` and
-	// a settings save must not overwrite each other's half of the document.
 	const release = acquireSettingsLockSync(path);
 	try {
-		const document = readStepConfig(path);
-		const current = document.mcp_servers ?? {};
-		writeStepConfig(path, { ...document, mcp_servers: update(current) });
+		writeStepConfig(path, update(readStepConfig(path)));
 	} finally {
 		release();
 	}
 	return path;
+}
+
+export function updateGlobalMcpConfig(
+	env: NodeJS.ProcessEnv,
+	update: (servers: Record<string, StepMcpServerConfig>) => Record<string, StepMcpServerConfig>,
+): string {
+	return updateGlobalStepConfig(env, (document) => ({
+		...document,
+		mcp_servers: update(document.mcp_servers ?? {}),
+	}));
 }
 
 /** Explicit config locations, so an embedded host or a test never reaches the real home. */

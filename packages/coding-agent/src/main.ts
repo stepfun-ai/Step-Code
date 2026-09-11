@@ -69,7 +69,7 @@ import type { ModelRequestObserver } from "./core/model-request-observer.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
-import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { type AppMode, ProjectTrustDeclinedError, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -88,7 +88,7 @@ import { collectSettingsDiagnostics, deduplicateDiagnostics } from "./core/setti
 import { SettingsManager, type SettingsManagerCreateOptions } from "./core/settings-manager.ts";
 import type { SystemPromptProduct } from "./core/system-prompt.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
-import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import { ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, type InteractiveModeOptions, runPrintMode, runRpcMode } from "./modes/index.ts";
@@ -767,6 +767,7 @@ export interface MainOptions {
 		| "allowedAuthProviders"
 		| "stepLogin"
 		| "stepLogout"
+		| "stepMcpImport"
 		| "onStartup"
 		| "offline"
 	>;
@@ -1017,11 +1018,6 @@ export async function main(args: string[], options?: MainOptions) {
 	time("createSessionManager");
 
 	const trustStore = new ProjectTrustStore(agentDir);
-	const sessionCwd = sessionManager.getCwd();
-	const autoTrustOnReloadCwd =
-		parsed.projectTrustOverride === undefined && !hasTrustRequiringProjectResources(sessionCwd, configDirName)
-			? sessionCwd
-			: undefined;
 	const trustPromptMode: AppMode = parsed.help || parsed.listModels !== undefined ? "print" : appMode;
 	const projectTrustByCwd = new Map<string, boolean>();
 
@@ -1040,14 +1036,14 @@ export async function main(args: string[], options?: MainOptions) {
 		const isInitialRuntime = sessionStartEvent === undefined;
 		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
 		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-		const hasTrustRequiringResources = hasTrustRequiringProjectResources(cwd, configDirName);
-		const shouldResolveProjectTrust =
-			parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined && hasTrustRequiringResources;
+		// Asked for every directory, not only those shipping project config. The
+		// config is one of two things trust covers; the other is the file contents
+		// the agent is about to read, and a hostile file is a prompt-injection
+		// vector whether or not the directory also ships a settings.json.
+		const shouldResolveProjectTrust = parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined;
 		const projectTrusted = shouldResolveProjectTrust
 			? false
-			: (cachedProjectTrust ??
-				parsed.projectTrustOverride ??
-				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
+			: (cachedProjectTrust ?? parsed.projectTrustOverride ?? trustStore.get(cwd) === true);
 		const runtimeSettingsManager = createSettingsManager(cwd, agentDir, {
 			projectTrusted,
 			configDirName,
@@ -1073,6 +1069,9 @@ export async function main(args: string[], options?: MainOptions) {
 								configDirName,
 								trustOverride: parsed.projectTrustOverride,
 								defaultProjectTrust: startupSettingsManager.getDefaultProjectTrust(),
+								// A session reads the directory's files into the model, so the
+								// question applies even where there is no project config.
+								alwaysAsk: true,
 								extensionsResult,
 								projectTrustContext:
 									projectTrustContext ??
@@ -1185,12 +1184,20 @@ export async function main(args: string[], options?: MainOptions) {
 		};
 	};
 	time("createRuntime");
-	const runtime = await createAgentSessionRuntime(createRuntime, {
-		cwd: sessionManager.getCwd(),
-		agentDir,
-		sessionManager,
-		sessionManagerFactory: options?.sessionManagerFactory,
-	});
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
+	try {
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: sessionManager.getCwd(),
+			agentDir,
+			sessionManager,
+			sessionManagerFactory: options?.sessionManagerFactory,
+		});
+	} catch (error) {
+		// Declining trust is a decision, not a failure: leave without a stack
+		// trace and without the alternate screen ever being entered.
+		if (error instanceof ProjectTrustDeclinedError) return;
+		throw error;
+	}
 	time("createAgentSessionRuntime");
 	const runtimeHost = options?.runtimeHostFactory?.(runtime) ?? runtime;
 	const { services, session, modelFallbackMessage } = runtime;
@@ -1294,7 +1301,6 @@ export async function main(args: string[], options?: MainOptions) {
 			migratedProviders,
 			startupDiagnostics,
 			modelFallbackMessage,
-			autoTrustOnReloadCwd,
 			initialMessage,
 			initialImages,
 			initialMessages: parsed.messages,

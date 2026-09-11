@@ -393,7 +393,6 @@ export interface InteractiveModeOptions {
 	/** Warning message if session model couldn't be restored */
 	modelFallbackMessage?: string;
 	/** Cwd to trust after reload if it gained a .pi directory during this implicitly trusted session. */
-	autoTrustOnReloadCwd?: string;
 	/** Initial message to send on startup (can include @file content) */
 	initialMessage?: string;
 	/** Images to attach to the initial message */
@@ -435,6 +434,21 @@ export interface InteractiveModeOptions {
 	stepLogin?: (host: StepLoginHost) => Promise<StepLoginOutcome>;
 	/** Shared Step logout flow used by the Step-only TUI command. */
 	stepLogout?: () => Promise<{ removed: boolean; remainingSource?: string | null }>;
+	/**
+	 * One-time offer to migrate another agent's MCP servers.
+	 *
+	 * Runs before the main UI is built, and owns the screen while it does: an
+	 * offer mounted after `init()` shows the user a logo and an input box and
+	 * then replaces them a frame later, which reads as a glitch. It is still
+	 * after the two gates it has to follow — the runtime resolved project trust
+	 * while it was being constructed, and Step performs its startup login before
+	 * `main()` is called at all.
+	 *
+	 * Resolves to a notice to show once the screen is gone, or `undefined` when
+	 * nothing happened worth reporting; a silent write would leave the user with
+	 * no record of what landed in their config.
+	 */
+	stepMcpImport?: () => Promise<string | undefined>;
 	/**
 	 * Product startup hook. Returning false stops the interactive loop after the
 	 * hook has completed (used by a self-update that has relaunched the binary).
@@ -669,7 +683,6 @@ export class InteractiveMode {
 	private readonly onRightClickPaste = (): void => {
 		void this.handleRightClickPaste();
 	};
-	private autoTrustOnReloadCwd: string | undefined;
 	private themeController: InteractiveThemeController;
 
 	// Convenience accessors
@@ -707,7 +720,6 @@ export class InteractiveMode {
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		const tuiMode = options.tuiMode ?? this.settingsManager.getTuiMode();
 		this.options = { ...options, tuiMode };
-		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
 		});
@@ -1289,6 +1301,26 @@ export class InteractiveMode {
 	 * Initializes the UI, shows warnings, processes initial messages, and starts the interactive loop.
 	 */
 	async run(): Promise<void> {
+		// Only a bare `step` gets the offer: a launch that already carries a prompt,
+		// a resumed session, or an auth-only command is here to do something else,
+		// not to answer a setup question.
+		let mcpImportNotice: string | undefined;
+		let mcpImportError: string | undefined;
+		if (
+			this.options.stepMcpImport &&
+			!this.options.exitAfterStartupLogin &&
+			!this.options.initialMessage &&
+			!this.options.initialMessages?.length &&
+			this.session.state.messages.length === 0
+		) {
+			try {
+				mcpImportNotice = await this.options.stepMcpImport();
+			} catch (error: unknown) {
+				// An offer to import is never worth failing a launch over. Hold the
+				// message: there is no chat surface to show it on until init() runs.
+				mcpImportError = `Could not offer MCP import: ${error instanceof Error ? error.message : String(error)}`;
+			}
+		}
 		await this.init();
 		if (this.options.onStartup) {
 			const continueStartup = await this.options.onStartup({
@@ -1328,6 +1360,9 @@ export class InteractiveMode {
 			stopThemeWatcher();
 			return;
 		}
+
+		if (mcpImportNotice) this.showNotice(mcpImportNotice);
+		if (mcpImportError) this.showWarning(mcpImportError);
 
 		if (!process.env.PI_OFFLINE && !this.options.disableBackgroundServices) {
 			const controller = new AbortController();
@@ -3377,6 +3412,7 @@ export class InteractiveMode {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
 			if (!text) return;
+			if (text === "/mcp" || text === "/status") this.addCommandInputToChat(text);
 
 			// Whatever this submission produces can push the transcript past the
 			// viewport, and an animating welcome block above the viewport leaves pi
@@ -3577,6 +3613,19 @@ export class InteractiveMode {
 			}
 			this.editor.addToHistory?.(text);
 		};
+	}
+
+	private addCommandInputToChat(text: string): void {
+		if (this.chatContainer.children.length > 0) this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(
+			this.createUserMessageComponent(
+				text,
+				this.getMarkdownThemeWithSettings(),
+				this.outputPad,
+				this.getMarkdownTransformers(),
+			),
+		);
+		this.ui.requestRender();
 	}
 
 	private subscribeToAgent(): void {
@@ -4774,6 +4823,22 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/**
+	 * A thing that succeeded and is worth a line in the transcript.
+	 *
+	 * Distinct from `showWarning` on purpose: routing a successful result through
+	 * the yellow "Warning:" channel tells the user something went wrong when
+	 * nothing did. Continuation lines are indented under the check so a
+	 * multi-line summary reads as one block.
+	 */
+	showNotice(message: string): void {
+		const [first = "", ...rest] = message.split("\n");
+		const body = [`${theme.fg("success", "✓")} ${first}`, ...rest.map((line) => `  ${line}`)].join("\n");
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(body, 1, 0));
+		this.ui.requestRender();
+	}
+
 	showNewVersionNotification(release: LatestPiRelease): void {
 		const action = theme.fg("accent", `${APP_NAME} update`);
 		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
@@ -5445,32 +5510,6 @@ export class InteractiveMode {
 			this.showWarning(ANTHROPIC_SUBSCRIPTION_AUTH_WARNING);
 		} catch {
 			// Ignore auth lookup failures for warning-only checks.
-		}
-	}
-
-	private maybeSaveImplicitProjectTrustAfterReload(): boolean {
-		const cwd = this.sessionManager.getCwd();
-		if (this.autoTrustOnReloadCwd !== cwd) {
-			return false;
-		}
-		if (!this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(cwd, this.configDirName)) {
-			return false;
-		}
-
-		const trustStore = new ProjectTrustStore(this.runtimeHost.services.agentDir);
-		try {
-			if (trustStore.get(cwd) !== null) {
-				this.autoTrustOnReloadCwd = undefined;
-				return false;
-			}
-			trustStore.set(cwd, true);
-			this.autoTrustOnReloadCwd = undefined;
-			return true;
-		} catch (error) {
-			this.showWarning(
-				`Could not save project trust after reload: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return false;
 		}
 	}
 
@@ -6764,16 +6803,11 @@ export class InteractiveMode {
 				force: false,
 				showDiagnosticsWhenQuiet: true,
 			});
-			const savedImplicitProjectTrust = this.maybeSaveImplicitProjectTrustAfterReload();
 			const modelsJsonError = this.session.modelRuntime.getError();
 			if (modelsJsonError) {
 				this.showError(`models.json error: ${modelsJsonError}`);
 			}
-			this.showStatus(
-				savedImplicitProjectTrust
-					? "Reloaded keybindings, extensions, skills, prompts, themes, and context files; saved project trust"
-					: "Reloaded keybindings, extensions, skills, prompts, themes, and context files",
-			);
+			this.showStatus("Reloaded keybindings, extensions, skills, prompts, themes, and context files");
 			dismissReloadBox(this.editor as Component);
 			reloadBoxDismissed = true;
 		} catch (error) {

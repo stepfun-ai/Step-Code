@@ -49,6 +49,7 @@ import {
 	runStepLogin,
 	syncStepLoginProfileEndpoint,
 } from "./step/login-flow.ts";
+import { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 import { loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
 import { createStepSessionManagerFactory } from "./step/session.ts";
 import { createStepSettingsManager, type StepSettingsManager } from "./step/settings-manager.ts";
@@ -239,6 +240,8 @@ const stepMainOptions: MainOptions = {
 				createHost: () => host,
 				themeName: getStepDefaultTheme(),
 			}),
+		stepMcpImport: async () =>
+			describeStepMcpImportOutcome(await runStepMcpImportPrompt({ themeName: getStepDefaultTheme() })),
 		stepLogout: async () => {
 			const report = await logoutStepCredentials({
 				nativePath: getStepAuthPath(),
