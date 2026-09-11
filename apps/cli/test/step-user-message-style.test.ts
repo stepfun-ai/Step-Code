@@ -1,6 +1,6 @@
 import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { StepUserMessageComponent } from "../src/ui/components/step-message.ts";
+import { StepUserMessageComponent } from "../src/ui/view/transcript/step-message.ts";
 import { getMarkdownTheme, getThemeByName, initTheme, setTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 describe("Step user message presentation", () => {

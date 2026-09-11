@@ -5,7 +5,7 @@ import {
 	type SettingsCallbacks,
 	type SettingsConfig,
 	SettingsSelectorComponent,
-} from "../src/ui/components/settings-selector.ts";
+} from "../src/ui/view/dialogs/settings-selector.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 describe("SettingsSelectorComponent", () => {

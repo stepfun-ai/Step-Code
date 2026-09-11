@@ -4,7 +4,7 @@
  */
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
-import { BashExecutionComponent } from "../src/ui/components/bash-execution.ts";
+import { BashExecutionComponent } from "../src/ui/view/transcript/bash-execution.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 /** Minimal TUI stub that only exposes terminal.columns */

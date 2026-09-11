@@ -7,8 +7,8 @@ import type { ToolDefinition } from "../../../packages/coding-agent/src/core/ext
 import { type BashOperations, createBashToolDefinition } from "../../../packages/coding-agent/src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../../../packages/coding-agent/src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../../../packages/coding-agent/src/core/tools/write.ts";
-import { StepToolSpinnerClock } from "../src/ui/components/step-spinner.ts";
-import { ToolExecutionComponent } from "../src/ui/components/tool-execution.ts";
+import { StepToolSpinnerClock } from "../src/ui/view/transcript/step-spinner.ts";
+import { ToolExecutionComponent } from "../src/ui/view/transcript/tool-execution.ts";
 import { createStepToolProfile } from "../../../packages/coding-agent/src/step/tool-profile.ts";
 import { initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";

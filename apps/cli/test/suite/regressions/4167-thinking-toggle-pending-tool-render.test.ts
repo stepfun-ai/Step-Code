@@ -4,7 +4,7 @@ import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../../../packages/coding-agent/src/core/agent-session.ts";
 import type { SessionEntry } from "../../../../../packages/coding-agent/src/core/session-manager.ts";
-import type { ToolExecutionComponent } from "../../../src/ui/components/tool-execution.ts";
+import type { ToolExecutionComponent } from "../../../src/ui/view/transcript/tool-execution.ts";
 import { InteractiveMode } from "../../../src/ui/interactive-mode.ts";
 import { initTheme } from "../../../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../../../packages/coding-agent/src/utils/ansi.ts";

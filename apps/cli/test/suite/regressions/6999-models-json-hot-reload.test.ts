@@ -5,7 +5,7 @@ import { setKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../../../../../packages/coding-agent/src/core/auth-storage.ts";
 import { KeybindingsManager } from "../../../../../packages/coding-agent/src/core/keybindings.ts";
-import { ModelSelectorComponent } from "../../../src/ui/components/model-selector.ts";
+import { ModelSelectorComponent } from "../../../src/ui/view/dialogs/model-selector.ts";
 import { initTheme } from "../../../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../../../packages/coding-agent/src/utils/ansi.ts";
 import { createModelRegistry, getModelRuntime } from "../../../../../packages/coding-agent/test/model-runtime-test-utils.ts";

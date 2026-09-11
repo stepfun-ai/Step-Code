@@ -1,7 +1,7 @@
 import { setKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../../../../packages/coding-agent/src/core/keybindings.ts";
-import { ModelSelectorComponent } from "../../../src/ui/components/model-selector.ts";
+import { ModelSelectorComponent } from "../../../src/ui/view/dialogs/model-selector.ts";
 import { initTheme } from "../../../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../../../packages/coding-agent/src/utils/ansi.ts";
 import { createHarness, type Harness } from "../../../../../packages/coding-agent/test/suite/harness.ts";

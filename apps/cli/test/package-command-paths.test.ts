@@ -19,7 +19,7 @@ import type { ResolvedPaths } from "../../../packages/coding-agent/src/core/pack
 import { InMemorySettingsStorage, SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
 import { ProjectTrustStore } from "../../../packages/coding-agent/src/core/trust-manager.ts";
 import { main } from "../../../packages/coding-agent/src/main.ts";
-import { ConfigSelectorComponent } from "../src/ui/components/config-selector.ts";
+import { ConfigSelectorComponent } from "../src/ui/view/dialogs/config-selector.ts";
 import { handlePackageCommand } from "../../../packages/coding-agent/src/package-manager-cli.ts";
 import { allowNetwork } from "../../../packages/coding-agent/test/test-network-env.ts";
 

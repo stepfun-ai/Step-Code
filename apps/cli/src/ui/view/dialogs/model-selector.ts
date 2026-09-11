@@ -12,8 +12,8 @@ import {
 	Text,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { refreshModelCatalogs } from "../model-catalog-refresh.ts";
-import { getModelSelectorSearchText } from "../model-search.ts";
+import { refreshModelCatalogs } from "../../model-catalog-refresh.ts";
+import { getModelSelectorSearchText } from "../../model-search.ts";
 
 interface ModelItem {
 	provider: string;

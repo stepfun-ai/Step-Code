@@ -149,51 +149,6 @@ import {
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { spawn } from "child_process";
-import { ArminComponent } from "./components/armin.ts";
-import { AssistantMessageComponent } from "./components/assistant-message.ts";
-import { BashExecutionComponent } from "./components/bash-execution.ts";
-import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
-import { CustomEntryComponent } from "./components/custom-entry.ts";
-import { CustomMessageComponent } from "./components/custom-message.ts";
-import { DaxnutsComponent } from "./components/daxnuts.ts";
-import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
-import { ExtensionEditorComponent } from "./components/extension-editor.ts";
-import { ExtensionInputComponent } from "./components/extension-input.ts";
-import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { LoginDialogComponent } from "./components/login-dialog.ts";
-import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
-import { ModelSelectorComponent } from "./components/model-selector.ts";
-import {
-	type AuthSelectorProvider,
-	formatAuthSelectorProviderType,
-	OAuthSelectorComponent,
-} from "./components/oauth-selector.ts";
-import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
-import { SessionSelectorComponent } from "./components/session-selector.ts";
-import { SettingsSelectorComponent } from "./components/settings-selector.ts";
-import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
-import {
-	BranchSummaryStatusIndicator,
-	IdleStatus,
-	STEP_WORKING_INDICATOR_INTERVAL_MS,
-	type StatusIndicator,
-	WorkingOutputTracker,
-	WorkingStatusIndicator,
-} from "./components/status-indicator.ts";
-import { StepSelectorFrame } from "./components/step-dialog.ts";
-import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "./components/step-editor.ts";
-import { StepAssistantMessageComponent, StepUserMessageComponent } from "./components/step-message.ts";
-import { StepQueuedMessagesComponent } from "./components/step-queued-messages.ts";
-import type { StepToolSpinnerClock } from "./components/step-spinner.ts";
-import { StepWelcomeComponent } from "./components/step-welcome.ts";
-import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
-import { ToolExecutionComponent } from "./components/tool-execution.ts";
-import { TreeSelectorComponent } from "./components/tree-selector.ts";
-import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { UserMessageComponent } from "./components/user-message.ts";
-import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -211,6 +166,51 @@ import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
 import { createRedraw, type Redraw } from "./runtime/redraw.ts";
 import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
 import { shareSession } from "./session-share.ts";
+import { FooterComponent, formatTokens } from "./view/chrome/footer.ts";
+import {
+	BranchSummaryStatusIndicator,
+	IdleStatus,
+	STEP_WORKING_INDICATOR_INTERVAL_MS,
+	type StatusIndicator,
+	WorkingOutputTracker,
+	WorkingStatusIndicator,
+} from "./view/chrome/status-indicator.ts";
+import { StepWelcomeComponent } from "./view/chrome/step-welcome.ts";
+import { ExtensionEditorComponent } from "./view/dialogs/extension-editor.ts";
+import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
+import { ExtensionSelectorComponent } from "./view/dialogs/extension-selector.ts";
+import { LoginDialogComponent } from "./view/dialogs/login-dialog.ts";
+import { ModelSelectorComponent } from "./view/dialogs/model-selector.ts";
+import {
+	type AuthSelectorProvider,
+	formatAuthSelectorProviderType,
+	OAuthSelectorComponent,
+} from "./view/dialogs/oauth-selector.ts";
+import { ScopedModelsSelectorComponent } from "./view/dialogs/scoped-models-selector.ts";
+import { SessionSelectorComponent } from "./view/dialogs/session-selector.ts";
+import { SettingsSelectorComponent } from "./view/dialogs/settings-selector.ts";
+import { StepSelectorFrame } from "./view/dialogs/step-dialog.ts";
+import { ThinkingSelectorComponent } from "./view/dialogs/thinking-selector.ts";
+import { TreeSelectorComponent } from "./view/dialogs/tree-selector.ts";
+import { TrustSelectorComponent } from "./view/dialogs/trust-selector.ts";
+import { UserMessageSelectorComponent } from "./view/dialogs/user-message-selector.ts";
+import { CustomEntryComponent } from "./view/editor/custom-entry.ts";
+import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "./view/editor/step-editor.ts";
+import { ArminComponent } from "./view/transcript/armin.ts";
+import { AssistantMessageComponent } from "./view/transcript/assistant-message.ts";
+import { BashExecutionComponent } from "./view/transcript/bash-execution.ts";
+import { BranchSummaryMessageComponent } from "./view/transcript/branch-summary-message.ts";
+import { CompactionSummaryMessageComponent } from "./view/transcript/compaction-summary-message.ts";
+import { CustomMessageComponent } from "./view/transcript/custom-message.ts";
+import { DaxnutsComponent } from "./view/transcript/daxnuts.ts";
+import { EarendilAnnouncementComponent } from "./view/transcript/earendil-announcement.ts";
+import { createMermaidMarkdownTransformer } from "./view/transcript/mermaid.ts";
+import { SkillInvocationMessageComponent } from "./view/transcript/skill-invocation-message.ts";
+import { StepAssistantMessageComponent, StepUserMessageComponent } from "./view/transcript/step-message.ts";
+import { StepQueuedMessagesComponent } from "./view/transcript/step-queued-messages.ts";
+import type { StepToolSpinnerClock } from "./view/transcript/step-spinner.ts";
+import { ToolExecutionComponent } from "./view/transcript/tool-execution.ts";
+import { UserMessageComponent } from "./view/transcript/user-message.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {

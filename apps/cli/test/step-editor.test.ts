@@ -1,7 +1,7 @@
 import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "../src/ui/components/step-editor.ts";
+import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "../src/ui/view/editor/step-editor.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 function createEditor(width = 80, rows = 24): StepEditor {

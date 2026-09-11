@@ -2,7 +2,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import type { MessageRenderer, MessageRenderOptions } from "../../../packages/coding-agent/src/core/extensions/types.ts";
 import type { CustomMessage } from "../../../packages/coding-agent/src/core/messages.ts";
-import { CustomMessageComponent } from "../src/ui/components/custom-message.ts";
+import { CustomMessageComponent } from "../src/ui/view/transcript/custom-message.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";
 

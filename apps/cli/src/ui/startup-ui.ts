@@ -25,9 +25,9 @@ import {
 	type TUI,
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import { ExtensionInputComponent } from "./components/extension-input.ts";
-import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FirstTimeSetupComponent, type FirstTimeSetupResult } from "./components/first-time-setup.ts";
+import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
+import { ExtensionSelectorComponent } from "./view/dialogs/extension-selector.ts";
+import { FirstTimeSetupComponent, type FirstTimeSetupResult } from "./view/dialogs/first-time-setup.ts";
 
 /** Product entrypoints keep the startup selector in the same visual language
  * as their interactive surface; keyboard handling remains in the shared

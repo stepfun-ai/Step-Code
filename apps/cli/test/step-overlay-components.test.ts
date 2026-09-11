@@ -1,19 +1,19 @@
 import { setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { BranchSummaryMessageComponent } from "../src/ui/components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "../src/ui/components/compaction-summary-message.ts";
-import { ExtensionEditorComponent } from "../src/ui/components/extension-editor.ts";
-import { ExtensionInputComponent } from "../src/ui/components/extension-input.ts";
-import { ExtensionSelectorComponent } from "../src/ui/components/extension-selector.ts";
-import { LoginDialogComponent } from "../src/ui/components/login-dialog.ts";
+import { BranchSummaryMessageComponent } from "../src/ui/view/transcript/branch-summary-message.ts";
+import { CompactionSummaryMessageComponent } from "../src/ui/view/transcript/compaction-summary-message.ts";
+import { ExtensionEditorComponent } from "../src/ui/view/dialogs/extension-editor.ts";
+import { ExtensionInputComponent } from "../src/ui/view/dialogs/extension-input.ts";
+import { ExtensionSelectorComponent } from "../src/ui/view/dialogs/extension-selector.ts";
+import { LoginDialogComponent } from "../src/ui/view/dialogs/login-dialog.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	WorkingStatusIndicator,
-} from "../src/ui/components/status-indicator.ts";
-import { StepSelectorFrame } from "../src/ui/components/step-dialog.ts";
-import { TrustSelectorComponent } from "../src/ui/components/trust-selector.ts";
+} from "../src/ui/view/chrome/status-indicator.ts";
+import { StepSelectorFrame } from "../src/ui/view/dialogs/step-dialog.ts";
+import { TrustSelectorComponent } from "../src/ui/view/dialogs/trust-selector.ts";
 import { getMarkdownTheme, initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 const fakeTui = {

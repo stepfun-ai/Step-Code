@@ -7,7 +7,7 @@ import { TuiMainScreen } from "../../../packages/tui/src/tui-main-screen.ts";
 import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../../../packages/coding-agent/src/core/extensions/types.ts";
 import type { SourceInfo } from "../../../packages/coding-agent/src/core/source-info.ts";
-import type { AuthSelectorProvider } from "../src/ui/components/oauth-selector.ts";
+import type { AuthSelectorProvider } from "../src/ui/view/dialogs/oauth-selector.ts";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 

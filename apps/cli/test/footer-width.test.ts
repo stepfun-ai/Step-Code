@@ -2,7 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../../../packages/coding-agent/src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../packages/coding-agent/src/core/footer-data-provider.ts";
-import { FooterComponent, formatCwdForFooter } from "../src/ui/components/footer.ts";
+import { FooterComponent, formatCwdForFooter } from "../src/ui/view/chrome/footer.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";
 

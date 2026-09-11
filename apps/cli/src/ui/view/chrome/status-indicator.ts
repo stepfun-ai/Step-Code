@@ -2,7 +2,7 @@ import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi
 import type { WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
 import { keyText, theme } from "@earendil-works/pi-coding-agent";
 import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { CountdownTimer } from "./countdown-timer.ts";
+import { CountdownTimer } from "../dialogs/countdown-timer.ts";
 import { formatTokens } from "./footer.ts";
 
 /** Refresh cadence for the compact Step working indicator. */

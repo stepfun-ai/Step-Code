@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
 	StepAssistantMessageComponent,
 	StepUserMessageComponent,
-} from "../src/ui/components/step-message.ts";
+} from "../src/ui/view/transcript/step-message.ts";
 import { getMarkdownTheme, initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";

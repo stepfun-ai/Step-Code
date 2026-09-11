@@ -5,7 +5,7 @@ import { Container, type Terminal, Text, type TUI, TuiMainScreen } from "@earend
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createEditToolDefinition } from "../../../packages/coding-agent/src/core/tools/edit.ts";
 import { computeEditsDiff, type Edit } from "../../../packages/coding-agent/src/core/tools/edit-diff.ts";
-import { ToolExecutionComponent } from "../src/ui/components/tool-execution.ts";
+import { ToolExecutionComponent } from "../src/ui/view/transcript/tool-execution.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 class FakeTerminal implements Terminal {

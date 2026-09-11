@@ -7,7 +7,7 @@ import {
 	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
-} from "../src/ui/components/status-indicator.ts";
+} from "../src/ui/view/chrome/status-indicator.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 function assistantMessage(

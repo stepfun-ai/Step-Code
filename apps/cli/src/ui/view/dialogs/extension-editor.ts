@@ -15,7 +15,7 @@ import {
 	Text,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { editInExternalEditor } from "../external-editor.ts";
+import { editInExternalEditor } from "../../external-editor.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
 export class ExtensionEditorComponent extends Container implements Focusable {

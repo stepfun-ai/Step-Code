@@ -1,7 +1,7 @@
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { TrustSelectorComponent } from "../src/ui/components/trust-selector.ts";
+import { TrustSelectorComponent } from "../src/ui/view/dialogs/trust-selector.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";
 

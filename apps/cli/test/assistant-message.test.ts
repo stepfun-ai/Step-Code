@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
-import { AssistantMessageComponent } from "../src/ui/components/assistant-message.ts";
-import { UserMessageComponent } from "../src/ui/components/user-message.ts";
+import { AssistantMessageComponent } from "../src/ui/view/transcript/assistant-message.ts";
+import { UserMessageComponent } from "../src/ui/view/transcript/user-message.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";
 

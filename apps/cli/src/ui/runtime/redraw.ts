@@ -23,7 +23,7 @@
  */
 
 import type { TUI } from "@earendil-works/pi-tui";
-import { StepToolSpinnerClock } from "../components/step-spinner.ts";
+import { StepToolSpinnerClock } from "../view/index.ts";
 
 export interface Redraw {
 	/** Throttled repaint (the ~112 default `requestRender()` sites). */

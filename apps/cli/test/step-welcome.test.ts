@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BIRD_ANIMATION_DURATION_MS, StepWelcomeComponent } from "../src/ui/components/step-welcome.ts";
+import { BIRD_ANIMATION_DURATION_MS, StepWelcomeComponent } from "../src/ui/view/chrome/step-welcome.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 afterEach(() => {

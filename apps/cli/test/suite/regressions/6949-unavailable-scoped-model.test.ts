@@ -2,7 +2,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../../../../packages/coding-agent/src/core/keybindings.ts";
-import { ScopedModelsSelectorComponent } from "../../../src/ui/components/scoped-models-selector.ts";
+import { ScopedModelsSelectorComponent } from "../../../src/ui/view/dialogs/scoped-models-selector.ts";
 import { InteractiveMode } from "../../../src/ui/interactive-mode.ts";
 import { initTheme } from "../../../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../../../packages/coding-agent/src/utils/ansi.ts";

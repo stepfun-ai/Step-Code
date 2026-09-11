@@ -1,7 +1,7 @@
 import { setKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { StepQueuedMessagesComponent } from "../src/ui/components/step-queued-messages.ts";
+import { StepQueuedMessagesComponent } from "../src/ui/view/transcript/step-queued-messages.ts";
 import { initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 beforeEach(() => {

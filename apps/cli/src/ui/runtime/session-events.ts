@@ -29,8 +29,8 @@ import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	RetryStatusIndicator,
-} from "../components/status-indicator.ts";
-import { ToolExecutionComponent } from "../components/tool-execution.ts";
+	ToolExecutionComponent,
+} from "../view/index.ts";
 import type { RuntimeContext } from "./context.ts";
 
 /** Subscribe to the session's agent events. Returns/records the unsubscribe handle (owned by the composition root). */

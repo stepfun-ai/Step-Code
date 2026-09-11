@@ -5,7 +5,7 @@ import { setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
 import type { SessionInfo } from "../../../packages/coding-agent/src/core/session-manager.ts";
-import { SessionSelectorComponent } from "../src/ui/components/session-selector.ts";
+import { SessionSelectorComponent } from "../src/ui/view/dialogs/session-selector.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 type Deferred<T> = {

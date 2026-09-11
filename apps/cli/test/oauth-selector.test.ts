@@ -1,7 +1,7 @@
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { OAuthSelectorComponent } from "../src/ui/components/oauth-selector.ts";
+import { OAuthSelectorComponent } from "../src/ui/view/dialogs/oauth-selector.ts";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";

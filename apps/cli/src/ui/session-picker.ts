@@ -5,8 +5,8 @@
 import type { SessionInfo, SessionListProgress, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { setKeybindings } from "@earendil-works/pi-tui";
-import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { createStartupTui, type StartupTuiPathOptions, startStartupTui } from "./startup-ui.ts";
+import { SessionSelectorComponent } from "./view/dialogs/session-selector.ts";
 
 type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[]>;
 

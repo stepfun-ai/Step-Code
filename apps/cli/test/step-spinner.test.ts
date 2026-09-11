@@ -3,7 +3,7 @@ import {
 	STEP_SPINNER_FRAMES,
 	STEP_SPINNER_INTERVAL_MS,
 	StepToolSpinnerClock,
-} from "../src/ui/components/step-spinner.ts";
+} from "../src/ui/view/transcript/step-spinner.ts";
 
 describe("StepToolSpinnerClock", () => {
 	beforeEach(() => vi.useFakeTimers());

@@ -5,7 +5,7 @@
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, initTheme, setThemeStorageDir, stopThemeWatcher } from "@earendil-works/pi-coding-agent";
 import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
-import { ConfigSelectorComponent, type ScopedResolvedPaths } from "./components/config-selector.ts";
+import { ConfigSelectorComponent, type ScopedResolvedPaths } from "./view/dialogs/config-selector.ts";
 
 export interface ConfigSelectorOptions {
 	resolvedPaths: ScopedResolvedPaths;

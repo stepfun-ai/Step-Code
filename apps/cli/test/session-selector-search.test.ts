@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "../../../packages/coding-agent/src/core/session-manager.ts";
-import { filterAndSortSessions } from "../src/ui/components/session-selector-search.ts";
+import { filterAndSortSessions } from "../src/ui/view/dialogs/session-selector-search.ts";
 
 function makeSession(
 	overrides: Partial<SessionInfo> & { id: string; modified: Date; allMessagesText: string },

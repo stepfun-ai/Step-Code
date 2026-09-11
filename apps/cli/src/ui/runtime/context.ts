@@ -39,12 +39,15 @@ import type {
 	TuiAltScreen,
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import type { AssistantMessageComponent } from "../components/assistant-message.ts";
-import type { FooterComponent } from "../components/footer.ts";
-import type { StatusIndicator, WorkingOutputTracker } from "../components/status-indicator.ts";
-import type { StepToolSpinnerClock } from "../components/step-spinner.ts";
-import type { StepWelcomeComponent } from "../components/step-welcome.ts";
-import type { ToolExecutionComponent } from "../components/tool-execution.ts";
+import type {
+	AssistantMessageComponent,
+	FooterComponent,
+	StatusIndicator,
+	StepToolSpinnerClock,
+	StepWelcomeComponent,
+	ToolExecutionComponent,
+	WorkingOutputTracker,
+} from "../view/index.ts";
 import type { Redraw } from "./redraw.ts";
 
 export interface RuntimeContext {

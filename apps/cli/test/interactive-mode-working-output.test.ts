@@ -1,7 +1,7 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../packages/coding-agent/src/core/agent-session.ts";
-import { WorkingOutputTracker } from "../src/ui/components/status-indicator.ts";
+import { WorkingOutputTracker } from "../src/ui/view/chrome/status-indicator.ts";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 
 function assistantMessage(

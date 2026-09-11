@@ -11,7 +11,7 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import { getModelSearchText } from "../model-search.ts";
+import { getModelSearchText } from "../../model-search.ts";
 
 // EnabledIds: null = all enabled (no filter), string[] = explicit ordered list
 type EnabledIds = string[] | null;

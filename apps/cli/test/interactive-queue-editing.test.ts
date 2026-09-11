@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
 import type { EditorFactory } from "../../../packages/coding-agent/src/core/extensions/index.ts";
 import { type KeybindingsConfig, KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { StepEditor } from "../src/ui/components/step-editor.ts";
-import { StepQueuedMessagesComponent } from "../src/ui/components/step-queued-messages.ts";
+import { StepEditor } from "../src/ui/view/editor/step-editor.ts";
+import { StepQueuedMessagesComponent } from "../src/ui/view/transcript/step-queued-messages.ts";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import { getEditorTheme, initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 

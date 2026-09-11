@@ -1,7 +1,7 @@
 import { setKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../../../../../packages/coding-agent/src/core/keybindings.ts";
-import { LoginDialogComponent } from "../../../src/ui/components/login-dialog.ts";
+import { LoginDialogComponent } from "../../../src/ui/view/dialogs/login-dialog.ts";
 import { initTheme } from "../../../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../../../packages/coding-agent/src/utils/ansi.ts";
 

@@ -1,7 +1,7 @@
 import type { BranchSummaryMessage } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyText, theme } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
-import { renderStepDialogFrame } from "./step-dialog.ts";
+import { renderStepDialogFrame } from "../dialogs/step-dialog.ts";
 
 /**
  * Component that renders a branch summary message with collapsed/expanded state.

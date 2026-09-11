@@ -8,7 +8,7 @@ import type {
 	SessionMessageEntry,
 	SessionTreeNode,
 } from "../../../packages/coding-agent/src/core/session-manager.ts";
-import { TreeSelectorComponent } from "../src/ui/components/tree-selector.ts";
+import { TreeSelectorComponent } from "../src/ui/view/dialogs/tree-selector.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 beforeAll(() => {
