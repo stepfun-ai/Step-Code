@@ -26,6 +26,14 @@ const STEP_EDITOR_CHROME_WIDTH = 4;
  */
 const STEP_EDITOR_CONTENT_INSET = "  ";
 
+/**
+ * The prompt marker on the first framed row. It is exactly as wide as the
+ * inset it replaces, so the content column, the wrap width, and the native
+ * cursor position are all unchanged. The gap is a plain space rather than a
+ * no-break space so a copied prompt stays free of invisible characters.
+ */
+const STEP_EDITOR_PROMPT_MARKER = "❯ ";
+
 /** A frame this narrow is less useful than pi-tui's compact native editor. */
 const STEP_EDITOR_MIN_FRAME_WIDTH = 8;
 
@@ -186,9 +194,10 @@ export class StepEditor extends CustomEditor {
 
 	/**
 	 * Widen pi-tui's two horizontal rules to the full terminal width, paint them
-	 * with the Step border tone, and inset the rows between them. The scan stops
-	 * at the last rule before autocomplete, so completion rows remain native and
-	 * are not accidentally indented.
+	 * with the Step border tone, and inset the rows between them. The first row
+	 * carries the prompt marker in place of its inset. The scan stops at the last
+	 * rule before autocomplete, so completion rows remain native and are not
+	 * accidentally indented.
 	 */
 	private frameBox(inner: string[], width: number): string[] {
 		if (inner.length < 2) {
@@ -216,7 +225,8 @@ export class StepEditor extends CustomEditor {
 		for (let index = 1; index < bottom; index += 1) {
 			const row = inner[index] ?? "";
 			const padding = " ".repeat(Math.max(0, interiorWidth - visibleWidth(row)));
-			framed.push(`${STEP_EDITOR_CONTENT_INSET}${row}${padding}${STEP_EDITOR_CONTENT_INSET}`);
+			const lead = index === 1 ? border(STEP_EDITOR_PROMPT_MARKER) : STEP_EDITOR_CONTENT_INSET;
+			framed.push(`${lead}${row}${padding}${STEP_EDITOR_CONTENT_INSET}`);
 		}
 		framed.push(rule);
 

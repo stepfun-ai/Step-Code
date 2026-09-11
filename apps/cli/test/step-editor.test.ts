@@ -47,10 +47,25 @@ describe("StepEditor", () => {
 		// selection of the composer copies the prompt without box drawing.
 		expect(stripSgr(lines[0] ?? "")).toBe("─".repeat(80));
 		expect(stripSgr(lines[2] ?? "")).toBe("─".repeat(80));
-		expect(lines[1]?.startsWith("  ")).toBe(true);
+		expect(stripSgr(lines[1] ?? "").startsWith("❯ ")).toBe(true);
 		expect(lines[1]).not.toContain("│");
 		expect(lines[1]).toContain(STEP_EDITOR_PLACEHOLDER);
 		for (const line of lines) expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("marks the first row and aligns wrapped rows to the same content column", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("重构 renderMessage，拆成三个小函数，并且补上单元测试。".repeat(3));
+		const rows = editor
+			.render(80)
+			.slice(1, -1)
+			.map((row) => stripSgr(row));
+
+		expect(rows.length).toBeGreaterThan(1);
+		expect(rows[0]?.startsWith("❯ ")).toBe(true);
+		// The marker is exactly as wide as the inset, so continuations line up.
+		for (const row of rows.slice(1)) expect(row.startsWith("  ")).toBe(true);
 	});
 
 	it("keeps wrapped rows free of side rails so a terminal selection copies the prompt alone", () => {
