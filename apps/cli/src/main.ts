@@ -296,6 +296,15 @@ const isTopLevelFeedback = topLevelStepCommand === "feedback";
 const topLevelAuthHelp = process.argv.slice(3).some((arg) => arg === "--help" || arg === "-h");
 
 let telemetryExitReason: "normal" | "error" = "normal";
+// One-shot / package commands that finish inside prepareMain historically
+// hard-exited (process.exit) so a loaded extension's leaked libuv handle
+// (unref-less timer, open socket, keep-alive agent) could not keep the process
+// alive. The soft-return refactor let the telemetry finally run instead, which
+// dropped that guarantee. We re-arm it and force-exit AFTER that finally (so
+// shutdown/devlog still flush). Left false for long-running dispatch modes
+// (interactive/rpc/print) and for completed paths that must drain naturally
+// (sdk-stdio's framed host; the win32 `update` teardown, nodejs/node#56645).
+let forceOneShotExit = false;
 try {
 	await telemetryIdentityReady;
 	if (!isTopLevelLogout && !(isTopLevelLogin && topLevelAuthHelp)) {
@@ -424,6 +433,10 @@ try {
 					const prep = await prepareMain(finalArgs, stepMainOptions);
 					if (prep.kind === "completed") {
 						if (prep.exitCode) process.exitCode = prep.exitCode;
+						// prepareMain finished a one-shot command in place. Guarantee
+						// termination after the telemetry finally below unless it asked
+						// to drain naturally (sdk-stdio's framed host / win32 `update`).
+						if (!prep.drainNaturally) forceOneShotExit = true;
 					} else {
 						await dispatchStepAppMode(prep);
 					}
@@ -459,6 +472,13 @@ try {
 	} finally {
 		await flushStderrDevLog();
 	}
+}
+
+if (forceOneShotExit) {
+	// The telemetry finally has flushed. Hard-exit now so a libuv handle leaked
+	// by a loaded extension cannot keep this one-shot command's process alive
+	// (restores the pre-refactor package-command termination guarantee).
+	process.exit(typeof process.exitCode === "number" ? process.exitCode : 0);
 }
 
 function readTelemetryEntrypoint(argv: readonly string[]): string {

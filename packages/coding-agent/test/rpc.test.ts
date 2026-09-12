@@ -11,16 +11,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
  * RPC mode tests.
  */
-describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN)("RPC mode", () => {
+const stepBundlePath = join(__dirname, "..", "dist", "bundle", "step.js");
+// Skip unless an Anthropic credential is present AND the shipped bundle has been
+// built — the suite spawns dist/bundle/step.js (the step entry) in --mode rpc.
+const skipRpc = (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN) || !existsSync(stepBundlePath);
+
+describe.skipIf(skipRpc)("RPC mode", () => {
 	let client: RpcClient;
 	let sessionDir: string;
 
 	beforeEach(() => {
 		sessionDir = join(tmpdir(), `pi-rpc-test-${Date.now()}`);
 		client = new RpcClient({
-			cliPath: join(__dirname, "..", "dist", "cli.js"),
+			cliPath: stepBundlePath,
 			cwd: join(__dirname, ".."),
-			env: { PI_CODING_AGENT_DIR: sessionDir },
+			env: { STEP_CODING_AGENT_DIR: sessionDir },
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 		});

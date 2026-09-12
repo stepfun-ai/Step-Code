@@ -2,6 +2,7 @@ import { MODELS } from "../models.generated.ts";
 import { type CreateModelsOptions, createModels, type MutableModels, type Provider } from "../models.ts";
 import type { Api, Model } from "../types.ts";
 import { anthropicProvider } from "./anthropic.ts";
+import modelDataManifest from "./data/.manifest.json" with { type: "json" };
 import { openaiProvider } from "./openai.ts";
 
 /** Providers present in the generated catalog. */
@@ -27,8 +28,8 @@ export function getBuiltinProviders(): BuiltinProvider[] {
 
 /** Generation timestamp shared by all built-in provider catalogs. */
 export function getBuiltinModelDataGeneratedAt(): number | undefined {
-	// The hydrated model-data manifest is gitignored/optional; timestamp unavailable offline.
-	return undefined;
+	const generatedAt = Date.parse(modelDataManifest.generatedAt);
+	return Number.isNaN(generatedAt) ? undefined : generatedAt;
 }
 
 export function getBuiltinModels<TProvider extends BuiltinProvider>(

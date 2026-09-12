@@ -818,14 +818,17 @@ export interface MainOptions {
  *    config, sdk-stdio, the Windows `update` drain) omit `exitCode` entirely.
  *    `main()` hard-exits when `exitCode` is defined; a product shell treats a
  *    zero/undefined `exitCode` as "return, do not exit" so telemetry/finally
- *    blocks always run. `--sdk-stdio` reports this kind *after* its framed host
- *    has run, so its byte-exact framing is never routed through the switch.
+ *    blocks always run, then force-exits the finished one-shot command (so a
+ *    leaked extension handle cannot keep it alive) unless `drainNaturally` is
+ *    set — sdk-stdio's framed host and the win32 `update` teardown must drain
+ *    naturally. `--sdk-stdio` reports this kind *after* its framed host has run,
+ *    so its byte-exact framing is never routed through the switch.
  *  - `kind: "dispatch"` — everything needed to run a full session mode. The
  *    `appMode` field is the final value (already flipped for piped stdin); the
  *    dispatcher must use it verbatim and never re-resolve it.
  */
 export type MainPreparation =
-	| { kind: "completed"; exitCode?: number }
+	| { kind: "completed"; exitCode?: number; drainNaturally?: boolean }
 	| {
 			kind: "dispatch";
 			appMode: AppMode;
@@ -923,11 +926,13 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		// only ever sets a numeric code, so normalize to a number for the result.
 		const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
 		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
-			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
-			// one-shot commands alive. On Windows, Node can assert after fetch() if process.exit(0)
-			// runs during teardown; let successful `pi update` drain naturally instead.
+			// Package commands are force-exited by the product shell after its telemetry
+			// finally so a bad extension cannot keep a one-shot command alive with a
+			// leaked libuv handle. On Windows, Node can assert after fetch() if
+			// process.exit(0) runs during teardown, so flag a successful `pi update`
+			// to drain naturally instead of being hard-exited.
 			// https://github.com/nodejs/node/issues/56645
-			return { kind: "completed" };
+			return { kind: "completed", drainNaturally: true };
 		}
 		return { kind: "completed", exitCode };
 	}
@@ -1353,7 +1358,9 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		// byte-exact length-prefixed protocol is never routed through the dispatch
 		// switch (which would risk interleaving diagnostics with frames).
 		await options.stdioModeFactory(runtimeHost);
-		return { kind: "completed" };
+		// The shell must not force-exit this path: the framed host owns its own
+		// lifetime and its final length-prefixed frames on stdout must drain naturally.
+		return { kind: "completed", drainNaturally: true };
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
