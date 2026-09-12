@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import { anthropicOAuth } from "../src/auth/oauth/anthropic.ts";
-import { kimiCodingOAuth } from "../src/auth/oauth/kimi-coding.ts";
-import { openaiCodexOAuth } from "../src/auth/oauth/openai-codex.ts";
-import { openRouterOAuth } from "../src/auth/oauth/openrouter.ts";
-import { xaiOAuth } from "../src/auth/oauth/xai.ts";
 import { createModels } from "../src/models.ts";
 import * as extensionOAuthCompatibility from "../src/oauth.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -25,31 +21,12 @@ describe.sequential("OAuthAuth adapters", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("identifies only subscription-backed OAuth flows as subscriptions", () => {
-		for (const oauth of [anthropicOAuth, openaiCodexOAuth, kimiCodingOAuth, xaiOAuth]) {
-			expect(oauth.isSubscription).toBe(true);
-		}
-		expect(openRouterOAuth.isSubscription).not.toBe(true);
+	it("identifies subscription-backed OAuth flows as subscriptions", () => {
+		expect(anthropicOAuth.isSubscription).toBe(true);
 	});
 
 	it("anthropic toAuth derives the api key from the access token", async () => {
 		const auth = await anthropicOAuth.toAuth({ type: "oauth", access: "token", refresh: "r", expires: 0 });
-		expect(auth).toEqual({ apiKey: "token" });
-	});
-
-	it("openai-codex toAuth derives the api key from the access token", async () => {
-		const auth = await openaiCodexOAuth.toAuth({ type: "oauth", access: "token", refresh: "r", expires: 0 });
-		expect(auth).toEqual({ apiKey: "token" });
-	});
-
-	it("openrouter derives the api key and keeps the permanent credential on refresh", async () => {
-		const credential = { type: "oauth" as const, access: "token", refresh: "", expires: Number.MAX_SAFE_INTEGER };
-		expect(await openRouterOAuth.toAuth(credential)).toEqual({ apiKey: "token" });
-		expect(await openRouterOAuth.refresh(credential, neverAbortedSignal)).toBe(credential);
-	});
-
-	it("xAI toAuth derives the api key from the access token", async () => {
-		const auth = await xaiOAuth.toAuth({ type: "oauth", access: "token", refresh: "r", expires: 0 });
 		expect(auth).toEqual({ apiKey: "token" });
 	});
 

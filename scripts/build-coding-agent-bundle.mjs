@@ -215,10 +215,6 @@ const lazyResult = await build({
 	entryPoints: {
 		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
 		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
-		"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
-		openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
-		xai: join(aiDistDir, "auth", "oauth", "xai.js"),
 	},
 	outdir: dirname(oauthLoaderOutput),
 	splitting: false,
