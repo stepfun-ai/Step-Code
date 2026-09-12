@@ -11,10 +11,6 @@ export type KnownApi = "openai-completions" | "openai-responses" | "anthropic-me
 
 export type Api = KnownApi | (string & {});
 
-export type KnownImagesApi = "openrouter-images";
-
-export type ImagesApi = KnownImagesApi | (string & {});
-
 export type KnownProvider =
 	| "amazon-bedrock"
 	| "ant-ling"
@@ -56,10 +52,6 @@ export type KnownProvider =
 	| "xiaomi-token-plan-ams"
 	| "xiaomi-token-plan-sgp";
 export type ProviderId = KnownProvider | string;
-
-export type KnownImagesProvider = "openrouter";
-
-export type ImagesProviderId = KnownImagesProvider | string;
 
 export type ToolChoice = "auto" | "none";
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -255,30 +247,6 @@ export interface ProviderStreams {
 	cancelDeferred?(model: Model<Api>, handle: DeferredHandle, options?: DeferredCancelOptions): Promise<void>;
 }
 
-/**
- * The uniform contract of an image-generation API implementation module:
- * every image API module under `src/api/` exports exactly `generateImages`,
- * so the module itself satisfies this interface. Lazy wrappers and image
- * provider factories pass these around as values.
- */
-export interface ProviderImages {
-	generateImages(
-		model: ImagesModel<ImagesApi>,
-		context: ImagesContext,
-		options?: ImagesOptions,
-	): Promise<AssistantImages>;
-}
-
-export interface ImagesOptions extends ProviderRequestOptions<ImagesModel<ImagesApi>> {
-	/**
-	 * Optional metadata to include in API requests.
-	 * Providers extract the fields they understand and ignore the rest.
-	 */
-	metadata?: Record<string, unknown>;
-}
-
-export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
-
 export interface AnthropicAllowedFallbackModel {
 	provider: ProviderId;
 	model: string;
@@ -309,12 +277,6 @@ export type StreamFunction<TApi extends Api = Api, TOptions extends StreamOption
 	context: Context,
 	options?: TOptions,
 ) => AssistantMessageEventStream;
-
-export type ImagesFunction<TApi extends ImagesApi = ImagesApi, TOptions extends ImagesOptions = ImagesOptions> = (
-	model: ImagesModel<TApi>,
-	context: ImagesContext,
-	options?: TOptions,
-) => Promise<AssistantImages>;
 
 export interface TextSignatureV1 {
 	v: 1;
@@ -440,27 +402,6 @@ export interface ToolResultMessage<TDetails = any> {
 }
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
-
-export type ImagesInputContent = TextContent | ImageContent;
-export type ImagesOutputContent = TextContent | ImageContent;
-
-export interface ImagesContext {
-	input: ImagesInputContent[];
-}
-
-export type ImagesStopReason = "stop" | "error" | "aborted";
-
-export interface AssistantImages {
-	api: ImagesApi;
-	provider: ImagesProviderId;
-	model: string;
-	output: ImagesOutputContent[];
-	responseId?: string;
-	usage?: Usage;
-	stopReason: ImagesStopReason;
-	errorMessage?: string;
-	timestamp: number; // Unix timestamp in milliseconds
-}
 
 import type { TSchema } from "typebox";
 
@@ -814,11 +755,4 @@ export interface Model<TApi extends Api> {
 			: TApi extends "anthropic-messages"
 				? AnthropicMessagesCompat
 				: never;
-}
-
-export interface ImagesModel<TApi extends ImagesApi>
-	extends Omit<Model<Api>, "api" | "provider" | "reasoning" | "contextWindow" | "maxTokens" | "compat"> {
-	api: TApi;
-	provider: ImagesProviderId;
-	output: ("text" | "image")[];
 }
