@@ -18,6 +18,7 @@ const guardsWithSelfTest = [
 	"check-contracts-deps-empty.mjs",
 	"check-pinned-deps.mjs",
 	"check-ts-relative-imports.mjs",
+	"check-derived-compat-only.mjs",
 ];
 
 for (const guard of guardsWithSelfTest) {

@@ -30,9 +30,12 @@ export type {
 	OAuthSelectOption,
 	OAuthSelectPrompt,
 } from "./compat/extension-oauth-types.ts";
+export { resolveModelApiDialect } from "./dialect/resolve.ts";
+export * from "./dialect/types.ts";
 export * from "./images-models.ts";
 export * from "./models.ts";
 export * from "./models-store.ts";
+export * from "./provider/types.ts";
 export * from "./providers/faux.ts";
 export * from "./session-resources.ts";
 export * from "./types.ts";
