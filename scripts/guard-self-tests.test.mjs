@@ -21,6 +21,7 @@ const guardsWithSelfTest = [
 	"check-derived-compat-only.mjs",
 	"check-no-provider-dispatch.mjs",
 	"check-metadata-not-in-dispatch.mjs",
+	"check-no-secret-leak.mjs",
 ];
 
 for (const guard of guardsWithSelfTest) {
