@@ -152,9 +152,9 @@ function runSelfTest() {
 	const registry = {
 		grandfatheredScope: "@earendil-works/pi-",
 		requiredScope: "@step-harness/",
-		baseline: ["@earendil-works/pi-ai"],
+		baseline: ["@step-harness/providers"],
 		members: [
-			{ name: "@earendil-works/pi-ai", dir: "packages/ai", role: "engine" },
+			{ name: "@step-harness/providers", dir: "packages/providers", role: "engine" },
 			{ name: "@step-harness/cli", dir: "apps/cli", role: "app" },
 			{ name: "pi-extension-sandbox", dir: "packages/coding-agent/examples/extensions/sandbox", role: "example" },
 		],
@@ -169,7 +169,7 @@ function runSelfTest() {
 		workspaceGlobs: ["apps/*", "packages/*"],
 		pnpmGlobs: ["apps/*", "packages/*"],
 		diskMembers: [
-			{ name: "@earendil-works/pi-ai", dir: "packages/ai" },
+			{ name: "@step-harness/providers", dir: "packages/providers" },
 			{ name: "@step-harness/cli", dir: "apps/cli" },
 			{ name: "pi-extension-sandbox", dir: "packages/coding-agent/examples/extensions/sandbox" },
 		],

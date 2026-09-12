@@ -8,12 +8,12 @@
 //
 //   Rule 1 — single home. `deriveFromLegacyProvider` (the ONE sanctioned
 //            old-provider -> dialect mapping) may be referenced only inside its
-//            home, packages/ai/src/dialect/resolve.ts (and *.test.ts). Any other
+//            home, packages/providers/src/dialect/resolve.ts (and *.test.ts). Any other
 //            reference means an ad-hoc name->dialect map is leaking elsewhere.
 //
 //   Rule 2 — `source` never selects an adapter. The DialectSource literal
 //            "derived-from-provider" must not appear in the adapter-selection
-//            zone (packages/ai/src/api/**, models.ts, dialect/registry.ts). The
+//            zone (packages/providers/src/api/**, models.ts, dialect/registry.ts). The
 //            dispatch key is always `.api`; branching an adapter choice on
 //            `source === "derived-from-provider"` is forbidden.
 //
@@ -32,7 +32,7 @@ const repoRoot = resolve(scriptDirectory, "..");
 
 const DERIVE_FN = "deriveFromLegacyProvider";
 const SOURCE_LITERAL = "derived-from-provider";
-const DERIVE_HOME = "packages/ai/src/dialect/resolve.ts";
+const DERIVE_HOME = "packages/providers/src/dialect/resolve.ts";
 
 // --- pure classification -------------------------------------------------------------
 
@@ -50,7 +50,7 @@ function isDeriveHome(p) {
 // chosen and the compat `source` must never appear as a branch?
 function inSelectionZone(p) {
 	const n = normalize(p);
-	return n.startsWith("packages/ai/src/api/") || n === "packages/ai/src/models.ts" || n === "packages/ai/src/dialect/registry.ts";
+	return n.startsWith("packages/providers/src/api/") || n === "packages/providers/src/models.ts" || n === "packages/providers/src/dialect/registry.ts";
 }
 
 // The single decision function. Returns an array of violation strings.
@@ -115,16 +115,16 @@ function runSelfTest() {
 
 	// clean — the home defines and uses both; callers use resolveModelApiDialect, not the derive fn.
 	expectClean(DERIVE_HOME, `export function ${DERIVE_FN}() { return undefined; } // "${SOURCE_LITERAL}"`);
-	expectClean("packages/ai/test/dialect-resolve.test.ts", `import { ${DERIVE_FN} } from "../src/dialect/resolve.ts"; // "${SOURCE_LITERAL}"`);
-	expectClean("packages/ai/src/api/openai-completions.ts", "const adapter = byApi[model.api];"); // selects by api, no source literal
+	expectClean("packages/providers/test/dialect-resolve.test.ts", `import { ${DERIVE_FN} } from "../src/dialect/resolve.ts"; // "${SOURCE_LITERAL}"`);
+	expectClean("packages/providers/src/api/openai-completions.ts", "const adapter = byApi[model.api];"); // selects by api, no source literal
 	expectClean("packages/coding-agent/src/core/model-request-observer.ts", `telemetry.record({ source: "${SOURCE_LITERAL}" });`); // telemetry outside the zone is fine
 
 	// violation — rule 1: derive fn referenced outside its home
-	expectViolation("packages/ai/src/models.ts", `import { ${DERIVE_FN} } from "./dialect/resolve.ts";`);
+	expectViolation("packages/providers/src/models.ts", `import { ${DERIVE_FN} } from "./dialect/resolve.ts";`);
 	expectViolation("packages/coding-agent/src/core/provider-composer.ts", `const api = ${DERIVE_FN}(model.provider);`);
 	// violation — rule 2: source literal used inside the adapter-selection zone
-	expectViolation("packages/ai/src/api/openai-responses.ts", `if (resolved.source === "${SOURCE_LITERAL}") pickAdapter();`);
-	expectViolation("packages/ai/src/models.ts", `const isCompat = source === "${SOURCE_LITERAL}";`);
+	expectViolation("packages/providers/src/api/openai-responses.ts", `if (resolved.source === "${SOURCE_LITERAL}") pickAdapter();`);
+	expectViolation("packages/providers/src/models.ts", `const isCompat = source === "${SOURCE_LITERAL}";`);
 
 	if (failures.length > 0) {
 		console.error("derived-compat-only self-test FAILED:");

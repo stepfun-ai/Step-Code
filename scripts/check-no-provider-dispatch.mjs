@@ -5,7 +5,7 @@
 // The dispatch key is always model.api (models.ts `byApi?.[model.api]`, compat.ts
 // getApiProvider(model.api)). A provider's identity must NEVER select the protocol
 // implementation. This gate freezes that invariant inside the adapter zone
-// (packages/ai/src/api/**):
+// (packages/providers/src/api/**):
 //
 //   - No `switch (provider)` / `switch (model.provider)` — adapters never select
 //     an implementation by vendor name (there are zero today; keep it zero).
@@ -17,7 +17,7 @@
 //     api/ file, or a NEW un-registered provider literal, fails the build.
 //
 // Field-to-field comparisons (`X.provider === model.provider`) are not quirks and
-// are excluded by the literal-only regex. Scope is intentionally packages/ai/src/api
+// are excluded by the literal-only regex. Scope is intentionally packages/providers/src/api
 // ONLY — coding-agent product-side attribution (provider-attribution.ts) is legal
 // and out of scope (A1 handles step-provider).
 //
@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDirectory, "..");
-const apiDirRelative = "packages/ai/src/api";
+const apiDirRelative = "packages/providers/src/api";
 
 // Matches a provider-vs-literal comparison in either direction and with either
 // operator: `provider === "x"`, `model.provider !== "x"`, `"x" === model.provider`.
@@ -46,10 +46,10 @@ function normalize(p) {
 	return p.replace(/\\/g, "/");
 }
 
-// key relative to packages/ai/src, e.g. "api/openai-responses.ts".
+// key relative to packages/providers/src, e.g. "api/openai-responses.ts".
 function aiSrcRelative(repoRelPath) {
 	const n = normalize(repoRelPath);
-	const m = n.match(/^packages\/ai\/src\/(.+)$/);
+	const m = n.match(/^packages\/providers\/src\/(.+)$/);
 	return m ? m[1] : n;
 }
 
@@ -133,22 +133,22 @@ function runSelfTest() {
 	};
 
 	// clean — registered quirk, registered literal (=== and !==, both operand orders)
-	expectClean("packages/ai/src/api/openai-responses.ts", 'if (model.provider === "github-copilot") tune();');
-	expectClean("packages/ai/src/api/openai-responses.ts", 'const x = provider === "xai" ? 1 : 0;');
-	expectClean("packages/ai/src/api/anthropic-messages.ts", 'if (model.provider !== "anthropic") return false;');
-	expectClean("packages/ai/src/api/openai-responses.ts", 'if ("xai" === model.provider) alt();');
+	expectClean("packages/providers/src/api/openai-responses.ts", 'if (model.provider === "github-copilot") tune();');
+	expectClean("packages/providers/src/api/openai-responses.ts", 'const x = provider === "xai" ? 1 : 0;');
+	expectClean("packages/providers/src/api/anthropic-messages.ts", 'if (model.provider !== "anthropic") return false;');
+	expectClean("packages/providers/src/api/openai-responses.ts", 'if ("xai" === model.provider) alt();');
 	// clean — field-to-field comparison is not a quirk (no quoted literal)
-	expectClean("packages/ai/src/api/anthropic-messages.ts", "if (fallback.provider === model.provider) reuse();");
+	expectClean("packages/providers/src/api/anthropic-messages.ts", "if (fallback.provider === model.provider) reuse();");
 	// clean — dispatch by api is the sanctioned form
-	expectClean("packages/ai/src/api/openai-completions.ts", "const adapter = byApi[model.api];");
+	expectClean("packages/providers/src/api/openai-completions.ts", "const adapter = byApi[model.api];");
 
 	// violation — quirk literal in a file with NO registered quirks
-	expectViolation("packages/ai/src/api/pi-messages.ts", 'if (model.provider === "radius") special();');
+	expectViolation("packages/providers/src/api/pi-messages.ts", 'if (model.provider === "radius") special();');
 	// violation — NEW literal not in a registered file's whitelist (=== and !==)
-	expectViolation("packages/ai/src/api/openai-responses.ts", 'if (model.provider === "brand-new-vendor") hack();');
-	expectViolation("packages/ai/src/api/anthropic-messages.ts", 'if (model.provider !== "brand-x") skip();');
+	expectViolation("packages/providers/src/api/openai-responses.ts", 'if (model.provider === "brand-new-vendor") hack();');
+	expectViolation("packages/providers/src/api/anthropic-messages.ts", 'if (model.provider !== "brand-x") skip();');
 	// violation — switch on provider selects an adapter
-	expectViolation("packages/ai/src/api/openai-responses.ts", "switch (model.provider) { case 'openrouter': return a; }");
+	expectViolation("packages/providers/src/api/openai-responses.ts", "switch (model.provider) { case 'openrouter': return a; }");
 
 	if (failures.length > 0) {
 		console.error("no-provider-dispatch self-test FAILED:");

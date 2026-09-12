@@ -7,7 +7,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 const DEFAULT_SESSIONS_DIR = path.join(homedir(), ".pi/agent/sessions");
-const MODELS_GENERATED_PATH = path.join(process.cwd(), "packages/ai/src/models.generated.ts");
+const MODELS_GENERATED_PATH = path.join(process.cwd(), "packages/providers/src/models.generated.ts");
 const MODELS_CONFIG_PATH = path.join(homedir(), ".pi/agent/models.json");
 const REPORT_TIME_ZONE = "Europe/Berlin";
 const CHART_WIDTH = 40;
@@ -341,7 +341,7 @@ function buildTextReport(summary) {
 	if (summary.filters.modelPrefixes.length > 0) lines.push(`Filters: model prefixes = ${summary.filters.modelPrefixes.join(", ")}`);
 	if (summary.filters.bashContains.length > 0) lines.push(`Filters: bash contains any of = ${summary.filters.bashContains.join(", ")}`);
 	if (summary.filters.cwd) lines.push(`Filters: cwd = ${summary.filters.cwd}`);
-	lines.push("Context usage parses full session JSONL files. max context uses max assistant usage.totalTokens per session, falling back to input + output + cacheRead + cacheWrite, plus compaction tokensBefore. medPreCompactCtx uses the last assistant usage before the first compaction, or the first compaction tokensBefore when present, divided by model contextWindow from packages/ai/src/models.generated.ts when known.");
+	lines.push("Context usage parses full session JSONL files. max context uses max assistant usage.totalTokens per session, falling back to input + output + cacheRead + cacheWrite, plus compaction tokensBefore. medPreCompactCtx uses the last assistant usage before the first compaction, or the first compaction tokensBefore when present, divided by model contextWindow from packages/providers/src/models.generated.ts when known.");
 	lines.push("");
 	lines.push("Totals");
 	lines.push(lineForGroup(summary.totals));

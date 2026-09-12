@@ -1,10 +1,10 @@
-# Decision: strip packages/ai to StepFun-only (S5-9')
+# Decision: strip packages/providers to StepFun-only (S5-9')
 
 **Date:** 2026-09-12 · **Commit:** `5962cae` · **Branch:** `dev/step-smoke-harness`
 
 ## Decision
 
-step-cli is a StepFun product. The `packages/ai` layer was a fork of an upstream
+step-cli is a StepFun product. The `packages/providers` layer was a fork of an upstream
 multi-vendor `pi-ai` that shipped ~40 builtin model providers and 10 wire dialects.
 The user decided to strip it to only what StepFun needs: **keep 3 protocol dialects,
 delete every other provider and adapter.**
@@ -15,7 +15,7 @@ delete every other provider and adapter.**
   `bedrock-converse-stream`, `mistral-conversations`, `azure-openai-responses`,
   `openai-codex-responses`, `pi-messages`.
 - **Delete all builtin providers except a reference pair.** The StepFun provider is NOT a
-  `packages/ai` builtin — it is the coding-agent `features/step-provider` extension
+  `packages/providers` builtin — it is the coding-agent `features/step-provider` extension
   (hardcoded `STEP_MODELS`, `anthropic-messages`, `api.stepfun.com`), registered in
   `apps/cli/src/main.ts` with `allowedAuthProviders: ["step"]`. That extension is untouched.
 
@@ -44,7 +44,7 @@ delete every other provider and adapter.**
 - **Providers:** ~37 factories + their `providers/data/*.json` + `*.models.ts` deleted;
   `radius` (+ `radius-config`, model-runtime `configureRadiusProviders` special-casing →
   `resetBuiltinProviders`), `bedrock-provider`, and the image subsystem removed.
-- **Core types (`packages/ai/src/types.ts`):** `KnownApi` 10 → 3; `ApiOptionsMap` → 3;
+- **Core types (`packages/providers/src/types.ts`):** `KnownApi` 10 → 3; `ApiOptionsMap` → 3;
   `Model.compat` conditional narrowed (openai-responses branch drops azure/codex; bedrock
   branch + `BedrockCompat` interface deleted). `index.ts` / `compat.ts` (`BUILTIN_APIS` +
   lazy re-exports/imports → 3) / `legacy-api-aliases` pruned to 3; `all.ts`

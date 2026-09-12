@@ -9,7 +9,7 @@
 // availability/trace zone; the reason must be built from redacted text instead
 // (see redactCredential in availability/probe.ts).
 //
-// Zone: packages/ai/src/availability/** (+ dialect/** where dialect/profileId traces
+// Zone: packages/providers/src/availability/** (+ dialect/** where dialect/profileId traces
 // live). No new dependency; same node + --self-test convention as the sibling checks.
 //
 // Run:  node scripts/check-no-secret-leak.mjs
@@ -31,7 +31,7 @@ function normalize(p) {
 
 function inSecretZone(repoRelPath) {
 	const n = normalize(repoRelPath);
-	return n.startsWith("packages/ai/src/availability/") || n.startsWith("packages/ai/src/dialect/");
+	return n.startsWith("packages/providers/src/availability/") || n.startsWith("packages/providers/src/dialect/");
 }
 
 // The single decision function. Returns an array of violation strings.
@@ -88,15 +88,15 @@ function runSelfTest() {
 	};
 
 	// clean — probe.ts redacts (splits on the credential), never interpolates it
-	expectClean("packages/ai/src/availability/probe.ts", "return reason.split(credential).join('[redacted]');");
-	expectClean("packages/ai/src/availability/probe.ts", "reason: redactCredential(message, credential)");
+	expectClean("packages/providers/src/availability/probe.ts", "return reason.split(credential).join('[redacted]');");
+	expectClean("packages/providers/src/availability/probe.ts", "reason: redactCredential(message, credential)");
 	// clean — a credential interpolation OUTSIDE the zone is not this gate's concern
-	expectClean("packages/ai/src/api/openai-completions.ts", "headers.Authorization = `Bearer ${apiKey}`;");
+	expectClean("packages/providers/src/api/openai-completions.ts", "headers.Authorization = `Bearer ${apiKey}`;");
 
 	// violation — a credential interpolated into a reason/string inside the zone
-	expectViolation("packages/ai/src/availability/probe.ts", "reason: `401 Unauthorized for ${credential}`,");
-	expectViolation("packages/ai/src/dialect/registry.ts", "log(`probe with ${apiKey} failed`);");
-	expectViolation("packages/ai/src/availability/probe.ts", "throw new Error(`bad ${token}`);");
+	expectViolation("packages/providers/src/availability/probe.ts", "reason: `401 Unauthorized for ${credential}`,");
+	expectViolation("packages/providers/src/dialect/registry.ts", "log(`probe with ${apiKey} failed`);");
+	expectViolation("packages/providers/src/availability/probe.ts", "throw new Error(`bad ${token}`);");
 
 	if (failures.length > 0) {
 		console.error("no-secret-leak self-test FAILED:");

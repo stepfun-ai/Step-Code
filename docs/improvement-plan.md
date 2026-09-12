@@ -52,7 +52,7 @@
 **遗留 follow-up**（本轮未修）：
 - Plan 1：stale `agent_settled` race；`isolateWorkspace` worktree cleanup；session 文件 gc（24h TTL / `/subagent gc`）；provider cache 命中率与 kill -9 crash-recovery fixture 未实测；fg/chain 专项 fixture 未落；`createSubagentRpcSession`（276 行）/ `createStepSubagentExtension`（137 行）仍超 50 行——verbatim-move 原则下未拆函数体，后续可再收敛
 - Plan 2：`examples/extensions/plan-mode/` 中 Pi upstream 样例仍含 legacy 模式（仅示例，`src/` 零残留）；tool-section token 变化未实测
-- Plan 3：~~层1 `SALIENT_LINE_PATTERN` 未含 stack-frame~~ / ~~`safeJsonStringify` 双份待去重~~ 已在 refactor pass 解决；**跨轨残留（cross-track audit）**：δ 的 `projection-content.ts:36` 有一份新的 private `safeJsonStringify`（与 C 的 canonical export 同目录同 body，分支内无法互引，合并后 1 行 import 即解）；`SALIENT_LINE_PATTERN`（C，module-private ×2）与 `SALIENT_LINE_REGEX`（δ，exported ×1）regex source 已 byte-identical，合并后可统一到单一 export；`packages/ai` 内 3 份 pre-existing `safeJsonStringify` 为存量问题非本轮引入；P3 paired replay / canary 与 P4 默认切换未启动
+- Plan 3：~~层1 `SALIENT_LINE_PATTERN` 未含 stack-frame~~ / ~~`safeJsonStringify` 双份待去重~~ 已在 refactor pass 解决；**跨轨残留（cross-track audit）**：δ 的 `projection-content.ts:36` 有一份新的 private `safeJsonStringify`（与 C 的 canonical export 同目录同 body，分支内无法互引，合并后 1 行 import 即解）；`SALIENT_LINE_PATTERN`（C，module-private ×2）与 `SALIENT_LINE_REGEX`（δ，exported ×1）regex source 已 byte-identical，合并后可统一到单一 export；`packages/providers` 内 3 份 pre-existing `safeJsonStringify` 为存量问题非本轮引入；P3 paired replay / canary 与 P4 默认切换未启动
 
 ---
 

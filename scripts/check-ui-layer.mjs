@@ -195,7 +195,7 @@ function runSelfTest() {
 	expectClean("apps/cli/src/ui/runtime/interrupt.ts", "../state/interface-state.ts"); // runtime -> state
 	expectClean("apps/cli/src/ui/components/footer.ts", "./step-message.ts"); // view -> view
 	expectClean("apps/cli/src/ui/components/footer.ts", "../state/interface-state.ts"); // view -> state
-	expectClean("apps/cli/src/ui/runtime/redraw.ts", "@earendil-works/pi-tui"); // runtime -> package
+	expectClean("apps/cli/src/ui/runtime/redraw.ts", "@step-harness/pi-tui"); // runtime -> package
 	expectClean("apps/cli/src/ui/runtime/index.ts", "#ui/state"); // resolves to ui/state (host-ish door), allowed
 
 	// rule A — view importing runtime

@@ -186,8 +186,8 @@ function runSelfTest() {
 	expectClean("apps/cli/src/bootstrap/boot.ts", "#ui/index");
 	expectClean("apps/cli/src/ui/view/transcript.ts", "#ui/state");
 	expectClean("apps/cli/src/ui/runtime/loop.ts", "./redraw.ts");
-	expectClean("apps/cli/src/bootstrap/boot.ts", "@earendil-works/pi-coding-agent");
-	expectClean("packages/coding-agent/src/x.ts", "@earendil-works/pi-ai");
+	expectClean("apps/cli/src/bootstrap/boot.ts", "@step-harness/coding-agent");
+	expectClean("packages/coding-agent/src/x.ts", "@step-harness/providers");
 
 	// rule 1 — shell/shared reaching into UI internals
 	expectViolation("apps/cli/src/bootstrap/boot.ts", "#ui/runtime/loop");

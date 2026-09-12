@@ -5,7 +5,7 @@ import type { ProviderProfile } from "../provider/types.ts";
 // Answers the user's most common question — "why can't I select this model?" — by
 // attaching a tri-state to a catalog entry. This is an ADDITIVE, pure helper: the
 // live product-side refresh (coding-agent model-runtime.refreshProviderAvailability)
-// remains the runtime source of truth; this gives packages/ai the S5-7 vocabulary
+// remains the runtime source of truth; this gives packages/providers the S5-7 vocabulary
 // and a dependency-injected probe that the product can back onto without a second
 // availability source. Design §5.8.
 

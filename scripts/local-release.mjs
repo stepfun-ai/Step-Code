@@ -6,13 +6,13 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const packages = [
-	{ directory: "packages/telemetry", name: "@earendil-works/pi-telemetry" },
-	{ directory: "packages/ai", name: "@earendil-works/pi-ai" },
-	{ directory: "packages/tui", name: "@earendil-works/pi-tui" },
-	{ directory: "packages/agent-loop", name: "@earendil-works/pi-agent-core" },
+	{ directory: "packages/telemetry", name: "@step-harness/telemetry" },
+	{ directory: "packages/providers", name: "@step-harness/providers" },
+	{ directory: "packages/tui", name: "@step-harness/pi-tui" },
+	{ directory: "packages/agent-loop", name: "@step-harness/agent-core" },
 	{ directory: "packages/config", name: "@step-harness/config" },
 	{ directory: "packages/contracts", name: "@step-harness/contracts" },
-	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
+	{ directory: "packages/coding-agent", name: "@step-harness/coding-agent" },
 ];
 
 function printUsage() {
@@ -241,7 +241,7 @@ if (!options.skipCheck) {
 
 for (const pkg of packages) {
 	run("npm", ["run", "clean"], { cwd: pkg.directory });
-	run("npm", ["run", pkg.directory === "packages/ai" ? "build:offline" : "build"], { cwd: pkg.directory });
+	run("npm", ["run", pkg.directory === "packages/providers" ? "build:offline" : "build"], { cwd: pkg.directory });
 }
 
 if (!options.skipTest) {

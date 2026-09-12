@@ -14,18 +14,18 @@ Foundation (no internal dependencies):
 - `packages/protocol` (`@earendil-works/pi-protocol`) — transport-neutral CBOR
   protocol for remote sessions: request/response schemas, event envelopes, and
   shared DTOs. Pure contracts, no business behavior.
-- `packages/telemetry` (`@earendil-works/pi-telemetry`) — vendor-neutral
+- `packages/telemetry` (`@step-harness/telemetry`) — vendor-neutral
   telemetry contracts and typed schema utilities.
-- `packages/tui` (`@earendil-works/pi-tui`) — terminal UI library with
+- `packages/tui` (`@step-harness/pi-tui`) — terminal UI library with
   differential rendering. A standalone presentation toolkit; it must not import
   agent, session, or product code.
 
 Core runtime:
 
-- `packages/ai` (`@earendil-works/pi-ai`, depends on `telemetry`) — unified LLM
+- `packages/providers` (`@step-harness/providers`, depends on `telemetry`) — unified LLM
   API: provider adapters, model discovery, and provider configuration. All
   provider- and model-specific code lives here.
-- `packages/agent` (`@earendil-works/pi-agent-core`, depends on `ai`,
+- `packages/agent` (`@step-harness/agent-core`, depends on `ai`,
   `telemetry`) — the general-purpose agent: the agent loop (`agent-loop.ts`),
   the harness (context assembly and compaction under `harness/`), transport
   abstraction, session state, and attachments. Product-neutral — it knows
@@ -40,13 +40,13 @@ Transport pair:
 
 Product:
 
-- `packages/coding-agent` (`@earendil-works/pi-coding-agent`, depends on
+- `packages/coding-agent` (`@step-harness/coding-agent`, depends on
   `agent-core`, `ai`, `client`, `protocol`, `tui`) — the coding-agent CLI and
   top-level product entrypoint. Owns the read/bash/edit/write tools, session
   management and persistence wiring (`src/core/session-*`), extensions,
   interactive and one-shot modes, the built-in theme catalog
   (`src/modes/interactive/theme/`), and the StepCode integration (`src/step/`).
-- `packages/evals` (`@earendil-works/pi-evals`, depends on `ai`, `coding-agent`)
+- `packages/evals` (`@step-harness/evals`, depends on `ai`, `coding-agent`)
   — evaluation harness.
 
 Pluggable backends:
@@ -65,7 +65,7 @@ Pluggable backends:
   for the CLI. Clients (`packages/client`, TUI) hold only projections, connection
   state, and local input state.
 - **Provider / model contract:** provider adapters, model discovery, and model
-  types live in `packages/ai`; cross-process DTOs and event shapes live in
+  types live in `packages/providers`; cross-process DTOs and event shapes live in
   `packages/protocol`. Keep provider SDKs out of `agent`, the `coding-agent`
   runtime, and `tui`.
 - **Tool contract:** tool schemas, registration, permission decisions, and
@@ -87,7 +87,7 @@ Pluggable backends:
 - Do not put durable session, transcript, or checkpoint state in `packages/tui`
   components.
 - New external integrations go behind an adapter boundary — a provider in
-  `packages/ai`, a session backend in `packages/session-backends/*`. Do not
+  `packages/providers`, a session backend in `packages/session-backends/*`. Do not
   import a third-party SDK from generic runtime or TUI code.
 - Validate cross-process event shapes at the `packages/protocol` boundary; a
   renderer must not depend on server internals.
@@ -119,7 +119,7 @@ Pluggable backends:
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
 - Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
-- Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead, then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes.
+- Never modify `packages/providers/src/models.generated.ts` directly; update `packages/providers/scripts/generate-models.ts` instead, then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes.
 
 ## Commands
 
@@ -151,7 +151,7 @@ Committing:
 - Only commit files YOU changed in THIS session.
 - Stage explicit paths (`git add <path1> <path2>`); never `git add -A` / `git add .`.
 - Before committing, run `git status` and verify you are only staging your files.
-- `packages/ai/src/models.generated.ts` may always be included alongside your files.
+- `packages/providers/src/models.generated.ts` may always be included alongside your files.
 - Message format: `{feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines)`. Message is informative and concise.
 
 Never run (destroys other agents' work or bypasses checks):

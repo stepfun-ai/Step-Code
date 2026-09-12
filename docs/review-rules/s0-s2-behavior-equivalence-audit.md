@@ -104,13 +104,13 @@ env: { PI_CODING_AGENT_DIR: sessionDir },            // 应为 STEP_CODING_AGENT
 **🔴→🟢 protobufjs "7.6.6→7.6.5 降版" 是 commit message 的错误陈述,无版本变化**:
 - 我亲自 diff:main `1cfed08:package.json` 的 `overrides.protobufjs` **本来就是 7.6.5**;pnpm commit 只是把它从 `overrides` 挪到 `pnpm.overrides`,**值一模一样**。
 - 两个 lockfile 都证明有效版本是 7.6.5(旧 npm lock `7.6.5.tgz`,新 pnpm lock `protobufjs@7.6.5`)。commit message 说"was silently 7.6.6"**与 lockfile 事实不符**。
-- protobufjs 经 `@google/genai`(packages/ai 的 runtime dep)进运行时树,但版本没变 → **protobuf 序列化行为无变化**。`packages/*/src` 无 protobufjs 运行时 import。
+- protobufjs 经 `@google/genai`(packages/providers 的 runtime dep)进运行时树,但版本没变 → **protobuf 序列化行为无变化**。`packages/*/src` 无 protobufjs 运行时 import。
 - 唯一真实传递漂移:`@protobufjs/utf8` 1.1.1→1.1.2(patch,字节长度工具,语义等价),低风险。
 
 **pnpm strict-layout 修复全部正确且必要**:
 - **photon wasm**:旧 `build-binaries.sh:306` 硬编码 `cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm`(扁平 hoist 路径,pnpm 严格布局下必断);新 `copy-photon-wasm.mjs` 用 `createRequire` 从 cwd=coding-agent 解析(同文件名同目的地)。✅
-- **bundle `resolveDir→aiDir`**:`HttpsProxyAgent` shim 需 `https-proxy-agent@7.0.6`,是 packages/ai 的 dep,pnpm 下不 hoist 到 root → `resolveDir:repoRoot` 会失败,`aiDir` 是正确修。✅
-- **phantom devDep**:`@smithy/types@4.18.0`(packages/ai,仅 `import type`,编译期擦除)+ `yaml@2.9.0`(root,仅测试用)——**确是 dev-only**,零运行时足迹。✅
+- **bundle `resolveDir→aiDir`**:`HttpsProxyAgent` shim 需 `https-proxy-agent@7.0.6`,是 packages/providers 的 dep,pnpm 下不 hoist 到 root → `resolveDir:repoRoot` 会失败,`aiDir` 是正确修。✅
+- **phantom devDep**:`@smithy/types@4.18.0`(packages/providers,仅 `import type`,编译期擦除)+ `yaml@2.9.0`(root,仅测试用)——**确是 dev-only**,零运行时足迹。✅
 - **workspace linking**:`.npmrc` `link-workspace-packages`+`prefer-workspace-packages`;lock 显示 8 个 workspace 内部跨包依赖全是 `link:`,无一从 registry 拉。`pi-agent-core` 是 private,没这俩 flag pnpm 根本解析不了——**是 load-bearing 不是装饰**。✅
 - **CI**:5 workflow + `.gitlab-ci.yml` → `pnpm install --frozen-lockfile` + corepack;无残留 `npm ci`。lockfile guard 改守 `pnpm-lock.yaml`,`PI_ALLOW_LOCKFILE_CHANGE` 逃生舱保留。✅
 
@@ -122,7 +122,7 @@ env: { PI_CODING_AGENT_DIR: sessionDir },            // 应为 STEP_CODING_AGENT
 
 ### S1-R(`f3de981`)packages/agent → packages/agent-loop — 🟢 教科书式
 
-- **包名不变**(`@earendil-works/pi-agent-core`)→ import 按包名解析,**0 处 import 需改**。~91 文件 100% similarity 纯重命名。
+- **包名不变**(`@step-harness/agent-core`)→ import 按包名解析,**0 处 import 需改**。~91 文件 100% similarity 纯重命名。
 - 8 处路径配置全部正确重指 agent-loop:root tsconfig paths、vitest.base.ts、coding-agent tsconfig.build(`../agent-loop/dist`)、root build cd-chain、profile-coding-agent-node.mjs、local-release.mjs、workspace-registry dir、被移包的 vitest.harness 自引用。
 - pnpm-lock importer key 重生成 `packages/agent-loop:`(`--frozen-lockfile` 继续通过的必要)。
 - **无残留构建/配置路径引用**:CI/scripts/configs 扫 `packages/agent`(排除 `-loop`/`-old`)为空。剩余 `packages/agent/` 提及只是注释/changelog fixture 字符串/录制对话数据(S7 deferred,不挡构建)。

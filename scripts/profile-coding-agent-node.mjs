@@ -303,7 +303,7 @@ async function runBuild(bundle) {
 				"--workspace",
 				"packages/telemetry",
 				"--workspace",
-				"packages/ai",
+				"packages/providers",
 				"--workspace",
 				"packages/agent-loop",
 				"--workspace",

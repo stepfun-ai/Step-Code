@@ -6,7 +6,7 @@
  * the environment from `/proc/self/environ`.
  *
  * Keep this in sync with getBunSandboxEnvValue() in
- * packages/ai/src/utils/provider-env.ts. The ai package duplicates the lookup
+ * packages/providers/src/utils/provider-env.ts. The ai package duplicates the lookup
  * for direct consumers that do not go through this coding-agent entrypoint.
  */
 
