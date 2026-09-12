@@ -534,10 +534,8 @@ function convertProvider(
 	if (raw.routeViaCloudTrace !== undefined) {
 		warnings.push(`${path}.routeViaCloudTrace: dropped; Pi uses the Step provider trace adapter.`);
 	}
-	if (raw.oauth !== undefined && raw.oauth !== "radius") {
+	if (raw.oauth !== undefined) {
 		warnings.push(`${path}.oauth: dropped; only Pi's supported OAuth providers can be registered.`);
-	} else if (raw.oauth === "radius") {
-		provider.oauth = "radius";
 	}
 
 	const rawModels = Array.isArray(raw.models) ? raw.models : [];
