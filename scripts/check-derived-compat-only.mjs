@@ -86,7 +86,7 @@ function collectTsFiles(absoluteDir) {
 }
 
 function runReal() {
-	const roots = [join(repoRoot, "packages", "ai", "src"), join(repoRoot, "packages", "coding-agent", "src")];
+	const roots = [join(repoRoot, "packages", "providers", "src"), join(repoRoot, "packages", "coding-agent", "src")];
 	const violations = [];
 	for (const root of roots) {
 		for (const file of collectTsFiles(root)) {

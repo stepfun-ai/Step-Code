@@ -847,6 +847,9 @@ export function getDefaultTheme(): string {
 // ============================================================================
 
 // Use globalThis to share theme across module loaders (tsx + jiti in dev mode)
+const THEME_KEY_NEW = Symbol.for("@step-harness/coding-agent:theme");
+// A1: legacy scope keys are kept so a theme set by an older-scoped build is still found,
+// and one we set stays visible to it (only-add, never remove — §7.8.5).
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const THEME_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
 
@@ -854,15 +857,18 @@ const THEME_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
 // This ensures all module instances (tsx, jiti) see the same theme
 export const theme: Theme = new Proxy({} as Theme, {
 	get(_target, prop) {
-		const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
+		const store = globalThis as Record<symbol, Theme>;
+		const t = store[THEME_KEY_NEW] ?? store[THEME_KEY] ?? store[THEME_KEY_OLD];
 		if (!t) throw new Error("Theme not initialized. Call initTheme() first.");
 		return (t as unknown as Record<string | symbol, unknown>)[prop];
 	},
 });
 
 function setGlobalTheme(t: Theme): void {
-	(globalThis as Record<symbol, Theme>)[THEME_KEY] = t;
-	(globalThis as Record<symbol, Theme>)[THEME_KEY_OLD] = t;
+	const store = globalThis as Record<symbol, Theme>;
+	store[THEME_KEY_NEW] = t;
+	store[THEME_KEY] = t;
+	store[THEME_KEY_OLD] = t;
 }
 
 let currentThemeName: string | undefined;

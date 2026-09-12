@@ -64,7 +64,7 @@ function collectTsFiles(absoluteDir) {
 
 function runReal() {
 	const violations = [];
-	for (const file of collectTsFiles(join(repoRoot, "packages", "ai", "src"))) {
+	for (const file of collectTsFiles(join(repoRoot, "packages", "providers", "src"))) {
 		const repoRel = relative(repoRoot, file);
 		for (const violation of analyzeFile(repoRel, readFileSync(file, "utf8"))) violations.push(violation);
 	}
