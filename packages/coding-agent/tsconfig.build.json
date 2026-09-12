@@ -6,6 +6,7 @@
 			"@step-harness/agent-core": ["../agent-loop/dist/index.d.ts"],
 			"@step-harness/agent-core/*": ["../agent-loop/dist/*.d.ts"],
 			"@step-harness/providers": ["../providers/dist/index.d.ts"],
+			"@step-harness/providers/step-provider": ["../providers/dist/step-provider/index.d.ts"],
 			"@step-harness/providers/*": ["../providers/dist/*.d.ts", "../providers/dist/providers/*.d.ts"],
 			"@step-harness/pi-tui": ["../tui/dist/index.d.ts"],
 			"@step-harness/pi-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"],

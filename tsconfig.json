@@ -9,6 +9,7 @@
 			"@step-harness/telemetry": ["./packages/telemetry/src/index.ts"],
 			"@step-harness/telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
 			"@step-harness/providers": ["./packages/providers/src/index.ts"],
+			"@step-harness/providers/step-provider": ["./packages/providers/src/step-provider/index.ts"],
 			"@step-harness/providers/oauth": ["./packages/providers/src/oauth.ts"],
 			"@step-harness/providers/*": ["./packages/providers/src/*.ts", "./packages/providers/src/providers/*.ts"],
 			"@step-harness/providers/dist/*": ["./packages/providers/src/*"],

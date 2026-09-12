@@ -33,6 +33,10 @@
 		"./bun-oauth": {
 			"types": "./dist/bun-oauth.d.ts",
 			"import": "./dist/bun-oauth.js"
+		},
+		"./step-provider": {
+			"types": "./dist/step-provider/index.d.ts",
+			"import": "./dist/step-provider/index.js"
 		}
 	},
 	"files": [

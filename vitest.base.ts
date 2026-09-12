@@ -7,6 +7,7 @@ export const workspaceSourcePaths = {
 	aiIndex: fileURLToPath(new URL("./packages/providers/src/index.ts", import.meta.url)),
 	aiCompat: fileURLToPath(new URL("./packages/providers/src/compat.ts", import.meta.url)),
 	aiOAuth: fileURLToPath(new URL("./packages/providers/src/oauth.ts", import.meta.url)),
+	stepProvider: fileURLToPath(new URL("./packages/providers/src/step-provider/index.ts", import.meta.url)),
 	aiProviders: fileURLToPath(new URL("./packages/providers/src/providers", import.meta.url)),
 	agentIndex: fileURLToPath(new URL("./packages/agent-loop/src/index.ts", import.meta.url)),
 	codingAgentIndex: fileURLToPath(new URL("./packages/coding-agent/src/index.ts", import.meta.url)),
@@ -20,6 +21,7 @@ export default defineConfig({
 			{ find: /^@step-harness\/telemetry$/, replacement: workspaceSourcePaths.telemetryIndex },
 			{ find: /^@step-harness\/telemetry\/testing$/, replacement: workspaceSourcePaths.telemetryTesting },
 			{ find: /^@step-harness\/providers$/, replacement: workspaceSourcePaths.aiIndex },
+			{ find: /^@step-harness\/providers\/step-provider$/, replacement: workspaceSourcePaths.stepProvider },
 			{ find: /^@step-harness\/providers\/compat$/, replacement: workspaceSourcePaths.aiCompat },
 			{ find: /^@step-harness\/providers\/oauth$/, replacement: workspaceSourcePaths.aiOAuth },
 			{
