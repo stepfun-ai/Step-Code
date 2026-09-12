@@ -77,26 +77,16 @@ describe("ModelRuntime auth options", () => {
 		expect(options).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					type: "api_key",
-					provider: expect.objectContaining({ id: "amazon-bedrock", name: "Amazon Bedrock" }),
-					method: expect.objectContaining({ name: "AWS credentials or bearer token" }),
-				}),
-				expect.objectContaining({
-					type: "api_key",
-					provider: expect.objectContaining({ id: "google-vertex", name: "Google Vertex AI" }),
-					method: expect.objectContaining({ name: "Google Cloud credentials" }),
-				}),
-				expect.objectContaining({
 					type: "oauth",
 					provider: expect.objectContaining({ id: "anthropic", name: "Anthropic" }),
 				}),
 				expect.objectContaining({
 					type: "api_key",
-					provider: expect.objectContaining({ id: "cloudflare-ai-gateway", name: "Cloudflare AI Gateway" }),
+					provider: expect.objectContaining({ id: "anthropic", name: "Anthropic" }),
 				}),
 				expect.objectContaining({
 					type: "api_key",
-					provider: expect.objectContaining({ id: "cloudflare-workers-ai", name: "Cloudflare Workers AI" }),
+					provider: expect.objectContaining({ id: "openai" }),
 				}),
 			]),
 		);
@@ -132,28 +122,35 @@ describe("ModelRuntime auth options", () => {
 					refresh: "anthropic-refresh",
 					expires: Date.now() + 60 * 60_000,
 				},
-				openrouter: {
+				"generic-oauth": {
 					type: "oauth",
-					access: "openrouter-key",
-					refresh: "",
-					expires: Number.MAX_SAFE_INTEGER,
-				},
-				radius: {
-					type: "oauth",
-					access: "radius-access",
-					refresh: "radius-refresh",
+					access: "generic-access",
+					refresh: "generic-refresh",
 					expires: Date.now() + 60 * 60_000,
 				},
 			}),
 			modelsPath: null,
 		});
+		// A registered extension provider whose OAuth flow is NOT a subscription:
+		// the only built-in OAuth provider after the strip (anthropic) is a
+		// subscription, so the generic-sign-in tier is exercised via an extension.
+		runtime.registerProvider("generic-oauth", {
+			name: "Generic OAuth",
+			baseUrl: "https://example.test/v1",
+			api: "openai-completions",
+			oauth: {
+				name: "Generic sign-in",
+				login: async () => ({ access: "generic-access", refresh: "generic-refresh", expires: Date.now() + 60_000 }),
+				refreshToken: async (credential) => credential,
+				getApiKey: (credential) => credential.access,
+			},
+			models: [testModel("generic-model")],
+		});
 
 		expect(runtime.isUsingOAuth("anthropic")).toBe(true);
 		expect(runtime.isUsingSubscription("anthropic")).toBe(true);
-		expect(runtime.isUsingOAuth("openrouter")).toBe(true);
-		expect(runtime.isUsingSubscription("openrouter")).toBe(false);
-		expect(runtime.isUsingOAuth("radius")).toBe(true);
-		expect(runtime.isUsingSubscription("radius")).toBe(false);
+		expect(runtime.isUsingOAuth("generic-oauth")).toBe(true);
+		expect(runtime.isUsingSubscription("generic-oauth")).toBe(false);
 	});
 
 	it("constructs an API key method for an extension API-key provider", async () => {

@@ -7,9 +7,7 @@
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"sideEffects": [
-		"./dist/compat.js",
-		"./dist/images.js",
-		"./dist/providers/images/register-builtins.js"
+		"./dist/compat.js"
 	],
 	"exports": {
 		".": {
@@ -31,10 +29,6 @@
 		"./oauth": {
 			"types": "./dist/oauth.d.ts",
 			"import": "./dist/oauth.js"
-		},
-		"./bedrock-provider": {
-			"types": "./dist/bedrock-provider.d.ts",
-			"import": "./dist/bedrock-provider.js"
 		},
 		"./bun-oauth": {
 			"types": "./dist/bun-oauth.d.ts",

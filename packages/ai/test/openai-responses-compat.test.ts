@@ -72,41 +72,6 @@ describe("openai-responses provider defaults", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("omits reasoning when no reasoning is requested", async () => {
-		const model = getModel("github-copilot", "gpt-5-mini");
-		let capturedPayload: unknown;
-
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response("data: [DONE]\n\n", {
-				status: 200,
-				headers: { "content-type": "text/event-stream" },
-			}),
-		);
-
-		const stream = streamOpenAIResponses(
-			model,
-			{
-				systemPrompt: "sys",
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "test-key",
-				onPayload: (payload) => {
-					capturedPayload = payload;
-				},
-			},
-		);
-
-		for await (const event of stream) {
-			if (event.type === "done" || event.type === "error") break;
-		}
-
-		expect(capturedPayload).not.toBeNull();
-		expect(capturedPayload).not.toMatchObject({
-			reasoning: expect.anything(),
-		});
-	});
-
 	it("forwards required tool choice", async () => {
 		let capturedPayload: unknown;
 
@@ -152,57 +117,6 @@ describe("openai-responses provider defaults", () => {
 			tool_choice: "required",
 			tools: [expect.objectContaining({ name: "ping" })],
 		});
-	});
-
-	it("sets strict mode explicitly for Cloudflare OpenAI Responses tools", async () => {
-		const model = getModel("cloudflare-ai-gateway", "gpt-5.6-sol");
-		let capturedPayload: CapturedResponsesPayload | undefined;
-
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response("data: [DONE]\n\n", {
-				status: 200,
-				headers: { "content-type": "text/event-stream" },
-			}),
-		);
-
-		const stream = streamOpenAIResponses(
-			model,
-			{
-				messages: [{ role: "user", content: "Use a tool.", timestamp: Date.now() }],
-				tools: [
-					{
-						name: "ordinary",
-						description: "An ordinary tool",
-						parameters: Type.Object({
-							path: Type.String(),
-							offset: Type.Optional(Type.Number()),
-						}),
-					},
-					{
-						name: "constrained",
-						description: "A constrained tool",
-						parameters: Type.Object({ value: Type.String() }),
-						constrainedSampling: { type: "json_schema", strict: "prefer" },
-					},
-				],
-			},
-			{
-				apiKey: "test-key",
-				onPayload: (payload) => {
-					capturedPayload = payload as CapturedResponsesPayload;
-				},
-			},
-		);
-
-		for await (const event of stream) {
-			if (event.type === "done" || event.type === "error") break;
-		}
-
-		expect(model.compat?.supportsStrictMode).toBe(true);
-		expect(capturedPayload?.tools).toEqual([
-			expect.objectContaining({ name: "ordinary", strict: false }),
-			expect.objectContaining({ name: "constrained", strict: true }),
-		]);
 	});
 
 	it.each([
@@ -410,26 +324,6 @@ describe("openai-responses provider defaults", () => {
 		expect(captured.xSessionId).toBeNull();
 		expect(capturedPayload?.session_id).toBeUndefined();
 		expect(capturedPayload?.prompt_cache_key).toBe("session-proxy");
-	});
-
-	it("uses OpenAI no-session format for OpenCode Responses models", async () => {
-		const model = getModel("opencode", "gpt-5.4");
-		let capturedPayload: CapturedResponsesPayload | undefined;
-		const captured = await captureOpenAIResponseHeaders(
-			{
-				sessionId: "session-opencode",
-				onPayload: (payload) => {
-					capturedPayload = payload as CapturedResponsesPayload;
-				},
-			},
-			model,
-		);
-
-		expect(model.compat?.sessionAffinityFormat).toBe("openai-nosession");
-		expect(captured.sessionId).toBeNull();
-		expect(captured.clientRequestId).toBe("session-opencode");
-		expect(captured.xSessionId).toBeNull();
-		expect(capturedPayload?.prompt_cache_key).toBe("session-opencode");
 	});
 
 	it("can omit OpenAI session_id header while preserving other affinity data", async () => {

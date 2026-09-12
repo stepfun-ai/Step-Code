@@ -165,7 +165,6 @@ import {
 import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
 import { createRedraw, type Redraw } from "./runtime/redraw.ts";
 import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
-import { shareSession } from "./session-share.ts";
 import { FooterComponent, formatTokens } from "./view/chrome/footer.ts";
 import {
 	BranchSummaryStatusIndicator,
@@ -6018,14 +6017,7 @@ export class InteractiveMode {
 	}
 
 	async handleShareCommand(): Promise<void> {
-		await shareSession({
-			session: this.session,
-			ui: this.ui,
-			editorContainer: this.editorContainer,
-			editor: this.editor,
-			showStatus: (message) => this.showStatus(message),
-			showError: (message) => this.showError(message),
-		});
+		this.showError("Session sharing is not available in this build.");
 	}
 
 	async handleCopyCommand(options: { flashConfirmation?: boolean; preferSelection?: boolean } = {}): Promise<void> {

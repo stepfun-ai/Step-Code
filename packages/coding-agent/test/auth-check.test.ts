@@ -62,15 +62,15 @@ describe("auth check command", () => {
 		);
 
 		const credentials = AuthStorage.inMemory({
-			"openai-codex": { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
+			anthropic: { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
 		});
 		const oauthRuntime = await createRuntime(credentials);
-		const oauth = oauthRuntime.getProvider("openai-codex")?.auth.oauth;
-		if (!oauth) throw new Error("OpenAI Codex OAuth provider is not registered");
+		const oauth = oauthRuntime.getProvider("anthropic")?.auth.oauth;
+		if (!oauth) throw new Error("Anthropic OAuth provider is not registered");
 		const refresh = vi.fn(oauth.refresh);
 		oauth.refresh = refresh;
 
-		await expect(getProviderCredential("openai-codex", oauthRuntime, credentials, { refresh: false })).resolves.toBe(
+		await expect(getProviderCredential("anthropic", oauthRuntime, credentials, { refresh: false })).resolves.toBe(
 			"old-token",
 		);
 		expect(refresh).not.toHaveBeenCalled();
@@ -78,11 +78,11 @@ describe("auth check command", () => {
 
 	test("refreshes OAuth by default", async () => {
 		const credentials = AuthStorage.inMemory({
-			"openai-codex": { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
+			anthropic: { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
 		});
 		const runtime = await createRuntime(credentials);
-		const oauth = runtime.getProvider("openai-codex")?.auth.oauth;
-		if (!oauth) throw new Error("OpenAI Codex OAuth provider is not registered");
+		const oauth = runtime.getProvider("anthropic")?.auth.oauth;
+		if (!oauth) throw new Error("Anthropic OAuth provider is not registered");
 		const refresh = vi.fn(async () => ({
 			type: "oauth" as const,
 			access: "fresh-token",
@@ -92,7 +92,7 @@ describe("auth check command", () => {
 		oauth.refresh = refresh;
 
 		await expect(
-			checkProviderAuth(parseArgs(["--provider", "openai-codex"]), runtime, { refresh: true }),
+			checkProviderAuth(parseArgs(["--provider", "anthropic"]), runtime, { refresh: true }),
 		).resolves.toMatchObject({
 			status: "ready",
 		});

@@ -180,7 +180,7 @@ function openAIToolNames(payload: OpenAIPayload): string[] {
 	return (payload.tools ?? []).map((tool) => tool.name ?? tool.function?.name ?? "");
 }
 
-function makeCodexToken(): string {
+function _makeCodexToken(): string {
 	return `header.${btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account" } }))}.signature`;
 }
 
@@ -487,40 +487,6 @@ describe("deferred tools", () => {
 
 		expect(openAIToolNames(payload)).toEqual(["base_tool", "late_tool"]);
 		expect(payload.input?.some((item) => item.type === "tool_search_output")).toBe(false);
-	});
-
-	it("selects additional tools, tool search, or top-level tools for Codex models", async () => {
-		const context = makeContext([makeTool("base_tool"), makeTool("late_tool")]);
-		const additionalTools = await capturePayload<OpenAIPayload>(
-			getModel("openai-codex", "gpt-5.6-sol"),
-			context,
-			makeCodexToken(),
-		);
-		const toolSearch = await capturePayload<OpenAIPayload>(
-			getModel("openai-codex", "gpt-5.4"),
-			context,
-			makeCodexToken(),
-		);
-		const topLevel = await capturePayload<OpenAIPayload>(
-			getModel("openai-codex", "gpt-5.3-codex-spark"),
-			context,
-			makeCodexToken(),
-		);
-
-		expect(openAIToolNames(additionalTools)).toEqual(["base_tool"]);
-		expect(additionalTools.input?.some((item) => item.type === "additional_tools")).toBe(true);
-		expect(additionalTools.input?.some((item) => item.type === "tool_search_output")).toBe(false);
-		expect(openAIToolNames(toolSearch)).toEqual(["base_tool"]);
-		expect(toolSearch.input?.some((item) => item.type === "tool_search_output")).toBe(true);
-		expect(openAIToolNames(topLevel)).toEqual(["base_tool", "late_tool"]);
-		expect(topLevel.input?.some((item) => item.type === "additional_tools")).toBe(false);
-		expect(topLevel.input?.some((item) => item.type === "tool_search_output")).toBe(false);
-	});
-
-	it("leaves providers without deferred loading unchanged", async () => {
-		const context = makeContext([makeTool("base_tool"), makeTool("late_tool")]);
-		const payload = await capturePayload<OpenAIPayload>(getModel("groq", "llama-3.3-70b-versatile"), context);
-		expect(openAIToolNames(payload)).toEqual(["base_tool", "late_tool"]);
 	});
 
 	it("counts definitions marked after the latest usage checkpoint", () => {

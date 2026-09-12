@@ -2,15 +2,12 @@
 //
 // Routes a 403-with-body error through the real provider catch path for one
 // representative per tier (Success Criterion 7): a body-blind text provider
-// (openai-completions), a status-only provider (openai-responses), and a
-// body-blind Bedrock provider. Each asserts the resulting errorMessage carries
-// both the HTTP status and the body reason. The image-provider tier is covered
-// by provider-error-body-passthrough.test.ts; the already-correct happy path
-// (no double body / no duplicated status) is asserted via the shared helper in
-// error-body.test.ts.
+// (openai-completions) and a status-only provider (openai-responses). Each
+// asserts the resulting errorMessage carries both the HTTP status and the body
+// reason. The already-correct happy path (no double body / no duplicated
+// status) is asserted via the shared helper in error-body.test.ts.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { streamSimple as streamSimpleBedrock } from "../src/api/bedrock-converse-stream.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
 import type { Context, Model } from "../src/types.ts";
@@ -27,10 +24,6 @@ class FakeAPIError extends Error {
 		this.error = parsedBody;
 	}
 }
-
-const bedrockMock = vi.hoisted(() => ({
-	sendError: undefined as unknown,
-}));
 
 const openaiMock = vi.hoisted(() => ({
 	// Default parsed body; individual tests may override before invoking.
@@ -51,44 +44,6 @@ vi.mock("openai", () => {
 	}
 	return { default: FakeOpenAI };
 });
-
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
-	class BedrockRuntimeServiceException extends Error {}
-
-	class BedrockRuntimeClient {
-		middlewareStack = { add: () => {} };
-		send(): Promise<never> {
-			return Promise.reject(bedrockMock.sendError);
-		}
-	}
-
-	class ConverseStreamCommand {
-		readonly input: unknown;
-		constructor(input: unknown) {
-			this.input = input;
-		}
-	}
-
-	return {
-		BedrockRuntimeClient,
-		BedrockRuntimeServiceException,
-		ConverseStreamCommand,
-		StopReason: {
-			END_TURN: "end_turn",
-			STOP_SEQUENCE: "stop_sequence",
-			MAX_TOKENS: "max_tokens",
-			MODEL_CONTEXT_WINDOW_EXCEEDED: "model_context_window_exceeded",
-			TOOL_USE: "tool_use",
-		},
-		CachePointType: { DEFAULT: "default" },
-		CacheTTL: { ONE_HOUR: "ONE_HOUR" },
-		ConversationRole: { ASSISTANT: "assistant", USER: "user" },
-		ImageFormat: { JPEG: "jpeg", PNG: "png", GIF: "gif", WEBP: "webp" },
-		ToolResultStatus: { ERROR: "error", SUCCESS: "success" },
-	};
-});
-
-import { getModel } from "../src/compat.ts";
 
 const context: Context = {
 	systemPrompt: "",
@@ -169,45 +124,5 @@ describe("provider error body passthrough (per-tier regression)", () => {
 		expect(output.stopReason).toBe("error");
 		expect(output.errorMessage).toContain("OpenAI API error (403)");
 		expect(output.errorMessage).toContain("blocked by gateway WAF");
-	});
-
-	it("bedrock (body-blind) surfaces the gateway body instead of Unknown: UnknownError", async () => {
-		bedrockMock.sendError = Object.assign(new Error("UnknownError"), {
-			name: "UnknownError",
-			$metadata: { httpStatusCode: 403 },
-			$response: { statusCode: 403, body: '{"message":"blocked by gateway WAF"}' },
-		});
-
-		const model = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
-		const output = await drainResult(streamSimpleBedrock(model, { messages: context.messages }, {}));
-
-		expect(output.stopReason).toBe("error");
-		expect(output.errorMessage).toContain("403");
-		expect(output.errorMessage).toContain("blocked by gateway WAF");
-		expect(output.errorMessage).not.toContain("Unknown: UnknownError");
-	});
-
-	it("bedrock preserves the SDK validation message when the response body is a stream", async () => {
-		bedrockMock.sendError = Object.assign(
-			new Error(
-				"Invocation of model ID anthropic.claude-opus-5 with on-demand throughput isn't supported. Retry with an inference profile.",
-			),
-			{
-				name: "ValidationException",
-				$metadata: { httpStatusCode: 400 },
-				$response: {
-					statusCode: 400,
-					body: { pipe: () => undefined, _readableState: { buffer: [], length: 0 } },
-				},
-			},
-		);
-
-		const model = getModel("amazon-bedrock", "global.anthropic.claude-opus-5");
-		const output = await drainResult(streamSimpleBedrock(model, { messages: context.messages }, {}));
-
-		expect(output.stopReason).toBe("error");
-		expect(output.errorMessage).toContain("on-demand throughput isn't supported");
-		expect(output.errorMessage).toContain("inference profile");
-		expect(output.errorMessage).not.toContain("_readableState");
 	});
 });

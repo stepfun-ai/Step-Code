@@ -17,5 +17,4 @@ process.emitWarning = (() => {}) as typeof process.emitWarning;
 registerBunOAuthFlows();
 restoreSandboxEnv();
 
-await import("#bun/register-bedrock");
 await import("#main");

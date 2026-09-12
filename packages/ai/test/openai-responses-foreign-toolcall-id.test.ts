@@ -18,7 +18,7 @@ const usage: Usage = {
 
 describe("OpenAI Responses foreign tool call ID normalization", () => {
 	it("hashes foreign Copilot tool item IDs into a bounded Codex-safe fc_<hash> shape", () => {
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel("openai", "gpt-5.4");
 		const assistant: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -49,7 +49,7 @@ describe("OpenAI Responses foreign tool call ID normalization", () => {
 			messages: [{ role: "user", content: "Use the tool.", timestamp: Date.now() - 3000 }, assistant, toolResult],
 		};
 
-		const input = convertResponsesMessages(model, context, new Set(["openai", "openai-codex", "opencode"]));
+		const input = convertResponsesMessages(model, context, new Set(["openai"]));
 		const functionCall = input.find((item) => item.type === "function_call");
 
 		expect(functionCall).toBeDefined();

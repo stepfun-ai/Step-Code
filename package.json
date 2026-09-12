@@ -31,7 +31,7 @@
 		"check:derived-compat-only": "node scripts/check-derived-compat-only.mjs",
 		"check:no-provider-dispatch": "node scripts/check-no-provider-dispatch.mjs",
 		"check:metadata-not-in-dispatch": "node scripts/check-metadata-not-in-dispatch.mjs",
-		"generate:models": "npm --prefix packages/ai run generate-models && npm --prefix packages/ai run generate-image-models",
+		"generate:models": "npm --prefix packages/ai run generate-models",
 		"hydrate:model-data": "npm --prefix packages/ai run hydrate-model-data",
 		"check:model-data": "npm --prefix packages/ai run check:model-data",
 		"generate:model-catalog": "npm --prefix packages/ai run generate-model-catalog",

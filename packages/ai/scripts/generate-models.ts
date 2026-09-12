@@ -8,12 +8,8 @@ import {
 	getOpenRouterThinkingLevelMap,
 	type OpenRouterReasoningMetadata,
 } from "./openrouter-reasoning-options.ts";
-import {
-	CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL,
-	CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
-	CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL,
-	CLOUDFLARE_WORKERS_AI_BASE_URL,
-} from "../src/api/cloudflare.ts";
+// StepFun-only build: the cloudflare provider/adapter was removed. Its base-URL
+// constants (and the cloudflare model-processing blocks that used them) are gone.
 import type {
 	AnthropicMessagesCompat,
 	Api,
@@ -1433,7 +1429,10 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		const data = (await response.json()) as ModelsDevCatalog;
 
 		const models: Model<any>[] = [];
-		const nvidiaNimModelIds = data.nvidia?.models ? await fetchNvidiaNimModelIds() : new Map<string, string>();
+		// StepFun-only build removed the nvidia provider, so its NIM id lookup is
+		// skipped (it only fed now-filtered "nvidia" models and would abort under
+		// --strict if the NIM endpoint were unreachable).
+		const nvidiaNimModelIds = new Map<string, string>();
 
 		// Process Amazon Bedrock models
 		if (data["amazon-bedrock"]?.models) {
@@ -1659,128 +1658,6 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					maxTokens: m.limit?.output || 4096,
 				});
 				recordModelsDevReasoningOptions("cerebras", modelId, m);
-			}
-		}
-
-		// Process Cloudflare Workers AI models
-		if (data["cloudflare-workers-ai"]?.models) {
-			for (const [modelId, model] of Object.entries(data["cloudflare-workers-ai"].models)) {
-				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
-
-				models.push({
-					id: modelId,
-					name: m.name || modelId,
-					api: "openai-completions",
-					provider: "cloudflare-workers-ai",
-					baseUrl: CLOUDFLARE_WORKERS_AI_BASE_URL,
-					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
-					contextWindow: m.limit?.context || 4096,
-					maxTokens: m.limit?.output || 4096,
-					compat: { sendSessionAffinityHeaders: true },
-				});
-				recordModelsDevReasoningOptions("cloudflare-workers-ai", modelId, m);
-			}
-		}
-
-		// Process Cloudflare AI Gateway models
-		const cloudflareAIGatewayModelIds = new Set<string>();
-		if (data["cloudflare-ai-gateway"]?.models) {
-			for (const [prefixedId, model] of Object.entries(data["cloudflare-ai-gateway"].models)) {
-				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
-
-				const slashIdx = prefixedId.indexOf("/");
-				if (slashIdx === -1) continue;
-				const upstream = prefixedId.slice(0, slashIdx);
-				const nativeId = prefixedId.slice(slashIdx + 1);
-
-				let api: "anthropic-messages" | "openai-completions" | "openai-responses";
-				let baseUrl: string;
-				let id: string;
-				if (upstream === "openai") {
-					api = "openai-responses";
-					baseUrl = CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL;
-					id = nativeId;
-				} else if (upstream === "anthropic") {
-					api = "anthropic-messages";
-					baseUrl = CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL;
-					id = nativeId;
-				} else if (upstream === "workers-ai") {
-					api = "openai-completions";
-					baseUrl = CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL;
-					id = prefixedId;
-				} else {
-					continue;
-				}
-
-				// Gateway passthroughs forward session affinity headers to upstreams that
-				// use them for cache/routing affinity.
-				const compat =
-					upstream === "anthropic" || upstream === "workers-ai" ? { sendSessionAffinityHeaders: true } : undefined;
-
-				cloudflareAIGatewayModelIds.add(id);
-				models.push({
-					id,
-					name: m.name || id,
-					api,
-					provider: "cloudflare-ai-gateway",
-					baseUrl,
-					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
-					contextWindow: m.limit?.context || 4096,
-					maxTokens: m.limit?.output || 4096,
-					...(compat ? { compat } : {}),
-				});
-				recordModelsDevReasoningOptions("cloudflare-ai-gateway", id, m);
-			}
-		}
-
-		// models.dev may omit Workers AI passthroughs from the AI Gateway provider
-		// list even though the gateway /compat endpoint supports routing to them.
-		// Mirror the Workers AI catalog under the documented workers-ai/ prefix so
-		// the gateway keeps its OpenAI-compatible /compat models stable.
-		if (data["cloudflare-workers-ai"]?.models) {
-			for (const [modelId, model] of Object.entries(data["cloudflare-workers-ai"].models)) {
-				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
-
-				const id = `workers-ai/${modelId}`;
-				if (cloudflareAIGatewayModelIds.has(id)) continue;
-				cloudflareAIGatewayModelIds.add(id);
-
-				models.push({
-					id,
-					name: m.name || id,
-					api: "openai-completions",
-					provider: "cloudflare-ai-gateway",
-					baseUrl: CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
-					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
-					contextWindow: m.limit?.context || 4096,
-					maxTokens: m.limit?.output || 4096,
-					compat: { sendSessionAffinityHeaders: true },
-				});
-				recordModelsDevReasoningOptions("cloudflare-ai-gateway", id, m);
 			}
 		}
 
@@ -2390,13 +2267,15 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 }
 
 async function generateModels() {
-	// Fetch models from both sources
-	// models.dev: Anthropic, Google, OpenAI, Groq, Cerebras
-	// OpenRouter: xAI and other providers (excluding Anthropic, Google, OpenAI)
-	// AI Gateway: OpenAI-compatible catalog with tool-capable models
+	// StepFun-only build keeps only the anthropic + openai builtin providers.
+	// models.dev is the single source for their catalogs. The OpenRouter and
+	// Vercel AI Gateway fetches only ever produced now-removed providers
+	// ("openrouter" / "vercel-ai-gateway"), so they are skipped: keeping them
+	// would make no difference to the emitted catalog and, under --strict, an
+	// unreachable endpoint would abort generation for no reason.
 	const modelsDevModels = await loadModelsDevData();
-	const openRouterModels = await fetchOpenRouterModels();
-	const aiGatewayModels = await fetchAiGatewayModels();
+	const openRouterModels: Model<any>[] = [];
+	const aiGatewayModels: Model<any>[] = [];
 
 	// Combine models (models.dev has priority)
 	const allModels = [...modelsDevModels, ...openRouterModels, ...aiGatewayModels].filter(
@@ -2892,8 +2771,13 @@ async function generateModels() {
 	applyAnthropicAllowedFallbackModelMetadata(allModels.filter(isAnthropicFallbackMetadataModel));
 
 	// Group by provider and deduplicate by model ID
+	// StepFun-only build: only the anthropic + openai builtin providers survive.
+	// All other providers (and the now-removed dialects they carried) are dropped
+	// here so the emitted catalog, shards and manifest contain exactly these two.
+	const BUILTIN_PROVIDER_IDS = new Set(["anthropic", "openai"]);
 	const providers: Record<string, Record<string, Model<any>>> = {};
 	for (const model of allModels) {
+		if (!BUILTIN_PROVIDER_IDS.has(model.provider)) continue;
 		if (!providers[model.provider]) {
 			providers[model.provider] = {};
 		}

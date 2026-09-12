@@ -23,8 +23,8 @@ describe("createDialectRegistry", () => {
 
 	it("reports has() and returns undefined for an unregistered dialect", () => {
 		expect(registry.has("anthropic-messages")).toBe(true);
-		expect(registry.has("google-vertex")).toBe(false);
-		expect(registry.get("google-vertex")).toBeUndefined();
+		expect(registry.has("openai-responses")).toBe(false);
+		expect(registry.get("openai-responses")).toBeUndefined();
 	});
 
 	it("enumerates dialects from the injected source, defaulting to empty", () => {
