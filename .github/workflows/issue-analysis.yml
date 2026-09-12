@@ -382,7 +382,7 @@ jobs:
             const outputPath = path.join(outDir, 'output.md');
             const output = fs.createWriteStream(outputPath);
             const args = [
-              'packages/coding-agent/src/cli.ts',
+              'apps/cli/src/main.ts',
               '-p',
               '--approve',
               '--session-dir',
@@ -527,7 +527,7 @@ jobs:
             const exitCode = await new Promise((resolve, reject) => {
               const child = spawn(
                 'node',
-                ['packages/coding-agent/src/cli.ts', '--no-extensions', '--export', sessionJsonl, sessionHtml],
+                ['apps/cli/src/main.ts', '--no-extensions', '--export', sessionJsonl, sessionHtml],
                 { cwd: workdir, env: process.env, stdio: 'inherit' },
               );
               child.on('error', reject);

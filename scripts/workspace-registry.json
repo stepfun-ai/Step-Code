@@ -1,5 +1,5 @@
 {
-	"note": "S0-4 workspace registry. Every workspace member matched by the workspaces globs must have a row here (matched by package name). New packages must use the @step-harness/* scope; the ten @earendil-works/pi-* packages are grandfathered; example extensions are exempt. Checked by scripts/check-workspace-registry.mjs.",
+	"note": "S0-4 workspace registry. Every workspace member matched by the workspaces globs must have a row here (matched by package name). New packages must use the @step-harness/* scope; the six @earendil-works/pi-* packages are grandfathered; example extensions are exempt. Checked by scripts/check-workspace-registry.mjs.",
 	"grandfatheredScope": "@earendil-works/pi-",
 	"requiredScope": "@step-harness/",
 	"baseline": [

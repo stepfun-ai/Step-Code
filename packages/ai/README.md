@@ -1596,11 +1596,10 @@ Create a new API implementation file (for example `bedrock-converse-stream.ts`) 
 
 Add a lazy wrapper `src/api/<api-id>.lazy.ts` (`<name>Api()` via `lazyApi()`) so providers can reference the implementation without importing its SDK. Add any root-level `export type` re-exports in `src/index.ts` that should remain available from `@earendil-works/pi-ai`.
 
-#### 3. Model Generation (`scripts/generate-models.ts`, `scripts/generate-image-models.ts`)
+#### 3. Model Generation (`scripts/generate-models.ts`)
 
 - Add logic to fetch and parse models from the provider's source (e.g., models.dev API)
 - Map chat/tool-capable provider model data to the standardized `Model` interface via `scripts/generate-models.ts`; hydration groups the ignored `src/providers/data/<id>.json` values by API, while stable `src/providers/<id>.models.ts` wrappers derive exact model/API types directly from those JSON keys
-- Map image-generation provider model data to the standardized `ImagesModel` interface via `scripts/generate-image-models.ts`
 - Handle provider-specific quirks (pricing format, capability flags, model ID transformations)
 
 #### 4. Provider Factory (`src/providers/<id>.ts`)

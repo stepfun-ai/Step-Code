@@ -545,7 +545,7 @@ step.compaction.contextProjection  = off     | lightweight-v1
 - `packages/coding-agent/src/core/session-manager.ts` + `packages/coding-agent/src/core/agent-session.ts` — projection 接入点
 
 **参考（不改）**：
-- `packages/coding-agent/src/step-cli.ts` — composition root
+- `apps/cli/src/main.ts` — composition root
 - `packages/coding-agent/src/step/tool-profile.ts:1135` — 8 核心 tool 定义
 - `packages/agent/docs/harness.md`（2942 行）— Pi harness spec
 - 旧 stepcli 参考：`/data/ai_code_base/for_multi_frame/framework/step-cli/packages/core/src/agent/`（`agent-loop.ts` / `agent-team.ts` / `conversation-memory.ts` / `conversation-memory-checkpoint.ts`）

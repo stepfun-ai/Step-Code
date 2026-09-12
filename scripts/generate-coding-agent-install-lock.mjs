@@ -14,7 +14,6 @@ const outputLockfilePath = join(outputDir, "package-lock.json");
 const internalPackagePrefix = "@earendil-works/pi-";
 const installPackageName = "@earendil-works/pi-coding-agent-install";
 const allowedInstallScriptPackages = new Map([
-	["@google/genai@1.52.0", "preinstall is a no-op in the published package"],
 	["isolated-vm@6.0.1", "install fetches or builds the pinned native runtime used for Workflow isolation"],
 	["protobufjs@7.6.5", "postinstall only warns about protobufjs version scheme mismatches"],
 ]);

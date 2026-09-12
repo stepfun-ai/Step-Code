@@ -44,7 +44,6 @@
 		"generate-models": "node scripts/generate-models.ts --strict",
 		"hydrate-model-data": "node scripts/generate-models.ts --strict --data-only",
 		"generate-model-catalog": "node scripts/generate-models.ts --strict --json-only --json-output ../../.artifacts/model-catalog",
-		"generate-image-models": "node scripts/generate-image-models.ts --strict",
 		"check:model-data": "node scripts/check-model-data.ts",
 		"build": "npm run generate-models && npm run build:offline",
 		"build:offline": "npm run check:model-data && tsgo -p tsconfig.build.json && shx rm -rf dist/providers/data && shx cp -r src/providers/data dist/providers/data",
@@ -53,10 +52,7 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "0.91.1",
-		"@aws-sdk/client-bedrock-runtime": "3.1048.0",
 		"@earendil-works/pi-telemetry": "^0.84.4",
-		"@google/genai": "1.52.0",
-		"@smithy/node-http-handler": "4.7.3",
 		"http-proxy-agent": "7.0.2",
 		"https-proxy-agent": "7.0.6",
 		"openai": "6.40.0",
@@ -68,8 +64,6 @@
 		"llm",
 		"openai",
 		"anthropic",
-		"gemini",
-		"bedrock",
 		"unified",
 		"api"
 	],
@@ -84,7 +78,6 @@
 		"node": ">=22.19.0"
 	},
 	"devDependencies": {
-		"@smithy/types": "4.18.0",
 		"@types/node": "22.19.19",
 		"canvas": "3.2.3",
 		"vitest": "4.1.9"
