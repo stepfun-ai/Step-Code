@@ -23,8 +23,7 @@
 		"docs",
 		"examples",
 		"containerization.md",
-		"CHANGELOG.md",
-		"npm-shrinkwrap.json"
+		"CHANGELOG.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
