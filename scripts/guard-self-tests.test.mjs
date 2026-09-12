@@ -19,6 +19,7 @@ const guardsWithSelfTest = [
 	"check-pinned-deps.mjs",
 	"check-ts-relative-imports.mjs",
 	"check-derived-compat-only.mjs",
+	"check-no-provider-dispatch.mjs",
 ];
 
 for (const guard of guardsWithSelfTest) {
