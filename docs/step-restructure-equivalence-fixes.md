@@ -109,3 +109,27 @@
 | `scripts/auto-pi.sh:68` 仍指 `dist/cli.js` | 仅 dev-helper（`profile:tui/rpc` 实测已改指 apps/cli，不受影响） |
 | `generate-models-strict.test.ts` 删除 → `--strict` 守卫丢覆盖 | strip 文档已记“S7 重建 slim 版”，尚未补 |
 | 登录对话框残留 `amazon-bedrock` 死分支等 | 不可达死 UI/元数据，strip 文档已列 S7 清理 |
+| `apps/cli/tsconfig.build.json` 指向未构建的 `contracts/dist` 死别名 | 无人 import 故 tsgo 不报错、构建绿；可删该别名或把 contracts 纳入构建链 |
+
+## 验证记录（第二轮：实测命令回归 + 再分析，2026-09-13）
+
+在 `refactor/step-restructure`（含本次 4 修复，`f0755e7`）上，依赖重装后实跑。
+
+**打包端到端（实测绿）**：`pnpm run build` exit 0（7 包编译）、esbuild bundle 15 文件 / 5.9 MiB、`node dist/bundle/step.js --version`=0.3.1、`--help` 正常。（首次失败仅因切分支后 node_modules 陈旧，重装即消，非缺陷。）
+
+**命令回归 23/23 全过，0 回归**（经 `/workflows` 跑 shell 脚本）：
+- `smoke-direct.sh` 5/5（version / help / auth-check + 打模型 print-text / print-json）
+- `tui-matrix.sh` 12/12（startup / input / slash / @ / ctrl-p / bang-shell / resize×2 / config / feedback / resize-cycle / session-picker + 打模型 one-round）
+- `smoke-apps-cli.mjs` 4/4（真实入口 + esbuild/bun bundle 解析证明）
+- 已构建 bundle `--version` / `--help` 2/2
+- 打模型用例本机凭证+网络可用，均真跑通（非 gated）。
+
+**再分析（逐字节 + 功能，均对抗式校验 CONFIRMED）**：
+- byte-ledger：1184 条 → R100 逐字节移动 202、R<100 仅改 import 205、M 288、D 334、A 155；**0 behavior-drift**；所有超出 import 的改动均为有意（strip / 本次 4 修复 / S3-S4 入口与 TUI 依赖倒置）。
+- TUI：全部搬迁 import-only；`packages/tui` markdown/autocomplete/editor 逐字节未变；interactive-mode 拆 `runtime/*` 忠实（中断机、按键表、斜杠路由顺序、~24 分支事件 switch 全保留）。**0 功能回归**。
+- coding-agent：工具/权限/会话/prompt 全不变（prompt 逐字节），dispatch 仍按 `model.api`（零 provider-name 分支）。**0 功能回归**。
+- packaging：拓扑序正确、发布重锚 `apps/cli`/step bundle；实测 build 绿。
+
+**未覆盖（冒烟脚本盲区，建议后续补）**：`--mode rpc`、`--sdk-stdio`、subagent/Task、`--resume`/`--continue`、多轮对话、工具审批提示、MCP。
+
+**净结论**：重构对基线**功能保真**（命令 23/23、TUI 与 coding-agent 零功能回归、打包绿）；本次 4 修复已并入 `refactor/step-restructure`。
