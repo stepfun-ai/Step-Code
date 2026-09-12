@@ -48,7 +48,6 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - [Bundling and Tree Shaking](#bundling-and-tree-shaking)
 - [OAuth Providers](#oauth-providers)
   - [Vertex AI](#vertex-ai)
-  - [CLI Login](#cli-login)
   - [Programmatic OAuth](#programmatic-oauth)
 - [Migrating from the Old Global API](#migrating-from-the-old-global-api)
 - [Development](#development)
@@ -1537,18 +1536,6 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
 ```
 
 Official docs: [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)
-
-### CLI Login
-
-The quickest way to authenticate:
-
-```bash
-npx @earendil-works/pi-ai login              # interactive provider selection
-npx @earendil-works/pi-ai login anthropic    # login to specific provider
-npx @earendil-works/pi-ai list               # list available providers
-```
-
-Credentials are saved to `auth.json` in the current directory.
 
 ### Programmatic OAuth
 

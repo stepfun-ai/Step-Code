@@ -41,9 +41,6 @@
 			"import": "./dist/bun-oauth.js"
 		}
 	},
-	"bin": {
-		"pi-ai": "dist/cli.js"
-	},
 	"files": [
 		"dist",
 		"README.md"
