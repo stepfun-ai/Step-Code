@@ -1,5 +1,4 @@
-import type { ApiKeyAuth, AuthCheck, OAuthAuth } from "@earendil-works/pi-ai";
-import { DynamicBorder, keyHint, rawKeyHint, theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, keyHint, rawKeyHint, theme } from "@step-harness/coding-agent";
 import {
 	Container,
 	type Focusable,
@@ -11,7 +10,8 @@ import {
 	type SelectListLayoutOptions,
 	Spacer,
 	Text,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import type { ApiKeyAuth, AuthCheck, OAuthAuth } from "@step-harness/providers";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
 export type AuthSelectorProvider = {

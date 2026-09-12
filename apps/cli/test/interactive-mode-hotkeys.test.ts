@@ -1,4 +1,4 @@
-import { type Component, Markdown, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { type Component, Markdown, stripTerminalSequences } from "@step-harness/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import { getMarkdownTheme, initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";

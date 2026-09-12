@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { Text, type TUI, visibleWidth } from "@step-harness/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../../../packages/coding-agent/src/config.ts";

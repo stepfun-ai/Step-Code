@@ -15,7 +15,7 @@ import {
 	type InlineExtension,
 	type StepExtensionOptions,
 	type StepTelemetryRuntime,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 
 export interface StepExtensionFactoryDeps {
 	/** Shared telemetry runtime handed to every Step extension. */

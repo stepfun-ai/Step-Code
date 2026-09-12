@@ -4,7 +4,7 @@ import {
 	readStepGlobalDefaults,
 	type StepCodeConfig,
 	type StepConfigMigrationReport,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import { showDeprecationWarnings } from "@step-harness/config";
 
 /**

@@ -5,4 +5,4 @@
  * The app shell consumes them through this single re-export so the rest of
  * apps/cli never reaches into the coding-agent barrel for argv concerns.
  */
-export { type Args, parseArgs } from "@earendil-works/pi-coding-agent";
+export { type Args, parseArgs } from "@step-harness/coding-agent";

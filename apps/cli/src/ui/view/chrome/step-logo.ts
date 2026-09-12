@@ -31,8 +31,8 @@
  * unchanged from when it was the only mark.
  */
 
-import { theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { theme } from "@step-harness/coding-agent";
+import { visibleWidth } from "@step-harness/pi-tui";
 import {
 	BIRD_SPRITE_COLUMNS,
 	BIRD_SPRITE_FRAME_DURATIONS_MS,

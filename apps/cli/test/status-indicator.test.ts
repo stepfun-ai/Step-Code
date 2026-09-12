@@ -1,5 +1,5 @@
-import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import type { AssistantMessage, AssistantMessageEvent } from "@step-harness/providers";
+import { stripTerminalSequences, type TUI, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	IdleStatus,

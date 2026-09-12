@@ -1,5 +1,5 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { setKeybindings } from "@earendil-works/pi-tui";
+import type { Api, Model } from "@step-harness/providers";
+import { setKeybindings } from "@step-harness/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../../../../packages/coding-agent/src/core/keybindings.ts";
 import { ScopedModelsSelectorComponent } from "../../../src/ui/view/dialogs/scoped-models-selector.ts";

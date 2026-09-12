@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import { visibleWidth } from "@step-harness/pi-tui";
 import { expect, test, vi } from "vitest";
 import type {
 	ExtensionAPI,

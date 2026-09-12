@@ -3,8 +3,8 @@
  * Displays a list of string options with keyboard navigation.
  */
 
-import { DynamicBorder, keyHint, rawKeyHint, theme } from "@earendil-works/pi-coding-agent";
-import { Container, getKeybindings, type SelectItem, SelectList, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { DynamicBorder, keyHint, rawKeyHint, theme } from "@step-harness/coding-agent";
+import { Container, getKeybindings, type SelectItem, SelectList, Spacer, Text, type TUI } from "@step-harness/pi-tui";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 

@@ -5,4 +5,4 @@
  * to runRpcMode when appMode === "rpc". This channel is covered independently of
  * --sdk-stdio (length-prefixed framing); the two protocols are separate.
  */
-export { RpcClient, type RpcClientOptions, runRpcMode } from "@earendil-works/pi-coding-agent";
+export { RpcClient, type RpcClientOptions, runRpcMode } from "@step-harness/coding-agent";

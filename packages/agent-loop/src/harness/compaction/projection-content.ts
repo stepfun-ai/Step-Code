@@ -1,10 +1,10 @@
 /**
  * Content measurement, hashing, marker, and classification helpers shared by
  * the projection modules. Everything here is pure and depends only on
- * `@earendil-works/pi-ai` message types.
+ * `@step-harness/providers` message types.
  */
 
-import type { ImageContent, Message, TextContent, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { ImageContent, Message, TextContent, ToolResultMessage, UserMessage } from "@step-harness/providers";
 
 // ============================================================================
 // Rewrite markers

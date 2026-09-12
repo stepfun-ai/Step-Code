@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DynamicBorder, getSelectListTheme, keyDisplayText, theme } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@step-harness/agent-core";
+import { DynamicBorder, getSelectListTheme, keyDisplayText, theme } from "@step-harness/coding-agent";
 import {
 	Container,
 	type Focusable,
@@ -12,7 +12,7 @@ import {
 	type SelectListLayoutOptions,
 	Spacer,
 	Text,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 
 const THINKING_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,

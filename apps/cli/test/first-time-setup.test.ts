@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { shouldRunFirstTimeSetup } from "@earendil-works/pi-coding-agent";
+import { shouldRunFirstTimeSetup } from "@step-harness/coding-agent";
 import { ENV_AGENT_DIR } from "../../../packages/coding-agent/src/config.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
 

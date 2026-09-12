@@ -10,7 +10,7 @@ import {
 	Spacer,
 	Text,
 	truncateToWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import { DynamicBorder } from "../render/dynamic-border.ts";
 import { initTheme, theme } from "../theme/theme.ts";
 import type { StepLoginProfile, StepLoginStep } from "./onboarding.ts";

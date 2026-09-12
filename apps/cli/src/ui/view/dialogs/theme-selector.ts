@@ -1,5 +1,5 @@
-import { DynamicBorder, getAvailableThemes, getSelectListTheme } from "@earendil-works/pi-coding-agent";
-import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@earendil-works/pi-tui";
+import { DynamicBorder, getAvailableThemes, getSelectListTheme } from "@step-harness/coding-agent";
+import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@step-harness/pi-tui";
 
 const THEME_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,

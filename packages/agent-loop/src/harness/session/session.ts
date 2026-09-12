@@ -1,4 +1,4 @@
-import { uuidv7 } from "@earendil-works/pi-ai";
+import { uuidv7 } from "@step-harness/providers";
 import type { AgentMessage } from "../../types.ts";
 import type {
 	BranchBounds,

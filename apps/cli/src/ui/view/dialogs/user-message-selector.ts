@@ -1,5 +1,5 @@
-import { DynamicBorder, theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Container, getKeybindings, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { DynamicBorder, theme } from "@step-harness/coding-agent";
+import { type Component, Container, getKeybindings, Spacer, Text, truncateToWidth } from "@step-harness/pi-tui";
 
 interface UserMessageItem {
 	id: string; // Entry ID in the session

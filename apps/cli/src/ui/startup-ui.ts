@@ -17,14 +17,8 @@ import {
 	setTheme,
 	setThemeStorageDir,
 	type Theme,
-} from "@earendil-works/pi-coding-agent";
-import {
-	ProcessTerminal,
-	setCapabilityOverrides,
-	setKeybindings,
-	type TUI,
-	TuiMainScreen,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/coding-agent";
+import { ProcessTerminal, setCapabilityOverrides, setKeybindings, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
 import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
 import { ExtensionSelectorComponent } from "./view/dialogs/extension-selector.ts";
 import { FirstTimeSetupComponent, type FirstTimeSetupResult } from "./view/dialogs/first-time-setup.ts";

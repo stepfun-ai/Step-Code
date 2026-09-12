@@ -15,7 +15,7 @@ const codingAgentDir = join(repoRoot, "packages", "coding-agent");
 // package directory is parameterised so a future move only touches this const.
 const appEntryDir = join(repoRoot, "apps", "cli");
 const appEntryDistDir = join(appEntryDir, "dist");
-const aiDir = join(repoRoot, "packages", "ai");
+const aiDir = join(repoRoot, "packages", "providers");
 const aiDistDir = join(aiDir, "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
 const bundleDir = join(codingAgentDistDir, "bundle");
@@ -203,7 +203,7 @@ const mainResult = await build({
 	splitting: true,
 });
 
-const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "packages/ai/dist/auth/oauth/load.js");
+const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "packages/providers/dist/auth/oauth/load.js");
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/utils/image-resize.js");
 
 // These implementations are reached through variable-specifier imports or a

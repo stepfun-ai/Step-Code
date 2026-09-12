@@ -1,6 +1,6 @@
-import type { MarkdownTransformer } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, theme } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import type { MarkdownTransformer } from "@step-harness/coding-agent";
+import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
+import { Box, Container, Markdown, type MarkdownTheme } from "@step-harness/pi-tui";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";

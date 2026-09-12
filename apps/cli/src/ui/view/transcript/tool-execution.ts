@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolRenderContext } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition, ToolRenderContext } from "@step-harness/coding-agent";
 import {
 	convertToPng,
 	createAllToolDefinitions,
@@ -8,7 +8,7 @@ import {
 	renderToolPath,
 	type ToolName,
 	theme,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	Box,
 	type Component,
@@ -22,7 +22,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import { prependAfterTerminalSequences } from "./step-message.ts";
 import type { StepToolSpinnerState } from "./step-spinner.ts";
 

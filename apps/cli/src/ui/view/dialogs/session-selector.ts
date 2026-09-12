@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import * as os from "node:os";
-import type { SessionInfo, SessionListProgress } from "@earendil-works/pi-coding-agent";
+import type { SessionInfo, SessionListProgress } from "@step-harness/coding-agent";
 import {
 	canonicalizePath as _canonicalizePath,
 	DynamicBorder,
@@ -10,7 +10,7 @@ import {
 	keyHint,
 	keyText,
 	theme,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	type Component,
 	Container,
@@ -21,7 +21,7 @@ import {
 	Text,
 	truncateToWidth,
 	visibleWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 
 type SessionScope = "current" | "all";

@@ -8,7 +8,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 	UserMessage,
-} from "@earendil-works/pi-ai";
+} from "@step-harness/providers";
 import { describe, expect, it } from "vitest";
 import {
 	cutTextWithSalientLines,

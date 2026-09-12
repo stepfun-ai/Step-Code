@@ -2,9 +2,9 @@
  * TUI config selector for `pi config` command
  */
 
-import type { SettingsManager } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, initTheme, setThemeStorageDir, stopThemeWatcher } from "@earendil-works/pi-coding-agent";
-import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
+import type { SettingsManager } from "@step-harness/coding-agent";
+import { CONFIG_DIR_NAME, initTheme, setThemeStorageDir, stopThemeWatcher } from "@step-harness/coding-agent";
+import { ProcessTerminal, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
 import { ConfigSelectorComponent, type ScopedResolvedPaths } from "./view/dialogs/config-selector.ts";
 
 export interface ConfigSelectorOptions {

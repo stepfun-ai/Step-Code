@@ -1,5 +1,5 @@
-import type { Usage } from "@earendil-works/pi-ai";
-import { Container } from "@earendil-works/pi-tui";
+import type { Usage } from "@step-harness/providers";
+import { Container } from "@step-harness/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import type { SessionEntry } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";

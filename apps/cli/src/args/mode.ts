@@ -12,4 +12,4 @@
  * already flipped interactive → print for piped stdin). `resolveAppMode` is
  * re-exported for tests and completeness; the dispatch switch must not re-run it.
  */
-export { type AppMode, resolveAppMode, toPrintOutputMode } from "@earendil-works/pi-coding-agent";
+export { type AppMode, resolveAppMode, toPrintOutputMode } from "@step-harness/coding-agent";

@@ -10,34 +10,34 @@ const anthropicMessagesStreams = anthropicMessagesApi();
 const openAICompletionsStreams = openAICompletionsApi();
 const openAIResponsesStreams = openAIResponsesApi();
 
-/** @deprecated Use `stream` from `@earendil-works/pi-ai/api/anthropic-messages` or `anthropicMessagesApi().stream`. */
+/** @deprecated Use `stream` from `@step-harness/providers/api/anthropic-messages` or `anthropicMessagesApi().stream`. */
 export const streamAnthropic = anthropicMessagesStreams.stream as StreamFunction<
 	"anthropic-messages",
 	AnthropicOptions
 >;
-/** @deprecated Use `streamSimple` from `@earendil-works/pi-ai/api/anthropic-messages` or `anthropicMessagesApi().streamSimple`. */
+/** @deprecated Use `streamSimple` from `@step-harness/providers/api/anthropic-messages` or `anthropicMessagesApi().streamSimple`. */
 export const streamSimpleAnthropic = anthropicMessagesStreams.streamSimple as StreamFunction<
 	"anthropic-messages",
 	SimpleStreamOptions
 >;
 
-/** @deprecated Use `stream` from `@earendil-works/pi-ai/api/openai-completions` or `openAICompletionsApi().stream`. */
+/** @deprecated Use `stream` from `@step-harness/providers/api/openai-completions` or `openAICompletionsApi().stream`. */
 export const streamOpenAICompletions = openAICompletionsStreams.stream as StreamFunction<
 	"openai-completions",
 	OpenAICompletionsOptions
 >;
-/** @deprecated Use `streamSimple` from `@earendil-works/pi-ai/api/openai-completions` or `openAICompletionsApi().streamSimple`. */
+/** @deprecated Use `streamSimple` from `@step-harness/providers/api/openai-completions` or `openAICompletionsApi().streamSimple`. */
 export const streamSimpleOpenAICompletions = openAICompletionsStreams.streamSimple as StreamFunction<
 	"openai-completions",
 	SimpleStreamOptions
 >;
 
-/** @deprecated Use `stream` from `@earendil-works/pi-ai/api/openai-responses` or `openAIResponsesApi().stream`. */
+/** @deprecated Use `stream` from `@step-harness/providers/api/openai-responses` or `openAIResponsesApi().stream`. */
 export const streamOpenAIResponses = openAIResponsesStreams.stream as StreamFunction<
 	"openai-responses",
 	OpenAIResponsesOptions
 >;
-/** @deprecated Use `streamSimple` from `@earendil-works/pi-ai/api/openai-responses` or `openAIResponsesApi().streamSimple`. */
+/** @deprecated Use `streamSimple` from `@step-harness/providers/api/openai-responses` or `openAIResponsesApi().streamSimple`. */
 export const streamSimpleOpenAIResponses = openAIResponsesStreams.streamSimple as StreamFunction<
 	"openai-responses",
 	SimpleStreamOptions

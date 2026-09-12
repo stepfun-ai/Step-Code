@@ -2,7 +2,7 @@
 // `check-tui-no-ai.mjs --self-test`; never part of the real build (scripts/ is outside
 // tsconfig include and biome includes). Bare (non-relative) specifiers keep check:ts-imports quiet.
 import OpenAI from "openai";
-import { createModel } from "@earendil-works/pi-ai";
+import { createModel } from "@step-harness/providers";
 
 export function boom() {
 	return [OpenAI, createModel];

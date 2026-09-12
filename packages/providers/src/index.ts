@@ -3,9 +3,9 @@ export { Type } from "typebox";
 
 // Core only, side-effect free: no generated catalogs, no provider factories,
 // no api-registry, no OAuth implementations, no compat. Provider factories
-// live under "@earendil-works/pi-ai/providers/*", API implementations under
-// "@earendil-works/pi-ai/api/*", the old global API under
-// "@earendil-works/pi-ai/compat".
+// live under "@step-harness/providers/providers/*", API implementations under
+// "@step-harness/providers/api/*", the old global API under
+// "@step-harness/providers/compat".
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./api/anthropic-messages.ts";
 export * from "./api/lazy.ts";
 export type { OpenAICompletionsOptions } from "./api/openai-completions.ts";

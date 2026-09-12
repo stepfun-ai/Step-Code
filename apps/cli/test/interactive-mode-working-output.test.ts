@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent } from "@step-harness/providers";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../packages/coding-agent/src/core/agent-session.ts";
 import { WorkingOutputTracker } from "../src/ui/view/chrome/status-indicator.ts";

@@ -10,7 +10,7 @@
 import type { Dirent } from "node:fs";
 import { chmod, copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { Credential } from "@earendil-works/pi-ai";
+import type { Credential } from "@step-harness/providers";
 import { parse as parseYaml } from "yaml";
 import {
 	normalizeStepAnthropicBaseUrl,

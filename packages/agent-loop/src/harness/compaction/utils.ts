@@ -2,7 +2,7 @@
  * Shared utilities for compaction and branch summarization.
  */
 
-import { contentText, type Message } from "@earendil-works/pi-ai";
+import { contentText, type Message } from "@step-harness/providers";
 import type { AgentMessage } from "../../types.ts";
 
 /** File paths touched by a session branch or compaction range. */

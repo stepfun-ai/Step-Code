@@ -9,7 +9,7 @@
 // through #main) so config.ts resolves the Step storage namespace even when the
 // launcher filename is not detected by isStepEntrypoint().
 import "#bootstrap/environment";
-import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
+import { registerBunOAuthFlows } from "@step-harness/providers/bun-oauth";
 import { restoreSandboxEnv } from "#bun/restore-sandbox-env";
 
 process.emitWarning = (() => {}) as typeof process.emitWarning;

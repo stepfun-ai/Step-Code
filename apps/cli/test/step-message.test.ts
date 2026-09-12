@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { AssistantMessage } from "@step-harness/providers";
+import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	StepAssistantMessageComponent,

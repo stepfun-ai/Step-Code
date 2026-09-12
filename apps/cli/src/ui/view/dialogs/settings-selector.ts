@@ -1,12 +1,11 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { getSupportedThinkingLevels, type Model, type Transport } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@step-harness/agent-core";
 import type {
 	DefaultProjectTrust,
 	FullscreenExitOutput,
 	MermaidRenderingMode,
 	TuiMode,
 	WarningSettings,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	DynamicBorder,
 	formatHttpIdleTimeoutMs,
@@ -16,7 +15,7 @@ import {
 	parseAutoThemeSetting,
 	type TerminalTheme,
 	theme,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	type Component,
 	Container,
@@ -27,7 +26,8 @@ import {
 	SettingsList,
 	Spacer,
 	Text,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import { getSupportedThinkingLevels, type Model, type Transport } from "@step-harness/providers";
 import { SelectSubmenu, SteppedSubmenu, type SteppedSubmenuStep } from "./settings-submenu.ts";
 
 const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };

@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
-import type { Credential } from "@earendil-works/pi-ai";
+import type { Credential } from "@step-harness/providers";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
 import { LEGACY_RENAMED_CONFIG_DIR, resolveStepAgentDir, resolveStepHomeDir } from "./environment.ts";

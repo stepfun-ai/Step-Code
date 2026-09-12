@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
+const ignoredDirectories = new Set([".git", ".artifacts", "dist", "node_modules", "binaries"]);
 const packageJsonFiles = [];
 
 function collectPackageJsonFiles(directory) {
@@ -22,7 +22,7 @@ function collectPackageJsonFiles(directory) {
 }
 
 function isInternalWorkspaceDependency(name) {
-	return name.startsWith("@earendil-works/pi-");
+	return name.startsWith("@step-harness/");
 }
 
 function isNonRegistrySpecifier(specifier) {
@@ -61,7 +61,7 @@ if (process.argv.includes("--self-test")) {
 	expect(classifyDependency("lodash", "~4.17.21"), "violation", "tilde range");
 	expect(classifyDependency("lodash", "4.x"), "violation", "wildcard range");
 	expect(classifyDependency("aliased", "npm:left-pad@^1.3.0"), "violation", "npm alias range");
-	expect(classifyDependency("@earendil-works/pi-ai", "^1.0.0"), "skip", "internal workspace dep");
+	expect(classifyDependency("@step-harness/providers", "^1.0.0"), "skip", "internal workspace dep");
 	expect(classifyDependency("dep", "workspace:*"), "skip", "workspace protocol");
 	expect(classifyDependency("dep", "file:../local"), "skip", "file protocol");
 

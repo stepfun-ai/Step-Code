@@ -1,4 +1,4 @@
-import { setKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { setKeybindings, stripTerminalSequences, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
 import { StepQueuedMessagesComponent } from "../src/ui/view/transcript/step-queued-messages.ts";

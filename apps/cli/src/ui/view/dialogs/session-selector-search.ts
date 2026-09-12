@@ -1,5 +1,5 @@
-import type { SessionInfo } from "@earendil-works/pi-coding-agent";
-import { fuzzyMatch } from "@earendil-works/pi-tui";
+import type { SessionInfo } from "@step-harness/coding-agent";
+import { fuzzyMatch } from "@step-harness/pi-tui";
 
 export type SortMode = "threaded" | "recent" | "relevance";
 

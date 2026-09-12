@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-ai",
+	"name": "@step-harness/providers",
 	"version": "0.84.4",
 	"private": true,
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
@@ -52,7 +52,7 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "0.91.1",
-		"@earendil-works/pi-telemetry": "^0.84.4",
+		"@step-harness/telemetry": "^0.84.4",
 		"http-proxy-agent": "7.0.2",
 		"https-proxy-agent": "7.0.6",
 		"openai": "6.40.0",
@@ -72,7 +72,7 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/earendil-works/pi.git",
-		"directory": "packages/ai"
+		"directory": "packages/providers"
 	},
 	"engines": {
 		"node": ">=22.19.0"

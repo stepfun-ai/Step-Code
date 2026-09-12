@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
 import {
 	type StepTelemetryKnownEventName,

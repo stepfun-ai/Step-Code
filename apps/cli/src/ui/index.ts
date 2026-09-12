@@ -13,7 +13,7 @@
 // The InteractiveMode options type is described by coding-agent (so MainOptions
 // can carry a Pick of it without a reverse dependency); re-export it here so the
 // shell's dispatch construction can reference it through the door.
-export type { InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
+export type { InteractiveModeOptions } from "@step-harness/coding-agent";
 export { selectConfig } from "./config-selector.ts";
 export { InteractiveMode } from "./interactive-mode.ts";
 export { selectSession } from "./session-picker.ts";

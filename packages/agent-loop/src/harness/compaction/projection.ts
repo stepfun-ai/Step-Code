@@ -28,11 +28,11 @@
  *
  * NOTE: This is the canonical, single implementation.
  * `packages/coding-agent/src/core/compaction/projection.ts` re-exports it via
- * `@earendil-works/pi-agent-core`, so keep it pure and import only from
- * `@earendil-works/pi-ai`.
+ * `@step-harness/agent-core`, so keep it pure and import only from
+ * `@step-harness/providers`.
  */
 
-import type { Message } from "@earendil-works/pi-ai";
+import type { Message } from "@step-harness/providers";
 import { estimateProjectionTokens, totalContentChars } from "./projection-content.ts";
 import { computeProtection, type ProtectionZones, verifyProjectionInvariants } from "./projection-invariants.ts";
 import {

@@ -1,5 +1,5 @@
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { CustomEditor, theme } from "@earendil-works/pi-coding-agent";
+import type { KeybindingsManager } from "@step-harness/coding-agent";
+import { CustomEditor, theme } from "@step-harness/coding-agent";
 import {
 	CURSOR_MARKER,
 	type EditorOptions,
@@ -7,7 +7,7 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 
 /** The hint shown before the first prompt is typed. */
 export const STEP_EDITOR_PLACEHOLDER = "Ask Step to do anything (/ for commands, @ for files, ! for shell)";

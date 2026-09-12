@@ -22,7 +22,7 @@
  * component that captures a redraw callback (welcome, spinner, extension mount host).
  */
 
-import type { TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@step-harness/pi-tui";
 import { StepToolSpinnerClock } from "../view/index.ts";
 
 export interface Redraw {

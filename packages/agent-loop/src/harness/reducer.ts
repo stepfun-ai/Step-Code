@@ -1,4 +1,4 @@
-import type { AssistantMessage, DeferredHandle, StopReason } from "@earendil-works/pi-ai";
+import type { AssistantMessage, DeferredHandle, StopReason } from "@step-harness/providers";
 import { Guard } from "typebox/guard";
 import type { AgentMessage, AgentToolCall, ThinkingLevel } from "../types.ts";
 import type {

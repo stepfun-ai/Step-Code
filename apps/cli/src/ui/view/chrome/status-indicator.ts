@@ -1,7 +1,7 @@
-import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
-import type { WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
-import { keyText, theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { WorkingIndicatorOptions } from "@step-harness/coding-agent";
+import { keyText, theme } from "@step-harness/coding-agent";
+import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
+import type { AssistantMessage, AssistantMessageEvent } from "@step-harness/providers";
 import { CountdownTimer } from "../dialogs/countdown-timer.ts";
 import { formatTokens } from "./footer.ts";
 

@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { type Model, validateToolArguments } from "@earendil-works/pi-ai";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import { type Model, validateToolArguments } from "@step-harness/providers";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { createStepCapabilitiesExtension } from "../src/features/step-capabilities.ts";

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@step-harness/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../../../src/ui/interactive-mode.ts";
 import { createHarness, type Harness } from "../../../../../packages/coding-agent/test/suite/harness.ts";

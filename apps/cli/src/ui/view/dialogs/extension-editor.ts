@@ -3,8 +3,8 @@
  * Supports Ctrl+G for external editor.
  */
 
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, getEditorTheme, keyHint, theme } from "@earendil-works/pi-coding-agent";
+import type { KeybindingsManager } from "@step-harness/coding-agent";
+import { DynamicBorder, getEditorTheme, keyHint, theme } from "@step-harness/coding-agent";
 import {
 	Container,
 	Editor,
@@ -14,7 +14,7 @@ import {
 	Spacer,
 	Text,
 	type TUI,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import { editInExternalEditor } from "../../external-editor.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 

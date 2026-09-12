@@ -1,4 +1,4 @@
-import type { MarkdownTransformContext, MarkdownTransformer } from "@earendil-works/pi-coding-agent";
+import type { MarkdownTransformContext, MarkdownTransformer } from "@step-harness/coding-agent";
 
 export function createMarkdownTransform(
 	messageType: MarkdownTransformContext["messageType"],

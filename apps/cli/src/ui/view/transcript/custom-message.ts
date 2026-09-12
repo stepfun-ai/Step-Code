@@ -1,8 +1,8 @@
-import type { TextContent } from "@earendil-works/pi-ai";
-import type { CustomMessage, MessageRenderer } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
-import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import type { CustomMessage, MessageRenderer } from "@step-harness/coding-agent";
+import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
+import type { Component } from "@step-harness/pi-tui";
+import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@step-harness/pi-tui";
+import type { TextContent } from "@step-harness/providers";
 
 /**
  * Component that renders a custom message entry from extensions.

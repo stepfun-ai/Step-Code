@@ -1,7 +1,7 @@
 /** Codex-style, session-scoped goals for Step. */
 
 import { randomUUID } from "node:crypto";
-import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentToolResult } from "@step-harness/agent-core";
 import { type Static, Type } from "typebox";
 import type {
 	ExtensionAPI,

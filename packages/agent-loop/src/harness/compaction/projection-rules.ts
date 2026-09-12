@@ -5,7 +5,7 @@
  * `computeProtection`.
  */
 
-import type { AssistantMessage, Message, TextContent, ThinkingContent, ToolCall } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, TextContent, ThinkingContent, ToolCall } from "@step-harness/providers";
 import {
 	containsProjectionMarker,
 	contentHasImage,

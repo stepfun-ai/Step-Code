@@ -1,7 +1,7 @@
-import type { CustomEntry, EntryRenderer } from "@earendil-works/pi-coding-agent";
-import { theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
-import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { CustomEntry, EntryRenderer } from "@step-harness/coding-agent";
+import { theme } from "@step-harness/coding-agent";
+import type { Component } from "@step-harness/pi-tui";
+import { Box, Container, Spacer, Text } from "@step-harness/pi-tui";
 
 /**
  * Component that renders a custom session entry from extensions.

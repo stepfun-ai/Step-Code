@@ -1,7 +1,7 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { MarkdownTransformer } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, theme } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import type { MarkdownTransformer } from "@step-harness/coding-agent";
+import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
+import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@step-harness/pi-tui";
+import type { AssistantMessage } from "@step-harness/providers";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";

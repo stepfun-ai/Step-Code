@@ -6,7 +6,7 @@
  * execution and queue semantics to pi's AgentSession.
  */
 
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@step-harness/providers";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../core/agent-session.ts";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import type { StepCli } from "../step-cli-runtime.ts";

@@ -1,6 +1,6 @@
-import type { BranchSummaryMessage } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, keyText, theme } from "@earendil-works/pi-coding-agent";
-import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import type { BranchSummaryMessage } from "@step-harness/coding-agent";
+import { getMarkdownTheme, keyText, theme } from "@step-harness/coding-agent";
+import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@step-harness/pi-tui";
 import { renderStepDialogFrame } from "../dialogs/step-dialog.ts";
 
 /**

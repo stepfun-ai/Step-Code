@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@step-harness/agent-core";
 import { finalOutput, isFailed, resultText, runStepSubagentProcess } from "../step-subagent.ts";
 import { discoverStepAgents, formatStepAgentCatalog } from "../step-subagent-agents.ts";
 import { resolveWorkflowToolProfile } from "./tool-profile.ts";

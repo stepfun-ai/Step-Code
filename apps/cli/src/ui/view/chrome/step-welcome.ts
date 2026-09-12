@@ -1,5 +1,5 @@
-import { theme } from "@earendil-works/pi-coding-agent";
-import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { theme } from "@step-harness/coding-agent";
+import { type Component, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
 import { formatCwdForFooter } from "./footer.ts";
 import {
 	alignMarkWithBody,

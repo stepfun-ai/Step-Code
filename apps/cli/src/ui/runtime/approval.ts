@@ -11,7 +11,7 @@
  * uses are never lifted out of their capturing scope.
  */
 
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext } from "@step-harness/coding-agent";
 import type { RuntimeContext } from "./context.ts";
 
 export function createApprovalProvider(ctx: RuntimeContext): Pick<ExtensionUIContext, "confirm"> {

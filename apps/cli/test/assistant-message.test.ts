@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@step-harness/providers";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/ui/view/transcript/assistant-message.ts";
 import { UserMessageComponent } from "../src/ui/view/transcript/user-message.ts";

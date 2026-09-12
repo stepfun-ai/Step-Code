@@ -1,4 +1,4 @@
-import type { TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@step-harness/pi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ModelSelectorComponent } from "../src/ui/view/dialogs/model-selector.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";

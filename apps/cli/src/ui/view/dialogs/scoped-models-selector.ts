@@ -1,5 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
-import { DynamicBorder, keyText, theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, keyText, theme } from "@step-harness/coding-agent";
 import {
 	Container,
 	type Focusable,
@@ -10,7 +9,8 @@ import {
 	matchesKey,
 	Spacer,
 	Text,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import type { Model } from "@step-harness/providers";
 import { getModelSearchText } from "../../model-search.ts";
 
 // EnabledIds: null = all enabled (no filter), string[] = explicit ordered list

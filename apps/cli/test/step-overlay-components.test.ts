@@ -1,4 +1,4 @@
-import { setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
 import { BranchSummaryMessageComponent } from "../src/ui/view/transcript/branch-summary-message.ts";

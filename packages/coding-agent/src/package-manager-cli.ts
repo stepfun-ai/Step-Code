@@ -9,7 +9,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Markdown, type MarkdownTheme } from "@step-harness/pi-tui";
 import chalk from "chalk";
 import lockfile from "proper-lockfile";
 import { createProjectTrustContext } from "./cli/project-trust.ts";

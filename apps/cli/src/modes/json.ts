@@ -5,4 +5,4 @@
  * channel; each emitted line is a JsonAgentSessionEvent (see contracts/wire for
  * the shared shape). Implementation lives in coding-agent/src/modes/json-event.ts.
  */
-export type { JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
+export type { JsonAgentSessionEvent } from "@step-harness/coding-agent";

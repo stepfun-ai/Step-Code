@@ -1,12 +1,5 @@
-import {
-	APP_NAME,
-	DynamicBorder,
-	keyHint,
-	rawKeyHint,
-	type TerminalTheme,
-	theme,
-} from "@earendil-works/pi-coding-agent";
-import { Container, getKeybindings, Spacer, Text } from "@earendil-works/pi-tui";
+import { APP_NAME, DynamicBorder, keyHint, rawKeyHint, type TerminalTheme, theme } from "@step-harness/coding-agent";
+import { Container, getKeybindings, Spacer, Text } from "@step-harness/pi-tui";
 
 export interface FirstTimeSetupResult {
 	theme: TerminalTheme;

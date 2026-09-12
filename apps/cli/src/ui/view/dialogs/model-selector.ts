@@ -1,6 +1,5 @@
-import { type Model, modelsAreEqual } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, keyHint, theme } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@step-harness/coding-agent";
+import { DynamicBorder, keyHint, theme } from "@step-harness/coding-agent";
 import {
 	Container,
 	type Focusable,
@@ -11,7 +10,8 @@ import {
 	Spacer,
 	Text,
 	type TUI,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import { type Model, modelsAreEqual } from "@step-harness/providers";
 import { refreshModelCatalogs } from "../../model-catalog-refresh.ts";
 import { getModelSelectorSearchText } from "../../model-search.ts";
 

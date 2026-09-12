@@ -1,7 +1,7 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { MarkdownTransformer } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, theme } from "@earendil-works/pi-coding-agent";
-import { type MarkdownTheme, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { MarkdownTransformer } from "@step-harness/coding-agent";
+import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
+import { type MarkdownTheme, stripTerminalSequences, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
+import type { AssistantMessage } from "@step-harness/providers";
 import { AssistantMessageComponent } from "./assistant-message.ts";
 import { UserMessageComponent } from "./user-message.ts";
 

@@ -1,6 +1,6 @@
-import type { ParsedSkillBlock } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, keyText, theme } from "@earendil-works/pi-coding-agent";
-import { Box, Markdown, type MarkdownTheme, Text } from "@earendil-works/pi-tui";
+import type { ParsedSkillBlock } from "@step-harness/coding-agent";
+import { getMarkdownTheme, keyText, theme } from "@step-harness/coding-agent";
+import { Box, Markdown, type MarkdownTheme, Text } from "@step-harness/pi-tui";
 
 /**
  * Component that renders a skill invocation message with collapsed/expanded state.

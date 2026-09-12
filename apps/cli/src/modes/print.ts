@@ -5,4 +5,4 @@
  * dispatches to runPrintMode for the print and json app modes; stdout is taken
  * over before any output so the result channel stays byte-clean.
  */
-export { type PrintModeOptions, runPrintMode } from "@earendil-works/pi-coding-agent";
+export { type PrintModeOptions, runPrintMode } from "@step-harness/coding-agent";

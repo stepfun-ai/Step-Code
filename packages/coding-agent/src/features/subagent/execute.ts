@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
 import type { Static } from "typebox";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../../step/telemetry.ts";

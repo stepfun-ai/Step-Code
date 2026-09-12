@@ -10,7 +10,7 @@ import type {
 	ResolvedPaths,
 	ResolvedResource,
 	SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	CONFIG_DIR_NAME,
 	canonicalizePath,
@@ -20,7 +20,7 @@ import {
 	rawKeyHint,
 	resolvePath,
 	theme,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	type Component,
 	Container,
@@ -31,7 +31,7 @@ import {
 	Spacer,
 	truncateToWidth,
 	visibleWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
 type ConfigWriteScope = "global" | "project";

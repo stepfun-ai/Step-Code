@@ -9,9 +9,9 @@
 
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Message, StringEnum, type Usage } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
+import type { AgentToolResult, ThinkingLevel } from "@step-harness/agent-core";
+import { Text } from "@step-harness/pi-tui";
+import { type Message, StringEnum, type Usage } from "@step-harness/providers";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";

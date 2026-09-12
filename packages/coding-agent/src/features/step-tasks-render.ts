@@ -1,5 +1,5 @@
 /** Presentation-only projections of task state and immutable tool results. */
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import {
 	type Component,
 	Container,
@@ -7,7 +7,7 @@ import {
 	Text,
 	TruncatedText,
 	truncateToWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import type { ToolRenderContext, ToolRenderResultOptions } from "../core/extensions/types.ts";
 import type { Theme } from "../theme/theme.ts";
 import type { StepTask, StepTaskStatus } from "./step-tasks.ts";

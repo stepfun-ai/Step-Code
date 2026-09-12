@@ -9,7 +9,7 @@
  *   3. The most recent `keepRecentTokens` worth of tail messages.
  */
 
-import type { AssistantMessage, Message, ToolCall } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, ToolCall } from "@step-harness/providers";
 import { estimateMessageTokens } from "./projection-content.ts";
 
 // ============================================================================

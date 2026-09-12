@@ -1,5 +1,5 @@
-import type { Component, Terminal, TUI } from "@earendil-works/pi-tui";
-import { Container, isViewportTUI, Text } from "@earendil-works/pi-tui";
+import type { Component, Terminal, TUI } from "@step-harness/pi-tui";
+import { Container, isViewportTUI, Text } from "@step-harness/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../../packages/coding-agent/src/core/settings-manager.ts";

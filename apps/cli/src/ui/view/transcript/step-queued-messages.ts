@@ -1,11 +1,5 @@
-import { formatKeyText, theme } from "@earendil-works/pi-coding-agent";
-import {
-	type Component,
-	getKeybindings,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { formatKeyText, theme } from "@step-harness/coding-agent";
+import { type Component, getKeybindings, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@step-harness/pi-tui";
 
 const MAX_PREVIEW_ENTRIES = 3;
 const MAX_PREVIEW_LINES = 2;

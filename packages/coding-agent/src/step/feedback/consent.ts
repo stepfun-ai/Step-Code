@@ -5,7 +5,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
 import type { Keybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { formatKeyText } from "../../render/keybinding-hints.ts";

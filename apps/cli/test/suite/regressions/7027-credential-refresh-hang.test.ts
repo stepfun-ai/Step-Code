@@ -1,4 +1,4 @@
-import type { Api, Model, Provider } from "@earendil-works/pi-ai";
+import type { Api, Model, Provider } from "@step-harness/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../../../../../packages/coding-agent/src/core/auth-storage.ts";
 import { ModelRuntime } from "../../../../../packages/coding-agent/src/core/model-runtime.ts";

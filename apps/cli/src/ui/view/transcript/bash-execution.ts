@@ -13,7 +13,7 @@ import {
 	theme,
 	truncateTail,
 	truncateToVisualLines,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	Container,
 	Loader,
@@ -23,7 +23,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;

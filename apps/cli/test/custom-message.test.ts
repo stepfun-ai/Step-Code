@@ -1,4 +1,4 @@
-import { Text } from "@earendil-works/pi-tui";
+import { Text } from "@step-harness/pi-tui";
 import { describe, expect, test } from "vitest";
 import type { MessageRenderer, MessageRenderOptions } from "../../../packages/coding-agent/src/core/extensions/types.ts";
 import type { CustomMessage } from "../../../packages/coding-agent/src/core/messages.ts";

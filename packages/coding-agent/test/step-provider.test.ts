@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import type { OAuthLoginCallbacks } from "@step-harness/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionAPI, InlineExtension } from "../src/core/extensions/types.ts";

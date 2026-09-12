@@ -1,5 +1,4 @@
-import type { AuthInfoLink, OAuthDeviceCodeInfo } from "@earendil-works/pi-ai";
-import { DynamicBorder, keyHint, openBrowser, theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, keyHint, openBrowser, theme } from "@step-harness/coding-agent";
 import {
 	Container,
 	CURSOR_MARKER,
@@ -12,7 +11,8 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import type { AuthInfoLink, OAuthDeviceCodeInfo } from "@step-harness/providers";
 import { renderStepDialogFrame } from "./step-dialog.ts";
 
 const FIXED_SECRET_MASK = "••••••••";

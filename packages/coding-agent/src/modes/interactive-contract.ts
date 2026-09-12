@@ -13,7 +13,7 @@
  * moved UI re-imports these types from the `.` barrel.
  */
 
-import type { ImageContent } from "@earendil-works/pi-ai/compat";
+import type { ImageContent } from "@step-harness/providers/compat";
 import type { AgentSessionRuntimeDiagnostic } from "./../core/agent-session-services.ts";
 import type { ExtensionUIContext } from "./../core/extensions/index.ts";
 import type { ResolvedPaths } from "./../core/package-manager.ts";

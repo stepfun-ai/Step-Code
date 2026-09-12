@@ -2,9 +2,9 @@
  * TUI session selector for --resume flag
  */
 
-import type { SessionInfo, SessionListProgress, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { setKeybindings } from "@earendil-works/pi-tui";
+import type { SessionInfo, SessionListProgress, SettingsManager } from "@step-harness/coding-agent";
+import { KeybindingsManager } from "@step-harness/coding-agent";
+import { setKeybindings } from "@step-harness/pi-tui";
 import { createStartupTui, type StartupTuiPathOptions, startStartupTui } from "./startup-ui.ts";
 import { SessionSelectorComponent } from "./view/dialogs/session-selector.ts";
 

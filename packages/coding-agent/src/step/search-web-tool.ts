@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Credential } from "@earendil-works/pi-ai";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import type { Credential } from "@step-harness/providers";
 import { type Static, Type } from "typebox";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionContext, ToolDefinition } from "../core/extensions/types.ts";

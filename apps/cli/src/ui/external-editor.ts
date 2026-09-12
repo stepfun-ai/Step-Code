@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_NAME, stripBom } from "@earendil-works/pi-coding-agent";
+import { APP_NAME, stripBom } from "@step-harness/coding-agent";
 
 export interface ExternalEditorOptions {
 	command: string;

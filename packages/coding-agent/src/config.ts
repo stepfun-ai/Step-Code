@@ -510,7 +510,7 @@ try {
 // must remain isolated even when a parent shell has stale STEP_* variables.
 const configuredProductName = STEP_ENTRYPOINT ? process.env.STEP_CLI_APP_NAME?.trim() : undefined;
 const piConfigName: string | undefined = configuredProductName || pkg.piConfig?.name;
-export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
+export const PACKAGE_NAME: string = pkg.name || "@step-harness/coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 // Rebranded distributions can select their project resource directory without

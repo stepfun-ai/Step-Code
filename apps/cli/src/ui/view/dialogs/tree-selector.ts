@@ -1,5 +1,5 @@
-import type { SessionTreeNode } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, formatKeyText, keyHint, theme } from "@earendil-works/pi-coding-agent";
+import type { SessionTreeNode } from "@step-harness/coding-agent";
+import { DynamicBorder, formatKeyText, keyHint, theme } from "@step-harness/coding-agent";
 import {
 	type Component,
 	Container,
@@ -13,7 +13,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 
 /** Gutter info: position (displayIndent where connector was) and whether to show │ */
 interface GutterInfo {

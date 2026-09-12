@@ -1,6 +1,6 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, keyHint } from "@earendil-works/pi-coding-agent";
-import { CancellableLoader, Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@step-harness/coding-agent";
+import { DynamicBorder, keyHint } from "@step-harness/coding-agent";
+import { CancellableLoader, Container, Loader, Spacer, Text, type TUI } from "@step-harness/pi-tui";
 
 /** Loader wrapped with borders for extension UI */
 export class BorderedLoader extends Container {

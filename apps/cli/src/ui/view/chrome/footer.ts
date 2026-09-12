@@ -1,12 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { AgentSession, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
-import {
-	addUsageToTotals,
-	areExperimentalFeaturesEnabled,
-	createUsageTotals,
-	theme,
-} from "@earendil-works/pi-coding-agent";
-import { type Component, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { AgentSession, ReadonlyFooterDataProvider } from "@step-harness/coding-agent";
+import { addUsageToTotals, areExperimentalFeaturesEnabled, createUsageTotals, theme } from "@step-harness/coding-agent";
+import { type Component, sliceByColumn, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
 
 /**
  * Sanitize text for display in a single-line status.

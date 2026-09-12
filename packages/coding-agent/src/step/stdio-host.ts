@@ -12,8 +12,8 @@ import type {
 	BeforeToolCallContext,
 	BeforeToolCallResult,
 	ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+} from "@step-harness/agent-core";
+import type { ImageContent, Model, TextContent } from "@step-harness/providers";
 import { Type } from "typebox";
 import type { AgentSession, AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";

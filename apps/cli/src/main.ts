@@ -67,7 +67,7 @@ import {
 	trackStepTelemetryError,
 	translateStepCommandArgs,
 	withStepDefaults,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import { parseArgs, toPrintOutputMode } from "#args/index";
 import { loadStepStartupConfig } from "#bootstrap/config";
 import { createStepExtensionFactories } from "#bootstrap/extensions";

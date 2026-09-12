@@ -6,8 +6,8 @@ import {
 	type ProjectTrustStoreEntry,
 	rawKeyHint,
 	theme,
-} from "@earendil-works/pi-coding-agent";
-import { Container, getKeybindings, Spacer, Text } from "@earendil-works/pi-tui";
+} from "@step-harness/coding-agent";
+import { Container, getKeybindings, Spacer, Text } from "@step-harness/pi-tui";
 
 export type TrustSelection = Pick<ProjectTrustOption, "trusted" | "updates">;
 

@@ -2,8 +2,8 @@
  * Simple text input component for extensions.
  */
 
-import { DynamicBorder, keyHint, theme } from "@earendil-works/pi-coding-agent";
-import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { DynamicBorder, keyHint, theme } from "@step-harness/coding-agent";
+import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@step-harness/pi-tui";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 

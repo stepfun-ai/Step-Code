@@ -21,8 +21,7 @@
  * without touching the call sites.
  */
 
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai/compat";
+import type { AgentMessage } from "@step-harness/agent-core";
 import type {
 	AgentSession,
 	CustomEditor,
@@ -30,15 +29,9 @@ import type {
 	InteractiveModeOptions,
 	MarkdownTransformer,
 	SessionEntry,
-} from "@earendil-works/pi-coding-agent";
-import type {
-	Container,
-	EditorComponent,
-	MarkdownTheme,
-	TUI,
-	TuiAltScreen,
-	TuiMainScreen,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/coding-agent";
+import type { Container, EditorComponent, MarkdownTheme, TUI, TuiAltScreen, TuiMainScreen } from "@step-harness/pi-tui";
+import type { AssistantMessage, Usage } from "@step-harness/providers/compat";
 import type {
 	AssistantMessageComponent,
 	FooterComponent,

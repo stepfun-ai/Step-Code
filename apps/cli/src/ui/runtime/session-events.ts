@@ -23,8 +23,8 @@
  * composition root and moved in lockstep with rebindCurrentSession.
  */
 
-import { type AgentSessionEvent, createCompactionSummaryMessage, theme } from "@earendil-works/pi-coding-agent";
-import { Spacer, Text } from "@earendil-works/pi-tui";
+import { type AgentSessionEvent, createCompactionSummaryMessage, theme } from "@step-harness/coding-agent";
+import { Spacer, Text } from "@step-harness/pi-tui";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,

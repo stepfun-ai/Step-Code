@@ -29,7 +29,7 @@ import {
 	extensionForImageMimeType,
 	readClipboardImage,
 	readClipboardText,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import type { RuntimeContext } from "./context.ts";
 import { handleEscape } from "./interrupt.ts";
 

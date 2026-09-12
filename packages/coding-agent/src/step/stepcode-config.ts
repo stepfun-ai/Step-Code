@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import type { Api } from "@earendil-works/pi-ai";
+import type { Api } from "@step-harness/providers";
 import lockfile from "proper-lockfile";
 import type { ExtensionAPI, InlineExtension, ProviderConfig, ProviderModelConfig } from "../core/extensions/types.ts";
 import { stripBom } from "../utils/text.ts";

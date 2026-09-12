@@ -1,4 +1,4 @@
-import { Container } from "@earendil-works/pi-tui";
+import { Container } from "@step-harness/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntimeDiagnostic } from "../../../../../packages/coding-agent/src/core/agent-session-services.ts";
 import { InteractiveMode } from "../../../src/ui/interactive-mode.ts";

@@ -1,4 +1,4 @@
-import { type AgentSessionRuntimeHost, StepStdioHost } from "@earendil-works/pi-coding-agent";
+import { type AgentSessionRuntimeHost, StepStdioHost } from "@step-harness/coding-agent";
 import type { RawStdoutWrite } from "#bootstrap/stdout-capture";
 
 /**

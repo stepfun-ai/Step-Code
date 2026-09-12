@@ -4,7 +4,7 @@ import {
 	setKeybindings,
 	TuiAltScreen,
 	TuiMainScreen,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
 import type { EditorFactory } from "../../../packages/coding-agent/src/core/extensions/index.ts";

@@ -1,6 +1,6 @@
-import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { raceWithAbortSignal } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@step-harness/coding-agent";
+import { raceWithAbortSignal } from "@step-harness/coding-agent";
+import type { ModelsRefreshResult } from "@step-harness/providers";
 
 type ModelCatalogRuntime = Pick<ModelRuntime, "refresh">;
 

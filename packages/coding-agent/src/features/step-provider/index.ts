@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import process from "node:process";
-import type { Api, Model, OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import type { Api, Model, OAuthCredentials, OAuthLoginCallbacks } from "@step-harness/providers";
 import type {
 	ExtensionAPI,
 	InlineExtension,

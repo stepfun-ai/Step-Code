@@ -6,9 +6,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import type { AssistantMessage, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
+import type { AgentMessage, ThinkingLevel } from "@step-harness/agent-core";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -28,7 +26,7 @@ import type {
 	TruncationResult,
 	TuiMode,
 	WorkingIndicatorOptions,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -111,7 +109,7 @@ import {
 	type ToolStatus,
 	theme,
 	VERSION,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -125,8 +123,8 @@ import type {
 	SlashCommand,
 	Terminal,
 	TuiMainScreenRenderState,
-} from "@earendil-works/pi-tui";
-import * as TuiLayouts from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import * as TuiLayouts from "@step-harness/pi-tui";
 import {
 	CombinedAutocompleteProvider,
 	type Component,
@@ -146,7 +144,9 @@ import {
 	TuiAltScreen,
 	TuiMainScreen,
 	visibleWidth,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
+import type { AuthEvent, AuthPrompt } from "@step-harness/providers";
+import type { AssistantMessage, Message, Model, Usage } from "@step-harness/providers/compat";
 import chalk from "chalk";
 import { spawn } from "child_process";
 import { editInExternalEditor } from "./external-editor.ts";
@@ -372,7 +372,7 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
 }
 
 // InteractiveModeOptions / InteractiveStartupContext: single source of truth lives in
-// @earendil-works/pi-coding-agent (interactive-contract.ts). Imported at top, re-exported
+// @step-harness/coding-agent (interactive-contract.ts). Imported at top, re-exported
 // here so the ui barrel and InteractiveMode construction share ONE definition (no drift).
 export type { InteractiveModeOptions, InteractiveStartupContext };
 

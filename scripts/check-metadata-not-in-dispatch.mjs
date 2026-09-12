@@ -7,7 +7,7 @@
 // "which protocol". The dispatch key is always model.api. This gate freezes that
 // by asserting the `metadata/` module is NOT imported by any dispatch point:
 //
-//   dispatch zone = packages/ai/src/api/** + models.ts + dialect/registry.ts
+//   dispatch zone = packages/providers/src/api/** + models.ts + dialect/registry.ts
 //
 // An import of `../metadata/...` (or any path ending in `metadata/<file>`) from a
 // dispatch-point file means metadata leaked into protocol selection — fail the build.
@@ -40,10 +40,10 @@ function normalize(p) {
 function inDispatchZone(repoRelPath) {
 	const n = normalize(repoRelPath);
 	return (
-		n.startsWith("packages/ai/src/api/") ||
-		n.startsWith("packages/ai/src/dialect/") ||
-		n === "packages/ai/src/models.ts" ||
-		n === "packages/ai/src/compat.ts"
+		n.startsWith("packages/providers/src/api/") ||
+		n.startsWith("packages/providers/src/dialect/") ||
+		n === "packages/providers/src/models.ts" ||
+		n === "packages/providers/src/compat.ts"
 	);
 }
 
@@ -101,17 +101,17 @@ function runSelfTest() {
 	};
 
 	// clean — metadata imported OUTSIDE the dispatch zone (flatten consumes it legitimately)
-	expectClean("packages/ai/src/provider/flatten.ts", 'import type { MetadataLookup } from "../metadata/lookup.ts";');
+	expectClean("packages/providers/src/provider/flatten.ts", 'import type { MetadataLookup } from "../metadata/lookup.ts";');
 	// clean — a dispatch-zone file importing non-metadata modules
-	expectClean("packages/ai/src/api/openai-completions.ts", 'import type { Model } from "../types.ts";');
-	expectClean("packages/ai/src/models.ts", 'import { getApiProvider } from "./compat.ts";');
+	expectClean("packages/providers/src/api/openai-completions.ts", 'import type { Model } from "../types.ts";');
+	expectClean("packages/providers/src/models.ts", 'import { getApiProvider } from "./compat.ts";');
 
 	// violation — a dispatch-zone file importing the metadata module
-	expectViolation("packages/ai/src/api/openai-responses.ts", 'import { createMetadataLookup } from "../metadata/lookup.ts";');
-	expectViolation("packages/ai/src/models.ts", 'import type { ModelMetadata } from "./metadata/types.ts";');
-	expectViolation("packages/ai/src/dialect/registry.ts", 'import { x } from "../metadata/types.ts";');
-	expectViolation("packages/ai/src/dialect/resolve.ts", 'import { x } from "../metadata/lookup.ts";');
-	expectViolation("packages/ai/src/compat.ts", 'import { createMetadataLookup } from "./metadata/lookup.ts";');
+	expectViolation("packages/providers/src/api/openai-responses.ts", 'import { createMetadataLookup } from "../metadata/lookup.ts";');
+	expectViolation("packages/providers/src/models.ts", 'import type { ModelMetadata } from "./metadata/types.ts";');
+	expectViolation("packages/providers/src/dialect/registry.ts", 'import { x } from "../metadata/types.ts";');
+	expectViolation("packages/providers/src/dialect/resolve.ts", 'import { x } from "../metadata/lookup.ts";');
+	expectViolation("packages/providers/src/compat.ts", 'import { createMetadataLookup } from "./metadata/lookup.ts";');
 
 	if (failures.length > 0) {
 		console.error("metadata-not-in-dispatch self-test FAILED:");

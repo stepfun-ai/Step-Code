@@ -1,4 +1,4 @@
-import { setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@step-harness/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
 import type { ExtensionCommandContext } from "../../../packages/coding-agent/src/core/extensions/types.ts";
