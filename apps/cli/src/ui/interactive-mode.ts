@@ -61,7 +61,6 @@ import {
 	getAvailableThemesWithPaths,
 	getChangelogPath,
 	getCwdRelativePath,
-	getDocsPath,
 	getEditorTheme,
 	getMarkdownTheme,
 	getNewEntries,
@@ -5638,14 +5637,6 @@ export class InteractiveMode {
 			undefined,
 			this.options.tuiStyle === "step" ? "step" : "native",
 		);
-
-		if (providerId === "amazon-bedrock") {
-			dialog.showDetails([
-				theme.fg("text", "You can also use an AWS profile, IAM keys, or role-based credentials."),
-				theme.fg("muted", "See:"),
-				theme.fg("accent", `  ${path.join(getDocsPath(), "providers.md")}`),
-			]);
-		}
 
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);

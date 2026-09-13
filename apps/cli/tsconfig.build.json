@@ -7,9 +7,7 @@
 			"@step-harness/coding-agent/*": ["../../packages/coding-agent/dist/*.d.ts"],
 			"@step-harness/providers": ["../../packages/providers/dist/index.d.ts"],
 			"@step-harness/providers/*": ["../../packages/providers/dist/*.d.ts", "../../packages/providers/dist/providers/*.d.ts"],
-			"@step-harness/config": ["../../packages/config/dist/index.d.ts"],
-			"@step-harness/contracts": ["../../packages/contracts/dist/in-process/index.d.ts"],
-			"@step-harness/contracts/wire": ["../../packages/contracts/dist/wire/index.d.ts"]
+			"@step-harness/config": ["../../packages/config/dist/index.d.ts"]
 		},
 		"rootDir": "./src"
 	},

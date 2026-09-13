@@ -102,14 +102,11 @@
 
 | 项 | 说明 |
 |---|---|
-| `packages/contracts` 重复帧 codec 缺 8MiB 上限守卫 | 仅被未接线的 voice-agent `import type` 引用，inert；接线前需与 `step/stdio.ts` 统一（含 max-frame 守卫） |
-| contracts `"1"`(string) vs coding-agent `1`(number) 协议版本常量类型不一 | inert；跨边界严格比较会误判，接线前统一 |
-| `apps/cli` bin 丢 `chmod +x` | `dist/main.js` 带 shebang 且声明为 `bin.step`，但 `private` 未 link；出货 bundle 有 chmod，当前 latent |
-| `.husky/pre-commit` 仍匹配 `packages/ai/*`、`packages/web-ui/*`（已不存在） | 无害：`pnpm run check` 无条件在最后跑 browser-smoke |
-| `scripts/auto-pi.sh:68` 仍指 `dist/cli.js` | 仅 dev-helper（`profile:tui/rpc` 实测已改指 apps/cli，不受影响） |
+| `packages/contracts` 重复帧 codec 缺 8MiB 上限守卫 | 仅被未接线的 voice-agent `import type` 引用，inert；属 S6 scaffold（非死代码），接线前需与 `step/stdio.ts` 统一 |
+| contracts `"1"`(string) vs coding-agent `1`(number) 协议版本常量类型不一 | 同上 scaffold，inert；接线前统一 |
+| `apps/cli` bin 丢 `chmod +x` | `dist/main.js` 带 shebang 且声明为 `bin.step`，但 `private` 未 link；出货 bundle 有 chmod，当前 latent（属"补 chmod"而非删死码，未动） |
 | `generate-models-strict.test.ts` 删除 → `--strict` 守卫丢覆盖 | strip 文档已记“S7 重建 slim 版”，尚未补 |
-| 登录对话框残留 `amazon-bedrock` 死分支等 | 不可达死 UI/元数据，strip 文档已列 S7 清理 |
-| `apps/cli/tsconfig.build.json` 指向未构建的 `contracts/dist` 死别名 | 无人 import 故 tsgo 不报错、构建绿；可删该别名或把 contracts 纳入构建链 |
+| `types.ts` KnownProvider / env-api-keys / model-resolver 的删除商死字面量 | S7 死码清扫；涉及联合类型收窄，有类型风险，随 S7 谨慎处理（本轮未动） |
 
 ## 验证记录（第二轮：实测命令回归 + 再分析，2026-09-13）
 
@@ -130,6 +127,19 @@
 - coding-agent：工具/权限/会话/prompt 全不变（prompt 逐字节），dispatch 仍按 `model.api`（零 provider-name 分支）。**0 功能回归**。
 - packaging：拓扑序正确、发布重锚 `apps/cli`/step bundle；实测 build 绿。
 
-**未覆盖（冒烟脚本盲区，建议后续补）**：`--mode rpc`、`--sdk-stdio`、subagent/Task、`--resume`/`--continue`、多轮对话、工具审批提示、MCP。
+**净结论（第二轮）**：重构对基线**功能保真**（命令 23/23、TUI 与 coding-agent 零功能回归、打包绿）；本次 4 修复已并入 `refactor/step-restructure`。
 
-**净结论**：重构对基线**功能保真**（命令 23/23、TUI 与 coding-agent 零功能回归、打包绿）；本次 4 修复已并入 `refactor/step-restructure`。
+## 验证记录（第三轮：盲区覆盖 + 死配置清理，2026-09-13）
+
+**盲区覆盖（实跑对应测试套件 + shipped bundle e2e）**：前一轮列为"未覆盖"的面已实测：
+- 靶向套件 **17 文件 / 156 用例通过，0 失败**（10 skip 为凭证/模型门控）：rpc（`rpc-client-clear-queue`/`clone`/`process-exit`、`rpc-jsonl`、`rpc-prompt-response-semantics`）、sdk-stdio（`step-stdio`、`step-stdio-host`）、subagent/Task（`step-subagent-events`、`step-tasks-extension`）、session/resume/fork（`sdk-session-manager`、`session-id-readonly`、`step-session-wrapper`、`step-session-file-compat`、`agent-session-branching`、`format-resume-command`）、权限/审批（`step-permissions`）、plugin/MCP（`step-plugins`）、多轮/compaction（`agent-session-compaction`、`compaction`、`agent-session-concurrent`）。
+- **shipped bundle 端到端**：`node dist/bundle/step.js --mode rpc` 实跑 `new_session`+`get_state`+`bash "echo …"` → 状态响应 ✓、bash 工具输出 ✓。
+- 仍未做真·外部集成两点（honest）：真实 MCP 服务器连接（仅测 `mcp.status`/plugin 装载面）、模型自发 Task 子代理 spawn（测了 agent 面 + 事件流）。需要可再补真服务器/诱导用例。
+
+**死配置清理（已 `pnpm run check` 全绿）**：
+- 删 `apps/cli/tsconfig.build.json` 指向未构建 contracts 的死别名
+- 删 `.husky/pre-commit` 冗余+陈旧的 `RUN_BROWSER_SMOKE` 块（browser-smoke 已由 `pnpm run check` 无条件跑）
+- 删 pi 时代 dev 包装器 `scripts/auto-pi.sh`（pi 已移除、指向不存在的 `dist/cli.js`、无引用）
+- 删 `interactive-mode.ts` 不可达的 `amazon-bedrock` 登录帮助死分支 + 其唯一 import `getDocsPath`
+
+**净结论（第三轮）**：命名盲区面全部实跑通过（156 + rpc bundle e2e）；死配置已清；`pnpm run check` 全绿。
