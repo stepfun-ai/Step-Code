@@ -46,7 +46,11 @@ function createQueueEditor(bindings: KeybindingsConfig = {}, fullscreen = false)
 		},
 		options: { tuiStyle: "step" },
 		ui,
-		redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: () => ui.renderNow() },
+		// `redraw` on InteractiveMode is a getter-only accessor backed by the
+		// private `_redraw` field (see interactive-mode.ts). The fixture bypasses
+		// the constructor via Object.create, so seed the backing field directly
+		// instead of assigning the getter (which would throw).
+		_redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: () => ui.renderNow() },
 		keybindings,
 		defaultEditor: editor,
 		editor,
