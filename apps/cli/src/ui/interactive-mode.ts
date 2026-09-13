@@ -482,7 +482,19 @@ export class InteractiveMode {
 	private documentContainer: Container;
 	stepWelcome: StepWelcomeComponent | undefined;
 	stepSpinner: StepToolSpinnerClock | undefined;
-	redraw: Redraw;
+	private _redraw: Redraw | undefined;
+	// `redraw` is the interactive render funnel — a thin facade over `this.ui`
+	// (see runtime/redraw.ts). The constructor builds it eagerly so it also owns
+	// the animation clock (`redraw.spinner`), but it is derived lazily from
+	// `this.ui` here so a mode that structurally satisfies RuntimeContext without
+	// running the constructor (e.g. the approval regression harness) still gets a
+	// working funnel instead of throwing on `this.redraw`.
+	get redraw(): Redraw {
+		if (this._redraw === undefined) {
+			this._redraw = createRedraw(this.ui);
+		}
+		return this._redraw;
+	}
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
@@ -677,7 +689,7 @@ export class InteractiveMode {
 		});
 		this.ui = createInteractiveTuiReference(() => this.renderer);
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
-		this.redraw = createRedraw(this.ui, { withSpinner: options.tuiStyle === "step" });
+		this._redraw = createRedraw(this.ui, { withSpinner: options.tuiStyle === "step" });
 		this.stepSpinner = this.redraw.spinner;
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();

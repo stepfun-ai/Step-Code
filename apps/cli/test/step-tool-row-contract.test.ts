@@ -1,11 +1,11 @@
-import { stripTerminalSequences, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, Text, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
-import type { StepToolSpinnerState } from "../src/modes/interactive/components/step-spinner.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { createStepToolProfile } from "../src/step/tool-profile.ts";
+import { TuiMainScreen } from "../../../packages/tui/src/tui-main-screen.ts";
+import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
+import type { StepToolSpinnerState } from "../src/ui/view/transcript/step-spinner.ts";
+import { ToolExecutionComponent } from "../src/ui/view/transcript/tool-execution.ts";
+import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
+import { createStepToolProfile } from "../../../packages/coding-agent/src/step/tool-profile.ts";
 
 const cleanups: Array<() => void> = [];
 

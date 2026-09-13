@@ -1,19 +1,19 @@
-import { Container, Input, setKeybindings, stripTerminalSequences, Text } from "@earendil-works/pi-tui";
+import { Container, Input, setKeybindings, stripTerminalSequences, Text } from "@step-harness/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
-import type { ExtensionContext, ExtensionUIContext } from "../src/core/extensions/types.ts";
-import { KeybindingsManager } from "../src/core/keybindings.ts";
-import type { ExtensionInputComponent } from "../src/modes/interactive/components/extension-input.ts";
-import type { ExtensionSelectorComponent } from "../src/modes/interactive/components/extension-selector.ts";
+import { TuiMainScreen } from "../../../packages/tui/src/tui-main-screen.ts";
+import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts";
+import type { ExtensionContext, ExtensionUIContext } from "../../../packages/coding-agent/src/core/extensions/types.ts";
+import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
+import type { ExtensionInputComponent } from "../src/ui/view/dialogs/extension-input.ts";
+import type { ExtensionSelectorComponent } from "../src/ui/view/dialogs/extension-selector.ts";
 import {
 	WorkingOutputTracker,
 	type WorkingStatusIndicator,
-} from "../src/modes/interactive/components/status-indicator.ts";
-import { StepToolSpinnerClock } from "../src/modes/interactive/components/step-spinner.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { StepPermissionController } from "../src/step/permissions.ts";
+} from "../src/ui/view/chrome/status-indicator.ts";
+import { StepToolSpinnerClock } from "../src/ui/view/transcript/step-spinner.ts";
+import { InteractiveMode } from "../src/ui/interactive-mode.ts";
+import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
+import { StepPermissionController } from "../../../packages/coding-agent/src/step/permissions.ts";
 
 // Run real dialog/status/TUI methods without loading user configuration or a
 // runtime session. Only unrelated extension reset services are stubbed.

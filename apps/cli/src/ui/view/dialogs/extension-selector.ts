@@ -4,7 +4,16 @@
  */
 
 import { DynamicBorder, keyHint, rawKeyHint, theme } from "@step-harness/coding-agent";
-import { Container, getKeybindings, type SelectItem, SelectList, Spacer, Text, type TUI, wrapTextWithAnsi } from "@step-harness/pi-tui";
+import {
+	Container,
+	getKeybindings,
+	type SelectItem,
+	SelectList,
+	Spacer,
+	Text,
+	type TUI,
+	wrapTextWithAnsi,
+} from "@step-harness/pi-tui";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
