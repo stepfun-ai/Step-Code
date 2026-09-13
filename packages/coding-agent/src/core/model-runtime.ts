@@ -730,13 +730,24 @@ export class ModelRuntime implements Models {
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
 
+	/**
+	 * Best-effort background refresh after a provider (un)registration. The
+	 * returned promise is intentionally discarded, so a transient failure — e.g.
+	 * the credential store being torn down under a concurrent test, or a flaky
+	 * filesystem — must be swallowed here rather than escaping as an unhandled
+	 * rejection. Refresh failures are already recorded via `availabilityError`.
+	 */
+	private scheduleBackgroundRefresh(): void {
+		void this.refresh({ allowNetwork: false }).catch(() => {});
+	}
+
 	registerNativeProvider(provider: Provider): void {
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
 		this.recomposeProvider(provider.id);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleBackgroundRefresh();
 	}
 
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
@@ -774,7 +785,7 @@ export class ModelRuntime implements Models {
 				available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
 			};
 		}
-		void this.refresh({ allowNetwork: false });
+		this.scheduleBackgroundRefresh();
 	}
 
 	unregisterProvider(providerId: string): void {
@@ -782,6 +793,6 @@ export class ModelRuntime implements Models {
 		this.nativeExtensionProviders.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleBackgroundRefresh();
 	}
 }
