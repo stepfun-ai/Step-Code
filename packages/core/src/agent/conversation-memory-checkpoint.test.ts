@@ -307,7 +307,71 @@ describe("normalizeCheckpoint extras", () => {
 });
 
 describe("buildCheckpointFromMessages", () => {
-  it("extracts objective from user messages and tool outcomes", () => {
+  it("does not promote ordinary chat into SUMMARY objectives", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "你是谁？" },
+      { role: "assistant", content: "我是 Step CLI 助手。" },
+      { role: "user", content: "你去读取一下README的文件内容。" },
+    ];
+
+    const result = buildCheckpointFromMessages(messages, {
+      fromIndex: 0,
+      toIndex: 3,
+    });
+
+    expect(result.objective).toEqual([]);
+    const summary = renderCheckpointText(
+      mergeCheckpoints(createEmptyCheckpoint(), result),
+    );
+    expect(summary).not.toMatch(/Current Objective|Superseded Objectives/);
+  });
+
+  it("extracts explicit /goal and labeled objective signals", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "你是谁？" },
+      { role: "user", content: "/goal 读取 README 并总结" },
+      { role: "user", content: "Goal: ship the release tonight" },
+    ];
+
+    const result = buildCheckpointFromMessages(messages, {
+      fromIndex: 0,
+      toIndex: 3,
+    });
+
+    expect(result.objective?.map((entry) => entry.text)).toEqual([
+      "读取 README 并总结",
+      "ship the release tonight",
+    ]);
+    expect(result.objective?.[0]!.status).toBe("superseded");
+    expect(result.objective?.[1]!.status).toBe("still_active");
+  });
+
+  it("extracts the goal text from a /goal wake prompt", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          "You are working toward this long-running session goal:",
+          "",
+          "Migrate the auth flow",
+          "",
+          "Goal id: goal-123",
+          "Goal iteration: 1",
+        ].join("\n"),
+      },
+    ];
+
+    const result = buildCheckpointFromMessages(messages, {
+      fromIndex: 0,
+      toIndex: 1,
+    });
+
+    expect(result.objective).toEqual([
+      { text: "Migrate the auth flow", status: "still_active" },
+    ]);
+  });
+
+  it("extracts tool outcomes without treating the user prompt as an objective", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Please fix the login bug" },
       {
@@ -353,7 +417,7 @@ describe("buildCheckpointFromMessages", () => {
       toIndex: 5,
     });
 
-    expect(result.objective?.[0]!.text).toContain("login bug");
+    expect(result.objective).toEqual([]);
     // Planned tools + assistant preview + tool summaries
     const actionTexts = (result.attemptedActions ?? []).map((a) => a.text);
     expect(actionTexts.some((t) => t.includes("Planned tools: Read"))).toBe(

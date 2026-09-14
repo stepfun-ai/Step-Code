@@ -171,6 +171,42 @@ describe("ConversationMemory", () => {
       const result = memory.forceCompact("test");
       expect(result.compactedMessages).toBeGreaterThan(0);
     });
+
+    it("does not promote ordinary chat into the SUMMARY objective sections", () => {
+      const memory = new ConversationMemory(
+        makeConfig({ minRecentMessages: 1 }),
+      );
+      memory.addUser("你是谁？");
+      memory.addAssistant("我是助手。");
+      memory.addUser("你去读取一下README的文件内容。");
+      memory.addAssistant("好的。");
+
+      const result = memory.forceCompact("issue-73");
+      expect(result.compactedMessages).toBeGreaterThan(0);
+
+      const summary = memory.exportState().summary;
+      expect(summary).not.toMatch(/Current Objective|Superseded Objectives/);
+      expect(summary).not.toContain("你是谁？");
+      expect(summary).not.toContain("你去读取一下README的文件内容。");
+    });
+
+    it("keeps explicit /goal text as the current SUMMARY objective", () => {
+      const memory = new ConversationMemory(
+        makeConfig({ minRecentMessages: 1 }),
+      );
+      memory.addUser("你是谁？");
+      memory.addAssistant("我是助手。");
+      memory.addUser("/goal 读取 README 并总结");
+      memory.addAssistant("开始读取。");
+
+      memory.forceCompact("issue-73");
+
+      const summary = memory.exportState().summary;
+      expect(summary).toContain("Current Objective:");
+      expect(summary).toContain("读取 README 并总结");
+      expect(summary).not.toContain("你是谁？");
+      expect(summary).not.toMatch(/Superseded Objectives/);
+    });
   });
 
   describe("loadState with checkpoint", () => {

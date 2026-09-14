@@ -178,15 +178,82 @@ export function buildTranscriptSaveArtifact(
   };
 }
 
+const GOAL_WAKE_INTRO =
+  "You are working toward this long-running session goal:";
+const GOAL_CONTROL_VERBS = new Set(["status", "pause", "resume", "stop"]);
+
+export function extractExplicitObjectiveText(text: string): string | undefined {
+  const raw = text.trim();
+  if (raw.length === 0) {
+    return undefined;
+  }
+
+  return (
+    extractSlashGoalText(raw) ??
+    extractGoalWakeText(raw) ??
+    extractLabeledObjectiveText(raw)
+  );
+}
+
+function extractSlashGoalText(text: string): string | undefined {
+  const firstLine = text.split(/\n/u, 1)[0]?.trim() ?? "";
+  const match = firstLine.match(/^\/goal(?:\s+(.+))?$/iu);
+  const rest = match?.[1]?.trim();
+  if (!rest) {
+    return undefined;
+  }
+
+  const [verb, ...remainder] = rest.split(/\s+/u);
+  if (!verb || GOAL_CONTROL_VERBS.has(verb.toLowerCase())) {
+    return undefined;
+  }
+
+  if (verb.toLowerCase() === "start") {
+    const started = remainder.join(" ").trim();
+    return started.length > 0 ? started : undefined;
+  }
+
+  return rest;
+}
+
+function extractGoalWakeText(text: string): string | undefined {
+  const introIndex = text.toLowerCase().indexOf(GOAL_WAKE_INTRO.toLowerCase());
+  if (introIndex < 0) {
+    return undefined;
+  }
+
+  const afterIntro = text.slice(introIndex + GOAL_WAKE_INTRO.length).trim();
+  const goalBody = afterIntro.split(/\n\s*Goal id:/iu)[0]?.trim();
+  return goalBody && goalBody.length > 0
+    ? normalizeWhitespace(goalBody)
+    : undefined;
+}
+
+function extractLabeledObjectiveText(text: string): string | undefined {
+  const labeled =
+    /(?:^|\n)\s*(?:current\s+(?:objective|goal)|objective|goal)\s*[:：]\s*(.+)$/imu.exec(
+      text,
+    ) ?? /(?:^|\n)\s*(?:当前目标|目标)\s*[:：]\s*(.+)$/mu.exec(text);
+  const value = labeled?.[1]?.trim();
+  return value && value.length > 0 ? normalizeWhitespace(value) : undefined;
+}
+
 function summarizeMessages(messages: ChatMessage[]): string {
   const goals: string[] = [];
+  const userTurns: string[] = [];
   const actions: string[] = [];
   const outcomes: string[] = [];
   const issues: string[] = [];
 
   for (const message of messages) {
     if (message.role === "user") {
-      goals.push(shortenLine(userMessagePreviewText(message), 200));
+      const preview = userMessagePreviewText(message);
+      const objective = extractExplicitObjectiveText(preview);
+      if (objective) {
+        goals.push(shortenLine(objective, 200));
+      } else if (preview.trim().length > 0) {
+        userTurns.push(shortenLine(preview, 200));
+      }
       continue;
     }
 
@@ -227,6 +294,7 @@ function summarizeMessages(messages: ChatMessage[]): string {
 
   const lines: string[] = [];
   pushSection(lines, "Goals", goals, 6);
+  pushSection(lines, "User turns", userTurns, 6);
   pushSection(lines, "Actions", actions, 10);
   pushSection(lines, "Outcomes", outcomes, 8);
   pushSection(lines, "Issues", issues, 6);

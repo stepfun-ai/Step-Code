@@ -13,6 +13,7 @@ import type {
 import { parseToolResult } from "./conversation-memory-tool-result.js";
 import {
   dedupeMessagesKeepingNewest,
+  extractExplicitObjectiveText,
   renderTranscriptEntrySummary,
 } from "./conversation-memory-transcript.js";
 
@@ -581,8 +582,9 @@ function extractObjectiveCandidates(
     }
 
     const preview = userMessagePreviewText(message).trim();
-    if (preview.length > 0) {
-      candidates.push(preview);
+    const objective = extractExplicitObjectiveText(preview);
+    if (objective) {
+      candidates.push(objective);
     }
   }
 
