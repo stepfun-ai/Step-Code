@@ -593,6 +593,7 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
 async function refreshModelCatalogs(agentDir: string): Promise<void> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 15_000);
+	let providerCount = 0;
 	try {
 		const modelRuntime = await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
@@ -600,6 +601,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 			allowModelNetwork: false,
 			signal: controller.signal,
 		});
+		providerCount = modelRuntime.getProviders().length;
 		const result = await modelRuntime.refresh({
 			allowNetwork: true,
 			force: true,
@@ -615,7 +617,9 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 	} finally {
 		clearTimeout(timeout);
 	}
-	console.log(chalk.green("Model catalogs refreshed"));
+	// With no providers registered (e.g. the Step entrypoint seeds no remote
+	// catalog providers) there is nothing to refresh — don't claim success.
+	console.log(chalk.green(providerCount > 0 ? "Model catalogs refreshed" : "No model catalogs to refresh"));
 }
 
 function printSelfUpdateUnavailable(

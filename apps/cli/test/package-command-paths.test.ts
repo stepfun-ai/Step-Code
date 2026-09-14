@@ -459,7 +459,10 @@ if (process.platform !== "win32") fs.chmodSync(piPath, 0o755);
 
 	it("refreshes only model catalogs with update --models", async () => {
 		const refresh = vi.fn(async () => ({ aborted: false, errors: new Map<string, Error>() }));
-		const create = vi.spyOn(ModelRuntime, "create").mockResolvedValue({ refresh } as unknown as ModelRuntime);
+		const getProviders = vi.fn(() => [{ id: "openai" }]);
+		const create = vi
+			.spyOn(ModelRuntime, "create")
+			.mockResolvedValue({ refresh, getProviders } as unknown as ModelRuntime);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

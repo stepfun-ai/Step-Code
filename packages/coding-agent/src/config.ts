@@ -16,7 +16,7 @@ import { stripBom } from "./utils/text.ts";
 // isStepEntrypoint()'s filename heuristic. That app sets STEP_CLI_ENTRYPOINT=1
 // as its very first side effect (before this module is evaluated), which is an
 // explicit, additive opt-in signal. Ordinary `pi` launches never set it.
-const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEP_CLI_ENTRYPOINT?.trim() === "1";
+export const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEP_CLI_ENTRYPOINT?.trim() === "1";
 if (STEP_ENTRYPOINT) applyStepEnvironment();
 
 // =============================================================================

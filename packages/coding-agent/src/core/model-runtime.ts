@@ -37,7 +37,7 @@ import {
 	type StreamOptions,
 } from "@step-harness/providers";
 import * as builtinProviderCatalog from "@step-harness/providers/providers/all";
-import { getAgentDir } from "../config.ts";
+import { getAgentDir, STEP_ENTRYPOINT } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
@@ -79,6 +79,11 @@ export interface CreateModelRuntimeOptions {
 	signal?: AbortSignal;
 	/** Skip initial catalog and availability refresh. Static models remain available. */
 	refreshOnCreate?: boolean;
+	/**
+	 * Seed the runtime with the default anthropic/openai builtin providers.
+	 * Defaults to false under the Step entrypoint (StepFun-only), true otherwise.
+	 */
+	includeDefaultBuiltins?: boolean;
 }
 
 export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
@@ -179,10 +184,11 @@ export class ModelRuntime implements Models {
 			(modelsPath
 				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
+		const includeDefaultBuiltins = options.includeDefaultBuiltins ?? !STEP_ENTRYPOINT;
 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
-		const providers = builtinProviderCatalog
-			.builtinProviders()
-			.map((provider) => withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt));
+		const providers = (includeDefaultBuiltins ? builtinProviderCatalog.builtinProviders() : []).map((provider) =>
+			withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
+		);
 		const runtime = new ModelRuntime(
 			credentials,
 			config,
