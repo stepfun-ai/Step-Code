@@ -1,12 +1,22 @@
 import type { MarkdownTransformer } from "@step-harness/coding-agent";
 import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@step-harness/pi-tui";
+import {
+	Container,
+	isIncrementalRenderDisabled,
+	Markdown,
+	type MarkdownTheme,
+	Spacer,
+	Text,
+} from "@step-harness/pi-tui";
 import type { AssistantMessage } from "@step-harness/providers";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/** Cached zone-marked output, keyed by the child lines it was derived from. */
+type ZoneCache = { width: number; native: string[]; lines: string[] };
 
 /**
  * Component that renders a complete assistant message
@@ -21,6 +31,7 @@ export class AssistantMessageComponent extends Container {
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private isStreaming = false;
+	private zoneCache?: ZoneCache;
 
 	constructor(
 		message?: AssistantMessage,
@@ -76,13 +87,31 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		const lines = super.render(width);
-		if (this.hasToolCalls || lines.length === 0) {
-			return lines;
+		// super.render() hands back an array Container reuses while nothing changed, so
+		// the zone markers must go into a new array instead of being written in place.
+		const native = super.render(width);
+		const cached = this.zoneCache;
+		if (
+			!isIncrementalRenderDisabled() &&
+			cached !== undefined &&
+			cached.width === width &&
+			cached.native === native
+		) {
+			return cached.lines;
 		}
 
+		if (this.hasToolCalls || native.length === 0) {
+			// Never hand the parent the array the base Container owns: a caller that
+			// reuses its cached prefix must be able to treat render() as read-only.
+			// The copy is memoized, so the ref stays stable while nothing changed.
+			this.zoneCache = { width, native, lines: [...native] };
+			return this.zoneCache.lines;
+		}
+
+		const lines = [...native];
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		this.zoneCache = { width, native, lines };
 		return lines;
 	}
 

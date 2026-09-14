@@ -1,4 +1,4 @@
-import type { Component } from "@step-harness/pi-tui";
+import { type Component, isIncrementalRenderDisabled } from "@step-harness/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -10,16 +10,25 @@ import { theme } from "../theme/theme.ts";
  */
 export class DynamicBorder implements Component {
 	private color: (str: string) => string;
+	private cache?: { width: number; lines: string[] };
 
 	constructor(color: (str: string) => string = (str) => theme.fg("border", str)) {
 		this.color = color;
 	}
 
 	invalidate(): void {
-		// No cached state to invalidate currently
+		// The color function reads the active theme, so a theme change must drop it.
+		this.cache = undefined;
 	}
 
 	render(width: number): string[] {
-		return [this.color("─".repeat(Math.max(1, width)))];
+		// A stable array lets the parent container skip everything above it.
+		const cache = this.cache;
+		if (!isIncrementalRenderDisabled() && cache !== undefined && cache.width === width) {
+			return cache.lines;
+		}
+		const lines = [this.color("─".repeat(Math.max(1, width)))];
+		this.cache = { width, lines };
+		return lines;
 	}
 }

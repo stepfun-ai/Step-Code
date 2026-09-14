@@ -29,6 +29,17 @@ export interface Component {
 	render(width: number): string[];
 
 	/**
+	 * First line of the last render() output that may differ from the output before
+	 * it. Optional: components that do not track dirtiness are treated as fully dirty
+	 * (0), so their parent re-collects them from their first line.
+	 *
+	 * A container uses this to locate a change inside a dirty child instead of
+	 * assuming the child changed from its first line, which is what keeps a long
+	 * transcript's stable prefix out of the per-keystroke work.
+	 */
+	renderDirtyStart?: number;
+
+	/**
 	 * Optional handler for keyboard input when component has focus
 	 */
 	handleInput?(data: string): void;
@@ -206,40 +217,131 @@ type OverlayFocusRestoreState = { status: "inactive" } | ActiveOverlayFocusResto
 type OverlayFocusRestorePolicy = "clear" | "preserve";
 
 /**
+ * Incremental rendering can be turned off for debugging and for the render
+ * equivalence test, which compares the byte stream against this unoptimized
+ * path. Set PI_TUI_DISABLE_INCREMENTAL=1 to force full renders every frame.
+ */
+let incrementalRenderDisabled: boolean | undefined;
+
+export function isIncrementalRenderDisabled(): boolean {
+	incrementalRenderDisabled ??= process.env.PI_TUI_DISABLE_INCREMENTAL === "1";
+	return incrementalRenderDisabled;
+}
+
+/**
  * Container - a component that contains other components
  */
 export class Container implements Component {
 	children: Component[] = [];
 
+	/**
+	 * First line of the previous render() output that may differ from the output
+	 * before it; equals the output length when nothing changed. Rendering a long
+	 * transcript must not rescan the whole buffer on every keystroke, so callers
+	 * that diff or normalize line-by-line can start at this index.
+	 *
+	 * Only meaningful for indices below the returned array's length: a caller that
+	 * reuses cached lines for the prefix must treat render()'s result as read-only.
+	 */
+	renderDirtyStart = 0;
+	private renderCache?: { lines: string[]; width: number; childRefs: string[][]; childStarts: number[] };
+
 	addChild(component: Component): void {
 		this.children.push(component);
+		this.renderCache = undefined;
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
+			this.renderCache = undefined;
 		}
 	}
 
 	clear(): void {
 		this.children = [];
+		this.renderCache = undefined;
 	}
 
 	invalidate(): void {
+		this.renderCache = undefined;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
 	}
 
 	render(width: number): string[] {
-		const lines: string[] = [];
-		for (const child of this.children) {
-			const childLines = child.render(width);
-			for (const line of childLines) {
-				lines.push(line);
+		const cache = this.renderCache;
+		if (!isIncrementalRenderDisabled() && cache !== undefined && cache.width === width) {
+			if (cache.childRefs.length === this.children.length) {
+				// Children that return the same array instance as last render produced
+				// identical lines, so the cached prefix up to the first changed child
+				// still holds. Re-render every child to find that child: skipping clean
+				// children entirely would need a parent back-reference and a dirty flag
+				// that invalidate() does not provide today.
+				let firstDirtyChild = -1;
+				let firstDirtyOffset = 0;
+				const childRefs: string[][] = new Array(this.children.length);
+				for (let i = 0; i < this.children.length; i++) {
+					const child = this.children[i];
+					const childLines = child.render(width);
+					childRefs[i] = childLines;
+					if (firstDirtyChild === -1 && childLines !== cache.childRefs[i]) {
+						firstDirtyChild = i;
+						// A child that reports where its own output changed lets the prefix
+						// reach into it; anything that does not report is dirty from line 0.
+						// Clamp to the child's PREVIOUS line count too: renderDirtyStart indexes
+						// the child's prior output, so a child that grew — or a reflowing
+						// subclass that publishes an index into a different-length array — must
+						// never let the reused prefix reach into a later child's cached lines
+						// (that would duplicate rows). Enforces the renderDirtyStart contract by
+						// construction rather than relying on every subclass to reset it.
+						const nextOldStart = i + 1 < cache.childStarts.length ? cache.childStarts[i + 1] : cache.lines.length;
+						const oldChildLen = nextOldStart - cache.childStarts[i];
+						firstDirtyOffset = Math.min(child.renderDirtyStart ?? 0, childLines.length, oldChildLen);
+					}
+				}
+
+				if (firstDirtyChild === -1) {
+					this.renderDirtyStart = cache.lines.length;
+					return cache.lines;
+				}
+
+				const dirtyChildStart = cache.childStarts[firstDirtyChild];
+				// Reuse the cached prefix up to where the dirty child itself changed. The
+				// child's unchanged leading lines are already in the prefix, so only its
+				// tail is collected again.
+				const start = dirtyChildStart + firstDirtyOffset;
+				const lines = cache.lines.slice(0, start);
+				const childStarts: number[] = new Array(this.children.length);
+				for (let i = 0; i < firstDirtyChild; i++) childStarts[i] = cache.childStarts[i];
+				for (let i = firstDirtyChild; i < this.children.length; i++) {
+					// The dirty child keeps its old start: the prefix it left behind holds
+					// exactly the lines it reported as unchanged.
+					childStarts[i] = i === firstDirtyChild ? dirtyChildStart : lines.length;
+					const childLines = childRefs[i];
+					for (let j = i === firstDirtyChild ? firstDirtyOffset : 0; j < childLines.length; j++) {
+						lines.push(childLines[j]);
+					}
+				}
+				this.renderCache = { lines, width, childRefs, childStarts };
+				this.renderDirtyStart = start;
+				return lines;
 			}
 		}
+
+		const lines: string[] = [];
+		const childRefs: string[][] = new Array(this.children.length);
+		const childStarts: number[] = new Array(this.children.length);
+		for (let i = 0; i < this.children.length; i++) {
+			childStarts[i] = lines.length;
+			const childLines = this.children[i].render(width);
+			childRefs[i] = childLines;
+			for (const line of childLines) lines.push(line);
+		}
+		this.renderCache = isIncrementalRenderDisabled() ? undefined : { lines, width, childRefs, childStarts };
+		this.renderDirtyStart = 0;
 		return lines;
 	}
 }
@@ -247,7 +349,8 @@ export class Container implements Component {
 /**
  * TUI - Main class for managing terminal UI with differential rendering
  */
-const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
+/** Reset appended to every rendered line so styling cannot leak between rows. */
+export const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
 
 /** Composite overlay content into a terminal line at a fixed column. */
 export function compositeTuiLine(

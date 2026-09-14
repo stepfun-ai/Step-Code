@@ -16,6 +16,7 @@ import {
 } from "@step-harness/coding-agent";
 import {
 	Container,
+	isIncrementalRenderDisabled,
 	Loader,
 	Spacer,
 	Text,
@@ -24,6 +25,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@step-harness/pi-tui";
+import { RenderLineCache } from "./render-line-cache.ts";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;
@@ -57,6 +59,9 @@ export class BashExecutionComponent extends Container {
 	private readonly excludeFromContext: boolean;
 	/** Captured from the native Loader callback so Step does not create another timer. */
 	private loaderFrame = "⠋";
+	private readonly cache = new RenderLineCache();
+	/** Bumped by every state change so the Step card is only rebuilt when it must be. */
+	private contentVersion = 0;
 
 	constructor(command: string, ui: TUI, excludeFromContext = false, presentation: "native" | "step" = "native") {
 		super();
@@ -87,6 +92,8 @@ export class BashExecutionComponent extends Container {
 			ui,
 			(spinner) => {
 				this.loaderFrame = spinner || "⠋";
+				// The Step card renders this frame, so it is part of the cache key.
+				this.contentVersion += 1;
 				return theme.fg(colorKey, spinner);
 			},
 			(text) => theme.fg("muted", text),
@@ -117,6 +124,9 @@ export class BashExecutionComponent extends Container {
 		if (this.presentation !== "step") return super.render(width);
 
 		const safeWidth = Math.max(1, Math.floor(width));
+		if (!isIncrementalRenderDisabled() && this.cache.matches(safeWidth, this.contentVersion)) {
+			return this.cache.get();
+		}
 		const commandColor = this.excludeFromContext ? "dim" : "bashMode";
 		const paintCommand = (text: string): string => theme.fg(commandColor, theme.bold(text));
 		const muted = (text: string): string => theme.fg("muted", text);
@@ -164,7 +174,10 @@ export class BashExecutionComponent extends Container {
 			}
 		}
 
-		return [...lines.map((line) => clampStepLine(line, safeWidth)), ""];
+		return this.cache.store(safeWidth, this.contentVersion, [
+			...lines.map((line) => clampStepLine(line, safeWidth)),
+			"",
+		]);
 	}
 
 	private stepGlyph(): string {
@@ -182,6 +195,7 @@ export class BashExecutionComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.contentVersion += 1;
 		this.updateDisplay();
 	}
 
@@ -225,6 +239,7 @@ export class BashExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.contentVersion += 1;
 		// Apply truncation for LLM context limits (same limits as bash tool)
 		const fullOutput = this.outputLines.join("\n");
 		const contextTruncation = truncateTail(fullOutput, {
