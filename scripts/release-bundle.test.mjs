@@ -433,6 +433,8 @@ test("copy-search-tools asset naming matches the runtime/installer scheme", () =
 	assert.equal(assetInfoFor("fd", "windows-x64").assetName, `fd-v${FD_VERSION}-x86_64-pc-windows-msvc.zip`);
 	assert.equal(assetInfoFor("fd", "windows-x64").binaryName, "fd.exe");
 	assert.equal(assetInfoFor("rg", "windows-arm64").binaryName, "rg.exe");
+	// ripgrep has no aarch64 Windows build: windows-arm64 falls back to the x64 asset.
+	assert.equal(assetInfoFor("rg", "windows-arm64").assetName, `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`);
 	assert.equal(assetInfoFor("rg", "linux-x64").binaryName, "rg");
 
 	assert.throws(() => assetInfoFor("rg", "solaris-sparc"), /Unknown target/);

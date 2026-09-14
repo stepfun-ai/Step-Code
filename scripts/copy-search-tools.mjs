@@ -56,11 +56,13 @@ export function assetInfoFor(tool, target, versions = {}) {
 	}
 	if (tool === "rg") {
 		// ripgrep uses musl for linux-x64 (fully static) and gnu for linux-arm64,
-		// mirroring tools-manager.ts.
+		// mirroring tools-manager.ts. ripgrep ships NO aarch64 Windows build, so
+		// windows-arm64 falls back to the x64 binary (Windows on ARM runs it under
+		// emulation) — otherwise that platform would have no rg at all.
 		const tripleByOs = {
 			darwin: `${arch.cpu}-apple-darwin`,
 			linux: arch.cpu === "x86_64" ? "x86_64-unknown-linux-musl" : "aarch64-unknown-linux-gnu",
-			windows: `${arch.cpu}-pc-windows-msvc`,
+			windows: "x86_64-pc-windows-msvc",
 		};
 		const assetName = `ripgrep-${rgVersion}-${tripleByOs[arch.os]}.${arch.ext}`;
 		return {
