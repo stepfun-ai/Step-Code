@@ -82,6 +82,25 @@ describe("parseArgs", () => {
 			const result = parseArgs(["-r"]);
 			expect(result.resume).toBe(true);
 		});
+
+		test("--resume with an id resolves via --session instead of opening the selector", () => {
+			const result = parseArgs(["--resume", "9b8fe41b-40f1-4f10-a869-1d2a6128a52e"]);
+			expect(result.resume).toBeUndefined();
+			expect(result.session).toBe("9b8fe41b-40f1-4f10-a869-1d2a6128a52e");
+		});
+
+		test("-r with an id resolves via --session", () => {
+			const result = parseArgs(["-r", "abc123"]);
+			expect(result.resume).toBeUndefined();
+			expect(result.session).toBe("abc123");
+		});
+
+		test("--resume followed by a flag still opens the selector", () => {
+			const result = parseArgs(["--resume", "--print"]);
+			expect(result.resume).toBe(true);
+			expect(result.session).toBeUndefined();
+			expect(result.print).toBe(true);
+		});
 	});
 
 	describe("flags with values", () => {

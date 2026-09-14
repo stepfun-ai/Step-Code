@@ -173,7 +173,14 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
-			result.resume = true;
+			// Optional value: `--resume <path|id>` opens that session directly
+			// (same resolution as --session); bare `--resume` opens the selector.
+			const next = args[i + 1];
+			if (next !== undefined && !next.startsWith("-")) {
+				result.session = args[++i];
+			} else {
+				result.resume = true;
+			}
 		} else if (arg === "--provider" && i + 1 < args.length) {
 			result.provider = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
@@ -402,7 +409,7 @@ ${stepPermissionOptionsText}
   --sdk-stdio                    Run the Step Agent SDK length-prefixed stdio host
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
-  --resume, -r                   Select a session to resume
+  --resume, -r [path|id]         Resume a session: with a path/id resume it directly, without opens a selector
   --session <path|id>            Use specific session file or partial UUID
   --session-id <id>              Use exact project session ID, creating it if missing
   --fork <path|id>               Fork specific session file or partial UUID into a new session
@@ -471,6 +478,9 @@ ${chalk.bold("Examples:")}
 
   # Continue previous session
   ${APP_NAME} --continue "What did we discuss?"
+
+  # Resume a specific session by id (or open a selector with bare --resume)
+  ${APP_NAME} --resume 9b8fe41b-40f1-4f10-a869-1d2a6128a52e
 
   # Start a named session
   ${APP_NAME} --name "Refactor auth module"
