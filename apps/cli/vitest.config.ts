@@ -20,6 +20,12 @@ export default mergeConfig(
 			// Tests that need credentials set them explicitly via vi.stubEnv.
 			env: {
 				PI_OFFLINE: "1",
+				// Force color OFF so TUI-render assertions are deterministic across
+				// shells. With truecolor on (e.g. stepcode sets FORCE_COLOR=3), the
+				// theme interleaves ANSI spans inside diff values, so raw substring
+				// checks like `render.includes("line 50 changed")` fail locally while
+				// passing in CI (no forced color). See edit-tool-no-full-redraw.test.
+				FORCE_COLOR: "0",
 				ANTHROPIC_AUTH_TOKEN: "",
 				ANTHROPIC_OAUTH_TOKEN: "",
 				ANTHROPIC_API_KEY: "",
