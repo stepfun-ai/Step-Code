@@ -408,6 +408,11 @@ export class StepUserMessageComponent extends UserMessageComponent {
 	override render(width: number): string[] {
 		const safeWidth = Math.max(1, Math.floor(width));
 		const nativeRows = super.render(safeWidth);
+		// The reflow below returns a differently-shaped array than the one
+		// Container.render just indexed, so the inherited dirty start no longer
+		// describes what is handed back. Reset it: the message is small, so
+		// re-diffing all of its lines is cheap and always correct.
+		this.renderDirtyStart = 0;
 		// Check cache
 		if (matchesRenderCache(this.cache, nativeRows, safeWidth)) {
 			return this.cache!.lines;
@@ -541,6 +546,10 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 
 	override render(width: number): string[] {
 		const safeWidth = Math.max(1, Math.floor(width));
+		// Step reshapes pi's rows into a different-length array, so the dirty start
+		// has to describe the rows returned here rather than anything an inherited
+		// render() may have indexed. Reset it before every return below.
+		this.renderDirtyStart = 0;
 		// Reserve the two-cell Step gutter before asking pi to wrap Markdown. This
 		// guarantees that adding a prefix can never violate pi-tui's width guard.
 		const contentWidth = Math.max(1, safeWidth - 2);

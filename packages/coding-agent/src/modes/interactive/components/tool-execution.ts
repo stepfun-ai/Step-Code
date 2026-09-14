@@ -4,6 +4,7 @@ import {
 	Container,
 	getCapabilities,
 	Image,
+	isIncrementalRenderDisabled,
 	Spacer,
 	stripTerminalSequences,
 	Text,
@@ -19,6 +20,7 @@ import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { renderDiff } from "./diff.ts";
 import { keyHint } from "./keybinding-hints.ts";
+import { RenderLineCache } from "./render-line-cache.ts";
 import { prependAfterTerminalSequences } from "./step-message.ts";
 import type { StepToolSpinnerState } from "./step-spinner.ts";
 
@@ -407,6 +409,9 @@ export class ToolExecutionComponent extends Container {
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
 	private readonly presentation: "native" | "step";
+	private readonly cache = new RenderLineCache();
+	/** Bumped by every state change so the Step card is only rebuilt when it must be. */
+	private contentVersion = 0;
 	private readonly spinner?: StepToolSpinnerState;
 
 	constructor(
@@ -605,6 +610,7 @@ export class ToolExecutionComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.contentVersion += 1;
 		this.updateDisplay();
 	}
 
@@ -635,6 +641,38 @@ export class ToolExecutionComponent extends Container {
 		return this.renderStepDefaultLines(width);
 	}
 
+	/**
+	 * Content version for the Step card. The spinner frame and the elapsed clock move
+	 * without any component state changing, so they are part of the key. A string key
+	 * avoids fragile numeric bit-packing: any distinct (version, elapsed, frame) triple
+	 * yields a distinct key regardless of how large the frame code point or elapsed
+	 * seconds grow.
+	 */
+	private stepCacheKey(): string {
+		const spinner = this.spinner;
+		const frame = spinner?.frame ?? "";
+		const elapsed = spinner?.elapsedSeconds(this.toolCallId) ?? -1;
+		return `${this.contentVersion}|${Math.max(0, elapsed)}|${frame}`;
+	}
+
+	private renderStepDefaultLines(width: number): string[] {
+		const safeWidth = Math.max(1, Math.floor(width));
+		const key = this.stepCacheKey();
+		if (!isIncrementalRenderDisabled() && this.cache.matches(safeWidth, key)) {
+			return this.cache.get();
+		}
+		return this.cache.store(safeWidth, key, this.buildStepDefaultLines(width));
+	}
+
+	private renderStepSelfLines(width: number): string[] {
+		const safeWidth = Math.max(1, Math.floor(width));
+		const key = this.stepCacheKey();
+		if (!isIncrementalRenderDisabled() && this.cache.matches(safeWidth, key)) {
+			return this.cache.get();
+		}
+		return this.cache.store(safeWidth, key, this.buildStepSelfLines(width));
+	}
+
 	private appendImages(lines: string[], width: number): void {
 		for (let i = 0; i < this.imageComponents.length; i++) {
 			const spacer = this.imageSpacers[i];
@@ -645,7 +683,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/** Render a Step card while leaving call/result content to Pi's components. */
-	private renderStepDefaultLines(width: number): string[] {
+	private buildStepDefaultLines(width: number): string[] {
 		const safeWidth = Math.max(1, Math.floor(width));
 		const plan = extractStepPlan(this.toolName, this.args, this.result?.details);
 		if (plan && !this.result?.isError) {
@@ -720,7 +758,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/** Self-shell tools own their inner framing; only add the Step status gutter. */
-	private renderStepSelfLines(width: number): string[] {
+	private buildStepSelfLines(width: number): string[] {
 		const safeWidth = Math.max(1, Math.floor(width));
 		let lines = trimRenderedRows(this.selfRenderContainer.render(safeWidth));
 		if (lines.length === 0) {
@@ -863,6 +901,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.contentVersion += 1;
 		const bgFn =
 			this.presentation === "step"
 				? undefined
