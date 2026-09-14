@@ -35,8 +35,12 @@ export function getPlanFilePath(sessionId: string, projectCwd?: string): string 
 	return path.join(projectCwd ?? process.cwd(), ".step-cli", "plans", `session-${sessionId}.md`);
 }
 
-function controlResult(text: string): AgentToolResult<undefined> {
-	return { content: [{ type: "text", text }], details: undefined };
+/**
+ * `terminate` asks the agent loop to stop after this tool batch instead of
+ * streaming another response, handing the turn back to the user.
+ */
+function controlResult(text: string, terminate = false): AgentToolResult<undefined> {
+	return { content: [{ type: "text", text }], details: undefined, terminate };
 }
 
 /**
@@ -52,7 +56,8 @@ function readPlanContents(planFilePath: string): string {
 }
 
 const STAY_IN_PLAN_MODE_RESULT =
-	"Staying in plan mode. Continue planning and call exit_plan_mode again when the plan is ready.";
+	"The user dismissed the review without approving the plan or leaving notes. Staying in plan mode. " +
+	"Stop here and wait for the user; do not call exit_plan_mode again until they ask for another review.";
 
 /**
  * Run the interactive review.
@@ -167,8 +172,11 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					"The user requested refinements. Their notes follow immediately as the next user message; do not ask what to change. Staying in plan mode: apply the notes to the plan file and call exit_plan_mode again.",
 				);
 			}
-			// Dismissed, or a host that cannot show the dialog at all.
-			return controlResult(STAY_IN_PLAN_MODE_RESULT);
+			// Dismissed, or a host that cannot show the dialog at all. Terminate the
+			// batch: the old result told the model to "call exit_plan_mode again when
+			// the plan is ready", and since nothing about the plan had changed it
+			// re-submitted at once, re-opening the dialog on every Escape.
+			return controlResult(STAY_IN_PLAN_MODE_RESULT, true);
 		},
 	});
 }

@@ -544,10 +544,35 @@ test("tui-mode exit_plan_mode still gates through the review dialog", async () =
 
 	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
 		content: Array<{ type: string; text: string }>;
+		terminate?: boolean;
 	};
 	expect(harness.customCalls()).toBe(1);
 	expect(result.content[0]!.text).toContain("Staying in plan mode.");
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+	// Escape hands the turn back to the user. Without this the model re-submits
+	// the unchanged plan straight away and the dialog re-opens on every Escape.
+	expect(result.terminate).toBe(true);
+	expect(result.content[0]!.text).toContain("do not call exit_plan_mode again");
+});
+
+test("only a dismissed review ends the turn; approval and notes let the agent keep going", async () => {
+	const cwd = makeWorkspace();
+	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const cases = [
+		{ keys: [REVIEW_KEYS.enter], terminate: false },
+		{ keys: [REVIEW_KEYS.down, ...typeReview("use canvas"), REVIEW_KEYS.enter], terminate: false },
+		{ keys: [REVIEW_KEYS.escape], terminate: true },
+	];
+	for (const { keys, terminate } of cases) {
+		const harness = createHarness({ cwd, review: keys });
+		createStepPlanExtension()(harness.api);
+		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		mkdirSync(path.dirname(planPath), { recursive: true });
+		writeFileSync(planPath, "# The plan\n");
+
+		const result = (await runTool(harness, "exit_plan_mode", {}, harness.ctx())) as { terminate?: boolean };
+		expect(result.terminate).toBe(terminate);
+	}
 });
 
 // ---------------------------------------------------------------------------
