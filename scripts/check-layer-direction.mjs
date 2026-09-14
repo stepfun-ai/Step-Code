@@ -9,7 +9,7 @@
 //      importing any deeper "#ui/..." internal is forbidden.
 //   2  the UI (apps/<app>/src/ui/**) must not reverse-import the shell (main/args/bootstrap/modes/bun).
 //   3  capability packages (packages/**) must not import an app package (@step-harness/<app>).
-//   4  extensions (extensions/*/src/**) must not import an app package.
+//   4  extensions (packages/extensions/*/src/**) must not import an app package.
 //
 // apps/cli currently has no ui/ or shell subdirs, so the real scan finds nothing to flag yet —
 // the rules are in place for steps 3/4. The --self-test exercises every rule with synthetic
@@ -75,9 +75,9 @@ function analyzeImport(importerRepoRel, specifier, ctx) {
 	const importer = importerRepoRel.replace(/\\/g, "/");
 
 	// Rules 3 & 4: capability packages / extensions must not import an app package.
-	if (importer.startsWith("packages/") || importer.startsWith("extensions/")) {
+	if (importer.startsWith("packages/")) {
 		if (appPackageMatch(specifier, ctx.appPackageNames)) {
-			const layer = importer.startsWith("extensions/") ? "extension" : "capability package";
+			const layer = importer.startsWith("packages/extensions/") ? "extension" : "capability package";
 			return `${importer}: ${layer} must not import app package "${specifier}" (dependencies only flow top-down)`;
 		}
 		return null;
@@ -149,7 +149,7 @@ function discoverAppPackageNames() {
 
 function runReal() {
 	const ctx = { appPackageNames: discoverAppPackageNames() };
-	const roots = ["apps", "packages", "extensions"].map((r) => join(repoRoot, r));
+	const roots = ["apps", "packages"].map((r) => join(repoRoot, r));
 	const violations = [];
 	for (const root of roots) {
 		for (const file of collectTsFiles(root)) {
@@ -199,7 +199,7 @@ function runSelfTest() {
 	expectViolation("packages/coding-agent/src/x.ts", "@step-harness/cli");
 	expectViolation("packages/tui/src/x.ts", "@step-harness/cli/runtime");
 	// rule 4 — extension importing an app
-	expectViolation("extensions/realtime-voice/src/x.ts", "@step-harness/cli");
+	expectViolation("packages/extensions/realtime-voice/src/x.ts", "@step-harness/cli");
 
 	if (failures.length > 0) {
 		console.error("layer-direction self-test FAILED:");

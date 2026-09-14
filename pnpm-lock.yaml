@@ -84,19 +84,6 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
-  extensions/realtime-voice:
-    dependencies:
-      '@step-harness/realtime':
-        specifier: workspace:*
-        version: link:../../packages/realtime
-    devDependencies:
-      '@types/node':
-        specifier: 22.19.19
-        version: 22.19.19
-      vitest:
-        specifier: 4.1.9
-        version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
-
   packages/agent-loop:
     dependencies:
       '@step-harness/providers':
@@ -301,6 +288,19 @@ importers:
       vitest-evals:
         specifier: 0.15.0
         version: 0.15.0(tinyrainbow@3.1.1)(vitest@4.1.9)(zod@4.6.1)
+
+  packages/extensions/realtime-voice:
+    dependencies:
+      '@step-harness/realtime':
+        specifier: workspace:*
+        version: link:../../realtime
+    devDependencies:
+      '@types/node':
+        specifier: 22.19.19
+        version: 22.19.19
+      vitest:
+        specifier: 4.1.9
+        version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
   packages/providers:
     dependencies:
