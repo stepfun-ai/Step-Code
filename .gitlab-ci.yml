@@ -6,6 +6,11 @@ variables:
   RELEASE_BUNDLE_VERSION: "v0.3.1"
   STEP_RELEASE_BASE_URL: "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli"
   STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcli"
+  # Internal mirror for the rg/fd search-tool binaries: this project's own GitLab
+  # generic package registry. scripts/copy-search-tools.mjs fetches from here
+  # (authenticating with the runner's CI_JOB_TOKEN) so the release archive bundles
+  # rg/fd without reaching github.com. Falls back to GitHub if unset/unreachable.
+  STEP_TOOLS_BASE_URL: "https://gitlab.basemind.com/api/v4/projects/10933/packages/generic/search-tools/1.0.0"
   STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
   STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
   STEP_CLI_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA

@@ -83,8 +83,8 @@ function parseArgs(argv) {
 	return args;
 }
 
-async function download(url, dest) {
-	const response = await fetch(url, { redirect: "follow", headers: { "User-Agent": "step-cli-build" } });
+async function download(url, dest, headers = {}) {
+	const response = await fetch(url, { redirect: "follow", headers: { "User-Agent": "step-cli-build", ...headers } });
 	if (!response.ok) throw new Error(`download failed ${response.status} for ${url}`);
 	const buffer = Buffer.from(await response.arrayBuffer());
 	const { writeFileSync } = await import("node:fs");
@@ -125,16 +125,23 @@ async function fetchTool(tool, target, toolsDir) {
 	const destBinary = join(toolsDir, info.binaryName);
 	if (existsSync(destBinary)) return true; // idempotent
 
-	// Prefer an internal mirror (e.g. the TOS release bucket) when configured, so
-	// locked-down CI runners that cannot reach github.com still bundle the tools.
+	// Prefer an internal mirror (e.g. the GitLab package registry or TOS bucket)
+	// when configured, so locked-down CI runners that cannot reach github.com still
+	// bundle the tools. A GitLab registry needs auth: use STEP_TOOLS_TOKEN, or fall
+	// back to the runner's CI_JOB_TOKEN (sent as a JOB-TOKEN header).
 	const mirror = (process.env.STEP_TOOLS_BASE_URL ?? "").trim().replace(/\/+$/, "");
-	const candidates = [mirror ? `${mirror}/${info.assetName}` : null, info.url].filter(Boolean);
+	const token = (process.env.STEP_TOOLS_TOKEN ?? process.env.CI_JOB_TOKEN ?? "").trim();
+	// A GitLab PAT authenticates via PRIVATE-TOKEN; a CI job token via JOB-TOKEN.
+	const authHeader = token ? (token.startsWith("glpat-") ? { "PRIVATE-TOKEN": token } : { "JOB-TOKEN": token }) : {};
+	const candidates = [];
+	if (mirror) candidates.push({ url: `${mirror}/${info.assetName}`, headers: authHeader });
+	candidates.push({ url: info.url, headers: {} });
 
-	for (const url of candidates) {
+	for (const { url, headers } of candidates) {
 		const workDir = mkdtempSync(join(tmpdir(), `step-tool-${tool}-`));
 		try {
 			const archivePath = join(workDir, info.assetName);
-			await download(url, archivePath);
+			await download(url, archivePath, headers);
 			const extractDir = join(workDir, "extract");
 			extract(archivePath, extractDir);
 			const found = findBinary(extractDir, info.binaryName);

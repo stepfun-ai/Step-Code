@@ -3279,13 +3279,17 @@ export class InteractiveMode {
 
 	/** Show a managed-tool status update in the chat. */
 	private showManagedToolStatus(status: ToolStatus): void {
+		// A missing search tool (rg/fd) is non-fatal: grep/find fall back to git and
+		// POSIX utilities. Never surface download failures, offline, or unsupported-
+		// platform notices as warnings — the fallback is silent and a red warning on
+		// every launch is just noise the user cannot act on.
+		if (status.type === "warning") return;
 		if (!this.managedToolStatusStarted) {
 			this.chatContainer.addChild(new Spacer(1));
 			this.managedToolStatusStarted = true;
 		}
-		const message = status.type === "warning" ? `Warning: ${status.message}` : status.message;
-		const color = status.type === "warning" ? "warning" : "dim";
-		this.chatContainer.addChild(new Text(theme.fg(color, message), 1, 0));
+		const message = status.message;
+		this.chatContainer.addChild(new Text(theme.fg("dim", message), 1, 0));
 		this.lastStatusSpacer = undefined;
 		this.lastStatusText = undefined;
 		this.redraw.requestRender();

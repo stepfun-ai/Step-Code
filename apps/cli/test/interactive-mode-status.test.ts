@@ -136,12 +136,12 @@ describe("InteractiveMode.showManagedToolStatus", () => {
 
 		showManagedToolStatus.call(fakeThis, { type: "info", message: "fd downloading" });
 		showManagedToolStatus.call(fakeThis, { type: "info", message: "rg downloading" });
+		// Warnings (download failure / offline / unsupported) are suppressed: a
+		// missing search tool is non-fatal and falls back to git/POSIX silently.
 		showManagedToolStatus.call(fakeThis, { type: "warning", message: "rg failed" });
 
-		expect(fakeThis.chatContainer.children).toHaveLength(4);
-		expect(normalizeRenderedOutput(fakeThis.chatContainer)).toBe(
-			"fd downloading\n rg downloading\n Warning: rg failed",
-		);
+		expect(fakeThis.chatContainer.children).toHaveLength(3);
+		expect(normalizeRenderedOutput(fakeThis.chatContainer)).toBe("fd downloading\n rg downloading");
 	});
 });
 

@@ -372,9 +372,8 @@ function Install-ManagedTool {
     Copy-FileWithRetry -Source $found[0].FullName -Destination $destination
   } catch {
     # fd/rg are convenience dependencies. A system installation or a later
-    # migration can still provide them, so a failed optional download must not
-    # make the main Step installation fail.
-    Write-Log "warning: could not install $Name ($($_.Exception.Message)); install it manually if needed"
+    # migration can still provide them, and grep/find fall back to git/POSIX at
+    # runtime, so a failed optional download is silently ignored (no warning).
   }
 }
 

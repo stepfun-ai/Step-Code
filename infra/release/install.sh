@@ -91,8 +91,9 @@ install_managed_tool() {
 		return 0
 	fi
 	local metadata="${WORK_DIR}/${name}.json" version archive extract found
+	# A missing search tool is non-fatal (grep/find fall back to git/POSIX at
+	# runtime), so every failure below silently skips instead of warning.
 	if ! download "https://api.github.com/repos/${repo}/releases/latest" "$metadata"; then
-		printf 'warning: could not resolve %s; install it manually if unavailable in PATH\n' "$name" >&2
 		return 0
 	fi
 	version="$(awk -F'"' '/"tag_name"[[:space:]]*:/ { print $4; exit }' "$metadata")"
@@ -101,13 +102,12 @@ install_managed_tool() {
 	extract="${WORK_DIR}/${name}.extract"
 	mkdir -p "$extract" "$tool_dir"
 	if ! download_progress "https://github.com/${repo}/releases/download/${tag_prefix}${version}/${asset//VERSION/$version}" "$archive"; then
-		printf 'warning: could not download %s; continuing without bundled tool\n' "$name" >&2
 		return 0
 	fi
 	if [[ "$archive" == *.zip ]]; then unzip -q "$archive" -d "$extract" || return 0
 	else tar -xzf "$archive" -C "$extract" || return 0; fi
 	found="$(find "$extract" -type f -name "$binary" -print -quit)"
-	[[ -n "$found" ]] || { printf 'warning: %s archive did not contain %s\n' "$name" "$binary" >&2; return 0; }
+	[[ -n "$found" ]] || return 0
 	cp "$found" "$target"
 	chmod 755 "$target" 2>/dev/null || true
 }
