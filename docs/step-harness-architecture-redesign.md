@@ -1,6 +1,6 @@
 # step-harness 项目结构重构设计：宿主入口、Coding Agent 与语音交互模块
 
-> 状态：设计提案（2026-09-07 原稿，原样保留）。**实际落地与本提案有差异，见文末「附录 A：as-built 变迁对照」**；逐步执行历程见 `step-harness-最终实施方案.md`，面向评审排期的微调版见 `step-harness 代码结构· 最终方案.md`。
+> 状态：设计提案（2026-09-07 原稿，原样保留）。**实际落地与本提案有差异，见文末「附录 A：as-built 变迁对照」**（含 2026-09-14 后续结构决策，见「附录 A.5」：顶层 `extensions/` 已并入 `packages/extensions/`）；逐步执行历程见 `step-harness-最终实施方案.md`，面向评审排期的微调版见 `step-harness 代码结构· 最终方案.md`。
 >
 > 日期：2026-09-07
 >
@@ -2052,3 +2052,12 @@ CLI/TUI host（composition root）
 - 过渡壳：**不造**（步骤 0 不声明 bin，真入口 S3 一次到位）。
 - 步骤 4 回滚开关：**不设**，靠分提交 revert。
 - tui 包名：**保留 pi-tui 词根**（非 tui-kit）。
+
+**A.5 后续结构决策：`extensions/` 并入 `packages/extensions/`（2026-09-14）**
+
+竣工时唯一的 extension（`@step-harness/realtime-voice`）曾落在顶层 `extensions/`（见 A.1）。之后判断：**单个 extension 不足以支撑一条独立的顶层轴**，遂将其下沉到 `packages/extensions/*`，与既有的 `packages/session-backends/*` 同构。
+
+- 决策：取消顶层 `extensions/` 目录，改用 `packages/extensions/*`。
+- 理由：拆包/建轴判据是依赖方向、测试边界、生命周期（§2.1），一个 mock 桩 extension 三条都不满足独立顶层轴；`packages/` 下已有 `session-backends/*` 的嵌套先例，沿用即可，减少 workspace glob 与 guard 的特例。
+- 落地：`extensions/realtime-voice` → `packages/extensions/realtime-voice`；`pnpm-workspace.yaml` 与根 `package.json` 的 glob `extensions/*` → `packages/extensions/*`；`scripts/workspace-registry.json` 更新 `dir`；`scripts/check-layer-direction.mjs` 改为以 `packages/extensions/` 前缀识别 extension 层；该包 `tsconfig.build.json` 的 `extends` 深度 `../../` → `../../../`；`pnpm-lock.yaml` importer 路径刷新。**包名不变**，无依赖引用改动。
+- 影响 §0 目标树、§2.2 依赖图、§13.6 workspace 成员示例中的顶层 `extensions/`：那些为 2026-09-07 提案形态与 A.1 竣工快照，按“原样保留”不改写；以本条为准。
