@@ -86,6 +86,17 @@ const BUILTIN_AGENTS: readonly StepAgentConfig[] = [
 	},
 ];
 
+/**
+ * Models often turn a built-in description such as "General-purpose delegated
+ * agent" into an agent name. Keep those descriptive forms as aliases while
+ * retaining exact matching for user- and project-defined names.
+ */
+const BUILTIN_AGENT_ALIASES: ReadonlyMap<string, string> = new Map([
+	["general-purpose", "general"],
+	["general purpose", "general"],
+	["general_purpose", "general"],
+]);
+
 function parseToolList(value: unknown): string[] | undefined {
 	const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
 	const tools = values
@@ -191,6 +202,17 @@ export function formatStepAgentCatalog(agents: readonly StepAgentConfig[], maxIt
 	const listed = agents.slice(0, maxItems).map((agent) => `${agent.name} (${agent.source}): ${agent.description}`);
 	const suffix = agents.length > maxItems ? `; ... +${agents.length - maxItems} more` : "";
 	return `${listed.join("; ")}${suffix}`;
+}
+
+/** Resolve an exact agent name, then a compatibility alias for a built-in. */
+export function resolveStepAgent(
+	agents: readonly StepAgentConfig[],
+	requestedName: string,
+): StepAgentConfig | undefined {
+	const exact = agents.find((agent) => agent.name === requestedName);
+	if (exact) return exact;
+	const canonicalName = BUILTIN_AGENT_ALIASES.get(requestedName.trim().toLowerCase());
+	return canonicalName ? agents.find((agent) => agent.name === canonicalName) : undefined;
 }
 
 export const builtinStepAgents: readonly StepAgentConfig[] = BUILTIN_AGENTS;

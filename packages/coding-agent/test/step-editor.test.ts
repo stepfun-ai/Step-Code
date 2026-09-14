@@ -27,21 +27,55 @@ function createEditor(width = 80, rows = 24): StepEditor {
 	);
 }
 
+function stripSgr(line: string): string {
+	// eslint-disable-next-line no-control-regex
+	return line.replaceAll(/\x1b\[[0-9;]*m/g, "");
+}
+
 afterEach(() => {
 	initTheme("dark");
 });
 
 describe("StepEditor", () => {
-	it("renders the Step rounded frame and placeholder without changing width", () => {
+	it("renders the Step frame rules and placeholder without changing width", () => {
 		initTheme("step");
 		const editor = createEditor();
 		const lines = editor.render(80);
 
 		expect(lines).toHaveLength(3);
-		expect(lines[0]).toContain("╭");
-		expect(lines[1]).toContain("│");
+		// Top and bottom are plain rules and the content is inset, so a terminal
+		// selection of the composer copies the prompt without box drawing.
+		expect(stripSgr(lines[0] ?? "")).toBe("─".repeat(80));
+		expect(stripSgr(lines[2] ?? "")).toBe("─".repeat(80));
+		expect(stripSgr(lines[1] ?? "").startsWith("❯ ")).toBe(true);
+		expect(lines[1]).not.toContain("│");
 		expect(lines[1]).toContain(STEP_EDITOR_PLACEHOLDER);
-		expect(lines[2]).toContain("╰");
+		for (const line of lines) expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("marks the first row and aligns wrapped rows to the same content column", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("重构 renderMessage，拆成三个小函数，并且补上单元测试。".repeat(3));
+		const rows = editor
+			.render(80)
+			.slice(1, -1)
+			.map((row) => stripSgr(row));
+
+		expect(rows.length).toBeGreaterThan(1);
+		expect(rows[0]?.startsWith("❯ ")).toBe(true);
+		// The marker is exactly as wide as the inset, so continuations line up.
+		for (const row of rows.slice(1)) expect(row.startsWith("  ")).toBe(true);
+	});
+
+	it("keeps wrapped rows free of side rails so a terminal selection copies the prompt alone", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("重构 renderMessage，拆成三个小函数，并且补上单元测试。".repeat(3));
+		const lines = editor.render(80);
+
+		expect(lines.length).toBeGreaterThan(3);
+		for (const row of lines.slice(1, -1)) expect(row).not.toContain("│");
 		for (const line of lines) expect(visibleWidth(line)).toBe(80);
 	});
 
@@ -71,7 +105,7 @@ describe("StepEditor", () => {
 		for (const line of lines) expect(visibleWidth(line)).toBe(80);
 	});
 
-	it("paints the rounded frame with the editor's borderColor", () => {
+	it("paints the frame rules with the editor's borderColor", () => {
 		initTheme("step");
 		const editor = createEditor();
 		editor.borderColor = (str: string) => `<b>${str}</b>`;
@@ -99,9 +133,10 @@ describe("StepEditor", () => {
 		const editor = createEditor();
 		const lines = editor.render(7);
 
-		expect(lines[0]).not.toContain("╭");
-		expect(lines[0]).not.toContain("╰");
+		// The frame needs room for its inset on both sides; below that the native
+		// compact editor renders alone, without the Step placeholder.
 		expect(lines.join("\n")).not.toContain(STEP_EDITOR_PLACEHOLDER);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(7);
 	});
 
 	it("keeps narrow CJK input safe when editor padding leaves no frame", () => {

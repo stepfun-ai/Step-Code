@@ -1,4 +1,4 @@
-import { Box, Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Box, Container, isIncrementalRenderDisabled, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -6,6 +6,9 @@ import { createMarkdownTransform } from "./markdown-transform.ts";
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/** Cached zone-marked output, keyed by the child lines it was derived from. */
+type ZoneCache = { width: number; native: string[]; lines: string[] };
 
 /**
  * Component that renders a user message
@@ -15,6 +18,7 @@ export class UserMessageComponent extends Container {
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
 	private markdownTransformers: readonly MarkdownTransformer[];
+	private zoneCache?: ZoneCache;
 
 	constructor(
 		text: string,
@@ -58,13 +62,27 @@ export class UserMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		const lines = super.render(width);
-		if (lines.length === 0) {
-			return lines;
+		// super.render() hands back an array Container reuses while nothing changed, so
+		// the zone markers must go into a new array instead of being written in place.
+		const native = super.render(width);
+		if (native.length === 0) {
+			return native;
 		}
 
+		const cached = this.zoneCache;
+		if (
+			!isIncrementalRenderDisabled() &&
+			cached !== undefined &&
+			cached.width === width &&
+			cached.native === native
+		) {
+			return cached.lines;
+		}
+
+		const lines = [...native];
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		this.zoneCache = { width, native, lines };
 		return lines;
 	}
 }

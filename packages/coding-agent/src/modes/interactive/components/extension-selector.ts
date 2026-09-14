@@ -3,7 +3,16 @@
  * Displays a list of string options with keyboard navigation.
  */
 
-import { Container, getKeybindings, type SelectItem, SelectList, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import {
+	Container,
+	getKeybindings,
+	type SelectItem,
+	SelectList,
+	Spacer,
+	Text,
+	type TUI,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -134,13 +143,16 @@ export class ExtensionSelectorComponent extends Container {
 		rows.push(...this.selectList.render(contentWidth));
 		rows.push("");
 		rows.push(
-			theme.fg(
-				"muted",
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("tui.select.confirm", "select") +
-					"  " +
-					keyHint("tui.select.cancel", "cancel"),
+			...wrapTextWithAnsi(
+				theme.fg(
+					"muted",
+					rawKeyHint("↑↓", "navigate") +
+						"  " +
+						keyHint("tui.select.confirm", "select") +
+						"  " +
+						keyHint("tui.select.cancel", "cancel"),
+				),
+				contentWidth,
 			),
 		);
 		return renderStepDialogFrame(rows, safeWidth);
