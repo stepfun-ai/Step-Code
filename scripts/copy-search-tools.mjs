@@ -116,25 +116,41 @@ function findBinary(dir, binaryName) {
 	return null;
 }
 
+// Try each candidate URL in order; first success wins. Returns true if the tool
+// binary landed in toolsDir, false if every source failed. NEVER throws on a
+// download/extract failure — bundling rg/fd is a best-effort optimization and
+// must not break the release build (the installer/runtime still fetch on demand).
 async function fetchTool(tool, target, toolsDir) {
 	const info = assetInfoFor(tool, target);
 	const destBinary = join(toolsDir, info.binaryName);
-	if (existsSync(destBinary)) return; // idempotent
-	const workDir = mkdtempSync(join(tmpdir(), `step-tool-${tool}-`));
-	try {
-		const archivePath = join(workDir, info.assetName);
-		await download(info.url, archivePath);
-		const extractDir = join(workDir, "extract");
-		extract(archivePath, extractDir);
-		const found = findBinary(extractDir, info.binaryName);
-		if (!found) throw new Error(`binary ${info.binaryName} not found in ${info.assetName}`);
-		mkdirSync(toolsDir, { recursive: true });
-		renameSync(found, destBinary);
-		const { chmodSync } = await import("node:fs");
-		if (!info.binaryName.endsWith(".exe")) chmodSync(destBinary, 0o755);
-	} finally {
-		rmSync(workDir, { recursive: true, force: true });
+	if (existsSync(destBinary)) return true; // idempotent
+
+	// Prefer an internal mirror (e.g. the TOS release bucket) when configured, so
+	// locked-down CI runners that cannot reach github.com still bundle the tools.
+	const mirror = (process.env.STEP_TOOLS_BASE_URL ?? "").trim().replace(/\/+$/, "");
+	const candidates = [mirror ? `${mirror}/${info.assetName}` : null, info.url].filter(Boolean);
+
+	for (const url of candidates) {
+		const workDir = mkdtempSync(join(tmpdir(), `step-tool-${tool}-`));
+		try {
+			const archivePath = join(workDir, info.assetName);
+			await download(url, archivePath);
+			const extractDir = join(workDir, "extract");
+			extract(archivePath, extractDir);
+			const found = findBinary(extractDir, info.binaryName);
+			if (!found) throw new Error(`binary ${info.binaryName} not found in ${info.assetName}`);
+			mkdirSync(toolsDir, { recursive: true });
+			renameSync(found, destBinary);
+			const { chmodSync } = await import("node:fs");
+			if (!info.binaryName.endsWith(".exe")) chmodSync(destBinary, 0o755);
+			return true;
+		} catch (error) {
+			console.warn(`copy-search-tools: ${tool} from ${url} failed: ${error instanceof Error ? error.message : error}`);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
 	}
+	return false;
 }
 
 async function main() {
@@ -149,9 +165,21 @@ async function main() {
 	}
 	const toolsDir = resolve(out, "tools");
 	mkdirSync(toolsDir, { recursive: true });
+	let skipped = 0;
 	for (const tool of ["rg", "fd"]) {
-		await fetchTool(tool, target, toolsDir);
-		console.log(`copy-search-tools: ${tool} ready for ${target} at ${join(toolsDir, assetInfoFor(tool, target).binaryName)}`);
+		const ok = await fetchTool(tool, target, toolsDir);
+		if (ok) {
+			console.log(`copy-search-tools: ${tool} ready for ${target} at ${join(toolsDir, assetInfoFor(tool, target).binaryName)}`);
+		} else {
+			skipped++;
+			console.warn(`copy-search-tools: ${tool} not bundled for ${target}; installer/runtime will fetch it on demand`);
+		}
+	}
+	if (skipped > 0) {
+		// Best-effort: a missing bundled tool must not fail the release. Set
+		// STEP_TOOLS_BASE_URL to an internal mirror (e.g. the TOS bucket) to bundle
+		// them on runners that cannot reach github.com.
+		console.warn(`copy-search-tools: ${skipped}/2 tool(s) unbundled (non-fatal)`);
 	}
 }
 
