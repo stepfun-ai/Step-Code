@@ -229,6 +229,18 @@ editor refocus/disposal callback is cancelled before mounting. This prevents
 an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
 refocused editor to open the next dialog.
 
+## Delegated agents
+
+The Step `subagent` tool accepts one of three modes: a single `{agent, task}`
+call, a non-empty `tasks` array for parallel work, or a non-empty `chain` array
+for sequential work. Fresh installations provide the built-in agents
+`general`, `explore`, `review`, and `planner`; custom definitions can be loaded
+from the user or project agent directories. Agent names are matched exactly,
+with `general-purpose`, `general purpose`, and `general_purpose` accepted as
+aliases for the built-in `general` role so descriptive model output remains
+usable. Malformed background requests are returned on the originating tool
+call and do not create a detached lane or a later completion notification.
+
 ## File search
 
 The `search_files` adapter recognizes native grep matches by their
