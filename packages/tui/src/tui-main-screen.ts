@@ -304,6 +304,14 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		return { firstChanged: expandedFirstChanged, lastChanged: expandedLastChanged };
 	}
 
+	/** Whether any image line sits in `[start, end)` of the previous or the new document. */
+	private hasImageLineInRange(start: number, end: number, newLines: string[]): boolean {
+		for (let i = Math.max(0, start); i < end; i++) {
+			if (isImageLine(this.previousLines[i] ?? "") || isImageLine(newLines[i] ?? "")) return true;
+		}
+		return false;
+	}
+
 	private deleteChangedKittyImages(firstChanged: number, lastChanged: number): string {
 		if (firstChanged < 0 || lastChanged < firstChanged) return "";
 
@@ -548,12 +556,36 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			return;
 		}
 
-		// Differential rendering can only touch what was actually visible.
-		// If the first changed line is above the previous viewport, we need a full redraw.
+		// Differential rendering can only touch what is on screen. A change above the
+		// previous viewport is invisible right now; only its scrollback copy is stale.
+		// Repainting it costs a screen+scrollback wipe and a rewrite of the whole
+		// document, so a spinner row pushed above the viewport by a tall dock would
+		// destroy and rebuild the user's scrollback several times a second. When the
+		// document kept its length no row moved, so the visible window still maps to the
+		// same terminal rows: keep the stale scrollback and repaint only what is visible.
+		// Any length change can shift rows under the viewport, so that still needs the
+		// full redraw.
 		if (firstChanged < prevViewportTop) {
-			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
-			return;
+			const documentLengthChanged = newLines.length !== this.previousLines.length;
+			// A kitty image block reaching across the clamp point cannot be repainted from
+			// its middle without corrupting it.
+			const straddlingImage = kittyScanEnabled && this.hasImageLineInRange(firstChanged, prevViewportTop, newLines);
+			if (documentLengthChanged || straddlingImage) {
+				logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+				fullRender(true);
+				return;
+			}
+			if (lastChanged < prevViewportTop) {
+				// Nothing on screen differs; only bookkeeping has to catch up.
+				this.positionHardwareCursor(cursorPos, newLines.length);
+				this.previousLines = newLines;
+				if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
+				this.previousWidth = width;
+				this.previousHeight = height;
+				this.previousViewportTop = prevViewportTop;
+				return;
+			}
+			firstChanged = prevViewportTop;
 		}
 
 		// Render from first changed line to end

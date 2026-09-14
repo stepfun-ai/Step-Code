@@ -1,7 +1,7 @@
 /**
  * Model-facing plan-mode tools: enter_plan_mode and exit_plan_mode.
  *
- * The tools own only the interaction surface (guards, review select, result
+ * The tools own only the interaction surface (guards, review dialog, result
  * texts). Plan-mode state lives in the step-plan extension and is driven
  * through {@link StepPlanModeController}, so the tools stay stateless.
  */
@@ -11,6 +11,7 @@ import path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "../core/extensions/types.ts";
+import { PlanReviewComponent, type PlanReviewResult } from "../modes/interactive/components/plan-review.ts";
 
 /** Exit outcome dimension for plan_mode_exited telemetry. */
 export type StepPlanExitOutcome = "approved" | "toggled_off" | "auto_headless" | "auto_rpc";
@@ -38,30 +39,50 @@ function controlResult(text: string): AgentToolResult<undefined> {
 	return { content: [{ type: "text", text }], details: undefined };
 }
 
-const PLAN_PREVIEW_MAX_CHARS = 2000;
-
-function readPlanPreview(planFilePath: string): string {
+/**
+ * The plan is shown in full: a review that hides the end of the proposal asks the
+ * user to approve something they have not read. The same text goes to the headless
+ * and rpc callers, which must gate approval on it.
+ */
+function readPlanContents(planFilePath: string): string {
 	if (!statSync(planFilePath).isFile()) throw new Error("The plan path is not a regular file");
 	const planContent = readFileSync(planFilePath, "utf8");
 	if (planContent.trim().length === 0) throw new Error("The plan file is empty or whitespace-only");
-	if (planContent.length <= PLAN_PREVIEW_MAX_CHARS) return planContent;
-	return `${planContent.slice(0, PLAN_PREVIEW_MAX_CHARS)}\n... (truncated, full plan in file)`;
+	return planContent;
 }
 
-async function requestPlanRefinement(
-	pi: ExtensionAPI,
+const STAY_IN_PLAN_MODE_RESULT =
+	"Staying in plan mode. Continue planning and call exit_plan_mode again when the plan is ready.";
+
+/**
+ * Run the interactive review.
+ *
+ * The dialog offers approval and a line of feedback, nothing else: a third
+ * "keep going, no comment" choice told the model nothing that dismissing the
+ * dialog does not already say, so Escape covers it.
+ */
+async function reviewPlanInteractively(
 	extensionContext: ExtensionContext,
 	planFilePath: string,
-): Promise<AgentToolResult<undefined>> {
-	const refinement = await extensionContext.ui.editor("Refine the plan:", "");
-	if (!refinement?.trim()) {
-		return controlResult("Refinement cancelled by the user. Staying in plan mode.");
-	}
-	pi.sendUserMessage(`Plan refinement requested. Update ${planFilePath} based on:\n\n${refinement.trim()}`, {
-		deliverAs: "followUp",
-	});
-	return controlResult(
-		"Awaiting user notes: the user requested refinements (delivered as a follow-up message). Staying in plan mode; update the plan file and call exit_plan_mode again.",
+	planContents: string,
+): Promise<PlanReviewResult> {
+	return extensionContext.ui.custom<PlanReviewResult>(
+		(tui, theme, _keybindings, done) =>
+			new PlanReviewComponent({
+				planFilePath,
+				planContents,
+				theme,
+				onResult: done,
+				onChange: () => tui.requestRender(),
+			}),
+		{
+			// The footer keeps advertising model, cwd, and context budget under a dialog
+			// that owns the whole decision, which reads as if input were still accepted.
+			hideFooter: true,
+			// The turn is blocked on the user: stop animating progress, and keep the
+			// review time out of the tool's reported duration.
+			waitingForApproval: true,
+		},
 	);
 }
 
@@ -101,9 +122,9 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					`No plan file at ${planFilePath}. Check the path and permissions, then write it with write_file and call exit_plan_mode again.`,
 				);
 			}
-			let planPreview: string;
+			let planContents: string;
 			try {
-				planPreview = readPlanPreview(planFilePath);
+				planContents = readPlanContents(planFilePath);
 			} catch (error) {
 				return controlResult(
 					`Cannot review the plan at ${planFilePath}: ${error instanceof Error ? error.message : String(error)}. Provide a readable, nonempty regular file containing your proposal with write_file, then call exit_plan_mode again.`,
@@ -117,33 +138,32 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				planMode.exitPlanMode("auto_rpc", ctx);
 				ctx.ui.notify("rpc child auto-approved plan mode exit — user oversight was not gated", "warning");
 				return controlResult(
-					`Cannot gate approval in rpc child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planPreview}`,
+					`Cannot gate approval in rpc child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
 				);
 			}
 			if (!ctx.hasUI) {
 				planMode.exitPlanMode("auto_headless", ctx);
 				return controlResult(
-					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planPreview}\n\nCannot show interactive prompt; caller must gate approval externally.`,
+					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally.`,
 				);
 			}
-			const choice = await ctx.ui.select(`Plan ready for review (${planFilePath}):\n\n${planPreview}`, [
-				"Execute the plan",
-				"Stay in plan mode",
-				"Refine the plan",
-			]);
-			if (choice === "Execute the plan") {
+			const review = await reviewPlanInteractively(ctx, planFilePath, planContents);
+			if (review?.action === "execute") {
 				planMode.exitPlanMode("approved", ctx);
 				return controlResult(
 					`The user approved the plan. Plan mode exited and file mutations are re-enabled. Execute the plan now, using ${planFilePath} as the reference; do not silently diverge from it.`,
 				);
 			}
-			if (choice === "Refine the plan") {
-				return await requestPlanRefinement(pi, ctx, planFilePath);
+			if (review?.action === "feedback") {
+				pi.sendUserMessage(`Plan refinement requested. Update ${planFilePath} based on:\n\n${review.text}`, {
+					deliverAs: "followUp",
+				});
+				return controlResult(
+					"Awaiting user notes: the user requested refinements (delivered as a follow-up message). Staying in plan mode; update the plan file and call exit_plan_mode again.",
+				);
 			}
-			// "Stay in plan mode" also covers a dismissed dialog.
-			return controlResult(
-				"Staying in plan mode. Continue planning and call exit_plan_mode again when the plan is ready.",
-			);
+			// Dismissed, or a host that cannot show the dialog at all.
+			return controlResult(STAY_IN_PLAN_MODE_RESULT);
 		},
 	});
 }
