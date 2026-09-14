@@ -238,16 +238,25 @@ test("install.ps1 persists the resolved $InstallDir/$AgentDir, honoring STEP_INS
 	);
 });
 
-test("install.sh appends a marker-guarded, env-var-honoring PATH export and prints a source-able snippet (static)", async () => {
+test("install.sh persists PATH via a guarded, env-var-honoring # step-cli block (static)", async () => {
 	const rendered = renderInstallTemplate(await readFile(shPath, "utf8"), BASE_URL);
-	assert.ok(rendered.includes("# added by step-cli installer"), "must use the unique marker comment");
-	assert.ok(rendered.includes('grep -qF -- "$marker"'), "must grep for the marker before appending (idempotent)");
+	assert.ok(rendered.includes("# step-cli"), "must use the # step-cli marker block");
+	assert.ok(rendered.includes("# step-cli end"), "marker block must be terminated");
 	assert.ok(
-		rendered.includes("${INSTALL_DIR}:${AGENT_DIR}/bin:"),
+		rendered.includes("grep -qxF '# step-cli'"),
+		"must grep for the marker before rewriting the block (idempotent)",
+	);
+	assert.ok(
+		rendered.includes('case ":$PATH:" in'),
+		"written block must self-guard so sourcing it twice does not double-prepend",
+	);
+	assert.ok(
+		rendered.includes('export PATH="%s:%s/bin:$PATH"'),
 		"export must use the resolved INSTALL_DIR/AGENT_DIR (honors STEP_INSTALL_DIR/STEP_CODING_AGENT_DIR)",
 	);
-	assert.ok(rendered.includes("to use step in the current shell, run:"), "must always print a source-able snippet");
-	assert.ok(rendered.includes("persist_path"), "main must call persist_path");
+	assert.ok(rendered.includes('fish_add_path "%s" "%s/bin"'), "fish must be configured via fish_add_path");
+	assert.ok(rendered.includes("STEP_NO_MODIFY_PATH"), "must honor the STEP_NO_MODIFY_PATH opt-out");
+	assert.ok(rendered.includes("configure_shell_path"), "main must call configure_shell_path");
 });
 
 const powershellShell = commandAvailable("pwsh", "--version")
@@ -356,33 +365,45 @@ $newPath
 );
 
 test(
-	"append_path_line does not duplicate the PATH export on re-run (bash)",
+	"strip_step_block is idempotent and never truncates on an unterminated marker (bash)",
 	{ skip: commandAvailable("bash", "--version") ? false : "bash unavailable" },
 	async () => {
 		const source = await readFile(shPath, "utf8");
-		const match = source.match(/append_path_line\(\) \{[\s\S]*?\n\}/);
-		assert.ok(match, "must be able to extract append_path_line from install.sh");
+		const match = source.match(/strip_step_block\(\) \{[\s\S]*?\n\}/);
+		assert.ok(match, "must be able to extract strip_step_block from install.sh");
 
 		const dir = await mkdtemp(join(tmpdir(), "step-sh-helper-"));
-		const rcPath = join(dir, "rc").replace(/\\/g, "/");
+		const rcWell = join(dir, "rc-well").replace(/\\/g, "/");
+		const rcUnterm = join(dir, "rc-unterm").replace(/\\/g, "/");
 		const scriptPath = join(dir, "helper-test.sh");
 		try {
-			// Call the extracted helper twice against the same rc file, then count
-			// the marker lines: a marker-guarded append must leave exactly one.
+			// A well-formed "# step-cli ... # step-cli end" block (and the blank line
+			// above it) must be removed while surrounding lines survive; a LONE start
+			// marker with no end must be preserved verbatim rather than truncating the
+			// rest of the rc to EOF (the reviewed data-loss guard).
 			const harness = String.raw`
 set -euo pipefail
 ${match[0]}
-rc="$1"
-marker='# added by step-cli installer'
-line='export PATH="/tmp/x:$PATH"'
-append_path_line "$rc" "$marker" "$line"
-append_path_line "$rc" "$marker" "$line"
-grep -cF -- "$marker" "$rc"
+printf 'keep1\n\n# step-cli\nexport PATH=x\n# step-cli end\nkeep2\n' > "$1"
+strip_step_block "$1"
+printf '# step-cli\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
+strip_step_block "$2"
+printf 'WELL:%s\n' "$(tr '\n' '|' < "$1")"
+printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
 `;
 			await writeFile(scriptPath, harness, "utf8");
-			const result = spawnSync("bash", [scriptPath, rcPath], { encoding: "utf8" });
-			assert.equal(result.status, 0, `append_path_line harness should exit 0: ${result.stderr}`);
-			assert.equal(result.stdout.trim(), "1", "marker must appear exactly once after a re-run");
+			const result = spawnSync("bash", [scriptPath, rcWell, rcUnterm], { encoding: "utf8" });
+			assert.equal(result.status, 0, `strip_step_block harness should exit 0: ${result.stderr}`);
+			assert.match(
+				result.stdout,
+				/WELL:keep1\|keep2\|/,
+				"well-formed block and its preceding blank must be stripped, surrounding lines intact",
+			);
+			assert.match(
+				result.stdout,
+				/UNTERM_KEEP:1/,
+				"an unterminated # step-cli marker must not truncate user content below it",
+			);
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}

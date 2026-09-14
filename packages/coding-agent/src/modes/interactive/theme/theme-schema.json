@@ -59,6 +59,7 @@
 				"toolTitle",
 				"toolOutput",
 				"mdHeading",
+				"mdTableHeader",
 				"mdLink",
 				"mdLinkUrl",
 				"mdCode",
@@ -161,6 +162,10 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Custom message background (hook-injected messages)"
 				},
+				"codeInlineBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Inline code chip background (optional; falls back to customMessageBg)"
+				},
 				"customMessageText": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Custom message text color"
@@ -192,6 +197,10 @@
 				"mdHeading": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Markdown heading text"
+				},
+				"mdTableHeader": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown table header text"
 				},
 				"mdLink": {
 					"$ref": "#/$defs/colorValue",

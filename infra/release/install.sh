@@ -116,37 +116,130 @@ install_managed_tools() {
 	install_managed_tool rg rg "$rg_asset" BurntSushi/ripgrep ''
 }
 
-append_path_line() {
-	# Append a marker-guarded line to a shell rc file, creating it if needed.
-	# The marker is grepped for FIRST so re-runs / self-update never duplicate it.
-	local rc_file="$1" marker="$2" line="$3"
-	[[ -n "$rc_file" ]] || return 0
-	if [[ -f "$rc_file" ]] && grep -qF -- "$marker" "$rc_file"; then return 0; fi
-	mkdir -p "$(dirname "$rc_file")"
-	printf '\n%s\n%s\n' "$marker" "$line" >>"$rc_file"
+path_hint() {
+	# Emit the manual instruction used both when PATH edits are opted out and as
+	# the reminder for the current (already-started) shell.
+	printf 'add %s to PATH for the current shell:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >&2
 }
 
-persist_path() {
-	# Persist INSTALL_DIR + AGENT_DIR/bin onto PATH for *future* shells by editing
-	# the user's shell rc, and ALWAYS print a source-able snippet below: rc edits
-	# only affect newly opened shells, and under `curl | sh` we cannot mutate the
-	# parent shell (there is no WM_SETTINGCHANGE analog as on Windows).
-	local marker='# added by step-cli installer'
-	local line="export PATH=\"${INSTALL_DIR}:${AGENT_DIR}/bin:\$PATH\""
-	local shell_name
-	shell_name="$(basename "${SHELL:-}")"
-	case "$shell_name" in
-		zsh) append_path_line "${HOME}/.zshrc" "$marker" "$line" ;;
-		bash) append_path_line "${HOME}/.bashrc" "$marker" "$line" ;;
-		*)
-			# $SHELL unset or unrecognized: edit ~/.profile, plus the rc of the shell
-			# we are actually running under when that is still determinable.
-			append_path_line "${HOME}/.profile" "$marker" "$line"
-			if [[ -n "${ZSH_VERSION:-}" ]]; then append_path_line "${HOME}/.zshrc" "$marker" "$line"
-			elif [[ -n "${BASH_VERSION:-}" ]]; then append_path_line "${HOME}/.bashrc" "$marker" "$line"; fi
+profile_targets() {
+	# The rc file(s) a future login/interactive shell of the user's login shell
+	# will source. One path per line so callers can read it safely. Only reached
+	# for shells whose PATH syntax is `export PATH=` (zsh/bash/POSIX); fish and
+	# csh/tcsh are handled separately in configure_shell_path.
+	case "$(basename "${SHELL:-}")" in
+		zsh) printf '%s\n' "${ZDOTDIR:-$HOME}/.zshrc" ;;
+		bash)
+			# macOS Terminal opens login shells (.bash_profile); most Linux
+			# interactive shells read .bashrc. Cover both so PATH sticks either way.
+			printf '%s\n' "$HOME/.bashrc"
+			[[ "$(uname -s)" == Darwin ]] && printf '%s\n' "$HOME/.bash_profile"
+			;;
+		*) printf '%s\n' "$HOME/.profile" ;;
+	esac
+}
+
+strip_step_block() {
+	# Remove a previously written, WELL-FORMED "# step-cli ... # step-cli end"
+	# block (and any blank lines directly above it) so reinstalls stay idempotent.
+	# A lone start marker with no matching end (a hand-edited rc, an interrupted
+	# prior write, or an unrelated "# step-cli" comment) is emitted verbatim
+	# rather than truncating everything below it to EOF. Returns non-zero (leaving
+	# the file untouched) if the rewrite could not be produced, so the caller can
+	# avoid appending a duplicate block on top of one it failed to remove.
+	local file="$1" tmp
+	tmp="$(mktemp "${file}.step.XXXXXX")" || return 1
+	if awk '
+		{
+			if (inblock) {
+				block = block $0 "\n"
+				if ($0 == "# step-cli end") { inblock = 0; block = ""; blank = "" }
+				next
+			}
+			if ($0 == "# step-cli") { inblock = 1; block = $0 "\n"; next }
+			if ($0 ~ /^[[:space:]]*$/) { blank = blank $0 "\n"; next }
+			if (blank != "") { printf "%s", blank; blank = "" }
+			print
+		}
+		END {
+			# Unterminated block: restore its lines (and preceding blanks) instead
+			# of dropping them. Trailing blanks are preserved.
+			if (inblock) { if (blank != "") printf "%s", blank; printf "%s", block }
+			else if (blank != "") printf "%s", blank
+		}
+	' "$file" >"$tmp"; then
+		cat "$tmp" >"$file"
+		rm -f "$tmp"
+		return 0
+	fi
+	rm -f "$tmp"
+	return 1
+}
+
+configure_shell_path() {
+	# Persist INSTALL_DIR onto PATH for future shells. Without this the installer
+	# drops the binary into a directory nothing sources, so a fresh shell reports
+	# "command not found: step". Opt out with STEP_NO_MODIFY_PATH=1 (package
+	# managers, CI, or callers that manage PATH themselves).
+	case ":${PATH}:" in *":${INSTALL_DIR}:"*) return 0 ;; esac
+	if [[ -n "${STEP_NO_MODIFY_PATH:-}" ]]; then path_hint; return 0; fi
+
+	# The install dir is interpolated into a shell-sourced file. Refuse to edit an
+	# rc when a path contains characters that could break quoting or inject a
+	# command, and fall back to a manual hint instead.
+	case "${INSTALL_DIR}:${AGENT_DIR}/bin" in
+		*'"'* | *'`'* | *'$'* | *$'\n'*)
+			printf 'note: install dir contains characters unsafe to write into a shell profile; add it to PATH manually:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$AGENT_DIR" >&2
+			return 0
 			;;
 	esac
-	printf 'to use step in the current shell, run:\n  %s\n' "$line"
+
+	local shell_name updated=0 rc
+	shell_name="$(basename "${SHELL:-}")"
+
+	case "$shell_name" in
+		fish)
+			# fish never sources ~/.profile and does not understand `export PATH=`;
+			# it manages PATH with fish_add_path in config.fish.
+			local fishcfg="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+			if mkdir -p "$(dirname "$fishcfg")" 2>/dev/null; then
+				if [[ -f "$fishcfg" ]] && grep -qxF '# step-cli' "$fishcfg" 2>/dev/null && ! strip_step_block "$fishcfg"; then
+					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$fishcfg" >&2
+				elif printf '\n# step-cli\nfish_add_path "%s" "%s/bin"\n# step-cli end\n' "$INSTALL_DIR" "$AGENT_DIR" >>"$fishcfg"; then
+					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$fishcfg"
+					updated=1
+				fi
+			fi
+			;;
+		csh | tcsh)
+			# csh/tcsh use a separate rc and `setenv` syntax we do not manage.
+			printf 'note: %s is not auto-configured; add this to your ~/.%src:\n  setenv PATH "%s:%s/bin:$PATH"\n' "$shell_name" "$shell_name" "$INSTALL_DIR" "$AGENT_DIR" >&2
+			return 0
+			;;
+		*)
+			# zsh, bash, and POSIX sh/ksh/dash all accept `export PATH=`. The written
+			# block guards against re-prepending, so sourcing it twice (e.g. a macOS
+			# .bash_profile that sources .bashrc) still leaves a single PATH entry.
+			while IFS= read -r rc; do
+				[[ -n "$rc" ]] || continue
+				mkdir -p "$(dirname "$rc")" 2>/dev/null || continue
+				if [[ -f "$rc" ]] && grep -qxF '# step-cli' "$rc" 2>/dev/null && ! strip_step_block "$rc"; then
+					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$rc" >&2
+					continue
+				fi
+				if printf '\n# step-cli\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:%s/bin:$PATH" ;;\nesac\n# step-cli end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >>"$rc"; then
+					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$rc"
+					updated=1
+				fi
+			done < <(profile_targets)
+			;;
+	esac
+
+	if [[ "$updated" -eq 1 ]]; then
+		printf 'restart your shell (or run: exec %s) to pick it up.\n' "${shell_name:-your shell}"
+	else
+		path_hint
+	fi
 }
 
 main() {
@@ -205,7 +298,7 @@ main() {
 	install_managed_tools
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
 	printf 'installed Step CLI %s to %s\n' "$VERSION" "$destination"
-	persist_path
+	configure_shell_path
 }
 
 main "$@"

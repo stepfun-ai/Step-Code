@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { finalOutput, isFailed, resultText, runStepSubagentProcess } from "../step-subagent.ts";
-import { discoverStepAgents, formatStepAgentCatalog } from "../step-subagent-agents.ts";
+import { discoverStepAgents, formatStepAgentCatalog, resolveStepAgent } from "../step-subagent-agents.ts";
 import { resolveWorkflowToolProfile } from "./tool-profile.ts";
 import type { WorkflowAgentRunner, WorkflowAgentRunResult, WorkflowUsage } from "./types.ts";
 
@@ -21,7 +21,7 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 			scope: "both",
 		});
 		const requestedName = input.options.agentType?.trim() || "general";
-		const agent = discovery.agents.find((candidate) => candidate.name === requestedName);
+		const agent = resolveStepAgent(discovery.agents, requestedName);
 		if (!agent) {
 			throw new Error(
 				`Unknown workflow agent "${requestedName}". Available: ${formatStepAgentCatalog(discovery.agents)}`,

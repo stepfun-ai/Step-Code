@@ -3,6 +3,7 @@ import { type MarkdownTheme, stripTerminalSequences, truncateToWidth, visibleWid
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { AssistantMessageComponent } from "./assistant-message.ts";
+import { estimateTokens, formatElapsedTime, formatTokens } from "./footer.ts";
 import { UserMessageComponent } from "./user-message.ts";
 
 /** OSC 133 prompt-zone markers emitted by pi's message components. */
@@ -196,10 +197,14 @@ function completeFenceOrdinals(text: string): Set<number> {
 /** Replace only the visible fence payload, preserving Pi's ANSI/background runs. */
 function replaceFencePayload(line: string, replacement: string): string {
 	const { markers, body } = splitMarkers(line);
-	const match = /(`{3,}|~{3,})[^\x1b]*/u.exec(body);
+	// The fence payload runs to the end of the row and may interleave SGR
+	// segments — the theme paints the backticks and the language tag in
+	// different colors. Consuming only the first plain run would leave the
+	// language suffix behind and print it twice (feedback acceptance F-2).
+	const match = /(`{3,}|~{3,})(?:\x1b\[[0-9;]*m|[^\x1b])*$/u.exec(body);
 	if (!match) return line;
 	const padding = " ".repeat(Math.max(0, visibleWidth(match[0]) - visibleWidth(replacement)));
-	return `${markers}${body.slice(0, match.index)}${replacement}${padding}${body.slice(match.index + match[0].length)}`;
+	return `${markers}${body.slice(0, match.index)}${replacement}${padding}`;
 }
 
 /**
@@ -461,9 +466,13 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 	private outputPadding: number;
 	private expanded = false;
 	private hideThinking: boolean;
-	private stepHiddenThinkingLabel: string;
 	private latestMessage?: AssistantMessage;
 	private latestStreaming = false;
+	// Thinking 摘要数据：时长按内容增量在流式期间起止计时（updateContent 每个增量
+	// 都会调用），token 优先取 usage.reasoning，缺省用字符数估算（与状态行同法）。
+	private thinkingChars = 0;
+	private thinkingTotalMs = 0;
+	private thinkingRunStartMs: number | undefined;
 	private stepMarkdownTheme: MarkdownTheme;
 	private stepMarkdownTransformers: readonly MarkdownTransformer[];
 	private nativeRuns: NativeAssistantRun[] = [];
@@ -491,11 +500,12 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		);
 		this.outputPadding = normalizeOutputPadding(outputPad);
 		this.hideThinking = hideThinkingBlock;
-		this.stepHiddenThinkingLabel = hiddenThinkingLabel;
 		this.latestMessage = message;
+		this.latestStreaming = false;
 		this.stepMarkdownTheme = markdownTheme;
 		this.stepMarkdownTransformers = markdownTransformers;
 		this.nativeComponentsReady = true;
+		if (message) this.trackThinkingTiming(message, false);
 		this.rebuildNativeComponents();
 	}
 
@@ -506,9 +516,55 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		this.cache = undefined;
 		this.latestMessage = message;
 		this.latestStreaming = isStreaming ?? false;
+		this.trackThinkingTiming(message, this.latestStreaming);
 		if (this.nativeComponentsReady) {
 			this.rebuildNativeComponents();
 		}
+	}
+
+	/**
+	 * 流式期间内容每次增长都会走到这里，恰好是 thinking 起止的可靠信号：
+	 * 思考字符首次增长=一段思考开始；其后出现非思考内容或消息完成=这段思考结束。
+	 * 非流式路径（会话回放）拿不到起止时刻，只累计字符数——摘要降级为不带时长。
+	 */
+	private trackThinkingTiming(message: AssistantMessage, isStreaming: boolean): void {
+		const chars = message.content.reduce(
+			(total, block) => total + (block.type === "thinking" ? block.thinking.trim().length : 0),
+			0,
+		);
+		const grew = chars > this.thinkingChars;
+		const hasNonThinking = message.content.some(
+			(block) => (block.type === "text" && block.text.trim().length > 0) || block.type === "toolCall",
+		);
+		if (grew && isStreaming && this.thinkingRunStartMs === undefined) {
+			this.thinkingRunStartMs = Date.now();
+		}
+		if (this.thinkingRunStartMs !== undefined && hasNonThinking && !grew) {
+			this.thinkingTotalMs += Date.now() - this.thinkingRunStartMs;
+			this.thinkingRunStartMs = undefined;
+		}
+		if (!isStreaming && this.thinkingRunStartMs !== undefined) {
+			this.thinkingTotalMs += Date.now() - this.thinkingRunStartMs;
+			this.thinkingRunStartMs = undefined;
+		}
+		this.thinkingChars = chars;
+	}
+
+	/**
+	 * 完成态 thinking 摘要行（hideThinking 时的信息流锚点）：
+	 * `• Thought for 12s · ↓ 1.2k tokens`——数据说话，代替无信息量的
+	 * "Thinking..." 死标签。无 thinking 内容时返回 undefined（不占行）。
+	 */
+	private thinkingSummaryLabel(): string | undefined {
+		if (this.thinkingChars === 0) return undefined;
+		const reasoning = this.latestMessage?.usage.reasoning ?? 0;
+		const tokens = reasoning > 0 ? reasoning : estimateTokens(this.thinkingChars);
+		const seconds = Math.ceil(this.thinkingTotalMs / 1000);
+		const duration = seconds > 0 ? ` for ${formatElapsedTime(seconds)}` : "";
+		return (
+			`${theme.italic(theme.fg("thinkingText", `Thought${duration}`))}` +
+			theme.fg("muted", ` · ↓ ${formatTokens(tokens)} tokens`)
+		);
 	}
 
 	override setHideThinkingBlock(hide: boolean): void {
@@ -516,8 +572,9 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		this.invalidate();
 	}
 
-	override setHiddenThinkingLabel(label: string): void {
-		this.stepHiddenThinkingLabel = label;
+	override setHiddenThinkingLabel(_label: string): void {
+		// step 皮肤隐藏 thinking 时显示的是数据摘要行，不是可配置 label；
+		// 保留 override 只为让主题/标签热切换走 invalidate 重渲染。
 		this.invalidate();
 	}
 
@@ -639,7 +696,7 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 							nativeMessage,
 							false,
 							this.stepMarkdownTheme,
-							this.stepHiddenThinkingLabel,
+							undefined,
 							this.outputPadding,
 							this.stepMarkdownTransformers,
 						);
@@ -664,7 +721,7 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 				statusMessage,
 				false,
 				this.stepMarkdownTheme,
-				this.stepHiddenThinkingLabel,
+				undefined,
 				this.outputPadding,
 				this.stepMarkdownTransformers,
 			);
@@ -693,10 +750,15 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		if (reasoning.length === 0) return [];
 
 		if (this.hideThinking) {
+			// 流式期间不占行：瞬时状态由底部状态行承担（Thinking... + 耗时 + token）。
+			// 完成后留一行带数据的摘要锚点，回看历史时它要能回答"想了多久、花了多少"。
+			if (this.latestStreaming) return [];
+			const summary = this.thinkingSummaryLabel();
+			if (!summary) return [];
 			return [
 				{
 					markers: "",
-					body: `${theme.fg("muted", "•")} ${theme.italic(theme.fg("thinkingText", this.stepHiddenThinkingLabel))}`,
+					body: `${theme.fg("muted", "•")} ${summary}`,
 				},
 			];
 		}

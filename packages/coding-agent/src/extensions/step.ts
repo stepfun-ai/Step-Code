@@ -22,6 +22,7 @@ import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/s
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
 import { registerStepProvider } from "./step-provider/index.ts";
+import { registerStepStreamRecovery } from "./step-stream-recovery.ts";
 
 export interface StepExtensionOptions {
 	/** Initial Step policy, normally populated from CLI/runtime options. */
@@ -38,6 +39,7 @@ export interface StepExtensionOptions {
 export function createStepExtension(options: StepExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		registerStepProvider(pi);
+		registerStepStreamRecovery(pi);
 		// Declarative plugins (including StepPage) contribute MCP servers. The
 		// bridge is loaded as part of the Step product extension so ordinary Pi
 		// sessions remain unchanged.

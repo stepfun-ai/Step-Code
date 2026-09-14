@@ -10,12 +10,16 @@
 
 ### Changed
 
+- Changed the default permission preset to Bypass when no CLI flag, `STEP_*` env var, or persisted preset is set; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
 - Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
 
 ### Fixed
 
+- Fixed extension select/input dialogs leaving unresolved promises or stale waiting state after cancellation, replacement, reset, stop, or reentrant focus restoration.
+- Fixed Step approval presentation with per-call identity and reversible waiting indicators, and kept multiline tool titles/summaries within one physical terminal row without changing execution arguments.
+- Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. `grep.ts` and `find.ts` now walk a ladder — injected custom search → downloaded/PATH rg/fd → `git grep`/`git ls-files` when the search path is inside a worktree → POSIX `grep`/`find` — and only throw when nothing at all is available. `GrepOperations` gains an optional `search` primitive so remote injectors can substitute text search the way `FindOperations.glob` already substitutes file listing.
 - Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
 - Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.
 - Fixed the Step queued-message preview and `update_plan` rendering dropping four characters at every wrap point by wrapping through Pi's shared text wrapper.
@@ -31,6 +35,7 @@
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
 - Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
 - Fixed `/feedback` pages growing the rendered transcript, which scrolled the screen and left the editor above the bottom row once a page closed.
+- Fixed Step `search_files` discarding valid match rows with `[`- or `WARNING:`-prefixed paths; native notices remain excluded and match/truncation metadata is preserved.
 
 ## [0.84.4] - 2026-08-28
 

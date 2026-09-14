@@ -347,9 +347,15 @@ describe("Markdown component", () => {
 			assert.ok(plainLines.some((line) => line.includes("Age")));
 			assert.ok(plainLines.some((line) => line.includes("Alice")));
 			assert.ok(plainLines.some((line) => line.includes("Bob")));
-			// Check for table borders
-			assert.ok(plainLines.some((line) => line.includes("│")));
-			assert.ok(plainLines.some((line) => line.includes("─")));
+			// Check open-style rules: heavy rule under header, light rules between rows
+			assert.ok(
+				plainLines.some((line) => line.includes("━")),
+				"Expected heavy header rule",
+			);
+			assert.ok(
+				plainLines.some((line) => line.includes("─")),
+				"Expected light row rule",
+			);
 		});
 
 		it("should render row dividers between data rows", () => {
@@ -365,9 +371,11 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(80);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
-			const dividerLines = plainLines.filter((line) => line.includes("┼"));
+			const heavyRules = plainLines.filter((line) => line.includes("━"));
+			const lightRules = plainLines.filter((line) => line.includes("─") && !line.includes("━"));
 
-			assert.strictEqual(dividerLines.length, 2, "Expected header + row divider");
+			assert.strictEqual(heavyRules.length, 1, "Expected one heavy header rule");
+			assert.strictEqual(lightRules.length, 1, "Expected one light rule between the two rows");
 		});
 
 		it("should keep column width at least the longest word", () => {
@@ -387,10 +395,9 @@ describe("Markdown component", () => {
 			const dataLine = plainLines.find((line) => line.includes(longestWord));
 			assert.ok(dataLine, "Expected data row containing longest word");
 
-			const segments = dataLine.split("│").slice(1, -1);
-			const [firstSegment] = segments;
+			const [firstSegment] = dataLine.split(/\s{2,}/);
 			assert.ok(firstSegment, "Expected first column segment");
-			const firstColumnWidth = firstSegment.length - 2;
+			const firstColumnWidth = firstSegment.length;
 
 			assert.ok(
 				firstColumnWidth >= longestWord.length,
@@ -418,6 +425,32 @@ describe("Markdown component", () => {
 			assert.ok(plainLines.some((line) => line.includes("Right")));
 			// Check content
 			assert.ok(plainLines.some((line) => line.includes("Long text")));
+		});
+
+		it("should align CJK table columns by display width", () => {
+			const markdown = new Markdown(
+				`| 领域 | 维护标准 |
+| --- | --- |
+| 健康 | 每周运动三次，定期体检 |
+| 财务 | 每月记账 |`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(60);
+			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+			const starts = ["每周运动三次", "每月记账"].map((needle) => {
+				const row = plainLines.find((line) => line.includes(needle)) ?? "";
+				return row.indexOf(needle);
+			});
+			assert.ok(starts[0]! > 0, "Expected second column after the first");
+			assert.strictEqual(
+				starts[0],
+				starts[1],
+				`Expected CJK cells aligned by display width, got starts ${JSON.stringify(starts)}`,
+			);
 		});
 
 		it("should handle tables with varying column widths", () => {
@@ -489,14 +522,14 @@ describe("Markdown component", () => {
 						assert.notStrictEqual(row, -1, `Missing wrapped table row: ${JSON.stringify(viewport)}`);
 						const line = viewport[row];
 						const linkCol = line.indexOf("one");
-						const separatorCol = line.indexOf("│", linkCol);
 						const plainCol = line.indexOf("norm");
-						assert.ok(linkCol >= 0 && separatorCol > linkCol && plainCol > separatorCol);
+						assert.ok(linkCol >= 0 && plainCol > linkCol, "Expected link before plain cell");
+						const gutterCol = plainCol - 1;
 						assert.strictEqual(getCell(terminal, row, linkCol).isFgDefault(), false);
-						assert.strictEqual(getCell(terminal, row, separatorCol).isFgDefault(), true);
+						assert.strictEqual(getCell(terminal, row, gutterCol).isFgDefault(), true);
 						assert.strictEqual(getCell(terminal, row, plainCol).isFgDefault(), true);
 						assert.notStrictEqual(getCell(terminal, row, linkCol).isBold(), 0);
-						assert.strictEqual(getCell(terminal, row, separatorCol).isBold(), 0);
+						assert.strictEqual(getCell(terminal, row, gutterCol).isBold(), 0);
 						assert.strictEqual(getCell(terminal, row, plainCol).isBold(), 0);
 
 						if (!hyperlinks) {
@@ -504,12 +537,8 @@ describe("Markdown component", () => {
 							assert.notStrictEqual(urlRow, -1, `Missing fallback URL row: ${JSON.stringify(viewport)}`);
 							const urlLine = viewport[urlRow];
 							const urlCol = urlLine.indexOf("https");
-							const urlSeparatorCol = urlLine.indexOf("│", urlCol);
-							const urlBorderCol = urlLine.lastIndexOf("│");
-							assert.ok(urlCol >= 0 && urlSeparatorCol > urlCol && urlBorderCol > urlSeparatorCol);
+							assert.ok(urlCol >= 0, "Expected URL fallback cell");
 							assert.notStrictEqual(getCell(terminal, urlRow, urlCol).isDim(), 0);
-							assert.strictEqual(getCell(terminal, urlRow, urlSeparatorCol).isDim(), 0);
-							assert.strictEqual(getCell(terminal, urlRow, urlBorderCol).isDim(), 0);
 						}
 					} finally {
 						tui.stop();
@@ -545,23 +574,20 @@ describe("Markdown component", () => {
 				assert.notStrictEqual(row, -1, `Missing wrapped blockquote table row: ${JSON.stringify(viewport)}`);
 				const line = viewport[row];
 				const linkCol = line.indexOf("one");
-				const separatorCol = line.indexOf("│", linkCol);
 				const plainCol = line.indexOf("normal");
-				assert.ok(linkCol >= 0 && separatorCol > linkCol && plainCol > separatorCol);
+				assert.ok(linkCol >= 0 && plainCol > linkCol, "Expected link before plain cell");
+				const gutterCol = plainCol - 1;
 
 				assert.notStrictEqual(getCell(terminal, row, linkCol).getFgColor(), quoteColor);
-				assert.strictEqual(getCell(terminal, row, separatorCol).getFgColor(), quoteColor);
+				assert.strictEqual(getCell(terminal, row, gutterCol).getFgColor(), quoteColor);
 				assert.strictEqual(getCell(terminal, row, plainCol).getFgColor(), quoteColor);
 
 				const finalRow = viewport.findIndex((line) => line.includes("five six"));
 				assert.notStrictEqual(finalRow, -1, `Missing final wrapped link row: ${JSON.stringify(viewport)}`);
 				const finalLine = viewport[finalRow];
 				const finalLinkCol = finalLine.indexOf("five six");
-				const finalSeparatorCol = finalLine.indexOf("│", finalLinkCol);
-				const finalBorderCol = finalLine.lastIndexOf("│");
-				assert.ok(finalLinkCol >= 0 && finalSeparatorCol > finalLinkCol && finalBorderCol > finalSeparatorCol);
-				assert.strictEqual(getCell(terminal, finalRow, finalSeparatorCol).getFgColor(), quoteColor);
-				assert.strictEqual(getCell(terminal, finalRow, finalBorderCol).getFgColor(), quoteColor);
+				assert.ok(finalLinkCol >= 0, "Expected final wrapped link row");
+				assert.notStrictEqual(getCell(terminal, finalRow, finalLinkCol).getFgColor(), quoteColor);
 			} finally {
 				tui.stop();
 				resetCapabilitiesCache();
@@ -582,8 +608,8 @@ describe("Markdown component", () => {
 			const lines = markdown.render(25);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
 
-			// Should have multiple data rows due to wrapping
-			const dataRows = plainLines.filter((line) => line.startsWith("│") && !line.includes("─"));
+			// Should have multiple data rows due to wrapping (content lines, not rules)
+			const dataRows = plainLines.filter((line) => line.length > 0 && !line.includes("━") && !line.includes("─"));
 			assert.ok(dataRows.length > 2, `Expected wrapped rows, got ${dataRows.length} rows`);
 
 			// All content should be preserved (may be split across lines)
@@ -615,17 +641,13 @@ describe("Markdown component", () => {
 				assert.ok(line.length <= width, `Line exceeds width ${width}: "${line}" (length: ${line.length})`);
 			}
 
-			// Borders should stay intact (exactly 2 vertical borders for a 1-col table)
-			const tableLines = plainLines.filter((line) => line.startsWith("│"));
+			// Open-style table: rule lines separate header from data
+			const tableLines = plainLines.filter((line) => line.length > 0);
 			assert.ok(tableLines.length > 0, "Expected table rows to render");
-			for (const line of tableLines) {
-				const borderCount = line.split("│").length - 1;
-				assert.strictEqual(borderCount, 2, `Expected 2 borders, got ${borderCount}: "${line}"`);
-			}
 
-			// Strip box drawing characters + whitespace so we can assert the URL is preserved
+			// Strip rule characters + whitespace so we can assert the URL is preserved
 			// even if it was split across multiple wrapped lines.
-			const extracted = plainLines.join("").replace(/[│├┤─\s]/g, "");
+			const extracted = plainLines.join("").replace(/[━─\s]/g, "");
 			assert.ok(extracted.includes("prefix"), "Should preserve 'prefix'");
 			assert.ok(extracted.includes(url), "Should preserve URL");
 		});
@@ -650,11 +672,12 @@ describe("Markdown component", () => {
 				assert.ok(line.length <= width, `Line exceeds width ${width}: "${line}" (length: ${line.length})`);
 			}
 
-			const tableLines = plainLines.filter((line) => line.startsWith("│"));
-			for (const line of tableLines) {
-				const borderCount = line.split("│").length - 1;
-				assert.strictEqual(borderCount, 2, `Expected 2 borders, got ${borderCount}: "${line}"`);
-			}
+			// Open-style table: assert content lines stay within width (checked above)
+			// and the heavy header rule is present.
+			assert.ok(
+				plainLines.some((line) => line.includes("━")),
+				"Expected header rule",
+			);
 		});
 
 		it("should handle extremely narrow width gracefully", () => {
@@ -694,13 +717,13 @@ describe("Markdown component", () => {
 			const lines = markdown.render(80);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
 
-			// Should have proper table structure
+			// Should have proper table structure (open style: heavy header rule)
 			const headerLine = plainLines.find((line) => line.includes("A") && line.includes("B"));
 			assert.ok(headerLine, "Should have header row");
-			assert.ok(headerLine?.includes("│"), "Header should have borders");
+			assert.ok(headerLine?.trim().length > 0, "Header should have content");
 
-			const separatorLine = plainLines.find((line) => line.includes("├") && line.includes("┼"));
-			assert.ok(separatorLine, "Should have separator row");
+			const separatorLine = plainLines.find((line) => line.includes("━"));
+			assert.ok(separatorLine, "Should have heavy header rule");
 
 			const dataLine = plainLines.find((line) => line.includes("1") && line.includes("2"));
 			assert.ok(dataLine, "Should have data row");
@@ -726,7 +749,7 @@ describe("Markdown component", () => {
 			}
 
 			// Table rows should have left padding
-			const tableRow = plainLines.find((line) => line.includes("│"));
+			const tableRow = plainLines.find((line) => line.includes("━") || /^[A-Za-z]/.test(line));
 			assert.ok(tableRow?.startsWith("  "), "Table should have left padding");
 		});
 
@@ -778,7 +801,7 @@ describe("Markdown component", () => {
 			assert.ok(plainLines.some((line) => line.includes("    - Nested item")));
 			// Check table
 			assert.ok(plainLines.some((line) => line.includes("Col1")));
-			assert.ok(plainLines.some((line) => line.includes("│")));
+			assert.ok(plainLines.some((line) => line.includes("━")));
 		});
 	});
 
@@ -884,7 +907,7 @@ A=
 			const output = lines.join("\n");
 
 			assert.ok(output.includes("- Formula: F₁ = u²"));
-			assert.ok(output.includes("│ ℂ³"));
+			assert.ok(output.includes("ℂ³"));
 		});
 
 		it("does not treat currency, shell variables, or code spans as math", () => {
@@ -1176,7 +1199,7 @@ again, hello world`,
 			const lines = markdown.render(80);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
 
-			const dividerIndex = plainLines.findIndex((line) => line.includes("─"));
+			const dividerIndex = plainLines.findIndex((line) => line.includes("———"));
 			assert.ok(dividerIndex !== -1, "Should have divider");
 
 			const afterDivider = plainLines.slice(dividerIndex + 1);

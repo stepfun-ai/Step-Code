@@ -38,6 +38,7 @@
 		"userMessageBg": "userMsgBg",
 		"userMessageText": "text",
 		"customMessageBg": "customMsgBg",
+		"codeInlineBg": "#e6e0f0",
 		"customMessageText": "text",
 		"customMessageLabel": "#7e57c2",
 		"toolPendingBg": "toolPendingBg",
@@ -47,6 +48,7 @@
 		"toolOutput": "mediumGray",
 
 		"mdHeading": "yellow",
+		"mdTableHeader": "#8f5210",
 		"mdLink": "blue",
 		"mdLinkUrl": "dimGray",
 		"mdCode": "teal",

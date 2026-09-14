@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "../src/core/extensions/types.ts";
 import {
 	AUTO_RESUME_PROMPT,
 	containsDangerousLifecycleCommand,
@@ -16,11 +17,11 @@ describe("Step permission presets", () => {
 	it("exposes the four stable presets in cycle order", () => {
 		expect(STEP_PERMISSION_PRESETS.map((preset) => preset.id)).toEqual(["ask", "read-only", "bypass", "autopilot"]);
 		const controller = new StepPermissionController({ env: {} });
-		expect(controller.getState().preset).toBe("ask");
-		expect(controller.cycle().preset).toBe("read-only");
-		expect(controller.cycle().preset).toBe("bypass");
+		expect(controller.getState().preset).toBe("bypass");
 		expect(controller.cycle().preset).toBe("autopilot");
 		expect(controller.cycle().preset).toBe("ask");
+		expect(controller.cycle().preset).toBe("read-only");
+		expect(controller.cycle().preset).toBe("bypass");
 		expect(
 			new StepPermissionController({
 				env: { STEP_PERMISSION_PRESET: "confirm" },
@@ -110,6 +111,53 @@ describe("Step permission presets", () => {
 		expect(isDangerousCommand("sudo -n reboot")).toBe(true);
 		expect(isDangerousCommand("qemu-system-x86_64 -no-reboot -no-shutdown")).toBe(false);
 		expect(containsDangerousLifecycleCommand("sh -c 'systemctl reboot'")).toBe(true);
+	});
+
+	it.each([true, false])("identifies each approval without changing the decision (approved=%s)", async (approved) => {
+		const controller = new StepPermissionController({ env: {}, initialPreset: "ask" });
+		const confirm = vi.fn(async () => approved);
+		const signal = new AbortController().signal;
+		const context = { hasUI: true, ui: { confirm }, signal } as unknown as ExtensionContext;
+		const ids = ["chatcmpl-tool-first-12345678", "chatcmpl-tool-second-87654321"];
+		for (const toolCallId of ids) {
+			const result = await controller.handleToolCall(
+				{ type: "tool_call", toolName: "run_command", toolCallId, input: { command: "printf test" } },
+				context,
+			);
+			expect(result).toEqual(approved ? undefined : { block: true, reason: "Tool call denied: run_command" });
+		}
+		expect(confirm).toHaveBeenCalledTimes(2);
+		for (const toolCallId of ids) {
+			expect(confirm).toHaveBeenCalledWith(
+				expect.stringMatching(new RegExp(`run_command.*${toolCallId.slice(-8)}`, "u")),
+				expect.stringContaining(toolCallId),
+				{ signal, overlay: true },
+			);
+		}
+		expect(confirm).toHaveBeenCalledWith(expect.any(String), expect.stringContaining("separately"), {
+			signal,
+			overlay: true,
+		});
+	});
+
+	it("keeps the hazard warning in an identifiable approval prompt", async () => {
+		const controller = new StepPermissionController({ env: {}, initialPreset: "bypass" });
+		const confirm = vi.fn(async () => false);
+		const context = { hasUI: true, ui: { confirm } } as unknown as ExtensionContext;
+		await controller.handleToolCall(
+			{
+				type: "tool_call",
+				toolName: "run_command",
+				toolCallId: "danger-12345678",
+				input: { command: "rm -rf /etc" },
+			},
+			context,
+		);
+		expect(confirm).toHaveBeenCalledWith(
+			expect.stringMatching(/dangerous.*run_command.*12345678/iu),
+			expect.stringContaining("danger-12345678"),
+			expect.objectContaining({ overlay: true }),
+		);
 	});
 
 	it("honors non-interactive allow for ordinary confirmations but not hazards", async () => {
