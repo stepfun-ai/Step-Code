@@ -1,7 +1,8 @@
-import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, isIncrementalRenderDisabled, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { CompactionSummaryMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { keyText } from "./keybinding-hints.ts";
+import { RenderLineCache } from "./render-line-cache.ts";
 import { renderStepDialogFrame } from "./step-dialog.ts";
 
 /**
@@ -13,6 +14,9 @@ export class CompactionSummaryMessageComponent extends Box {
 	private message: CompactionSummaryMessage;
 	private markdownTheme: MarkdownTheme;
 	private readonly presentation: "native" | "step";
+	private readonly stepCache = new RenderLineCache();
+	/** Bumped by every state change so the Step frame is only rebuilt when it must be. */
+	private contentVersion = 0;
 
 	constructor(
 		message: CompactionSummaryMessage,
@@ -33,10 +37,12 @@ export class CompactionSummaryMessageComponent extends Box {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.contentVersion += 1;
 		this.updateDisplay();
 	}
 
 	private updateDisplay(): void {
+		this.contentVersion += 1;
 		this.clear();
 
 		const tokenStr = this.message.tokensBefore.toLocaleString();
@@ -68,6 +74,9 @@ export class CompactionSummaryMessageComponent extends Box {
 		if (this.presentation !== "step") return super.render(width);
 		const safeWidth = Math.max(1, Math.floor(width));
 		if (safeWidth < 8) return super.render(safeWidth);
+		if (!isIncrementalRenderDisabled() && this.stepCache.matches(safeWidth, this.contentVersion)) {
+			return this.stepCache.get();
+		}
 		const contentWidth = Math.max(1, safeWidth - 4);
 		const tokenStr = this.message.tokensBefore.toLocaleString();
 		const rows: string[] = [theme.fg("accent", theme.bold(`● Compaction · ${tokenStr} tokens`))];
@@ -77,7 +86,7 @@ export class CompactionSummaryMessageComponent extends Box {
 		} else {
 			rows.push(theme.fg("muted", `Compacted from ${tokenStr} tokens (${keyText("app.tools.expand")} to expand)`));
 		}
-		return renderStepDialogFrame(rows, safeWidth);
+		return this.stepCache.store(safeWidth, this.contentVersion, renderStepDialogFrame(rows, safeWidth));
 	}
 }
 

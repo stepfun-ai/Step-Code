@@ -121,6 +121,7 @@ export {
 	compositeTuiLine,
 	type Focusable,
 	isFocusable,
+	isIncrementalRenderDisabled,
 	isViewportTUI,
 	type OverlayAnchor,
 	type OverlayHandle,
