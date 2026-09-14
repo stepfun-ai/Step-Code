@@ -541,6 +541,7 @@ function createReadInboxTool(team: AgentTeam): ToolSpec<ReadInboxArgs> {
         markRead: args.markRead,
         limit: args.limit,
         waitMs: args.waitMs,
+        signal: ctx.signal,
       });
 
       return {

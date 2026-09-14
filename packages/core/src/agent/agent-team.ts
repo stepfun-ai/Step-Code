@@ -166,6 +166,7 @@ export class AgentTeam {
   private readonly activeRuns = new Map<string, ActiveTeammateRun>();
   private readonly shutdownRequests = new Map<string, TeamProtocolRequest>();
   private readonly planRequests = new Map<string, TeamProtocolRequest>();
+  private readonly abortController = new AbortController();
   private cursors: Record<string, Record<string, number>> = {};
   private closePromise: Promise<void> | null = null;
 
@@ -325,6 +326,7 @@ export class AgentTeam {
     markRead?: boolean;
     limit?: number;
     waitMs?: number;
+    signal?: AbortSignal;
   }): Promise<TeamReadResult> {
     const inboxName = normalizeInboxName(input.inboxName);
     const reader = normalizeInboxName(input.reader);
@@ -333,27 +335,41 @@ export class AgentTeam {
     const limit = clamp(input.limit ?? MAX_READ_LIMIT, 1, MAX_READ_LIMIT);
     const waitMs = clamp(input.waitMs ?? 0, 0, 60_000);
     const deadline = Date.now() + waitMs;
+    const combined = combineAbortSignals(
+      input.signal,
+      this.abortController.signal,
+    );
 
-    while (true) {
-      const messages = await this.loadInboxMessages(inboxName, sessionId);
-      const start = this.getCursor(reader, inboxName, sessionId);
-      const available = messages.slice(start);
+    try {
+      while (true) {
+        const messages = await this.loadInboxMessages(inboxName, sessionId);
+        const start = this.getCursor(reader, inboxName, sessionId);
+        const available = messages.slice(start);
 
-      if (available.length > 0 || waitMs === 0 || Date.now() >= deadline) {
-        const selected = available.slice(0, limit);
-        if (markRead) {
-          this.setCursor(reader, inboxName, start + selected.length, sessionId);
+        if (available.length > 0 || waitMs === 0 || Date.now() >= deadline) {
+          const selected = available.slice(0, limit);
+          if (markRead) {
+            this.setCursor(
+              reader,
+              inboxName,
+              start + selected.length,
+              sessionId,
+            );
+          }
+          return {
+            messages: selected,
+            remaining: Math.max(0, available.length - selected.length),
+            total: messages.length,
+          };
         }
-        return {
-          messages: selected,
-          remaining: Math.max(0, available.length - selected.length),
-          total: messages.length,
-        };
-      }
 
-      await sleep(
-        Math.min(WORKER_IDLE_WAIT_MS, Math.max(50, deadline - Date.now())),
-      );
+        await sleep(
+          Math.min(WORKER_IDLE_WAIT_MS, Math.max(50, deadline - Date.now())),
+          combined.signal,
+        );
+      }
+    } finally {
+      combined.dispose();
     }
   }
 
@@ -386,6 +402,10 @@ export class AgentTeam {
 
     const reason = options.reason?.trim() || "Agent team shutting down.";
     this.closePromise = (async () => {
+      if (!this.abortController.signal.aborted) {
+        this.abortController.abort(reason);
+      }
+
       const shutdownAt = new Date().toISOString();
 
       for (const teammate of this.teammates.values()) {
@@ -844,14 +864,22 @@ export class AgentTeam {
         return;
       }
 
-      const read = await this.readInbox({
-        inboxName: name,
-        reader: name,
-        sessionId: teammate.sessionId,
-        markRead: false,
-        limit: 32,
-        waitMs: WORKER_IDLE_WAIT_MS,
-      });
+      let read: TeamReadResult;
+      try {
+        read = await this.readInbox({
+          inboxName: name,
+          reader: name,
+          sessionId: teammate.sessionId,
+          markRead: false,
+          limit: 32,
+          waitMs: WORKER_IDLE_WAIT_MS,
+        });
+      } catch (error) {
+        if (this.shouldStopWorker(error)) {
+          return;
+        }
+        throw error;
+      }
 
       const latest = this.teammates.get(name);
       if (!latest) {
@@ -872,7 +900,17 @@ export class AgentTeam {
 
       const run = this.claimRunSlot(name, "worker");
       if (!run) {
-        await sleep(Math.min(200, WORKER_IDLE_WAIT_MS));
+        try {
+          await sleep(
+            Math.min(200, WORKER_IDLE_WAIT_MS),
+            this.abortController.signal,
+          );
+        } catch (error) {
+          if (this.shouldStopWorker(error)) {
+            return;
+          }
+          throw error;
+        }
         continue;
       }
 
@@ -1072,6 +1110,10 @@ export class AgentTeam {
       return;
     }
     this.activeRuns.delete(name);
+  }
+
+  private shouldStopWorker(error: unknown): boolean {
+    return this.abortController.signal.aborted || isInterruptError(error);
   }
 }
 
@@ -1374,8 +1416,35 @@ function encodeSessionStorageKey(sessionId: string): string {
   return Buffer.from(sessionId, "utf8").toString("base64url");
 }
 
-async function sleep(delayMs: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
+async function sleep(delayMs: number, signal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+
+    const abort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(interruptError(signal));
+    };
+
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function interruptError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return new Error(
+    typeof reason === "string" && reason.trim().length > 0
+      ? reason
+      : "Run interrupted by user.",
+  );
 }
 
 function finalizeTeammateHarness(teammate: LiveTeammate): void {
