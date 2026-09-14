@@ -45,9 +45,14 @@ function typeReview(text: string): string[] {
 	return [...text];
 }
 
+// Identity styling: the plan is rendered as markdown, so the double has to
+// cover everything getMarkdownTheme reaches for, not just fg/bold.
 const fakeReviewTheme = {
 	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
+	italic: (text: string) => text,
+	underline: (text: string) => text,
 };
 
 const cleanups: Array<() => void> = [];
@@ -559,19 +564,35 @@ test("only a dismissed review ends the turn; approval and notes let the agent ke
 	const cwd = makeWorkspace();
 	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
 	const cases = [
-		{ keys: [REVIEW_KEYS.enter], terminate: false },
-		{ keys: [REVIEW_KEYS.down, ...typeReview("use canvas"), REVIEW_KEYS.enter], terminate: false },
-		{ keys: [REVIEW_KEYS.escape], terminate: true },
+		{ keys: [REVIEW_KEYS.enter], terminate: false, outcome: "approved" },
+		{
+			keys: [REVIEW_KEYS.down, ...typeReview("use canvas"), REVIEW_KEYS.enter],
+			terminate: false,
+			outcome: "feedback",
+			feedback: "use canvas",
+		},
+		{ keys: [REVIEW_KEYS.escape], terminate: true, outcome: "dismissed" },
 	];
-	for (const { keys, terminate } of cases) {
+	for (const { keys, terminate, outcome, feedback } of cases) {
 		const harness = createHarness({ cwd, review: keys });
 		createStepPlanExtension()(harness.api);
 		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
 		mkdirSync(path.dirname(planPath), { recursive: true });
 		writeFileSync(planPath, "# The plan\n");
 
-		const result = (await runTool(harness, "exit_plan_mode", {}, harness.ctx())) as { terminate?: boolean };
+		const result = (await runTool(harness, "exit_plan_mode", {}, harness.ctx())) as {
+			terminate?: boolean;
+			details?: unknown;
+		};
 		expect(result.terminate).toBe(terminate);
+		// Every reviewed outcome carries the plan so the tool row can replay it
+		// after the dialog — the only place it was drawn — has been torn down.
+		expect(result.details).toEqual({
+			planFilePath: planPath,
+			planContents: "# The plan\n",
+			outcome,
+			...(feedback === undefined ? {} : { feedback }),
+		});
 	}
 });
 
@@ -1116,10 +1137,13 @@ test("the review dialog shows the whole plan, however long", async () => {
 	writeFileSync(planPath, proposal);
 
 	await runTool(harness, "exit_plan_mode", {}, harness.ctx());
-	// Approving a plan whose end is hidden is approving something unread.
-	const rendered = (harness.reviewComponent()?.render(200) ?? []).join("\n");
+	// Approving a plan whose end is hidden is approving something unread. The
+	// plan renders as markdown, which reflows consecutive lines into paragraphs,
+	// so compare with whitespace collapsed: words survive, line breaks need not.
+	const collapse = (text: string): string => text.replace(/\s+/gu, " ");
+	const rendered = collapse((harness.reviewComponent()?.render(200) ?? []).join("\n"));
 	for (const line of proposal.split("\n")) {
-		if (line.trim().length > 0) expect(rendered).toContain(line.trimEnd());
+		if (line.trim().length > 0) expect(rendered).toContain(collapse(line.trim()));
 	}
 	expect(rendered).not.toContain("truncated");
 });

@@ -5,7 +5,9 @@ import {
 	PLAN_REVIEW_FEEDBACK_LABEL,
 	PLAN_REVIEW_PROMPT,
 	PlanReviewComponent,
+	type PlanReviewDetails,
 	type PlanReviewResult,
+	renderPlanReviewResult,
 } from "../src/modes/interactive/components/plan-review.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -15,7 +17,17 @@ const DOWN = "[B";
 const UP = "[A";
 const BACKSPACE = "";
 
-const PLAN = ["# Heading", "", "- first step", "  nested detail", "", "## Last", "done"].join("\n");
+const PLAN = ["# Heading", "", "- first step", "  nested detail", "", "## Last", "**done**"].join("\n");
+
+const BOLD = "\u001b[1m";
+
+/** Long enough that a length-based preview would have clipped it. */
+const PLAN_LINES = Array.from({ length: 40 }, (_, index) => `- line ${index + 1} of the plan`);
+
+/** The bare colour escape a theme colour opens with, independent of nested styles. */
+function colorPrefix(color: Parameters<typeof theme.fg>[0]): string {
+	return theme.fg(color, "@").split("@")[0]!;
+}
 
 function createReview(): { component: PlanReviewComponent; results: PlanReviewResult[]; renders: () => number } {
 	const results: PlanReviewResult[] = [];
@@ -65,6 +77,20 @@ describe("plan review dialog", () => {
 		expect(planRows.some((row) => row.includes("# Heading"))).toBe(true);
 		expect(planRows.some((row) => row.includes("  nested detail"))).toBe(true);
 		expect(planRows.some((row) => row.trim() === "")).toBe(true);
+	});
+
+	test("the plan is rendered as markdown, not as one muted block", () => {
+		const { component } = createReview();
+		const rows = component.render(80);
+		const headingRow = rows.find((row) => stripTerminalSequences(row).includes("Heading")) ?? "";
+		const doneRow = rows.find((row) => stripTerminalSequences(row).includes("done")) ?? "";
+
+		// The heading carries the heading colour, the emphasis markers are consumed,
+		// and nothing in the plan is painted with the old flat muted colour.
+		expect(headingRow).toContain(colorPrefix("mdHeading"));
+		expect(doneRow).toContain(BOLD);
+		expect(stripTerminalSequences(doneRow)).not.toContain("**");
+		expect(rows.some((row) => row.includes(theme.fg("muted", "# Heading")))).toBe(false);
 	});
 
 	test("the feedback row becomes an input as soon as the cursor lands on it", () => {
@@ -184,6 +210,89 @@ describe("plan review dialog", () => {
 		type(second.component, "still here");
 		second.component.handleInput(ENTER);
 		expect(second.results).toEqual([{ action: "feedback", text: "still here" }]);
+	});
+
+	describe("renderPlanReviewResult", () => {
+		const details = (outcome: PlanReviewDetails["outcome"], feedback?: string): PlanReviewDetails => ({
+			planFilePath: "/tmp/plan.md",
+			planContents: PLAN,
+			outcome,
+			...(feedback === undefined ? {} : { feedback }),
+		});
+		const result = (d: PlanReviewDetails) => ({ content: [{ type: "text" as const, text: "ctl" }], details: d });
+		// The card owns its framing (renderShell: "self"), so every non-blank row
+		// carries the Step gutter; strip it to assert on content.
+		const lines = (component: { render(width: number): string[] }) =>
+			component.render(80).map((row) =>
+				stripTerminalSequences(row)
+					.replace(/^(?:\s{2}└\s|\s{4})/u, "")
+					.trimEnd(),
+			);
+
+		test("the reviewed plan comes back under the summary, as markdown", () => {
+			const component = renderPlanReviewResult(
+				result(details("approved")),
+				{ expanded: false, isPartial: false },
+				theme,
+			);
+			const raw = component.render(80);
+			const out = lines(component);
+			// Hangs off the header on the Step gutter, like any other tool body.
+			expect(stripTerminalSequences(raw[0] ?? "")).toMatch(/^ {2}└ /u);
+			expect(stripTerminalSequences(raw[2] ?? "")).toMatch(/^ {4}#/u);
+			expect(out[0]).toContain("Plan approved");
+			expect(out[0]).toContain("/tmp/plan.md");
+			expect(out[1]).toBe("");
+			expect(out.some((row) => row.includes("first step"))).toBe(true);
+			expect(raw.some((row) => row.includes(colorPrefix("mdHeading")))).toBe(true);
+		});
+
+		test("a long plan is shown whole in both expansion states, never behind a hint", () => {
+			const long = { ...details("dismissed"), planContents: PLAN_LINES.join("\n") };
+			for (const expanded of [false, true]) {
+				const out = lines(renderPlanReviewResult(result(long), { expanded, isPartial: false }, theme));
+				// The dialog is gone by now, so this row is the only copy of the plan
+				// left on screen; hiding it behind ctrl+o is the bug this renderer fixes.
+				expect(out.some((row) => row.includes("line 1 of the plan"))).toBe(true);
+				expect(out.some((row) => row.includes("line 40 of the plan"))).toBe(true);
+				expect(out.some((row) => row.includes("more lines"))).toBe(false);
+				expect(out.some((row) => row.includes("to expand"))).toBe(false);
+			}
+		});
+
+		test("feedback: the user's note is shown under the summary", () => {
+			const out = lines(
+				renderPlanReviewResult(
+					result(details("feedback", "use canvas")),
+					{ expanded: false, isPartial: false },
+					theme,
+				),
+			);
+			expect(out[0]).toContain("Changes requested");
+			expect(out[1]).toContain("use canvas");
+		});
+
+		test("a result without review details falls back to its text", () => {
+			const out = lines(
+				renderPlanReviewResult(
+					{ content: [{ type: "text", text: "Not in plan mode." }], details: undefined },
+					{ expanded: false, isPartial: false },
+					theme,
+				),
+			);
+			expect(out).toEqual(["Not in plan mode."]);
+		});
+
+		test("blank rows inside the plan survive, so paragraphs keep their spacing", () => {
+			const out = lines(
+				renderPlanReviewResult(result(details("approved")), { expanded: false, isPartial: false }, theme),
+			);
+			// PLAN has blank lines between its sections; the Step shell's default
+			// body pass drops those, which is why this card renders itself.
+			expect(out.filter((row) => row === "").length).toBeGreaterThan(1);
+			const heading = out.indexOf("# Heading");
+			expect(out[heading + 1]).toBe("");
+		});
 	});
 
 	test("every rendered row fits the requested width", () => {

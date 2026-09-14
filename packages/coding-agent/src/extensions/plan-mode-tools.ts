@@ -11,7 +11,13 @@ import path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "../core/extensions/types.ts";
-import { PlanReviewComponent, type PlanReviewResult } from "../modes/interactive/components/plan-review.ts";
+import {
+	PlanReviewComponent,
+	type PlanReviewDetails,
+	type PlanReviewOutcome,
+	type PlanReviewResult,
+	renderPlanReviewResult,
+} from "../modes/interactive/components/plan-review.ts";
 
 /** Exit outcome dimension for plan_mode_exited telemetry. */
 export type StepPlanExitOutcome = "approved" | "toggled_off" | "auto_headless" | "auto_rpc";
@@ -39,8 +45,22 @@ export function getPlanFilePath(sessionId: string, projectCwd?: string): string 
  * `terminate` asks the agent loop to stop after this tool batch instead of
  * streaming another response, handing the turn back to the user.
  */
-function controlResult(text: string, terminate = false): AgentToolResult<undefined> {
+function controlResult(text: string, terminate = false): AgentToolResult<PlanReviewDetails | undefined> {
 	return { content: [{ type: "text", text }], details: undefined, terminate };
+}
+
+/**
+ * A reviewed outcome, carrying the plan for the transcript.
+ *
+ * The dialog is torn down as soon as it closes, taking the plan it drew with
+ * it; renderPlanReviewResult puts it back on the tool row.
+ */
+function reviewedResult(
+	text: string,
+	details: PlanReviewDetails,
+	terminate = false,
+): AgentToolResult<PlanReviewDetails | undefined> {
+	return { content: [{ type: "text", text }], details, terminate };
 }
 
 /**
@@ -115,6 +135,10 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 	pi.registerTool({
 		name: "exit_plan_mode",
 		label: "Exit plan mode",
+		// The plan body owns its own framing: the Step shell's default body pass
+		// strips blank rows and clips to a five-line budget behind ctrl+o.
+		renderShell: "self",
+		renderResult: renderPlanReviewResult,
 		description:
 			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. In interactive mode, user approval exits planning; staying, refining, or cancelling keeps it active. In headless and RPC modes, exits without interactive approval; the caller must gate approval externally before execution.",
 		promptSnippet: "Submit the written proposal for review",
@@ -153,10 +177,17 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				);
 			}
 			const review = await reviewPlanInteractively(ctx, planFilePath, planContents);
+			const reviewed = (outcome: PlanReviewOutcome, feedback?: string): PlanReviewDetails => ({
+				planFilePath,
+				planContents,
+				outcome,
+				...(feedback === undefined ? {} : { feedback }),
+			});
 			if (review?.action === "execute") {
 				planMode.exitPlanMode("approved", ctx);
-				return controlResult(
+				return reviewedResult(
 					`The user approved the plan. Plan mode exited and file mutations are re-enabled. Execute the plan now, using ${planFilePath} as the reference; do not silently diverge from it.`,
+					reviewed("approved"),
 				);
 			}
 			if (review?.action === "feedback") {
@@ -168,15 +199,16 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				pi.sendUserMessage(`Plan refinement requested. Update ${planFilePath} based on:\n\n${review.text}`, {
 					deliverAs: "steer",
 				});
-				return controlResult(
+				return reviewedResult(
 					"The user requested refinements. Their notes follow immediately as the next user message; do not ask what to change. Staying in plan mode: apply the notes to the plan file and call exit_plan_mode again.",
+					reviewed("feedback", review.text),
 				);
 			}
 			// Dismissed, or a host that cannot show the dialog at all. Terminate the
 			// batch: the old result told the model to "call exit_plan_mode again when
 			// the plan is ready", and since nothing about the plan had changed it
 			// re-submitted at once, re-opening the dialog on every Escape.
-			return controlResult(STAY_IN_PLAN_MODE_RESULT, true);
+			return reviewedResult(STAY_IN_PLAN_MODE_RESULT, reviewed("dismissed"), true);
 		},
 	});
 }
