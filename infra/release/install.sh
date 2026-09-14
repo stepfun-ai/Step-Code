@@ -77,10 +77,19 @@ copy_runtime_dir() {
 }
 
 install_managed_tool() {
-	local name="$1" binary="$2" asset="$3" repo="$4" tag_prefix="$5" tool_dir="$AGENT_DIR/bin"
+	local name="$1" binary="$2" asset="$3" repo="$4" tag_prefix="$5" bundled_root="$6" tool_dir="$AGENT_DIR/bin"
 	local target="${tool_dir}/${binary}"
 	[[ -x "$target" || -x "${target}.exe" ]] && return 0
 	if has_cmd "$binary" || { [[ "$name" == fd ]] && has_cmd fdfind; }; then return 0; fi
+	# Prefer the binary shipped inside the release archive (tools/) so a packaged
+	# install needs no network. Fall back to the GitHub download below when the
+	# archive did not carry it (older archive, skipped build, unbundled platform).
+	if [[ -n "$bundled_root" && -f "${bundled_root}/tools/${binary}" ]]; then
+		mkdir -p "$tool_dir"
+		cp "${bundled_root}/tools/${binary}" "$target"
+		chmod 755 "$target" 2>/dev/null || true
+		return 0
+	fi
 	local metadata="${WORK_DIR}/${name}.json" version archive extract found
 	if ! download "https://api.github.com/repos/${repo}/releases/latest" "$metadata"; then
 		printf 'warning: could not resolve %s; install it manually if unavailable in PATH\n' "$name" >&2
@@ -105,15 +114,17 @@ install_managed_tool() {
 
 install_managed_tools() {
 	# These are the same managed paths used by the Pi runtime wrapper. Existing
-	# system commands remain valid; missing tools are fetched into Step storage.
+	# system commands remain valid; missing tools are copied from the release
+	# archive's tools/ dir when present, otherwise fetched into Step storage.
+	local bundled_root="$1"
 	mkdir -p "$AGENT_DIR/bin"
 	local fd_asset rg_asset
 	if [[ "$TARGET_ID" == darwin-arm64 ]]; then fd_asset='fd-vVERSION-aarch64-apple-darwin.tar.gz'; rg_asset='ripgrep-VERSION-aarch64-apple-darwin.tar.gz'
 	elif [[ "$TARGET_ID" == darwin-x64 ]]; then fd_asset='fd-vVERSION-x86_64-apple-darwin.tar.gz'; rg_asset='ripgrep-VERSION-x86_64-apple-darwin.tar.gz'
 	elif [[ "$TARGET_ID" == linux-arm64 ]]; then fd_asset='fd-vVERSION-aarch64-unknown-linux-gnu.tar.gz'; rg_asset='ripgrep-VERSION-aarch64-unknown-linux-gnu.tar.gz'
 	else fd_asset='fd-vVERSION-x86_64-unknown-linux-gnu.tar.gz'; rg_asset='ripgrep-VERSION-x86_64-unknown-linux-musl.tar.gz'; fi
-	install_managed_tool fd fd "$fd_asset" sharkdp/fd v
-	install_managed_tool rg rg "$rg_asset" BurntSushi/ripgrep ''
+	install_managed_tool fd fd "$fd_asset" sharkdp/fd v "$bundled_root"
+	install_managed_tool rg rg "$rg_asset" BurntSushi/ripgrep '' "$bundled_root"
 }
 
 path_hint() {
@@ -295,7 +306,7 @@ main() {
 	chmod 755 "$temporary" 2>/dev/null || true
 	mv -f "$temporary" "$destination"
 	for dir in native theme assets export-html docs examples; do copy_runtime_dir "$archive_root" "$dir"; done
-	install_managed_tools
+	install_managed_tools "$archive_root"
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
 	printf 'installed Step CLI %s to %s\n' "$VERSION" "$destination"
 	configure_shell_path
