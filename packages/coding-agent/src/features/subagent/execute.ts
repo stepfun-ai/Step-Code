@@ -34,6 +34,7 @@ import {
 import {
 	discoverStepAgents,
 	formatStepAgentCatalog,
+	resolveStepAgent,
 	type StepAgentConfig,
 	type StepAgentDiscoveryResult,
 	type StepAgentScope,
@@ -195,9 +196,13 @@ async function confirmProjectAgents(
 ): Promise<boolean> {
 	if (params.confirmProjectAgents === false || !ctx.hasUI || ctx.isProjectTrusted()) return true;
 	if (params.agentScope === "user") return true;
-	const projectNames = [...new Set(tasks.map((task) => task.agent))].filter((name) =>
-		discovery.agents.some((agent) => agent.name === name && agent.source === "project"),
-	);
+	const projectNames = [
+		...new Set(
+			tasks
+				.map((task) => resolveStepAgent(discovery.agents, task.agent)?.name ?? task.agent)
+				.filter((name) => discovery.agents.some((agent) => agent.name === name && agent.source === "project")),
+		),
+	];
 	if (projectNames.length === 0) return true;
 	return ctx.ui.confirm(
 		"Run project-local agents?",
@@ -302,7 +307,7 @@ export async function executeSubagent(
 	};
 
 	const runOne = async (task: StepSubagentTaskInput, index: number): Promise<StepSubagentResultRecord> => {
-		const agent = discovery.agents.find((candidate) => candidate.name === task.agent);
+		const agent = resolveStepAgent(discovery.agents, task.agent);
 		if (!agent) {
 			const failed = makeFailureResult(
 				task.agent,

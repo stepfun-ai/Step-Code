@@ -464,6 +464,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			description: [
 				"Delegate tasks to specialized subagents with isolated context.",
 				"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+				'Built-in agent names are exactly "general", "explore", "review", and "planner"; descriptions are not names.',
 				`Default agent scope is "user" (from ${path.join(resolved.agentDir, "agents")}).`,
 				`To enable project-local agents in ${resolved.configDirName}/agents, set agentScope: "both" (or "project").`,
 			].join(" "),
@@ -473,8 +474,21 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 				// the internal extension API, while ordinary model calls follow Pi's
 				// blocking single/parallel/chain contract.
 				if ((params as SubagentParams).run_in_background) {
-					const lane = createLane(params as SubagentParams, ctx);
-					startLane(lane, params as SubagentParams);
+					const backgroundParams = params as SubagentParams;
+					const hasParallelInput = (backgroundParams.tasks?.length ?? 0) > 0;
+					const hasChainInput = (backgroundParams.chain?.length ?? 0) > 0;
+					const hasSingleInput =
+						!hasParallelInput &&
+						!hasChainInput &&
+						Boolean(backgroundParams.agent?.trim() && backgroundParams.task?.trim());
+					// Do not create a detached lane for malformed input. Returning the
+					// normal validation result keeps the error attached to this tool call
+					// instead of emitting a misleading background_done notification.
+					if (Number(hasSingleInput) + Number(hasParallelInput) + Number(hasChainInput) !== 1) {
+						return executeSubagent(backgroundParams, signal, onUpdate, ctx, resolved);
+					}
+					const lane = createLane(backgroundParams, ctx);
+					startLane(lane, backgroundParams);
 					const details: StepSubagentDetails = {
 						...lane.details,
 						results: [...lane.details.results],
