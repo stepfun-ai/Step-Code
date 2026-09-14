@@ -30,6 +30,12 @@ export type PlanReviewResult =
 	| { action: "dismissed" };
 
 export const PLAN_REVIEW_FEEDBACK_LABEL = "Tell Step what to change";
+/** The question under the divider; the rows below it are the answers. */
+export const PLAN_REVIEW_PROMPT = "Step has written up a plan and is ready to execute. Would you like to proceed?";
+
+const EXECUTE_INDEX = 0;
+const FEEDBACK_INDEX = 1;
+const OPTION_LABELS = ["Execute the plan", PLAN_REVIEW_FEEDBACK_LABEL] as const;
 
 export interface PlanReviewOptions {
 	planFilePath: string;
@@ -62,7 +68,9 @@ export class PlanReviewComponent implements Component, Focusable {
 		this.theme = options.theme;
 		this.onResult = options.onResult;
 		this.onChange = options.onChange;
-		this.input = new Input({ prompt: `${PLAN_REVIEW_FEEDBACK_LABEL}: ` });
+		// The row's numbered head is drawn by renderOptionRow; the label is a
+		// placeholder that disappears once the user types, not part of the value.
+		this.input = new Input({ prompt: "" });
 	}
 
 	get focused(): boolean {
@@ -72,15 +80,15 @@ export class PlanReviewComponent implements Component, Focusable {
 	set focused(value: boolean) {
 		this._focused = value;
 		// Only the feedback row owns a caret; the approve row must not show one.
-		this.input.focused = value && this.selectedIndex === 1;
+		this.input.focused = value && this.selectedIndex === FEEDBACK_INDEX;
 	}
 
 	private get onFeedbackRow(): boolean {
-		return this.selectedIndex === 1;
+		return this.selectedIndex === FEEDBACK_INDEX;
 	}
 
 	private moveSelection(next: number): void {
-		const clamped = Math.max(0, Math.min(1, next));
+		const clamped = Math.max(EXECUTE_INDEX, Math.min(FEEDBACK_INDEX, next));
 		if (clamped === this.selectedIndex) return;
 		this.selectedIndex = clamped;
 		this.input.focused = this._focused && this.onFeedbackRow;
@@ -113,6 +121,19 @@ export class PlanReviewComponent implements Component, Focusable {
 			this.onResult({ action: "feedback", text });
 			return;
 		}
+		// Number shortcuts, matching the row labels. "1" is the whole decision;
+		// "2" only lands on the input because a note still has to be typed. Once
+		// the feedback row is selected, digits are text, so the shortcuts stop.
+		if (!this.onFeedbackRow) {
+			if (data === "1") {
+				this.onResult({ action: "execute" });
+				return;
+			}
+			if (data === "2") {
+				this.moveSelection(FEEDBACK_INDEX);
+				return;
+			}
+		}
 		if (this.onFeedbackRow) {
 			this.input.handleInput(data);
 			this.onChange?.();
@@ -143,9 +164,10 @@ export class PlanReviewComponent implements Component, Focusable {
 
 		rows.push("");
 		rows.push(fg("borderAccent", "─".repeat(safeWidth)));
+		for (const line of wrapTextWithAnsi(PLAN_REVIEW_PROMPT, contentWidth)) rows.push(` ${fg("text", line)}`);
+		rows.push("");
 
-		rows.push(this.renderOptionRow(0, "Execute the plan", contentWidth));
-		rows.push(this.renderOptionRow(1, PLAN_REVIEW_FEEDBACK_LABEL, contentWidth));
+		for (const [index, label] of OPTION_LABELS.entries()) rows.push(this.renderOptionRow(index, label, contentWidth));
 		rows.push("");
 		rows.push(` ${fg("muted", this.renderHint())}`);
 		// pi-tui rejects a rendered row wider than the viewport, and the hint and the
@@ -155,22 +177,27 @@ export class PlanReviewComponent implements Component, Focusable {
 
 	private renderOptionRow(index: number, label: string, contentWidth: number): string {
 		const selected = this.selectedIndex === index;
+		const color = selected ? "accent" : "muted";
 		const marker = selected ? this.theme.fg("accent", "▸") : " ";
-		if (index === 1 && selected) {
-			// The row is the input: Input draws the label as its prompt so the caret
-			// lands after it without a second focusable component.
-			const line = this.input.render(Math.max(1, contentWidth - 1))[0] ?? label;
-			return `${marker} ${line}`;
+		// "▸ 1. " — the head is the same width on every row so the labels line up.
+		const head = `${marker} ${this.theme.fg(color, `${index + 1}.`)} `;
+		if (index !== FEEDBACK_INDEX || !selected) {
+			return `${head}${this.theme.fg(color, label)}`;
 		}
-		const text = selected ? this.theme.fg("accent", label) : this.theme.fg("muted", label);
-		return `${marker} ${text}`;
+		// The row is the input, drawn right after the head. Input pads its line
+		// to the full width; drop that so the placeholder can sit at the caret.
+		const line = (this.input.render(Math.max(1, contentWidth - 3))[0] ?? "").replace(/ +$/u, "");
+		if (this.input.getValue().length > 0) return `${head}${line}`;
+		return `${head}${line}${this.theme.fg("dim", label)}`;
 	}
 
 	private renderHint(): string {
-		const navigate = "↑↓ navigate";
-		const confirm = `${keyLabel("tui.select.confirm", "enter")} ${this.onFeedbackRow ? "send" : "select"}`;
-		const cancel = `${keyLabel("tui.select.cancel", "esc")} cancel`;
-		return `${navigate}  ${confirm}  ${cancel}`;
+		const parts = ["↑↓ navigate"];
+		// Digits type into the feedback row, so only advertise them elsewhere.
+		if (!this.onFeedbackRow) parts.push("1-2 select");
+		parts.push(`${keyLabel("tui.select.confirm", "enter")} ${this.onFeedbackRow ? "send" : "select"}`);
+		parts.push(`${keyLabel("tui.select.cancel", "esc")} cancel`);
+		return parts.join("  ");
 	}
 
 	/** Visible width of the widest rendered row, for callers that size a container. */

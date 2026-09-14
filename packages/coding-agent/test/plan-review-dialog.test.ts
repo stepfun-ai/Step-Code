@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import {
 	PLAN_REVIEW_FEEDBACK_LABEL,
+	PLAN_REVIEW_PROMPT,
 	PlanReviewComponent,
 	type PlanReviewResult,
 } from "../src/modes/interactive/components/plan-review.ts";
@@ -46,16 +47,18 @@ describe("plan review dialog", () => {
 		setKeybindings(new KeybindingsManager());
 	});
 
-	test("shows the plan with a divider above two rows and no frame", () => {
+	test("shows the plan, a divider, the question, then two numbered rows and no frame", () => {
 		const { component } = createReview();
-		const rows = plainRows(component);
+		const rows = plainRows(component, 100);
 
 		expect(rows.some((row) => row.startsWith("╭") || row.startsWith("│"))).toBe(false);
 		const dividerRow = rows.findIndex((row) => /^─+$/u.test(row));
 		expect(dividerRow).toBeGreaterThan(0);
-		expect(rows[dividerRow]).toHaveLength(60);
-		expect(rows[dividerRow + 1]?.replace("▸", "").trim()).toBe("Execute the plan");
-		expect(rows[dividerRow + 2]?.replace("▸", "").trim()).toBe(PLAN_REVIEW_FEEDBACK_LABEL);
+		expect(rows[dividerRow]).toHaveLength(100);
+		expect(rows[dividerRow + 1]?.trim()).toBe(PLAN_REVIEW_PROMPT);
+		expect(rows[dividerRow + 2]?.trim()).toBe("");
+		expect(rows[dividerRow + 3]?.replace("▸", "").trim()).toBe("1. Execute the plan");
+		expect(rows[dividerRow + 4]?.replace("▸", "").trim()).toBe(`2. ${PLAN_REVIEW_FEEDBACK_LABEL}`);
 
 		// Everything above the divider is the plan, blank lines and indent included.
 		const planRows = rows.slice(0, dividerRow);
@@ -71,8 +74,10 @@ describe("plan review dialog", () => {
 		type(component, "split step 3");
 
 		const rows = plainRows(component);
-		const feedbackRow = rows.find((row) => row.includes(PLAN_REVIEW_FEEDBACK_LABEL)) ?? "";
-		expect(feedbackRow).toContain(`${PLAN_REVIEW_FEEDBACK_LABEL}: split step 3`);
+		const feedbackRow = rows.find((row) => row.includes("split step 3")) ?? "";
+		// The label was only a placeholder: the typed note replaces it outright.
+		expect(feedbackRow.replace("▸", "").trim()).toBe("2. split step 3");
+		expect(feedbackRow).not.toContain(PLAN_REVIEW_FEEDBACK_LABEL);
 		expect(feedbackRow.trimStart().startsWith("▸")).toBe(true);
 		expect(results).toEqual([]);
 
@@ -130,7 +135,41 @@ describe("plan review dialog", () => {
 
 		component.handleInput(DOWN);
 		component.handleInput(BACKSPACE);
-		expect(plainRows(component).some((row) => row.includes(`${PLAN_REVIEW_FEEDBACK_LABEL}: keep m`))).toBe(true);
+		expect(plainRows(component).some((row) => row.includes("2. keep m"))).toBe(true);
+	});
+
+	test("the empty feedback row shows its label as a placeholder at the caret, never as a prefix", () => {
+		const { component } = createReview();
+		component.handleInput(DOWN);
+
+		const raw = component.render(60).find((row) => row.includes(PLAN_REVIEW_FEEDBACK_LABEL)) ?? "";
+		// "▸ 2. ", the reverse-video caret cell, then the label. No "label:" prefix.
+		expect(raw).toMatch(/2\..*\x1b\[7m \x1b\[27m/u);
+		expect(raw).not.toContain(`${PLAN_REVIEW_FEEDBACK_LABEL}:`);
+		// Stripped, the caret reads as the one space between the number and the label.
+		expect(stripTerminalSequences(raw).replace("▸", "").trim()).toBe(`2.  ${PLAN_REVIEW_FEEDBACK_LABEL}`);
+
+		type(component, "x");
+		expect(plainRows(component).some((row) => row.includes(PLAN_REVIEW_FEEDBACK_LABEL))).toBe(false);
+		component.handleInput(BACKSPACE);
+		expect(plainRows(component).some((row) => row.includes(PLAN_REVIEW_FEEDBACK_LABEL))).toBe(true);
+	});
+
+	test("1 executes and 2 jumps to the feedback row; digits type once the input is selected", () => {
+		const first = createReview();
+		first.component.handleInput("1");
+		expect(first.results).toEqual([{ action: "execute" }]);
+
+		const { component, results } = createReview();
+		expect(plainRows(component).at(-1)).toContain("1-2 select");
+		component.handleInput("2");
+		expect(results).toEqual([]);
+		expect(plainRows(component).at(-1)).not.toContain("1-2 select");
+
+		// On the input row "1" and "2" are part of the note, not shortcuts.
+		type(component, "step 1 before 2");
+		component.handleInput(ENTER);
+		expect(results).toEqual([{ action: "feedback", text: "step 1 before 2" }]);
 	});
 
 	test("selection stops at both ends instead of wrapping", () => {

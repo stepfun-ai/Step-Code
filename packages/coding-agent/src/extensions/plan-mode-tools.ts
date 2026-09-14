@@ -155,11 +155,16 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				);
 			}
 			if (review?.action === "feedback") {
+				// Steer, don't follow up. This tool returns a result, so the agent keeps
+				// running; the follow-up queue is only drained once it would stop on its
+				// own. The model, told notes were coming but not seeing any, stopped by
+				// asking clarify_user what to change — which never ends the run, so the
+				// note stayed queued. Steering lands it before the very next response.
 				pi.sendUserMessage(`Plan refinement requested. Update ${planFilePath} based on:\n\n${review.text}`, {
-					deliverAs: "followUp",
+					deliverAs: "steer",
 				});
 				return controlResult(
-					"Awaiting user notes: the user requested refinements (delivered as a follow-up message). Staying in plan mode; update the plan file and call exit_plan_mode again.",
+					"The user requested refinements. Their notes follow immediately as the next user message; do not ask what to change. Staying in plan mode: apply the notes to the plan file and call exit_plan_mode again.",
 				);
 			}
 			// Dismissed, or a host that cannot show the dialog at all.

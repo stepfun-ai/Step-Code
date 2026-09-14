@@ -1044,7 +1044,7 @@ test.each([
 });
 
 test.each(["Cover the migration edge case.", "  padded note  "])(
-	"typing %j on the feedback row sends it as a follow-up and keeps planning",
+	"typing %j on the feedback row steers it into the next turn and keeps planning",
 	async (notes) => {
 		const cwd = makeWorkspace();
 		const harness = createHarness({
@@ -1061,10 +1061,15 @@ test.each(["Cover the migration edge case.", "  padded note  "])(
 		expect(lastPlanEntry(harness).enabled).toBe(true);
 		expect(harness.appended).toHaveLength(1);
 		expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+		// Steering, not follow-up: this tool result keeps the agent running, and the
+		// follow-up queue only drains once it would stop, so the note has to jump the
+		// queue or the model answers the empty turn by asking what to change.
 		expect(harness.userMessages).toEqual([
-			[`Plan refinement requested. Update ${planPath} based on:\n\n${notes.trim()}`, { deliverAs: "followUp" }],
+			[`Plan refinement requested. Update ${planPath} based on:\n\n${notes.trim()}`, { deliverAs: "steer" }],
 		]);
-		expect(result).toMatchObject({ content: [{ text: expect.stringContaining("Awaiting user notes") }] });
+		expect(result).toMatchObject({
+			content: [{ text: expect.stringContaining("do not ask what to change") }],
+		});
 	},
 );
 
@@ -1145,4 +1150,59 @@ test("exit_plan_mode describes review and mode-specific approval rather than unc
 	expect(tool.description).toContain("exits without interactive approval");
 	expect(tool.description).toContain("caller must gate approval externally");
 	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
+});
+
+// ---------------------------------------------------------------------------
+// `/plan <task>` — enable plan mode and hand the task over in one submission
+// ---------------------------------------------------------------------------
+
+test("/plan with a task enables plan mode and sends the task as a user turn", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("实现一个俄罗斯方块,简单版", context);
+
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	expect(harness.userMessages).toEqual([["实现一个俄罗斯方块,简单版", {}]]);
+	// The turn must start under the plan-mode tool set, not the unrestricted one.
+	expect(harness.activeTools()).not.toContain("edit_file_unrestricted");
+	expect(harness.activeTools()).toContain("read_file");
+});
+
+test("/plan with a task never toggles plan mode off", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("", context);
+	await harness.commands.get("plan")!.handler("now plan the next thing", context);
+
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	expect(harness.userMessages.map(([text]) => text)).toEqual(["now plan the next thing"]);
+});
+
+test("/plan with a task queues as a follow-up while the agent is streaming", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+
+	await harness.commands.get("plan")!.handler("plan this too", harness.ctx({ isIdle: () => false }));
+
+	expect(harness.userMessages).toEqual([["plan this too", { deliverAs: "followUp" }]]);
+});
+
+test("bare /plan still toggles plan mode and sends nothing", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("", context);
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	await harness.commands.get("plan")!.handler("   ", context);
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
+	expect(harness.userMessages).toEqual([]);
 });
