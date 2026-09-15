@@ -2430,6 +2430,27 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/**
+	 * Empty the footer row and return the call that puts it back.
+	 *
+	 * The footer keeps reporting model, cwd, and context budget, which under a
+	 * dialog that owns the whole decision reads as if the session were still
+	 * taking input. Restoring goes through the same path that installs a custom
+	 * footer, so an extension's footer survives the round trip.
+	 */
+	private hideFooterRow(): () => void {
+		this.footerContainer.clear();
+		this.redraw.requestRender();
+		let restored = false;
+		return () => {
+			if (restored) return;
+			restored = true;
+			this.footerContainer.clear();
+			this.footerContainer.addChild(this.customFooter ?? this.footer);
+			this.redraw.requestRender();
+		};
+	}
+
 	private setWorkingVisible(visible: boolean): void {
 		this.workingVisible = visible;
 		if (!visible) {
@@ -3104,16 +3125,25 @@ export class InteractiveMode {
 			overlay?: boolean;
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
+			hideFooter?: boolean;
+			waitingForApproval?: boolean;
 		},
 	): Promise<T> {
 		const savedText = this.editor.getText();
 		const isOverlay = options?.overlay ?? false;
+		// An inline dialog replaces the editor, so a dialog that blocks on a decision
+		// holds the working animations the same way an approval selector does.
+		const holdsApproval = !isOverlay && options?.waitingForApproval === true;
+		let restoreFooter: (() => void) | undefined;
 
 		const restoreEditor = () => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.editor.setText(savedText);
 			this.ui.setFocus(this.editor);
+			restoreFooter?.();
+			restoreFooter = undefined;
+			if (holdsApproval) this.setWaitingForApproval(false);
 			this.redraw.requestRender();
 		};
 
@@ -3158,6 +3188,8 @@ export class InteractiveMode {
 						options?.onHandle?.(handle);
 					} else {
 						this.disposeActiveSelector();
+						if (holdsApproval) this.setWaitingForApproval(true);
+						if (options?.hideFooter) restoreFooter = this.hideFooterRow();
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
 						this.ui.setFocus(component);
