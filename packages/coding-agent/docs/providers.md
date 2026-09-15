@@ -21,7 +21,6 @@ Use `/login` in interactive mode, then select a provider:
 - GitHub Copilot
 - xAI (Grok/X subscription)
 - OpenRouter (OAuth-minted API key billed from OpenRouter credits)
-- Radius
 
 Use `/logout` to clear credentials. Tokens are stored in `~/.pi/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
 
@@ -50,10 +49,6 @@ Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party h
 - The authorization creates a user-controlled OpenRouter API key billed from your OpenRouter credits
 - On remote/headless machines (e.g. over SSH) the browser cannot reach the loopback callback; paste the final redirect URL (or the authorization code) into the login prompt instead
 - `OPENROUTER_API_KEY` remains available through **Use an API key**
-
-### Radius
-
-Radius is a dynamic `pi-messages` gateway. `/login radius` stores OAuth tokens in `auth.json`; the gateway catalog is refreshed independently and cached in `models-store.json`. Custom Radius gateways can be declared in `models.json` with `"oauth": "radius"` and a gateway `baseUrl`.
 
 ## API Keys
 
@@ -88,7 +83,6 @@ pi
 | ZAI Coding Plan (China) | `ZAI_CODING_CN_API_KEY` | `zai-coding-cn` |
 | OpenCode Zen | `OPENCODE_API_KEY` | `opencode` |
 | OpenCode Go | `OPENCODE_API_KEY` | `opencode-go` |
-| Radius | `RADIUS_API_KEY` | `radius` |
 | Hugging Face | `HF_TOKEN` | `huggingface` |
 | Fireworks | `FIREWORKS_API_KEY` | `fireworks` |
 | Together AI | `TOGETHER_API_KEY` | `together` |
