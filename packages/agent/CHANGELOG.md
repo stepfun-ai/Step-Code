@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AgentLoopConfig.toolCallLeakRetries` (default `2`, `0` disables). When an assistant turn carries no structured tool call but its text contains `<tool_call>`/`<function=` markup — the signature of a serving-side tool parser failing on the model's raw output — the loop drops that attempt from the request context and streams the identical context again instead of treating the turn as a final answer and ending the run. The leaked attempt's message events stay in the event stream for observability, and a turn that emits markup text alongside a real structured call is left alone because it already has something to execute.
+
 ## [0.84.4] - 2026-08-28
 
 ### Breaking Changes
