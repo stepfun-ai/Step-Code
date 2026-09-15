@@ -21,6 +21,7 @@ import {
 } from "@step-harness/providers";
 import { getApiProvider } from "@step-harness/providers/compat";
 import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
+import { normalizeProviderBaseUrl } from "./provider-base-url.ts";
 import {
 	clearConfigValueCache,
 	getConfigValueEnvVarNames,
@@ -143,7 +144,10 @@ function modelFromJson(
 			`Provider ${providerId}, model ${definition.id}: no "api" specified. Set at provider or model level.`,
 		);
 	}
-	const baseUrl = definition.baseUrl ?? providerConfig.baseUrl ?? defaults?.baseUrl;
+	// Only a models.json value is normalized; an inherited built-in base URL is
+	// already the API root its adapter expects.
+	const configuredBaseUrl = definition.baseUrl ?? providerConfig.baseUrl;
+	const baseUrl = normalizeProviderBaseUrl(configuredBaseUrl, api as Api) ?? defaults?.baseUrl;
 	if (!baseUrl) throw new Error(`Provider ${providerId}: "baseUrl" is required when defining custom models.`);
 	if (definition.contextWindow !== undefined && definition.contextWindow <= 0) {
 		throw new Error(`Provider ${providerId}, model ${definition.id}: invalid contextWindow`);
@@ -192,7 +196,7 @@ function applyModelsJson(
 
 	const models: Model<Api>[] = baseModels.map((model) => ({
 		...model,
-		baseUrl: config.baseUrl ?? model.baseUrl,
+		baseUrl: normalizeProviderBaseUrl(config.baseUrl, model.api) ?? model.baseUrl,
 		compat: mergeCompat(model.compat, config.compat),
 	}));
 	for (const definition of config.models ?? []) {
