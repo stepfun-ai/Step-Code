@@ -121,6 +121,16 @@ export interface ExtensionWidgetOptions {
 	placement?: WidgetPlacement;
 }
 
+/** Extra presentation hints for {@link ExtensionUIContext.notify}. */
+export interface ExtensionNotifyOptions {
+	/**
+	 * Render the message the way typed input is rendered — a full-width
+	 * background bar — for an `info` notification that echoes what the user just
+	 * entered. Modes without a transcript ignore it.
+	 */
+	echoesInput?: boolean;
+}
+
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
@@ -151,7 +161,7 @@ export interface ExtensionUIContext {
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
 	/** Show a notification to the user. */
-	notify(message: string, type?: "info" | "warning" | "error"): void;
+	notify(message: string, type?: "info" | "warning" | "error", options?: ExtensionNotifyOptions): void;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;

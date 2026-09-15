@@ -13,6 +13,12 @@ import { stripBom } from "./utils/text.ts";
 // compatible with ordinary static imports and bundled entrypoints alike.
 const STEP_ENTRYPOINT = isStepEntrypoint();
 if (STEP_ENTRYPOINT) applyStepEnvironment();
+/**
+ * Whether this process was launched through the Step entrypoint. Decided once,
+ * next to APP_NAME, so anything that branches on the product agrees with the
+ * name being printed.
+ */
+export const IS_STEP_ENTRYPOINT: boolean = STEP_ENTRYPOINT;
 
 // =============================================================================
 // Package Detection

@@ -19,6 +19,7 @@ type FakeSession = {
 	subscribe: ReturnType<typeof vi.fn>;
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
+	emitToListeners: (event: unknown) => void;
 };
 
 type FakeRuntimeHost = {
@@ -62,6 +63,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 	};
 
 	const state = { messages: [assistantMessage] };
+	const listeners: Array<(event: unknown) => void> = [];
 
 	const session: FakeSession = {
 		sessionManager: { getHeader: () => undefined },
@@ -69,9 +71,15 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		state,
 		extensionRunner,
 		bindExtensions: vi.fn(async () => {}),
-		subscribe: vi.fn(() => () => {}),
+		subscribe: vi.fn((listener: (event: unknown) => void) => {
+			listeners.push(listener);
+			return () => {};
+		}),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
+		emitToListeners: (event: unknown) => {
+			for (const listener of listeners) listener(event);
+		},
 	};
 
 	return {
@@ -121,6 +129,85 @@ describe("runPrintMode", () => {
 		expect(session.prompt).toHaveBeenCalledWith("hello");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	// Feedback issue-d8b499026f19831c: with no UI, a denied tool call only reached
+	// the model, so the run looked like it silently did nothing.
+	it("reports a terminating tool block on stderr and exits non-zero", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		session.prompt.mockImplementation(async () => {
+			session.emitToListeners({
+				type: "tool_execution_end",
+				toolCallId: "call_1",
+				toolName: "run_command",
+				isError: true,
+				result: {
+					content: [
+						{ type: "text", text: "run_command requires approval (no interactive approval is available)" },
+					],
+					details: {},
+					terminate: true,
+				},
+			});
+		});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "clean the directory",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Blocked run_command: run_command requires approval (no interactive approval is available)",
+		);
+	});
+
+	it("leaves a recoverable tool error alone", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "recovered" }));
+		const { session } = runtimeHost;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		session.prompt.mockImplementation(async () => {
+			session.emitToListeners({
+				type: "tool_execution_end",
+				toolCallId: "call_1",
+				toolName: "read_file",
+				isError: true,
+				result: { content: [{ type: "text", text: "ENOENT" }], details: {} },
+			});
+		});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "read a missing file",
+		});
+
+		expect(exitCode).toBe(0);
+		expect(errorSpy).not.toHaveBeenCalled();
+	});
+
+	it("reports a blocked call with no reason text", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		session.prompt.mockImplementation(async () => {
+			session.emitToListeners({
+				type: "tool_execution_end",
+				toolCallId: "call_1",
+				toolName: "write_file",
+				isError: true,
+				result: { content: [], details: {}, terminate: true },
+			});
+		});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "write something",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalledWith("Blocked write_file: no reason given");
 	});
 
 	it("emits session_shutdown and returns non-zero on assistant error", async () => {

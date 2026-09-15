@@ -78,15 +78,25 @@ export class FooterComponent implements Component {
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 	private readonly presentation: FooterPresentation;
+	private readonly permissionCycleKey: () => string | undefined;
 
 	constructor(
 		session: AgentSession,
 		footerData: ReadonlyFooterDataProvider,
-		options: { presentation?: FooterPresentation } = {},
+		options: {
+			presentation?: FooterPresentation;
+			/**
+			 * Key that cycles the permission preset, or undefined when the session
+			 * has no such cycle. Supplied by the caller so the footer stays
+			 * presentational and does not have to resolve keybindings itself.
+			 */
+			permissionCycleKey?: () => string | undefined;
+		} = {},
 	) {
 		this.session = session;
 		this.footerData = footerData;
 		this.presentation = options.presentation ?? "native";
+		this.permissionCycleKey = options.permissionCycleKey ?? (() => undefined);
 	}
 
 	setSession(session: AgentSession): void {
@@ -339,7 +349,12 @@ export class FooterComponent implements Component {
 							? { label: "Read-only", paint: muted }
 							: { label: "Ask", paint: accent };
 		const displayMode = this.bashMode ? { label: "Shell", paint: (text: string) => theme.fg("error", text) } : mode;
-		const segments: string[] = [displayMode.paint(`⏵ ${displayMode.label}`)];
+		// The permission cycle was reachable but invisible: the footer named the
+		// mode and nothing said how to change it. Feedback issue-b39a464025061aa5.
+		const cycleHint = !this.bashMode && safeWidth >= 60 ? (this.permissionCycleKey() ?? "") : "";
+		const segments: string[] = [
+			displayMode.paint(`⏵ ${displayMode.label}`) + (cycleHint ? muted(` (${cycleHint})`) : ""),
+		];
 
 		const model = state.model?.id;
 		if (safeWidth >= 60 && model) {

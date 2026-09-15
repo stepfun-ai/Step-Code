@@ -274,6 +274,38 @@ describe("FooterComponent width handling", () => {
 		expect(visibleWidth(line)).toBe(120);
 	});
 
+	// Feedback issue-b39a464025061aa5: the footer named the permission mode but
+	// never said that Shift+Tab changes it.
+	it("advertises the permission cycle key next to the mode", () => {
+		const session = createSession({ sessionName: "", approvalMode: "auto" });
+		const footer = new FooterComponent(session, createFooterData(1), {
+			presentation: "step",
+			permissionCycleKey: () => "shift+tab",
+		});
+
+		const plain = stripAnsi(footer.render(120)[0] ?? "");
+		expect(plain.startsWith("⏵ Bypass (shift+tab)")).toBe(true);
+	});
+
+	it("omits the permission cycle key on a narrow terminal", () => {
+		const session = createSession({ sessionName: "", approvalMode: "auto" });
+		const footer = new FooterComponent(session, createFooterData(1), {
+			presentation: "step",
+			permissionCycleKey: () => "shift+tab",
+		});
+
+		const plain = stripAnsi(footer.render(50)[0] ?? "");
+		expect(plain).not.toContain("shift+tab");
+		expect(plain).toContain("⏵ Bypass");
+	});
+
+	it("omits the permission cycle key when the session has no cycle", () => {
+		const session = createSession({ sessionName: "", approvalMode: "auto" });
+		const footer = new FooterComponent(session, createFooterData(1), { presentation: "step" });
+
+		expect(stripAnsi(footer.render(120)[0] ?? "")).not.toContain("shift+tab");
+	});
+
 	it("renders the read-only permission status instead of falling back to ask", () => {
 		const session = createSession({ sessionName: "", approvalMode: "strict" });
 		const footer = new FooterComponent(

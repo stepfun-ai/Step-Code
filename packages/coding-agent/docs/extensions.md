@@ -2528,6 +2528,11 @@ const text = await ctx.ui.editor("Edit:", "prefilled text");
 
 // Notification (non-blocking)
 ctx.ui.notify("Done!", "info");  // "info" | "warning" | "error"
+
+// An "info" notification that quotes what the user just typed. `echoesInput`
+// renders it on the user-message background bar instead of as a dim status
+// line, so it reads as their input. Modes without a transcript ignore it.
+ctx.ui.notify(`Goal set: ${objective}`, "info", { echoesInput: true });
 ```
 
 #### Timed Dialogs with Countdown
