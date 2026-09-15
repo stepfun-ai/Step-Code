@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@step-harness/agent-core";
+import type { Api, ImageContent, Model, TextContent } from "@step-harness/providers";
 import type { AgentSession, AgentSessionEventListener, PromptOptions } from "./core/agent-session.ts";
 import type { AgentSessionRuntime, AgentSessionRuntimeHost } from "./core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./core/agent-session-services.ts";

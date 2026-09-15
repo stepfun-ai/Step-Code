@@ -1,12 +1,7 @@
-import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
+import { ProcessTerminal, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
-import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../extensions/step-provider/index.ts";
-import {
-	detectTerminalBackgroundFromEnv,
-	initTheme,
-	resolveThemeSetting,
-	theme,
-} from "../modes/interactive/theme/theme.ts";
+import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
+import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import {
 	INITIAL_STEP_LOGIN_STEP,
@@ -97,7 +92,6 @@ export function isStepInteractiveLoginStartup(input: {
 		readonly export?: string;
 		readonly listModels?: string | true;
 		readonly sdkStdio?: boolean;
-		readonly offline?: boolean;
 		readonly messages: readonly string[];
 		readonly fileArgs: readonly string[];
 		readonly print?: boolean;
@@ -112,7 +106,6 @@ export function isStepInteractiveLoginStartup(input: {
 		input.args.export === undefined &&
 		input.args.listModels === undefined &&
 		input.args.sdkStdio !== true &&
-		input.args.offline !== true &&
 		input.args.messages.length === 0 &&
 		input.args.fileArgs.length === 0 &&
 		input.args.print !== true &&

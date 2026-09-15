@@ -1,11 +1,9 @@
 packages:
+  - "apps/*"
   - "packages/*"
-  - "packages/session-backends/*"
+  - "packages/extensions/*"
   - "packages/coding-agent/examples/extensions/with-deps"
   - "packages/coding-agent/examples/extensions/custom-provider-anthropic"
   - "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo"
   - "packages/coding-agent/examples/extensions/sandbox"
   - "packages/coding-agent/examples/extensions/gondolin"
-
-allowBuilds:
-  esbuild: set this to true or false

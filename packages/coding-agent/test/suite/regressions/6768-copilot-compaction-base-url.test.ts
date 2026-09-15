@@ -4,7 +4,7 @@ import {
 	fauxAssistantMessage,
 	type Model,
 	type Provider,
-} from "@earendil-works/pi-ai";
+} from "@step-harness/providers";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "../harness.ts";
 

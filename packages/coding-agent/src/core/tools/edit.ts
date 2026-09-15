@@ -1,10 +1,10 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { AgentTool } from "@step-harness/agent-core";
+import { Box, Container, Spacer, Text } from "@step-harness/pi-tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
-import { renderDiff } from "../../modes/interactive/components/diff.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { renderDiff } from "../../render/diff.ts";
+import type { Theme } from "../../theme/theme.ts";
 import { splitBom } from "../../utils/text.ts";
 import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ToolDefinition } from "../extensions/types.ts";

@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-coding-agent",
+	"name": "@step-harness/coding-agent",
 	"version": "0.84.4",
 	"private": true,
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
@@ -8,7 +8,6 @@
 		"configDir": ".pi"
 	},
 	"bin": {
-		"pi": "dist/bundle/cli.js",
 		"step": "dist/bundle/step.js"
 	},
 	"main": "./dist/index.js",
@@ -17,13 +16,6 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
-		},
-		"./rpc-entry": {
-			"import": "./dist/bundle/rpc-entry.js"
-		},
-		"./client": {
-			"types": "./dist/client/index.d.ts",
-			"import": "./dist/client/index.js"
 		}
 	},
 	"files": [
@@ -31,26 +23,23 @@
 		"docs",
 		"examples",
 		"containerization.md",
-		"CHANGELOG.md",
-		"npm-shrinkwrap.json"
+		"CHANGELOG.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs",
-		"build:unbundled": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js dist/step-cli.js && npm run copy-assets",
-		"build:binary": "npm --prefix ../tui run build && npm --prefix ../telemetry run build && npm --prefix ../ai run build && npm --prefix ../agent run build && npm --prefix ../protocol run build && npm --prefix ../client run build && npm run build && bun build --compile --no-compile-autoload-bunfig --env=STEP_CLI_BUILD_* ./src/bun/cli.ts ./src/utils/image-resize-worker.ts --outfile dist/pi && bun build --compile --no-compile-autoload-bunfig --env=STEP_CLI_BUILD_* ./src/bun/step-cli.ts ./src/utils/image-resize-worker.ts --outfile dist/step-bin && npm run copy-binary-assets",
-		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
-		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/",
+		"build:unbundled": "tsgo -p tsconfig.build.json && npm run copy-assets",
+		"build:binary": "npm --prefix ../tui run build && npm --prefix ../telemetry run build && npm --prefix ../providers run build && npm --prefix ../agent-core run build && npm run build && bun build --compile --no-compile-autoload-bunfig --env=STEP_CLI_BUILD_* ../../apps/cli/src/bun/step-cli.ts ./src/utils/image-resize-worker.ts --outfile dist/step-bin && npm run copy-binary-assets",
+		"copy-assets": "shx mkdir -p dist/theme && shx cp src/theme/*.json dist/theme/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
+		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/theme/*.json dist/theme/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && node ../../scripts/copy-photon-wasm.mjs dist",
 		"test": "vitest --run",
-		"shrinkwrap": "node ../../scripts/generate-coding-agent-shrinkwrap.mjs",
-		"prepublishOnly": "npm run clean && npm run build && npm run shrinkwrap"
+		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "^0.84.4",
-		"@earendil-works/pi-ai": "^0.84.4",
-		"@earendil-works/pi-client": "^0.84.4",
-		"@earendil-works/pi-protocol": "^0.84.4",
-		"@earendil-works/pi-tui": "^0.84.4",
+		"@step-harness/agent-core": "^0.84.4",
+		"@step-harness/providers": "^0.84.4",
+		"@step-harness/pi-tui": "^0.84.4",
+		"@step-harness/config": "workspace:*",
 		"@modelcontextprotocol/sdk": "1.27.1",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"chalk": "5.6.2",
@@ -102,7 +91,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://gitlab.basemind.com/aiagent/step-harness.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

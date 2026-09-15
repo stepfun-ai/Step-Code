@@ -131,9 +131,10 @@ description: project
 Project skill`,
 			);
 
-			const baseTheme = JSON.parse(
-				readFileSync(join(process.cwd(), "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
-			) as { name: string; vars?: Record<string, string> };
+			const baseTheme = JSON.parse(readFileSync(join(process.cwd(), "src", "theme", "dark.json"), "utf-8")) as {
+				name: string;
+				vars?: Record<string, string>;
+			};
 			baseTheme.name = "collision-theme";
 			const userThemePath = join(agentDir, "themes", "collision.json");
 			const projectThemePath = join(cwd, ".pi", "themes", "collision.json");
@@ -439,9 +440,9 @@ description: Project skill
 Project skill content`,
 			);
 			writeFileSync(join(promptsDir, "project.md"), "Project prompt");
-			const themeData = JSON.parse(
-				readFileSync(join(process.cwd(), "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
-			) as { name: string };
+			const themeData = JSON.parse(readFileSync(join(process.cwd(), "src", "theme", "dark.json"), "utf-8")) as {
+				name: string;
+			};
 			themeData.name = "project-theme";
 			writeFileSync(join(themesDir, "project.json"), JSON.stringify(themeData, null, 2));
 			const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
@@ -684,9 +685,9 @@ description: Package prompt
 ---
 Package prompt content`,
 			);
-			const baseTheme = JSON.parse(
-				readFileSync(join(process.cwd(), "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
-			) as { name: string };
+			const baseTheme = JSON.parse(readFileSync(join(process.cwd(), "src", "theme", "dark.json"), "utf-8")) as {
+				name: string;
+			};
 			writeFileSync(
 				join(packageThemesDir, "package-theme.json"),
 				JSON.stringify({ ...baseTheme, name: "package-theme" }),
@@ -853,7 +854,7 @@ Content`,
 			writeFileSync(
 				join(ext1Dir, "index.ts"),
 				`
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -868,7 +869,7 @@ export default function(pi: ExtensionAPI) {
 			writeFileSync(
 				join(ext2Dir, "index.ts"),
 				`
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -895,7 +896,7 @@ export default function(pi: ExtensionAPI) {
 			writeFileSync(
 				join(globalExtDir, "global.ts"),
 				`
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -914,7 +915,7 @@ export default function(pi: ExtensionAPI) {
 			writeFileSync(
 				explicitExtPath,
 				`
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({

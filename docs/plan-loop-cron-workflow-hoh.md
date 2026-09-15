@@ -411,7 +411,7 @@ telemetry 和 evidence 在进程内串行 append；读取时容忍被杀进程�
 | 用途 | 位置 |
 |---|---|
 | Extension API | `packages/coding-agent/src/core/extensions/types.ts` |
-| Step composition root | `packages/coding-agent/src/step-cli.ts` |
+| Step composition root | `apps/cli/src/main.ts` |
 | Custom message/steer | `packages/coding-agent/src/core/agent-session.ts` |
 | Subagent runner | `packages/coding-agent/src/extensions/step-subagent.ts`、`extensions/subagent/` |
 | Prompt appendix | `packages/coding-agent/src/step/system-prompt.ts` |

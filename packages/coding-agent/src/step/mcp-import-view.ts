@@ -19,9 +19,9 @@ import {
 	Text,
 	truncateToWidth,
 	visibleWidth,
-} from "@earendil-works/pi-tui";
-import { DynamicBorder } from "../modes/interactive/components/dynamic-border.ts";
-import { initTheme, theme } from "../modes/interactive/theme/theme.ts";
+} from "@step-harness/pi-tui";
+import { DynamicBorder } from "../render/dynamic-border.ts";
+import { initTheme, theme } from "../theme/theme.ts";
 import type { StepMcpImportCandidate, StepMcpImportSourceStatus } from "./mcp-import.ts";
 
 export interface StepMcpImportViewCallbacks {

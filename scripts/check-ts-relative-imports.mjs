@@ -24,6 +24,40 @@ function isRelativeJavaScriptSpecifier(specifier) {
 	return /^\.\.?\//.test(specifier) && /\.js(?:[?#].*)?$/.test(specifier);
 }
 
+// --- self-test ---------------------------------------------------------------------------
+// Exercises the specifier predicate against known clean/violation cases so the guard is
+// verified in CI (via `node --test scripts/*.test.mjs`) instead of only running against the
+// repo. Runs before the repo scan and exits, so normal invocation is unaffected.
+if (process.argv.includes("--self-test")) {
+	const failures = [];
+	const expectViolation = (specifier) => {
+		if (!isRelativeJavaScriptSpecifier(specifier)) failures.push(`expected violation: ${specifier}`);
+	};
+	const expectClean = (specifier) => {
+		if (isRelativeJavaScriptSpecifier(specifier)) failures.push(`expected clean: ${specifier}`);
+	};
+
+	expectViolation("./foo.js");
+	expectViolation("../bar/baz.js");
+	expectViolation("./foo.js?raw");
+	expectViolation("./foo.js#frag");
+	expectClean("./foo.ts");
+	expectClean("../bar/baz.ts");
+	expectClean("foo.js"); // bare specifier, not relative
+	expectClean("@scope/pkg");
+	expectClean("./foo"); // extensionless
+	expectClean("#ui/state"); // subpath import
+
+	if (failures.length > 0) {
+		console.error("ts-relative-imports self-test FAILED:");
+		for (const failure of failures) console.error(`  ${failure}`);
+		process.exit(1);
+	}
+	console.log("ts-relative-imports self-test passed.");
+	process.exit(0);
+}
+
+
 function getImportTypeSpecifier(node) {
 	if (!ts.isLiteralTypeNode(node.argument)) return undefined;
 	if (!ts.isStringLiteralLike(node.argument.literal)) return undefined;

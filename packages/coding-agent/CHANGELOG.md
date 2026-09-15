@@ -14,6 +14,7 @@
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
 - Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
+- Changed `buildStepSystemPromptAppendix` to drop the ask-and-wait clauses from the Communication, Destructive actions, Cost and consent, and Workflow sections: a concrete implementation request proceeds on a reasonable assumption rather than pausing for a clarifying question, a cost preview, or a stated target. Opt-in gated tools still require an explicit user trigger, the destructive-action caution and the security rules are unchanged, and approval remains the runtime's responsibility.
 
 ### Fixed
 

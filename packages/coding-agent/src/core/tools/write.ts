@@ -1,10 +1,10 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Container, Text } from "@earendil-works/pi-tui";
+import type { AgentTool } from "@step-harness/agent-core";
+import { Container, Text } from "@step-harness/pi-tui";
 import { mkdir as fsMkdir, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { keyHint } from "../../render/keybinding-hints.ts";
+import { getLanguageFromPath, highlightCode, type Theme } from "../../theme/theme.ts";
 import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";

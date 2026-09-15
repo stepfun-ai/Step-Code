@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { isValidThinkingLevel } from "../src/cli/args.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { loadThemeFromPath } from "../src/modes/interactive/theme/theme.ts";
+import { loadThemeFromPath } from "../src/theme/theme.ts";
 
 const tempDirs: string[] = [];
 
@@ -29,9 +29,10 @@ describe("max thinking level", () => {
 		const testDir = mkdtempSync(join(tmpdir(), "pi-max-theme-"));
 		tempDirs.push(testDir);
 		const currentDir = dirname(fileURLToPath(import.meta.url));
-		const darkTheme = JSON.parse(
-			readFileSync(join(currentDir, "../src/modes/interactive/theme/dark.json"), "utf8"),
-		) as { name: string; colors: Record<string, unknown> };
+		const darkTheme = JSON.parse(readFileSync(join(currentDir, "../src/theme/dark.json"), "utf8")) as {
+			name: string;
+			colors: Record<string, unknown>;
+		};
 		darkTheme.name = "legacy-theme";
 		delete darkTheme.colors.thinkingMax;
 		const themePath = join(testDir, "legacy-theme.json");

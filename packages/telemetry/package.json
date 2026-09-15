@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-telemetry",
+	"name": "@step-harness/telemetry",
 	"version": "0.84.4",
 	"private": true,
 	"description": "Vendor-neutral telemetry contracts and typed schema utilities for pi",
@@ -35,7 +35,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://gitlab.basemind.com/aiagent/step-harness.git",
 		"directory": "packages/telemetry"
 	},
 	"engines": {

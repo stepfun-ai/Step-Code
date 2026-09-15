@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AssistantMessageEventStream, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
-import { type Api, clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@step-harness/agent-core";
+import type { AssistantMessageEventStream, ModelsSimpleStreamOptions } from "@step-harness/providers";
+import { type Api, clampThinkingLevel, type Message, type Model, streamSimple } from "@step-harness/providers/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -161,7 +161,7 @@ function getDefaultAgentDir(): string {
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@earendil-works/pi-ai';
+ * import { getModel } from '@step-harness/providers';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',
@@ -368,12 +368,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						}
 					: undefined),
 				transformHeaders: async (requestHeaders) => {
-					const headers = mergeProviderAttributionHeaders(
-						model,
-						settingsManager,
-						options?.sessionId,
-						requestHeaders,
-					);
+					const headers = mergeProviderAttributionHeaders(model, options?.sessionId, requestHeaders);
 					return headerRunner?.hasHandlers("before_provider_headers")
 						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
 						: (headers ?? {});

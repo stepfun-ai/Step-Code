@@ -215,7 +215,7 @@ describe("CombinedAutocompleteProvider", () => {
 			setupFolder(baseDir, {
 				files: {
 					"packages/tui/src/autocomplete.ts": "export {};",
-					"packages/ai/src/autocomplete.ts": "export {};",
+					"packages/providers/src/autocomplete.ts": "export {};",
 				},
 			});
 
@@ -225,7 +225,7 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const values = result?.items.map((item) => item.value);
 			assert.ok(values?.includes("@packages/tui/src/autocomplete.ts"));
-			assert.ok(!values?.includes("@packages/ai/src/autocomplete.ts"));
+			assert.ok(!values?.includes("@packages/providers/src/autocomplete.ts"));
 		});
 
 		test("matches directory in middle of path with --full-path", async () => {

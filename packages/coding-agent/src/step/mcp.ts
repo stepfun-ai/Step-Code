@@ -1,14 +1,14 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import { type TSchema, Type } from "typebox";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
-import { theme } from "../modes/interactive/theme/theme.ts";
+import { theme } from "../theme/theme.ts";
 import { getStepAuthPath } from "./auth.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";

@@ -2,7 +2,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getSupportedThinkingLevels } from "../packages/ai/src/models.ts";
+import { getSupportedThinkingLevels } from "../packages/providers/src/models.ts";
 
 const [catalogPath, outputDir] = process.argv.slice(2);
 if (!catalogPath || !outputDir) {

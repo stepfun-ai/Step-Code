@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isIsolatedVmAvailable, runInIsolatedVm, type WorkflowVmHost } from "../src/extensions/workflow/vm.ts";
+import { isIsolatedVmAvailable, runInIsolatedVm, type WorkflowVmHost } from "../src/features/workflow/vm.ts";
 
 const nativeVmTest = test.skipIf(!isIsolatedVmAvailable());
 

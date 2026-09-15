@@ -319,7 +319,8 @@ function Install-ManagedTool {
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)][string]$Repository,
     [Parameter(Mandatory = $true)][string]$TargetId,
-    [Parameter(Mandatory = $true)][string]$WorkDir
+    [Parameter(Mandatory = $true)][string]$WorkDir,
+    [string]$ExtractDir
   )
 
   $toolDir = Join-Path $AgentDir 'bin'
@@ -331,6 +332,18 @@ function Install-ManagedTool {
   $systemNames = if ($Name -eq 'fd') { @('fd.exe', 'fd', 'fdfind.exe', 'fdfind') } else { @('rg.exe', 'rg') }
   if (Test-CommandAvailable -Names $systemNames) {
     return
+  }
+
+  # Prefer the binary shipped inside the release archive (tools\) so a packaged
+  # install needs no network. Fall back to the GitHub download below when the
+  # archive did not carry it.
+  if ($ExtractDir) {
+    $bundled = Join-Path $ExtractDir (Join-Path 'tools' $binaryName)
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) {
+      New-Item -ItemType Directory -Path $toolDir -Force | Out-Null
+      Copy-FileWithRetry -Source $bundled -Destination $destination
+      return
+    }
   }
 
   try {
@@ -359,20 +372,20 @@ function Install-ManagedTool {
     Copy-FileWithRetry -Source $found[0].FullName -Destination $destination
   } catch {
     # fd/rg are convenience dependencies. A system installation or a later
-    # migration can still provide them, so a failed optional download must not
-    # make the main Step installation fail.
-    Write-Log "warning: could not install $Name ($($_.Exception.Message)); install it manually if needed"
+    # migration can still provide them, and grep/find fall back to git/POSIX at
+    # runtime, so a failed optional download is silently ignored (no warning).
   }
 }
 
 function Install-ManagedTools {
   param(
     [Parameter(Mandatory = $true)][string]$TargetId,
-    [Parameter(Mandatory = $true)][string]$WorkDir
+    [Parameter(Mandatory = $true)][string]$WorkDir,
+    [string]$ExtractDir
   )
   New-Item -ItemType Directory -Path (Join-Path $AgentDir 'bin') -Force | Out-Null
-  Install-ManagedTool -Name 'fd' -Repository 'sharkdp/fd' -TargetId $TargetId -WorkDir $WorkDir
-  Install-ManagedTool -Name 'rg' -Repository 'BurntSushi/ripgrep' -TargetId $TargetId -WorkDir $WorkDir
+  Install-ManagedTool -Name 'fd' -Repository 'sharkdp/fd' -TargetId $TargetId -WorkDir $WorkDir -ExtractDir $ExtractDir
+  Install-ManagedTool -Name 'rg' -Repository 'BurntSushi/ripgrep' -TargetId $TargetId -WorkDir $WorkDir -ExtractDir $ExtractDir
 }
 
 function Test-Install {
@@ -563,7 +576,7 @@ try {
   Install-Package -ArchivePath $archivePath -ExtractDir $extractDir -Destination $InstallDir
 
   Write-Progress-Step -Step 5 -Total 6 -Message 'installing managed fd and rg tools'
-  Install-ManagedTools -TargetId $targetId -WorkDir $workDir
+  Install-ManagedTools -TargetId $targetId -WorkDir $workDir -ExtractDir $extractDir
 
   Write-Progress-Step -Step 6 -Total 6 -Message 'running smoke test'
   Test-Install -BinaryPath (Join-Path $InstallDir 'step.exe')

@@ -84,7 +84,7 @@ fi
 mkdir -p "$(dirname "$output")"
 output="$(cd "$(dirname "$output")" && pwd)/$(basename "$output")"
 
-model_data_dir="packages/ai/src/providers/data"
+model_data_dir="packages/providers/src/providers/data"
 if [[ ! -f "${model_data_dir}/.manifest.json" ]]; then
     echo "Generated model data is missing. Run npm run hydrate:model-data first." >&2
     exit 1
@@ -113,21 +113,21 @@ GIT_INDEX_FILE="$temporary_index" git add -f -- "${model_data_files[@]}"
 archive_tree="$(GIT_INDEX_FILE="$temporary_index" git write-tree)"
 archive_mtime="$(git show -s --format=%ct "$commit")"
 
-archive_root="pi-${version}"
+archive_root="step-${version}"
 git archive --format=tar --prefix="${archive_root}/" --mtime="@${archive_mtime}" "$archive_tree" \
     | gzip -n -9 > "$temporary_archive"
 tar -tzf "$temporary_archive" > "$manifest"
 
 required_paths=(
     "package.json"
-    "package-lock.json"
+    "pnpm-lock.yaml"
     "scripts/build-binaries.sh"
-    "packages/ai/src/models.generated.ts"
-    "packages/ai/src/image-models.generated.ts"
-    "packages/ai/src/providers/data/.manifest.json"
+    "packages/providers/src/models.generated.ts"
+    "packages/providers/src/image-models.generated.ts"
+    "packages/providers/src/providers/data/.manifest.json"
     "packages/coding-agent/package.json"
-    "packages/coding-agent/src/bun/step-cli.ts"
-    "packages/coding-agent/src/step-cli.ts"
+    "apps/cli/src/bun/step-cli.ts"
+    "apps/cli/src/main.ts"
     "packages/coding-agent/src/step/stdio-host.ts"
     "packages/coding-agent/src/utils/image-resize-worker.ts"
     "packages/coding-agent/src/core/export-html/template.css"
@@ -151,7 +151,7 @@ if grep -Eq '(^|/)node_modules/|(^|/)packages/coding-agent/binaries/' "$manifest
 fi
 
 tar -xzf "$temporary_archive" -C "$validation_root"
-node "${validation_root}/${archive_root}/packages/ai/scripts/check-model-data.ts"
+node "${validation_root}/${archive_root}/packages/providers/scripts/check-model-data.ts"
 
 mv "$temporary_archive" "$output"
 trap 'rm -f "$temporary_index" "$manifest"; rm -rf "$validation_root"' EXIT

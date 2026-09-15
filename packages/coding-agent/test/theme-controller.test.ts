@@ -1,8 +1,8 @@
-import type { TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { initTheme, type TerminalTheme, theme } from "../src/modes/interactive/theme/theme.ts";
-import { InteractiveThemeController } from "../src/modes/interactive/theme/theme-controller.ts";
+import { initTheme, type TerminalTheme, theme } from "../src/theme/theme.ts";
+import { InteractiveThemeController } from "../src/theme/theme-controller.ts";
 
 function createUi() {
 	const queryTerminalBackgroundColor = vi.fn();

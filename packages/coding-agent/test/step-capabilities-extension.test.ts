@@ -1,20 +1,20 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { type Model, validateToolArguments } from "@earendil-works/pi-ai";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import { type Model, validateToolArguments } from "@step-harness/providers";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
-import { createStepCapabilitiesExtension } from "../src/extensions/step-capabilities.ts";
-import { createStepPlanExtension } from "../src/extensions/step-plan.ts";
+import { createStepCapabilitiesExtension } from "../src/features/step-capabilities.ts";
+import { createStepPlanExtension } from "../src/features/step-plan.ts";
 import {
 	createStepSubagentExtension,
 	type StepSubagentRunResult,
 	type StepWorktreeLease,
-} from "../src/extensions/step-subagent.ts";
-import { discoverStepAgents } from "../src/extensions/step-subagent-agents.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+} from "../src/features/step-subagent.ts";
+import { discoverStepAgents } from "../src/features/step-subagent-agents.ts";
 import type { StepTelemetryEventName, StepTelemetryProperties } from "../src/step/telemetry.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 
 function agentFile(name: string, description: string, body = "Do the task."): string {
 	return `---\nname: ${name}\ndescription: ${description}\ntools: read_file, find_files\n---\n${body}\n`;

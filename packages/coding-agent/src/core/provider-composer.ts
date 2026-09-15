@@ -18,8 +18,8 @@ import {
 	type RefreshModelsContext,
 	type SimpleStreamOptions,
 	type StreamOptions,
-} from "@earendil-works/pi-ai";
-import { getApiProvider } from "@earendil-works/pi-ai/compat";
+} from "@step-harness/providers";
+import { getApiProvider } from "@step-harness/providers/compat";
 import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
 import { normalizeProviderBaseUrl } from "./provider-base-url.ts";
 import {
@@ -179,9 +179,6 @@ function applyModelsJson(
 	config: ModelsJsonProvider | undefined,
 ): Model<Api>[] {
 	if (!config) return [...baseModels];
-	if (config.oauth && !config.baseUrl) {
-		throw new Error(`Provider ${providerId}: "baseUrl" is required when "oauth" is set.`);
-	}
 	const hasOverrides = config.modelOverrides && Object.keys(config.modelOverrides).length > 0;
 	if (
 		!config.models?.length &&
@@ -190,7 +187,6 @@ function applyModelsJson(
 		!config.compat &&
 		!hasOverrides &&
 		!config.apiKey &&
-		!config.oauth &&
 		config.authHeader === undefined
 	) {
 		throw new Error(
@@ -200,10 +196,7 @@ function applyModelsJson(
 
 	const models: Model<Api>[] = baseModels.map((model) => ({
 		...model,
-		baseUrl:
-			config.oauth === "radius"
-				? model.baseUrl
-				: (normalizeProviderBaseUrl(config.baseUrl, model.api) ?? model.baseUrl),
+		baseUrl: normalizeProviderBaseUrl(config.baseUrl, model.api) ?? model.baseUrl,
 		compat: mergeCompat(model.compat, config.compat),
 	}));
 	for (const definition of config.models ?? []) {

@@ -1,9 +1,9 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@step-harness/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createStepExtension } from "../../src/extensions/step.ts";
-import { registerStepStreamRecovery } from "../../src/extensions/step-stream-recovery.ts";
+import { createStepExtension } from "../../src/features/step.ts";
+import { registerStepStreamRecovery } from "../../src/features/step-stream-recovery.ts";
 import { createHarness, getMessageText, getUserTexts, type Harness } from "./harness.ts";
 
 const streamError = "Anthropic stream ended before message_stop";

@@ -227,7 +227,6 @@ describe("Step Pi storage wrappers", () => {
 		await writeFile(join(cwd, "sample.txt"), "sample\n");
 		vi.stubEnv("STEP_CODING_AGENT_DIR", agentDir);
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(root, ".pi", "agent"));
-		vi.stubEnv("PI_OFFLINE", "1");
 		vi.stubEnv("PATH", join(root, "empty-path"));
 
 		const profile = createStepToolProfile(cwd);
