@@ -36,10 +36,20 @@ describe("parsePositiveInt", () => {
     expect(() => parsePositiveInt("abc")).toThrow("positive integer");
   });
 
-  it("rejects partially parsed and unsafe integer inputs", () => {
-    for (const value of ["12px", "1.5", "1e3", "9007199254740992"]) {
+  it("rejects partially parsed numeric prefixes instead of truncating them", () => {
+    for (const value of ["12px", "12abc", "3.14xyz", "1.5", "1e3", "0x10"]) {
       expect(() => parsePositiveInt(value)).toThrow("positive integer");
     }
+  });
+
+  it("rejects integers beyond the safe integer range", () => {
+    for (const value of ["9007199254740992", "9007199254740993", "1e21"]) {
+      expect(() => parsePositiveInt(value)).toThrow("positive integer");
+    }
+  });
+
+  it("accepts the largest safe integer", () => {
+    expect(parsePositiveInt("9007199254740991")).toBe(9007199254740991);
   });
 });
 
@@ -53,7 +63,19 @@ describe("parseNonNegativeInt", () => {
   });
 
   it("rejects partially parsed values", () => {
-    expect(() => parseNonNegativeInt("0items")).toThrow("non-negative");
+    for (const value of ["0items", "3.14xyz", "1e3"]) {
+      expect(() => parseNonNegativeInt(value)).toThrow("non-negative");
+    }
+  });
+
+  it("rejects values beyond the safe integer range", () => {
+    expect(() => parseNonNegativeInt("9007199254740992")).toThrow(
+      "non-negative",
+    );
+  });
+
+  it("accepts the largest safe integer", () => {
+    expect(parseNonNegativeInt("9007199254740991")).toBe(9007199254740991);
   });
 });
 
@@ -67,9 +89,22 @@ describe("parseNumber", () => {
   });
 
   it("rejects malformed numeric values", () => {
-    for (const value of ["3.14ms", "1.2.3", "Infinity"]) {
+    for (const value of [
+      "3.14ms",
+      "3.14xyz",
+      "1.2.3",
+      "Infinity",
+      "-Infinity",
+      "NaN",
+    ]) {
       expect(() => parseNumber(value)).toThrow("Expected number");
     }
+  });
+
+  it("still accepts scientific notation and sign prefixes", () => {
+    expect(parseNumber("1e3")).toBeCloseTo(1000);
+    expect(parseNumber("-2.5e-3")).toBeCloseTo(-0.0025);
+    expect(parseNumber("+7")).toBe(7);
   });
 });
 
