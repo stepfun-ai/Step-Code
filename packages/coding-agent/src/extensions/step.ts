@@ -282,7 +282,12 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			if (requested === "--cycle" || requested === "cycle") {
 				const state = permissions.cycle();
 				trackPermissionMode(options.telemetry, state.preset, "shortcut");
-				persistPermissionState(options.stepSettings, state);
+				// Deliberately not persisted. The shortcut means "stop asking me right
+				// now, I am watching", but persisting it wrote the whole policy triple
+				// — including `nonInteractiveApproval: "allow"` under Bypass — to
+				// config.toml, so one keypress silently granted every later unattended
+				// `--print` run in that project permission to write and execute. Use
+				// `/permissions <preset>` for a durable choice.
 				autoResume.reset();
 				syncNativeRetry(ctx, state.autoResume);
 				publishStepPermissionStatus(ctx.ui, state);
