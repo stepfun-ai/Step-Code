@@ -48,10 +48,6 @@ export interface StepUpdateCommandInput {
 
 export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): Promise<number> {
 	const env = input.env ?? process.env;
-	if (env.PI_OFFLINE === "1") {
-		process.stderr.write("Step update is unavailable in offline mode.\n");
-		return 1;
-	}
 	const executablePath = await resolveUpdateExecutablePath(input.executablePath, env);
 	if (!executablePath) {
 		process.stderr.write("This installation is not a standalone Step binary and cannot self-update.\n");

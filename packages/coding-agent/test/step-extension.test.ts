@@ -5,7 +5,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "../src/core/extensions/types.ts";
-import { createStepExtension, stepExtension } from "../src/extensions/step.ts";
+import { createStepExtension, stepExtension } from "../src/features/step.ts";
 import { STEP_INIT_PROMPT } from "../src/step/init-prompt.ts";
 
 function commandContext(isIdle: boolean): ExtensionCommandContext {

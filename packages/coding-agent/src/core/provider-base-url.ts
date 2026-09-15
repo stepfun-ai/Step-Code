@@ -1,6 +1,6 @@
 /** Normalization for provider base URLs supplied by user configuration. */
 
-import type { Api } from "@earendil-works/pi-ai";
+import type { Api } from "@step-harness/providers";
 
 /**
  * Operation path each adapter appends to the configured base URL.  Only APIs

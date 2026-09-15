@@ -2,7 +2,29 @@ import chalk from "chalk";
 import type { ProjectTrustContext } from "../core/extensions/types.ts";
 import type { AppMode } from "../core/project-trust.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
-import { type StartupTuiPathOptions, showStartupInput, showStartupSelector } from "./startup-ui.ts";
+import type { StartupTuiPathOptions } from "../modes/interactive-contract.ts";
+
+/**
+ * Startup selector primitives injected from the product shell. The interactive
+ * selectors live in @step-harness/cli; this package receives them as callbacks
+ * (dependency inversion) so it never imports the shell. When they are absent
+ * (e.g. coding-agent's own `main()` running a non-interactive command) the
+ * context behaves exactly like a no-UI context.
+ */
+export interface ProjectTrustUiPrimitives {
+	showStartupSelector?: <T>(
+		settingsManager: SettingsManager,
+		title: string,
+		options: Array<{ label: string; value: T }>,
+		paths?: StartupTuiPathOptions,
+	) => Promise<T | undefined>;
+	showStartupInput?: (
+		settingsManager: SettingsManager,
+		title: string,
+		placeholder?: string,
+		paths?: StartupTuiPathOptions,
+	) => Promise<string | undefined>;
+}
 
 export function createProjectTrustContext(options: {
 	cwd: string;
@@ -10,7 +32,10 @@ export function createProjectTrustContext(options: {
 	settingsManager: SettingsManager;
 	hasUI: boolean;
 	paths?: StartupTuiPathOptions;
+	ui?: ProjectTrustUiPrimitives;
 }): ProjectTrustContext {
+	const showStartupSelector = options.ui?.showStartupSelector;
+	const showStartupInput = options.ui?.showStartupInput;
 	return {
 		cwd: options.cwd,
 		mode: options.mode === "interactive" ? "tui" : options.mode,
@@ -21,6 +46,9 @@ export function createProjectTrustContext(options: {
 					return undefined;
 				}
 				if (options.mode !== "interactive") {
+					return undefined;
+				}
+				if (!showStartupSelector) {
 					return undefined;
 				}
 				return showStartupSelector(
@@ -35,6 +63,9 @@ export function createProjectTrustContext(options: {
 					return false;
 				}
 				if (options.mode !== "interactive") {
+					return false;
+				}
+				if (!showStartupSelector) {
 					return false;
 				}
 				return (
@@ -54,6 +85,9 @@ export function createProjectTrustContext(options: {
 					return undefined;
 				}
 				if (options.mode !== "interactive") {
+					return undefined;
+				}
+				if (!showStartupInput) {
 					return undefined;
 				}
 				return showStartupInput(options.settingsManager, title, placeholder, options.paths);

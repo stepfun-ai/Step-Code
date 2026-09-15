@@ -2,12 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadThemeFromPath } from "../src/modes/interactive/theme/theme.ts";
+import { loadThemeFromPath } from "../src/theme/theme.ts";
 
 const tempDirs: string[] = [];
 
 function loadDarkTheme(): { name: string; colors: Record<string, string | number> } {
-	return JSON.parse(readFileSync(new URL("../src/modes/interactive/theme/dark.json", import.meta.url), "utf8")) as {
+	return JSON.parse(readFileSync(new URL("../src/theme/dark.json", import.meta.url), "utf8")) as {
 		name: string;
 		colors: Record<string, string | number>;
 	};

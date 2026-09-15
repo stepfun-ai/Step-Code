@@ -7,13 +7,8 @@
  * not a safety net.
  */
 
-import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
-import {
-	detectTerminalBackgroundFromEnv,
-	initTheme,
-	resolveThemeSetting,
-	theme,
-} from "../modes/interactive/theme/theme.ts";
+import { ProcessTerminal, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
+import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import type { StepLoginHost } from "./login-flow.ts";
 import {
 	type ApplyStepMcpImportResult,

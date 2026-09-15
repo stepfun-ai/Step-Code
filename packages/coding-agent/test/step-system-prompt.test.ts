@@ -216,11 +216,27 @@ describe("Step system prompt appendix", () => {
 		expect(withoutOrchestration).not.toContain("# Coordination primitives");
 	});
 
-	it("carries a cost-and-consent contract", () => {
+	it("carries a cost-and-consent contract without steer-and-wait phrasing", () => {
 		const prompt = buildStepSystemPromptAppendix(["read_file"]);
 		expect(prompt).toContain("# Cost and consent");
-		expect(prompt).toContain("opt-in gate");
-		expect(prompt).toContain("necessary but not sufficient consent");
+		expect(prompt).toContain("Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger");
+		expect(prompt).not.toContain("necessary but not sufficient consent");
+		expect(prompt).not.toContain("so the user can steer before you spend");
+	});
+
+	it("omits the ask-and-wait clauses that end unattended runs early", () => {
+		const prompt = buildStepSystemPromptAppendix(["read_file", "edit_file", "run_command"]);
+		expect(prompt).not.toContain("unless a critical ambiguity or approval is required");
+		expect(prompt).toContain("proceed with a reasonable assumption.");
+		expect(prompt).not.toContain("when the runtime permits a confirmation");
+		expect(prompt).toContain("are never routine.");
+		expect(prompt).not.toContain("Ask or assume");
+		// Workflow list stays contiguous after the removal.
+		expect(prompt).toContain("3. Test first when feasible");
+		expect(prompt).toContain("4. Act in small, verifiable steps");
+		expect(prompt).toContain("5. Validate");
+		expect(prompt).toContain("6. Stay in scope");
+		expect(prompt).not.toMatch(/\n7\. /);
 	});
 
 	it("reports the operating mode inside the env block", () => {

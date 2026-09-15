@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import {
@@ -10,8 +10,8 @@ import {
 	routeSubagentRpcLine,
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
-} from "../src/extensions/step-subagent.ts";
-import { builtinStepAgents, resolveStepAgent, type StepAgentConfig } from "../src/extensions/step-subagent-agents.ts";
+} from "../src/features/step-subagent.ts";
+import { builtinStepAgents, resolveStepAgent, type StepAgentConfig } from "../src/features/step-subagent-agents.ts";
 
 interface SentMessage {
 	customType: string;

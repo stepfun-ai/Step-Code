@@ -2,11 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	getAvailableThemes,
-	getAvailableThemesWithPaths,
-	setRegisteredThemes,
-} from "../src/modes/interactive/theme/theme.ts";
+import { getAvailableThemes, getAvailableThemesWithPaths, setRegisteredThemes } from "../src/theme/theme.ts";
 
 type ThemeFile = {
 	name: string;
@@ -33,7 +29,7 @@ describe("theme picker", () => {
 
 	it("uses custom theme content names instead of file names", () => {
 		const darkTheme = JSON.parse(
-			readFileSync(new URL("../src/modes/interactive/theme/dark.json", import.meta.url), "utf-8"),
+			readFileSync(new URL("../src/theme/dark.json", import.meta.url), "utf-8"),
 		) as ThemeFile;
 		const customTheme: ThemeFile = {
 			...darkTheme,
@@ -52,6 +48,6 @@ describe("theme picker", () => {
 	it("includes the Step palette as a built-in theme", () => {
 		expect(getAvailableThemes()).toContain("step");
 		const stepTheme = getAvailableThemesWithPaths().find((theme) => theme.name === "step");
-		expect(stepTheme?.path?.endsWith(join("modes", "interactive", "theme", "step.json"))).toBe(true);
+		expect(stepTheme?.path?.endsWith(join("theme", "step.json"))).toBe(true);
 	});
 });

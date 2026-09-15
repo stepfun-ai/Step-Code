@@ -10,7 +10,7 @@
 import type { Dirent } from "node:fs";
 import { chmod, copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { Credential } from "@earendil-works/pi-ai";
+import type { Credential } from "@step-harness/providers";
 import { parse as parseYaml } from "yaml";
 import {
 	normalizeStepAnthropicBaseUrl,
@@ -18,7 +18,7 @@ import {
 	STEP_PROVIDER_DEFAULTS,
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
-} from "../extensions/step-provider/index.ts";
+} from "../features/step-provider/index.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { stripBom } from "../utils/text.ts";
 import {
@@ -534,10 +534,8 @@ function convertProvider(
 	if (raw.routeViaCloudTrace !== undefined) {
 		warnings.push(`${path}.routeViaCloudTrace: dropped; Pi uses the Step provider trace adapter.`);
 	}
-	if (raw.oauth !== undefined && raw.oauth !== "radius") {
+	if (raw.oauth !== undefined) {
 		warnings.push(`${path}.oauth: dropped; only Pi's supported OAuth providers can be registered.`);
-	} else if (raw.oauth === "radius") {
-		provider.oauth = "radius";
 	}
 
 	const rawModels = Array.isArray(raw.models) ? raw.models : [];

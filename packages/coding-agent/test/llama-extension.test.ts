@@ -1,14 +1,14 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { AuthContext, AuthPrompt, ModelsPublication, ModelsStoreEntry } from "@earendil-works/pi-ai";
+import type { AuthContext, AuthPrompt, ModelsPublication, ModelsStoreEntry } from "@step-harness/providers";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
-import { LlamaClient, type LlamaProgress, normalizeLlamaServerUrl } from "../src/extensions/llama/client.ts";
-import { findHuggingFaceToken, HuggingFaceClient } from "../src/extensions/llama/huggingface.ts";
-import llamaExtension from "../src/extensions/llama/index.ts";
-import { createLlamaProvider, LLAMA_PROVIDER_ID } from "../src/extensions/llama/provider.ts";
+import { LlamaClient, type LlamaProgress, normalizeLlamaServerUrl } from "../src/features/llama/client.ts";
+import { findHuggingFaceToken, HuggingFaceClient } from "../src/features/llama/huggingface.ts";
+import llamaExtension from "../src/features/llama/index.ts";
+import { createLlamaProvider, LLAMA_PROVIDER_ID } from "../src/features/llama/provider.ts";
 
 const servers: Server[] = [];
 

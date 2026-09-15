@@ -53,7 +53,7 @@ type AgentEvent =
 
 ## Message Types
 
-Base messages from [`packages/ai/src/types.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/types.ts#L134):
+Base messages from [`packages/providers/src/types.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/providers/src/types.ts#L134):
 - `UserMessage` (line 134)
 - `AssistantMessage` (line 140)
 - `ToolResultMessage` (line 152)

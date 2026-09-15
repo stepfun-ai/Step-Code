@@ -1,17 +1,17 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, ToolDefinition } from "../src/core/extensions/types.ts";
-import { registerWorkflowChildAcl, WORKFLOW_ACL_ENV } from "../src/extensions/workflow/acl-extension.ts";
+import { registerWorkflowChildAcl, WORKFLOW_ACL_ENV } from "../src/features/workflow/acl-extension.ts";
 import {
 	createStepWorkflowExtension,
 	resolveWorkflowScript,
 	type WorkflowRequest,
-} from "../src/extensions/workflow/step-workflow.ts";
-import type { WorkflowRunResult } from "../src/extensions/workflow/types.ts";
-import { isIsolatedVmAvailable } from "../src/extensions/workflow/vm.ts";
+} from "../src/features/workflow/step-workflow.ts";
+import type { WorkflowRunResult } from "../src/features/workflow/types.ts";
+import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 const cleanups: string[] = [];

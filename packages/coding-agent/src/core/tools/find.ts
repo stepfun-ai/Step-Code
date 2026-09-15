@@ -1,13 +1,13 @@
 import { stat as fsStat } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Text } from "@earendil-works/pi-tui";
+import type { AgentTool } from "@step-harness/agent-core";
+import { Text } from "@step-harness/pi-tui";
 import { spawn, spawnSync } from "child_process";
 import { minimatch } from "minimatch";
 import path from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { keyHint } from "../../render/keybinding-hints.ts";
+import type { Theme } from "../../theme/theme.ts";
 import { commandExists, ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";

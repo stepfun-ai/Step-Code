@@ -1,4 +1,4 @@
-import { type RgbColor, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
+import { type RgbColor, resetCapabilitiesCache, setCapabilities } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	detectTerminalBackgroundFromEnv,
@@ -8,7 +8,7 @@ import {
 	getThemeForRgbColor,
 	parseAutoThemeSetting,
 	resolveThemeSetting,
-} from "../src/modes/interactive/theme/theme.ts";
+} from "../src/theme/theme.ts";
 
 afterEach(() => {
 	resetCapabilitiesCache();

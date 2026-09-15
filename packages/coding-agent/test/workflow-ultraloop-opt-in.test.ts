@@ -5,8 +5,8 @@ import {
 	buildUltraloopSessionReminder,
 	createUltraloopOptInExtension,
 	detectUltraloopOptIn,
-} from "../src/extensions/workflow/ultraloop-opt-in.ts";
-import { isIsolatedVmAvailable } from "../src/extensions/workflow/vm.ts";
+} from "../src/features/workflow/ultraloop-opt-in.ts";
+import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
 
 const nativeUltraloopTest = test.skipIf(!isIsolatedVmAvailable());
 
