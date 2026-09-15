@@ -1,0 +1,32 @@
+{
+	"note": "S0-4 workspace registry. Every workspace member matched by the workspaces globs must have a row here (matched by package name). New packages must use the @step-harness/* scope; the six @earendil-works/pi-* packages are grandfathered; example extensions are exempt. Checked by scripts/check-workspace-registry.mjs.",
+	"grandfatheredScope": "@earendil-works/pi-",
+	"requiredScope": "@step-harness/",
+	"baseline": [
+		"@step-harness/agent-core",
+		"@step-harness/providers",
+		"@step-harness/coding-agent",
+		"@step-harness/evals",
+		"@step-harness/telemetry",
+		"@step-harness/pi-tui"
+	],
+	"members": [
+		{ "name": "@step-harness/agent-core", "dir": "packages/agent-core", "role": "engine", "reason": "通用 Agent loop 与工具调用时序" },
+		{ "name": "@step-harness/providers", "dir": "packages/providers", "role": "engine", "reason": "模型 API/provider、dialect/catalog" },
+		{ "name": "@step-harness/coding-agent", "dir": "packages/coding-agent", "role": "product", "reason": "编码 Agent 产品逻辑(prompt/tools/permissions)" },
+		{ "name": "@step-harness/evals", "dir": "packages/evals", "role": "tooling", "reason": "评测脚本与 fixture" },
+		{ "name": "@step-harness/telemetry", "dir": "packages/telemetry", "role": "engine", "reason": "通用 telemetry contract/实现" },
+		{ "name": "@step-harness/pi-tui", "dir": "packages/tui", "role": "renderer", "reason": "终端渲染原语，保持零 AI 依赖" },
+		{ "name": "@step-harness/cli", "dir": "apps/cli", "role": "app", "reason": "唯一进程入口宿主骨架(S0 起)；进程生命周期/argv/退出码" },
+		{ "name": "@step-harness/contracts", "dir": "packages/contracts", "role": "contract", "reason": "host 到 agent 的稳定契约(in-process facade 类型 + wire 帧),依赖为空" },
+		{ "name": "@step-harness/config", "dir": "packages/config", "role": "engine", "reason": "产品中立的配置格式/加载与启动迁移(config/migrations),不含资源解析" },
+		{ "name": "@step-harness/realtime", "dir": "packages/realtime", "role": "contract", "reason": "依赖方向:中立实时音频契约(帧/轮次/打断/VAD/驱动能力),零运行时依赖,切断 voice-agent 直接依赖设备实现的边(S6-1)" },
+		{ "name": "@step-harness/voice-agent", "dir": "packages/voice-agent", "role": "interaction", "reason": "生命周期:语音通道,与 coding-agent 平级、互不 import;只接已有会话不创建会话(S6-3)" },
+		{ "name": "@step-harness/realtime-voice", "dir": "packages/extensions/realtime-voice", "role": "extension", "reason": "生命周期:可替换的语音设备实现(mic/播放/厂商桥接),只由组合根按需注册;首期 mock driver(S6-2)" },
+		{ "name": "pi-extension-with-deps", "dir": "packages/coding-agent/examples/extensions/with-deps", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-custom-provider-anthropic", "dir": "packages/coding-agent/examples/extensions/custom-provider-anthropic", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-custom-provider-gitlab-duo", "dir": "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-sandbox", "dir": "packages/coding-agent/examples/extensions/sandbox", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-gondolin", "dir": "packages/coding-agent/examples/extensions/gondolin", "role": "example", "reason": "扩展示例(tsconfig 排除)" }
+	]
+}

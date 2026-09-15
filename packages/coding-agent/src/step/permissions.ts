@@ -8,7 +8,7 @@
 
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@step-harness/agent-core";
 import type {
 	AgentEndEvent,
 	ExtensionContext,

@@ -1,4 +1,4 @@
-import { setKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { setKeybindings, stripTerminalSequences, visibleWidth } from "@step-harness/pi-tui";
 import { beforeAll, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import {
@@ -8,8 +8,8 @@ import {
 	type PlanReviewDetails,
 	type PlanReviewResult,
 	renderPlanReviewResult,
-} from "../src/modes/interactive/components/plan-review.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+} from "../src/render/plan-review.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 
 const ENTER = "\r";
 const ESCAPE = "";

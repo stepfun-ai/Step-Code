@@ -50,12 +50,6 @@ const NETWORK_TIMEOUT_MS = 10000;
 const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
-function isOfflineModeEnabled(): boolean {
-	const value = process.env.PI_OFFLINE;
-	if (!value) return false;
-	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
-}
-
 function isExactNpmVersion(version: string | undefined): boolean {
 	return valid(version ?? "") !== null;
 }
@@ -1093,7 +1087,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async updateConfiguredSources(sources: ConfiguredUpdateSource[]): Promise<void> {
-		if (isOfflineModeEnabled() || sources.length === 0) {
+		if (sources.length === 0) {
 			return;
 		}
 
@@ -1188,10 +1182,6 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	async checkForAvailableUpdates(): Promise<PackageUpdate[]> {
-		if (isOfflineModeEnabled()) {
-			return [];
-		}
-
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
 		const allPackages: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
@@ -1273,7 +1263,6 @@ export class DefaultPackageManager implements PackageManager {
 			}
 
 			const installMissing = async (): Promise<boolean> => {
-				if (isOfflineModeEnabled()) return false;
 				if (!onMissing) {
 					await this.installParsedSource(parsed, resolvedScope);
 					return true;
@@ -1304,7 +1293,7 @@ export class DefaultPackageManager implements PackageManager {
 				if (!existsSync(installedPath)) {
 					const installed = await installMissing();
 					if (!installed) continue;
-				} else if (resolvedScope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
+				} else if (resolvedScope === "temporary" && !parsed.pinned) {
 					await this.refreshTemporaryGitSource(parsed, resolvedSource);
 				}
 				metadata.baseDir = installedPath;
@@ -1483,10 +1472,6 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async npmHasAvailableUpdate(source: NpmSource, installedPath: string): Promise<boolean> {
-		if (isOfflineModeEnabled()) {
-			return false;
-		}
-
 		const installedVersion = this.getInstalledNpmVersion(installedPath);
 		if (!installedVersion) {
 			return false;
@@ -1534,10 +1519,6 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async gitHasAvailableUpdate(installedPath: string): Promise<boolean> {
-		if (isOfflineModeEnabled()) {
-			return false;
-		}
-
 		try {
 			const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
 				cwd: installedPath,
@@ -1791,7 +1772,7 @@ export class DefaultPackageManager implements PackageManager {
 		// Extension packages run inside pi and resolve pi APIs through loader aliases/virtual modules.
 		// Disable peer dependency resolution for managed installs (npm's --legacy-peer-deps, and
 		// equivalent bun/pnpm settings) so package managers do not install or solve host-provided
-		// @earendil-works/pi-* peers. Stale auto-installed pi peers can otherwise block updates.
+		// @step-harness/* (and legacy-scope) peers. Stale auto-installed peers can otherwise block updates.
 		if (packageManagerName === "bun") {
 			return ["install", ...specs, "--cwd", installRoot, "--omit=peer"];
 		}
@@ -1962,9 +1943,6 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async refreshTemporaryGitSource(source: GitSource, sourceStr: string): Promise<void> {
-		if (isOfflineModeEnabled()) {
-			return;
-		}
 		try {
 			await this.withProgress("pull", sourceStr, `Refreshing ${sourceStr}...`, async () => {
 				await this.updateGit(source, "temporary");

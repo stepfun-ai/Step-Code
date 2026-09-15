@@ -1,0 +1,16 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@step-harness/coding-agent": ["../../packages/coding-agent/dist/index.d.ts"],
+			"@step-harness/coding-agent/*": ["../../packages/coding-agent/dist/*.d.ts"],
+			"@step-harness/providers": ["../../packages/providers/dist/index.d.ts"],
+			"@step-harness/providers/*": ["../../packages/providers/dist/*.d.ts", "../../packages/providers/dist/providers/*.d.ts"],
+			"@step-harness/config": ["../../packages/config/dist/index.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts", "src/**/*.d.ts"],
+	"exclude": ["node_modules", "dist"]
+}

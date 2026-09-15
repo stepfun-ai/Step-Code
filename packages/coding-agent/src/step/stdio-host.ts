@@ -12,8 +12,8 @@ import type {
 	BeforeToolCallContext,
 	BeforeToolCallResult,
 	ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+} from "@step-harness/agent-core";
+import type { ImageContent, Model, TextContent } from "@step-harness/providers";
 import { Type } from "typebox";
 import type { AgentSession, AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
@@ -23,7 +23,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../core/extensions/types.ts";
-import type { Theme } from "../modes/interactive/theme/theme.ts";
+import type { Theme } from "../theme/theme.ts";
 import { STEP_DEFAULT_PROVIDER } from "./defaults.ts";
 import { listStepSessions } from "./session.ts";
 import {

@@ -1,4 +1,4 @@
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Usage } from "@step-harness/providers";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,

@@ -15,7 +15,6 @@
  * right after the tree is built (see stopLoaders), so a recording is identical
  * across runs and across processes.
  */
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	type Component,
 	Container,
@@ -26,20 +25,21 @@ import {
 	Text,
 	type Terminal,
 	TuiMainScreen,
-} from "@earendil-works/pi-tui";
-import type { BranchSummaryMessage, CompactionSummaryMessage } from "../packages/coding-agent/src/core/messages.ts";
-import { AssistantMessageComponent } from "../packages/coding-agent/src/modes/interactive/components/assistant-message.ts";
-import { BashExecutionComponent } from "../packages/coding-agent/src/modes/interactive/components/bash-execution.ts";
-import { BranchSummaryMessageComponent } from "../packages/coding-agent/src/modes/interactive/components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "../packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts";
+} from "@step-harness/pi-tui";
+import type { AssistantMessage } from "@step-harness/providers";
+import { AssistantMessageComponent } from "../apps/cli/src/ui/view/transcript/assistant-message.ts";
+import { BashExecutionComponent } from "../apps/cli/src/ui/view/transcript/bash-execution.ts";
+import { BranchSummaryMessageComponent } from "../apps/cli/src/ui/view/transcript/branch-summary-message.ts";
+import { CompactionSummaryMessageComponent } from "../apps/cli/src/ui/view/transcript/compaction-summary-message.ts";
 import {
 	StepAssistantMessageComponent,
 	StepUserMessageComponent,
-} from "../packages/coding-agent/src/modes/interactive/components/step-message.ts";
-import type { StepToolSpinnerState } from "../packages/coding-agent/src/modes/interactive/components/step-spinner.ts";
-import { ToolExecutionComponent } from "../packages/coding-agent/src/modes/interactive/components/tool-execution.ts";
-import { UserMessageComponent } from "../packages/coding-agent/src/modes/interactive/components/user-message.ts";
-import { getEditorTheme, initTheme } from "../packages/coding-agent/src/modes/interactive/theme/theme.ts";
+} from "../apps/cli/src/ui/view/transcript/step-message.ts";
+import type { StepToolSpinnerState } from "../apps/cli/src/ui/view/transcript/step-spinner.ts";
+import { ToolExecutionComponent } from "../apps/cli/src/ui/view/transcript/tool-execution.ts";
+import { UserMessageComponent } from "../apps/cli/src/ui/view/transcript/user-message.ts";
+import type { BranchSummaryMessage, CompactionSummaryMessage } from "../packages/coding-agent/src/core/messages.ts";
+import { getEditorTheme, initTheme } from "../packages/coding-agent/src/theme/theme.ts";
 import { setCapabilityOverrides } from "../packages/tui/src/terminal-image.ts";
 
 /** One recorded frame: the writes a single scenario step produced. */

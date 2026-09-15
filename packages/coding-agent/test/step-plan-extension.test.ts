@@ -2,14 +2,14 @@ import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { type Component, setKeybindings } from "@earendil-works/pi-tui";
+import { type Component, setKeybindings } from "@step-harness/pi-tui";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { createStepPlanExtension } from "../src/extensions/step-plan.ts";
-import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
+import { createStepPlanExtension } from "../src/features/step-plan.ts";
+import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 // Preserve real file I/O while making the ESM read export spyable for EACCES tests.

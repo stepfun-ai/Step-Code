@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	getAvailableThemes,
@@ -12,12 +12,12 @@ import {
 	isLightTheme,
 	loadThemeFromPath,
 	theme,
-} from "../src/modes/interactive/theme/theme.ts";
+} from "../src/theme/theme.ts";
 
 const THEME_FILES = {
-	sage: new URL("../src/modes/interactive/theme/sage.json", import.meta.url),
-	step: new URL("../src/modes/interactive/theme/step.json", import.meta.url),
-	"step-light": new URL("../src/modes/interactive/theme/step-light.json", import.meta.url),
+	sage: new URL("../src/theme/sage.json", import.meta.url),
+	step: new URL("../src/theme/step.json", import.meta.url),
+	"step-light": new URL("../src/theme/step-light.json", import.meta.url),
 } as const;
 
 type StepThemeName = keyof typeof THEME_FILES;

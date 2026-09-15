@@ -2,15 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { WorkflowBudgetExceeded } from "../src/extensions/workflow/budget.ts";
+import { WorkflowBudgetExceeded } from "../src/features/workflow/budget.ts";
 import {
 	createWorkflowRunPaths,
 	readJsonLines,
 	WorkflowJournal,
 	type WorkflowRunPaths,
-} from "../src/extensions/workflow/journal.ts";
-import { WorkflowRuntime } from "../src/extensions/workflow/runtime.ts";
-import { checkWorkflowPathAccess, checkWorkflowToolCall } from "../src/extensions/workflow/tool-profile.ts";
+} from "../src/features/workflow/journal.ts";
+import { WorkflowRuntime } from "../src/features/workflow/runtime.ts";
+import { checkWorkflowPathAccess, checkWorkflowToolCall } from "../src/features/workflow/tool-profile.ts";
 import type {
 	IterateResult,
 	WorkflowAgentOptions,
@@ -18,7 +18,7 @@ import type {
 	WorkflowAgentRunner,
 	WorkflowProgress,
 	WorkflowTelemetryRecord,
-} from "../src/extensions/workflow/types.ts";
+} from "../src/features/workflow/types.ts";
 
 const cleanups: string[] = [];
 let runSequence = 0;

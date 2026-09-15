@@ -9,8 +9,8 @@
 
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Component } from "@earendil-works/pi-tui";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import type { Component } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type {
 	AgentToolUpdateCallback,

@@ -24,7 +24,7 @@ SDK/harness 兼容边界。TUI 的输入、组件交互、审批选择、渲染�
 - Step 入口使用 Pi 原生 editor、selector、overlay、agent session 和事件循环；Step 组件只重排已渲染行并提供产品样式。
 - Step 启动界面隐藏 Pi 的普通 Context/Skills/Prompts/Extensions/Themes 清单，但保留资源冲突、扩展错误和主题诊断。
 - 欢迎区依据 Pi 的上下文消息投影判断是否已经开始会话；model/thinking/label 等 metadata entry 不会隐藏首次消息提示。
-- 验证：`npm test --workspace=@earendil-works/pi-coding-agent`（264 个测试文件通过，2167 个测试通过，6 个跳过），根目录 `npm test`、`npm run check`、coding-agent bundle 构建、`npx tsgo --noEmit -p tsconfig.json`、`git diff --check` 均通过。
+- 验证：`npm test --workspace=@step-harness/coding-agent`（264 个测试文件通过，2167 个测试通过，6 个跳过），根目录 `npm test`、`npm run check`、coding-agent bundle 构建、`npx tsgo --noEmit -p tsconfig.json`、`git diff --check` 均通过。
 - 入口验收：隔离临时 HOME 下的 `step auth` / `step auth --help` 正确进入 auth 帮助，Step PTY 启动显示欢迎区、圆角输入框，中文连续输入保持完整。
 
 ## 回退

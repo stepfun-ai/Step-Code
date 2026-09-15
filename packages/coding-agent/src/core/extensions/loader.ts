@@ -7,13 +7,13 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as _bundledPiAgentCore from "@earendil-works/pi-agent-core";
-import type { Provider } from "@earendil-works/pi-ai";
-import * as _bundledPiAiCompat from "@earendil-works/pi-ai/compat";
-import * as _bundledPiAiOauth from "@earendil-works/pi-ai/oauth";
-import * as _bundledPiAiProviders from "@earendil-works/pi-ai/providers/all";
-import type { KeyId } from "@earendil-works/pi-tui";
-import * as _bundledPiTui from "@earendil-works/pi-tui";
+import * as _bundledPiAgentCore from "@step-harness/agent-core";
+import type { KeyId } from "@step-harness/pi-tui";
+import * as _bundledPiTui from "@step-harness/pi-tui";
+import type { Provider } from "@step-harness/providers";
+import * as _bundledPiAiCompat from "@step-harness/providers/compat";
+import * as _bundledPiAiOauth from "@step-harness/providers/oauth";
+import * as _bundledPiAiProviders from "@step-harness/providers/providers/all";
 import { createJiti } from "jiti/static";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
@@ -54,6 +54,16 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
 	"@sinclair/typebox/compile": _bundledTypeboxCompile,
 	"@sinclair/typebox/value": _bundledTypeboxValue,
+	// A1: current internal scope (primary resolution target). The legacy
+	// @earendil-works/* and @mariozechner/* keys below are kept as backward-compat
+	// for existing user extensions (only-add, never remove — see §7.8.5).
+	"@step-harness/agent-core": _bundledPiAgentCore,
+	"@step-harness/pi-tui": _bundledPiTui,
+	"@step-harness/providers": _bundledPiAiCompat,
+	"@step-harness/providers/compat": _bundledPiAiCompat,
+	"@step-harness/providers/oauth": _bundledPiAiOauth,
+	"@step-harness/providers/providers/all": _bundledPiAiProviders,
+	"@step-harness/coding-agent": _bundledPiCodingAgent,
 	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
 	"@earendil-works/pi-tui": _bundledPiTui,
 	// Extensions resolve the pi-ai root to the compat entrypoint (a strict
@@ -108,19 +118,26 @@ function getAliases(): Record<string, string> {
 	};
 
 	const piCodingAgentEntry = packageIndex;
-	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@earendil-works/pi-agent-core");
-	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@earendil-works/pi-tui");
+	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@step-harness/agent-core");
+	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@step-harness/pi-tui");
 	// Extensions resolve the pi-ai root to the compat entrypoint (a strict
 	// superset of the core entrypoint): existing extensions using the old
 	// global API keep working at runtime until compat is removed.
-	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@earendil-works/pi-ai/compat");
-	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@earendil-works/pi-ai/oauth");
+	const piAiCompatEntry = resolveWorkspaceOrImport("providers/dist/compat.js", "@step-harness/providers/compat");
+	const piAiOauthEntry = resolveWorkspaceOrImport("providers/dist/oauth.js", "@step-harness/providers/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport(
-		"ai/dist/providers/all.js",
-		"@earendil-works/pi-ai/providers/all",
+		"providers/dist/providers/all.js",
+		"@step-harness/providers/providers/all",
 	);
 
 	_aliases = {
+		"@step-harness/coding-agent": piCodingAgentEntry,
+		"@step-harness/agent-core": piAgentCoreEntry,
+		"@step-harness/pi-tui": piTuiEntry,
+		"@step-harness/providers/providers/all": piAiProvidersEntry,
+		"@step-harness/providers/compat": piAiCompatEntry,
+		"@step-harness/providers/oauth": piAiOauthEntry,
+		"@step-harness/providers": piAiCompatEntry,
 		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
 		"@earendil-works/pi-agent-core": piAgentCoreEntry,
 		"@earendil-works/pi-tui": piTuiEntry,

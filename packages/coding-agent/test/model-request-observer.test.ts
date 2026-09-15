@@ -1,4 +1,9 @@
-import { type Api, type AssistantMessage, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	type Model,
+} from "@step-harness/providers";
 import { describe, expect, it } from "vitest";
 import {
 	type ModelRequestCompleted,

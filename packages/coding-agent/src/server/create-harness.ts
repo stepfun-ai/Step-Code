@@ -9,7 +9,7 @@ import {
 	type ExecutionEnv,
 	type ExecutionToolContext,
 	type HarnessTool,
-} from "@earendil-works/pi-agent-core";
+} from "@step-harness/agent-core";
 import type { Static, TSchema } from "typebox";
 import { getExperimentalToolSampling } from "../core/experimental.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "../core/system-prompt.ts";

@@ -3,11 +3,11 @@
  *
  * The canonical implementation lives in
  * `packages/agent/src/harness/compaction/` and is pure: it only depends on
- * `@earendil-works/pi-ai` message types, with no I/O and no session state.
+ * `@step-harness/providers` message types, with no I/O and no session state.
  * Unlike `utils.ts` / `compaction.ts` -- which need package-local mirror
  * copies because they import package-specific `AgentMessage` machinery --
  * projection can therefore be re-exported directly from
- * `@earendil-works/pi-agent-core` instead of keeping a synced copy here.
+ * `@step-harness/agent-core` instead of keeping a synced copy here.
  */
 
 export {
@@ -24,4 +24,4 @@ export {
 	projectContextForRequest,
 	shortContentHash,
 	verifyProjectionInvariants,
-} from "@earendil-works/pi-agent-core";
+} from "@step-harness/agent-core";
