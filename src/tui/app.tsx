@@ -39,7 +39,6 @@ import {
   getTuiThemeNames,
   hasTuiTheme,
   mergeTuiThemes,
-  resolveTuiTranscriptRailColor,
   resolveTuiTheme,
   type StepCliTuiThemeColors,
   type StepCliTuiThemeName,
@@ -1502,7 +1501,7 @@ const TranscriptPane = React.memo(function TranscriptPane(input: {
       {summaryLines.length > 0 ? (
         <box flexDirection="column" marginBottom={1}>
           <text fg={input.theme.foreground}>
-            <span bg={input.theme.systemBadge} fg={input.theme.foreground}>
+            <span bg={input.theme.systemBadge} fg={input.theme.warning}>
               {" "}
               SUMMARY{" "}
             </span>
@@ -2158,43 +2157,42 @@ function resolveTranscriptBadgeStyle(
   textColor: string;
   railColor: string;
 } {
-  const railColor = resolveTuiTranscriptRailColor(theme);
   switch (tone) {
     case "accent":
       return {
         backgroundColor: theme.userBadge,
-        textColor: theme.foreground,
-        railColor,
+        textColor: theme.accent,
+        railColor: theme.accent,
       };
     case "brand":
       return {
         backgroundColor: theme.assistantBadge,
-        textColor: theme.foreground,
-        railColor,
+        textColor: theme.brand,
+        railColor: theme.brand,
       };
     case "success":
       return {
         backgroundColor: theme.toolBadge,
-        textColor: theme.foreground,
-        railColor,
+        textColor: theme.success,
+        railColor: theme.success,
       };
     case "warning":
       return {
         backgroundColor: theme.systemBadge,
-        textColor: theme.foreground,
-        railColor,
+        textColor: theme.warning,
+        railColor: theme.warning,
       };
     case "danger":
       return {
         backgroundColor: theme.systemBadge,
-        textColor: theme.foreground,
-        railColor,
+        textColor: theme.danger,
+        railColor: theme.danger,
       };
     case "muted":
       return {
         backgroundColor: theme.systemBadge,
-        textColor: theme.foreground,
-        railColor,
+        textColor: theme.muted,
+        railColor: theme.line,
       };
   }
 }

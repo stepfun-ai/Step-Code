@@ -72,7 +72,7 @@ const BUILTIN_TUI_THEME_COLORS = {
     brand: "#a3ab78",
     success: "#bde038",
     warning: "#d4c979",
-    danger: "#e07a5f",
+    danger: "#e28369",
     canvas: "#081417",
     panel: "#10454f",
     panelAlt: "#16515c",
@@ -88,7 +88,7 @@ const BUILTIN_TUI_THEME_COLORS = {
     foreground: "#f7f0e1",
     muted: "#8c955d",
     accent: "#47f5d7",
-    brand: "#9247f5",
+    brand: "#a669f7",
     success: "#f5f147",
     warning: "#f57847",
     danger: "#ff6f91",
@@ -107,7 +107,7 @@ const BUILTIN_TUI_THEME_COLORS = {
     foreground: "#eef6ff",
     muted: "#7ca8d8",
     accent: "#02b891",
-    brand: "#0066ff",
+    brand: "#408dff",
     success: "#02b891",
     warning: "#3399ff",
     danger: "#ff6f91",
@@ -125,8 +125,8 @@ const BUILTIN_TUI_THEME_COLORS = {
   steel: {
     foreground: "#ffffff",
     muted: "#bbbcbc",
-    accent: "#006298",
-    brand: "#002f6c",
+    accent: "#0092e2",
+    brand: "#1c7fff",
     success: "#4eb4c7",
     warning: "#d9d9d9",
     danger: "#ff7c7c",
@@ -209,14 +209,6 @@ export function resolveTuiTheme(
     findTuiTheme(themes, DEFAULT_TUI_THEME_NAME) ??
     getBuiltinTuiTheme()
   );
-}
-
-export function resolveTuiTranscriptRailColor(
-  colors: StepCliTuiThemeColors,
-): string {
-  // Transcript rails are structural markers, so keep them tied to the
-  // contrast-checked line color instead of tone colors that may be too dark.
-  return colors.line;
 }
 
 export function isValidTuiThemeName(value: string): boolean {
