@@ -119,9 +119,10 @@ describe("ModelRegistry", () => {
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
-			// All models should have the new baseUrl
+			// All models should have the new baseUrl. The trailing `/v1` is dropped
+			// because the Anthropic adapter appends the full `/v1/messages` path.
 			for (const model of anthropicModels) {
-				expect(model.baseUrl).toBe("https://my-proxy.example.com/v1");
+				expect(model.baseUrl).toBe("https://my-proxy.example.com");
 			}
 		});
 
@@ -210,7 +211,7 @@ describe("ModelRegistry", () => {
 			// Anthropic: multiple built-in models with new baseUrl
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 			expect(anthropicModels.length).toBeGreaterThan(1);
-			expect(anthropicModels[0].baseUrl).toBe("https://anthropic-proxy.example.com/v1");
+			expect(anthropicModels[0].baseUrl).toBe("https://anthropic-proxy.example.com");
 
 			// Google: built-ins plus custom model
 			const googleModels = getModelsForProvider(registry, "google");
@@ -224,7 +225,7 @@ describe("ModelRegistry", () => {
 			});
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);
 
-			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://first-proxy.example.com/v1");
+			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://first-proxy.example.com");
 
 			// Update and refresh
 			writeRawModelsJson({
@@ -232,7 +233,7 @@ describe("ModelRegistry", () => {
 			});
 			await registry.refresh();
 
-			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://second-proxy.example.com/v1");
+			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://second-proxy.example.com");
 		});
 	});
 
@@ -344,7 +345,7 @@ describe("ModelRegistry", () => {
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			for (const model of anthropicModels) {
-				expect(model.baseUrl).toBe("https://merged-proxy.example.com/v1");
+				expect(model.baseUrl).toBe("https://merged-proxy.example.com");
 			}
 		});
 
