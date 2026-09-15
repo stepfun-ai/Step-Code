@@ -21,6 +21,7 @@ interface ApprovalTestMode {
 	activeStatusIndicator?: WorkingStatusIndicator;
 	extensionSelector?: ExtensionSelectorComponent;
 	extensionInput?: ExtensionInputComponent;
+	footerContainer: Container;
 	createExtensionUIContext(): ExtensionUIContext;
 	showWorkingStatusIndicator(): void;
 	clearStatusIndicator(): void;
@@ -40,7 +41,16 @@ function createHarness(columns = 80, rows = 24, render = false) {
 	// Fake-time tests observe component timers, not renderer scheduling. The
 	// viewport tests use the unmodified rendering pipeline.
 	if (!render) requestRender.mockImplementation(() => {});
-	const editor = new Input();
+	const editor = Object.assign(new Input(), {
+		// showExtensionCustom saves and restores the editor text; Input spells that
+		// pair getValue/setValue.
+		getText(): string {
+			return editor.getValue();
+		},
+		setText(text: string): void {
+			editor.setValue(text);
+		},
+	});
 	const editorContainer = new Container();
 	editorContainer.addChild(editor);
 	const statusContainer = new Container();
@@ -182,6 +192,55 @@ describe("interactive approval lifecycle", () => {
 			expect(spinner.elapsedSeconds("call-1")).toBe(1);
 		},
 	);
+
+	it("lets a custom dialog take the approval hold and hide the footer", async () => {
+		const { mode, api, spinner, requestRender, statusText, ui, editor } = createHarness();
+		let close: ((value: string) => void) | undefined;
+		const dialogComponent = Object.assign(new Text("PLAN REVIEW", 0, 0), {
+			focused: false,
+			handleInput: () => {},
+		});
+		const result = api.custom<string>(
+			(_tui, _theme, _keybindings, done) => {
+				close = done;
+				return dialogComponent;
+			},
+			{ hideFooter: true, waitingForApproval: true },
+		);
+		await flushMicrotasks();
+
+		expect(mode.footerContainer.children).toHaveLength(0);
+		expect(statusText()).toContain("Waiting for approval");
+		const renders = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(30_000);
+		expect(requestRender).toHaveBeenCalledTimes(renders);
+		expect(spinner.elapsedSeconds("call-1")).toBe(0);
+
+		close?.("done");
+		expect(await result).toBe("done");
+		await flushMicrotasks();
+		expect(mode.footerContainer.children).toHaveLength(1);
+		expect(statusText()).not.toContain("Waiting for approval");
+		expect(ui.getFocusedComponent()).toBe(editor);
+		vi.advanceTimersByTime(1000);
+		expect(spinner.elapsedSeconds("call-1")).toBe(1);
+	});
+
+	it("leaves the footer and the animations alone for a plain custom dialog", async () => {
+		const { mode, api, statusText } = createHarness();
+		let close: ((value: string) => void) | undefined;
+		const result = api.custom<string>((_tui, _theme, _keybindings, done) => {
+			close = done;
+			return Object.assign(new Text("WIDGET", 0, 0), { focused: false, handleInput: () => {} });
+		});
+		await flushMicrotasks();
+
+		expect(mode.footerContainer.children).toHaveLength(1);
+		expect(statusText()).not.toContain("Waiting for approval");
+
+		close?.("done");
+		expect(await result).toBe("done");
+	});
 
 	it("preserves preferences and waiting when the working indicator is recreated", async () => {
 		const { mode, api, statusText, spinner } = createHarness();

@@ -6,6 +6,7 @@ import { basename, resolve } from "node:path";
 import type { Api } from "@earendil-works/pi-ai";
 import lockfile from "proper-lockfile";
 import type { ExtensionAPI, InlineExtension, ProviderConfig, ProviderModelConfig } from "../core/extensions/types.ts";
+import { normalizeProviderBaseUrl } from "../core/provider-base-url.ts";
 import { stripBom } from "../utils/text.ts";
 import {
 	getStepPermissionPreset,
@@ -641,19 +642,7 @@ function normalizeApi(value: string | undefined): Api | undefined {
 function normalizeBaseUrl(value: string | undefined, api: Api): string | undefined {
 	const trimmed = value?.trim().replace(/\/+$/u, "");
 	if (!trimmed) return undefined;
-	try {
-		const url = new URL(trimmed);
-		const pathname = url.pathname.replace(/\/+$/u, "");
-		const suffix =
-			api === "anthropic-messages" ? "/messages" : api === "openai-responses" ? "/responses" : "/chat/completions";
-		if (pathname.toLowerCase().endsWith(suffix))
-			url.pathname = pathname.slice(0, -suffix.length).replace(/\/+$/u, "") || "/";
-		if (api === "anthropic-messages" && url.pathname.toLowerCase().endsWith("/v1"))
-			url.pathname = url.pathname.slice(0, -3) || "/";
-		return url.toString().replace(/\/+$/u, "");
-	} catch {
-		return trimmed;
-	}
+	return normalizeProviderBaseUrl(trimmed, api);
 }
 
 function hasOption(args: readonly string[], name: string): boolean {

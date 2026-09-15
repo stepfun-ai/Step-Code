@@ -218,6 +218,22 @@ export interface ExtensionUIContext {
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
+			/**
+			 * Hide the footer row while the component is mounted (inline dialogs only).
+			 *
+			 * Use it when the dialog owns the whole decision and a live status row under
+			 * it would read as if the session were still accepting input. The previous
+			 * footer, custom or built-in, is restored when the dialog closes.
+			 */
+			hideFooter?: boolean;
+			/**
+			 * Mark the dialog as blocking on a user decision (inline dialogs only).
+			 *
+			 * Freezes the working indicator and the tool spinner for as long as it is
+			 * mounted, and keeps the wait out of the displayed tool duration, the same
+			 * way a tool-approval prompt does.
+			 */
+			waitingForApproval?: boolean;
 		},
 	): Promise<T>;
 

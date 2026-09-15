@@ -13,12 +13,18 @@ interface InputState {
 	cursor: number;
 }
 
+export interface InputOptions {
+	/** Text drawn before the editable value. Defaults to the shell-style `"> "`. */
+	prompt?: string;
+}
+
 /**
  * Input component - single-line text input with horizontal scrolling
  */
 export class Input implements Component, Focusable {
 	private value: string = "";
 	private cursor: number = 0; // Cursor position in the value
+	private readonly prompt: string;
 	public onSubmit?: (value: string) => void;
 	public onEscape?: () => void;
 
@@ -35,6 +41,10 @@ export class Input implements Component, Focusable {
 
 	// Undo support
 	private undoStack = new UndoStack<InputState>();
+
+	constructor(options: InputOptions = {}) {
+		this.prompt = options.prompt ?? "> ";
+	}
 
 	getValue(): string {
 		return this.value;
@@ -377,8 +387,8 @@ export class Input implements Component, Focusable {
 
 	render(width: number): string[] {
 		// Calculate visible window
-		const prompt = "> ";
-		const availableWidth = width - prompt.length;
+		const prompt = this.prompt;
+		const availableWidth = width - visibleWidth(prompt);
 
 		if (availableWidth <= 0) {
 			return [prompt];

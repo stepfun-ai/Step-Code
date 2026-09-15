@@ -130,6 +130,25 @@ const result = await ctx.ui.custom<string | null>(
 );
 ```
 
+## Hiding the footer
+
+An inline dialog that owns the whole decision can hide the footer row while it is
+mounted, so the status line does not read as if the session were still taking
+input:
+
+```typescript
+const result = await ctx.ui.custom<Decision>(
+  (tui, theme, keybindings, done) => new MyDialog({ theme, onDone: done }),
+  { hideFooter: true }
+);
+```
+
+The previous footer, custom or built-in, is restored when the dialog closes.
+`hideFooter` has no effect on overlays, which composite over the rows the footer
+already occupies.
+
+## Overlay positioning
+
 For positioning and sizing, use `overlayOptions`:
 
 ```typescript
