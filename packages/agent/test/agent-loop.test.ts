@@ -1608,3 +1608,125 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(messages[0].role).toBe("assistant");
 	});
 });
+
+describe("tool-call markup leak retry", () => {
+	const LEAK_TEXT = "<tool_call> <function=run_command> ls </function> </tool_call>";
+
+	function scriptedStream(script: AssistantMessage[]) {
+		let call = 0;
+		const requestMessages: Message[][] = [];
+		const streamFn = (_model: unknown, llmContext: { messages: Message[] }) => {
+			requestMessages.push([...llmContext.messages]);
+			const stream = new MockAssistantStream();
+			const message = script[Math.min(call, script.length - 1)];
+			call++;
+			queueMicrotask(() => {
+				stream.push({ type: "done", reason: message.stopReason as "stop", message });
+			});
+			return stream;
+		};
+		return { streamFn, calls: () => call, requestMessages };
+	}
+
+	it("resamples a leaked turn and keeps only the good message in context", async () => {
+		const leaked = createAssistantMessage([{ type: "text", text: LEAK_TEXT }]);
+		const good = createAssistantMessage([{ type: "text", text: "done cleanly" }]);
+		const { streamFn, calls, requestMessages } = scriptedStream([leaked, good]);
+
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+		const messages = await stream.result();
+
+		expect(calls()).toBe(2);
+		// Leaked attempt is not committed anywhere.
+		expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+		expect((messages[1] as AssistantMessage).content).toEqual([{ type: "text", text: "done cleanly" }]);
+		// The retry request must not contain the leaked attempt: identical
+		// context to the first call.
+		expect(requestMessages[1]).toEqual(requestMessages[0]);
+		// Both attempts remain observable in the event stream.
+		expect(events.filter((e) => e.type === "message_end" && (e as any).message.role === "assistant")).toHaveLength(2);
+		// Only one turn ends.
+		expect(events.filter((e) => e.type === "turn_end")).toHaveLength(1);
+	});
+
+	it("stops after the bounded retries and commits the last attempt", async () => {
+		const leaked = createAssistantMessage([{ type: "text", text: LEAK_TEXT }]);
+		const { streamFn, calls, requestMessages } = scriptedStream([leaked, leaked, leaked]);
+
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+
+		// 1 initial + 2 default retries.
+		expect(calls()).toBe(3);
+		expect(requestMessages[1]).toEqual(requestMessages[0]);
+		expect(requestMessages[2]).toEqual(requestMessages[0]);
+		expect((messages.at(-1) as AssistantMessage).content).toEqual([{ type: "text", text: LEAK_TEXT }]);
+	});
+
+	it("can be disabled with toolCallLeakRetries: 0", async () => {
+		const leaked = createAssistantMessage([{ type: "text", text: LEAK_TEXT }]);
+		const { streamFn, calls } = scriptedStream([leaked]);
+
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [] };
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolCallLeakRetries: 0,
+		};
+
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect(calls()).toBe(1);
+	});
+
+	it("does not retry when a structured tool call is present alongside markup text", async () => {
+		const executed: string[] = [];
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return { content: [{ type: "text", text: `echoed: ${params.value}` }], details: params };
+			},
+		};
+
+		const mixed = createAssistantMessage(
+			[
+				{ type: "text", text: LEAK_TEXT },
+				{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hi" } },
+			],
+			"toolUse",
+		);
+		const final = createAssistantMessage([{ type: "text", text: "done" }]);
+		const { streamFn, calls } = scriptedStream([mixed, final]);
+
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [tool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect(executed).toEqual(["hi"]);
+		// Two model calls: tool turn + final turn, no leak retry in between.
+		expect(calls()).toBe(2);
+	});
+});

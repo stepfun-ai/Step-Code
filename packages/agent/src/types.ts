@@ -150,6 +150,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
 	/**
+	 * Bounded resampling for turns whose tool call leaked into plain text.
+	 *
+	 * Serving-side tool parsers can fail on the model's raw output, leaving
+	 * `<tool_call>`/`<function=` markup in the text content with no
+	 * structured tool call: the model meant to act, but the turn would end
+	 * the loop. Each retry drops the leaked attempt from the request context
+	 * (its message events remain in the event stream) and streams the
+	 * identical context again. Default 2; set 0 to disable.
+	 */
+	toolCallLeakRetries?: number;
+
+	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
 	 *
 	 * Each AgentMessage must be converted to a UserMessage, AssistantMessage, or ToolResultMessage

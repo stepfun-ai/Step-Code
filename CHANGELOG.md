@@ -19,6 +19,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Changed CI release delivery to publish only standalone Step binaries, installers, and release metadata; npm packages are not released.
 - Changed Step authentication commands to expose only the Step provider while retaining Pi's native auth flow.
 - Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
+- Changed the system prompt to stop instructing the model to ask a clarifying question, announce a cost, or state a target and then wait for a reply: a concrete implementation request now proceeds on a reasonable assumption. The security rules, the caution that `rm -rf`/force-push and similar commands are never routine, and the requirement that opt-in gated tools need an explicit user trigger are unchanged; approval itself stays with the runtime's approval mechanism. In a non-interactive run nobody answers such a question, so the turn produced no tool call and ended the session.
 
 ### Fixed
 
@@ -43,3 +44,4 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Fixed input, deletion, and menu lag in long sessions, where every keystroke reprocessed all settled messages before the screen could update.
 - Fixed `/feedback` leaving the editor above the bottom row when a page was cancelled; every page of the flow now renders over the transcript.
 - Fixed `search_files` silently omitting matching files in bracket-prefixed dynamic routes such as `[slug]`, `[...slug]`, and `[[...slug]]`.
+- Fixed sessions ending silently when a serving-side tool parser leaks the model's `<tool_call>`/`<function=` markup into assistant text: that turn carries no executable call even though the model meant to act, so the loop now resamples the identical context up to twice before the run can end.
