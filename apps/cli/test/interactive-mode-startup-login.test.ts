@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import * as themeModule from "../../../packages/coding-agent/src/theme/theme.ts";
 import { createFakeInteractiveContext } from "./support/fake-interactive-context.ts";
@@ -7,7 +7,6 @@ type StartupLoginContext = {
 	options: {
 		startupLoginProvider?: string;
 		disableBackgroundServices?: boolean;
-		offline?: boolean;
 		forceStartupLogin?: boolean;
 	};
 	session: {
@@ -54,13 +53,6 @@ function createContext(overrides: Partial<StartupLoginContext> = {}): StartupLog
 }
 
 describe("InteractiveMode startup login", () => {
-	beforeEach(() => {
-		// The workspace test config defaults all tests to offline. Exercise the
-		// normal startup-login path explicitly; the offline case is represented by
-		// the explicit `offline` option below.
-		vi.stubEnv("PI_OFFLINE", "");
-	});
-
 	it("starts the native OAuth path for an unconfigured Step model", async () => {
 		const startProviderLogin = vi.fn(async () => {});
 		const handleLoginCommand = vi.fn(async () => {});
@@ -90,12 +82,6 @@ describe("InteractiveMode startup login", () => {
 	});
 
 	it.each([
-		[
-			"offline startup",
-			{
-				options: { startupLoginProvider: "step", offline: true },
-			},
-		],
 		[
 			"a configured provider",
 			{
@@ -149,7 +135,7 @@ describe("InteractiveMode startup login", () => {
 		const startProviderLogin = vi.fn(async () => {});
 		const handleLoginCommand = vi.fn(async () => {});
 		const context = createContext({
-			options: { startupLoginProvider: "step", disableBackgroundServices: true, offline: false },
+			options: { startupLoginProvider: "step", disableBackgroundServices: true },
 			startProviderLogin,
 			handleLoginCommand,
 		});

@@ -32,7 +32,6 @@ async function runCli(args: string[], cwd: string, agentDir: string): Promise<{ 
 				// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
 				// from this test process's APP_NAME, which may differ from the child's).
 				STEP_CODING_AGENT_DIR: agentDir,
-				PI_OFFLINE: "1",
 				TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 			},
 			stdio: ["ignore", "ignore", "pipe"],

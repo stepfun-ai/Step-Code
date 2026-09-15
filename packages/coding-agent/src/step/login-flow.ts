@@ -92,7 +92,6 @@ export function isStepInteractiveLoginStartup(input: {
 		readonly export?: string;
 		readonly listModels?: string | true;
 		readonly sdkStdio?: boolean;
-		readonly offline?: boolean;
 		readonly messages: readonly string[];
 		readonly fileArgs: readonly string[];
 		readonly print?: boolean;
@@ -107,7 +106,6 @@ export function isStepInteractiveLoginStartup(input: {
 		input.args.export === undefined &&
 		input.args.listModels === undefined &&
 		input.args.sdkStdio !== true &&
-		input.args.offline !== true &&
 		input.args.messages.length === 0 &&
 		input.args.fileArgs.length === 0 &&
 		input.args.print !== true &&

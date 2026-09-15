@@ -8,8 +8,6 @@ export default mergeConfig(
 			globals: true,
 			environment: "node",
 			testTimeout: 30000,
-			// Tests run offline by default; opt in with allowNetwork() from test/test-network-env.ts.
-			env: { PI_OFFLINE: "1" },
 			unstubEnvs: true,
 			reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 			silent: "passed-only",

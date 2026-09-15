@@ -3,8 +3,8 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
-			"@step-harness/agent-core": ["../agent-loop/dist/index.d.ts"],
-			"@step-harness/agent-core/*": ["../agent-loop/dist/*.d.ts"],
+			"@step-harness/agent-core": ["../agent-core/dist/index.d.ts"],
+			"@step-harness/agent-core/*": ["../agent-core/dist/*.d.ts"],
 			"@step-harness/providers": ["../providers/dist/index.d.ts"],
 			"@step-harness/providers/step-provider": ["../providers/dist/step-provider/index.d.ts"],
 			"@step-harness/providers/*": ["../providers/dist/*.d.ts", "../providers/dist/providers/*.d.ts"],

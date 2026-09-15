@@ -89,7 +89,7 @@ import { builtInExtensions } from "./features/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { runPrintMode, runRpcMode } from "./modes/index.ts";
 import type { InteractiveModeOptions, StartupTuiPathOptions, StartupUiHooks } from "./modes/interactive-contract.ts";
-import { cleanupManagedInstall, handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
+import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import {
 	continueStepSession,
 	createStepSessionManager,
@@ -768,7 +768,6 @@ export interface MainOptions {
 		| "stepLogin"
 		| "stepLogout"
 		| "onStartup"
-		| "offline"
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */
 	stdioModeFactory?: (runtimeHost: AgentSessionRuntimeHost) => Promise<void>;
@@ -844,8 +843,6 @@ export type MainPreparation =
 			initialMessage: string | undefined;
 			initialImages: ImageContent[] | undefined;
 			sessionRoot: string | undefined;
-			explicitOfflineMode: boolean;
-			offlineMode: boolean;
 			startupBenchmark: boolean;
 			parsed: Args;
 			// Computed here (not raw options) so the dispatcher and an embedding
@@ -876,18 +873,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		: options?.agentDir
 			? join(agentDir, "auth.json")
 			: undefined;
-	// Keep explicit offline mode separate from the product switch that only
-	// disables Pi's optional catalog/update/install services. Step uses the
-	// latter by default but must still be able to open its OAuth login flow.
-	const explicitOfflineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
-	// `disableBackgroundServices` is deliberately narrower than offline mode:
-	// it suppresses catalog/update/install work, but provider requests and the
-	// interactive OAuth flow must remain available to product entrypoints.
-	const offlineMode = explicitOfflineMode;
-	if (offlineMode) {
-		process.env.PI_OFFLINE = "1";
-		process.env.PI_SKIP_VERSION_CHECK = "1";
-	}
 
 	if (
 		await runAuthCommand(args, options?.authRuntimeSetup, authPath, options?.agentDir, options?.allowedAuthProviders)
@@ -900,7 +885,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 	if (process.platform === "win32") {
 		cleanupWindowsSelfUpdateQuarantine(getPackageDir());
 	}
-	cleanupManagedInstall();
 
 	const createSettingsManager =
 		options?.settingsManagerFactory ??
@@ -1370,7 +1354,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 	}
 
 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
-	if (!offlineMode && !options?.disableBackgroundServices && appMode === "rpc") {
+	if (!options?.disableBackgroundServices && appMode === "rpc") {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), 15_000);
 		void modelRuntime
@@ -1394,8 +1378,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		initialMessage,
 		initialImages,
 		sessionRoot,
-		explicitOfflineMode,
-		offlineMode,
 		startupBenchmark,
 		parsed,
 		configDirName,

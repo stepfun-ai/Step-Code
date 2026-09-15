@@ -305,7 +305,7 @@ async function runBuild(bundle) {
 				"--workspace",
 				"packages/providers",
 				"--workspace",
-				"packages/agent-loop",
+				"packages/agent-core",
 				"--workspace",
 				"packages/config",
 			],

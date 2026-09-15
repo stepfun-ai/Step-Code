@@ -25,7 +25,6 @@ export {
 	getPackageDir,
 	getReadmePath,
 	getSettingsPath,
-	getShareViewerUrl,
 	PACKAGE_NAME,
 	VERSION,
 } from "./config.ts";
@@ -367,7 +366,6 @@ export {
 } from "./core/skills.ts";
 export { BUILTIN_SLASH_COMMANDS } from "./core/slash-commands.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
-export { isInstallTelemetryEnabled } from "./core/telemetry.ts";
 export { printTimings, time } from "./core/timings.ts";
 export {
 	type EditDiffResult,
@@ -817,4 +815,3 @@ export { getPowerShellConfig, getShellConfig, killTrackedDetachedChildren } from
 export { loadAllHighlightLanguages } from "./utils/syntax-highlight.ts";
 export { stripBom } from "./utils/text.ts";
 export { ensureTool, type ToolStatus } from "./utils/tools-manager.ts";
-export { checkForNewPiVersion, type LatestPiRelease } from "./utils/version-check.ts";

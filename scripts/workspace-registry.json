@@ -11,7 +11,7 @@
 		"@step-harness/pi-tui"
 	],
 	"members": [
-		{ "name": "@step-harness/agent-core", "dir": "packages/agent-loop", "role": "engine", "reason": "通用 Agent loop 与工具调用时序" },
+		{ "name": "@step-harness/agent-core", "dir": "packages/agent-core", "role": "engine", "reason": "通用 Agent loop 与工具调用时序" },
 		{ "name": "@step-harness/providers", "dir": "packages/providers", "role": "engine", "reason": "模型 API/provider、dialect/catalog" },
 		{ "name": "@step-harness/coding-agent", "dir": "packages/coding-agent", "role": "product", "reason": "编码 Agent 产品逻辑(prompt/tools/permissions)" },
 		{ "name": "@step-harness/evals", "dir": "packages/evals", "role": "tooling", "reason": "评测脚本与 fixture" },

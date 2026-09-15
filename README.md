@@ -19,10 +19,9 @@ boundary so upstream-compatible imports continue to resolve.
 * **[@step-harness/agent-core](packages/agent)**: Agent runtime with tool calling and state management
 * **[@step-harness/providers](packages/providers)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
 
-To learn more about Pi:
+To learn more about Step:
 
-* [Visit pi.dev](https://pi.dev), the project website with demos
-* [Read the documentation](https://pi.dev/docs/latest), but you can also ask the agent to explain itself
+* You can ask the agent to explain itself
 
 ## Runtime Packages
 
@@ -122,9 +121,3 @@ I regularly publish my own `pi-mono` work sessions here:
 ## License
 
 MIT
-
-<p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="packages/coding-agent/docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
-</p>

@@ -19,7 +19,6 @@ export default mergeConfig(
 			// the #6999/#7209 model-selector tests locally while passing in CI.
 			// Tests that need credentials set them explicitly via vi.stubEnv.
 			env: {
-				PI_OFFLINE: "1",
 				// Force color OFF so TUI-render assertions are deterministic across
 				// shells. With truecolor on (e.g. stepcode sets FORCE_COLOR=3), the
 				// theme interleaves ANSI spans inside diff values, so raw substring

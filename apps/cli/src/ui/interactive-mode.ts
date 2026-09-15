@@ -40,7 +40,6 @@ import {
 	CONFIG_DIR_NAME,
 	CredentialSynchronizationError,
 	CustomEditor,
-	checkForNewPiVersion,
 	collectCacheMisses,
 	computeCacheWaste,
 	configureHttpDispatcher,
@@ -64,18 +63,15 @@ import {
 	getEditorTheme,
 	getMarkdownTheme,
 	getNewEntries,
-	getPiUserAgent,
 	getThemeByName,
 	getUsageCostBreakdown,
 	hasTrustRequiringProjectResources,
 	InteractiveThemeController,
-	isInstallTelemetryEnabled,
 	KeybindingsManager,
 	keyDisplayText,
 	keyHint,
 	keyText,
 	killTrackedDetachedChildren,
-	type LatestPiRelease,
 	listAllStepSessions,
 	listStepSessions,
 	loadAllHighlightLanguages,
@@ -130,7 +126,6 @@ import {
 	Container,
 	fuzzyFilter,
 	getCapabilities,
-	hyperlink,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -1288,23 +1283,13 @@ export class InteractiveMode {
 			return;
 		}
 
-		if (!process.env.PI_OFFLINE && !this.options.disableBackgroundServices) {
+		if (!this.options.disableBackgroundServices) {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 15_000);
 			void refreshModelCatalogs(this.session.modelRuntime, controller.signal)
 				.then(() => this.updateAvailableProviderCount())
 				.catch(() => {})
 				.finally(() => clearTimeout(timeout));
-		}
-
-		// Start version check asynchronously. Product entrypoints can disable all
-		// optional background services without changing Pi's native TUI loop.
-		if (!this.options.disableBackgroundServices) {
-			checkForNewPiVersion(this.version).then((newRelease) => {
-				if (newRelease) {
-					this.showNewVersionNotification(newRelease);
-				}
-			});
 		}
 
 		// Start package update check asynchronously
@@ -1398,7 +1383,7 @@ export class InteractiveMode {
 	}
 
 	private async checkForPackageUpdates(): Promise<string[]> {
-		if (process.env.PI_OFFLINE || this.options.disableBackgroundServices) {
+		if (this.options.disableBackgroundServices) {
 			return [];
 		}
 
@@ -1478,39 +1463,18 @@ export class InteractiveMode {
 		const entries = parseChangelog(changelogPath);
 
 		if (!lastVersion) {
-			// Fresh install - record the version, send telemetry, don't show changelog
+			// Fresh install - record the version, don't show changelog
 			this.settingsManager.setLastChangelogVersion(VERSION);
-			this.reportInstallTelemetry(VERSION);
 			return undefined;
 		}
 
 		const newEntries = getNewEntries(entries, lastVersion);
 		if (newEntries.length > 0) {
 			this.settingsManager.setLastChangelogVersion(VERSION);
-			this.reportInstallTelemetry(VERSION);
 			return newEntries.map((e) => normalizeChangelogLinks(e.content, e)).join("\n\n");
 		}
 
 		return undefined;
-	}
-
-	private reportInstallTelemetry(version: string): void {
-		if (process.env.PI_OFFLINE || this.options.disableBackgroundServices) {
-			return;
-		}
-
-		if (!isInstallTelemetryEnabled(this.settingsManager)) {
-			return;
-		}
-
-		void fetch(`https://pi.dev/api/report-install?version=${encodeURIComponent(version)}`, {
-			headers: {
-				"User-Agent": getPiUserAgent(version),
-			},
-			signal: AbortSignal.timeout(5000),
-		})
-			.then(() => undefined)
-			.catch(() => undefined);
 	}
 
 	getMarkdownThemeWithSettings(): MarkdownTheme {
@@ -4064,35 +4028,6 @@ export class InteractiveMode {
 		this.redraw.requestRender();
 	}
 
-	showNewVersionNotification(release: LatestPiRelease): void {
-		const action = theme.fg("accent", `${APP_NAME} update`);
-		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
-		const changelogUrl = "https://pi.dev/changelog";
-		const changelogLink = getCapabilities().hyperlinks
-			? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
-			: theme.fg("accent", changelogUrl);
-		const changelogLine = theme.fg("muted", "Changelog: ") + changelogLink;
-		const note = release.note?.trim();
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
-		this.chatContainer.addChild(
-			new Text(`${theme.bold(theme.fg("warning", "Update Available"))}\n${updateInstruction}`, 1, 0),
-		);
-		if (note) {
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(
-				new Markdown(note, 1, 0, this.getMarkdownThemeWithSettings(), {
-					color: (text) => theme.fg("muted", text),
-				}),
-			);
-			this.chatContainer.addChild(new Spacer(1));
-		}
-		this.chatContainer.addChild(new Text(changelogLine, 1, 0));
-		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
-		this.redraw.requestRender();
-	}
-
 	showPackageUpdateNotification(packages: string[]): void {
 		const action = theme.fg("accent", `${APP_NAME} update --extensions`);
 		const updateInstruction = theme.fg("muted", "Package updates are available. Run ") + action;
@@ -4375,7 +4310,6 @@ export class InteractiveMode {
 					hideThinkingBlock: this.hideThinkingBlock,
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
-					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
@@ -4481,9 +4415,6 @@ export class InteractiveMode {
 					},
 					onCollapseChangelogChange: (collapsed) => {
 						this.settingsManager.setCollapseChangelog(collapsed);
-					},
-					onEnableInstallTelemetryChange: (enabled) => {
-						this.settingsManager.setEnableInstallTelemetry(enabled);
 					},
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
@@ -5310,15 +5241,6 @@ export class InteractiveMode {
 	private async maybeRunStartupLogin(): Promise<void> {
 		const providerId = this.options.startupLoginProvider?.trim();
 		if (!providerId || this.session.state.messages.length > 0) return;
-		// Explicit offline runs must not open a browser or bind the OAuth callback
-		// server. `disableBackgroundServices` is intentionally not consulted here:
-		// Step uses that switch by default while OAuth remains an interactive feature.
-		const offlineValue = process.env.PI_OFFLINE?.trim().toLowerCase();
-		const offline =
-			this.options.offline ?? (offlineValue === "1" || offlineValue === "true" || offlineValue === "yes");
-		if (offline) {
-			return;
-		}
 		if (this.session.model?.provider !== providerId) return;
 		if (!this.options.forceStartupLogin && this.session.modelRuntime.getProviderAuthStatus(providerId).configured)
 			return;

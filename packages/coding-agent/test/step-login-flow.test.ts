@@ -49,7 +49,6 @@ describe("shared Step login flow storage", () => {
 		["filtered model listing", ["--list-models", "claude"]],
 		["session export", ["--export", "session.jsonl"]],
 		["SDK stdio host", ["--sdk-stdio"]],
-		["offline startup", ["--offline"]],
 		["print mode", ["--print"]],
 		["JSON mode", ["--mode", "json"]],
 		["RPC mode", ["--mode", "rpc"]],

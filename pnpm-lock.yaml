@@ -51,7 +51,7 @@ importers:
     dependencies:
       '@step-harness/agent-core':
         specifier: ^0.84.4
-        version: link:../../packages/agent-loop
+        version: link:../../packages/agent-core
       '@step-harness/coding-agent':
         specifier: ^0.84.4
         version: link:../../packages/coding-agent
@@ -84,7 +84,7 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
-  packages/agent-loop:
+  packages/agent-core:
     dependencies:
       '@step-harness/providers':
         specifier: ^0.84.4
@@ -128,7 +128,7 @@ importers:
         version: 0.3.4
       '@step-harness/agent-core':
         specifier: ^0.84.4
-        version: link:../agent-loop
+        version: link:../agent-core
       '@step-harness/config':
         specifier: workspace:*
         version: link:../config

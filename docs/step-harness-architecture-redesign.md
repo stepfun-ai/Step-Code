@@ -2009,7 +2009,7 @@ CLI/TUI host（composition root）
 | --- | --- | --- |
 | apps/cli | `@step-harness/cli` | 唯一宿主，**含交互式 TUI**（提案里的 apps/tui 未单独建） |
 | packages/coding-agent | `@step-harness/coding-agent` | 保留；仍持有 session-manager、core/tools、features/*、扩展系统 |
-| packages/agent-loop | `@step-harness/agent-core` | 由 `agent` 改目录名（S1-R） |
+| packages/agent-core | `@step-harness/agent-core` | 由 `agent` 改目录名（S1-R） |
 | packages/providers | `@step-harness/providers` | 由 `ai` 改名 + step-provider 迁入（C8） |
 | packages/tui | `@step-harness/pi-tui` | **保留 pi-tui 词根**（非提案里的 tui-kit，D4） |
 | packages/contracts | `@step-harness/contracts` | 按提案建（S2），零运行时依赖 |

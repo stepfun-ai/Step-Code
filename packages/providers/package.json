@@ -75,7 +75,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://gitlab.basemind.com/aiagent/step-harness.git",
 		"directory": "packages/providers"
 	},
 	"engines": {

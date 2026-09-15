@@ -410,13 +410,6 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--offline flag", () => {
-		test("parses --offline flag", () => {
-			const result = parseArgs(["--offline"]);
-			expect(result.offline).toBe(true);
-		});
-	});
-
 	describe("--tui-mode flag", () => {
 		test.each(["regular", "fullscreen"] as const)("parses %s mode", (mode) => {
 			const result = parseArgs(["--tui-mode", mode]);

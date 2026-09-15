@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 const telemetrySrcIndex = fileURLToPath(new URL("../telemetry/src/index.ts", import.meta.url));
 const aiSrcIndex = fileURLToPath(new URL("../providers/src/index.ts", import.meta.url));
 const aiSrcCompat = fileURLToPath(new URL("../providers/src/compat.ts", import.meta.url));
-const agentSrcIndex = fileURLToPath(new URL("../agent-loop/src/index.ts", import.meta.url));
+const agentSrcIndex = fileURLToPath(new URL("../agent-core/src/index.ts", import.meta.url));
 
 export default defineConfig({
 	test: {

@@ -1,7 +1,7 @@
 // Host-facing session surface: the handle an app drives, the events it observes,
 // the inputs it sends, and the tool-approval round-trip. These types are the
 // stable contract between a host (CLI/TUI/voice) and an agent product; they are
-// modeled after the loop's AgentEvent (packages/agent-loop) and AgentSession's
+// modeled after the loop's AgentEvent (packages/agent-core) and AgentSession's
 // AgentSessionEvent (packages/coding-agent) but kept fully self-contained so the
 // contracts package carries zero runtime dependencies.
 

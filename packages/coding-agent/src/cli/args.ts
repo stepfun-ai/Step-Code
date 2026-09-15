@@ -50,7 +50,6 @@ export interface Args {
 	noThemes?: boolean;
 	noContextFiles?: boolean;
 	listModels?: string | true;
-	offline?: boolean;
 	/** Enable/disable the Step binary update check for this invocation. */
 	updateCheck?: boolean;
 	tuiMode?: TuiMode;
@@ -314,8 +313,6 @@ export function parseArgs(args: string[]): Args {
 			result.projectTrustOverride = true;
 		} else if (arg === "--no-approve" || arg === "-na") {
 			result.projectTrustOverride = false;
-		} else if (arg === "--offline") {
-			result.offline = true;
 		} else if (arg === "--update-check") {
 			result.updateCheck = true;
 		} else if (arg === "--no-update-check") {
@@ -442,7 +439,6 @@ ${stepPermissionOptionsText}
   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
-  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
   --update-check                 Check for a newer Step binary at startup
   --no-update-check              Skip the Step binary update check for this run
   --                             End option parsing; treat remaining arguments as messages/files
@@ -520,10 +516,6 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
 ${stepEnvironmentText}
-  PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
-  PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 
 ${chalk.bold("Built-in Tool Names:")}
   read       - Read file contents

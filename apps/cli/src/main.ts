@@ -548,7 +548,6 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 				disableBackgroundServices: stepMainOptions.disableBackgroundServices,
 				...stepMainOptions.interactiveModeOptions,
 				sessionRoot: prep.sessionRoot,
-				offline: prep.explicitOfflineMode || stepMainOptions.interactiveModeOptions?.offline === true,
 			});
 			if (prep.startupBenchmark) {
 				await interactiveMode.init();

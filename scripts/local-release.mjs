@@ -9,7 +9,7 @@ const packages = [
 	{ directory: "packages/telemetry", name: "@step-harness/telemetry" },
 	{ directory: "packages/providers", name: "@step-harness/providers" },
 	{ directory: "packages/tui", name: "@step-harness/pi-tui" },
-	{ directory: "packages/agent-loop", name: "@step-harness/agent-core" },
+	{ directory: "packages/agent-core", name: "@step-harness/agent-core" },
 	{ directory: "packages/config", name: "@step-harness/config" },
 	{ directory: "packages/contracts", name: "@step-harness/contracts" },
 	{ directory: "packages/coding-agent", name: "@step-harness/coding-agent" },

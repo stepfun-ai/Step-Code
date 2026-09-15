@@ -5,7 +5,7 @@
   - `39a6287` S1-B remove SQLite session backend
   - `135ae6d` S1-C remove pi command
   - `b9497e5` S1-D migrate npm workspaces → pnpm
-  - `f3de981` S1-R rename packages/agent → packages/agent-loop
+  - `f3de981` S1-R rename packages/agent → packages/agent-core
   - `9a70902` S2 hoist theme/render + build contracts
 - **基线**: `main` = `1cfed08`
 - **审查日期**: 2026-09-12
@@ -120,11 +120,11 @@ env: { PI_CODING_AGENT_DIR: sessionDir },            // 应为 STEP_CODING_AGENT
 
 ---
 
-### S1-R(`f3de981`)packages/agent → packages/agent-loop — 🟢 教科书式
+### S1-R(`f3de981`)packages/agent → packages/agent-core — 🟢 教科书式
 
 - **包名不变**(`@step-harness/agent-core`)→ import 按包名解析,**0 处 import 需改**。~91 文件 100% similarity 纯重命名。
 - 8 处路径配置全部正确重指 agent-loop:root tsconfig paths、vitest.base.ts、coding-agent tsconfig.build(`../agent-loop/dist`)、root build cd-chain、profile-coding-agent-node.mjs、local-release.mjs、workspace-registry dir、被移包的 vitest.harness 自引用。
-- pnpm-lock importer key 重生成 `packages/agent-loop:`(`--frozen-lockfile` 继续通过的必要)。
+- pnpm-lock importer key 重生成 `packages/agent-core:`(`--frozen-lockfile` 继续通过的必要)。
 - **无残留构建/配置路径引用**:CI/scripts/configs 扫 `packages/agent`(排除 `-loop`/`-old`)为空。剩余 `packages/agent/` 提及只是注释/changelog fixture 字符串/录制对话数据(S7 deferred,不挡构建)。
 - 🟡 既存(非本 commit 引入):`tsconfig.json:27` 映射 `pi-agent-old` → 不存在的 `./packages/agent-old`(baseline `1cfed08` 就有,无害,仅当 import 该 specifier 才生效)。
 

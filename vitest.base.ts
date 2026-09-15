@@ -9,7 +9,7 @@ export const workspaceSourcePaths = {
 	aiOAuth: fileURLToPath(new URL("./packages/providers/src/oauth.ts", import.meta.url)),
 	stepProvider: fileURLToPath(new URL("./packages/providers/src/step-provider/index.ts", import.meta.url)),
 	aiProviders: fileURLToPath(new URL("./packages/providers/src/providers", import.meta.url)),
-	agentIndex: fileURLToPath(new URL("./packages/agent-loop/src/index.ts", import.meta.url)),
+	agentIndex: fileURLToPath(new URL("./packages/agent-core/src/index.ts", import.meta.url)),
 	codingAgentIndex: fileURLToPath(new URL("./packages/coding-agent/src/index.ts", import.meta.url)),
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
 	configIndex: fileURLToPath(new URL("./packages/config/src/index.ts", import.meta.url)),

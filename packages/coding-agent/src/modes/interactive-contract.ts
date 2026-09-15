@@ -53,8 +53,6 @@ export interface InteractiveModeOptions {
 	defaultTheme?: string;
 	/** Skip optional network, catalog, update, and install telemetry services. */
 	disableBackgroundServices?: boolean;
-	/** Explicit offline mode (`--offline` or `PI_OFFLINE`), distinct from service suppression. */
-	offline?: boolean;
 	/** Whether to show the package changelog on startup. Defaults to true. */
 	showChangelog?: boolean;
 	/** Product presentation variant for the native interactive surface. */
