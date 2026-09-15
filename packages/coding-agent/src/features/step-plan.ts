@@ -153,14 +153,25 @@ export const createStepPlanExtension =
 			default: false,
 		});
 		pi.registerCommand("plan", {
-			description: "Toggle plan mode (draft a proposal for approval)",
-			handler: async (_args, ctx) => {
-				if (enabled) {
-					exit("toggled_off", ctx);
-					ctx.ui.notify("Plan mode disabled.", "info");
-				} else {
-					enter("user", ctx);
+			description: "Toggle plan mode, or `/plan <task>` to start planning a task right away",
+			handler: async (args, ctx) => {
+				const prompt = args.trim();
+				if (!prompt) {
+					if (enabled) {
+						exit("toggled_off", ctx);
+						ctx.ui.notify("Plan mode disabled.", "info");
+					} else {
+						enter("user", ctx);
+					}
+					return;
 				}
+				// `/plan <task>` is "plan this", never "toggle": make sure plan mode is on,
+				// then hand the task to the model as an ordinary user turn. Tool
+				// restriction has already been applied by enter(), so the turn starts
+				// with the plan-mode tool set. Slash commands run even mid-stream; queue
+				// the task behind the current turn in that case instead of throwing.
+				if (!enabled) enter("user", ctx);
+				pi.sendUserMessage(prompt, ctx.isIdle() ? {} : { deliverAs: "followUp" });
 			},
 		});
 		registerPlanModeTools(pi, planModeController);
