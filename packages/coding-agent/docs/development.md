@@ -1,12 +1,12 @@
 # Development
 
-See [AGENTS.md](https://github.com/earendil-works/pi-mono/blob/main/AGENTS.md) for additional guidelines.
+See [AGENTS.md](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/AGENTS.md) for additional guidelines.
 
 ## Setup
 
 ```bash
-git clone https://github.com/earendil-works/pi-mono
-cd pi-mono
+git clone https://gitlab.basemind.com/aiagent/step-harness
+cd step-harness
 npm install
 npm run build
 ```
@@ -14,10 +14,10 @@ npm run build
 Run from source:
 
 ```bash
-/path/to/pi-mono/pi-test.sh
+/path/to/step-harness/test.sh
 ```
 
-The script can be run from any directory. Pi keeps the caller's current working directory.
+The script can be run from any directory. Step keeps the caller's current working directory.
 
 ## Forking / Rebranding
 
@@ -48,7 +48,7 @@ Never use `__dirname` directly for package assets.
 
 ## Debug Command
 
-`/debug` (hidden) writes to `~/.pi/agent/pi-debug.log`:
+`/debug` (hidden) writes to `~/.step-cli/agent/step-debug.log`:
 - Rendered TUI lines with ANSI codes
 - Last messages sent to the LLM
 

@@ -1,4 +1,4 @@
-> pi can create themes. Ask it to build one for your setup.
+> step can create themes. Ask it to build one for your setup.
 
 # Themes
 
@@ -16,11 +16,11 @@ Themes are JSON files that define colors for the TUI.
 
 ## Locations
 
-Pi loads themes from:
+Step loads themes from:
 
 - Built-in: `dark`, `light`, `sage`, `step`, `step-light`
-- Global: `~/.pi/agent/themes/*.json`
-- Project: `.pi/themes/*.json` (only after the project is trusted)
+- Global: `~/.step-cli/agent/themes/*.json`
+- Project: `.step-cli/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
@@ -37,20 +37,20 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, pi detects your terminal background and defaults to `dark` or `light`.
+On first run, step detects your terminal background and defaults to `dark` or `light`.
 
 ### Initial Theme
 
 Start an interactive run with a theme without changing the saved setting:
 
 ```bash
-pi --use-theme light
+step --use-theme light
 ```
 
 To follow terminal appearance, use `lightTheme/darkTheme` syntax:
 
 ```bash
-pi --use-theme light/dark
+step --use-theme light/dark
 ```
 
 The CLI value is the initial theme for that run. Choosing another theme later in `/settings` applies it immediately
@@ -61,15 +61,15 @@ and saves it normally.
 1. Create a theme file:
 
 ```bash
-mkdir -p ~/.pi/agent/themes
-vim ~/.pi/agent/themes/my-theme.json
+mkdir -p ~/.step-cli/agent/themes
+vim ~/.step-cli/agent/themes/my-theme.json
 ```
 
 2. Define the theme with all required colors (see [Color Tokens](#color-tokens)):
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://gitlab.basemind.com/aiagent/step-harness/-/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -137,13 +137,13 @@ vim ~/.pi/agent/themes/my-theme.json
 
 3. Select the theme via `/settings`.
 
-**Hot reload:** When you edit the currently active custom theme file, pi reloads it automatically for immediate visual feedback.
+**Hot reload:** When you edit the currently active custom theme file, step reloads it automatically for immediate visual feedback.
 
 ## Theme Format
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://gitlab.basemind.com/aiagent/step-harness/-/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",
@@ -293,7 +293,7 @@ Four formats are supported:
 
 ### Terminal Compatibility
 
-Pi uses 24-bit RGB colors. Most modern terminals support this (iTerm2, Kitty, WezTerm, Windows Terminal, VS Code). For older terminals with only 256-color support, pi falls back to the nearest approximation.
+Step uses 24-bit RGB colors. Most modern terminals support this (iTerm2, Kitty, WezTerm, Windows Terminal, VS Code). For older terminals with only 256-color support, step falls back to the nearest approximation.
 
 Check truecolor support:
 
@@ -316,8 +316,8 @@ echo $COLORTERM  # Should output "truecolor" or "24bit"
 ## Examples
 
 See the built-in themes:
-- [dark.json](../src/modes/interactive/theme/dark.json)
-- [light.json](../src/modes/interactive/theme/light.json)
-- [sage.json](../src/modes/interactive/theme/sage.json)
-- [step.json](../src/modes/interactive/theme/step.json)
-- [step-light.json](../src/modes/interactive/theme/step-light.json)
+- [dark.json](../src/theme/dark.json)
+- [light.json](../src/theme/light.json)
+- [sage.json](../src/theme/sage.json)
+- [step.json](../src/theme/step.json)
+- [step-light.json](../src/theme/step-light.json)
