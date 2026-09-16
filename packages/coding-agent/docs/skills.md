@@ -1,10 +1,10 @@
-> pi can create skills. Ask it to build one for your use case.
+> step can create skills. Ask it to build one for your use case.
 
 # Skills
 
 Skills are self-contained capability packages that the agent loads on-demand. A skill provides specialized workflows, setup instructions, helper scripts, and reference documentation for specific tasks.
 
-Pi implements the [Agent Skills standard](https://agentskills.io/specification), warning about most violations but remaining lenient. Pi allows skill names to differ from their parent directory even though the standard disallows it; that rule is suboptimal for shared skill directories used across multiple agent harnesses.
+Step implements the [Agent Skills standard](https://agentskills.io/specification), warning about most violations but remaining lenient. Step allows skill names to differ from their parent directory even though the standard disallows it; that rule is suboptimal for shared skill directories used across multiple agent harnesses.
 
 ## Table of Contents
 
@@ -21,20 +21,20 @@ Pi implements the [Agent Skills standard](https://agentskills.io/specification),
 
 > **Security:** Skills can instruct the model to perform any action and may include executable code the model invokes. Review skill content before use.
 
-Pi loads skills from:
+Step loads skills from:
 
 - Global:
-  - `~/.pi/agent/skills/`
+  - `~/.step-cli/agent/skills/`
   - `~/.agents/skills/`
 - Project (only after the project is trusted):
-  - `.pi/skills/`
+  - `.step-cli/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Packages: `skills/` directories or `pi.skills` entries in `package.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
 
 Discovery rules:
-- In `~/.pi/agent/skills/` and `.pi/skills/`, direct root `.md` files are discovered as individual skills when they have valid skill frontmatter with a non-empty `description`
+- In `~/.step-cli/agent/skills/` and `.step-cli/skills/`, direct root `.md` files are discovered as individual skills when they have valid skill frontmatter with a non-empty `description`
 - In all skill locations, directories containing `SKILL.md` are discovered recursively
 - In `~/.agents/skills/` and project `.agents/skills/`, root `.md` files are ignored, but nested `.md` files in grouping folders are discovered when they declare skill frontmatter
 - Root Markdown files other than `SKILL.md` that do not look like skills are ignored silently
@@ -54,7 +54,7 @@ To use skills from Claude Code or OpenAI Codex, add their directories to setting
 }
 ```
 
-For project-level Claude Code skills, add to `.pi/settings.json`:
+For project-level Claude Code skills, add to `.step-cli/settings.json`:
 
 ```json
 {
@@ -64,7 +64,7 @@ For project-level Claude Code skills, add to `.pi/settings.json`:
 
 ## How Skills Work
 
-1. At startup, pi scans skill locations and extracts names and descriptions
+1. At startup, step scans skill locations and extracts names and descriptions
 2. The system prompt includes available skills in XML format per the [specification](https://agentskills.io/integrate-skills)
 3. When a task matches, the agent uses `read` to load the full SKILL.md (models don't always do this; use prompting or `/skill:name` to force it)
 4. The agent follows the instructions, using relative paths to reference scripts and assets
@@ -141,7 +141,7 @@ Per the [Agent Skills specification](https://agentskills.io/specification#frontm
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Max 64 chars. Lowercase a-z, 0-9, hyphens. Unlike the standard, Pi does not require this to match the parent directory because that standard requirement is suboptimal for shared skill directories. |
+| `name` | Yes | Max 64 chars. Lowercase a-z, 0-9, hyphens. Unlike the standard, Step does not require this to match the parent directory because that standard requirement is suboptimal for shared skill directories. |
 | `description` | Yes | Max 1024 chars. What the skill does and when to use it. |
 | `license` | No | License name or reference to bundled file. |
 | `compatibility` | No | Max 500 chars. Environment requirements. |
@@ -155,7 +155,7 @@ Per the [Agent Skills specification](https://agentskills.io/specification#frontm
 - Lowercase letters, numbers, hyphens only
 - No leading/trailing hyphens
 - No consecutive hyphens
-Pi does not require the name to match the parent directory. The Agent Skills standard does, but that requirement is suboptimal for shared skill directories used by multiple tools.
+Step does not require the name to match the parent directory. The Agent Skills standard does, but that requirement is suboptimal for shared skill directories used by multiple tools.
 
 Valid: `pdf-processing`, `data-analysis`, `code-review`
 Invalid: `PDF-Processing`, `-pdf`, `pdf--processing`
@@ -176,7 +176,7 @@ description: Helps with PDFs.
 
 ## Validation
 
-Pi validates skills against the Agent Skills standard. Most issues produce warnings but still load the skill:
+Step validates skills against the Agent Skills standard. Most issues produce warnings but still load the skill:
 
 - Name exceeds 64 characters or contains invalid characters
 - Name starts/ends with hyphen or has consecutive hyphens
@@ -229,4 +229,4 @@ cd /path/to/brave-search && npm install
 ## Skill Repositories
 
 - [Anthropic Skills](https://github.com/anthropics/skills) - Document processing (docx, pdf, pptx, xlsx), web development
-- [Pi Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription
+- [Step Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription

@@ -1,6 +1,6 @@
 # llama.cpp
 
-Pi supports the [llama.cpp](https://github.com/ggml-org/llama.cpp) router server. The router discovers multiple GGUF models and loads or unloads them on demand.
+Step supports the [llama.cpp](https://github.com/ggml-org/llama.cpp) router server. The router discovers multiple GGUF models and loads or unloads them on demand.
 
 Use a current llama.cpp build with router support. Follow the [build instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) or install a [prebuilt release](https://github.com/ggml-org/llama.cpp/releases) for your platform.
 
@@ -43,9 +43,9 @@ A single-file model can sit directly in the model directory. Put multimodal and 
 
 Restart the router after manually adding files. For per-model context sizes and other options, use [llama.cpp model presets](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#model-presets).
 
-## Configure Pi
+## Configure Step
 
-Start Pi and configure the provider:
+Start Step and configure the provider:
 
 ```text
 /login llama.cpp
@@ -60,7 +60,7 @@ Environment variables can configure the same values without `/login`:
 ```bash
 export LLAMA_BASE_URL=http://127.0.0.1:8080
 export LLAMA_API_KEY=optional-secret
-pi
+step
 ```
 
 If the server uses an API key, start `llama-server` with the matching `--api-key` value. Keep `--host 127.0.0.1` for local-only access.
@@ -78,11 +78,11 @@ Run:
 - Select **Download model…**, search Hugging Face, then choose a repository and quantization. Exact `owner/repository[:quant]` values also work.
 - Press Escape during a load or download to confirm cancellation.
 
-Hugging Face search uses `HF_TOKEN` when set, then checks `$HF_TOKEN_PATH`, `$HF_HOME/token`, `$XDG_CACHE_HOME/huggingface/token`, and `~/.cache/huggingface/token`. Search also works without authentication, subject to lower rate limits. Pi warns before downloading gated repositories and links to their access page. The llama.cpp server performs the download, so its process must also have `HF_TOKEN` when the selected repository requires access.
+Hugging Face search uses `HF_TOKEN` when set, then checks `$HF_TOKEN_PATH`, `$HF_HOME/token`, `$XDG_CACHE_HOME/huggingface/token`, and `~/.cache/huggingface/token`. Search also works without authentication, subject to lower rate limits. Step warns before downloading gated repositories and links to their access page. The llama.cpp server performs the download, so its process must also have `HF_TOKEN` when the selected repository requires access.
 
-If other models are loaded, Pi asks whether to unload them first or keep them loaded. Pi does not silently unload models and never deletes model files. The router may be shared with other clients, so `/llama` always displays the router's current state.
+If other models are loaded, Step asks whether to unload them first or keep them loaded. Step does not silently unload models and never deletes model files. The router may be shared with other clients, so `/llama` always displays the router's current state.
 
-Only loaded models appear in `/model`. After loading a model, run `/model` to select it for the current Pi session.
+Only loaded models appear in `/model`. After loading a model, run `/model` to select it for the current Step session.
 
 If the router disconnects, `/llama` shows **Retry** and **Close**. Retry reconnects and refreshes model state without replaying the interrupted operation.
 

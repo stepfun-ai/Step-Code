@@ -1,8 +1,8 @@
-> pi can help you use the SDK. Ask it to build an integration for your use case.
+> step can help you use the SDK. Ask it to build an integration for your use case.
 
 # SDK
 
-The SDK provides programmatic access to pi's agent capabilities. Use it to embed pi in other applications, build custom interfaces, or integrate with automated workflows.
+The SDK provides programmatic access to step's agent capabilities. Use it to embed step in other applications, build custom interfaces, or integrate with automated workflows.
 
 **Example use cases:**
 - Build a custom UI (web, desktop, mobile)
@@ -337,23 +337,23 @@ const { session } = await createAgentSession({
   cwd: process.cwd(), // default
   
   // Global config directory
-  agentDir: "~/.pi/agent", // default (expands ~)
+  agentDir: "~/.step-cli/agent", // default (expands ~)
 });
 ```
 
 `cwd` is used by `DefaultResourceLoader` for:
-- Project extensions (`.pi/extensions/`)
+- Project extensions (`.step-cli/extensions/`)
 - Project skills:
-  - `.pi/skills/`
+  - `.step-cli/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
-- Project prompts (`.pi/prompts/`)
+- Project prompts (`.step-cli/prompts/`)
 - Context files (`AGENTS.md` walking up from cwd)
 - Session directory naming
 
 `agentDir` is used by `DefaultResourceLoader` for:
 - Global extensions (`extensions/`)
 - Global skills:
-  - `skills/` under `agentDir` (for example `~/.pi/agent/skills/`)
+  - `skills/` under `agentDir` (for example `~/.step-cli/agent/skills/`)
   - `~/.agents/skills/`
 - Global prompts (`prompts/`)
 - Global context file (`AGENTS.md`)
@@ -409,7 +409,7 @@ If no model is provided:
 2. Uses default from settings
 3. Falls back to first available model
 
-Remote catalogs are persisted locally so later runtimes can restore them without a network request. The default file is `~/.pi/agent/models-store.json`; set `modelsStorePath` to choose another location, or inject `modelsStore` to control persistence. Network refreshes are throttled to once per provider every four hours unless forced. To force an immediate refresh, call `await modelRuntime.refresh({ allowNetwork: true, force: true, signal })`.
+Remote catalogs are persisted locally so later runtimes can restore them without a network request. The default file is `~/.step-cli/agent/models-store.json`; set `modelsStorePath` to choose another location, or inject `modelsStore` to control persistence. Network refreshes are throttled to once per provider every four hours unless forced. To force an immediate refresh, call `await modelRuntime.refresh({ allowNetwork: true, force: true, signal })`.
 
 To match CLI model parsing, use the exported resolver helpers:
 
@@ -451,7 +451,7 @@ Authentication resolution priority (handled by `ModelRuntime`):
 import { InMemoryCredentialStore } from "@step-harness/providers";
 import { createAgentSession, ModelRuntime } from "@step-harness/coding-agent";
 
-// Default: uses ~/.pi/agent/auth.json and ~/.pi/agent/models.json
+// Default: uses ~/.step-cli/agent/auth.json and ~/.step-cli/agent/models.json
 const modelRuntime = await ModelRuntime.create();
 
 // Provider-owned auth methods and current status
@@ -525,7 +525,7 @@ Specify which built-in tools to enable:
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
 
-The `edit` tool returns `details.diff` for Pi's TUI display and `details.patch` as a standard unified patch for SDK consumers.
+The `edit` tool returns `details.diff` for Step's TUI display and `details.patch` as a standard unified patch for SDK consumers.
 
 ```typescript
 import { createAgentSession } from "@step-harness/coding-agent";
@@ -612,7 +612,7 @@ If you pass `tools`, include each custom or extension tool name you want enabled
 
 ### Extensions
 
-Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.pi/agent/extensions/`, `.pi/extensions/`, and settings.json extension sources.
+Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.step-cli/agent/extensions/`, `.step-cli/extensions/`, and settings.json extension sources.
 
 ```typescript
 import { createAgentSession, DefaultResourceLoader } from "@step-harness/coding-agent";
@@ -620,7 +620,7 @@ import { createAgentSession, DefaultResourceLoader } from "@step-harness/coding-
 const loader = new DefaultResourceLoader({
   additionalExtensionPaths: ["/path/to/my-extension.ts"],
   extensionFactories: [
-    (pi) => {
+    (step) => {
       pi.on("agent_start", () => {
         console.log("[Inline Extension] Agent starting");
       });
@@ -641,7 +641,7 @@ import type { InlineExtension } from "@step-harness/coding-agent";
 
 const myProvider: InlineExtension = {
   name: "my-provider",
-  factory: (pi) => {
+  factory: (step) => {
     pi.on("agent_start", () => {
       console.log("[my-provider] Agent starting");
     });
@@ -891,8 +891,8 @@ const { session } = await createAgentSession({
 **Project-specific settings:**
 
 Settings load from two locations and merge:
-1. Global: `~/.pi/agent/settings.json`
-2. Project: `<cwd>/.pi/settings.json`
+1. Global: `~/.step-cli/agent/settings.json`
+2. Project: `<cwd>/.step-cli/settings.json`
 
 Project overrides global. Nested objects merge keys. Setters modify global settings by default.
 
@@ -1147,7 +1147,7 @@ See [RPC documentation](rpc.md) for the JSON protocol.
 For subprocess-based integration without building with the SDK, use the CLI directly:
 
 ```bash
-pi --mode rpc --no-session
+step --mode rpc --no-session
 ```
 
 See [RPC documentation](rpc.md) for the JSON protocol.

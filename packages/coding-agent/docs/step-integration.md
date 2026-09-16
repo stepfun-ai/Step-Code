@@ -95,7 +95,7 @@ Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
 binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
 operations to the active Step agent root. Runtime replacement flows (`/new`,
 `/resume`, `/fork`, and `/import`) use that same bound factory, so a later
-operation cannot fall back to Pi's default `~/.pi/agent/sessions` directory.
+operation cannot fall back to Pi's default `~/.step-cli/agent/sessions` directory.
 Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
