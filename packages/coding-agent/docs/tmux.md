@@ -1,6 +1,6 @@
 # tmux Setup
 
-Pi works inside tmux, but tmux strips modifier information from certain keys by default. Without configuration, modified Enter keys may be indistinguishable from plain `Enter`.
+Step works inside tmux, but tmux strips modifier information from certain keys by default. Without configuration, modified Enter keys may be indistinguishable from plain `Enter`.
 
 ## Recommended Configuration
 
@@ -18,7 +18,7 @@ tmux kill-server
 tmux
 ```
 
-Pi requests extended key reporting automatically when Kitty keyboard protocol is not available. With `extended-keys-format csi-u`, tmux forwards modified keys in CSI-u format, which is the most reliable configuration. The `extended-keys-format` option requires tmux 3.5 or later.
+Step requests extended key reporting automatically when Kitty keyboard protocol is not available. With `extended-keys-format csi-u`, tmux forwards modified keys in CSI-u format, which is the most reliable configuration. The `extended-keys-format` option requires tmux 3.5 or later.
 
 ## Why `csi-u` Is Recommended
 
@@ -40,7 +40,7 @@ With `extended-keys-format csi-u`, the same keys are forwarded as:
 - `Ctrl+D` → `\x1b[100;5u`
 - `Ctrl+Enter` → `\x1b[13;5u`
 
-Pi supports both formats, but `csi-u` is the recommended tmux setup.
+Step supports both formats, but `csi-u` is the recommended tmux setup.
 
 ## What This Fixes
 
@@ -60,4 +60,4 @@ This affects the default keybindings (`Enter` to submit, `Shift+Enter` or `Alt/O
 - tmux 3.5 or later for `extended-keys-format csi-u` (run `tmux -V` to check)
 - A terminal emulator that supports extended keys (Ghostty, Kitty, iTerm2, WezTerm, Windows Terminal)
 
-With tmux 3.2 through 3.4, omit `extended-keys-format csi-u`; Pi still supports tmux's default xterm `modifyOtherKeys` format.
+With tmux 3.2 through 3.4, omit `extended-keys-format csi-u`; Step still supports tmux's default xterm `modifyOtherKeys` format.

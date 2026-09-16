@@ -1,15 +1,15 @@
 # JSON Event Stream Mode
 
 ```bash
-pi --mode json "Your prompt"
+step --mode json "Your prompt"
 ```
 
-Outputs all session events as JSON lines to stdout. Useful for integrating pi into other tools or custom UIs.
+Outputs all session events as JSON lines to stdout. Useful for integrating step into other tools or custom UIs.
 
 ## Event Types
 
 Wire events use `JsonAgentSessionEvent`. It matches
-[`AgentSessionEvent`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/agent-session.ts)
+[`AgentSessionEvent`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/agent-session.ts)
 except that streaming message updates omit cumulative snapshots:
 
 ```typescript
@@ -31,7 +31,7 @@ type JsonAgentSessionEvent =
 `queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 
 Other base events come from
-[`AgentEvent`](https://github.com/earendil-works/pi-mono/blob/main/packages/agent/src/types.ts):
+[`AgentEvent`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/agent/src/types.ts):
 
 ```typescript
 type AgentEvent =
@@ -53,12 +53,12 @@ type AgentEvent =
 
 ## Message Types
 
-Base messages from [`packages/providers/src/types.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/providers/src/types.ts#L134):
+Base messages from [`packages/providers/src/types.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/types.ts#L134):
 - `UserMessage` (line 134)
 - `AssistantMessage` (line 140)
 - `ToolResultMessage` (line 152)
 
-Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/messages.ts#L29):
+Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/messages.ts#L29):
 - `BashExecutionMessage` (line 29)
 - `CustomMessage` (line 46)
 - `BranchSummaryMessage` (line 55)
@@ -94,5 +94,5 @@ fields. `message_end` contains the final authoritative message.
 ## Example
 
 ```bash
-pi --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
+step --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
 ```
