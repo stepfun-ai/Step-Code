@@ -106,4 +106,87 @@ describe("runStepConfigCommand argument handling", () => {
 			runStepConfigCommand(["config", "show", "--bogus"], { stdout: capture().stdout, homeEnv: env }),
 		).rejects.toThrow(/Unknown option "--bogus"/);
 	});
+
+	// User feedback: `step config init --path --force` consumed --force as the
+	// --path value, writing a config file literally named "--force" and exiting 0.
+	// A value-taking option must reject a missing or flag-like value.
+	test("`config init --path --force` errors and writes no '--force' file", async () => {
+		const { env, root, configPath } = await makeEnv();
+		const io = capture();
+
+		await expect(
+			runStepConfigCommand(["config", "init", "--path", "--force"], {
+				stdout: io.stdout,
+				homeEnv: env,
+				cwd: root,
+			}),
+		).rejects.toThrow(/Option "--path" requires a value/);
+
+		expect(io.text()).not.toContain("Wrote Step config template");
+		expect(existsSync(join(process.cwd(), "--force"))).toBe(false);
+		expect(existsSync(configPath)).toBe(false);
+	});
+
+	test("`config init --path` with no value errors and writes nothing", async () => {
+		const { env, root, configPath } = await makeEnv();
+		const io = capture();
+
+		await expect(
+			runStepConfigCommand(["config", "init", "--path"], { stdout: io.stdout, homeEnv: env, cwd: root }),
+		).rejects.toThrow(/Option "--path" requires a value/);
+		expect(existsSync(configPath)).toBe(false);
+	});
+
+	test("`config init --scope --path <file>` errors on the missing --scope value", async () => {
+		const { env, root } = await makeEnv();
+		const io = capture();
+		const target = join(root, "scoped.toml");
+
+		await expect(
+			runStepConfigCommand(["config", "init", "--scope", "--path", target], {
+				stdout: io.stdout,
+				homeEnv: env,
+				cwd: root,
+			}),
+		).rejects.toThrow(/Option "--scope" requires a value/);
+		expect(existsSync(target)).toBe(false);
+	});
+
+	test("`config init --path=<file>` inline form still writes the template", async () => {
+		const { env, root } = await makeEnv();
+		const io = capture();
+		const target = join(root, "inline.toml");
+
+		await runStepConfigCommand(["config", "init", `--path=${target}`], {
+			stdout: io.stdout,
+			homeEnv: env,
+			cwd: root,
+		});
+
+		expect(existsSync(target)).toBe(true);
+	});
+
+	// An unset shell variable (`--path "$MISSING"`) used to resolve to the cwd and
+	// fail later with a raw EISDIR instead of reporting the missing value.
+	test("`config init --path ''` reports the missing value", async () => {
+		const { env, root } = await makeEnv();
+		const io = capture();
+
+		await expect(
+			runStepConfigCommand(["config", "init", "--path", "", "--force"], {
+				stdout: io.stdout,
+				homeEnv: env,
+				cwd: root,
+			}),
+		).rejects.toThrow(/Option "--path" requires a value/);
+	});
+
+	test("`config init --path=` reports the missing value", async () => {
+		const { env, root } = await makeEnv();
+		const io = capture();
+
+		await expect(
+			runStepConfigCommand(["config", "init", "--path="], { stdout: io.stdout, homeEnv: env, cwd: root }),
+		).rejects.toThrow(/Option "--path" requires a value/);
+	});
 });

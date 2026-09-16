@@ -53,7 +53,12 @@ export function normalizeStepSessionSelectorArgs(argv: readonly string[]): strin
 		let sessionFile: string | undefined;
 		if (arg === "--session-file") {
 			const value = optionArgs[index + 1];
-			if (value !== undefined && !value.startsWith("--")) {
+			// Only a non-option token can be the value. Testing for a single "-" (not
+			// "--") keeps short flags such as `-p` in place for parseArgs: consuming
+			// one silently dropped it and changed the run's mode. A flag-like token is
+			// left where it is, so a genuinely bogus one surfaces as a parse error
+			// rather than disappearing.
+			if (value !== undefined && !value.startsWith("-")) {
 				sessionFile = value;
 				index++;
 			}
@@ -324,10 +329,25 @@ function translateModelsArgs(args: readonly string[]): string[] {
 
 function readOption(argv: readonly string[], name: string): string | undefined {
 	const index = argv.indexOf(name);
-	if (index >= 0) return argv[index + 1];
+	if (index >= 0) {
+		// Reject a missing, empty or flag-like value rather than consuming the next
+		// option: `config init --path --force` must report the missing --path value
+		// instead of writing a file literally named "--force", and `--path ""`
+		// must not resolve to the cwd and fail later with a raw EISDIR.
+		const value = argv[index + 1];
+		if (value === undefined || value === "" || value.startsWith("-")) {
+			throw new Error(`Option "${name}" requires a value.`);
+		}
+		return value;
+	}
 	const prefix = `${name}=`;
 	const inline = argv.find((arg) => arg.startsWith(prefix));
-	return inline?.slice(prefix.length);
+	if (inline === undefined) return undefined;
+	const value = inline.slice(prefix.length);
+	if (value === "") {
+		throw new Error(`Option "${name}" requires a value.`);
+	}
+	return value;
 }
 
 /** Flags each `step config` subcommand accepts. Anything else is a user error. */
