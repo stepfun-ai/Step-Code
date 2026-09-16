@@ -3,7 +3,7 @@
  *
  * Pi owns the actual runtime and command implementations.  This module only
  * translates the legacy Step command spelling to Pi's public CLI flags, and
- * handles the few configuration inspection operations that Pi's package
+ * handles the few configuration inspection operations that pi's package
  * manager does not provide.  Keeping this boundary separate makes upgrades to
  * Pi's parser/local runtime low-risk.
  */
@@ -11,7 +11,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
-import { migrateStepConfig } from "./config-migration.ts";
+import { readStepConfig, resolveStepConfigPath, STEP_CONFIG_FILE_NAME } from "./config-toml.ts";
 import { resolveStepAgentDir, resolveStepConfigDir, resolveStepConfigRoot } from "./environment.ts";
 import { normalizeStepStableVersion } from "./local-update.ts";
 
@@ -120,25 +120,24 @@ export function parseStepUpdateCommand(argv: readonly string[]): StepUpdateComma
 
 /** Return whether argv selects a Step config inspection command. */
 export function isStepConfigCommand(argv: readonly string[]): boolean {
-	return argv[0] === "config" && ["path", "show", "init", "migrate"].includes(argv[1] ?? "");
+	return argv[0] === "config" && ["path", "show", "init"].includes(argv[1] ?? "");
 }
 
 export interface StepConfigCommandIo {
 	stdout?: Pick<NodeJS.WriteStream, "write">;
-	stderr?: Pick<NodeJS.WriteStream, "write">;
 	cwd?: string;
 	homeEnv?: Record<string, string | undefined>;
 }
 
 /**
- * Run the Step-owned config inspection/migration commands.
+ * Run the Step-owned config inspection commands.
  *
- * The files use Pi's native schema (`settings.json`, `models.json`, and
- * `auth.json`) but live below `.step-cli`; secrets are never printed.
+ * Settings live in `config.toml`; `models.json` and `auth.json` stay JSON but
+ * hold model definitions and credentials rather than settings. Everything sits
+ * below `.step-cli`; secrets are never printed.
  */
 export async function runStepConfigCommand(argv: readonly string[], io: StepConfigCommandIo = {}): Promise<void> {
 	const stdout = io.stdout ?? process.stdout;
-	const stderr = io.stderr ?? process.stderr;
 	const cwd = resolve(io.cwd ?? process.cwd());
 	const env = io.homeEnv ?? process.env;
 	const agentDir = resolveStepAgentDir(env);
@@ -147,31 +146,14 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 	const projectDir = join(cwd, configDirName);
 	const paths = {
 		agentDir,
-		globalSettings: join(agentDir, "settings.json"),
+		globalSettings: resolveStepConfigPath(env),
 		globalModels: join(configRoot, "models.json"),
 		globalAuth: join(configRoot, "auth.json"),
 		projectDir,
-		projectSettings: join(projectDir, "settings.json"),
+		projectSettings: join(projectDir, STEP_CONFIG_FILE_NAME),
 	};
 
 	const subcommand = argv[1];
-	if (subcommand === "migrate") {
-		const report = await migrateStepConfig({ cwd, env });
-		for (const warning of report.warnings) stderr.write(`[step migration] ${warning}\n`);
-		stdout.write(
-			`${JSON.stringify(
-				{
-					migrated: report.migrated,
-					defaultProvider: report.defaultProvider,
-					defaultModel: report.defaultModel,
-					roots: report.roots,
-				},
-				null,
-				2,
-			)}\n`,
-		);
-		return;
-	}
 
 	if (subcommand === "path") {
 		const json = argv.includes("--json");
@@ -214,12 +196,14 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 			throw new Error(`Config file already exists: ${target} (pass --force to overwrite)`);
 		}
 		await mkdir(join(target, ".."), { recursive: true, mode: 0o700 });
-		const template = {
-			defaultProvider: "step",
-			defaultModel: "step-3.7-flash",
-		};
-		await writeFile(target, `${JSON.stringify(template, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-		stdout.write(`Wrote Step Pi settings template: ${target}\n`);
+		const template = [
+			"# Step CLI configuration",
+			'defaultProvider = "step"',
+			'defaultModel = "step-3.7-flash"',
+			"",
+		].join("\n");
+		await writeFile(target, template, { encoding: "utf8", mode: 0o600 });
+		stdout.write(`Wrote Step config template: ${target}\n`);
 		return;
 	}
 
@@ -232,11 +216,20 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 				return undefined;
 			}
 		};
+		// Settings are TOML; a missing or malformed file reads as absent here
+		// because `show` is a diagnostic, not a validator.
+		const readToml = (path: string): unknown => {
+			try {
+				return readStepConfig(path);
+			} catch {
+				return undefined;
+			}
+		};
 		const payload = {
 			paths,
-			globalSettings: await readJson(paths.globalSettings),
+			globalSettings: readToml(paths.globalSettings),
 			globalModels: await readJson(paths.globalModels),
-			workspaceSettings: await readJson(paths.projectSettings),
+			workspaceSettings: readToml(paths.projectSettings),
 			// Auth presence is useful for diagnostics; credential material is not.
 			auth: { configured: existsSync(paths.globalAuth), path: paths.globalAuth },
 		};
@@ -248,7 +241,7 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 		return;
 	}
 
-	throw new Error(`Usage: step config ${"path|show|init|migrate"}`);
+	throw new Error(`Usage: step config ${"path|show|init"}`);
 }
 
 function translateExecArgs(args: readonly string[]): string[] {

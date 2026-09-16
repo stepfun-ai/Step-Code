@@ -1,9 +1,9 @@
 /** Step-facing adapters layered on top of pi's coding-agent runtime. */
 
-export * from "./config-migration.ts";
 export * from "./device-id.ts";
 export * from "./environment.ts";
 export * from "./mcp.ts";
+export * from "./models-endpoint-repair.ts";
 export * from "./permissions.ts";
 export * from "./plugins.ts";
 export * from "./sdk.ts";
