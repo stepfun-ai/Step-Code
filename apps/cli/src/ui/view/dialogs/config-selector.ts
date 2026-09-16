@@ -221,8 +221,8 @@ class ConfigSelectorHeader implements Component {
 		const spacing = Math.max(1, width - visibleWidth(title) - visibleWidth(hint));
 		const scopeHint =
 			this.writeScope === "project"
-				? theme.fg("muted", `${this.configDirName}/settings.json · inherited global resources are dimmed`)
-				: theme.fg("muted", `~/${this.configDirName}/agent/settings.json`);
+				? theme.fg("muted", `${this.configDirName}/config.toml · inherited global resources are dimmed`)
+				: theme.fg("muted", `~/${this.configDirName}/config.toml`);
 
 		return [
 			truncateToWidth(`${title}${" ".repeat(spacing)}${hint}`, width, ""),

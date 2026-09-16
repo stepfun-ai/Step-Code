@@ -317,7 +317,7 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
     ├── models-store.json
     ├── auth.json                     # ▲ 旧位置,迁移后不再写入
     ├── models.json                   # ▲ 旧位置,迁移后不再写入
-    ├── settings.json                 # ▲ 已退役:step 二进制不再创建/读取(裸 pi 仍用)
+    ├── settings.json                 # ▲ 已退役:step 不再创建/读取,旧安装里的残留
     └── step-settings.json            # ▲ 已退役:不再读写,也不再纳入信任提示
 ```
 
@@ -365,8 +365,6 @@ callback_port = 8976
 - 工具名仍是旧的拼接方式,尚未改成 `mcp__<server>__<tool>`。
 - `/mcp` 快照是模块级全局变量,不是按会话隔离。
 - `step mcp list|get --json` 未做敏感值脱敏。
-- `step config init` 仍会写一份运行期不再读取的 `settings.json` 模板,需要改成
-  写 `config.toml`。
 - `src/step/settings-manager.ts` 头部注释与 `docs/step-integration.md` 中"sidecar"
   的措辞已部分过时。
 

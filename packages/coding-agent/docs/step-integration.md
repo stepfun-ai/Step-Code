@@ -274,7 +274,7 @@ service and are not silently faked by this fork.
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
-| Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
+| Step CLI OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |

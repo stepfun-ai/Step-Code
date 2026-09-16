@@ -42,7 +42,6 @@ import {
 	type MainPreparation,
 	maybeUpdateStep,
 	migrateLegacyStepCredential,
-	migrateStepConfig,
 	needsStepLoginBeforeInteractive,
 	normalizeStepSessionSelectorArgs,
 	parseStepUpdateCommand,
@@ -103,16 +102,17 @@ installProcessStderrDevLogCapture();
 const rawStdoutWrite = captureRawStdout();
 const sdkStdio = sdkStdioRequested();
 
-// Migrate old config files before telemetry, device identity, or Pi's
-// SettingsManager can create the canonical files (bootstrap step 2).
-// The source is retained; warnings are surfaced without blocking startup.
+// Read persisted defaults before telemetry, device identity, or pi's
+// SettingsManager exist (bootstrap step 2). Telemetry in particular is
+// constructed below, so a user's saved `telemetry.enabled = false` has to be
+// visible here or reporting silently turns itself back on at every launch.
 const {
-	migration: stepConfigMigration,
 	persistedDefaults: stepPersistedDefaults,
 	stepCodeConfig,
+	warnings: stepConfigWarnings,
 } = await loadStepStartupConfig();
-for (const warning of stepConfigMigration.warnings) {
-	process.stderr.write(`[step migration] ${warning}\n`);
+for (const warning of stepConfigWarnings) {
+	process.stderr.write(`[step config] ${warning}\n`);
 }
 const stepCodeProviderExtension = stepCodeConfig ? createStepCodeProviderInlineExtension(stepCodeConfig) : undefined;
 // Parse only the product policy flags here so the inline extension can receive
@@ -216,25 +216,8 @@ const stepMainOptions: MainOptions = {
 	allowedAuthProviders: [STEP_PROVIDER_ID, ...(stepCodeConfig?.providers.map((provider) => provider.id) ?? [])],
 	disableBackgroundServices: isStepServicesDisabled(),
 	defaultTheme: getStepDefaultTheme(),
-	defaultProvider:
-		stepCodeConfig?.defaultProvider ??
-		stepPersistedDefaults.provider ??
-		stepConfigMigration.defaultProvider ??
-		STEP_DEFAULT_PROVIDER,
-	defaultModel:
-		stepCodeConfig?.defaultModel ??
-		stepPersistedDefaults.model ??
-		stepConfigMigration.defaultModel ??
-		STEP_DEFAULT_MODEL,
-	beforeRuntimeCreate: async ({ cwd, agentDir }) => {
-		// Session selectors may move the runtime to a workspace different from
-		// process.cwd(). Give that workspace the same one-time legacy projection
-		// before pi loads its project-scoped settings and resources.
-		const report = await migrateStepConfig({ cwd, agentDir });
-		for (const warning of report.warnings) {
-			process.stderr.write(`[step migration] ${warning}\n`);
-		}
-	},
+	defaultProvider: stepCodeConfig?.defaultProvider ?? stepPersistedDefaults.provider ?? STEP_DEFAULT_PROVIDER,
+	defaultModel: stepCodeConfig?.defaultModel ?? stepPersistedDefaults.model ?? STEP_DEFAULT_MODEL,
 	runtimeHostFactory: createStepCli,
 	stdioModeFactory: sdkStdio ? createSdkStdioMode({ writeFrame: rawStdoutWrite }) : undefined,
 	interactiveModeOptions: {
@@ -337,10 +320,9 @@ let forceOneShotExit = false;
 try {
 	await telemetryIdentityReady;
 	if (!isTopLevelLogout && !(isTopLevelLogin && topLevelAuthHelp)) {
-		// Legacy credentials are projected by migrateStepConfig() before this
-		// point. Normalize only an old product-shaped file that is already inside
-		// the canonical Step CLI path; normal launches never fall back to
-		// reading retired files after migration.
+		// Normalize only an old product-shaped credential file that is already
+		// inside the canonical Step CLI path. This is the credential store, not
+		// settings: Step reads no configuration from a legacy layout.
 		await migrateLegacyStepCredential({
 			nativePath: getStepAuthPath(),
 			// The config migration above handles the common case, but keep the
@@ -571,8 +553,8 @@ try {
 						compatibility?.args ?? stepCodeArgs,
 						process.env,
 						{
-							provider: stepPersistedDefaults.provider ?? stepConfigMigration.defaultProvider,
-							model: stepPersistedDefaults.model ?? stepConfigMigration.defaultModel,
+							provider: stepPersistedDefaults.provider,
+							model: stepPersistedDefaults.model,
 						},
 						{ deferSettingsSelection: true },
 					);
