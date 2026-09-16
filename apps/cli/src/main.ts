@@ -511,10 +511,14 @@ try {
 			});
 		} else {
 			const normalizedStepArgs = normalizeStepSessionSelectorArgs(rawStepArgs);
-			const stepCodeArgs = applyStepCodeConfigDefaults(normalizedStepArgs, stepCodeConfig);
-			if (isStepConfigCommand(stepCodeArgs)) {
-				await runStepConfigCommand(stepCodeArgs);
+			if (isStepConfigCommand(normalizedStepArgs)) {
+				// Config inspection/init runs before session-default injection: these
+				// commands are not sessions, so applyStepCodeConfigDefaults must not
+				// splice --provider/--model into their argv — the config handler would
+				// otherwise reject the injected flags as unknown options.
+				await runStepConfigCommand(normalizedStepArgs);
 			} else {
+				const stepCodeArgs = applyStepCodeConfigDefaults(normalizedStepArgs, stepCodeConfig);
 				const compatibility = translateStepCommandArgs(stepCodeArgs);
 				syncStepLoginProfileEndpoint(getStepAuthPath());
 				let shouldLaunchMain = true;
