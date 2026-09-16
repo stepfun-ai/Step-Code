@@ -83,6 +83,59 @@ export function normalizeSessionName(value: string): string | undefined {
 	return name.length > 0 ? name : undefined;
 }
 
+/**
+ * Split a single `@`-prefixed CLI argument into its file token and any trailing
+ * message text, recording both on `result`.
+ *
+ * The file token follows the same rule the interactive editor teaches users
+ * (see packages/tui/src/components/editor.ts `buildDebouncePattern`, which matches
+ * `@(?:"[^"]*|[^\s]*)`): it runs to the first whitespace (JS `\s`, so Unicode-aware —
+ * the same boundary the editor uses), unless it is written as `@"..."`, in which case
+ * the closing quote bounds it and spaces inside are part of the path. The boundary is
+ * deliberately whitespace + the `@"..."` quote ONLY — not the wider autocomplete
+ * `PATH_DELIMITERS` set, which also treats `'` and `=` as boundaries; those are
+ * valid filename characters that must not truncate a path here.
+ *
+ * A bare `@` (or `@` followed only by whitespace, or an empty `@""`) is not a file
+ * reference; the original argument is kept as message text instead.
+ */
+function pushAtFileArg(result: Args, rawArg: string): void {
+	const rest = rawArg.slice(1); // strip leading "@"
+
+	let file: string;
+	let message: string;
+	if (rest.startsWith('"')) {
+		const close = rest.indexOf('"', 1);
+		if (close === -1) {
+			// Unclosed quote: tolerant, matching the editor — the whole rest is the path.
+			file = rest.slice(1);
+			message = "";
+		} else {
+			file = rest.slice(1, close);
+			message = rest.slice(close + 1).trim();
+		}
+	} else {
+		const wsIndex = rest.search(/\s/);
+		if (wsIndex === -1) {
+			file = rest;
+			message = "";
+		} else {
+			file = rest.slice(0, wsIndex);
+			message = rest.slice(wsIndex).trim();
+		}
+	}
+
+	if (file.length > 0) {
+		result.fileArgs.push(file);
+		if (message.length > 0) {
+			result.messages.push(message);
+		}
+	} else {
+		// No usable file token (bare "@", `@""`, or "@ ..."): keep the literal argument as text.
+		result.messages.push(rawArg);
+	}
+}
+
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
@@ -97,7 +150,7 @@ export function parseArgs(args: string[]): Args {
 		if (arg === "--") {
 			for (const positionalArg of args.slice(i + 1)) {
 				if (positionalArg.startsWith("@")) {
-					result.fileArgs.push(positionalArg.slice(1));
+					pushAtFileArg(result, positionalArg);
 				} else {
 					result.messages.push(positionalArg);
 				}
@@ -320,7 +373,7 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--sdk-stdio") {
 			result.sdkStdio = true;
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			pushAtFileArg(result, arg); // "@path [message]" — split file token from trailing text
 		} else if (arg.startsWith("--")) {
 			const eqIndex = arg.indexOf("=");
 			if (eqIndex !== -1) {

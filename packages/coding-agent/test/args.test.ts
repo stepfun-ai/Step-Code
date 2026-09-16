@@ -506,6 +506,59 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual(["explain this"]);
 		});
 
+		// User feedback: `stepcli -p --mode json "@empty.md 这个文件有什么"` treated the whole
+		// quoted arg as one filename. A single @-arg containing whitespace must split into a
+		// file token plus trailing message text.
+		test("splits an @-arg containing whitespace into a file token and a message", () => {
+			const result = parseArgs(["@empty.md 这个文件有什么"]);
+			expect(result.fileArgs).toEqual(["empty.md"]);
+			expect(result.messages).toEqual(["这个文件有什么"]);
+		});
+
+		test("reproduces the reported argv: -p --mode json '@file text'", () => {
+			const result = parseArgs(["-p", "--mode", "json", "@empty.md 这个文件有什么"]);
+			expect(result.print).toBe(true);
+			expect(result.mode).toBe("json");
+			expect(result.fileArgs).toEqual(["empty.md"]);
+			expect(result.messages).toEqual(["这个文件有什么"]);
+		});
+
+		test('honors @"quoted path" so spaces in a filename are preserved', () => {
+			const result = parseArgs(['@"my notes.md" summarize this']);
+			expect(result.fileArgs).toEqual(["my notes.md"]);
+			expect(result.messages).toEqual(["summarize this"]);
+		});
+
+		test("does not treat '=' or apostrophe as a path boundary", () => {
+			const result = parseArgs(["@foo=bar.txt tell me"]);
+			expect(result.fileArgs).toEqual(["foo=bar.txt"]);
+			expect(result.messages).toEqual(["tell me"]);
+		});
+
+		test("keeps a bare @ as message text instead of an empty file arg", () => {
+			const result = parseArgs(["@"]);
+			expect(result.fileArgs).toEqual([]);
+			expect(result.messages).toEqual(["@"]);
+		});
+
+		test("a whitespace-free @file yields no spurious empty message", () => {
+			const result = parseArgs(["@file.md"]);
+			expect(result.fileArgs).toEqual(["file.md"]);
+			expect(result.messages).toEqual([]);
+		});
+
+		test('tolerates an unclosed @"quote by treating the rest as the path', () => {
+			const result = parseArgs(['@"partial']);
+			expect(result.fileArgs).toEqual(["partial"]);
+			expect(result.messages).toEqual([]);
+		});
+
+		test("splits an @-arg with whitespace after the -- delimiter", () => {
+			const result = parseArgs(["--", "@empty.md read it"]);
+			expect(result.fileArgs).toEqual(["empty.md"]);
+			expect(result.messages).toEqual(["read it"]);
+		});
+
 		test("captures unknown long flags with string values", () => {
 			const result = parseArgs(["--unknown-flag", "message"]);
 			expect(result.messages).toEqual([]);
