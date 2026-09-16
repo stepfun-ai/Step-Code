@@ -52,7 +52,7 @@ function runReal() {
 	if (growth.length > 0) {
 		console.error("coding-agent entry-freeze check failed — entry surface grew beyond baseline:");
 		for (const item of growth) console.error(`  ${item}`);
-		console.error("  packages/coding-agent must not gain new bin/argv/TTY entry responsibilities during the refactor (see docs/review-rules/coding-agent-entry-freeze.md).");
+		console.error("  packages/coding-agent must not gain new bin/argv/TTY entry responsibilities.");
 		process.exit(1);
 	}
 	console.log("coding-agent entry-freeze check passed (no new bin/export entry points).");
