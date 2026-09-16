@@ -146,7 +146,29 @@ export class StepEditor extends CustomEditor {
 	 */
 	private renderNative(width: number): string[] {
 		const safeWidth = Number.isFinite(width) ? Math.max(1, Math.floor(width)) : 1;
-		return this.applyPlaceholder(super.render(Math.max(safeWidth, this.minimumNativeWidth())));
+		return this.applyPlaceholder(this.applyCommandTint(super.render(Math.max(safeWidth, this.minimumNativeWidth()))));
+	}
+
+	/**
+	 * Paint the leading slash command in the accent tone so an accepted
+	 * completion reads as a command rather than free text. The tint is skipped
+	 * when the cursor overlays the token: pi-tui renders the cursor grapheme
+	 * with its own SGR codes, which split the plain token in the row, and
+	 * re-wrapping those segments would fight the reverse-video cursor.
+	 */
+	private applyCommandTint(lines: string[]): string[] {
+		const token = /^\/\S+/.exec(this.getText())?.[0];
+		if (!token || lines.length < 2) return lines;
+		const row = lines[1];
+		const at = row.indexOf(token);
+		if (at === -1) return lines;
+		try {
+			const result = [...lines];
+			result[1] = `${row.slice(0, at)}${theme.fg("accent", token)}${row.slice(at + token.length)}`;
+			return result;
+		} catch {
+			return lines;
+		}
 	}
 
 	/**

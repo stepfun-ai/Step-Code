@@ -544,15 +544,15 @@ describe("F/G. 选中样式与页脚快照", () => {
 		const flat = lines.join("\n");
 		expect(stripTerminalSequences(flat)).toContain("⏵ Ask");
 		expect(stripTerminalSequences(flat)).toContain("step-3.8");
-		// 6-1：右侧读出 = 会话 token 花费 + 剩余上下文（紧凑写法 ctx left）
-		expect(stripTerminalSequences(flat)).toContain("ctx left");
+		// 6-1：右侧读出 = 剩余上下文
+		expect(stripTerminalSequences(flat)).toContain("context left");
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(120);
 		expect(plain(lines)).toMatchSnapshot("footer-step-120");
 	});
 
-	test("页脚 token 用量段与 context 变色（G4/6-1）", () => {
+	test("页脚 context 变色且不显示 token 计数（G4/6-1）", () => {
 		const session = footerSession();
-		// 会话累计 12k in + 3k out + 60k cacheRead → 75k tok 显示在右侧
+		// 会话累计用量不再进入右侧读出；右侧只有剩余上下文
 		session.sessionManager.getEntries = () =>
 			[
 				{
@@ -565,8 +565,8 @@ describe("F/G. 选中样式与页脚快照", () => {
 			] as never;
 		const footer = new FooterComponent(session, footerData(), { presentation: "step" });
 		const flat = stripTerminalSequences(footer.render(120).join("\n"));
-		expect(flat).toContain("75k tok");
-		expect(flat).toContain("88% ctx left");
+		expect(flat).not.toContain("tok");
+		expect(flat).toContain("88% context left");
 
 		// 低水位：88% ctx left 保持 muted（无 error/warning 色）
 		const calm = footer.render(120).join("\n");

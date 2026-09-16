@@ -9,6 +9,7 @@ import type {
 	ExtensionContext,
 	ExtensionFactory,
 } from "../core/extensions/types.ts";
+import { isUserMessage } from "../core/messages.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 
 const MAX_OBJECTIVE_LENGTH = 16_000;
@@ -367,7 +368,7 @@ export class StepGoalRuntime {
 		const text = validateObjective(objective);
 		if (this.goal && this.goal.status !== "complete") {
 			throw new Error(
-				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. Complete or clear it first.`,
+				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. Use /goal resume to continue it, or /goal clear to end it.`,
 			);
 		}
 		const budget = tokenBudget(tokenBudgetValue);
@@ -885,6 +886,17 @@ function envFlagEnabled(value: string | undefined): boolean {
 	return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "on";
 }
 
+/** Compact elapsed time: 45s, 58m 25s, 1h 02m. */
+export function formatDuration(totalSeconds: number): string {
+	const total = Math.max(0, Math.floor(totalSeconds));
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const seconds = total % 60;
+	if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+	if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+	return `${total}s`;
+}
+
 function formatGoalStatus(goal: StepGoalRecord | undefined): string {
 	if (!goal) return "No goal is currently set.";
 	const budget = goal.tokenBudget === undefined ? "unbounded" : `${goal.tokensUsed}/${goal.tokenBudget}`;
@@ -893,7 +905,7 @@ function formatGoalStatus(goal: StepGoalRecord | undefined): string {
 		`Objective: ${goal.objective}`,
 		`Created: ${goal.createdAt}`,
 		`Updated: ${goal.updatedAt}`,
-		`Time: ${goal.timeUsedSeconds}s`,
+		`Time: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${budget}`,
 	].join("\n");
 }
@@ -936,8 +948,10 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			runtime.bindHost(host);
 		};
 		const updateStatus = (ctx: ExtensionContext): void => {
-			const goal = runtime.get();
-			ctx.ui.setStatus("step-goal", goal ? `Goal: ${goal.status}` : undefined);
+			// Only a paused goal earns a footer slot: active progress is visible
+			// in the stream and /goal status reports the rest. A forgotten pause
+			// is the one state worth nagging about persistently.
+			ctx.ui.setStatus("step-goal", runtime.get()?.status === "paused" ? "Goal: paused" : undefined);
 		};
 
 		pi.on("session_start", (_event, ctx) => {
@@ -980,6 +994,14 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			updateStatus(ctx);
 		});
 		pi.on("session_shutdown", () => runtime.shutdown());
+		pi.on("message_start", (event, ctx) => {
+			if (!isUserMessage(event.message)) return;
+			if (runtime.get()?.status !== "paused") return;
+			ctx.ui.notify(
+				"Goal is paused; ordinary prompts do not advance it. /goal resume to continue (or /goal clear to end).",
+				"warning",
+			);
+		});
 
 		pi.registerTool({
 			name: "create_goal",
@@ -1046,7 +1068,10 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 					if (subcommand === "pause" || subcommand === "resume") {
 						runtime.setUserStatus(subcommand === "resume" ? "active" : "paused");
 						updateStatus(ctx);
-						ctx.ui.notify(`Goal ${subcommand}d.`, "info");
+						ctx.ui.notify(
+							subcommand === "pause" ? "Goal paused. Resume with /goal resume." : "Goal resumed.",
+							"info",
+						);
 						return;
 					}
 					if (subcommand === "edit") {

@@ -270,7 +270,7 @@ describe("FooterComponent width handling", () => {
 		expect(plain).toContain("⏵ Ask");
 		expect(plain).toContain("test-model");
 		expect(plain).toContain("high");
-		expect(plain).toContain("88% ctx left");
+		expect(plain).toContain("88% context left");
 		expect(visibleWidth(line)).toBe(120);
 	});
 

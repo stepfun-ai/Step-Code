@@ -2,7 +2,7 @@ import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@step-harness/pi-tu
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "../src/ui/view/editor/step-editor.ts";
-import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
+import { initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 function createEditor(width = 80, rows = 24): StepEditor {
 	const keybindings = new KeybindingsManager();
@@ -167,6 +167,36 @@ describe("StepEditor", () => {
 
 		expect(lines.every((line) => visibleWidth(line) <= 1)).toBe(true);
 		expect(lines.some((line) => line.includes(CURSOR_MARKER))).toBe(true);
+	});
+
+	it("tints the leading slash command in the accent tone without changing width", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("/model hi");
+		const lines = editor.render(80);
+
+		expect(lines[1]).toContain(theme.fg("accent", "/model"));
+		expect(stripSgr(lines[1] ?? "")).toContain("/model hi");
+		for (const line of lines) expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("keeps plain text and a bare slash trigger untinted", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("plain text with /model inside");
+		expect(editor.render(80)[1]).not.toContain(theme.fg("accent", "/model"));
+		editor.setText("/");
+		expect(editor.render(80)[1]).not.toContain(theme.fg("accent", "/"));
+	});
+
+	it("skips the tint while the cursor overlays the token", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("/model hi");
+		for (let i = 0; i < 4; i += 1) editor.handleInput("\x1b[D"); // left into the token
+		const lines = editor.render(80);
+		expect(lines[1]).not.toContain(theme.fg("accent", "/model"));
+		expect(stripSgr(lines[1] ?? "")).toContain("/model hi");
 	});
 
 	it("delegates printable input and submit to the inherited editor", () => {

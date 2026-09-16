@@ -9,6 +9,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
+import { TaskWidgetComponent } from "../src/features/step-tasks-render.ts";
 import type { Theme } from "../src/theme/theme.ts";
 
 interface TasksSnapshot {
@@ -20,6 +21,7 @@ function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 	api: ExtensionAPI;
 	tools: Map<string, ToolDefinition>;
 	entries: TasksSnapshot[];
+	sentMessages: Array<{ customType: string; content: string; display: boolean; triggerTurn?: boolean }>;
 	sessionManager: SessionManager;
 	commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>;
 	emit: (event: { type: string } & Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
@@ -27,6 +29,7 @@ function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 	const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const entries: TasksSnapshot[] = [];
+	const sentMessages: Array<{ customType: string; content: string; display: boolean; triggerTurn?: boolean }> = [];
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	const api = {
 		registerTool(tool: ToolDefinition) {
@@ -49,13 +52,19 @@ function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 			entries.push(data);
 			sessionManager.appendCustomEntry(customType, data);
 		},
-		sendMessage: () => {},
+		sendMessage: (
+			message: { customType: string; content: string; display: boolean },
+			options?: { triggerTurn?: boolean },
+		) => {
+			sentMessages.push({ ...message, triggerTurn: options?.triggerTurn });
+		},
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
 	return {
 		api,
 		tools,
 		entries,
+		sentMessages,
 		sessionManager,
 		commands,
 		emit: async (event, ctx) => {
@@ -556,7 +565,7 @@ test("task widget shows bounded progress with the active label first and plain R
 		"todo 3. Task 3",
 		"todo 4. Task 4",
 		"todo 5. Task 5",
-		"... 2 more open tasks (/todos)",
+		"... +3 more (1 done · 2 todo) · /todos to expand",
 	]);
 });
 
@@ -575,6 +584,82 @@ test("task widget flattens and clips untrusted titles without changing stored da
 	expect(await run(tools, "task_get", { taskId: "1" })).toMatchObject({ subject });
 });
 
+test("task widget component toggles between open preview and the full list via setExpanded", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	for (let i = 1; i <= 8; i++) {
+		await run(
+			tools,
+			"task_create",
+			{ subject: `Task ${i}`, description: "work", activeForm: `Working on ${i}` },
+			ctx,
+		);
+	}
+	await run(tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	await run(tools, "task_update", { taskId: "8", status: "in_progress" }, ctx);
+
+	const widget = (): { render(width: number): string[]; setExpanded(v: boolean): void } => {
+		const options = vi.mocked(ctx.ui.setWidget).mock.calls.at(-1)![2] as {
+			component?: (
+				tui: unknown,
+				theme: Theme,
+			) => {
+				render(width: number): string[];
+				setExpanded(v: boolean): void;
+			};
+		};
+		expect(options?.component).toBeTypeOf("function");
+		return options.component!(undefined, plainTheme);
+	};
+
+	const collapsed = widget().render(120);
+	expect(collapsed[0]).toBe("Tasks: 1/8 completed");
+	expect(collapsed).toContain("wip 8. Working on 8");
+	expect(collapsed).not.toContain("done 1. Task 1");
+	expect(collapsed.at(-1)).toBe("... +3 more (1 done · 2 todo) · ctrl+o to expand");
+
+	const expandedWidget = widget();
+	expandedWidget.setExpanded(true);
+	const expanded = expandedWidget.render(120);
+	expect(expanded[0]).toBe("Tasks: 1/8 completed");
+	expect(expanded).toContain("done 1. Task 1");
+	expect(expanded).toContain("todo 5. Task 5");
+	expect(expanded.at(-1)).toBe("all 8 items · ctrl+o to collapse");
+	expect(widget().render(120).at(-1)).toBe("... +3 more (1 done · 2 todo) · ctrl+o to expand");
+});
+
+test("expanded widget lists every task without a line cap", () => {
+	const tasks: StepTask[] = Array.from({ length: 12 }, (_, i) => ({
+		id: String(i + 1),
+		subject: `Task ${i + 1}`,
+		description: "",
+		status: i < 3 ? "completed" : "pending",
+		blocks: [],
+		blockedBy: [],
+		createdAt: 1,
+		updatedAt: 1,
+	}));
+	const component = new TaskWidgetComponent(tasks, plainTheme);
+	component.setExpanded(true);
+	const lines = component.render(120);
+	expect(lines).toHaveLength(14);
+	expect(lines).toContain("done 3. Task 3");
+	expect(lines).toContain("todo 12. Task 12");
+	expect(lines.at(-1)).toBe("all 12 items · ctrl+o to collapse");
+});
+
+test("/todos always notifies the full list and never re-renders the widget", async () => {
+	const { api, tools, commands } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	await run(tools, "task_create", { subject: "Only", description: "fits the preview" }, ctx);
+	const before = vi.mocked(ctx.ui.setWidget).mock.calls.length;
+	await commands.get("todos")!.handler("", ctx);
+	expect(vi.mocked(ctx.ui.setWidget).mock.calls.length).toBe(before);
+	expect(ctx.ui.notify).toHaveBeenLastCalledWith("todo 1. Only", "info");
+});
+
 test("task widget follows branch restores, completed tasks, deletion and fresh sessions", async () => {
 	const source = createApi();
 	createStepTasksExtension()(source.api);
@@ -582,18 +667,118 @@ test("task widget follows branch restores, completed tasks, deletion and fresh s
 	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
 	const pending = source.sessionManager.getLeafId()!;
 	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
-	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 1/1 completed"]);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+		"step-tasks",
+		["Tasks: 1/1 completed", "... +1 more (1 done) · /todos to expand"],
+		{ component: expect.any(Function) },
+	);
 	source.sessionManager.branch(pending);
 	await source.emit({ type: "session_tree" }, ctx);
-	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"]);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"], {
+		component: expect.any(Function),
+	});
 	await run(source.tools, "task_update", { taskId: "1", status: "deleted" }, ctx);
-	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined, undefined);
 	source.sessionManager.branch(pending);
 	await source.emit({ type: "session_start" }, ctx);
-	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"]);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"], {
+		component: expect.any(Function),
+	});
 	source.sessionManager.newSession();
 	await source.emit({ type: "session_start" }, ctx);
-	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined, undefined);
+});
+
+test("a fully-completed checklist survives the turn end and clears on the next prompt", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext();
+	const nextPrompt = () => userPrompt("next");
+	const runEnds = () => source.emit({ type: "agent_end" }, createContext());
+	const userPrompt = (content: string) =>
+		source.emit({ type: "message_start", message: { role: "user", content } }, ctx);
+	await userPrompt("Fix the login bug and report");
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	await run(source.tools, "task_create", { subject: "Two", description: "second" }, ctx);
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+
+	// Assistant traffic never retires the list; a new user prompt does.
+	await source.emit({ type: "message_start", message: { role: "assistant" } }, ctx);
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+
+	// The run ends with work still open: nothing is archived into the transcript.
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(0);
+
+	// Partially done: a new prompt arrives with work still open, so the list stays.
+	await nextPrompt();
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+
+	await run(source.tools, "task_update", { taskId: "2", status: "completed" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+		"step-tasks",
+		["Tasks: 2/2 completed", "... +2 more (2 done) · /todos to expand"],
+		{ component: expect.any(Function) },
+	);
+
+	// Fully done: the receipt stays past the turn end (still listed) and is
+	// retired by the next prompt; the id counter survives so no id from this
+	// checklist is handed out again.
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+		"step-tasks",
+		["Tasks: 2/2 completed", "... +2 more (2 done) · /todos to expand"],
+		{ component: expect.any(Function) },
+	);
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+
+	// The run ends fully done: the checklist is archived as a transcript receipt
+	// that recaps the prompt the checklist was created for.
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(1);
+	expect(source.sentMessages[0]).toMatchObject({ customType: "step-tasks", display: true, triggerTurn: false });
+	expect(source.sentMessages[0]!.content).toContain("**Tasks: 2/2 completed**");
+	expect(source.sentMessages[0]!.content).toContain("> Fix the login bug and report");
+	expect(source.sentMessages[0]!.content).toContain("done 2. Two");
+
+	// The next prompt retires the panel; a second receipt is not posted.
+	await nextPrompt();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined, undefined);
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(1);
+	expect(await run(source.tools, "task_list", {})).toEqual([]);
+	const next = (await run(source.tools, "task_create", { subject: "Three", description: "fresh" })) as { id: string };
+	expect(next.id).toBe("3");
+});
+
+test("the receipt posts exactly once across repeated runs and late retirement", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext();
+	const userPrompt = (content: string) =>
+		source.emit({ type: "message_start", message: { role: "user", content } }, ctx);
+	const runEnds = () => source.emit({ type: "agent_end" }, createContext());
+	await userPrompt("build the feature");
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+
+	// agent_end fires once per run; repeated runs must not duplicate the receipt.
+	await runEnds();
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(1);
+	expect(source.sentMessages[0]!.content).toContain("> build the feature");
+
+	// A user message that retires the checklist before agent_end still archives it.
+	const second = createApi();
+	createStepTasksExtension()(second.api);
+	const ctx2 = createContext();
+	await second.emit({ type: "message_start", message: { role: "user", content: "fix the bug" } }, ctx2);
+	await run(second.tools, "task_create", { subject: "Two", description: "second" }, ctx2);
+	await run(second.tools, "task_update", { taskId: "1", status: "completed" }, ctx2);
+	// A later prompt does not become the origin of a checklist already started.
+	await second.emit({ type: "message_start", message: { role: "user", content: "unrelated" } }, ctx2);
+	expect(second.sentMessages).toHaveLength(1);
+	expect(second.sentMessages[0]!.content).toContain("> fix the bug");
+	expect(second.sentMessages[0]!.content).not.toContain("unrelated");
 });
 
 test("failed updates and read-only task tools do not refresh the widget", async () => {
@@ -658,16 +843,15 @@ test("task result history renders its own snapshot and expands all task fields",
 	expect(renderResult(tools.get("task_update")!, removed)).toContain("deleted 1. Write parser");
 });
 
-test("task list rendering is bounded when collapsed and complete when expanded", async () => {
+test("task list rendering keeps only counts when collapsed and the full output when expanded", async () => {
 	const { api, tools } = createApi();
 	createStepTasksExtension()(api);
 	for (let i = 1; i <= 7; i++) await run(tools, "task_create", { subject: `Task ${i}`, description: "work" });
 	await run(tools, "task_update", { taskId: "2", addBlockedBy: ["1"] });
 	const result = await runResult(tools, "task_list", {});
 	const collapsed = renderResult(tools.get("task_list")!, result);
-	expect(collapsed).toContain("todo 2. Task 2 (blocked by 1)");
-	expect(collapsed).not.toContain("Task 6");
-	expect(collapsed).toContain("2 more tasks");
+	expect(collapsed).toContain("7 tasks · 0 done · 7 open");
+	expect(collapsed).not.toContain("Task 2");
 	expect(renderResult(tools.get("task_list")!, result, true)).toContain("Task 7");
 });
 

@@ -566,3 +566,64 @@ describe("Step goal extension", () => {
 		expect(latestGoalSnapshot).toMatchObject({ id: "goal-overbudget", status: "budget_limited" });
 	});
 });
+
+describe("Goal UX guidance (T1-T6)", () => {
+	test("start, pause, and paused-input messages carry next-step pointers", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")!("finish the migration", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			expect.stringContaining("Goal set:"),
+			"info",
+			expect.anything(),
+		);
+
+		await harness.commands.get("goal")!("pause", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			"Goal paused. Resume with /goal resume.",
+			"info",
+		);
+		expect(vi.mocked(harness.ctx.ui.setStatus)).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
+
+		// Ordinary prompts while paused get a recovery pointer (T4).
+		await emit(harness, "message_start", { message: { role: "user", content: "继续" } });
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			expect.stringContaining("/goal resume to continue"),
+			"warning",
+		);
+
+		await harness.commands.get("goal")!("resume", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith("Goal resumed.", "info");
+	});
+
+	test("footer stays quiet while active and formatDuration carries places", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")!("finish the migration", harness.ctx);
+		// Active goals leave the footer alone; only a pause earns a slot.
+		expect(vi.mocked(harness.ctx.ui.setStatus)).toHaveBeenLastCalledWith("step-goal", undefined);
+	});
+
+	test("formatDuration formats 45s / 58m 25s / 1h 02m", async () => {
+		const { formatDuration } = await import("../src/features/step-schedule.ts");
+		expect(formatDuration(45)).toBe("45s");
+		expect(formatDuration(3505)).toBe("58m 25s");
+		expect(formatDuration(3725)).toBe("1h 02m");
+	});
+
+	test("starting over an unfinished goal points at resume/clear", async () => {
+		const runtime = new StepGoalRuntime({
+			now: () => 1_000,
+			idFactory: () => "goal-1",
+			isIdle: () => true,
+			hasPendingMessages: () => false,
+			persist: () => true,
+			requestContinuation: () => {},
+		});
+		runtime.start("first", "session-1");
+		runtime.setUserStatus("paused");
+		expect(() => runtime.start("second", "session-1")).toThrowError(
+			/\/goal resume to continue.*\/goal clear to end/s,
+		);
+	});
+});

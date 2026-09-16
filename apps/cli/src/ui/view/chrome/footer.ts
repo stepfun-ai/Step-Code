@@ -391,35 +391,18 @@ export class FooterComponent implements Component {
 		const left = segments.join(muted(" · "));
 		const usage = this.session.getContextUsage();
 
-		// Right-aligned readout: session token spend, then remaining context.
-		// Tokens are first-class (省 token 是产品目标), but yield to context on
-		// narrow terminals; context turns amber/red as the window fills so the
-		// need to compact is visible before it becomes urgent.
-		const { usageTotals } = this.computeUsageTotals();
-		const spentTokens = usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
-		const rightSegments: string[] = [];
-		if (spentTokens > 0 && safeWidth >= 72) {
-			rightSegments.push(muted(`${formatTokens(spentTokens)} tok`));
-		}
-
+		// Right-aligned readout: remaining context only. Context turns amber/red
+		// as the window fills so the need to compact is visible before it
+		// becomes urgent.
 		if (usage?.percent === null || usage?.percent === undefined) {
-			const right = rightSegments.join(muted(" · "));
-			if (!right) return [truncateToWidth(left, safeWidth, "")];
-			const rightWidth = visibleWidth(right);
-			const gapUnknown = safeWidth - visibleWidth(left) - rightWidth;
-			if (gapUnknown >= 2) return [`${left}${" ".repeat(gapUnknown)}${right}`];
-			const availableUnknown = Math.max(0, safeWidth - rightWidth - 1);
-			return [
-				`${truncateToWidth(left, availableUnknown, "")}${" ".repeat(Math.max(0, safeWidth - availableUnknown - rightWidth))}${right}`,
-			];
+			return [truncateToWidth(left, safeWidth, "")];
 		}
 
 		const usedPercent = Math.max(0, Math.min(100, usage.percent));
-		const contextLeftText = `${Math.round(100 - usedPercent)}% ctx left`;
+		const contextLeftText = `${Math.round(100 - usedPercent)}% context left`;
 		// Same thresholds as the native footer: >90% used turns error, >70% warning.
 		const contextPaint = usedPercent > 90 ? error : usedPercent > 70 ? warning : muted;
-		rightSegments.push(contextPaint(contextLeftText));
-		const right = rightSegments.join(muted(" · "));
+		const right = contextPaint(contextLeftText);
 
 		const leftWidth = visibleWidth(left);
 		const contextWidth = visibleWidth(right);
