@@ -602,7 +602,6 @@ export {
 } from "./step/login-flow.ts";
 export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
-export { canonicalStepBaseUrl, normalizeStepModelsFile } from "./step/models-endpoint-repair.ts";
 export { resolveStepLoginProfiles } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,
