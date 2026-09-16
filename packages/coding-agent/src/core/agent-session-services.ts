@@ -37,6 +37,8 @@ export interface AgentSessionRuntimeDiagnostic {
  * reach this function, so later cwd switches do not reinterpret them.
  */
 export interface CreateAgentSessionServicesOptions {
+	/** Optional model catalog path for product-specific layouts. */
+	modelCatalogPath?: string;
 	cwd: string;
 	agentDir?: string;
 	/** Project resource directory name. Defaults to Pi's configured value. */
@@ -157,7 +159,9 @@ export async function createAgentSessionServices(
 		options.modelRuntime ??
 		(await ModelRuntime.create({
 			authPath: options.authPath ? resolvePath(options.authPath, cwd) : join(agentDir, "auth.json"),
-			modelsPath: join(agentDir, "models.json"),
+			modelsPath: options.modelCatalogPath
+				? resolvePath(options.modelCatalogPath, cwd)
+				: join(agentDir, "models.json"),
 			signal: options.modelRuntimeSignal,
 		}));
 	const configDirName = options.configDirName?.trim() || options.resourceLoaderOptions?.configDirName?.trim();

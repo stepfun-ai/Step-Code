@@ -167,6 +167,7 @@ export interface RuntimeContext {
 	isExtensionCommand(text: string): boolean;
 	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void;
 	showModelSelector(initialSearchInput?: string): void;
+	addCommandInputToChat(text: string): void;
 	showModelsSelector(): void;
 	showOAuthSelector(mode: "login" | "logout"): Promise<void>;
 	showSessionSelector(): void;

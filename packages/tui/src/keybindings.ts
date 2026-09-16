@@ -41,6 +41,7 @@ export interface Keybindings {
 	"tui.select.pageDown": true;
 	"tui.select.confirm": true;
 	"tui.select.cancel": true;
+	"tui.select.toggle": true;
 	// Alternate-screen viewport navigation
 	"tui.altScreen.pageUp": true;
 	"tui.altScreen.pageDown": true;
@@ -155,6 +156,10 @@ export const TUI_KEYBINDINGS = {
 	"tui.select.cancel": {
 		defaultKeys: ["escape", "ctrl+c"],
 		description: "Cancel selection",
+	},
+	"tui.select.toggle": {
+		defaultKeys: "space",
+		description: "Toggle the highlighted item in a multi-select list",
 	},
 	// These intentionally shadow the unmodified editor bindings in fullscreen mode.
 	"tui.altScreen.pageUp": {

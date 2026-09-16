@@ -1,21 +1,18 @@
 import {
 	loadStepCodeConfig,
-	migrateStepConfig,
-	readStepGlobalDefaults,
+	readGlobalStepDefaults,
 	type StepCodeConfig,
-	type StepConfigMigrationReport,
+	type StepGlobalDefaults,
 } from "@step-harness/coding-agent";
 import { showDeprecationWarnings } from "@step-harness/config";
 
 /**
- * Bootstrap step 2: load + migrate configuration.
+ * Bootstrap step 2: load configuration.
  *
- * The product-neutral migration format/loader/runner lives in
- * `@step-harness/config` (imported here directly); the Step-specific projection
- * of legacy files is applied by the coding-agent product package. Runs after
- * stdout capture (step 1) and before telemetry (step 3): migration must finish
- * before telemetry, device identity, or pi's SettingsManager create canonical
- * files.
+ * Step's only configuration file is `config.toml`; `models.json` and `auth.json`
+ * remain JSON but hold model definitions and credentials, not settings. Runs
+ * after stdout capture (step 1) and before telemetry (step 3), because the
+ * persisted telemetry defaults have to be visible before telemetry is built.
  */
 
 // Re-export the product-neutral deprecation surface so this bootstrap module has
@@ -23,18 +20,21 @@ import { showDeprecationWarnings } from "@step-harness/config";
 // per the step-3 assembly contract.
 export { showDeprecationWarnings };
 
-export type StepPersistedStartupDefaults = Awaited<ReturnType<typeof readStepGlobalDefaults>>;
-
 export interface StepStartupConfig {
-	migration: StepConfigMigrationReport;
-	persistedDefaults: StepPersistedStartupDefaults;
+	persistedDefaults: StepGlobalDefaults;
 	stepCodeConfig: StepCodeConfig | undefined;
 }
 
-/** Migrate legacy config, then read persisted defaults and the stepcode config. */
+/**
+ * Read persisted defaults and the stepcode config.
+ *
+ * A stale Step endpoint left in models.json by an older release needs no pass
+ * here: the Step provider's `normalizeModels` hook restores the dialect and the
+ * canonical endpoint for built-in ids on every launch, so the request path is
+ * already protected without rewriting the user's file.
+ */
 export async function loadStepStartupConfig(): Promise<StepStartupConfig> {
-	const migration = await migrateStepConfig();
-	const persistedDefaults = await readStepGlobalDefaults();
+	const persistedDefaults = readGlobalStepDefaults();
 	const stepCodeConfig = await loadStepCodeConfig();
-	return { migration, persistedDefaults, stepCodeConfig };
+	return { persistedDefaults, stepCodeConfig };
 }

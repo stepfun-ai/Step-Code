@@ -112,13 +112,14 @@ does not pass these options and keeps its upstream defaults.
 Step also injects a settings decorator through `settingsManagerFactory`. The
 decorator delegates Pi's complete `SettingsManager` API, including global and
 project merging, trust, reload, and flush. Product-only permission policy is
-kept in separate `step-settings.json` sidecars under the Step global agent and
-workspace directories, with the same global-then-project precedence and file
-locking. This keeps fields such as `permissionPreset` and `autoResume` out of
-Pi's native `settings.json` schema while leaving ordinary Pi startup unchanged.
+kept in the unified `config.toml` files at `~/.step-cli/config.toml` and
+`<cwd>/.step-cli/config.toml`, with the same global-then-project precedence and
+file locking. This keeps fields such as `permissionPreset` and `autoResume` out
+of Pi's native `settings.json` schema while leaving ordinary Pi startup
+unchanged.
 
 Top-level `step feedback` and interactive `/feedback` use a Step-owned gate,
-configured by `feedbackEnabled` in the Step sidecar and the legacy feedback
+configured by `feedbackEnabled` in the Step config and the legacy feedback
 opt-out environment variables. This gate is independent of Step telemetry:
 disabling analytics does not disable user feedback, while the optional
 `feedback_submitted` analytics event still follows the telemetry gate.
@@ -273,7 +274,7 @@ service and are not silently faked by this fork.
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
-| Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
+| Step CLI OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |

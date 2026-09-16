@@ -64,7 +64,7 @@ import type { ModelRequestObserver } from "./core/model-request-observer.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
-import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { type AppMode, ProjectTrustDeclinedError, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { ResourceLoader } from "./core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
@@ -727,6 +727,8 @@ export interface MainOptions {
 	configDirName?: string;
 	/** Optional credential file override for product entrypoints. */
 	authPath?: string;
+	/** Optional model catalog path for product entrypoints. */
+	modelsPath?: string;
 	/** Session construction facade used by replacement flows such as /new and /fork. */
 	sessionManagerFactory?: SessionManagerFactory;
 	/**
@@ -767,6 +769,7 @@ export interface MainOptions {
 		| "allowedAuthProviders"
 		| "stepLogin"
 		| "stepLogout"
+		| "stepMcpImport"
 		| "onStartup"
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */
@@ -1109,14 +1112,14 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		const isInitialRuntime = sessionStartEvent === undefined;
 		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
 		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-		const hasTrustRequiringResources = hasTrustRequiringProjectResources(cwd, configDirName);
-		const shouldResolveProjectTrust =
-			parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined && hasTrustRequiringResources;
+		// Asked for every directory, not only those shipping project config. The
+		// config is one of two things trust covers; the other is the file contents
+		// the agent is about to read, and a hostile file is a prompt-injection
+		// vector whether or not the directory also ships a settings.json.
+		const shouldResolveProjectTrust = parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined;
 		const projectTrusted = shouldResolveProjectTrust
 			? false
-			: (cachedProjectTrust ??
-				parsed.projectTrustOverride ??
-				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
+			: (cachedProjectTrust ?? parsed.projectTrustOverride ?? trustStore.get(cwd) === true);
 		const runtimeSettingsManager = createSettingsManager(cwd, agentDir, {
 			projectTrusted,
 			configDirName,
@@ -1127,6 +1130,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,
+			modelCatalogPath: options?.modelsPath,
 			configDirName,
 			authPath,
 			settingsManager: runtimeSettingsManager,
@@ -1141,6 +1145,9 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 								configDirName,
 								trustOverride: parsed.projectTrustOverride,
 								defaultProjectTrust: startupSettingsManager.getDefaultProjectTrust(),
+								// A session reads the directory's files into the model, so the
+								// question applies even where there is no project config.
+								alwaysAsk: true,
 								extensionsResult,
 								projectTrustContext:
 									projectTrustContext ??
@@ -1259,12 +1266,20 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		};
 	};
 	time("createRuntime");
-	const runtime = await createAgentSessionRuntime(createRuntime, {
-		cwd: sessionManager.getCwd(),
-		agentDir,
-		sessionManager,
-		sessionManagerFactory: options?.sessionManagerFactory,
-	});
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
+	try {
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: sessionManager.getCwd(),
+			agentDir,
+			sessionManager,
+			sessionManagerFactory: options?.sessionManagerFactory,
+		});
+	} catch (error) {
+		// Declining trust is a decision, not a failure: leave without a stack
+		// trace and without the alternate screen ever being entered.
+		if (error instanceof ProjectTrustDeclinedError) return { kind: "completed" };
+		throw error;
+	}
 	time("createAgentSessionRuntime");
 	const runtimeHost = options?.runtimeHostFactory?.(runtime) ?? runtime;
 	const { services, session, modelFallbackMessage } = runtime;

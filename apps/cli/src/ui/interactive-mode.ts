@@ -1195,11 +1195,12 @@ export class InteractiveMode {
 		wireInteractiveRuntime(this);
 		this.redraw.requestRender();
 
-		// Initialize extensions first so resources are shown before messages
-		await this.rebindCurrentSession();
-
-		// Render initial messages AFTER showing loaded resources
-		this.renderInitialMessages();
+		// Paint the committed startup frame before binding extensions. Extension
+		// startup (MCP discovery, connections, tool registration) is unbounded in
+		// time, and the loaded-resources container is mounted above the chat
+		// container, so resources still appear above messages regardless of which
+		// is populated first. renderCurrentSessionState renders initial messages.
+		await this.rebindCurrentSession({ renderBeforeBind: true });
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -1243,6 +1244,26 @@ export class InteractiveMode {
 	 * Initializes the UI, shows warnings, processes initial messages, and starts the interactive loop.
 	 */
 	async run(): Promise<void> {
+		// Only a bare `step` gets the offer: a launch that already carries a prompt,
+		// a resumed session, or an auth-only command is here to do something else,
+		// not to answer a setup question.
+		let mcpImportNotice: string | undefined;
+		let mcpImportError: string | undefined;
+		if (
+			this.options.stepMcpImport &&
+			!this.options.exitAfterStartupLogin &&
+			!this.options.initialMessage &&
+			!this.options.initialMessages?.length &&
+			this.session.state.messages.length === 0
+		) {
+			try {
+				mcpImportNotice = await this.options.stepMcpImport();
+			} catch (error: unknown) {
+				// An offer to import is never worth failing a launch over. Hold the
+				// message: there is no chat surface to show it on until init() runs.
+				mcpImportError = `Could not offer MCP import: ${error instanceof Error ? error.message : String(error)}`;
+			}
+		}
 		await this.init();
 		if (this.options.onStartup) {
 			const continueStartup = await this.options.onStartup({
@@ -1282,6 +1303,9 @@ export class InteractiveMode {
 			stopThemeWatcher();
 			return;
 		}
+
+		if (mcpImportNotice) this.showNotice(mcpImportNotice);
+		if (mcpImportError) this.showWarning(mcpImportError);
 
 		if (!this.options.disableBackgroundServices) {
 			const controller = new AbortController();
@@ -2216,6 +2240,10 @@ export class InteractiveMode {
 		if (options.renderBeforeBind) {
 			this.renderCurrentSessionState();
 			this.subscribeToAgent();
+			// Commit the frame here rather than relying on a queued render to flush
+			// during an await. Binding extensions is unbounded in time, so this is
+			// the guarantee that the header and the editor are visible first.
+			this.redraw.renderNow();
 		}
 
 		await this.bindCurrentSessionExtensions();
@@ -3237,6 +3265,19 @@ export class InteractiveMode {
 		return clipboardPaste(this);
 	}
 
+	addCommandInputToChat(text: string): void {
+		if (this.chatContainer.children.length > 0) this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(
+			this.createUserMessageComponent(
+				text,
+				this.getMarkdownThemeWithSettings(),
+				this.outputPad,
+				this.getMarkdownTransformers(),
+			),
+		);
+		this.redraw.requestRender();
+	}
+
 	private subscribeToAgent(): void {
 		subscribeToAgent(this);
 	}
@@ -4057,6 +4098,22 @@ export class InteractiveMode {
 	showWarning(warningMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		this.redraw.requestRender();
+	}
+
+	/**
+	 * A thing that succeeded and is worth a line in the transcript.
+	 *
+	 * Distinct from `showWarning` on purpose: routing a successful result through
+	 * the yellow "Warning:" channel tells the user something went wrong when
+	 * nothing did. Continuation lines are indented under the check so a
+	 * multi-line summary reads as one block.
+	 */
+	showNotice(message: string): void {
+		const [first = "", ...rest] = message.split("\n");
+		const body = [`${theme.fg("success", "✓")} ${first}`, ...rest.map((line) => `  ${line}`)].join("\n");
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(body, 1, 0));
 		this.redraw.requestRender();
 	}
 

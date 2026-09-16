@@ -77,6 +77,21 @@ export interface InteractiveModeOptions {
 	/** Shared Step logout flow used by the Step-only TUI command. */
 	stepLogout?: () => Promise<{ removed: boolean; remainingSource?: string | null }>;
 	/**
+	 * One-time offer to migrate another agent's MCP servers.
+	 *
+	 * Runs before the main UI is built, and owns the screen while it does: an
+	 * offer mounted after `init()` shows the user a logo and an input box and
+	 * then replaces them a frame later, which reads as a glitch. It is still
+	 * after the two gates it has to follow — the runtime resolved project trust
+	 * while it was being constructed, and Step performs its startup login before
+	 * `main()` is called at all.
+	 *
+	 * Resolves to a notice to show once the screen is gone, or `undefined` when
+	 * nothing happened worth reporting; a silent write would leave the user with
+	 * no record of what landed in their config.
+	 */
+	stepMcpImport?: () => Promise<string | undefined>;
+	/**
 	 * Product startup hook. Returning false stops the interactive loop after the
 	 * hook has completed (used by a self-update that has relaunched the binary).
 	 */

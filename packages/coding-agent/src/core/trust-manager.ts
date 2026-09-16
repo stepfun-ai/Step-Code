@@ -33,13 +33,39 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"skills",
 	"prompts",
 	"themes",
-	// Product adapters may keep their policy overlay in a sidecar next to the
-	// native settings file. It is still project-controlled input and must be
-	// covered by the same trust decision.
-	"step-settings.json",
+	// A product's unified TOML config carries project-scoped settings such as
+	// extension paths and approval presets, so a project that only ships this
+	// file must still be gated by the trust prompt.
+	"config.toml",
 	"SYSTEM.md",
 	"APPEND_SYSTEM.md",
 ] as const;
+
+/**
+ * Entries that double as the user's own global file at ~/<configDir>/<entry>.
+ * When cwd is $HOME the project path resolves to that same file, so treating it
+ * as project input would prompt for trust on the user's own configuration - and
+ * a "do not trust" answer there would be inherited by every project below $HOME.
+ */
+const USER_GLOBAL_CONFIG_RESOURCES: ReadonlySet<string> = new Set(["config.toml"]);
+
+/**
+ * Compare two already-resolved paths for filesystem equality.
+ *
+ * Windows resolves paths case-insensitively, but canonicalizePath
+ * (fs.realpathSync) echoes back the casing it was handed rather than the casing
+ * on disk - only realpathSync.native normalizes it. So $HOME and cwd can spell
+ * one directory two ways, notably under Git Bash, which sets HOME itself. A
+ * case-sensitive compare there stops recognizing the user's own global
+ * resources and prompts for trust on their own configuration.
+ *
+ * Only win32 folds case. Both callers below use a match to *skip* a check, so a
+ * false match fails open, and case-sensitive volumes exist on macOS and Linux.
+ */
+function isSamePath(a: string, b: string): boolean {
+	if (a === b) return true;
+	return process.platform === "win32" && a.toLowerCase() === b.toLowerCase();
+}
 
 function normalizeCwd(cwd: string): string {
 	return canonicalizePath(resolvePath(cwd));
@@ -193,13 +219,17 @@ export function hasTrustRequiringProjectResources(cwd: string, configDirName: st
 
 	const resolvedConfigDirName = configDirName.trim() || CONFIG_DIR_NAME;
 	const configDir = join(currentDir, resolvedConfigDirName);
-	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
+	const isUserConfigDir = isSamePath(configDir, join(homeDir, resolvedConfigDirName));
+	const configResources = isUserConfigDir
+		? TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.filter((entry) => !USER_GLOBAL_CONFIG_RESOURCES.has(entry))
+		: TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES;
+	if (configResources.some((entry) => existsSync(join(configDir, entry)))) {
 		return true;
 	}
 
 	while (true) {
 		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (agentsSkillsDir !== userAgentsSkillsDir && existsSync(agentsSkillsDir)) {
+		if (!isSamePath(agentsSkillsDir, userAgentsSkillsDir) && existsSync(agentsSkillsDir)) {
 			return true;
 		}
 

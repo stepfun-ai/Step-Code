@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DefaultPackageManager } from "../src/core/package-manager.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { readStepGlobalDefaults } from "../src/step/config-migration.ts";
+import { readGlobalStepDefaults } from "../src/step/config-toml.ts";
 import { createStepSettingsManager } from "../src/step/settings-manager.ts";
 
 const roots: string[] = [];
@@ -15,23 +15,26 @@ afterEach(async () => {
 });
 
 describe("Step config path resolution", () => {
-	test("reads defaults from an explicitly configured Step agent directory", async () => {
+	// The config file sits beside the agent directory, so an injected
+	// STEP_CODING_AGENT_DIR must steer the defaults read away from $HOME.
+	test("reads defaults from the config beside an explicitly configured agent directory", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-config-paths-"));
 		roots.push(root);
-		const agentDir = join(root, "custom-agent");
+		const configRoot = join(root, "custom-root");
+		const agentDir = join(configRoot, "agent");
 		await mkdir(agentDir, { recursive: true });
 		await writeFile(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ defaultProvider: "custom", defaultModel: "model" }),
+			join(configRoot, "config.toml"),
+			['defaultProvider = "custom"', 'defaultModel = "model"', ""].join("\n"),
 		);
 
-		await expect(
-			readStepGlobalDefaults(undefined, {
+		expect(
+			readGlobalStepDefaults({
 				STEP_CODING_AGENT_DIR: agentDir,
 				HOME: join(root, "different-home"),
 			}),
-		).resolves.toEqual({ provider: "custom", model: "model" });
-		await expect(readFile(join(agentDir, "settings.json"), "utf8")).resolves.toContain("custom");
+		).toEqual({ provider: "custom", model: "model" });
+		await expect(readFile(join(configRoot, "config.toml"), "utf8")).resolves.toContain("custom");
 	});
 
 	test("keeps project settings isolated when managers use different config directory names", async () => {
@@ -109,7 +112,7 @@ describe("Step config path resolution", () => {
 		expect(packageManager.getInstalledPath("extensions/local.ts", "project")).toBe(projectExtension);
 	});
 
-	test("derives the Step sidecar next to the injected project config directory", async () => {
+	test("derives the Step config next to the injected agent and project directories", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-config-paths-sidecar-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
@@ -119,8 +122,25 @@ describe("Step config path resolution", () => {
 		const manager = createStepSettingsManager(cwd, agentDir, { configDirName: ".step-custom" });
 
 		expect(manager.getStepSettingsPaths()).toEqual({
-			global: join(agentDir, "step-settings.json"),
-			project: join(cwd, ".step-custom", "step-settings.json"),
+			global: join(root, "config.toml"),
+			project: join(cwd, ".step-custom", "config.toml"),
 		});
+	});
+
+	test("keeps the wrapped Pi manager on the injected config, not the real home", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-config-paths-shared-"));
+		roots.push(root);
+		const cwd = join(root, "workspace");
+		const agentDir = join(root, "agent");
+		await mkdir(cwd, { recursive: true });
+
+		const manager = createStepSettingsManager(cwd, agentDir, { configDirName: ".step-custom" });
+		manager.setDefaultModel("injected-model");
+		await manager.flush();
+
+		// The global config is the file the decorator reports, not ~/.step-cli.
+		const globalPath = manager.getStepSettingsPaths().global;
+		expect(globalPath).toBe(join(root, "config.toml"));
+		expect(await readFile(globalPath, "utf8")).toContain("injected-model");
 	});
 });

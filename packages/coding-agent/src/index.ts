@@ -546,12 +546,19 @@ export {
 	translateStepCommandArgs,
 } from "./step/command-compat.ts";
 export {
-	migrateStepConfig,
-	readStepGlobalDefaults,
-	type StepConfigMigrationOptions,
-	type StepConfigMigrationReport,
-	type StepConfigMigrationRootReport,
-} from "./step/config-migration.ts";
+	ensureStepConfigFile,
+	ensureStepGlobalConfig,
+	readGlobalStepConfig,
+	readGlobalStepDefaults,
+	readStepConfig,
+	resolveStepConfigPath,
+	STEP_CONFIG_FILE_NAME,
+	type StepConfigDocument,
+	type StepGlobalDefaults,
+	type StepMcpServerConfig,
+	updateGlobalMcpConfig,
+	updateGlobalStepConfig,
+} from "./step/config-toml.ts";
 export {
 	getStepDefaultTheme,
 	isStepServicesDisabled,
@@ -573,6 +580,7 @@ export {
 	LEGACY_STEP_CONFIG_DIR,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
+	resolveStepConfigRoot,
 	resolveStepHomeDir,
 	resolveStepSessionDir,
 	STEP_CLI_CONFIG_DIR,
@@ -592,6 +600,8 @@ export {
 	type StepLoginOutcome,
 	syncStepLoginProfileEndpoint,
 } from "./step/login-flow.ts";
+export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
+export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
 export { resolveStepLoginProfiles } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,
@@ -646,7 +656,6 @@ export {
 export {
 	createStepSettingsManager,
 	decorateStepSettingsManager,
-	STEP_SETTINGS_FILE_NAME,
 	type StepSettings,
 	type StepSettingsDecoratorOptions,
 	type StepSettingsManager,

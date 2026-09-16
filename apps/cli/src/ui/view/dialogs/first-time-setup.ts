@@ -68,7 +68,7 @@ export class FirstTimeSetupComponent extends Container {
 				new Text(
 					theme.fg(
 						"muted",
-						`Opting in stores a tracking identifier in settings.json and enables anonymous\nusage analytics. This helps us to better debug, reproduce, and resolve issues\nand bugs within ${APP_NAME}. You can observe what is shared using /privacy and make\nchanges anytime in settings.json.`,
+						`Opting in stores a tracking identifier in config.toml and enables anonymous\nusage analytics. This helps us to better debug, reproduce, and resolve issues\nand bugs within ${APP_NAME}. You can observe what is shared using /privacy and make\nchanges anytime in config.toml.`,
 					),
 					1,
 					0,

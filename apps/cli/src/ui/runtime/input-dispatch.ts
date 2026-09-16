@@ -162,6 +162,9 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 	ctx.defaultEditor.onSubmit = async (text: string) => {
 		text = text.trim();
 		if (!text) return;
+		// These two answer in place instead of going through the agent, so without
+		// an echo the transcript shows a reply to a question nobody asked.
+		if (text === "/mcp" || text === "/status") ctx.addCommandInputToChat(text);
 
 		// Whatever this submission produces can push the transcript past the
 		// viewport, and an animating welcome block above the viewport leaves pi

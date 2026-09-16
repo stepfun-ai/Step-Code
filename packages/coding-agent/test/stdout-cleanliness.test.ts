@@ -40,16 +40,17 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 		"utf-8",
 	);
 
+	// Step reads its settings from config.toml, not settings.json: the CLI builds
+	// pi's SettingsManager on StepTomlSettingsStorage. Declaring the package in
+	// settings.json here would leave the startup silent and make the assertions
+	// below pass for the wrong reason.
 	writeFileSync(
-		join(projectConfigDir, "settings.json"),
-		JSON.stringify(
-			{
-				packages: ["npm:fake-package"],
-				npmCommand: [process.execPath, fakeNpmPath],
-			},
-			null,
-			2,
-		),
+		join(projectConfigDir, "config.toml"),
+		[
+			`packages = [${JSON.stringify("npm:fake-package")}]`,
+			`npmCommand = [${JSON.stringify(process.execPath)}, ${JSON.stringify(fakeNpmPath)}]`,
+			"",
+		].join("\n"),
 		"utf-8",
 	);
 

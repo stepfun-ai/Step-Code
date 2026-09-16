@@ -1339,6 +1339,13 @@ export interface ExtensionAPI {
 		tool: ToolDefinition<TParams, TDetails, TState>,
 	): void;
 
+	/**
+	 * Register several tools and refresh the tool registry once. Registering a
+	 * large catalog one tool at a time rebuilds the registry and the system
+	 * prompt per tool, which is quadratic work on the startup path.
+	 */
+	registerTools(tools: readonly ToolDefinition<any, any, any>[]): void;
+
 	// =========================================================================
 	// Command, Shortcut, Flag Registration
 	// =========================================================================
