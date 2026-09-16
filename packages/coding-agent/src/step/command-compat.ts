@@ -269,16 +269,23 @@ function translateExecArgs(args: readonly string[]): string[] {
 	return result;
 }
 
+/**
+ * `step resume` has two shapes and they map to different pi flags.
+ *
+ * Without an id it opens the interactive picker, which is `--resume`. With an
+ * id it must open that specific session, and pi rejects `--session-id`
+ * alongside `--resume` (see validateSessionIdFlags in main.ts), so the pair
+ * would fail before reaching the session layer. `--session <path|id>` is the
+ * selector that resolves an existing session and reports a missing one.
+ *
+ * Only the first argument can be the id. Scanning for any non-flag token would
+ * pick up a flag's value instead, so `step resume --model step-3` would resume
+ * a session named `step-3` rather than opening the picker.
+ */
 function translateResumeArgs(args: readonly string[]): string[] {
-	const result: string[] = ["--resume"];
-	const sessionId = args.find((arg) => !arg.startsWith("-"));
-	if (sessionId) result.push("--session-id", sessionId);
-	for (let index = 0; index < args.length; index += 1) {
-		const arg = args[index];
-		if (arg === sessionId) continue;
-		result.push(arg);
-	}
-	return result;
+	const sessionId = args[0];
+	if (sessionId === undefined || sessionId.startsWith("-")) return ["--resume", ...args];
+	return ["--session", sessionId, ...args.slice(1)];
 }
 
 function translateModelsArgs(args: readonly string[]): string[] {

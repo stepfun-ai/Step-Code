@@ -12,6 +12,7 @@ import type {
 	EditorFactory,
 	ExtensionCommandContext,
 	ExtensionContext,
+	ExtensionNotifyOptions,
 	ExtensionRunner,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -67,6 +68,7 @@ import {
 	getUsageCostBreakdown,
 	hasTrustRequiringProjectResources,
 	InteractiveThemeController,
+	IS_STEP_ENTRYPOINT,
 	KeybindingsManager,
 	keyDisplayText,
 	keyHint,
@@ -121,6 +123,7 @@ import type {
 } from "@step-harness/pi-tui";
 import * as TuiLayouts from "@step-harness/pi-tui";
 import {
+	Box,
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
@@ -322,10 +325,16 @@ export function formatResumeCommand(sessionManager: SessionManager): string | un
 	if (!sessionFile || !fs.existsSync(sessionFile)) return undefined;
 
 	const args = [APP_NAME];
+	// Step ships a `resume <id>` subcommand; pi has only the `--session` flag.
+	// Print the spelling the product the user launched actually accepts, and keep
+	// the id directly after `resume` because the Step compat layer reads the
+	// first positional argument as the session id.
+	const useStepResume = IS_STEP_ENTRYPOINT;
+	if (useStepResume) args.push("resume", sessionManager.getSessionId());
 	if (!sessionManager.usesDefaultSessionDir()) {
 		args.push("--session-dir", quoteIfNeeded(sessionManager.getSessionDir()));
 	}
-	args.push("--session", sessionManager.getSessionId());
+	if (!useStepResume) args.push("--session", sessionManager.getSessionId());
 	return args.join(" ");
 }
 
@@ -567,6 +576,15 @@ export class InteractiveMode {
 	// Skill commands: command name -> skill file path
 	private skillCommands = new Map<string, string>();
 
+	/**
+	 * Every slash command name the user can invoke, rebuilt with the autocomplete
+	 * provider. Used to reject unregistered `/x` input instead of forwarding it to
+	 * the model as a prompt. Commands handled by the hardcoded chain in
+	 * setupEditorSubmitHandler return before the check, so hidden ones such as
+	 * /debug do not need to appear here.
+	 */
+	private knownSlashCommandNames = new Set<string>();
+
 	// Agent subscription unsubscribe function
 	unsubscribe?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
@@ -737,6 +755,12 @@ export class InteractiveMode {
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider, {
 			presentation: options.tuiStyle === "step" ? "step" : "native",
+			// Same condition that redirects the binding in setupKeyHandlers, so the
+			// footer never advertises a cycle this session does not have.
+			permissionCycleKey: () =>
+				options.tuiStyle === "step" && this.session.extensionRunner.getCommand("permissions")
+					? keyText("app.thinking.cycle")
+					: undefined,
 		});
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
@@ -901,6 +925,7 @@ export class InteractiveMode {
 		}
 
 		const combinedCommands = [...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList];
+		this.knownSlashCommandNames = new Set(combinedCommands.map((command) => command.name));
 		return new CombinedAutocompleteProvider(
 			this.presentation === "step" ? orderStepSlashCommands(combinedCommands) : combinedCommands,
 			this.sessionManager.getCwd(),
@@ -2768,7 +2793,7 @@ export class InteractiveMode {
 			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
 			confirm: createApprovalProvider(this).confirm,
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
-			notify: (message, type) => this.showExtensionNotify(message, type),
+			notify: (message, type, options) => this.showExtensionNotify(message, type, options),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
@@ -3131,11 +3156,17 @@ export class InteractiveMode {
 	/**
 	 * Show a notification for extensions.
 	 */
-	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
+	private showExtensionNotify(
+		message: string,
+		type?: "info" | "warning" | "error",
+		options?: ExtensionNotifyOptions,
+	): void {
 		if (type === "error") {
 			this.showError(message);
 		} else if (type === "warning") {
 			this.showWarning(message);
+		} else if (options?.echoesInput) {
+			this.showInputEcho(message);
 		} else {
 			this.showStatus(message);
 		}
@@ -3338,6 +3369,24 @@ export class InteractiveMode {
 	 * If multiple status messages are emitted back-to-back (without anything else being added to the chat),
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
+	/**
+	 * Add a transcript row that carries content the user just typed.
+	 *
+	 * A dim status line reads as something the agent said. This is the same
+	 * background bar UserMessageComponent paints, so a confirmation that quotes
+	 * the user's input is recognizable as their input at a glance.
+	 */
+	private showInputEcho(message: string): void {
+		const box = new Box(1, 0, (content: string) => theme.bg("userMessageBg", content));
+		box.addChild(new Text(theme.fg("userMessageText", message), 0, 0));
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(box);
+		// Nothing may merge into this row the way consecutive statuses merge.
+		this.lastStatusSpacer = undefined;
+		this.lastStatusText = undefined;
+		this.redraw.requestRender();
+	}
+
 	showStatus(message: string): void {
 		const children = this.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
@@ -4225,6 +4274,26 @@ export class InteractiveMode {
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
 		this.showStatus("Queued message for after compaction");
+	}
+
+	/**
+	 * Return the command name when `text` looks like a slash command that is not
+	 * registered anywhere, otherwise undefined.
+	 *
+	 * Only single-line, command-shaped input qualifies, so a pasted absolute path
+	 * such as `/tmp/report.md`, or a multi-line message that happens to start with
+	 * `/`, is still submitted as an ordinary prompt. An empty command set means
+	 * the autocomplete provider has not been built yet; stay out of the way rather
+	 * than reject every command.
+	 */
+	getUnknownSlashCommandName(text: string): string | undefined {
+		if (!text.startsWith("/") || /[\n\r]/u.test(text)) return undefined;
+		if (this.knownSlashCommandNames.size === 0) return undefined;
+		const name = text.slice(1).split(" ")[0];
+		if (!name || !/^[A-Za-z0-9][\w.:-]*$/u.test(name)) return undefined;
+		if (this.knownSlashCommandNames.has(name)) return undefined;
+		if (this.session.extensionRunner.getCommand(name)) return undefined;
+		return name;
 	}
 
 	isExtensionCommand(text: string): boolean {

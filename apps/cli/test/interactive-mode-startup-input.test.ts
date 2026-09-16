@@ -23,6 +23,11 @@ type SubmitContext = {
 	handleModelCommand: (searchTerm?: string) => Promise<void>;
 	isBashMode: boolean;
 	updateEditorBorderColor: () => void;
+	// Used by the unregistered-slash-command guard the handler runs before the
+	// bash, queue, and normal-submission branches.
+	knownSlashCommandNames: Set<string>;
+	getUnknownSlashCommandName: (text: string) => string | undefined;
+	showError: (message: string) => void;
 };
 
 type InputContext = {
@@ -39,6 +44,7 @@ type InteractiveModePrivate = {
 	handleStartupSubmit(this: StartupSubmitContext, text: string): void;
 	setupEditorSubmitHandler(this: SubmitContext): void;
 	getUserInput(this: InputContext): Promise<string>;
+	getUnknownSlashCommandName(this: SubmitContext, text: string): string | undefined;
 };
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown as InteractiveModePrivate;
@@ -57,6 +63,12 @@ function createSubmitContext(): SubmitContext {
 			prompt: vi.fn(async () => {}),
 		},
 		flushPendingBashComponents: vi.fn(),
+		// Real implementation, with an empty command set so nothing is rejected.
+		getUnknownSlashCommandName: function (this: SubmitContext, text: string) {
+			return interactiveModePrototype.getUnknownSlashCommandName.call(this, text);
+		},
+		knownSlashCommandNames: new Set<string>(),
+		showError: vi.fn(),
 		handleThinkingCommand: vi.fn(),
 		pendingUserInputs: [],
 		stepWelcome: { stopLogoIntro: vi.fn() },

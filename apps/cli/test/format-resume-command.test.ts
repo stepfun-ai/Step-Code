@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { APP_NAME } from "../../../packages/coding-agent/src/config.ts";
+import { APP_NAME, IS_STEP_ENTRYPOINT } from "../../../packages/coding-agent/src/config.ts";
 import type { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { formatResumeCommand } from "../src/ui/interactive-mode.ts";
 
@@ -100,6 +100,39 @@ describe("formatResumeCommand", () => {
 
 		expect(formatResumeCommand(sessionManager)).toBe(
 			`${APP_NAME} --session-dir '/tmp/custom pi'\\''s sessions' --session test-session`,
+		);
+	});
+
+	// The printed hint has to be a command the launched product accepts: Step
+	// ships `resume <id>`, while `--session` is pi's spelling. Both the product
+	// name and the branch come from config's single entrypoint decision, made at
+	// import time, so this suite asserts whichever product it was imported as.
+	it("prints a command the launched product accepts", () => {
+		setStdoutIsTTY(true);
+		const sessionFile = createTempFile();
+		const sessionManager = createSessionManager({ sessionFile, sessionId: "test-session" });
+
+		expect(formatResumeCommand(sessionManager)).toBe(
+			IS_STEP_ENTRYPOINT ? `${APP_NAME} resume test-session` : `${APP_NAME} --session test-session`,
+		);
+	});
+
+	it("keeps a custom session dir after the session selector", () => {
+		setStdoutIsTTY(true);
+		const sessionFile = createTempFile();
+		const sessionManager = createSessionManager({
+			sessionFile,
+			sessionId: "test-session",
+			sessionDir: "/tmp/custom-step-sessions",
+			usesDefaultSessionDir: false,
+		});
+
+		// Under Step the id stays directly after `resume`, because the compat layer
+		// reads the first positional argument as the session id.
+		expect(formatResumeCommand(sessionManager)).toBe(
+			IS_STEP_ENTRYPOINT
+				? `${APP_NAME} resume test-session --session-dir /tmp/custom-step-sessions`
+				: `${APP_NAME} --session-dir /tmp/custom-step-sessions --session test-session`,
 		);
 	});
 

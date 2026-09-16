@@ -1076,7 +1076,9 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 					const goal = runtime.start(objective, ctx.sessionManager.getSessionId());
 					runtime.onSessionReady();
 					updateStatus(ctx);
-					ctx.ui.notify(`Goal set: ${goal.objective}`, "info");
+					// The objective is text the user just typed, so it is shown the way
+					// their input is shown rather than as a dim agent status line.
+					ctx.ui.notify(`Goal set: ${goal.objective}`, "info", { echoesInput: true });
 				} catch (error) {
 					ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
 				}

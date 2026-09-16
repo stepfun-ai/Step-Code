@@ -297,6 +297,20 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			return;
 		}
 
+		// An unregistered slash command used to fall through to normal submission
+		// and reach the model verbatim, with no error. Everything the hardcoded
+		// chain above handles has already returned, so anything command-shaped
+		// still here must resolve to an extension command, prompt template, or
+		// skill. Feedback issue-d59692496ef285c0.
+		const unknownCommand = ctx.getUnknownSlashCommandName(text);
+		if (unknownCommand !== undefined) {
+			ctx.showError(`/${unknownCommand} is not a command. Type / to list the available commands.`);
+			// submitValue() clears the editor before calling this handler, so put
+			// the text back: a mistyped command is usually one character off.
+			ctx.editor.setText(text);
+			return;
+		}
+
 		// Handle bash command (! for normal, !! for excluded from context)
 		if (text.startsWith("!")) {
 			const isExcluded = text.startsWith("!!");

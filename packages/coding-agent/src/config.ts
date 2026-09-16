@@ -17,6 +17,12 @@ import { stripBom } from "./utils/text.ts";
 // explicit, additive opt-in signal. Ordinary `pi` launches never set it.
 export const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEP_CLI_ENTRYPOINT?.trim() === "1";
 if (STEP_ENTRYPOINT) applyStepEnvironment();
+/**
+ * Whether this process was launched through the Step entrypoint. Decided once,
+ * next to APP_NAME, so anything that branches on the product agrees with the
+ * name being printed.
+ */
+export const IS_STEP_ENTRYPOINT: boolean = STEP_ENTRYPOINT;
 
 // =============================================================================
 // Package Detection

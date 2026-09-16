@@ -25,6 +25,7 @@ export {
 	getPackageDir,
 	getReadmePath,
 	getSettingsPath,
+	IS_STEP_ENTRYPOINT,
 	PACKAGE_NAME,
 	VERSION,
 } from "./config.ts";
@@ -117,6 +118,7 @@ export type {
 	ExtensionFactory,
 	ExtensionFlag,
 	ExtensionHandler,
+	ExtensionNotifyOptions,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,

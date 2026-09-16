@@ -168,6 +168,7 @@ export interface RuntimeContext {
 	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void;
 	showModelSelector(initialSearchInput?: string): void;
 	addCommandInputToChat(text: string): void;
+	getUnknownSlashCommandName(text: string): string | undefined;
 	showModelsSelector(): void;
 	showOAuthSelector(mode: "login" | "logout"): Promise<void>;
 	showSessionSelector(): void;
