@@ -3,7 +3,6 @@
 export * from "./device-id.ts";
 export * from "./environment.ts";
 export * from "./mcp.ts";
-export * from "./models-endpoint-repair.ts";
 export * from "./permissions.ts";
 export * from "./plugins.ts";
 export * from "./sdk.ts";

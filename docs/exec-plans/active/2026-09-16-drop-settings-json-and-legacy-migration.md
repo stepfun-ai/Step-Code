@@ -35,15 +35,23 @@ Step 不再以任何形式读写 `settings.json`。配置的唯一来源与写�
 | 11 | 校验 | `npm run check`、`npm run build`、全量测试 | 全绿（除已知的超长路径用例） | 按报错回退 |
 | 12 | 合并到 fix 分支并推送 | `git merge` + `git push` | 两分支一致 | 见下 |
 
-## 保留 models.json 端点修复的理由
+## models.json 端点修复也已移除（修正）
 
-用户选的是"整个迁移去掉"，问题问的是"旧版 config.json 迁移"。
-`normalizeStepModelsFile` 不读旧 `config.json`——它修的是**当前** `models.json` 里
-早期 Harness 版本写死的失效 Step endpoint。跟着迁移一起删会让这批用户卡在一个打不通的
-端点上，且没有任何提示。因此单独保留为一个小模块，在启动时照旧跑一次（没有陈旧 URL
-时是只读的）。若不需要，删掉该模块与其调用点即可。
+原先把 `normalizeStepModelsFile` 抽成独立模块保留，理由是"跟着迁移一起删会让老用户
+卡在打不通的端点上"。这个理由不成立，实测已证伪：
 
-`repairStepLoginBinding` 不保留：它以 `settings.json` 为中心，在本次改动后没有意义。
+Step provider 注册了 `normalizeModels` 钩子（`features/step-provider/index.ts`），
+`normalizeStepModel()` 对内置 Step id **每次启动都在内存里**强制恢复
+`api: "anthropic-messages"` 与规范 endpoint，非内置的 anthropic 模型则走
+`normalizeStepAnthropicBaseUrl()` 循环剥离后缀。用一个同时含错误方言、旧代理 host
+和 `/v1/v1/messages` 双重后缀的 models.json 直接走 ModelRuntime（不做任何文件修复），
+解析结果是 `anthropic-messages` + `https://api.stepfun.com/step_plan`，
+实际请求打到 `https://api.stepfun.com/step_plan/v1/messages`——正确。
+
+所以那个模块只是把运行时已经得到的结果额外持久化一遍，对正确性没有贡献，还多了
+改写用户文件的副作用；这也与 a3799398 确立的"读取时归一化、不改写用户文件"一致。
+`step/models-endpoint-repair.ts`、`bootstrap/config.ts` 的调用、两处 barrel 导出
+与对应测试一并删除。
 
 ## 信任列表保留 settings.json
 

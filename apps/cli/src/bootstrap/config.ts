@@ -1,10 +1,6 @@
-import { join } from "node:path";
 import {
-	canonicalStepBaseUrl,
 	loadStepCodeConfig,
-	normalizeStepModelsFile,
 	readGlobalStepDefaults,
-	resolveStepAgentDir,
 	type StepCodeConfig,
 	type StepGlobalDefaults,
 } from "@step-harness/coding-agent";
@@ -27,18 +23,18 @@ export { showDeprecationWarnings };
 export interface StepStartupConfig {
 	persistedDefaults: StepGlobalDefaults;
 	stepCodeConfig: StepCodeConfig | undefined;
-	/** Warnings from the models.json endpoint repair, surfaced without blocking. */
-	warnings: string[];
 }
 
-/** Read persisted defaults and the stepcode config, repairing a stale endpoint. */
+/**
+ * Read persisted defaults and the stepcode config.
+ *
+ * A stale Step endpoint left in models.json by an older release needs no pass
+ * here: the Step provider's `normalizeModels` hook restores the dialect and the
+ * canonical endpoint for built-in ids on every launch, so the request path is
+ * already protected without rewriting the user's file.
+ */
 export async function loadStepStartupConfig(): Promise<StepStartupConfig> {
-	const warnings: string[] = [];
-	// An older release could persist a Step endpoint that no longer answers.
-	// Repair it before the model runtime reads the catalog; the pass writes
-	// nothing when the file is already canonical.
-	await normalizeStepModelsFile(join(resolveStepAgentDir(), "models.json"), warnings, canonicalStepBaseUrl());
 	const persistedDefaults = readGlobalStepDefaults();
 	const stepCodeConfig = await loadStepCodeConfig();
-	return { persistedDefaults, stepCodeConfig, warnings };
+	return { persistedDefaults, stepCodeConfig };
 }

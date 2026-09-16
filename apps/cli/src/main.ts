@@ -106,14 +106,7 @@ const sdkStdio = sdkStdioRequested();
 // SettingsManager exist (bootstrap step 2). Telemetry in particular is
 // constructed below, so a user's saved `telemetry.enabled = false` has to be
 // visible here or reporting silently turns itself back on at every launch.
-const {
-	persistedDefaults: stepPersistedDefaults,
-	stepCodeConfig,
-	warnings: stepConfigWarnings,
-} = await loadStepStartupConfig();
-for (const warning of stepConfigWarnings) {
-	process.stderr.write(`[step config] ${warning}\n`);
-}
+const { persistedDefaults: stepPersistedDefaults, stepCodeConfig } = await loadStepStartupConfig();
 const stepCodeProviderExtension = stepCodeConfig ? createStepCodeProviderInlineExtension(stepCodeConfig) : undefined;
 // Parse only the product policy flags here so the inline extension can receive
 // explicit CLI values before Pi builds its resource loader. `main()` parses the
