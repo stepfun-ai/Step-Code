@@ -174,6 +174,23 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 
 		await rebindSession();
 
+		// Extensions have registered by now, so the tool set is final: report any
+		// --tools/--exclude-tools name that matches nothing instead of silently
+		// ignoring it. Warnings go to stderr to keep the text answer and the JSON
+		// event stream on stdout parseable.
+		const unknownSelectors = session.getUnknownToolSelectors();
+		if (unknownSelectors.tools.length > 0 || unknownSelectors.excludeTools.length > 0) {
+			for (const [flag, names] of [
+				["--tools", unknownSelectors.tools],
+				["--exclude-tools", unknownSelectors.excludeTools],
+			] as const) {
+				if (names.length > 0) {
+					console.error(`Warning: ${flag}: unrecognized tool name(s) ignored: ${names.join(", ")}`);
+				}
+			}
+			console.error(`Available tools: ${unknownSelectors.knownTools.join(", ") || "(none)"}`);
+		}
+
 		if (initialMessage) {
 			await session.prompt(initialMessage, { images: initialImages });
 		}
