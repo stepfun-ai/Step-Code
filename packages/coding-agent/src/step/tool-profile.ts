@@ -1196,8 +1196,9 @@ async function startBackgroundCommand(
 	// wrapper and orphans the real process (e.g. the dev server it launched). Unix:
 	// `kill -TERM -<pid>` signals the group — a leading `-<pid>` without a signal token
 	// parses as a signal number, so -TERM is required. Windows run_command routes through
-	// Git Bash, so MSYS_NO_PATHCONV=1 keeps it from mangling taskkill's /F /T /PID flags.
-	// NOTE: the Windows form is not yet verified on a real Git Bash.
+	// Git Bash, so MSYS_NO_PATHCONV=1 keeps it from mangling taskkill's /F /T /PID flags
+	// (without it MSYS rewrites `/F` to `F:/` and taskkill rejects the argument). Verified
+	// on real Git Bash (MINGW64): the returned command terminates the whole tree (exit 0).
 	const stopCommand =
 		pid === undefined
 			? undefined
