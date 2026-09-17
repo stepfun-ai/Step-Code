@@ -10,6 +10,9 @@ type FakeUi = {
 type HandleCtrlZThis = {
 	ui: FakeUi;
 	redraw: { requestRender: () => void; forceRender: () => void; renderNow: () => void };
+	focusReportingEnabled: boolean;
+	disableFocusReporting: () => void;
+	enableFocusReporting: () => void;
 };
 
 type ProcessSignalHandler = () => void;
@@ -39,6 +42,9 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		const context: HandleCtrlZThis & { showStatus: (message: string) => void } = {
 			ui,
 			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+			focusReportingEnabled: false,
+			disableFocusReporting: vi.fn(),
+			enableFocusReporting: vi.fn(),
 			showStatus,
 		};
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -73,9 +79,14 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			stop: vi.fn(),
 			requestRender: vi.fn(),
 		};
+		const disableFocusReporting = vi.fn();
+		const enableFocusReporting = vi.fn();
 		const context: HandleCtrlZThis = {
 			ui,
 			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+			focusReportingEnabled: true,
+			disableFocusReporting,
+			enableFocusReporting,
 		};
 		const keepAliveHandle = setTimeout(() => undefined, 0);
 		clearTimeout(keepAliveHandle);
@@ -108,6 +119,10 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(processOnSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
 		expect(processOnceSpy).toHaveBeenCalledWith("SIGCONT", expect.any(Function));
 		expect(ui.stop).toHaveBeenCalledTimes(1);
+		// Focus reporting is turned off before suspending so the backgrounded shell
+		// does not receive \x1b[I / \x1b[O.
+		expect(disableFocusReporting).toHaveBeenCalledTimes(1);
+		expect(enableFocusReporting).not.toHaveBeenCalled();
 		expect(processKillSpy).toHaveBeenCalledWith(0, "SIGTSTP");
 		expect(sigintHandler).toBeDefined();
 		expect(sigcontHandler).toBeDefined();
@@ -117,6 +132,8 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(clearIntervalSpy).toHaveBeenCalledWith(keepAliveHandle);
 		expect(removeListenerSpy).toHaveBeenCalledWith("SIGINT", sigintHandler);
 		expect(ui.start).toHaveBeenCalledTimes(1);
+		// ...and re-enabled on resume because it was on before the suspend.
+		expect(enableFocusReporting).toHaveBeenCalledTimes(1);
 		expect(ui.requestRender).toHaveBeenCalledWith(true);
 	});
 
@@ -129,6 +146,9 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		const context: HandleCtrlZThis = {
 			ui,
 			redraw: { requestRender: () => ui.requestRender(), forceRender: () => ui.requestRender(true), renderNow: vi.fn() },
+			focusReportingEnabled: false,
+			disableFocusReporting: vi.fn(),
+			enableFocusReporting: vi.fn(),
 		};
 		const keepAliveHandle = setTimeout(() => undefined, 0);
 		clearTimeout(keepAliveHandle);

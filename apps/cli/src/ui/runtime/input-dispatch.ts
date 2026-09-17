@@ -14,9 +14,10 @@
  * runtime→host reverse dependency. onEscape's non-timer branches delegate to interrupt
  * (handleEscape), which owns the double-Esc window.
  *
- * `wireInputHandlers` must register onto defaultEditor BEFORE any editor swap: the swap
- * path (setCustomEditorComponent) copies actionHandlers/onCtrlD/onPasteImage from
- * defaultEditor to the swapped-in editor, so a late registration would be missed.
+ * `wireKeyHandlers` must register onto defaultEditor BEFORE any editor swap: the swap
+ * path (setCustomEditorComponent) copies onEscape/onCtrlD/onPasteImage/onEmptyPaste/canDequeue/
+ * onExtensionShortcut from defaultEditor to the swapped-in editor, so a late registration
+ * would be missed.
  */
 
 import * as crypto from "node:crypto";
@@ -26,9 +27,14 @@ import * as path from "node:path";
 import {
 	type AgentSession,
 	APP_NAME,
+	cleanPastedPath,
 	extensionForImageMimeType,
+	isImageFilePath,
+	isWindowsPath,
 	readClipboardImage,
+	readClipboardImagePath,
 	readClipboardText,
+	wslPathToPosix,
 } from "@step-harness/coding-agent";
 import type { RuntimeContext } from "./context.ts";
 import { handleEscape } from "./interrupt.ts";
@@ -56,8 +62,31 @@ export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 	}
 }
 
-export async function clipboardPaste(ctx: RuntimeContext): Promise<void> {
+/**
+ * Format a resolved image path as a file reference for the input line. Quote it
+ * only when it contains a space: the `@`-reference tokenizer treats an unquoted
+ * `@` reference as whitespace-delimited (packages/tui editor `@(?:"[^"]*|[^\s]*)`),
+ * so a spaced path must be `@"path"` to read as one reference, while a space-free
+ * path stays `@path`. This mirrors the typed-`@` autocomplete rule
+ * (autocomplete.ts `buildCompletionValue`), so a pasted reference and a typed one
+ * look identical.
+ */
+function formatImageRef(absolutePath: string): string {
+	return absolutePath.includes(" ") ? `@"${absolutePath}"` : `@${absolutePath}`;
+}
+
+export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {
 	try {
+		// A copied FILE (Finder/Explorer) puts BOTH a file URL and the file's ICON
+		// on the clipboard, so readClipboardImage() below would return the icon, not
+		// the file. Prefer the real file path: reference the file itself.
+		const clipboardFile = await readClipboardImagePath();
+		if (clipboardFile && fs.existsSync(clipboardFile)) {
+			ctx.editor.insertTextAtCursor?.(formatImageRef(clipboardFile));
+			ctx.redraw.requestRender();
+			return;
+		}
+
 		const image = await readClipboardImage();
 		if (image) {
 			const tmpDir = os.tmpdir();
@@ -66,10 +95,15 @@ export async function clipboardPaste(ctx: RuntimeContext): Promise<void> {
 			const filePath = path.join(tmpDir, fileName);
 			fs.writeFileSync(filePath, Buffer.from(image.bytes));
 
-			ctx.editor.insertTextAtCursor?.(filePath);
+			ctx.editor.insertTextAtCursor?.(formatImageRef(filePath));
 			ctx.redraw.requestRender();
 			return;
 		}
+
+		// The empty-bracketed-paste trigger (Cmd+V of an image-only clipboard) only
+		// wants an image. Skip the text fallback so a genuinely empty paste with no
+		// image inserts nothing — identical to the behavior before this hook existed.
+		if (opts?.imageOnly) return;
 
 		const text = await readClipboardText();
 		if (text) {
@@ -79,6 +113,52 @@ export async function clipboardPaste(ctx: RuntimeContext): Promise<void> {
 	} catch {
 		// Silently ignore clipboard errors (may not have permission, etc.)
 	}
+}
+
+/**
+ * Handle a bracketed paste whose text is an image file reference — e.g. a file
+ * copied in Finder/Explorer, which the terminal pastes as its (often bare) name.
+ * Resolve it to an absolute path (a bare name via the clipboard's file URL) and
+ * insert it as an `@` file reference so the model can read it; if it cannot be
+ * resolved, insert the original text unchanged so nothing is lost.
+ *
+ * Exported for unit testing the WSL Windows-path branch composition.
+ */
+export async function insertPastedImagePath(ctx: RuntimeContext, pastedText: string): Promise<void> {
+	let value = pastedText;
+	try {
+		const cleaned = cleanPastedPath(pastedText);
+		let absolutePath: string | undefined;
+		if (path.isAbsolute(cleaned) && isImageFilePath(cleaned) && fs.existsSync(cleaned)) {
+			absolutePath = cleaned;
+		} else if (isWindowsPath(cleaned)) {
+			// On WSL, a file copied in Windows Explorer pastes as a Windows path
+			// (`C:\...`) that does not exist on the Linux side; convert it to its
+			// `/mnt/...` form before checking. On non-WSL this returns null, so a
+			// stray `C:\...` paste falls through to the raw-text insert below.
+			const posixPath = await wslPathToPosix(cleaned);
+			if (posixPath && isImageFilePath(posixPath) && fs.existsSync(posixPath)) {
+				absolutePath = posixPath;
+			}
+		} else {
+			const clipboardPath = await readClipboardImagePath();
+			const matches = clipboardPath
+				? path.isAbsolute(cleaned)
+					? clipboardPath === cleaned
+					: path.basename(clipboardPath) === path.basename(cleaned)
+				: false;
+			if (clipboardPath && matches && fs.existsSync(clipboardPath)) {
+				absolutePath = clipboardPath;
+			}
+		}
+		if (absolutePath) {
+			value = formatImageRef(absolutePath);
+		}
+	} catch {
+		// Fall back to the original pasted text below.
+	}
+	ctx.editor.insertTextAtCursor?.(value);
+	ctx.redraw.requestRender();
 }
 
 export function handleStartupSubmit(ctx: RuntimeContext, text: string): void {
@@ -155,6 +235,29 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 	// otherwise, paste plain text from the system clipboard.
 	ctx.defaultEditor.onPasteImage = () => {
 		void ctx.handleClipboardPaste();
+	};
+
+	// An empty bracketed paste (macOS Cmd+V of an image-only clipboard) has no text
+	// to insert; treat it as an image-only paste so the clipboard image is attached
+	// by path. No image on the clipboard -> no-op (no text fallback).
+	ctx.defaultEditor.onEmptyPaste = () => {
+		void ctx.handleClipboardPaste(true);
+	};
+
+	// A paste whose text is a single image file path/name (e.g. a file copied in
+	// Finder/Explorer, pasted by the terminal as its name) is resolved to an
+	// absolute `@` reference. Returning true claims the paste; anything else
+	// pastes normally.
+	ctx.defaultEditor.onPasteImagePath = (content: string) => {
+		const cleaned = cleanPastedPath(content);
+		// Only claim a short, single-line, image-extension token. The length cap
+		// keeps large single-line pastes on the base editor's paste path (which
+		// collapses big blobs) and bounds how often the clipboard is probed.
+		if (cleaned.length === 0 || cleaned.length > 512 || cleaned.includes("\n") || !isImageFilePath(cleaned)) {
+			return false;
+		}
+		void insertPastedImagePath(ctx, content);
+		return true;
 	};
 }
 

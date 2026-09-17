@@ -66,6 +66,7 @@ import {
 	getNewEntries,
 	getThemeByName,
 	getUsageCostBreakdown,
+	hasClipboardImage,
 	hasTrustRequiringProjectResources,
 	InteractiveThemeController,
 	IS_STEP_ENTRYPOINT,
@@ -136,6 +137,7 @@ import {
 	setCapabilityOverrides,
 	setKeybindings,
 	Text,
+	type TextAlign,
 	TruncatedText,
 	type TUI,
 	TuiAltScreen,
@@ -553,6 +555,10 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	// Alignment of the currently-tracked status row, so showStatus never merges a
+	// message onto a tracked Text of a different alignment (e.g. the centered
+	// clipboard-image hint onto a left-aligned status).
+	private lastStatusAlign: TextAlign = "left";
 	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
@@ -623,6 +629,12 @@ export class InteractiveMode {
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
 	}>();
+
+	// Clipboard-image hint: when the terminal regains focus (e.g. after a
+	// screenshot) and the clipboard holds an image, hint the paste key once.
+	private focusReportingEnabled = false;
+	private clipboardHintTimer?: ReturnType<typeof setTimeout>;
+	private lastClipboardHintAt = 0;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -1122,6 +1134,7 @@ export class InteractiveMode {
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
+		this.setupClipboardImageHint();
 		this.isInitialized = true;
 		// A resumed transcript scrolls the welcome block out of the viewport, and
 		// pi answers a change above the viewport by clearing the screen and
@@ -2770,6 +2783,81 @@ export class InteractiveMode {
 		}
 	}
 
+	/**
+	 * When the terminal regains focus (e.g. the user returns after taking a
+	 * screenshot) and the clipboard holds an image, hint the paste key once. We
+	 * enable focus reporting (DECSET 1004) so the terminal emits \x1b[I on
+	 * focus-in / \x1b[O on focus-out, and register an input listener that consumes
+	 * those sequences (so they never reach the editor) and triggers the hint.
+	 * Registered via the extension-listener machinery so it survives UI swaps.
+	 */
+	private setupClipboardImageHint(): void {
+		this.enableFocusReporting();
+		this.addExtensionTerminalInputListener((data) => {
+			if (data === "\x1b[I") {
+				this.handleTerminalFocusIn();
+				return { consume: true };
+			}
+			if (data === "\x1b[O") {
+				// In fullscreen, TuiAltScreen consumes FOCUS_OUT itself (selection
+				// cleanup); in regular mode consume it so it never reaches the editor.
+				return this.ui instanceof TuiAltScreen ? undefined : { consume: true };
+			}
+			return undefined;
+		});
+	}
+
+	/**
+	 * Enable terminal focus reporting (DECSET 1004) for the clipboard-image hint,
+	 * so the terminal emits \x1b[I on focus-in / \x1b[O on focus-out. Idempotent.
+	 * Every path that restores the terminal (shutdown, suspend, crash) must pair
+	 * this with disableFocusReporting() or the escapes leak to the parent shell.
+	 */
+	private enableFocusReporting(): void {
+		if (this.focusReportingEnabled) return;
+		try {
+			this.ui.terminal.write("\x1b[?1004h");
+			this.focusReportingEnabled = true;
+		} catch {
+			// Terminal not writable; leave the hint disabled rather than claim it on.
+		}
+	}
+
+	/**
+	 * Turn off focus reporting (DECSET 1004) and cancel any pending hint, so the
+	 * terminal stops sending \x1b[I / \x1b[O to whatever owns the tty next (the
+	 * parent shell after quit/suspend/crash). Idempotent and never throws.
+	 */
+	private disableFocusReporting(): void {
+		if (this.clipboardHintTimer) {
+			clearTimeout(this.clipboardHintTimer);
+			this.clipboardHintTimer = undefined;
+		}
+		if (!this.focusReportingEnabled) return;
+		try {
+			this.ui.terminal.write("\x1b[?1004l");
+		} catch {
+			// Terminal may already be gone during a signal-triggered exit.
+		}
+		this.focusReportingEnabled = false;
+	}
+
+	private handleTerminalFocusIn(): void {
+		// Debounce rapid focus flaps, then rate-limit so the hint is not spammy.
+		if (this.clipboardHintTimer) clearTimeout(this.clipboardHintTimer);
+		this.clipboardHintTimer = setTimeout(() => {
+			this.clipboardHintTimer = undefined;
+			const now = Date.now();
+			if (now - this.lastClipboardHintAt < 30_000) return;
+			if (!hasClipboardImage()) return;
+			this.lastClipboardHintAt = now;
+			// Centered dim line above the editor. showStatus keeps the hint from
+			// stacking duplicates on repeated focus-ins, and its align-aware dedup
+			// never merges this centered row onto a left-aligned status.
+			this.showStatus(`Image in clipboard · ${keyText("app.clipboard.pasteImage")} to paste`, "center");
+		}, 1000);
+	}
+
 	private clearExtensionTerminalInputListeners(): void {
 		for (const subscription of this.extensionTerminalInputSubscriptions) subscription.unsubscribe();
 		this.extensionTerminalInputSubscriptions.clear();
@@ -3134,6 +3222,13 @@ export class InteractiveMode {
 				if (!customEditor.onPasteImage) {
 					customEditor.onPasteImage = () => this.defaultEditor.onPasteImage?.();
 				}
+				if (!customEditor.onEmptyPaste) {
+					customEditor.onEmptyPaste = () => this.defaultEditor.onEmptyPaste?.();
+				}
+				if (!customEditor.onPasteImagePath) {
+					customEditor.onPasteImagePath = (content: string) =>
+						this.defaultEditor.onPasteImagePath?.(content) ?? false;
+				}
 				if (!customEditor.canDequeue) {
 					customEditor.canDequeue = () => this.defaultEditor.canDequeue?.() ?? false;
 				}
@@ -3297,8 +3392,8 @@ export class InteractiveMode {
 		return rightClickPaste(this);
 	}
 
-	async handleClipboardPaste(): Promise<void> {
-		return clipboardPaste(this);
+	async handleClipboardPaste(imageOnly?: boolean): Promise<void> {
+		return clipboardPaste(this, { imageOnly });
 	}
 
 	addCommandInputToChat(text: string): void {
@@ -3392,23 +3487,30 @@ export class InteractiveMode {
 		this.redraw.requestRender();
 	}
 
-	showStatus(message: string): void {
+	showStatus(message: string, align: TextAlign = "left"): void {
 		const children = this.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
 
-		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
+		if (
+			last &&
+			secondLast &&
+			last === this.lastStatusText &&
+			secondLast === this.lastStatusSpacer &&
+			align === this.lastStatusAlign
+		) {
 			this.lastStatusText.setText(theme.fg("dim", message));
 			this.redraw.requestRender();
 			return;
 		}
 
 		const spacer = new Spacer(1);
-		const text = new Text(theme.fg("dim", message), 1, 0);
+		const text = new Text(theme.fg("dim", message), 1, 0, undefined, align);
 		this.chatContainer.addChild(spacer);
 		this.chatContainer.addChild(text);
 		this.lastStatusSpacer = spacer;
 		this.lastStatusText = text;
+		this.lastStatusAlign = align;
 		this.redraw.requestRender();
 	}
 
@@ -3811,6 +3913,10 @@ export class InteractiveMode {
 	async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+
+		// Turn off focus reporting we enabled for the clipboard-image hint, so the
+		// terminal does not keep sending \x1b[I / \x1b[O to the parent shell.
+		this.disableFocusReporting();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -3883,6 +3989,11 @@ export class InteractiveMode {
 		} catch {}
 		try {
 			killTrackedDetachedChildren();
+		} catch {}
+		try {
+			// isShuttingDown is set above, so shutdown()'s teardown never runs here;
+			// restore focus reporting ourselves or the escapes leak to the shell.
+			this.disableFocusReporting();
 		} catch {}
 		try {
 			this.ui.stop();
@@ -3963,16 +4074,24 @@ export class InteractiveMode {
 		const ignoreSigint = () => {};
 		process.on("SIGINT", ignoreSigint);
 
+		// Capture whether the clipboard-image hint's focus reporting is on: it must
+		// be turned off before suspending (otherwise the backgrounded shell keeps
+		// receiving \x1b[I / \x1b[O), then restored on resume if it was on.
+		const restoreFocusReporting = this.focusReportingEnabled;
+
 		// Set up handler to restore TUI when resumed
 		process.once("SIGCONT", () => {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
+			if (restoreFocusReporting) this.enableFocusReporting();
 			this.redraw.forceRender();
 		});
 
 		try {
-			// Stop the TUI (restore terminal to normal mode)
+			// Restore the terminal to normal mode: disable focus reporting first,
+			// then stop the TUI.
+			this.disableFocusReporting();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -4119,6 +4238,11 @@ export class InteractiveMode {
 	async handleOpenExternalEditor(): Promise<void> {
 		const editorCmd = this.settingsManager.getExternalEditorCommand();
 		const content = this.editor.getExpandedText?.() ?? this.editor.getText();
+		// Hand the terminal to $EDITOR: turn off focus reporting first (otherwise
+		// \x1b[I / \x1b[O land in the external editor on focus changes), restore it
+		// on return if it was on.
+		const restoreFocusReporting = this.focusReportingEnabled;
+		this.disableFocusReporting();
 		this.ui.stop();
 		try {
 			const result = await editInExternalEditor({
@@ -4130,6 +4254,7 @@ export class InteractiveMode {
 			}
 		} finally {
 			this.ui.start();
+			if (restoreFocusReporting) this.enableFocusReporting();
 			this.redraw.forceRender();
 		}
 	}
@@ -6665,6 +6790,12 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			}
 			this.themeController.disableAutoSync();
 			this.clearExtensionTerminalInputListeners();
+			// The clipboard-image hint enabled focus reporting (DECSET 1004). The
+			// listener above is now gone, so disable it too, or the terminal keeps
+			// emitting \x1b[I / \x1b[O to whatever owns the tty after teardown — the
+			// parent shell on quit, or the process's own stdout on a fatal-error /
+			// startup-login exit that returns through here without going via shutdown().
+			this.disableFocusReporting();
 			this.footer.dispose();
 			this.footerDataProvider.dispose();
 			if (this.unsubscribe) {
