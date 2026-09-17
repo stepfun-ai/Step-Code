@@ -93,11 +93,12 @@ const STEP_MODEL_API: Api = "openai-completions";
 
 /**
  * `{base}/v1/models` tags each entry with a `model_type`. Step is a coding
- * agent, so only large-language models are usable; other types (web search,
- * TTS, ASR, realtime voice, text-to-image) are filtered out. Endpoints that do
- * not yet return `model_type` are left unfiltered for backward compatibility.
+ * agent, so only chat-capable types are usable — large-language models and
+ * routers; other types (web search, TTS, ASR, realtime voice, text-to-image)
+ * are filtered out. Endpoints that do not yet return `model_type` are left
+ * unfiltered for backward compatibility.
  */
-const STEP_LLM_MODEL_TYPE = "大语言模型";
+const STEP_USABLE_MODEL_TYPES = new Set(["大语言模型", "路由模型"]);
 
 /** Metadata `{base}/v1/models` does not always return; used as fallbacks. */
 const STEP_MODEL_DEFAULTS = {
@@ -614,9 +615,9 @@ export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
 }
 
 /**
- * Discover the large-language models the current credential can use from
+ * Discover the chat-capable models the current credential can use from
  * `{base}/v1/models`, filtered by the endpoint's `model_type` (see
- * {@link STEP_LLM_MODEL_TYPE}). Per-model capabilities are taken from the
+ * {@link STEP_USABLE_MODEL_TYPES}). Per-model capabilities are taken from the
  * response where present: `max_input_tokens` -> context window, `enable_reason`
  * -> thinking support, `enable_vision_input` -> image input; missing fields use
  * the built-in defaults.
@@ -669,7 +670,9 @@ export async function fetchStepModels(
 	// Keep only large-language models when the endpoint tags model types; if no
 	// entry carries a type (older/other endpoints), leave the list unfiltered.
 	const typed = entries.some((entry) => entry.modelType !== undefined);
-	const usable = typed ? entries.filter((entry) => entry.modelType === STEP_LLM_MODEL_TYPE) : entries;
+	const usable = typed
+		? entries.filter((entry) => entry.modelType !== undefined && STEP_USABLE_MODEL_TYPES.has(entry.modelType))
+		: entries;
 	const seen = new Set<string>();
 	const models: StepModelConfig[] = [];
 	for (const entry of usable) {

@@ -494,7 +494,7 @@ describe("Step dynamic model discovery", () => {
 		});
 	});
 
-	it("keeps only large-language models when the endpoint tags model_type", async () => {
+	it("keeps chat-capable models (LLM and router) when the endpoint tags model_type", async () => {
 		const resolved = resolveStepProviderOptions({ env: {} });
 		const fetchMock = vi.fn(
 			async () =>
@@ -502,6 +502,7 @@ describe("Step dynamic model discovery", () => {
 					JSON.stringify({
 						data: [
 							{ id: "step-3.5-flash", model_type: "大语言模型" },
+							{ id: "step-router-v1", model_type: "路由模型" },
 							{ id: "step-tts-mini", model_type: "语音合成" },
 							{ id: "search-image" },
 							{ id: "step-2", model_type: "大语言模型" },
@@ -516,7 +517,7 @@ describe("Step dynamic model discovery", () => {
 			{ ...resolved, fetch: fetchMock },
 		);
 
-		expect(models.map((m) => m.id)).toEqual(["step-3.5-flash", "step-2"]);
+		expect(models.map((m) => m.id)).toEqual(["step-3.5-flash", "step-router-v1", "step-2"]);
 	});
 
 	it("maps discovered capability fields onto the model config", async () => {
