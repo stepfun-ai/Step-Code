@@ -808,7 +808,12 @@ export { stripAnsi } from "./utils/ansi.ts";
 export { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "./utils/changelog.ts";
 // Clipboard utilities
 export { copyToClipboard, readClipboardText } from "./utils/clipboard.ts";
-export { extensionForImageMimeType, readClipboardImage } from "./utils/clipboard-image.ts";
+export {
+	extensionForImageMimeType,
+	isImageFilePath,
+	readClipboardImage,
+	readClipboardImagePath,
+} from "./utils/clipboard-image.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { parseGitUrl } from "./utils/git.ts";
 export { convertToPng } from "./utils/image-convert.ts";

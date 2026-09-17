@@ -28,7 +28,9 @@ import {
 	type AgentSession,
 	APP_NAME,
 	extensionForImageMimeType,
+	isImageFilePath,
 	readClipboardImage,
+	readClipboardImagePath,
 	readClipboardText,
 } from "@step-harness/coding-agent";
 import type { RuntimeContext } from "./context.ts";
@@ -57,6 +59,15 @@ export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 	}
 }
 
+/**
+ * Format a resolved image path as a file reference for the input line: prefix
+ * with `@` (the file marker), quoting with `@"..."` when the path contains a
+ * space so it reads as a single reference.
+ */
+function formatImageRef(absolutePath: string): string {
+	return absolutePath.includes(" ") ? `@"${absolutePath}"` : `@${absolutePath}`;
+}
+
 export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {
 	try {
 		const image = await readClipboardImage();
@@ -67,7 +78,7 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
 			const filePath = path.join(tmpDir, fileName);
 			fs.writeFileSync(filePath, Buffer.from(image.bytes));
 
-			ctx.editor.insertTextAtCursor?.(filePath);
+			ctx.editor.insertTextAtCursor?.(formatImageRef(filePath));
 			ctx.redraw.requestRender();
 			return;
 		}
@@ -85,6 +96,41 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
 	} catch {
 		// Silently ignore clipboard errors (may not have permission, etc.)
 	}
+}
+
+/**
+ * Handle a bracketed paste whose text is an image file reference — e.g. a file
+ * copied in Finder/Explorer, which the terminal pastes as its (often bare) name.
+ * Resolve it to an absolute path (a bare name via the clipboard's file URL) and
+ * insert it as an `@` file reference so the model can read it; if it cannot be
+ * resolved, insert the original text unchanged so nothing is lost.
+ */
+async function insertPastedImagePath(ctx: RuntimeContext, pastedText: string): Promise<void> {
+	let value = pastedText;
+	try {
+		const cleaned = pastedText.trim().replace(/^"(.*)"$/, "$1");
+		let absolutePath: string | undefined;
+		if (path.isAbsolute(cleaned) && isImageFilePath(cleaned) && fs.existsSync(cleaned)) {
+			absolutePath = cleaned;
+		} else {
+			const clipboardPath = await readClipboardImagePath();
+			const matches = clipboardPath
+				? path.isAbsolute(cleaned)
+					? clipboardPath === cleaned
+					: path.basename(clipboardPath) === path.basename(cleaned)
+				: false;
+			if (clipboardPath && matches && fs.existsSync(clipboardPath)) {
+				absolutePath = clipboardPath;
+			}
+		}
+		if (absolutePath) {
+			value = formatImageRef(absolutePath);
+		}
+	} catch {
+		// Fall back to the original pasted text below.
+	}
+	ctx.editor.insertTextAtCursor?.(value);
+	ctx.redraw.requestRender();
 }
 
 export function handleStartupSubmit(ctx: RuntimeContext, text: string): void {
@@ -168,6 +214,22 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 	// by path. No image on the clipboard -> no-op (no text fallback).
 	ctx.defaultEditor.onEmptyPaste = () => {
 		void ctx.handleClipboardPaste(true);
+	};
+
+	// A paste whose text is a single image file path/name (e.g. a file copied in
+	// Finder/Explorer, pasted by the terminal as its name) is resolved to an
+	// absolute `@` reference. Returning true claims the paste; anything else
+	// pastes normally.
+	ctx.defaultEditor.onPasteImagePath = (content: string) => {
+		const cleaned = content.trim().replace(/^"(.*)"$/, "$1");
+		// Only claim a short, single-line, image-extension token. The length cap
+		// keeps large single-line pastes on the base editor's paste path (which
+		// collapses big blobs) and bounds how often the clipboard is probed.
+		if (cleaned.length === 0 || cleaned.length > 512 || cleaned.includes("\n") || !isImageFilePath(cleaned)) {
+			return false;
+		}
+		void insertPastedImagePath(ctx, content);
+		return true;
 	};
 }
 

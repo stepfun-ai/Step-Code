@@ -3132,6 +3132,10 @@ export class InteractiveMode {
 				if (!customEditor.onEmptyPaste) {
 					customEditor.onEmptyPaste = () => this.defaultEditor.onEmptyPaste?.();
 				}
+				if (!customEditor.onPasteImagePath) {
+					customEditor.onPasteImagePath = (content: string) =>
+						this.defaultEditor.onPasteImagePath?.(content) ?? false;
+				}
 				if (!customEditor.canDequeue) {
 					customEditor.canDequeue = () => this.defaultEditor.canDequeue?.() ?? false;
 				}

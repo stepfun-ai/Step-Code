@@ -20,6 +20,14 @@ export class CustomEditor extends Editor {
 	 * this stays a neutral callback so packages/tui pulls in no clipboard code.
 	 */
 	public onEmptyPaste?: () => void;
+	/**
+	 * Called for a NON-empty bracketed paste with the pasted text. Lets the product
+	 * layer claim a paste that is a single image file path/name (copied in
+	 * Finder/Explorer) and turn it into an `@` file reference. Returns true if it
+	 * handled the paste; false lets it paste as normal text. Kept a neutral callback
+	 * so packages/tui pulls in no clipboard/product code.
+	 */
+	public onPasteImagePath?: (content: string) => boolean;
 	/** Whether queued messages can currently be restored ahead of editor navigation. */
 	public canDequeue?: () => boolean;
 	/** Handler for extension-registered shortcuts. Returns true if handled. */
@@ -43,12 +51,20 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		// An empty bracketed paste (the terminal pasted nothing textual) is how
-		// macOS delivers Cmd+V of an image-only clipboard. Route it to the clipboard
-		// image reader; when unwired, fall through so it stays a no-op as before.
-		if (data === "\x1b[200~\x1b[201~" && this.onEmptyPaste) {
-			this.onEmptyPaste();
-			return;
+		// Bracketed paste. An EMPTY one is how macOS delivers Cmd+V of an image-only
+		// clipboard; a non-empty one whose text is an image file path/name (a file
+		// copied in Finder/Explorer) is routed to the product layer to become an `@`
+		// reference. Anything else falls through to the normal text paste below.
+		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			const content = data.slice("\x1b[200~".length, data.length - "\x1b[201~".length);
+			if (content.length === 0) {
+				if (this.onEmptyPaste) {
+					this.onEmptyPaste();
+					return;
+				}
+			} else if (this.onPasteImagePath?.(content)) {
+				return;
+			}
 		}
 
 		// Check for clipboard paste keybinding
