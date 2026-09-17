@@ -3129,6 +3129,9 @@ export class InteractiveMode {
 				if (!customEditor.onPasteImage) {
 					customEditor.onPasteImage = () => this.defaultEditor.onPasteImage?.();
 				}
+				if (!customEditor.onEmptyPaste) {
+					customEditor.onEmptyPaste = () => this.defaultEditor.onEmptyPaste?.();
+				}
 				if (!customEditor.canDequeue) {
 					customEditor.canDequeue = () => this.defaultEditor.canDequeue?.() ?? false;
 				}
@@ -3292,8 +3295,8 @@ export class InteractiveMode {
 		return rightClickPaste(this);
 	}
 
-	async handleClipboardPaste(): Promise<void> {
-		return clipboardPaste(this);
+	async handleClipboardPaste(imageOnly?: boolean): Promise<void> {
+		return clipboardPaste(this, { imageOnly });
 	}
 
 	addCommandInputToChat(text: string): void {

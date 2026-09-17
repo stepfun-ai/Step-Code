@@ -12,6 +12,14 @@ export class CustomEditor extends Editor {
 	public onEscape?: () => void;
 	public onCtrlD?: () => void;
 	public onPasteImage?: () => void;
+	/**
+	 * Called when the terminal delivers an EMPTY bracketed paste. macOS emits this
+	 * for `Cmd+V` when the clipboard holds only an image (no text), so it is the
+	 * hook that lets a clipboard image be pasted without the app receiving Cmd+V as
+	 * a keypress. The clipboard read itself lives in the product layer (apps/cli);
+	 * this stays a neutral callback so packages/tui pulls in no clipboard code.
+	 */
+	public onEmptyPaste?: () => void;
 	/** Whether queued messages can currently be restored ahead of editor navigation. */
 	public canDequeue?: () => boolean;
 	/** Handler for extension-registered shortcuts. Returns true if handled. */
@@ -32,6 +40,14 @@ export class CustomEditor extends Editor {
 	handleInput(data: string): void {
 		// Check extension-registered shortcuts first
 		if (this.onExtensionShortcut?.(data)) {
+			return;
+		}
+
+		// An empty bracketed paste (the terminal pasted nothing textual) is how
+		// macOS delivers Cmd+V of an image-only clipboard. Route it to the clipboard
+		// image reader; when unwired, fall through so it stays a no-op as before.
+		if (data === "\x1b[200~\x1b[201~" && this.onEmptyPaste) {
+			this.onEmptyPaste();
 			return;
 		}
 

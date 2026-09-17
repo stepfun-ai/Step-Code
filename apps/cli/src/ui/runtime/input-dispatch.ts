@@ -14,9 +14,10 @@
  * runtime→host reverse dependency. onEscape's non-timer branches delegate to interrupt
  * (handleEscape), which owns the double-Esc window.
  *
- * `wireInputHandlers` must register onto defaultEditor BEFORE any editor swap: the swap
- * path (setCustomEditorComponent) copies actionHandlers/onCtrlD/onPasteImage from
- * defaultEditor to the swapped-in editor, so a late registration would be missed.
+ * `wireKeyHandlers` must register onto defaultEditor BEFORE any editor swap: the swap
+ * path (setCustomEditorComponent) copies onEscape/onCtrlD/onPasteImage/onEmptyPaste/canDequeue/
+ * onExtensionShortcut from defaultEditor to the swapped-in editor, so a late registration
+ * would be missed.
  */
 
 import * as crypto from "node:crypto";
@@ -56,7 +57,7 @@ export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 	}
 }
 
-export async function clipboardPaste(ctx: RuntimeContext): Promise<void> {
+export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {
 	try {
 		const image = await readClipboardImage();
 		if (image) {
@@ -70,6 +71,11 @@ export async function clipboardPaste(ctx: RuntimeContext): Promise<void> {
 			ctx.redraw.requestRender();
 			return;
 		}
+
+		// The empty-bracketed-paste trigger (Cmd+V of an image-only clipboard) only
+		// wants an image. Skip the text fallback so a genuinely empty paste with no
+		// image inserts nothing — identical to the behavior before this hook existed.
+		if (opts?.imageOnly) return;
 
 		const text = await readClipboardText();
 		if (text) {
@@ -155,6 +161,13 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 	// otherwise, paste plain text from the system clipboard.
 	ctx.defaultEditor.onPasteImage = () => {
 		void ctx.handleClipboardPaste();
+	};
+
+	// An empty bracketed paste (macOS Cmd+V of an image-only clipboard) has no text
+	// to insert; treat it as an image-only paste so the clipboard image is attached
+	// by path. No image on the clipboard -> no-op (no text fallback).
+	ctx.defaultEditor.onEmptyPaste = () => {
+		void ctx.handleClipboardPaste(true);
 	};
 }
 
