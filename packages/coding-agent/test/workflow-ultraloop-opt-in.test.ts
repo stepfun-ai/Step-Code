@@ -4,7 +4,9 @@ import {
 	buildUltraloopReminder,
 	buildUltraloopSessionReminder,
 	createUltraloopOptInExtension,
+	detectUltraloopBudget,
 	detectUltraloopOptIn,
+	type UltraloopTurnState,
 } from "../src/features/workflow/ultraloop-opt-in.ts";
 import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
 
@@ -74,6 +76,11 @@ describe("detectUltraloopOptIn", () => {
 		expect(detectUltraloopOptIn("ULTRALOOP now")).toBe("ULTRALOOP");
 	});
 
+	test("matches the Claude Code spelling ultracode as the same keyword", () => {
+		expect(detectUltraloopOptIn("ultracode: audit the extensions")).toBe("ultracode");
+		expect(detectUltraloopOptIn("please ULTRACODE this MR")).toBe("ULTRACODE");
+	});
+
 	test("matches each explicit trigger phrase", () => {
 		expect(detectUltraloopOptIn("use a workflow to review this")).toBe("use a workflow");
 		expect(detectUltraloopOptIn("run the nightly-review workflow please")).toBe("run the nightly-review workflow");
@@ -104,6 +111,25 @@ describe("buildUltraloopReminder", () => {
 		expect(buildUltraloopReminder("fan out agents")).toBe(
 			'<system-reminder>The user included the phrase "fan out agents", opting this turn into multi-agent orchestration — use the workflow tool to fulfill the request.</system-reminder>',
 		);
+	});
+
+	test("the ultracode spelling is reported as a keyword, not a phrase", () => {
+		expect(buildUltraloopReminder("Ultracode")).toContain('the keyword "ultracode"');
+	});
+});
+
+describe("detectUltraloopBudget", () => {
+	test("parses +500k and +1.5m style turn targets", () => {
+		expect(detectUltraloopBudget("ultracode +500k audit everything")).toBe(500_000);
+		expect(detectUltraloopBudget("go deep +1.5m")).toBe(1_500_000);
+		expect(detectUltraloopBudget("(+30K) quick pass")).toBe(30_000);
+	});
+
+	test("ignores diff-like pluses and unrelated suffixes", () => {
+		expect(detectUltraloopBudget("+5 lines changed")).toBeUndefined();
+		expect(detectUltraloopBudget("a+3k inline expression")).toBeUndefined();
+		expect(detectUltraloopBudget("+500kb payload")).toBeUndefined();
+		expect(detectUltraloopBudget("no directive here")).toBeUndefined();
 	});
 });
 
@@ -324,5 +350,31 @@ describe("createUltraloopOptInExtension", () => {
 		install(h);
 		void h.commands.get("ultraloop")?.handler("please-toggle", makeCtx(h.notifications));
 		expect(h.notifications.at(-1)).toEqual({ message: "Usage: /ultraloop [on|off|status]", level: "warning" });
+	});
+
+	test("a +500k directive fills the shared turn state and clears with the turn", () => {
+		const h = harness();
+		const turnState: UltraloopTurnState = {};
+		createUltraloopOptInExtension({ enabled: true, vmExecutor: () => {}, turnState })(h.api);
+
+		h.handlers.get("before_agent_start")?.({
+			type: "before_agent_start",
+			prompt: "ultracode +500k sweep the repo",
+		} as never);
+		expect(turnState.budgetTotal).toBe(500_000);
+
+		h.handlers.get("agent_end")?.({ type: "agent_end", messages: [] } as never);
+		expect(turnState.budgetTotal).toBeUndefined();
+
+		h.handlers.get("before_agent_start")?.({
+			type: "before_agent_start",
+			prompt: "no directive on this turn",
+		} as never);
+		expect(turnState.budgetTotal).toBeUndefined();
+
+		h.handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "+30k focused" } as never);
+		expect(turnState.budgetTotal).toBe(30_000);
+		h.handlers.get("session_start")?.({ type: "session_start" } as never);
+		expect(turnState.budgetTotal).toBeUndefined();
 	});
 });
