@@ -630,6 +630,10 @@ export class InteractiveMode {
 	private focusReportingEnabled = false;
 	private clipboardHintTimer?: ReturnType<typeof setTimeout>;
 	private lastClipboardHintAt = 0;
+	// Dedicated (center-aligned) row for the hint so it can update in place like a
+	// status line without sharing showStatus's left-aligned Text instance.
+	private lastClipboardHintSpacer: Spacer | undefined = undefined;
+	private lastClipboardHintText: Text | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -2841,8 +2845,41 @@ export class InteractiveMode {
 			if (now - this.lastClipboardHintAt < 30_000) return;
 			if (!hasClipboardImage()) return;
 			this.lastClipboardHintAt = now;
-			this.showStatus(`Image in clipboard · ${keyText("app.clipboard.pasteImage")} to paste`);
+			this.showClipboardImageHint(`Image in clipboard · ${keyText("app.clipboard.pasteImage")} to paste`);
 		}, 1000);
+	}
+
+	/**
+	 * Render the clipboard-image hint as a centered dim line above the editor. Uses
+	 * its own center-aligned Text rather than showStatus(): showStatus reuses a
+	 * single left-aligned Text instance for in-place updates, so a centered message
+	 * routed through it would render left-aligned (and could later flip an unrelated
+	 * status to centered). A dedicated Text keeps the two independent, while still
+	 * updating in place when the previous hint is still the last row (so repeated
+	 * focus-ins do not stack duplicate lines).
+	 */
+	private showClipboardImageHint(message: string): void {
+		const children = this.chatContainer.children;
+		const last = children.length > 0 ? children[children.length - 1] : undefined;
+		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
+
+		if (last && secondLast && last === this.lastClipboardHintText && secondLast === this.lastClipboardHintSpacer) {
+			this.lastClipboardHintText.setText(theme.fg("dim", message));
+			this.redraw.requestRender();
+			return;
+		}
+
+		const spacer = new Spacer(1);
+		const text = new Text(theme.fg("dim", message), 1, 0, undefined, "center");
+		this.chatContainer.addChild(spacer);
+		this.chatContainer.addChild(text);
+		this.lastClipboardHintSpacer = spacer;
+		this.lastClipboardHintText = text;
+		// This row is not a showStatus row, so drop its merge refs (parity with the
+		// other non-status append helpers) to keep showStatus from merging onto it.
+		this.lastStatusSpacer = undefined;
+		this.lastStatusText = undefined;
+		this.redraw.requestRender();
 	}
 
 	private clearExtensionTerminalInputListeners(): void {
