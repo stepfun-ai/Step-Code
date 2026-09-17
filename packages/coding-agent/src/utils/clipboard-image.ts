@@ -304,6 +304,23 @@ export async function readClipboardImage(options?: {
 /** File extensions we treat as pasteable image files. */
 const IMAGE_FILE_EXTENSION_REGEX = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
+/**
+ * Cheap check for whether the clipboard currently holds an image, for a UI hint.
+ * macOS only: uses the native NSPasteboard check (sub-millisecond), so it is safe
+ * to call on focus changes. Other platforms return false rather than spawn a
+ * subprocess on that hot path.
+ */
+export function hasClipboardImage(platform: NodeJS.Platform = process.platform): boolean {
+	if (platform !== "darwin" || !clipboard) {
+		return false;
+	}
+	try {
+		return clipboard.hasImage();
+	} catch {
+		return false;
+	}
+}
+
 export function isImageFilePath(path: string): boolean {
 	return IMAGE_FILE_EXTENSION_REGEX.test(path.trim());
 }
