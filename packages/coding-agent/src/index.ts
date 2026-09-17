@@ -825,4 +825,5 @@ export { getPiUserAgent } from "./utils/pi-user-agent.ts";
 export { getPowerShellConfig, getShellConfig, killTrackedDetachedChildren } from "./utils/shell.ts";
 export { loadAllHighlightLanguages } from "./utils/syntax-highlight.ts";
 export { stripBom } from "./utils/text.ts";
+export { formatElapsedTime } from "./utils/time.ts";
 export { ensureTool, type ToolStatus } from "./utils/tools-manager.ts";

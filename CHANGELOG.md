@@ -11,8 +11,13 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Added the Step CLI standalone binary release bundle, cross-platform installers, checksum manifests, and managed `fd`/`rg` tools under `.step-cli`.
 - Added the Step binary startup update check with Pi-native selection and restart behavior.
 - Added the `step update` / `step upgrade` command that installs an exact or latest standalone Step release with checksum verification, staged smoke test, rollback, and update locking.
+- Added active-only elapsed time to the goal footer status (`Goal: active · 12m 3s`), refreshed at message boundaries; paused spans never count.
 
 ### Changed
+
+- Changed `/goal` feedback to guide the next step: creation lists the companion commands, `/goal status` formats time in minute/hour units instead of raw seconds, pausing points at `/goal resume`, and starting over an unfinished goal explains resume/edit/clear per status instead of a bare warning.
+- Changed `/goal pause` to actually stop goal execution: it interrupts an in-flight goal-continuation turn immediately (turns the user started themselves keep running), and a queued goal continuation that only starts after the goal was paused or cleared is aborted at turn start instead of silently doing goal work.
+- Changed silent goal auto-stops to be announced: when a run abort or error pauses/blocks the goal (or a usage/token budget limit stops it), a warning now explains how to recover, and a plain message typed while the goal is paused notes once per pause that it does not resume the goal.
 
 - Changed the default permission preset to Bypass, so a fresh run with no CLI flag, `STEP_*` env var, or persisted preset runs tools without approval prompts; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
