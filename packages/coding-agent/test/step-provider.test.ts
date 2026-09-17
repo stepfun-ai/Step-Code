@@ -494,6 +494,81 @@ describe("Step dynamic model discovery", () => {
 		});
 	});
 
+	it("keeps only large-language models when the endpoint tags model_type", async () => {
+		const resolved = resolveStepProviderOptions({ env: {} });
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						data: [
+							{ id: "step-3.5-flash", model_type: "大语言模型" },
+							{ id: "step-tts-mini", model_type: "语音合成" },
+							{ id: "search-image" },
+							{ id: "step-2", model_type: "大语言模型" },
+						],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+
+		const models = await fetchStepModels(
+			refreshContext({ credential: { type: "oauth", access: "t", refresh: "", expires: 0 } }),
+			{ ...resolved, fetch: fetchMock },
+		);
+
+		expect(models.map((m) => m.id)).toEqual(["step-3.5-flash", "step-2"]);
+	});
+
+	it("maps discovered capability fields onto the model config", async () => {
+		const resolved = resolveStepProviderOptions({ env: {} });
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "step-vision",
+								model_type: "大语言模型",
+								max_input_tokens: 131072,
+								enable_reason: false,
+								enable_vision_input: true,
+							},
+							{
+								id: "step-text",
+								model_type: "大语言模型",
+								max_input_tokens: 262144,
+								enable_reason: true,
+								enable_vision_input: false,
+							},
+							{ id: "step-bare", model_type: "大语言模型" },
+						],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+
+		const models = await fetchStepModels(
+			refreshContext({ credential: { type: "oauth", access: "t", refresh: "", expires: 0 } }),
+			{ ...resolved, fetch: fetchMock },
+		);
+
+		expect(models).toEqual([
+			expect.objectContaining({
+				id: "step-vision",
+				contextWindow: 131072,
+				reasoning: false,
+				input: ["text", "image"],
+			}),
+			expect.objectContaining({ id: "step-text", contextWindow: 262144, reasoning: true, input: ["text"] }),
+			expect.objectContaining({
+				id: "step-bare",
+				contextWindow: 256_000,
+				reasoning: true,
+				input: ["text", "image"],
+			}),
+		]);
+	});
+
 	it("falls back to the built-in catalog when unauthenticated or offline", async () => {
 		const resolved = resolveStepProviderOptions({ env: {} });
 		const ids = STEP_MODELS.map((m) => m.id);

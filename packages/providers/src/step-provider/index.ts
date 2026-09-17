@@ -91,7 +91,15 @@ export const STEP_STATIC_REFRESH_TOKEN = "step-static-credential";
  */
 const STEP_MODEL_API: Api = "openai-completions";
 
-/** Metadata `{base}/v1/models` does not return; applied to every Step model. */
+/**
+ * `{base}/v1/models` tags each entry with a `model_type`. Step is a coding
+ * agent, so only large-language models are usable; other types (web search,
+ * TTS, ASR, realtime voice, text-to-image) are filtered out. Endpoints that do
+ * not yet return `model_type` are left unfiltered for backward compatibility.
+ */
+const STEP_LLM_MODEL_TYPE = "大语言模型";
+
+/** Metadata `{base}/v1/models` does not always return; used as fallbacks. */
 const STEP_MODEL_DEFAULTS = {
 	reasoning: true,
 	input: ["text", "image"] as ("text" | "image")[],
@@ -100,17 +108,29 @@ const STEP_MODEL_DEFAULTS = {
 	maxTokens: 32_000,
 } as const;
 
-/** Build a Step model entry with the shared dialect and default metadata. */
-function stepModelConfig(id: string, name: string, baseUrl?: string): StepModelConfig {
+/** Per-model capabilities parsed from `{base}/v1/models` (any field may be absent). */
+interface StepModelMeta {
+	/** `max_input_tokens` -> context window. */
+	contextWindow?: number;
+	/** `enable_reason` -> extended-thinking support. */
+	reasoning?: boolean;
+	/** `enable_vision_input` -> image input support. */
+	vision?: boolean;
+}
+
+/** Build a Step model entry, using discovered metadata where present. */
+function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: StepModelMeta): StepModelConfig {
 	return {
 		id,
 		name,
 		api: STEP_MODEL_API,
 		...(baseUrl ? { baseUrl } : {}),
-		reasoning: STEP_MODEL_DEFAULTS.reasoning,
-		input: [...STEP_MODEL_DEFAULTS.input],
+		reasoning: meta?.reasoning ?? STEP_MODEL_DEFAULTS.reasoning,
+		// Only drop image input when the endpoint explicitly reports no vision;
+		// keep the permissive default when the field is absent.
+		input: meta?.vision === false ? ["text"] : [...STEP_MODEL_DEFAULTS.input],
 		cost: { ...STEP_MODEL_DEFAULTS.cost },
-		contextWindow: STEP_MODEL_DEFAULTS.contextWindow,
+		contextWindow: meta?.contextWindow ?? STEP_MODEL_DEFAULTS.contextWindow,
 		maxTokens: STEP_MODEL_DEFAULTS.maxTokens,
 	};
 }
@@ -595,12 +615,17 @@ export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
 }
 
 /**
- * Discover the models the current credential can use from `{base}/v1/models`.
+ * Discover the large-language models the current credential can use from
+ * `{base}/v1/models`, filtered by the endpoint's `model_type` (see
+ * {@link STEP_LLM_MODEL_TYPE}). Per-model capabilities are taken from the
+ * response where present: `max_input_tokens` -> context window, `enable_reason`
+ * -> thinking support, `enable_vision_input` -> image input; missing fields use
+ * the built-in defaults.
  *
  * The coding-agent provider composition treats the return value as a full
  * replacement for the model list, so this never returns `[]` (which would wipe
  * the catalog): when offline, unauthenticated, on any transport/parse failure,
- * or when the endpoint returns no models, it falls back to the built-in
+ * or when the endpoint returns no usable models, it falls back to the built-in
  * baseline. Only a successful fetch with at least one model replaces it.
  */
 export async function fetchStepModels(
@@ -626,14 +651,32 @@ export async function fetchStepModels(
 	if (!response.ok) return fallback();
 	const payload = await readJsonObject(response);
 	const data = Array.isArray(payload.data) ? payload.data : [];
-	const seen = new Set<string>();
-	const models: StepModelConfig[] = [];
+	const entries: { id: string; modelType?: string; meta: StepModelMeta }[] = [];
 	for (const entry of data) {
 		if (!entry || typeof entry !== "object") continue;
-		const id = readString(entry as Record<string, unknown>, "id");
-		if (!id || seen.has(id)) continue;
-		seen.add(id);
-		models.push(stepModelConfig(id, id, baseUrl));
+		const record = entry as Record<string, unknown>;
+		const id = readString(record, "id");
+		if (!id) continue;
+		entries.push({
+			id,
+			modelType: readString(record, "model_type"),
+			meta: {
+				contextWindow: readPositiveNumber(record, "max_input_tokens"),
+				reasoning: readBoolean(record, "enable_reason"),
+				vision: readBoolean(record, "enable_vision_input"),
+			},
+		});
+	}
+	// Keep only large-language models when the endpoint tags model types; if no
+	// entry carries a type (older/other endpoints), leave the list unfiltered.
+	const typed = entries.some((entry) => entry.modelType !== undefined);
+	const usable = typed ? entries.filter((entry) => entry.modelType === STEP_LLM_MODEL_TYPE) : entries;
+	const seen = new Set<string>();
+	const models: StepModelConfig[] = [];
+	for (const entry of usable) {
+		if (seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		models.push(stepModelConfig(entry.id, entry.id, baseUrl, entry.meta));
 	}
 	return models.length > 0 ? models : fallback();
 }
@@ -660,6 +703,11 @@ function readPositiveNumber(value: Record<string, unknown>, key: string): number
 	const result = value[key];
 	if (typeof result !== "number" || !Number.isFinite(result) || result <= 0) return undefined;
 	return result;
+}
+
+function readBoolean(value: Record<string, unknown>, key: string): boolean | undefined {
+	const result = value[key];
+	return typeof result === "boolean" ? result : undefined;
 }
 
 function tokenErrorDetail(value: Record<string, unknown>): string {
