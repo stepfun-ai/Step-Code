@@ -27,6 +27,7 @@ import {
 	fetchStepModelEfforts,
 	registerStepProvider,
 	STEP_PROVIDER_ID,
+	stepHighestEffort,
 	stepThinkingLevelMap,
 } from "./step-provider/index.ts";
 import { registerStepStreamRecovery } from "./step-stream-recovery.ts";
@@ -48,7 +49,11 @@ export interface StepExtensionOptions {
  * model in place — the session's active model is the same object the picker
  * reads — and fetches at most once per model (skips when a map already exists).
  */
-async function enrichStepModelEffort(model: Model<Api> | undefined, ctx: ExtensionContext): Promise<void> {
+async function enrichStepModelEffort(
+	model: Model<Api> | undefined,
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+): Promise<void> {
 	try {
 		if (!model || model.provider !== STEP_PROVIDER_ID || model.thinkingLevelMap) return;
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
@@ -64,6 +69,9 @@ async function enrichStepModelEffort(model: Model<Api> | undefined, ctx: Extensi
 		if (!efforts) return;
 		model.thinkingLevelMap = stepThinkingLevelMap(efforts);
 		model.reasoning = true;
+		// Default a Step model to its highest supported effort.
+		const highest = stepHighestEffort(efforts);
+		if (highest) pi.setThinkingLevel(highest);
 	} catch {
 		// Best-effort; the model keeps its existing thinking-level defaults.
 	}
@@ -99,10 +107,10 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		// picker) from `{base}/v1/models/{id}` the first time it becomes active.
 		// Fire-and-forget; failures leave the model's defaults untouched.
 		pi.on("session_start", (_event, ctx) => {
-			void enrichStepModelEffort(ctx.model, ctx);
+			void enrichStepModelEffort(ctx.model, ctx, pi);
 		});
 		pi.on("model_select", (event, ctx) => {
-			void enrichStepModelEffort(event.model, ctx);
+			void enrichStepModelEffort(event.model, ctx, pi);
 		});
 		// Declarative plugins (including StepPage) contribute MCP servers. The
 		// bridge is loaded as part of the Step product extension so ordinary Pi

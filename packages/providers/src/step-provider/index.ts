@@ -3,7 +3,7 @@ import process from "node:process";
 import type { Credential, OAuthCredentials } from "../auth/types.ts";
 import type { OAuthLoginCallbacks } from "../compat/extension-oauth-types.ts";
 import type { RefreshModelsContext } from "../models.ts";
-import type { Api, Model, ThinkingLevel, ThinkingLevelMap } from "../types.ts";
+import type { Api, Model, ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from "../types.ts";
 
 /**
  * Model catalog entry for the Step provider. Structurally identical to coding-agent's
@@ -686,18 +686,32 @@ export async function fetchStepModels(
 /** Reasoning-effort levels the Step endpoint may report, in ascending order. */
 const STEP_EFFORT_LEVELS: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
+/** All selectable thinking levels, including the "off" (no reasoning) option. */
+const STEP_THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", ...STEP_EFFORT_LEVELS];
+
 /**
  * Convert a `reasoning_effort_support_list` into a `thinkingLevelMap`: listed
- * levels map to their own effort value; unlisted levels are marked `null`
- * (unsupported). `off` is left unset so the "no thinking" option remains.
+ * levels map to their own effort value; every other level (including `off` when
+ * the list omits it) is marked `null` (unsupported), so the `/effort` picker
+ * shows exactly what the endpoint reports.
  */
 export function stepThinkingLevelMap(efforts: readonly string[]): ThinkingLevelMap {
 	const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
 	const map: ThinkingLevelMap = {};
-	for (const level of STEP_EFFORT_LEVELS) {
+	for (const level of STEP_THINKING_LEVELS) {
 		map[level] = supported.has(level) ? level : null;
 	}
 	return map;
+}
+
+/** Highest supported reasoning effort (used as the default level for a model). */
+export function stepHighestEffort(efforts: readonly string[]): ThinkingLevel | undefined {
+	const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
+	for (let index = STEP_EFFORT_LEVELS.length - 1; index >= 0; index -= 1) {
+		const level = STEP_EFFORT_LEVELS[index]!;
+		if (supported.has(level)) return level;
+	}
+	return undefined;
 }
 
 export interface FetchStepModelEffortsInput {

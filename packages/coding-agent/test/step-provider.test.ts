@@ -23,6 +23,7 @@ import {
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
 	startStepCallbackServer,
+	stepHighestEffort,
 	stepOpenAiBaseUrl,
 	stepProviderInlineExtension,
 	stepThinkingLevelMap,
@@ -611,6 +612,7 @@ describe("Step dynamic model discovery", () => {
 
 	it("maps a reasoning_effort_support_list to a thinkingLevelMap", () => {
 		expect(stepThinkingLevelMap(["low", "medium", "high"])).toEqual({
+			off: null,
 			minimal: null,
 			low: "low",
 			medium: "medium",
@@ -618,6 +620,12 @@ describe("Step dynamic model discovery", () => {
 			xhigh: null,
 			max: null,
 		});
+	});
+
+	it("reports the highest supported effort", () => {
+		expect(stepHighestEffort(["low", "medium", "high"])).toBe("high");
+		expect(stepHighestEffort(["low", "xhigh", "medium"])).toBe("xhigh");
+		expect(stepHighestEffort([])).toBeUndefined();
 	});
 
 	it("fetches a model's supported efforts from /v1/models/{id}", async () => {
