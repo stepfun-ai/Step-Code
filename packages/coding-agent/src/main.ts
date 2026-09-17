@@ -40,6 +40,7 @@ import {
 	expandTildePath,
 	getAgentDir,
 	getPackageDir,
+	STEP_ENTRYPOINT,
 	VERSION,
 } from "./config.ts";
 import type { AgentSession } from "./core/agent-session.ts";
@@ -1299,6 +1300,16 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 
 	if (parsed.listModels !== undefined) {
 		reportDiagnostics(startupSettingsDiagnostics);
+		// The one-shot model listing is otherwise cache-only. On the Step
+		// entrypoint, refresh catalogs from the network first so dynamic providers
+		// (Step discovers its models from `{base}/v1/models`) list the account's
+		// real usable models instead of the built-in baseline. Best-effort and
+		// bounded; on failure the cached/baseline list is shown.
+		if (STEP_ENTRYPOINT) {
+			await modelRuntime
+				.refresh({ allowNetwork: true, force: true, signal: AbortSignal.timeout(15_000) })
+				.catch(() => {});
+		}
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRuntime, searchPattern, AbortSignal.timeout(15_000));
 		return { kind: "completed", exitCode: 0 };

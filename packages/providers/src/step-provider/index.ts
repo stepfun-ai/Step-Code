@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import process from "node:process";
-import type { OAuthCredentials } from "../auth/types.ts";
+import type { Credential, OAuthCredentials } from "../auth/types.ts";
 import type { OAuthLoginCallbacks } from "../compat/extension-oauth-types.ts";
+import type { RefreshModelsContext } from "../models.ts";
 import type { Api, Model } from "../types.ts";
 
 /**
@@ -83,54 +84,48 @@ export const STEP_PROVIDER_DEFAULTS = {
 /** Marker used for credentials that contain a non-expiring Step API key. */
 export const STEP_STATIC_REFRESH_TOKEN = "step-static-credential";
 
-const STEP_MODEL_COMPAT = {
-	forceAdaptiveThinking: true,
-	supportsToolReferences: false,
+/**
+ * Wire dialect for every Step model. All Step profile URLs speak the OpenAI
+ * Chat Completions API (`{baseUrl}/chat/completions`), so both the built-in
+ * baseline and the models discovered from `{baseUrl}/models` use it.
+ */
+const STEP_MODEL_API: Api = "openai-completions";
+
+/** Metadata `{base}/v1/models` does not return; applied to every Step model. */
+const STEP_MODEL_DEFAULTS = {
+	reasoning: true,
+	input: ["text", "image"] as ("text" | "image")[],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 256_000,
+	maxTokens: 32_000,
 } as const;
 
-/** Models exposed by the Step Plan provider. */
+/** Build a Step model entry with the shared dialect and default metadata. */
+function stepModelConfig(id: string, name: string, baseUrl?: string): StepModelConfig {
+	return {
+		id,
+		name,
+		api: STEP_MODEL_API,
+		...(baseUrl ? { baseUrl } : {}),
+		reasoning: STEP_MODEL_DEFAULTS.reasoning,
+		input: [...STEP_MODEL_DEFAULTS.input],
+		cost: { ...STEP_MODEL_DEFAULTS.cost },
+		contextWindow: STEP_MODEL_DEFAULTS.contextWindow,
+		maxTokens: STEP_MODEL_DEFAULTS.maxTokens,
+	};
+}
+
+/**
+ * Built-in baseline shown before a credential is available (offline / pre-login).
+ * After login, `fetchStepModels` replaces this list with the account's real
+ * `{base}/v1/models` result.
+ */
 export const STEP_MODELS: readonly StepModelConfig[] = [
-	{
-		id: "step-3.7-flash",
-		name: "Step 3.7 Flash",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-	{
-		id: "step-3.5-flash-2603",
-		name: "Step 3.5 Flash (2603)",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-	{
-		id: "step-3.5-flash",
-		name: "Step 3.5 Flash",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-	{
-		id: "step-router-v1",
-		name: "Step Router v1",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-] as const;
+	stepModelConfig("step-3.7-flash", "Step 3.7 Flash"),
+	stepModelConfig("step-3.5-flash-2603", "Step 3.5 Flash (2603)"),
+	stepModelConfig("step-3.5-flash", "Step 3.5 Flash"),
+	stepModelConfig("step-router-v1", "Step Router v1"),
+];
 
 // These ids are owned by the Step provider. A stale models.json can carry a
 // legacy wire dialect for one of them, but Pi must still send the built-in
@@ -255,31 +250,25 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 }
 
 /**
- * A model entry may override the provider URL. Keep that override compatible
- * with Pi's Anthropic adapter as well; otherwise a caller that supplies
- * `/v1/messages` at model level bypasses the provider-level repair.
+ * A model entry may omit its dialect. Default it to the shared Step wire
+ * dialect (OpenAI Chat Completions) so a bare custom entry streams correctly.
  */
 export function normalizeStepModelConfig(model: StepModelConfig): StepModelConfig {
-	const api = model.api ?? "anthropic-messages";
 	return {
 		...model,
-		...(api === "anthropic-messages" && model.baseUrl
-			? { baseUrl: normalizeStepAnthropicBaseUrl(model.baseUrl) }
-			: {}),
+		api: model.api ?? STEP_MODEL_API,
 		input: [...model.input],
 	};
 }
 
-export function normalizeStepModel(model: Model<Api>, canonicalBaseUrl: string): Model<Api> {
+export function normalizeStepModel(model: Model<Api>, openaiBaseUrl: string): Model<Api> {
 	if (STEP_BUILTIN_MODEL_IDS.has(model.id.toLowerCase())) {
-		// Step owns these ids. Always restore both the wire dialect and endpoint,
-		// including files that already say `anthropic-messages` but still point at
-		// an old proxy host. Otherwise the models.json overlay can override the
-		// provider default and recreate the 404 after a successful login.
-		return { ...model, api: "anthropic-messages", baseUrl: canonicalBaseUrl };
+		// Step owns these ids. Restore the wire dialect and endpoint so a stale
+		// models.json overlay cannot override the provider default (which would
+		// send a built-in id to the wrong host/dialect after a successful login).
+		return { ...model, api: STEP_MODEL_API, baseUrl: openaiBaseUrl };
 	}
-	if (model.api !== "anthropic-messages") return model;
-	return { ...model, baseUrl: normalizeStepAnthropicBaseUrl(model.baseUrl) };
+	return model;
 }
 
 export async function loginStepOAuth(
@@ -590,6 +579,69 @@ export function normalizeStepAnthropicBaseUrl(value: string): string {
 		// entries must remain intact for Pi's normal validation diagnostics.
 		return value;
 	}
+}
+
+/**
+ * OpenAI-style base (`.../v1`) for the active profile. `resolved.apiBaseUrl` is
+ * already normalized (trailing `/v1` stripped), so appending `/v1` yields the
+ * OpenAI base for every profile:
+ *   step_plan   -> https://api.stepfun.com/step_plan/v1
+ *   platform_cn -> https://api.stepfun.com/v1
+ * The OpenAI adapter appends `/chat/completions`; discovery uses `/models`.
+ */
+export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
+	return `${normalizeStepAnthropicBaseUrl(apiBaseUrl)}/v1`;
+}
+
+/**
+ * Discover the models the current credential can use from `{base}/v1/models`.
+ *
+ * The coding-agent provider composition treats the return value as a full
+ * replacement for the model list, so this never returns `[]` (which would wipe
+ * the catalog): when offline, unauthenticated, on any transport/parse failure,
+ * or when the endpoint returns no models, it falls back to the built-in
+ * baseline. Only a successful fetch with at least one model replaces it.
+ */
+export async function fetchStepModels(
+	context: RefreshModelsContext,
+	resolved: ResolvedStepProviderOptions,
+): Promise<StepModelConfig[]> {
+	const fallback = (): StepModelConfig[] => resolved.models.map((model) => ({ ...model, input: [...model.input] }));
+	if (!context.allowNetwork || context.signal.aborted) return fallback();
+	const token = readStepBearerToken(context.credential);
+	if (!token) return fallback();
+	const baseUrl = stepOpenAiBaseUrl(resolved.apiBaseUrl);
+	const fetchFn = resolveFetch(resolved.fetch);
+	let response: Response;
+	try {
+		response = await fetchFn(`${baseUrl}/models`, {
+			method: "GET",
+			headers: { accept: "application/json", authorization: `Bearer ${token}` },
+			signal: context.signal,
+		});
+	} catch {
+		return fallback();
+	}
+	if (!response.ok) return fallback();
+	const payload = await readJsonObject(response);
+	const data = Array.isArray(payload.data) ? payload.data : [];
+	const seen = new Set<string>();
+	const models: StepModelConfig[] = [];
+	for (const entry of data) {
+		if (!entry || typeof entry !== "object") continue;
+		const id = readString(entry as Record<string, unknown>, "id");
+		if (!id || seen.has(id)) continue;
+		seen.add(id);
+		models.push(stepModelConfig(id, id, baseUrl));
+	}
+	return models.length > 0 ? models : fallback();
+}
+
+function readStepBearerToken(credential: Credential | undefined): string | undefined {
+	if (!credential) return undefined;
+	if (credential.type === "oauth") return credential.access.trim() || undefined;
+	if (credential.type === "api_key") return credential.key?.trim() || undefined;
+	return undefined;
 }
 
 function nonEmpty(value: string, label: string): string {

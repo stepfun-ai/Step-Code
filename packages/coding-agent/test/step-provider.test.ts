@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OAuthLoginCallbacks } from "@step-harness/providers";
+import type { OAuthLoginCallbacks, RefreshModelsContext } from "@step-harness/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionAPI, InlineExtension } from "../src/core/extensions/types.ts";
@@ -13,6 +13,7 @@ import {
 	buildStepCallbackUrl,
 	createStepProviderConfig,
 	createStepProviderInlineExtension,
+	fetchStepModels,
 	loginStepOAuth,
 	refreshStepOAuth,
 	resolveStepProviderOptions,
@@ -21,6 +22,7 @@ import {
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
 	startStepCallbackServer,
+	stepOpenAiBaseUrl,
 	stepProviderInlineExtension,
 } from "../src/features/step-provider/index.ts";
 
@@ -122,8 +124,8 @@ describe("Step provider extension", () => {
 		expect(createStepProviderInlineExtension({ name: "Step test" }).name).toBe("Step test");
 		expect(registerProvider).toHaveBeenCalledWith(STEP_PROVIDER_ID, expect.any(Object));
 		const config = registerProvider.mock.calls[0]?.[1] as ReturnType<typeof createStepProviderConfig>;
-		expect(config.api).toBe("anthropic-messages");
-		expect(config.baseUrl).toBe("https://api.stepfun.com/step_plan");
+		expect(config.api).toBe("openai-completions");
+		expect(config.baseUrl).toBe("https://api.stepfun.com/step_plan/v1");
 		expect(config.models).toHaveLength(STEP_MODELS.length);
 		expect(config.oauth?.name).toBe("Step Plan");
 	});
@@ -154,20 +156,27 @@ describe("Step provider extension", () => {
 		).toBe("https://api.stepfun.ai");
 	});
 
-	it("normalizes Anthropic model-level endpoint overrides without mutating input", () => {
+	it("defaults custom Step models to the OpenAI dialect without mutating input", () => {
+		const base = STEP_MODELS[0]!;
 		const models = [
 			{
-				...STEP_MODELS[0],
-				baseUrl: "https://api.example.test/step_plan/v1/v1/messages",
+				id: "custom-step",
+				name: "Custom Step",
+				reasoning: base.reasoning,
+				input: base.input,
+				cost: base.cost,
+				contextWindow: base.contextWindow,
+				maxTokens: base.maxTokens,
 			},
-		] as const;
+		];
 		const config = createStepProviderConfig({ models, env: {} });
 
-		expect(config.models?.[0]?.baseUrl).toBe("https://api.example.test/step_plan");
-		expect(models[0].baseUrl).toBe("https://api.example.test/step_plan/v1/v1/messages");
+		expect(config.models?.[0]?.api).toBe("openai-completions");
+		expect(config.models?.[0]?.input).toEqual(["text", "image"]);
+		expect(models[0]).not.toHaveProperty("api");
 	});
 
-	it("routes a stored Step login to the Messages endpoint exactly once", async () => {
+	it("routes a stored Step login to the chat completions endpoint exactly once", async () => {
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory({
 				[STEP_PROVIDER_ID]: {
@@ -183,8 +192,8 @@ describe("Step provider extension", () => {
 		runtime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig({ env: {} }));
 		const model = runtime.getModel(STEP_PROVIDER_ID, "step-3.7-flash");
 		expect(model).toMatchObject({
-			api: "anthropic-messages",
-			baseUrl: "https://api.stepfun.com/step_plan",
+			api: "openai-completions",
+			baseUrl: "https://api.stepfun.com/step_plan/v1",
 		});
 
 		let requestUrl: string | undefined;
@@ -201,9 +210,9 @@ describe("Step provider extension", () => {
 			},
 		);
 
-		expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/messages");
-		expect(requestHeaders?.get("x-api-key")).toBe("step-key");
-		expect(response.errorMessage).toBe("401 status code (no body)");
+		expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/chat/completions");
+		expect(requestHeaders?.get("authorization")).toBe("Bearer step-key");
+		expect(response.errorMessage).toContain("401");
 	});
 
 	it("normalizes stale models.json endpoint overrides for embedded hosts", async () => {
@@ -245,7 +254,7 @@ describe("Step provider extension", () => {
 			});
 			runtime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig({ env: {} }));
 			const model = runtime.getModel(STEP_PROVIDER_ID, "step-3.7-flash");
-			expect(model?.baseUrl).toBe("https://api.stepfun.com/step_plan");
+			expect(model?.baseUrl).toBe("https://api.stepfun.com/step_plan/v1");
 
 			let requestUrl: string | undefined;
 			await runtime.completeSimple(
@@ -258,7 +267,7 @@ describe("Step provider extension", () => {
 					},
 				},
 			);
-			expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/messages");
+			expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/chat/completions");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -302,8 +311,8 @@ describe("Step provider extension", () => {
 			runtime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig({ env: {} }));
 			const model = runtime.getModel(STEP_PROVIDER_ID, "step-3.7-flash");
 			expect(model).toMatchObject({
-				api: "anthropic-messages",
-				baseUrl: "https://api.stepfun.com/step_plan",
+				api: "openai-completions",
+				baseUrl: "https://api.stepfun.com/step_plan/v1",
 			});
 
 			let requestUrl: string | undefined;
@@ -317,7 +326,7 @@ describe("Step provider extension", () => {
 					},
 				},
 			);
-			expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/messages");
+			expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/chat/completions");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -438,5 +447,79 @@ describe("Step provider extension", () => {
 			},
 		);
 		expect(result).toMatchObject({ access: "new-access", uid: "u-existing" });
+	});
+});
+
+describe("Step dynamic model discovery", () => {
+	function refreshContext(overrides: Partial<RefreshModelsContext> = {}): RefreshModelsContext {
+		return {
+			allowNetwork: true,
+			signal: new AbortController().signal,
+			publish: async () => true,
+			...overrides,
+		} as RefreshModelsContext;
+	}
+
+	it("derives the OpenAI base for each profile", () => {
+		expect(stepOpenAiBaseUrl("https://api.stepfun.com/step_plan")).toBe("https://api.stepfun.com/step_plan/v1");
+		expect(stepOpenAiBaseUrl("https://api.stepfun.com")).toBe("https://api.stepfun.com/v1");
+		// Idempotent for a base that already carries a `/v1` suffix.
+		expect(stepOpenAiBaseUrl("https://api.stepfun.com/v1")).toBe("https://api.stepfun.com/v1");
+	});
+
+	it("fetches models from {base}/v1/models with the bearer token", async () => {
+		const resolved = resolveStepProviderOptions({ env: {} });
+		let requestUrl: string | undefined;
+		let authorization: string | null | undefined;
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requestUrl = String(input);
+			authorization = new Headers(init?.headers).get("authorization");
+			return new Response(JSON.stringify({ data: [{ id: "step-3.5-flash" }, { id: "step-2" }] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		});
+
+		const models = await fetchStepModels(
+			refreshContext({ credential: { type: "oauth", access: "tok", refresh: "", expires: 0 } }),
+			{ ...resolved, fetch: fetchMock },
+		);
+
+		expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/models");
+		expect(authorization).toBe("Bearer tok");
+		expect(models.map((m) => m.id)).toEqual(["step-3.5-flash", "step-2"]);
+		expect(models[0]).toMatchObject({
+			api: "openai-completions",
+			baseUrl: "https://api.stepfun.com/step_plan/v1",
+		});
+	});
+
+	it("falls back to the built-in catalog when unauthenticated or offline", async () => {
+		const resolved = resolveStepProviderOptions({ env: {} });
+		const ids = STEP_MODELS.map((m) => m.id);
+		expect((await fetchStepModels(refreshContext({ credential: undefined }), resolved)).map((m) => m.id)).toEqual(
+			ids,
+		);
+		expect(
+			(
+				await fetchStepModels(
+					refreshContext({
+						allowNetwork: false,
+						credential: { type: "oauth", access: "t", refresh: "", expires: 0 },
+					}),
+					resolved,
+				)
+			).map((m) => m.id),
+		).toEqual(ids);
+	});
+
+	it("falls back to the built-in catalog on a non-200 response", async () => {
+		const resolved = resolveStepProviderOptions({ env: {} });
+		const fetchMock = vi.fn(async () => new Response("nope", { status: 500 }));
+		const models = await fetchStepModels(
+			refreshContext({ credential: { type: "oauth", access: "t", refresh: "", expires: 0 } }),
+			{ ...resolved, fetch: fetchMock },
+		);
+		expect(models.map((m) => m.id)).toEqual(STEP_MODELS.map((m) => m.id));
 	});
 });

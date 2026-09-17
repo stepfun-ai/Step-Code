@@ -21,7 +21,7 @@ import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
-import { registerStepProvider } from "./step-provider/index.ts";
+import { registerStepProvider, STEP_PROVIDER_ID } from "./step-provider/index.ts";
 import { registerStepStreamRecovery } from "./step-stream-recovery.ts";
 
 export interface StepExtensionOptions {
@@ -40,6 +40,27 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 	return (pi: ExtensionAPI): void => {
 		registerStepProvider(pi);
 		registerStepStreamRecovery(pi);
+		// The Step provider discovers its usable models from `{base}/v1/models`
+		// (see fetchStepModels), but the runtime only refreshes model catalogs from
+		// the network on an explicit request. Trigger one for the Step provider when
+		// a session starts and a Step credential is configured, so `/models` reflects
+		// the account's real usable models instead of the built-in baseline. This is
+		// fire-and-forget with a timeout so it never blocks session start.
+		pi.on("session_start", (_event, ctx) => {
+			try {
+				if (!ctx.modelRegistry.getProviderAuthStatus(STEP_PROVIDER_ID).configured) return;
+				void ctx.modelRegistry
+					.refresh({
+						allowNetwork: true,
+						force: true,
+						providers: [STEP_PROVIDER_ID],
+						signal: AbortSignal.timeout(15_000),
+					})
+					.catch(() => {});
+			} catch {
+				// Discovery is best-effort; the built-in baseline remains available.
+			}
+		});
 		// Declarative plugins (including StepPage) contribute MCP servers. The
 		// bridge is loaded as part of the Step product extension so ordinary Pi
 		// sessions remain unchanged.
