@@ -1,7 +1,9 @@
 import process from "node:process";
+import type { Api, Model } from "@step-harness/providers";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
+	ExtensionContext,
 	ExtensionFactory,
 	InlineExtension,
 } from "../core/extensions/types.ts";
@@ -21,7 +23,12 @@ import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
-import { registerStepProvider, STEP_PROVIDER_ID } from "./step-provider/index.ts";
+import {
+	fetchStepModelEfforts,
+	registerStepProvider,
+	STEP_PROVIDER_ID,
+	stepThinkingLevelMap,
+} from "./step-provider/index.ts";
 import { registerStepStreamRecovery } from "./step-stream-recovery.ts";
 
 export interface StepExtensionOptions {
@@ -33,6 +40,33 @@ export interface StepExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 	/** Current account identity, resolved when `/feedback` is invoked. */
 	feedbackIdentity?: () => FeedbackIdentity;
+}
+
+/**
+ * Enrich an active Step model with its supported reasoning-effort levels so the
+ * `/effort` picker only offers what `{base}/v1/models/{id}` reports. Mutates the
+ * model in place — the session's active model is the same object the picker
+ * reads — and fetches at most once per model (skips when a map already exists).
+ */
+async function enrichStepModelEffort(model: Model<Api> | undefined, ctx: ExtensionContext): Promise<void> {
+	try {
+		if (!model || model.provider !== STEP_PROVIDER_ID || model.thinkingLevelMap) return;
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok || !auth.apiKey) return;
+		const baseUrl = auth.baseUrl ?? model.baseUrl;
+		if (!baseUrl) return;
+		const efforts = await fetchStepModelEfforts({
+			baseUrl,
+			modelId: model.id,
+			apiKey: auth.apiKey,
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!efforts) return;
+		model.thinkingLevelMap = stepThinkingLevelMap(efforts);
+		model.reasoning = true;
+	} catch {
+		// Best-effort; the model keeps its existing thinking-level defaults.
+	}
 }
 
 /** Product extension layered on pi's native coding-agent runtime. */
@@ -60,6 +94,15 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			} catch {
 				// Discovery is best-effort; the built-in baseline remains available.
 			}
+		});
+		// Populate a Step model's supported reasoning-effort levels (the `/effort`
+		// picker) from `{base}/v1/models/{id}` the first time it becomes active.
+		// Fire-and-forget; failures leave the model's defaults untouched.
+		pi.on("session_start", (_event, ctx) => {
+			void enrichStepModelEffort(ctx.model, ctx);
+		});
+		pi.on("model_select", (event, ctx) => {
+			void enrichStepModelEffort(event.model, ctx);
 		});
 		// Declarative plugins (including StepPage) contribute MCP servers. The
 		// bridge is loaded as part of the Step product extension so ordinary Pi

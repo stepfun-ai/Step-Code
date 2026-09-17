@@ -13,6 +13,7 @@ import {
 	buildStepCallbackUrl,
 	createStepProviderConfig,
 	createStepProviderInlineExtension,
+	fetchStepModelEfforts,
 	fetchStepModels,
 	loginStepOAuth,
 	refreshStepOAuth,
@@ -24,6 +25,7 @@ import {
 	startStepCallbackServer,
 	stepOpenAiBaseUrl,
 	stepProviderInlineExtension,
+	stepThinkingLevelMap,
 } from "../src/features/step-provider/index.ts";
 
 async function request(port: number, path: string): Promise<Response> {
@@ -605,5 +607,51 @@ describe("Step dynamic model discovery", () => {
 			{ ...resolved, fetch: fetchMock },
 		);
 		expect(models.map((m) => m.id)).toEqual(STEP_MODELS.map((m) => m.id));
+	});
+
+	it("maps a reasoning_effort_support_list to a thinkingLevelMap", () => {
+		expect(stepThinkingLevelMap(["low", "medium", "high"])).toEqual({
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+			max: null,
+		});
+	});
+
+	it("fetches a model's supported efforts from /v1/models/{id}", async () => {
+		let requestUrl: string | undefined;
+		let authorization: string | null | undefined;
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requestUrl = String(input);
+			authorization = new Headers(init?.headers).get("authorization");
+			return new Response(JSON.stringify({ id: "step-3.5-flash", reasoning_effort_support_list: ["low", "high"] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		});
+
+		const efforts = await fetchStepModelEfforts({
+			baseUrl: "https://api.stepfun.com/step_plan/v1",
+			modelId: "step-3.5-flash",
+			apiKey: "tok",
+			fetch: fetchMock,
+		});
+
+		expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/models/step-3.5-flash");
+		expect(authorization).toBe("Bearer tok");
+		expect(efforts).toEqual(["low", "high"]);
+	});
+
+	it("returns undefined when the effort field is absent or the request fails", async () => {
+		const missing = vi.fn(async () => new Response(JSON.stringify({ id: "m" }), { status: 200 }));
+		expect(
+			await fetchStepModelEfforts({ baseUrl: "https://x/v1", modelId: "m", apiKey: "t", fetch: missing }),
+		).toBeUndefined();
+		const failed = vi.fn(async () => new Response("no", { status: 404 }));
+		expect(
+			await fetchStepModelEfforts({ baseUrl: "https://x/v1", modelId: "m", apiKey: "t", fetch: failed }),
+		).toBeUndefined();
 	});
 });

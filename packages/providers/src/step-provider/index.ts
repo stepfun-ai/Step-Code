@@ -3,7 +3,7 @@ import process from "node:process";
 import type { Credential, OAuthCredentials } from "../auth/types.ts";
 import type { OAuthLoginCallbacks } from "../compat/extension-oauth-types.ts";
 import type { RefreshModelsContext } from "../models.ts";
-import type { Api, Model } from "../types.ts";
+import type { Api, Model, ThinkingLevel, ThinkingLevelMap } from "../types.ts";
 
 /**
  * Model catalog entry for the Step provider. Structurally identical to coding-agent's
@@ -681,6 +681,59 @@ export async function fetchStepModels(
 		models.push(stepModelConfig(entry.id, entry.id, baseUrl, entry.meta));
 	}
 	return models.length > 0 ? models : fallback();
+}
+
+/** Reasoning-effort levels the Step endpoint may report, in ascending order. */
+const STEP_EFFORT_LEVELS: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Convert a `reasoning_effort_support_list` into a `thinkingLevelMap`: listed
+ * levels map to their own effort value; unlisted levels are marked `null`
+ * (unsupported). `off` is left unset so the "no thinking" option remains.
+ */
+export function stepThinkingLevelMap(efforts: readonly string[]): ThinkingLevelMap {
+	const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
+	const map: ThinkingLevelMap = {};
+	for (const level of STEP_EFFORT_LEVELS) {
+		map[level] = supported.has(level) ? level : null;
+	}
+	return map;
+}
+
+export interface FetchStepModelEffortsInput {
+	/** OpenAI-style base (`.../v1`); the request targets `{baseUrl}/models/{modelId}`. */
+	readonly baseUrl: string;
+	readonly modelId: string;
+	readonly apiKey: string;
+	readonly fetch?: typeof fetch;
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * Fetch a single model's supported reasoning efforts from
+ * `{baseUrl}/models/{modelId}` (`reasoning_effort_support_list`). Returns
+ * `undefined` on any transport/parse failure or when the field is absent.
+ */
+export async function fetchStepModelEfforts(input: FetchStepModelEffortsInput): Promise<string[] | undefined> {
+	if (!input.apiKey.trim()) return undefined;
+	const base = input.baseUrl.replace(/\/+$/u, "");
+	const fetchFn = resolveFetch(input.fetch);
+	let response: Response;
+	try {
+		response = await fetchFn(`${base}/models/${encodeURIComponent(input.modelId)}`, {
+			method: "GET",
+			headers: { accept: "application/json", authorization: `Bearer ${input.apiKey}` },
+			signal: input.signal,
+		});
+	} catch {
+		return undefined;
+	}
+	if (!response.ok) return undefined;
+	const payload = await readJsonObject(response);
+	const list = payload.reasoning_effort_support_list;
+	if (!Array.isArray(list)) return undefined;
+	const efforts = list.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+	return efforts.length > 0 ? efforts : undefined;
 }
 
 function readStepBearerToken(credential: Credential | undefined): string | undefined {
