@@ -95,6 +95,7 @@ import {
 	type SessionEntry,
 	SessionImportFileNotFoundError,
 	SessionManager,
+	STEP_PROVIDER_ID,
 	type StepLoginHost,
 	sessionEntryToContextMessages,
 	setRegisteredThemes,
@@ -4704,16 +4705,24 @@ export class InteractiveMode {
 				this.selectThinkingLevel(level, persist);
 				done();
 			};
+			const availableLevels = this.session.getAvailableThinkingLevels();
+			const globalDefault = this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
+			// Step models default to their highest supported effort, so mark that as
+			// the default rather than the global level (which may not be selectable).
+			const defaultMarker =
+				this.session.model?.provider === STEP_PROVIDER_ID
+					? (availableLevels[availableLevels.length - 1] ?? globalDefault)
+					: globalDefault;
 			const selector = new ThinkingSelectorComponent(
 				this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-				this.session.getAvailableThinkingLevels(),
+				availableLevels,
 				(level) => selectLevel(level, false),
 				() => {
 					done();
 					this.redraw.requestRender();
 				},
 				(level) => selectLevel(level, true),
-				this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+				defaultMarker,
 			);
 			return { component: selector, focus: selector };
 		});
