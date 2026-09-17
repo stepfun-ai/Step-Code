@@ -163,7 +163,7 @@ describe("Step provider extension", () => {
 				id: "custom-step",
 				name: "Custom Step",
 				reasoning: base.reasoning,
-				input: base.input,
+				input: ["text", "image"] as ("text" | "image")[],
 				cost: base.cost,
 				contextWindow: base.contextWindow,
 				maxTokens: base.maxTokens,
@@ -556,15 +556,23 @@ describe("Step dynamic model discovery", () => {
 			expect.objectContaining({
 				id: "step-vision",
 				contextWindow: 131072,
+				maxTokens: 131072,
 				reasoning: false,
 				input: ["text", "image"],
 			}),
-			expect.objectContaining({ id: "step-text", contextWindow: 262144, reasoning: true, input: ["text"] }),
+			expect.objectContaining({
+				id: "step-text",
+				contextWindow: 262144,
+				maxTokens: 262144,
+				reasoning: true,
+				input: ["text"],
+			}),
 			expect.objectContaining({
 				id: "step-bare",
 				contextWindow: 256_000,
-				reasoning: true,
-				input: ["text", "image"],
+				maxTokens: 256_000,
+				reasoning: false,
+				input: ["text"],
 			}),
 		]);
 	});

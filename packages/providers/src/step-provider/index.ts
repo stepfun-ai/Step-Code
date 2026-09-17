@@ -101,11 +101,9 @@ const STEP_LLM_MODEL_TYPE = "大语言模型";
 
 /** Metadata `{base}/v1/models` does not always return; used as fallbacks. */
 const STEP_MODEL_DEFAULTS = {
-	reasoning: true,
-	input: ["text", "image"] as ("text" | "image")[],
+	reasoning: false,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 256_000,
-	maxTokens: 32_000,
 } as const;
 
 /** Per-model capabilities parsed from `{base}/v1/models` (any field may be absent). */
@@ -120,18 +118,19 @@ interface StepModelMeta {
 
 /** Build a Step model entry, using discovered metadata where present. */
 function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: StepModelMeta): StepModelConfig {
+	const contextWindow = meta?.contextWindow ?? STEP_MODEL_DEFAULTS.contextWindow;
 	return {
 		id,
 		name,
 		api: STEP_MODEL_API,
 		...(baseUrl ? { baseUrl } : {}),
+		// Default to no thinking and text-only unless the endpoint reports otherwise.
 		reasoning: meta?.reasoning ?? STEP_MODEL_DEFAULTS.reasoning,
-		// Only drop image input when the endpoint explicitly reports no vision;
-		// keep the permissive default when the field is absent.
-		input: meta?.vision === false ? ["text"] : [...STEP_MODEL_DEFAULTS.input],
+		input: meta?.vision ? ["text", "image"] : ["text"],
 		cost: { ...STEP_MODEL_DEFAULTS.cost },
-		contextWindow: meta?.contextWindow ?? STEP_MODEL_DEFAULTS.contextWindow,
-		maxTokens: STEP_MODEL_DEFAULTS.maxTokens,
+		contextWindow,
+		// The endpoint reports no max-output; default it to the input window.
+		maxTokens: contextWindow,
 	};
 }
 
