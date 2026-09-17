@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setCapabilityOverrides } from "@step-harness/pi-tui";
 import { type ImageContent, modelsAreEqual } from "@step-harness/providers";
+import { STEP_PROVIDER_ID } from "@step-harness/providers/step-provider";
 import chalk from "chalk";
 import { type Args, type Mode, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import {
@@ -1301,13 +1302,19 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 	if (parsed.listModels !== undefined) {
 		reportDiagnostics(startupSettingsDiagnostics);
 		// The one-shot model listing is otherwise cache-only. On the Step
-		// entrypoint, refresh catalogs from the network first so dynamic providers
-		// (Step discovers its models from `{base}/v1/models`) list the account's
-		// real usable models instead of the built-in baseline. Best-effort and
-		// bounded; on failure the cached/baseline list is shown.
-		if (STEP_ENTRYPOINT) {
+		// entrypoint, when a Step credential is configured, refresh the Step
+		// catalog from the network first so it lists the account's real usable
+		// models (discovered from `{base}/v1/models`) instead of the built-in
+		// baseline. Skipped when logged out so listing stays offline. Best-effort
+		// and bounded; on failure the cached/baseline list is shown.
+		if (STEP_ENTRYPOINT && modelRuntime.getProviderAuthStatus(STEP_PROVIDER_ID).configured) {
 			await modelRuntime
-				.refresh({ allowNetwork: true, force: true, signal: AbortSignal.timeout(15_000) })
+				.refresh({
+					allowNetwork: true,
+					force: true,
+					providers: [STEP_PROVIDER_ID],
+					signal: AbortSignal.timeout(15_000),
+				})
 				.catch(() => {});
 		}
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;

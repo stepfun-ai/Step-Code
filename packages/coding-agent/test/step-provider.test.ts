@@ -136,7 +136,7 @@ describe("Step provider extension", () => {
 		["https://api.example.test/step_plan/v1/messages", "https://api.example.test/step_plan"],
 		["https://api.example.test/step_plan/v1/v1/messages", "https://api.example.test/step_plan"],
 		["https://api.example.test/step_plan/v1/messages/messages", "https://api.example.test/step_plan"],
-	])("normalizes the Step endpoint %s for Pi's Anthropic adapter", (input, expected) => {
+	])("normalizes the Step endpoint %s to its route prefix", (input, expected) => {
 		expect(resolveStepProviderOptions({ apiBaseUrl: input, env: {} }).apiBaseUrl).toBe(expected);
 	});
 

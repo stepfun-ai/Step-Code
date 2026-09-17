@@ -72,8 +72,8 @@ export const STEP_PROVIDER_ENV = {
 
 /** Production defaults; every endpoint can be replaced through the options/env. */
 export const STEP_PROVIDER_DEFAULTS = {
-	// Pi's Anthropic adapter appends `/v1/messages` itself, so this must be the
-	// route prefix rather than the versioned operation URL.
+	// The OpenAI adapter appends `/chat/completions` to `{baseUrl}/v1`, so this
+	// must be the route prefix rather than a versioned operation URL.
 	apiBaseUrl: "https://api.stepfun.com/step_plan",
 	authBaseUrl: "https://platform.stepfun.com",
 	callbackHost: "127.0.0.1",
@@ -128,8 +128,8 @@ export const STEP_MODELS: readonly StepModelConfig[] = [
 ];
 
 // These ids are owned by the Step provider. A stale models.json can carry a
-// legacy wire dialect for one of them, but Pi must still send the built-in
-// Step catalog through the Anthropic Messages adapter.
+// legacy wire dialect or endpoint for one of them; normalizeStepModel restores
+// the built-in dialect and base so the overlay cannot misroute a built-in id.
 const STEP_BUILTIN_MODEL_IDS = new Set(STEP_MODELS.map((model) => model.id.toLowerCase()));
 
 const API_BASE_URL_ENV_NAMES = [
@@ -194,7 +194,7 @@ export type CallbackServerFactory = (options: StartStepCallbackServerOptions) =>
 /** Resolve provider settings at registration time, after environment setup. */
 export function resolveStepProviderOptions(options: StepProviderOptions = {}): ResolvedStepProviderOptions {
 	const env = options.env ?? process.env;
-	const apiBaseUrl = normalizeStepAnthropicBaseUrl(
+	const apiBaseUrl = normalizeStepApiBaseUrl(
 		validateHttpEndpoint(
 			options.apiBaseUrl ?? readFirstEnv(env, API_BASE_URL_ENV_NAMES) ?? STEP_PROVIDER_DEFAULTS.apiBaseUrl,
 			"Step API base URL",
@@ -552,12 +552,13 @@ function validateHttpEndpoint(value: string, label: string): string {
 }
 
 /**
- * Pi's Anthropic SDK always appends `/v1/messages` to `baseUrl`. Step's older
- * configuration accepted either that operation URL or its `/v1` parent, so
- * normalize all three supported spellings to the route prefix before handing
- * the model to Pi.
+ * Reduce a Step endpoint to its route prefix. Step's configuration (and older
+ * models.json files) accepted the versioned operation URL (`/v1/messages`),
+ * the `/messages` operation, or the `/v1` parent; strip any of those trailing
+ * segments so callers can append the correct suffix for the active dialect
+ * (`stepOpenAiBaseUrl` re-appends `/v1`).
  */
-export function normalizeStepAnthropicBaseUrl(value: string): string {
+export function normalizeStepApiBaseUrl(value: string): string {
 	try {
 		const url = new URL(value);
 		let pathname = url.pathname.replace(/\/+$/u, "");
@@ -576,7 +577,7 @@ export function normalizeStepAnthropicBaseUrl(value: string): string {
 	} catch {
 		// The provider resolver validates its own endpoint. This exported helper is
 		// also used while repairing an existing models.json, where malformed custom
-		// entries must remain intact for Pi's normal validation diagnostics.
+		// entries must remain intact for normal validation diagnostics.
 		return value;
 	}
 }
@@ -590,7 +591,7 @@ export function normalizeStepAnthropicBaseUrl(value: string): string {
  * The OpenAI adapter appends `/chat/completions`; discovery uses `/models`.
  */
 export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
-	return `${normalizeStepAnthropicBaseUrl(apiBaseUrl)}/v1`;
+	return `${normalizeStepApiBaseUrl(apiBaseUrl)}/v1`;
 }
 
 /**
