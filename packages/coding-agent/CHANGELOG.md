@@ -4,12 +4,14 @@
 
 ### Added
 
+- Added `runStepThemePrompt` / `buildStepThemeOptions` and the `stepThemePrompt` interactive-mode option: a one-time first-run theme picker that runs on its own screen before `init()` (the phase the MCP import offer uses), applies each option as it is highlighted, and returns the setting for the interactive mode to persist before it builds the UI. A dismissed screen returns the product default rather than nothing, so the persisted `theme` is the only state the flow needs.
 - Added extension-owned task widgets and native task tool renderers, keeping `/todos` with the task extension.
 - Added the Step binary startup update check and native installer integration for Step CLI hosts.
 - Added an `overlay` option to the extension `select` and `input` dialogs, which renders them over the transcript instead of inside it.
 
 ### Changed
 
+- Changed the standalone Step startup screens (login, MCP import, theme picker) to share one `createStandaloneStepHost()` full-screen host instead of three copies of it.
 - Changed the default permission preset to Bypass when no CLI flag, `STEP_*` env var, or persisted preset is set; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
@@ -34,6 +36,7 @@
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+- Fixed StepCode model catalogs with omitted vision metadata defaulting to text-only input, which made the read tool drop image attachments. `readInputTypes` now mirrors `hasReasoning` and defaults an omitted capability to `["text", "image"]`; an explicit `supportsVision: false` or a declared `input` list still wins.
 - Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
 - Fixed `/feedback` pages growing the rendered transcript, which scrolled the screen and left the editor above the bottom row once a page closed.
 - Fixed Step `search_files` discarding valid match rows with `[`- or `WARNING:`-prefixed paths; native notices remain excluded and match/truncation metadata is preserved.

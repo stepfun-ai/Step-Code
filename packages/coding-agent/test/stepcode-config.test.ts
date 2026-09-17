@@ -258,4 +258,35 @@ describe("StepCode config compatibility", () => {
 			autoResume: false,
 		});
 	});
+
+	test("defaults omitted vision metadata to image input and honors an explicit opt-out", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					"stepcode-anthropic": {
+						api: "anthropic-messages",
+						baseUrl: "https://config.example",
+						models: [
+							{ id: "omitted" },
+							{ id: "opted-out", supportsVision: false },
+							{ id: "declared", supportsVision: true },
+							{ id: "explicit", input: ["text"] },
+						],
+					},
+				},
+			}),
+		);
+
+		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const models = config?.providers[0]?.config.models ?? [];
+		const inputOf = (id: string) => models.find((model) => model.id === id)?.input;
+		expect(inputOf("omitted")).toEqual(["text", "image"]);
+		expect(inputOf("opted-out")).toEqual(["text"]);
+		expect(inputOf("declared")).toEqual(["text", "image"]);
+		expect(inputOf("explicit")).toEqual(["text"]);
+	});
 });

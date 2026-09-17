@@ -98,6 +98,19 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).not.toContain("- run_command:");
 	});
 
+	it("adds frontend visual verification only when a browser or screenshot tool is active", () => {
+		const withBrowser = buildStepSystemPromptAppendix(["read_file", "playwright__browser_take_screenshot"]);
+		expect(withBrowser).toContain("# Frontend visual verification");
+		expect(withBrowser).toContain("read_file the saved path");
+		expect(withBrowser).toContain("Subagent reports are text-only");
+
+		const withoutBrowser = buildStepSystemPromptAppendix(["read_file", "run_command"]);
+		expect(withoutBrowser).not.toContain("# Frontend visual verification");
+		// The validation step still nudges visual verification unconditionally.
+		expect(withoutBrowser).toContain("verify visually");
+		expect(withoutBrowser).toContain("playwright plugin");
+	});
+
 	it("adds event-driven delegation guidance only when the subagent tool is active", () => {
 		const withSubagent = buildStepSystemPromptAppendix(["read_file", "subagent", "agent_send"]);
 

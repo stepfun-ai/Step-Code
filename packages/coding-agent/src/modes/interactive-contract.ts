@@ -92,6 +92,20 @@ export interface InteractiveModeOptions {
 	 */
 	stepMcpImport?: () => Promise<string | undefined>;
 	/**
+	 * One-time theme picker shown on the first interactive launch.
+	 *
+	 * Runs in the same pre-`init()` phase as the MCP import offer, and for the
+	 * same reason: a picker mounted after `init()` shows the logo and the input
+	 * box and replaces them a frame later, which reads as a glitch. It comes
+	 * after the import offer, which comes after Step's startup login — by then
+	 * the user has signed in and has nothing left to set up but the look of it.
+	 *
+	 * Resolves to the theme setting to persist — the confirmed option, or the
+	 * product default when the screen was dismissed, since taking the default is
+	 * also an answer. `undefined` means there was no question to put.
+	 */
+	stepThemePrompt?: () => Promise<string | undefined>;
+	/**
 	 * Product startup hook. Returning false stops the interactive loop after the
 	 * hook has completed (used by a self-update that has relaunched the binary).
 	 */

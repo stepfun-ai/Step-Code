@@ -283,6 +283,19 @@ export function buildStepSystemPromptAppendix(
 			]
 		: [];
 
+	const hasBrowserTool = [...active].some((name) => /screenshot|playwright|browser|puppeteer/iu.test(name));
+	const frontendSection = hasBrowserTool
+		? [
+				"# Frontend visual verification",
+				[
+					"- For UI work, tests and builds are not enough: render the page, capture a screenshot, and look at it before reporting done.",
+					"- Screenshot tools that return images attach them directly. When a tool saves the capture to disk instead, read_file the saved path — read_file returns real image content for PNG, JPEG, GIF, and WebP.",
+					"- Iterate visually: compare the render against the request (layout, spacing, color, empty/loading/error states), fix, and re-capture until it matches.",
+					"- Subagent reports are text-only; have a subagent save screenshots to files and return the paths, then read_file them yourself.",
+				].join("\n"),
+			]
+		: [];
+
 	const sections = [
 		"# Step operating contract",
 		"Use the structured tools exposed by the model API. Never emit XML or pseudo tool-call syntax as assistant text; tool calls are represented by the API itself.",
@@ -318,7 +331,7 @@ export function buildStepSystemPromptAppendix(
 		"2. Plan when useful: for work with several non-trivial steps or real uncertainty, keep a concise plan and update it as facts change.",
 		"3. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
 		"4. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
-		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly.",
+		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly. For UI-facing changes, also verify visually when a browser or screenshot tool is available; when none is, suggest installing the playwright plugin.",
 		"6. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
 
 		...planningSection,
@@ -331,6 +344,8 @@ export function buildStepSystemPromptAppendix(
 		...goalSection,
 
 		...workflowSection,
+
+		...frontendSection,
 
 		"# Code conventions",
 		"- Match surrounding style, naming, patterns, and dependencies. Check the project manifest or existing imports before assuming a dependency exists.",
