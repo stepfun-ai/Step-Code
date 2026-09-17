@@ -63,13 +63,16 @@ export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 }
 
 /**
- * Format a resolved image path as a file reference for the input line: always
- * `@"<path>"`. The quotes are required when the path has a space (so it reads as
- * one reference) and kept for space-free paths too, so every pasted image
- * reference looks the same rather than appearing inconsistent.
+ * Format a resolved image path as a file reference for the input line. Quote it
+ * only when it contains a space: the `@`-reference tokenizer treats an unquoted
+ * `@` reference as whitespace-delimited (packages/tui editor `@(?:"[^"]*|[^\s]*)`),
+ * so a spaced path must be `@"path"` to read as one reference, while a space-free
+ * path stays `@path`. This mirrors the typed-`@` autocomplete rule
+ * (autocomplete.ts `buildCompletionValue`), so a pasted reference and a typed one
+ * look identical.
  */
 function formatImageRef(absolutePath: string): string {
-	return `@"${absolutePath}"`;
+	return absolutePath.includes(" ") ? `@"${absolutePath}"` : `@${absolutePath}`;
 }
 
 export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {

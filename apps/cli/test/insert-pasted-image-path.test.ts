@@ -4,7 +4,7 @@ import type { RuntimeContext } from "../src/ui/runtime/context.ts";
 // Exercise the WSL Windows-path branch of insertPastedImagePath end-to-end: the
 // real cleanPastedPath/isImageFilePath/isWindowsPath run, while wslPathToPosix and
 // fs.existsSync are controlled so we can assert the resolved POSIX path (not the
-// raw `C:\...` text) is threaded into the `@"..."` reference.
+// raw `C:\...` text) is threaded into the `@` reference, quoted only when spaced.
 const mocks = vi.hoisted(() => ({
 	wslPathToPosix: vi.fn<(winPath: string) => Promise<string | null>>(),
 	existsSync: vi.fn<(p: string) => boolean>(),
@@ -50,6 +50,18 @@ describe("insertPastedImagePath WSL Windows-path branch", () => {
 		await insertPastedImagePath(ctx, "C:\\Users\\Administrator\\Desktop\\pic.jpg");
 
 		expect(mocks.wslPathToPosix).toHaveBeenCalledWith("C:\\Users\\Administrator\\Desktop\\pic.jpg");
+		// A space-free path is inserted unquoted, matching the typed-@ autocomplete.
+		expect(inserted).toEqual([`@${posix}`]);
+	});
+
+	it("quotes the @-reference only when the resolved path contains a space", async () => {
+		const posix = "/mnt/c/Users/John Doe/pic.jpg";
+		mocks.wslPathToPosix.mockResolvedValue(posix);
+		mocks.existsSync.mockImplementation((p) => p === posix);
+
+		const { ctx, inserted } = makeCtx();
+		await insertPastedImagePath(ctx, "C:\\Users\\John Doe\\pic.jpg");
+
 		expect(inserted).toEqual([`@"${posix}"`]);
 	});
 
