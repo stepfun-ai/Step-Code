@@ -13,6 +13,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Added the Step binary startup update check with Pi-native selection and restart behavior.
 - Added the `step update` / `step upgrade` command that installs an exact or latest standalone Step release with checksum verification, staged smoke test, rollback, and update locking.
 - Added active-only elapsed time to the goal footer status (`Goal: active · 12m 3s`), refreshed at message boundaries; paused spans never count.
+- Added `run_in_background` to `run_command`: the command starts detached and the call returns immediately with a pid and a log file capturing stdout+stderr, so long-running processes such as dev servers survive the turn. Readiness is checked by reading the log, `kill <pid>` stops the process, and anything still running is terminated when the session exits.
 - Added Claude Code usage parity for workflow opt-in: the keyword `ultracode` now grants the same per-turn opt-in as `ultraloop`, and a `+500k`-style token target in the opting message becomes the run's default budget (an explicit `budget` parameter still wins). The workflow tool result now includes `scriptPath`, the persisted script copy to edit and re-invoke for iteration.
 - Added frontend visual-verification guidance to the Step system prompt: the validation step now asks for a visual check on UI-facing changes (pointing at the playwright plugin when no browser tool is present), and a browser-tool-gated section teaches the render → screenshot → read_file → iterate loop and the subagent save-to-file pattern.
 

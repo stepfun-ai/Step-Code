@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { spawn, spawnSync } from "child_process";
+import { type ChildProcess, spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "../step/environment.ts";
 
@@ -149,6 +149,32 @@ export function getShellEnv(agentDir?: string): NodeJS.ProcessEnv {
 		...process.env,
 		[pathKey]: updatedPath,
 	};
+}
+
+/**
+ * Spawn a shell child from a resolved ShellConfig, centralizing the command
+ * transport (argv vs stdin) so call sites do not re-derive it. Callers own the
+ * lifecycle (pid tracking, timeout, streaming, unref); the stdout/stderr targets
+ * are "pipe" to stream, or an open fd number to redirect (e.g. a background log).
+ */
+export function spawnShellChild(
+	shellConfig: ShellConfig,
+	command: string,
+	options: { cwd: string; env: NodeJS.ProcessEnv; stdout: "pipe" | number; stderr: "pipe" | number },
+): ChildProcess {
+	const commandFromStdin = shellConfig.commandTransport === "stdin";
+	const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+		cwd: options.cwd,
+		detached: process.platform !== "win32",
+		env: options.env,
+		stdio: [commandFromStdin ? "pipe" : "ignore", options.stdout, options.stderr],
+		windowsHide: true,
+	});
+	if (commandFromStdin) {
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(command);
+	}
+	return child;
 }
 
 /**
