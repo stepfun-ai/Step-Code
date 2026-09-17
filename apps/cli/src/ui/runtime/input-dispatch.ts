@@ -70,6 +70,16 @@ function formatImageRef(absolutePath: string): string {
 
 export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {
 	try {
+		// A copied FILE (Finder/Explorer) puts BOTH a file URL and the file's ICON
+		// on the clipboard, so readClipboardImage() below would return the icon, not
+		// the file. Prefer the real file path: reference the file itself.
+		const clipboardFile = await readClipboardImagePath();
+		if (clipboardFile && fs.existsSync(clipboardFile)) {
+			ctx.editor.insertTextAtCursor?.(formatImageRef(clipboardFile));
+			ctx.redraw.requestRender();
+			return;
+		}
+
 		const image = await readClipboardImage();
 		if (image) {
 			const tmpDir = os.tmpdir();
