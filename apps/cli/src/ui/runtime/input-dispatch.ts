@@ -30,9 +30,11 @@ import {
 	cleanPastedPath,
 	extensionForImageMimeType,
 	isImageFilePath,
+	isWindowsPath,
 	readClipboardImage,
 	readClipboardImagePath,
 	readClipboardText,
+	wslPathToPosix,
 } from "@step-harness/coding-agent";
 import type { RuntimeContext } from "./context.ts";
 import { handleEscape } from "./interrupt.ts";
@@ -116,14 +118,25 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
  * Resolve it to an absolute path (a bare name via the clipboard's file URL) and
  * insert it as an `@` file reference so the model can read it; if it cannot be
  * resolved, insert the original text unchanged so nothing is lost.
+ *
+ * Exported for unit testing the WSL Windows-path branch composition.
  */
-async function insertPastedImagePath(ctx: RuntimeContext, pastedText: string): Promise<void> {
+export async function insertPastedImagePath(ctx: RuntimeContext, pastedText: string): Promise<void> {
 	let value = pastedText;
 	try {
 		const cleaned = cleanPastedPath(pastedText);
 		let absolutePath: string | undefined;
 		if (path.isAbsolute(cleaned) && isImageFilePath(cleaned) && fs.existsSync(cleaned)) {
 			absolutePath = cleaned;
+		} else if (isWindowsPath(cleaned)) {
+			// On WSL, a file copied in Windows Explorer pastes as a Windows path
+			// (`C:\...`) that does not exist on the Linux side; convert it to its
+			// `/mnt/...` form before checking. On non-WSL this returns null, so a
+			// stray `C:\...` paste falls through to the raw-text insert below.
+			const posixPath = await wslPathToPosix(cleaned);
+			if (posixPath && isImageFilePath(posixPath) && fs.existsSync(posixPath)) {
+				absolutePath = posixPath;
+			}
 		} else {
 			const clipboardPath = await readClipboardImagePath();
 			const matches = clipboardPath

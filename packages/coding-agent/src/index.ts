@@ -813,8 +813,10 @@ export {
 	extensionForImageMimeType,
 	hasClipboardImage,
 	isImageFilePath,
+	isWindowsPath,
 	readClipboardImage,
 	readClipboardImagePath,
+	wslPathToPosix,
 } from "./utils/clipboard-image.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { parseGitUrl } from "./utils/git.ts";

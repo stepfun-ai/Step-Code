@@ -326,6 +326,23 @@ export function isImageFilePath(path: string): boolean {
 }
 
 /**
+ * True when `path` looks like a Windows path: a drive-letter path (`C:\...` or
+ * `C:/...`) or a UNC path (`\\host\share\...`). Used to keep such a path intact
+ * when it is pasted into a WSL terminal (where `process.platform` is `"linux"`,
+ * so the shell-escape unescaping below would otherwise strip its backslashes),
+ * and to gate the `wslpath` conversion.
+ *
+ * The UNC branch requires a host AND a share segment (`\\host\share`), not just a
+ * leading `\\`, so a macOS/Linux filename that begins with a literal backslash
+ * (shell-escaped on paste to `\\file.png`) is not misread as UNC and still
+ * unescapes correctly.
+ */
+export function isWindowsPath(path: string): boolean {
+	const trimmed = path.trim();
+	return /^[A-Za-z]:[\\/]/.test(trimmed) || /^\\\\[^\\/]+\\[^\\/]/.test(trimmed);
+}
+
+/**
  * Clean a file path pasted from a terminal: strip surrounding quotes and the
  * shell escaping a terminal adds when you paste/drag a path with spaces or
  * special characters (e.g. `a\ file\ \(1\).png` -> `a file (1).png`). On Windows
@@ -350,7 +367,11 @@ function stripSurroundingQuotes(text: string): string {
 
 export function cleanPastedPath(text: string, platform: NodeJS.Platform = process.platform): string {
 	const cleaned = stripSurroundingQuotes(text);
-	if (platform === "win32") {
+	// A Windows path (drive-letter or UNC) uses backslashes as separators, not as
+	// shell escaping, so it must never be unescaped. Checking the path shape (not
+	// just the platform) also covers a Windows path pasted into a WSL terminal,
+	// where `platform` is "linux" but the path is still `C:\Users\...\pic.jpg`.
+	if (platform === "win32" || isWindowsPath(cleaned)) {
 		return cleaned;
 	}
 	const sentinel = ` ${randomUUID()} `;
@@ -375,6 +396,31 @@ async function runClipboardCommand(command: string, args: string[], timeoutMs: n
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Convert a Windows path (drive-letter `C:\...` / `C:/...` or UNC `\\host\...`)
+ * to its WSL POSIX form (`/mnt/c/...`) via `wslpath -u`, or null when not on WSL,
+ * not a Windows path, or the conversion fails. A file copied in Windows Explorer
+ * and pasted into a WSL terminal arrives as a Windows path that does not exist on
+ * the Linux side; this recovers the real path so it resolves. Uses execFile
+ * (non-blocking) so an ordinary paste never freezes the terminal UI. The `run`
+ * option is a test seam.
+ */
+export async function wslPathToPosix(
+	winPath: string,
+	options?: {
+		env?: NodeJS.ProcessEnv;
+		run?: (command: string, args: string[]) => Promise<string | null>;
+	},
+): Promise<string | null> {
+	const env = options?.env ?? process.env;
+	if (!isWSL(env) || !isWindowsPath(winPath)) {
+		return null;
+	}
+	const run = options?.run ?? ((command, args) => runClipboardCommand(command, args, DEFAULT_LIST_TIMEOUT_MS));
+	const posix = await run("wslpath", ["-u", winPath.trim()]);
+	return posix && posix.length > 0 ? posix : null;
 }
 
 function readClipboardFilePathViaOsascript(): Promise<string | null> {
@@ -431,5 +477,12 @@ export async function readClipboardImagePath(options?: { platform?: NodeJS.Platf
 	// quotes, do NOT unescape backslashes (that would corrupt a literal backslash
 	// in a filename).
 	const cleaned = stripSurroundingQuotes(candidate);
-	return isImageFilePath(cleaned) ? cleaned : null;
+	if (!isImageFilePath(cleaned)) {
+		return null;
+	}
+	// On WSL the clipboard yields a Windows path (`C:\...`) that does not exist on
+	// the Linux side; convert it so both callers (clipboardPaste and the
+	// insertPastedImagePath fallback) can resolve it. wslPathToPosix returns null
+	// off-WSL or for a non-Windows path, so other platforms are unaffected.
+	return (await wslPathToPosix(cleaned)) ?? cleaned;
 }
