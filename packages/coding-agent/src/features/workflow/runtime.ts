@@ -162,6 +162,19 @@ export class WorkflowRuntime {
 				...vmOptions,
 				filename: vmOptions.filename ?? this.journal.paths.scriptPath,
 			});
+			if (this.signal?.aborted || this.context?.signal?.aborted) {
+				// A swallowing script (parallel()/pipeline() null-on-error) can absorb the abort
+				// thrown by semaphore.acquire()/the runner and return normally; recheck here so a
+				// cancelled run reports "aborted" instead of a silent "completed".
+				throw new Error("Workflow operation was aborted");
+			}
+			const budgetTotal = this.budget.total();
+			if (budgetTotal !== null && this.budget.spent() > budgetTotal) {
+				// The script may have swallowed the per-call WorkflowBudgetExceeded (e.g. via
+				// parallel()/pipeline() null-on-error). Fail the run closed regardless so a
+				// budget breach is never silently reported as a completed run.
+				throw new WorkflowBudgetExceeded(budgetTotal, this.budget.spent(), 0);
+			}
 			const finishedAt = this.readNow();
 			await this.progress.update({
 				status: "completed",
@@ -263,6 +276,18 @@ export class WorkflowRuntime {
 
 		this.validateMounts(normalizedOptions);
 		const release = await this.semaphore.acquire(this.signal ?? this.context?.signal);
+		const budgetTotal = this.budget.total();
+		if (budgetTotal !== null && this.budget.remaining() <= 0) {
+			// Fail closed BEFORE spending: once completed calls have exhausted the budget,
+			// refuse to run further agents. parallel()/pipeline() invoke every agent() up
+			// front, so a check at the top of agent() would see zero spend and admit them all;
+			// gating here (after acquiring the concurrency slot, once prior waves have settled
+			// and accounted their tokens) bounds overspend to at most one in-flight wave — up
+			// to `maxConcurrency` agents can pass this gate before any of them account spend,
+			// so the effective cap is ~concurrency extra agents, not the budget value itself.
+			release();
+			throw new WorkflowBudgetExceeded(budgetTotal, this.budget.spent(), 0);
+		}
 		const startedAt = this.readNow();
 		const retries = clampRetries(normalizedOptions.retries);
 		const parentSignal = this.signal ?? this.context?.signal;
