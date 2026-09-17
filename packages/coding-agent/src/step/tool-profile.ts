@@ -7,7 +7,7 @@
  * are equivalent.
  */
 
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync } from "node:fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
@@ -48,7 +48,13 @@ import type { ReadToolOptions } from "../core/tools/read.ts";
 import type { WriteToolOptions } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { resolvePath } from "../utils/paths.ts";
-import { getShellConfig, getShellEnv, trackDetachedChildPid, untrackDetachedChildPid } from "../utils/shell.ts";
+import {
+	getShellConfig,
+	getShellEnv,
+	spawnShellChild,
+	trackDetachedChildPid,
+	untrackDetachedChildPid,
+} from "../utils/shell.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { createSearchWebTool, type SearchWebToolOptions } from "./search-web-tool.ts";
 
@@ -131,7 +137,7 @@ const runCommandSchema = Type.Object({
 	run_in_background: Type.Optional(
 		Type.Boolean({
 			description:
-				"Start the command detached and return immediately with its pid and a log file capturing stdout+stderr. Use for long-running processes such as dev servers: read the log to confirm readiness, stop with kill <pid>. The process is terminated when the session exits; timeout_ms and max_output_chars do not apply.",
+				"Start the command detached and return immediately with its pid and a log file capturing stdout+stderr. Use for long-running processes such as dev servers: read the log to confirm readiness, then stop it (and the processes it spawned) with the kill command returned in the result. The process is terminated when the session exits; timeout_ms and max_output_chars do not apply.",
 		}),
 	),
 });
@@ -1163,23 +1169,17 @@ async function startBackgroundCommand(
 	const shellConfig = getShellConfig(options.shellPath);
 	const logPath = path.join(os.tmpdir(), `step-run-bg-${process.pid}-${randomUUID().slice(0, 8)}.log`);
 	const logFd = openSync(logPath, "a", 0o600);
-	const commandFromStdin = shellConfig.commandTransport === "stdin";
-	let child: ReturnType<typeof spawn>;
+	let child: ChildProcess;
 	try {
-		child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+		child = spawnShellChild(shellConfig, command, {
 			cwd: commandCwd,
-			detached: process.platform !== "win32",
 			env: getShellEnv(options.agentDir),
-			stdio: [commandFromStdin ? "pipe" : "ignore", logFd, logFd],
-			windowsHide: true,
+			stdout: logFd,
+			stderr: logFd,
 		});
 	} finally {
 		// The child holds its own duplicated descriptors after spawn.
 		closeSync(logFd);
-	}
-	if (commandFromStdin) {
-		child.stdin?.on("error", () => {});
-		child.stdin?.end(command);
 	}
 	await new Promise<void>((resolve, reject) => {
 		child.once("spawn", () => resolve());
@@ -1191,6 +1191,19 @@ async function startBackgroundCommand(
 		child.once("exit", () => untrackDetachedChildPid(pid));
 	}
 	child.unref();
+	// Stop the whole process tree, not just the wrapper shell. The child is spawned
+	// detached (a process-group leader on Unix), so a bare `kill <pid>` signals only the
+	// wrapper and orphans the real process (e.g. the dev server it launched). Unix:
+	// `kill -TERM -<pid>` signals the group — a leading `-<pid>` without a signal token
+	// parses as a signal number, so -TERM is required. Windows run_command routes through
+	// Git Bash, so MSYS_NO_PATHCONV=1 keeps it from mangling taskkill's /F /T /PID flags.
+	// NOTE: the Windows form is not yet verified on a real Git Bash.
+	const stopCommand =
+		pid === undefined
+			? undefined
+			: process.platform === "win32"
+				? `MSYS_NO_PATHCONV=1 taskkill /F /T /PID ${pid}`
+				: `kill -TERM -${pid}`;
 	return {
 		content: [
 			{
@@ -1198,7 +1211,9 @@ async function startBackgroundCommand(
 				text: [
 					`Started background command (pid ${pid ?? "unknown"}).`,
 					`Log: ${logPath}`,
-					`Check progress with read_file on the log; stop it with run_command("kill ${pid ?? "<pid>"}").`,
+					stopCommand === undefined
+						? "Check progress with read_file on the log."
+						: `Check progress with read_file on the log; stop it and its child processes with run_command(${JSON.stringify(stopCommand)}).`,
 				].join("\n"),
 			},
 		],

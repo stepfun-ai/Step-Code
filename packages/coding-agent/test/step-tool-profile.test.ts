@@ -119,6 +119,11 @@ describe("Step tool profile", () => {
 			expect(details.pid).toBeGreaterThan(0);
 			expect(text(result)).toContain(`pid ${details.pid}`);
 			expect(text(result)).toContain(details.logPath);
+			// Stop advice must target the whole process group, not just the wrapper (a bare
+			// `kill <pid>` would orphan the real process). Unix uses `kill -TERM -<pid>`.
+			const expectedStop =
+				process.platform === "win32" ? `taskkill /F /T /PID ${details.pid}` : `kill -TERM -${details.pid}`;
+			expect(text(result)).toContain(expectedStop);
 			await expect
 				.poll(async () => readFile(details.logPath, "utf8").catch(() => ""), { timeout: 5_000 })
 				.toContain("finished");
