@@ -100,6 +100,33 @@ describe("Step tool profile", () => {
 		);
 	});
 
+	it("run_command run_in_background returns immediately with a pid and a streaming log", async () => {
+		const tools = createStepToolProfile(process.cwd());
+		const run = tools.find((tool) => tool.name === "run_command")!;
+		const startedAt = Date.now();
+		const result = await run.execute(
+			"bg-1",
+			{ command: "echo started; sleep 0.4; echo finished", run_in_background: true },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		const details = result.details as { background: boolean; pid: number | null; logPath: string };
+		try {
+			// The tool call returns long before the command does.
+			expect(Date.now() - startedAt).toBeLessThan(2_000);
+			expect(details.background).toBe(true);
+			expect(details.pid).toBeGreaterThan(0);
+			expect(text(result)).toContain(`pid ${details.pid}`);
+			expect(text(result)).toContain(details.logPath);
+			await expect
+				.poll(async () => readFile(details.logPath, "utf8").catch(() => ""), { timeout: 5_000 })
+				.toContain("finished");
+		} finally {
+			await rm(details.logPath, { force: true });
+		}
+	});
+
 	it("can replace Pi's default active tools without changing the agent loop", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
 		try {

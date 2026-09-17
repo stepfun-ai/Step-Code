@@ -7,7 +7,11 @@
  * are equivalent.
  */
 
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { closeSync, openSync } from "node:fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
 import type { Component } from "@step-harness/pi-tui";
@@ -44,6 +48,7 @@ import type { ReadToolOptions } from "../core/tools/read.ts";
 import type { WriteToolOptions } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { resolvePath } from "../utils/paths.ts";
+import { getShellConfig, getShellEnv, trackDetachedChildPid, untrackDetachedChildPid } from "../utils/shell.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { createSearchWebTool, type SearchWebToolOptions } from "./search-web-tool.ts";
 
@@ -122,6 +127,12 @@ const runCommandSchema = Type.Object({
 	timeout_ms: Type.Optional(Type.Integer({ minimum: 1000, maximum: 600000 })),
 	max_output_chars: Type.Optional(
 		Type.Integer({ minimum: 200, maximum: 120000, description: "Output character cap for stdout+stderr" }),
+	),
+	run_in_background: Type.Optional(
+		Type.Boolean({
+			description:
+				"Start the command detached and return immediately with its pid and a log file capturing stdout+stderr. Use for long-running processes such as dev servers: read the log to confirm readiness, stop with kill <pid>. The process is terminated when the session exits; timeout_ms and max_output_chars do not apply.",
+		}),
 	),
 });
 
@@ -1134,6 +1145,67 @@ function createFindToolsDefinition(
 	};
 }
 
+/**
+ * Detached run for long-lived processes (dev servers, watchers). The child
+ * outlives the tool call but not the session: its pid stays in the detached
+ * registry until it exits, and session shutdown kills whatever is left.
+ */
+async function startBackgroundCommand(
+	command: string,
+	commandCwd: string,
+	options: { shellPath?: string; agentDir?: string },
+): Promise<AnyResult> {
+	try {
+		await fsStat(commandCwd);
+	} catch {
+		throw new Error(`Working directory does not exist: ${commandCwd}`);
+	}
+	const shellConfig = getShellConfig(options.shellPath);
+	const logPath = path.join(os.tmpdir(), `step-run-bg-${process.pid}-${randomUUID().slice(0, 8)}.log`);
+	const logFd = openSync(logPath, "a", 0o600);
+	const commandFromStdin = shellConfig.commandTransport === "stdin";
+	let child: ReturnType<typeof spawn>;
+	try {
+		child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+			cwd: commandCwd,
+			detached: process.platform !== "win32",
+			env: getShellEnv(options.agentDir),
+			stdio: [commandFromStdin ? "pipe" : "ignore", logFd, logFd],
+			windowsHide: true,
+		});
+	} finally {
+		// The child holds its own duplicated descriptors after spawn.
+		closeSync(logFd);
+	}
+	if (commandFromStdin) {
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(command);
+	}
+	await new Promise<void>((resolve, reject) => {
+		child.once("spawn", () => resolve());
+		child.once("error", (error) => reject(error));
+	});
+	const pid = child.pid;
+	if (pid !== undefined) {
+		trackDetachedChildPid(pid);
+		child.once("exit", () => untrackDetachedChildPid(pid));
+	}
+	child.unref();
+	return {
+		content: [
+			{
+				type: "text",
+				text: [
+					`Started background command (pid ${pid ?? "unknown"}).`,
+					`Log: ${logPath}`,
+					`Check progress with read_file on the log; stop it with run_command("kill ${pid ?? "<pid>"}").`,
+				].join("\n"),
+			},
+		],
+		details: { background: true, pid: pid ?? null, logPath },
+	};
+}
+
 /** Create Step-facing definitions backed by Pi's native tools. */
 export function createStepToolProfile(cwd: string, options: StepToolProfileOptions = {}): AnyToolDefinition[] {
 	// A Step profile is also used by embedded hosts that do not launch
@@ -1313,6 +1385,12 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		execute: async (toolCallId, args, signal, onUpdate, ctx) => {
 			const effectiveCwd = getToolCwd(ctx, cwd);
 			const commandCwd = resolveToCwd(args.cwd ?? ".", effectiveCwd);
+			if (args.run_in_background === true) {
+				return startBackgroundCommand(args.command, commandCwd, {
+					...(nativeBashOptions.shellPath ? { shellPath: nativeBashOptions.shellPath } : {}),
+					agentDir,
+				});
+			}
 			const nativeForCwd =
 				args.cwd === undefined ? nativeBash : createBashToolDefinition(commandCwd, nativeBashOptions);
 			const result = await nativeForCwd.execute(toolCallId, mapRunCommandArgs(args, ctx), signal, onUpdate, ctx);

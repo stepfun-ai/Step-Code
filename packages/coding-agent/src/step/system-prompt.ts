@@ -32,7 +32,7 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 	write_file:
 		"Use write_file for new files or deliberate full replacement; for an existing file prefer edit_file and preserve its line-ending style.",
 	run_command:
-		"Use run_command for non-interactive tests, builds, formatters, and git commands. Keep scope minimal, use its cwd parameter for another directory, and treat truncated output as incomplete.",
+		"Use run_command for non-interactive tests, builds, formatters, and git commands. Keep scope minimal, use its cwd parameter for another directory, and treat truncated output as incomplete. For long-running processes such as dev servers, set run_in_background:true — it returns a pid and a log path; read the log to confirm readiness and kill the pid to stop.",
 	find_tools: "Use find_tools when you know the intent but do not know the available tool name.",
 	task_create:
 		"Use task_create to add a todo item to the session execution checklist; it records work rather than starting it.",
