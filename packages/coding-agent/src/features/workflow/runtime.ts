@@ -182,6 +182,7 @@ export class WorkflowRuntime {
 				status: "completed",
 				value: vmResult.value,
 				meta: vmResult.meta,
+				scriptPath: this.journal.paths.scriptPath,
 				startedAt: this.startedAt,
 				finishedAt,
 				spentTokens: this.budget.spent(),

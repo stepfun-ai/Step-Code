@@ -119,6 +119,8 @@ export interface WorkflowRunResult {
 	status: "completed" | "failed" | "aborted";
 	value: unknown;
 	meta: WorkflowMeta;
+	/** Persisted copy of the executed script; edit and re-invoke with scriptPath to iterate. */
+	scriptPath?: string;
 	startedAt: number;
 	finishedAt: number;
 	spentTokens: number;
