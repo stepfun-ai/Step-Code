@@ -19,6 +19,25 @@ and `auth.json` keep their own formats — they hold model definitions and
 credentials, not settings — and a stale Step endpoint recorded in `models.json`
 by an older release is still repaired in place at startup.
 
+## First-run theme prompt
+
+The first interactive launch asks which theme reads best in the terminal, after
+the startup login and the MCP import offer. Like that offer, it runs before the
+main UI is built and owns the screen while it does, so the logo and the input
+box are not painted and then replaced a frame later. Moving through the list
+applies the highlighted theme immediately, and a small sample below the list
+shows the syntax and diff colors. The chosen setting is written before the UI is
+built, so the session opens in the theme just chosen.
+
+Escape answers too: it takes the product default (`step-light/step`, which keeps
+following the terminal's light or dark mode) and writes that. So the `theme` key
+in the global `config.toml` is the whole record — there is no separate "we asked
+you" flag, because every way out of the screen leaves a theme behind. A config
+that already has a `theme`, written here or through `/settings` or by hand, skips
+the prompt; deleting that line asks again. `/theme` changes the theme later, and
+launches that already carry work (an initial prompt, a resumed session) skip the
+prompt entirely.
+
 ## MCP startup in the terminal
 
 Interactive Step sessions start MCP discovery and connections in the background.

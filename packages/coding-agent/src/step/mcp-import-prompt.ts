@@ -7,9 +7,8 @@
  * not a safety net.
  */
 
-import { ProcessTerminal, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
 import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
-import type { StepLoginHost } from "./login-flow.ts";
+import { createStandaloneStepHost, type StepLoginHost } from "./login-flow.ts";
 import {
 	type ApplyStepMcpImportResult,
 	applyStepMcpImport,
@@ -88,7 +87,7 @@ export async function runStepMcpImportPrompt(
 		return { kind: "skipped", reason: "no MCP servers were found in the other agent configs" };
 	}
 
-	const host = options.createHost?.() ?? createStandaloneHost();
+	const host = options.createHost?.() ?? createStandaloneStepHost();
 	// This runs before main() initializes the product theme; only initialize when
 	// this is the first renderer in the process.
 	try {
@@ -125,18 +124,6 @@ export async function runStepMcpImportPrompt(
 	if (selection === null) return { kind: "cancelled" };
 	const result = applyStepMcpImport(plan, selection, env);
 	return { kind: "imported", result };
-}
-
-function createStandaloneHost(): StepLoginHost {
-	const ui = new TuiMainScreen(new ProcessTerminal());
-	return {
-		addChild: (child) => ui.addChild(child as Parameters<TUI["addChild"]>[0]),
-		setFocus: (child) => ui.setFocus(child as Parameters<TUI["setFocus"]>[0]),
-		requestRender: () => ui.requestRender(),
-		start: () => ui.start(),
-		stop: () => ui.stop({ preserveScreen: true }),
-		clearScreen: () => ui.terminal.clearScreen(),
-	};
 }
 
 /**

@@ -141,7 +141,7 @@ export function syncStepLoginProfileEndpoint(
 export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<StepLoginOutcome> {
 	const authPath = options.authPath ?? "auth.json";
 	const profiles = resolveStepLoginProfiles(options.env);
-	const host = options.createHost?.() ?? createStandaloneHost();
+	const host = options.createHost?.() ?? createStandaloneStepHost();
 	// `step login` runs before main() initializes the product theme. Reusing the
 	// configured theme is safe in-session; only initialize when this is the first
 	// renderer in the process.
@@ -273,7 +273,14 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 	}
 }
 
-function createStandaloneHost(): StepLoginHost {
+/**
+ * A screen of its own for a startup flow that runs before the main UI exists.
+ *
+ * `preserveScreen` plus an explicit clear is what keeps these screens from
+ * bleeding into whatever renders next: the login, the MCP import offer and the
+ * theme picker each own the terminal for their turn and hand it back empty.
+ */
+export function createStandaloneStepHost(): StepLoginHost {
 	const ui = new TuiMainScreen(new ProcessTerminal());
 	return {
 		addChild: (child) => ui.addChild(child as Parameters<TUI["addChild"]>[0]),
