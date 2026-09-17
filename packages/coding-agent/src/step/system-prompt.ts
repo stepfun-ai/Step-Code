@@ -267,7 +267,7 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Workflow orchestration",
 				[
-					'- workflow is opt-in: reach for it only when the user\'s current message contains the keyword "ultraloop" or an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop is on for the session (a system-reminder confirms it and repeats every turn until /ultraloop off); the user invokes a saved workflow by name; or a skill instructs it. A system-reminder confirms per-turn and session-standing opt-ins (saved-workflow and skill invocations are valid without one); never infer opt-in from task shape, and never carry a per-turn opt-in forward.',
+					'- workflow is opt-in: reach for it only when the user\'s current message contains the keyword "ultraloop" (or its Claude Code spelling "ultracode") or an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop is on for the session (a system-reminder confirms it and repeats every turn until /ultraloop off); the user invokes a saved workflow by name; or a skill instructs it. A system-reminder confirms per-turn and session-standing opt-ins (saved-workflow and skill invocations are valid without one); never infer opt-in from task shape, and never carry a per-turn opt-in forward.',
 					"- When ultraloop is on for the session that opt-in is standing: author and run a workflow for every substantive task by default, treat token cost as unconstrained, and aim for the most exhaustive correct answer. Multi-phase work often means several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits. When session mode is off, revert to the per-turn opt-in rule.",
 					"- Without any signal, prefer targeted tools — search_files, read_file, or a single subagent — and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
 					"- With opt-in, workflow fits broad multi-subsystem audits, mechanical migrations across many sites, multi-way parallel review with adversarial verification, research sweeps, and HoH convergence on a spec.",
@@ -279,6 +279,19 @@ export function buildStepSystemPromptAppendix(
 					"- Resume with resumeFromRunId: the same script and args replay the unchanged call prefix as a 100% cache hit; the first mismatched call and everything after it re-run live.",
 					"- Scripts must be deterministic: Date, new Date(), and Math.random() throw in the isolated runtime, and process, require, and network access are unavailable. Pass timestamps through args and vary prompts by index.",
 					"- Default to a medium-sized run and stay under roughly 15 agents unless the user asks for scale or ultraloop is on for the session.",
+				].join("\n"),
+			]
+		: [];
+
+	const hasBrowserTool = [...active].some((name) => /screenshot|playwright|browser|puppeteer/iu.test(name));
+	const frontendSection = hasBrowserTool
+		? [
+				"# Frontend visual verification",
+				[
+					"- For UI work, tests and builds are not enough: render the page, capture a screenshot, and look at it before reporting done.",
+					"- Screenshot tools that return images attach them directly. When a tool saves the capture to disk instead, read_file the saved path — read_file returns real image content for PNG, JPEG, GIF, and WebP.",
+					"- Iterate visually: compare the render against the request (layout, spacing, color, empty/loading/error states), fix, and re-capture until it matches.",
+					"- Subagent reports are text-only; have a subagent save screenshots to files and return the paths, then read_file them yourself.",
 				].join("\n"),
 			]
 		: [];
@@ -318,7 +331,7 @@ export function buildStepSystemPromptAppendix(
 		"2. Plan when useful: for work with several non-trivial steps or real uncertainty, keep a concise plan and update it as facts change.",
 		"3. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
 		"4. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
-		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly.",
+		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly. For UI-facing changes, also verify visually when a browser or screenshot tool is available; when none is, suggest installing the playwright plugin.",
 		"6. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
 
 		...planningSection,
@@ -331,6 +344,8 @@ export function buildStepSystemPromptAppendix(
 		...goalSection,
 
 		...workflowSection,
+
+		...frontendSection,
 
 		"# Code conventions",
 		"- Match surrounding style, naming, patterns, and dependencies. Check the project manifest or existing imports before assuming a dependency exists.",

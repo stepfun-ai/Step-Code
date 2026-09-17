@@ -143,7 +143,7 @@ export function formatWorkflowStatus(runs: readonly WorkflowRunSummary[], saved:
 	}
 	lines.push("");
 	lines.push(
-		'Usage: prefix a message with "ultraloop:" to opt in for one turn, or run /ultraloop on for the whole session.',
+		'Usage: prefix a message with "ultraloop:" (or "ultracode:") to opt in for one turn, or run /ultraloop on for the whole session.',
 	);
 	return lines.join("\n");
 }

@@ -67,6 +67,60 @@ nativeVmTest("parallel starts every task before its barrier and pipeline preserv
 	expect(peak).toBe(3);
 });
 
+nativeVmTest("pipeline runs item chains concurrently and passes (prev, item, index) to stages", async () => {
+	let active = 0;
+	let peak = 0;
+	const result = await runInIsolatedVm(
+		`return pipeline(
+		   ["a", "b", "c"],
+		   async (value, item, index) => (await agent(value)) + ":" + item + ":" + index,
+		   async (value, item, index) => value + "/" + index,
+		 );`,
+		null,
+		host({
+			agent: async (prompt) => {
+				active += 1;
+				peak = Math.max(peak, active);
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				active -= 1;
+				return prompt;
+			},
+		}),
+	);
+
+	expect(result.value).toEqual(["a:a:0/0", "b:b:1/1", "c:c:2/2"]);
+	expect(peak).toBe(3);
+});
+
+nativeVmTest("a throwing stage or task resolves to null instead of rejecting the wave", async () => {
+	const result = await runInIsolatedVm(
+		`const piped = await pipeline(
+		   [1, 2, 3],
+		   async (value) => { if (value === 2) throw new Error("boom"); return value * 10; },
+		   async (value) => value + 1,
+		 );
+		 const waved = await parallel([
+		   () => agent("ok"),
+		   async () => { throw new Error("boom"); },
+		   () => agent("also-ok"),
+		 ]);
+		 return { piped, waved };`,
+		null,
+		host({ agent: async (prompt) => prompt }),
+	);
+
+	expect(result.value).toEqual({ piped: [11, null, 31], waved: ["ok", null, "also-ok"] });
+});
+
+nativeVmTest("pipeline and parallel reject batches above the 4096-entry cap", async () => {
+	await expect(runInIsolatedVm("return parallel(new Array(4097).fill(() => null));", null, host())).rejects.toThrow(
+		/4096/u,
+	);
+	await expect(
+		runInIsolatedVm("return pipeline(new Array(4097).fill(1), async (value) => value);", null, host()),
+	).rejects.toThrow(/4096/u);
+});
+
 nativeVmTest.each([
 	["Date.now", "return Date.now();"],
 	["Date constructor", "return new Date();"],

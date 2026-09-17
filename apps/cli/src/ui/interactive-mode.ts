@@ -1289,6 +1289,10 @@ export class InteractiveMode {
 				mcpImportError = `Could not offer MCP import: ${error instanceof Error ? error.message : String(error)}`;
 			}
 		}
+		// Optional for the same reason as maybeRunStartupLogin below: the
+		// prototype-based render tests drive run() with only the native mode surface.
+		const themePromptError =
+			typeof this.maybeRunStepThemePrompt === "function" ? await this.maybeRunStepThemePrompt() : undefined;
 		await this.init();
 		if (this.options.onStartup) {
 			const continueStartup = await this.options.onStartup({
@@ -1331,6 +1335,7 @@ export class InteractiveMode {
 
 		if (mcpImportNotice) this.showNotice(mcpImportNotice);
 		if (mcpImportError) this.showWarning(mcpImportError);
+		if (themePromptError) this.showWarning(themePromptError);
 
 		if (!this.options.disableBackgroundServices) {
 			const controller = new AbortController();
@@ -5389,6 +5394,44 @@ export class InteractiveMode {
 				provider.id.toLowerCase() === normalizedProviderRef ||
 				provider.name.toLowerCase() === normalizedProviderRef,
 		);
+	}
+
+	/**
+	 * Ask once, on the first interactive launch, which theme reads best here.
+	 *
+	 * Runs before `init()`, so the picker owns a screen of its own instead of
+	 * appearing over a logo and an input box that were painted a frame earlier.
+	 * The chosen setting is written through the settings manager while it is
+	 * still the only reader: `init()` builds the theme controller from those
+	 * settings a moment later, so the session opens in the theme just chosen.
+	 *
+	 * The gate is the absence of a persisted theme, and nothing else: the screen
+	 * always answers with a setting — the default when it is dismissed — so the
+	 * written `theme` is the whole record that the question was put. A user who
+	 * has a theme, from this screen, `/settings`, or by hand, has answered it;
+	 * deleting that line asks again. Launches that carry work (an initial prompt,
+	 * a resumed session) are left alone: a setup screen in front of a task the
+	 * user already asked for is an interruption, not onboarding.
+	 *
+	 * Returns a message to show once there is a chat surface to show it on.
+	 */
+	private async maybeRunStepThemePrompt(): Promise<string | undefined> {
+		if (!this.options.stepThemePrompt) return undefined;
+		if (this.options.exitAfterStartupLogin) return undefined;
+		if (this.settingsManager.getThemeSetting() !== undefined) return undefined;
+		if (this.options.initialMessage || this.options.initialMessages?.length) return undefined;
+		if (this.session.state.messages.length > 0) return undefined;
+
+		try {
+			const selection = await this.options.stepThemePrompt();
+			if (!selection) return undefined;
+			this.settingsManager.setTheme(selection);
+			await this.settingsManager.flush();
+		} catch (error: unknown) {
+			// A theme question is never worth failing a launch over.
+			return `Could not offer the theme picker: ${error instanceof Error ? error.message : String(error)}`;
+		}
+		return undefined;
 	}
 
 	/**

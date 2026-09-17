@@ -411,6 +411,51 @@ export function resolveStepMcpEnvironment(
 	return resolved;
 }
 
+interface McpCallResult {
+	content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>;
+	structuredContent?: unknown;
+	isError?: boolean;
+}
+
+/**
+ * Convert one MCP call result into model-facing content. Image blocks
+ * (screenshot-style tools) must survive to the model: the host resizes them
+ * and downgrades them to a text placeholder for non-vision models downstream,
+ * so dropping them here would blind the model to its own captures.
+ */
+export function convertMcpCallResult(serverName: string, toolName: string, result: McpCallResult) {
+	if (result.isError === true) {
+		const errorText = (result.content ?? [])
+			.filter((item) => item.type === "text" && typeof item.text === "string")
+			.map((item) => item.text as string)
+			.join("\n\n")
+			.trim();
+		throw new Error(errorText || `MCP tool '${toolName}' failed.`);
+	}
+	const text = (result.content ?? [])
+		.filter((item) => item.type === "text" && typeof item.text === "string")
+		.map((item) => item.text as string)
+		.join("\n\n");
+	const images = (result.content ?? []).filter(
+		(item): item is { type: "image"; data: string; mimeType: string } =>
+			item.type === "image" &&
+			typeof item.data === "string" &&
+			item.data.length > 0 &&
+			typeof item.mimeType === "string",
+	);
+	// Without this note an image-only result falls into the JSON fallback,
+	// which pastes the base64 payload into the text block.
+	const fallback = images.length > 0 ? "(see attached image)" : JSON.stringify(result.structuredContent ?? result);
+	const renderedText = appendStepPageManagementHint(serverName, toolName, text || fallback);
+	return {
+		content: [
+			{ type: "text" as const, text: renderedText },
+			...images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
+		],
+		details: result,
+	};
+}
+
 function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 	const name = `${server.name}__${sanitizeName(remote.name)}`;
 	return {
@@ -427,31 +472,8 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 				{ name: remote.name, arguments: isRecord(params) ? params : {} },
 				CallToolResultSchema,
 				{ timeout: server.callTimeoutMs, resetTimeoutOnProgress: true, signal },
-			)) as {
-				content?: Array<{ type?: string; text?: string }>;
-				structuredContent?: unknown;
-			};
-			if ((result as { isError?: boolean }).isError === true) {
-				const errorText = (result.content ?? [])
-					.filter((item) => item.type === "text" && typeof item.text === "string")
-					.map((item) => item.text as string)
-					.join("\n\n")
-					.trim();
-				throw new Error(errorText || `MCP tool '${remote.name}' failed.`);
-			}
-			const text = (result.content ?? [])
-				.filter((item) => item.type === "text" && typeof item.text === "string")
-				.map((item) => item.text as string)
-				.join("\n\n");
-			const renderedText = appendStepPageManagementHint(
-				server.name,
-				remote.name,
-				text || JSON.stringify(result.structuredContent ?? result),
-			);
-			return {
-				content: [{ type: "text", text: renderedText }],
-				details: result,
-			};
+			)) as McpCallResult;
+			return convertMcpCallResult(server.name, remote.name, result);
 		},
 	};
 }

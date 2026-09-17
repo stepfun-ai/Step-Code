@@ -240,23 +240,25 @@ globalThis.iterate = async (options) => __workflow_apply(__workflow_iterate_ref,
 globalThis.workflow = async (name, options = null) => __workflow_apply(__workflow_nested_ref, [name, options]);
 globalThis.parallel = async (tasks) => {
   if (!Array.isArray(tasks)) throw new TypeError("parallel() requires an array of task functions");
-  return Promise.all(tasks.map((task) => {
+  if (tasks.length > 4096) throw new RangeError("parallel() accepts at most 4096 tasks");
+  return Promise.all(tasks.map(async (task) => {
     if (typeof task !== "function") throw new TypeError("parallel() entries must be functions");
-    return task();
+    try { return await task(); } catch { return null; }
   }));
 };
 globalThis.pipeline = async (items, ...stages) => {
   if (!Array.isArray(items)) throw new TypeError("pipeline() requires an array of items");
+  if (items.length > 4096) throw new RangeError("pipeline() accepts at most 4096 items");
   if (stages.some((stage) => typeof stage !== "function")) {
     throw new TypeError("pipeline() stages must be functions");
   }
-  const output = [];
-  for (const item of items) {
+  return Promise.all(items.map(async (item, index) => {
     let value = item;
-    for (const stage of stages) value = await stage(value);
-    output.push(value);
-  }
-  return output;
+    for (const stage of stages) {
+      try { value = await stage(value, item, index); } catch { return null; }
+    }
+    return value;
+  }));
 };
 globalThis.phase = (title) => { __workflow_apply_sync(__workflow_phase_ref, [title]); };
 globalThis.log = (message) => { __workflow_apply_sync(__workflow_log_ref, [message]); };
