@@ -760,6 +760,7 @@ export {
 	trackStepTelemetryCrash,
 	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
+export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from "./step/theme-prompt.ts";
 export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {

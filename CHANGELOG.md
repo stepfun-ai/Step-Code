@@ -7,6 +7,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Added
 
+- Added a first-run theme picker: the first interactive launch asks which theme reads best in the terminal after the startup login and the MCP import offer, on a screen of its own before the main UI is built (so no logo/input flashes past first), applying each option as it is highlighted and showing a syntax/diff sample. The chosen setting is written to `config.toml` before the UI is built, so the session opens in it; Escape answers with the terminal-following default and writes that, so the `theme` key alone decides whether the screen has been seen and deleting it asks again.
 - Added bounded task progress widgets and compact task tool views; `/todos` is available independently of plan mode.
 - Added the Step CLI standalone binary release bundle, cross-platform installers, checksum manifests, and managed `fd`/`rg` tools under `.step-cli`.
 - Added the Step binary startup update check with Pi-native selection and restart behavior.
@@ -41,6 +42,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 - Fixed StepCode-launched Step sessions so `STEPCLI_CONFIG_PATH` provider catalogs, active models, API keys, and base URLs are loaded from the injected config file.
 - Fixed StepCode-launched model and permission persistence so reads and writes use the injected config file instead of mixing in `.step-cli` settings.
 - Fixed StepCode-launched models with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+- Fixed StepCode-launched models with omitted vision metadata registering as text-only, so `read_file` replaced every image with a "current model does not support images" note even on vision-capable models such as `water18-0910`. Omitted capability metadata now defaults to image input; an explicit `supportsVision: false` or a declared `input` list remains authoritative.
 - Fixed input, deletion, and menu lag in long sessions, where every keystroke reprocessed all settled messages before the screen could update.
 - Fixed `/feedback` leaving the editor above the bottom row when a page was cancelled; every page of the flow now renders over the transcript.
 - Fixed `search_files` silently omitting matching files in bracket-prefixed dynamic routes such as `[slug]`, `[...slug]`, and `[[...slug]]`.

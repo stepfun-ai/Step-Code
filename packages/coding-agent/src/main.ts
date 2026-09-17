@@ -770,6 +770,7 @@ export interface MainOptions {
 		| "stepLogin"
 		| "stepLogout"
 		| "stepMcpImport"
+		| "stepThemePrompt"
 		| "onStartup"
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */

@@ -204,6 +204,7 @@ describe("InteractiveMode startup login", () => {
 		const stopThemeWatcher = vi.spyOn(themeModule, "stopThemeWatcher").mockImplementation(() => {});
 		const context = {
 			init: vi.fn(async () => {}),
+			maybeRunStepThemePrompt: vi.fn(async () => undefined),
 			maybeRunStartupLogin: vi.fn(async () => {
 				throw failure;
 			}),
