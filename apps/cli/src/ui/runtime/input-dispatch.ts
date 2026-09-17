@@ -61,12 +61,13 @@ export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 }
 
 /**
- * Format a resolved image path as a file reference for the input line: prefix
- * with `@` (the file marker), quoting with `@"..."` when the path contains a
- * space so it reads as a single reference.
+ * Format a resolved image path as a file reference for the input line: always
+ * `@"<path>"`. The quotes are required when the path has a space (so it reads as
+ * one reference) and kept for space-free paths too, so every pasted image
+ * reference looks the same rather than appearing inconsistent.
  */
 function formatImageRef(absolutePath: string): string {
-	return absolutePath.includes(" ") ? `@"${absolutePath}"` : `@${absolutePath}`;
+	return `@"${absolutePath}"`;
 }
 
 export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {
