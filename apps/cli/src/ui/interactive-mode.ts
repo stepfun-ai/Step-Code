@@ -1289,7 +1289,10 @@ export class InteractiveMode {
 				mcpImportError = `Could not offer MCP import: ${error instanceof Error ? error.message : String(error)}`;
 			}
 		}
-		const themePromptError = await this.maybeRunStepThemePrompt();
+		// Optional for the same reason as maybeRunStartupLogin below: the
+		// prototype-based render tests drive run() with only the native mode surface.
+		const themePromptError =
+			typeof this.maybeRunStepThemePrompt === "function" ? await this.maybeRunStepThemePrompt() : undefined;
 		await this.init();
 		if (this.options.onStartup) {
 			const continueStartup = await this.options.onStartup({
