@@ -27,6 +27,7 @@ import * as path from "node:path";
 import {
 	type AgentSession,
 	APP_NAME,
+	cleanPastedPath,
 	extensionForImageMimeType,
 	isImageFilePath,
 	readClipboardImage,
@@ -118,7 +119,7 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
 async function insertPastedImagePath(ctx: RuntimeContext, pastedText: string): Promise<void> {
 	let value = pastedText;
 	try {
-		const cleaned = pastedText.trim().replace(/^"(.*)"$/, "$1");
+		const cleaned = cleanPastedPath(pastedText);
 		let absolutePath: string | undefined;
 		if (path.isAbsolute(cleaned) && isImageFilePath(cleaned) && fs.existsSync(cleaned)) {
 			absolutePath = cleaned;
@@ -231,7 +232,7 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 	// absolute `@` reference. Returning true claims the paste; anything else
 	// pastes normally.
 	ctx.defaultEditor.onPasteImagePath = (content: string) => {
-		const cleaned = content.trim().replace(/^"(.*)"$/, "$1");
+		const cleaned = cleanPastedPath(content);
 		// Only claim a short, single-line, image-extension token. The length cap
 		// keeps large single-line pastes on the base editor's paste path (which
 		// collapses big blobs) and bounds how often the clipboard is probed.

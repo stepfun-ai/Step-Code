@@ -809,6 +809,7 @@ export { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelo
 // Clipboard utilities
 export { copyToClipboard, readClipboardText } from "./utils/clipboard.ts";
 export {
+	cleanPastedPath,
 	extensionForImageMimeType,
 	isImageFilePath,
 	readClipboardImage,

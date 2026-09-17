@@ -309,6 +309,38 @@ export function isImageFilePath(path: string): boolean {
 }
 
 /**
+ * Clean a file path pasted from a terminal: strip surrounding quotes and the
+ * shell escaping a terminal adds when you paste/drag a path with spaces or
+ * special characters (e.g. `a\ file\ \(1\).png` -> `a file (1).png`). On Windows
+ * backslashes are path separators, so they are left intact. A doubled backslash
+ * (`\\`) is preserved as one literal backslash.
+ *
+ * Use this ONLY on text pasted through the terminal — a path READ back from the
+ * clipboard is raw and never shell-escaped, so unescaping it there would corrupt
+ * a filename that legitimately contains a backslash.
+ */
+/** Trim and remove one matched pair of surrounding single/double quotes. */
+function stripSurroundingQuotes(text: string): string {
+	const trimmed = text.trim();
+	if (
+		trimmed.length >= 2 &&
+		((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
+	) {
+		return trimmed.slice(1, -1);
+	}
+	return trimmed;
+}
+
+export function cleanPastedPath(text: string, platform: NodeJS.Platform = process.platform): string {
+	const cleaned = stripSurroundingQuotes(text);
+	if (platform === "win32") {
+		return cleaned;
+	}
+	const sentinel = ` ${randomUUID()} `;
+	return cleaned.replace(/\\\\/g, sentinel).replace(/\\(.)/g, "$1").split(sentinel).join("\\");
+}
+
+/**
  * Run a clipboard-reading command asynchronously and return its trimmed stdout,
  * or null on any failure. Uses execFile (non-blocking) rather than spawnSync so
  * the terminal UI never freezes while probing the clipboard — this runs on
@@ -378,7 +410,9 @@ export async function readClipboardImagePath(options?: { platform?: NodeJS.Platf
 	if (!candidate) {
 		return null;
 	}
-	// The clipboard text may be quoted or contain a single leading/trailing space.
-	const trimmed = candidate.trim().replace(/^"(.*)"$/, "$1");
-	return isImageFilePath(trimmed) ? trimmed : null;
+	// A clipboard-read path is raw (never terminal shell-escaped): only strip
+	// quotes, do NOT unescape backslashes (that would corrupt a literal backslash
+	// in a filename).
+	const cleaned = stripSurroundingQuotes(candidate);
+	return isImageFilePath(cleaned) ? cleaned : null;
 }
