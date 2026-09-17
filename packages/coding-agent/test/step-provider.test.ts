@@ -18,7 +18,6 @@ import {
 	loginStepOAuth,
 	refreshStepOAuth,
 	resolveStepProviderOptions,
-	STEP_MODELS,
 	STEP_PROVIDER_ENV,
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
@@ -129,7 +128,8 @@ describe("Step provider extension", () => {
 		const config = registerProvider.mock.calls[0]?.[1] as ReturnType<typeof createStepProviderConfig>;
 		expect(config.api).toBe("openai-completions");
 		expect(config.baseUrl).toBe("https://api.stepfun.com/step_plan/v1");
-		expect(config.models).toHaveLength(STEP_MODELS.length);
+		// No built-in baseline; the catalog is discovered dynamically after login.
+		expect(config.models).toEqual([]);
 		expect(config.oauth?.name).toBe("Step Plan");
 	});
 
@@ -160,16 +160,15 @@ describe("Step provider extension", () => {
 	});
 
 	it("defaults custom Step models to the OpenAI dialect without mutating input", () => {
-		const base = STEP_MODELS[0]!;
 		const models = [
 			{
 				id: "custom-step",
 				name: "Custom Step",
-				reasoning: base.reasoning,
+				reasoning: false,
 				input: ["text", "image"] as ("text" | "image")[],
-				cost: base.cost,
-				contextWindow: base.contextWindow,
-				maxTokens: base.maxTokens,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 256_000,
+				maxTokens: 256_000,
 			},
 		];
 		const config = createStepProviderConfig({ models, env: {} });
@@ -192,7 +191,23 @@ describe("Step provider extension", () => {
 			modelsPath: null,
 			refreshOnCreate: false,
 		});
-		runtime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig({ env: {} }));
+		runtime.registerProvider(
+			STEP_PROVIDER_ID,
+			createStepProviderConfig({
+				env: {},
+				models: [
+					{
+						id: "step-3.7-flash",
+						name: "Step 3.7 Flash",
+						reasoning: true,
+						input: ["text", "image"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 256_000,
+						maxTokens: 256_000,
+					},
+				],
+			}),
+		);
 		const model = runtime.getModel(STEP_PROVIDER_ID, "step-3.7-flash");
 		expect(model).toMatchObject({
 			api: "openai-completions",
@@ -581,33 +596,28 @@ describe("Step dynamic model discovery", () => {
 		]);
 	});
 
-	it("falls back to the built-in catalog when unauthenticated or offline", async () => {
+	it("returns no models when unauthenticated or offline", async () => {
 		const resolved = resolveStepProviderOptions({ env: {} });
-		const ids = STEP_MODELS.map((m) => m.id);
-		expect((await fetchStepModels(refreshContext({ credential: undefined }), resolved)).map((m) => m.id)).toEqual(
-			ids,
-		);
+		expect(await fetchStepModels(refreshContext({ credential: undefined }), resolved)).toEqual([]);
 		expect(
-			(
-				await fetchStepModels(
-					refreshContext({
-						allowNetwork: false,
-						credential: { type: "oauth", access: "t", refresh: "", expires: 0 },
-					}),
-					resolved,
-				)
-			).map((m) => m.id),
-		).toEqual(ids);
+			await fetchStepModels(
+				refreshContext({
+					allowNetwork: false,
+					credential: { type: "oauth", access: "t", refresh: "", expires: 0 },
+				}),
+				resolved,
+			),
+		).toEqual([]);
 	});
 
-	it("falls back to the built-in catalog on a non-200 response", async () => {
+	it("returns no models on a non-200 response", async () => {
 		const resolved = resolveStepProviderOptions({ env: {} });
 		const fetchMock = vi.fn(async () => new Response("nope", { status: 500 }));
 		const models = await fetchStepModels(
 			refreshContext({ credential: { type: "oauth", access: "t", refresh: "", expires: 0 } }),
 			{ ...resolved, fetch: fetchMock },
 		);
-		expect(models.map((m) => m.id)).toEqual(STEP_MODELS.map((m) => m.id));
+		expect(models).toEqual([]);
 	});
 
 	it("maps a reasoning_effort_support_list to a thinkingLevelMap", () => {

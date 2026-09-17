@@ -136,21 +136,11 @@ function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: Step
 }
 
 /**
- * Built-in baseline shown before a credential is available (offline / pre-login).
- * After login, `fetchStepModels` replaces this list with the account's real
- * `{base}/v1/models` result.
+ * No built-in baseline: the Step catalog is discovered entirely from
+ * `{base}/v1/models` after login (see `fetchStepModels`). When discovery is
+ * unavailable (offline / logged out / request failure) the list stays empty.
  */
-export const STEP_MODELS: readonly StepModelConfig[] = [
-	stepModelConfig("step-3.7-flash", "Step 3.7 Flash"),
-	stepModelConfig("step-3.5-flash-2603", "Step 3.5 Flash (2603)"),
-	stepModelConfig("step-3.5-flash", "Step 3.5 Flash"),
-	stepModelConfig("step-router-v1", "Step Router v1"),
-];
-
-// These ids are owned by the Step provider. A stale models.json can carry a
-// legacy wire dialect or endpoint for one of them; normalizeStepModel restores
-// the built-in dialect and base so the overlay cannot misroute a built-in id.
-const STEP_BUILTIN_MODEL_IDS = new Set(STEP_MODELS.map((model) => model.id.toLowerCase()));
+export const STEP_MODELS: readonly StepModelConfig[] = [];
 
 const API_BASE_URL_ENV_NAMES = [
 	"STEP_PROVIDER_API_URL",
@@ -245,8 +235,9 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 
 	const clientId = options.clientId ?? readFirstEnv(env, [STEP_PROVIDER_ENV.clientId]);
 	const scope = options.scope ?? readFirstEnv(env, [STEP_PROVIDER_ENV.scope]);
+	// Empty is allowed: the Step catalog is discovered dynamically from
+	// `{base}/v1/models`; there is no built-in baseline.
 	const models = options.models ?? STEP_MODELS;
-	if (models.length === 0) throw new Error("Step provider must expose at least one model");
 
 	return {
 		providerId,
@@ -281,14 +272,13 @@ export function normalizeStepModelConfig(model: StepModelConfig): StepModelConfi
 	};
 }
 
+/**
+ * Every Step model uses the active profile's OpenAI endpoint and dialect.
+ * Restore both so a stale models.json overlay (e.g. an old proxy host or the
+ * legacy Anthropic dialect) cannot misroute a Step model.
+ */
 export function normalizeStepModel(model: Model<Api>, openaiBaseUrl: string): Model<Api> {
-	if (STEP_BUILTIN_MODEL_IDS.has(model.id.toLowerCase())) {
-		// Step owns these ids. Restore the wire dialect and endpoint so a stale
-		// models.json overlay cannot override the provider default (which would
-		// send a built-in id to the wrong host/dialect after a successful login).
-		return { ...model, api: STEP_MODEL_API, baseUrl: openaiBaseUrl };
-	}
-	return model;
+	return { ...model, api: STEP_MODEL_API, baseUrl: openaiBaseUrl };
 }
 
 export async function loginStepOAuth(
@@ -620,22 +610,21 @@ export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
  * {@link STEP_USABLE_MODEL_TYPES}). Per-model capabilities are taken from the
  * response where present: `max_input_tokens` -> context window, `enable_reason`
  * -> thinking support, `enable_vision_input` -> image input; missing fields use
- * the built-in defaults.
+ * the metadata defaults.
  *
- * The coding-agent provider composition treats the return value as a full
- * replacement for the model list, so this never returns `[]` (which would wipe
- * the catalog): when offline, unauthenticated, on any transport/parse failure,
- * or when the endpoint returns no usable models, it falls back to the built-in
- * baseline. Only a successful fetch with at least one model replaces it.
+ * When discovery is unavailable — offline, unauthenticated, on any
+ * transport/parse failure, or when the endpoint returns no usable models — it
+ * returns the configured baseline (empty by default), so the Step catalog is
+ * simply empty until a successful fetch.
  */
 export async function fetchStepModels(
 	context: RefreshModelsContext,
 	resolved: ResolvedStepProviderOptions,
 ): Promise<StepModelConfig[]> {
-	const fallback = (): StepModelConfig[] => resolved.models.map((model) => ({ ...model, input: [...model.input] }));
-	if (!context.allowNetwork || context.signal.aborted) return fallback();
+	const baseline = (): StepModelConfig[] => resolved.models.map((model) => ({ ...model, input: [...model.input] }));
+	if (!context.allowNetwork || context.signal.aborted) return baseline();
 	const token = readStepBearerToken(context.credential);
-	if (!token) return fallback();
+	if (!token) return baseline();
 	const baseUrl = stepOpenAiBaseUrl(resolved.apiBaseUrl);
 	const fetchFn = resolveFetch(resolved.fetch);
 	let response: Response;
@@ -646,9 +635,9 @@ export async function fetchStepModels(
 			signal: context.signal,
 		});
 	} catch {
-		return fallback();
+		return baseline();
 	}
-	if (!response.ok) return fallback();
+	if (!response.ok) return baseline();
 	const payload = await readJsonObject(response);
 	const data = Array.isArray(payload.data) ? payload.data : [];
 	const entries: { id: string; modelType?: string; meta: StepModelMeta }[] = [];
@@ -680,7 +669,7 @@ export async function fetchStepModels(
 		seen.add(entry.id);
 		models.push(stepModelConfig(entry.id, entry.id, baseUrl, entry.meta));
 	}
-	return models.length > 0 ? models : fallback();
+	return models.length > 0 ? models : baseline();
 }
 
 /** Reasoning-effort levels the Step endpoint may report, in ascending order. */
