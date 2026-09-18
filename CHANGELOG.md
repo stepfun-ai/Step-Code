@@ -7,6 +7,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Added
 
+- Added a `Step Plan Oversea` login option: the login page now offers the overseas Step Plan alongside the mainland one, signing in through `https://platform.stepfun.ai` and using `https://api.stepfun.ai/step_plan` for models. An overseas plan login also routes `search_web` to `https://api.stepfun.ai/v1/mcp/web_search/mcp`, and `step login status` reports `Login method: Step Plan Oversea.` (with the stored profile in `--json`) after validating the credential against the overseas endpoint.
 - Added a first-run theme picker: the first interactive launch asks which theme reads best in the terminal after the startup login and the MCP import offer, on a screen of its own before the main UI is built (so no logo/input flashes past first), applying each option as it is highlighted and showing a syntax/diff sample. The chosen setting is written to `config.toml` before the UI is built, so the session opens in it; Escape answers with the terminal-following default and writes that, so the `theme` key alone decides whether the screen has been seen and deleting it asks again.
 - Added bounded task progress widgets and compact task tool views; `/todos` is available independently of plan mode.
 - Added the Step CLI standalone binary release bundle, cross-platform installers, checksum manifests, and managed `fd`/`rg` tools under `.step-cli`.
@@ -34,6 +35,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Fixed a signed-in Step session starting with `No models available. Use /login to log into a provider via OAuth or API key.` and `model unknown`. The Step catalog is discovered from `{base}/v1/models` and is not cached between runs, but startup only composed catalogs from cache, so the initial model had nothing to resolve against until something else refreshed (for example opening `/model`). Startup now pulls the Step catalog once, bounded and best-effort, before it picks the model.
 - Fixed the Step MCP bridge dropping image blocks from tool results: screenshot-style MCP tools (for example the playwright plugin) now attach real images to the model, resized and capability-downgraded downstream like read_file images, and an image-only result renders a "(see attached image)" note instead of a base64 JSON dump.
 - Fixed two silent failure modes around explicit user intent: with `STEP_ENABLE_WORKFLOW` set but the isolated-vm native module unavailable, the session now starts with a warning naming the missing module instead of silently registering no workflow tools; and a failed background lane's `<agent-notification>` now always carries each failed task's error reason instead of only the aggregate output text, which could omit the cause.
 - Fixed Step approval dialogs appearing to loop: show distinct call IDs and a static waiting state, settle cancelled or replaced dialogs once, and prevent multiline tool titles from corrupting terminal redraws.

@@ -124,18 +124,27 @@ export function needsStepLoginBeforeInteractive(input: {
 	return readStepLoginCredential(input.authPath) === undefined;
 }
 
-/** Update the provider endpoint hint used by the Step extension on reload. */
+/**
+ * Update the provider endpoint hints used by the Step extension on reload.
+ *
+ * Both the model endpoint and the developer-center login page follow the stored
+ * profile, so a mainland and an overseas plan never cross regions.
+ */
 export function syncStepLoginProfileEndpoint(
 	authPath: string,
 	env: Record<string, string | undefined> = process.env,
 ): void {
 	const profileId = readStepLoginProfile(authPath);
-	if (!profileId) {
+	const profile = profileId
+		? resolveStepLoginProfiles(env).find((candidate) => candidate.id === profileId)
+		: undefined;
+	if (!profile) {
 		delete env.STEP_LOGIN_PROFILE_API_URL;
+		delete env.STEP_LOGIN_PROFILE_AUTH_URL;
 		return;
 	}
-	const profile = resolveStepLoginProfiles(env).find((candidate) => candidate.id === profileId);
-	if (profile) env.STEP_LOGIN_PROFILE_API_URL = profile.baseUrl;
+	env.STEP_LOGIN_PROFILE_API_URL = profile.baseUrl;
+	env.STEP_LOGIN_PROFILE_AUTH_URL = profile.authBaseUrl;
 }
 
 export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<StepLoginOutcome> {
