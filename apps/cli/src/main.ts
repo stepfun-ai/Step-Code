@@ -479,11 +479,14 @@ try {
 			} else if (statusArgs.includes("--help") || statusArgs.includes("-h")) {
 				process.stdout.write("Usage: step login status [--json]\nShow the current Step credential status.\n");
 			} else {
-				const status = await getStepLoginStatus({ authPath: getStepAuthPath(), env: process.env });
+				const status = await getStepLoginStatus({
+					authPath: getStepAuthPath(),
+					env: process.env,
+				});
 				if (json) {
 					process.stdout.write(`${JSON.stringify(status)}\n`);
 				} else if (status.validity === "missing") {
-					process.stdout.write("Not signed in. Run `step login` or set STEP_API_KEY.\n");
+					process.stdout.write("Not signed in. Run `step login`.\n");
 				} else {
 					process.stdout.write(`Signed in${status.account ? ` as ${status.account}` : ""}.\n`);
 					process.stdout.write(`Login method: ${status.loginMethod === "api_key" ? "apiKey" : "Step Plan"}.\n`);
