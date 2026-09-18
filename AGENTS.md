@@ -255,7 +255,7 @@ For any non-trivial change — a new subsystem, a multi-file refactor, or risky 
 3. For operations with side effects (deleting, publishing, releasing, migrating), request explicit confirmation at the end of the plan before proceeding.
 4. Prefer the scripts under `scripts/` over ad-hoc command lines.
 
-Exec-plans are execution records, not user-facing docs: keep them in `docs/exec-plans/active/` while in progress and move them out when the work lands. They are not part of any published docs navigation. When a change alters runtime behavior, tool boundaries, or a cross-process contract, update the matching doc in the same change rather than leaving the plan as the only record.
+Exec-plans are execution records, not user-facing docs: keep them in `docs/exec-plans/active/` while in progress and move them to `docs/exec-plans/done/` once the work is complete (landed, or finished and verified). They are not part of any published docs navigation. When a change alters runtime behavior, tool boundaries, or a cross-process contract, update the matching doc in the same change rather than leaving the plan as the only record.
 
 ## User Override
 
