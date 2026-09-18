@@ -506,6 +506,59 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual(["explain this"]);
 		});
 
+		// User feedback: `stepcli -p --mode json "@empty.md 这个文件有什么"` treated the whole
+		// quoted arg as one filename. A single @-arg containing whitespace must split into a
+		// file token plus trailing message text.
+		test("splits an @-arg containing whitespace into a file token and a message", () => {
+			const result = parseArgs(["@empty.md 这个文件有什么"]);
+			expect(result.fileArgs).toEqual(["empty.md"]);
+			expect(result.messages).toEqual(["这个文件有什么"]);
+		});
+
+		test("reproduces the reported argv: -p --mode json '@file text'", () => {
+			const result = parseArgs(["-p", "--mode", "json", "@empty.md 这个文件有什么"]);
+			expect(result.print).toBe(true);
+			expect(result.mode).toBe("json");
+			expect(result.fileArgs).toEqual(["empty.md"]);
+			expect(result.messages).toEqual(["这个文件有什么"]);
+		});
+
+		test('honors @"quoted path" so spaces in a filename are preserved', () => {
+			const result = parseArgs(['@"my notes.md" summarize this']);
+			expect(result.fileArgs).toEqual(["my notes.md"]);
+			expect(result.messages).toEqual(["summarize this"]);
+		});
+
+		test("does not treat '=' or apostrophe as a path boundary", () => {
+			const result = parseArgs(["@foo=bar.txt tell me"]);
+			expect(result.fileArgs).toEqual(["foo=bar.txt"]);
+			expect(result.messages).toEqual(["tell me"]);
+		});
+
+		test("keeps a bare @ as message text instead of an empty file arg", () => {
+			const result = parseArgs(["@"]);
+			expect(result.fileArgs).toEqual([]);
+			expect(result.messages).toEqual(["@"]);
+		});
+
+		test("a whitespace-free @file yields no spurious empty message", () => {
+			const result = parseArgs(["@file.md"]);
+			expect(result.fileArgs).toEqual(["file.md"]);
+			expect(result.messages).toEqual([]);
+		});
+
+		test('tolerates an unclosed @"quote by treating the rest as the path', () => {
+			const result = parseArgs(['@"partial']);
+			expect(result.fileArgs).toEqual(["partial"]);
+			expect(result.messages).toEqual([]);
+		});
+
+		test("splits an @-arg with whitespace after the -- delimiter", () => {
+			const result = parseArgs(["--", "@empty.md read it"]);
+			expect(result.fileArgs).toEqual(["empty.md"]);
+			expect(result.messages).toEqual(["read it"]);
+		});
+
 		test("captures unknown long flags with string values", () => {
 			const result = parseArgs(["--unknown-flag", "message"]);
 			expect(result.messages).toEqual([]);
@@ -542,6 +595,113 @@ describe("parseArgs", () => {
 			expect(result.thinking).toBe("high");
 			expect(result.fileArgs).toEqual(["prompt.md"]);
 			expect(result.messages).toEqual(["Do the task"]);
+		});
+	});
+
+	// User feedback: `step --session-dir --version` consumed --version as the
+	// directory name, created a "--version" dir and never printed the version.
+	// Every value-taking option must reject a missing or flag-like value instead
+	// of swallowing the following option.
+	describe("value-taking options reject a missing or flag-like value", () => {
+		test("--session-dir does not consume a following --version", () => {
+			const result = parseArgs(["--session-dir", "--version"]);
+			expect(result.sessionDir).toBeUndefined();
+			expect(result.version).toBe(true);
+			expect(result.diagnostics).toEqual([{ type: "error", message: "--session-dir requires a value" }]);
+		});
+
+		const VALUE_FLAGS: Array<[string, string]> = [
+			["--mode", "--mode"],
+			["--provider", "--provider"],
+			["--model", "--model"],
+			["--api-key", "--api-key"],
+			["--system-prompt", "--system-prompt"],
+			["--append-system-prompt", "--append-system-prompt"],
+			["--name", "--name"],
+			["-n", "--name"],
+			["--session", "--session"],
+			["--session-id", "--session-id"],
+			["--fork", "--fork"],
+			["--session-dir", "--session-dir"],
+			["--models", "--models"],
+			["--tools", "--tools"],
+			["-t", "--tools"],
+			["--exclude-tools", "--exclude-tools"],
+			["-xt", "--exclude-tools"],
+			["--thinking", "--thinking"],
+			["--export", "--export"],
+			["--extension", "--extension"],
+			["-e", "--extension"],
+			["--skill", "--skill"],
+			["--prompt-template", "--prompt-template"],
+			["--theme", "--theme"],
+		];
+
+		test.each(VALUE_FLAGS)("%s reports a missing value when it is the last argument", (flag, canonical) => {
+			const result = parseArgs([flag]);
+			expect(result.diagnostics).toEqual([{ type: "error", message: `${canonical} requires a value` }]);
+		});
+
+		test.each(VALUE_FLAGS)("%s does not swallow a following flag", (flag, canonical) => {
+			const result = parseArgs([flag, "--verbose"]);
+			expect(result.verbose).toBe(true);
+			expect(result.diagnostics).toEqual([{ type: "error", message: `${canonical} requires a value` }]);
+		});
+
+		test("normal values are still accepted for every value-taking option", () => {
+			const result = parseArgs([
+				"--provider",
+				"openai",
+				"--model",
+				"gpt-4o",
+				"--session-dir",
+				"/tmp/sessions",
+				"--tools",
+				"read,bash",
+				"--thinking",
+				"high",
+				"--theme",
+				"/tmp/theme.json",
+			]);
+			expect(result.provider).toBe("openai");
+			expect(result.model).toBe("gpt-4o");
+			expect(result.sessionDir).toBe("/tmp/sessions");
+			expect(result.tools).toEqual(["read", "bash"]);
+			expect(result.thinking).toBe("high");
+			expect(result.themes).toEqual(["/tmp/theme.json"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("an invalid --thinking value still warns rather than erroring", () => {
+			const result = parseArgs(["--thinking", "bogus"]);
+			expect(result.thinking).toBeUndefined();
+			expect(result.diagnostics[0].type).toBe("warning");
+		});
+
+		// An option token never contains whitespace, so dash-leading free text is a
+		// value, not a flag: a prompt opening with a markdown bullet or YAML front
+		// matter must still be accepted.
+		test("a dash-leading value containing whitespace is accepted as a value", () => {
+			const result = parseArgs(["--system-prompt", "- Always use tabs", "-p", "hi"]);
+			expect(result.systemPrompt).toBe("- Always use tabs");
+			expect(result.print).toBe(true);
+			expect(result.messages).toEqual(["hi"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("a prompt beginning with YAML front matter is accepted", () => {
+			const prompt = "---\nname: x\n---\nbe terse";
+			const result = parseArgs(["--append-system-prompt", prompt, "hi"]);
+			expect(result.appendSystemPrompt).toEqual([prompt]);
+			expect(result.messages).toEqual(["hi"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("a whitespace-free flag-like token is still rejected", () => {
+			const result = parseArgs(["--system-prompt", "--verbose"]);
+			expect(result.systemPrompt).toBeUndefined();
+			expect(result.verbose).toBe(true);
+			expect(result.diagnostics).toEqual([{ type: "error", message: "--system-prompt requires a value" }]);
 		});
 	});
 });

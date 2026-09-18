@@ -53,7 +53,12 @@ export function normalizeStepSessionSelectorArgs(argv: readonly string[]): strin
 		let sessionFile: string | undefined;
 		if (arg === "--session-file") {
 			const value = optionArgs[index + 1];
-			if (value !== undefined && !value.startsWith("--")) {
+			// Only a non-option token can be the value. Testing for a single "-" (not
+			// "--") keeps short flags such as `-p` in place for parseArgs: consuming
+			// one silently dropped it and changed the run's mode. A flag-like token is
+			// left where it is, so a genuinely bogus one surfaces as a parse error
+			// rather than disappearing.
+			if (value !== undefined && !value.startsWith("-")) {
 				sessionFile = value;
 				index++;
 			}
@@ -154,6 +159,27 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 	};
 
 	const subcommand = argv[1];
+
+	// `--help` and unknown-flag handling must run before any subcommand acts:
+	// `init` writes a file, so without this an invocation like
+	// `step config init --help` — or a mistyped flag — silently writes the
+	// template instead of printing help or reporting the bad option.
+	const knownFlags = STEP_CONFIG_SUBCOMMAND_FLAGS[subcommand ?? ""];
+	if (knownFlags) {
+		const flagArgs = argv.slice(2);
+		if (flagArgs.includes("--help") || flagArgs.includes("-h")) {
+			stdout.write(`${stepConfigUsage(subcommand)}\n`);
+			return;
+		}
+		const unknownFlag = flagArgs.find(
+			(arg) => arg.startsWith("-") && arg !== "--" && !knownFlags.includes(arg.split("=")[0]),
+		);
+		if (unknownFlag) {
+			throw new Error(
+				`Unknown option "${unknownFlag}" for step config ${subcommand}. Run "step config ${subcommand} --help".`,
+			);
+		}
+	}
 
 	if (subcommand === "path") {
 		const json = argv.includes("--json");
@@ -303,8 +329,46 @@ function translateModelsArgs(args: readonly string[]): string[] {
 
 function readOption(argv: readonly string[], name: string): string | undefined {
 	const index = argv.indexOf(name);
-	if (index >= 0) return argv[index + 1];
+	if (index >= 0) {
+		// Reject a missing, empty or flag-like value rather than consuming the next
+		// option: `config init --path --force` must report the missing --path value
+		// instead of writing a file literally named "--force", and `--path ""`
+		// must not resolve to the cwd and fail later with a raw EISDIR.
+		const value = argv[index + 1];
+		if (value === undefined || value === "" || value.startsWith("-")) {
+			throw new Error(`Option "${name}" requires a value.`);
+		}
+		return value;
+	}
 	const prefix = `${name}=`;
 	const inline = argv.find((arg) => arg.startsWith(prefix));
-	return inline?.slice(prefix.length);
+	if (inline === undefined) return undefined;
+	const value = inline.slice(prefix.length);
+	if (value === "") {
+		throw new Error(`Option "${name}" requires a value.`);
+	}
+	return value;
+}
+
+/** Flags each `step config` subcommand accepts. Anything else is a user error. */
+const STEP_CONFIG_SUBCOMMAND_FLAGS: Record<string, readonly string[]> = {
+	path: ["--json"],
+	show: ["--json"],
+	init: ["--scope", "--path", "--force"],
+};
+
+function stepConfigUsage(subcommand: string): string {
+	switch (subcommand) {
+		case "path":
+			return "Usage: step config path [--json]\n  Print the resolved Step config file paths.";
+		case "show":
+			return "Usage: step config show [--json]\n  Print the effective Step config (credentials omitted).";
+		case "init":
+			return [
+				"Usage: step config init [--scope user|workspace] [--path <file>] [--force]",
+				"  Write a Step config template. Defaults to the user scope; --force overwrites an existing file.",
+			].join("\n");
+		default:
+			return "Usage: step config path|show|init";
+	}
 }

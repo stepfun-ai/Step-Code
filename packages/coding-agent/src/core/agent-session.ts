@@ -1032,6 +1032,34 @@ export class AgentSession {
 	}
 
 	/**
+	 * Report `--tools` / `--exclude-tools` selector names that match no real tool,
+	 * alongside the names that were available to choose from.
+	 *
+	 * `_refreshToolRegistry` filters the tool set by these selectors, so a misspelled
+	 * name simply selects nothing and the run proceeds as if it were never passed.
+	 * This compares the selectors against the unfiltered universe (built-in +
+	 * extension + SDK tools) so the caller can warn about names that will be ignored.
+	 * `knownTools` is that same unfiltered universe — `getAllTools()` reports the
+	 * post-filter set, which is empty precisely when every selector was misspelled.
+	 * Call it only after extensions have finished registering, otherwise
+	 * not-yet-registered tools look unknown.
+	 */
+	getUnknownToolSelectors(): { tools: string[]; excludeTools: string[]; knownTools: string[] } {
+		const known = new Set<string>([
+			...this._baseToolDefinitions.keys(),
+			...this._extensionRunner.getAllRegisteredTools().map((tool) => tool.definition.name),
+			...this._customTools.map((definition) => definition.name),
+		]);
+		const unknown = (names: Set<string> | undefined): string[] =>
+			names ? [...names].filter((name) => !known.has(name)) : [];
+		return {
+			tools: unknown(this._allowedToolNames),
+			excludeTools: unknown(this._excludedToolNames),
+			knownTools: [...known].sort(),
+		};
+	}
+
+	/**
 	 * Set active tools by name.
 	 * Only tools in the registry can be enabled. Unknown tool names are ignored.
 	 * Also rebuilds the system prompt to reflect the new tool set.

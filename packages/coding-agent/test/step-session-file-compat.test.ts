@@ -50,7 +50,26 @@ describe("normalizeStepSessionSelectorArgs", () => {
 	});
 
 	test("drops selectors that are not valid Pi session ids instead of erroring", () => {
-		expect(normalizeStepSessionSelectorArgs(["--session-file", "-oops", "-p", "hi"])).toEqual(["-p", "hi"]);
+		expect(normalizeStepSessionSelectorArgs(["--session-file", "not a session id", "-p", "hi"])).toEqual([
+			"-p",
+			"hi",
+		]);
+	});
+
+	// A flag-like token is never the selector's value: consuming `-p` silently
+	// dropped it and switched the run from print mode back to interactive.
+	test("does not consume a following short flag as the selector", () => {
+		expect(normalizeStepSessionSelectorArgs(["--session-file", "-p", "hi"])).toEqual(["-p", "hi"]);
+		expect(normalizeStepSessionSelectorArgs(["--session-file", "-t", "read", "-p", "hi"])).toEqual([
+			"-t",
+			"read",
+			"-p",
+			"hi",
+		]);
+	});
+
+	test("does not consume a following long flag as the selector", () => {
+		expect(normalizeStepSessionSelectorArgs(["--session-file", "--version"])).toEqual(["--version"]);
 	});
 
 	test("only rewrites the portion before a -- separator", () => {

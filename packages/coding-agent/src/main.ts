@@ -116,7 +116,7 @@ const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP
  * Read all content from piped stdin.
  * Returns undefined if stdin is a TTY (interactive terminal).
  */
-async function readPipedStdin(): Promise<string | undefined> {
+export async function readPipedStdin(): Promise<string | undefined> {
 	// If stdin is a TTY, we're running interactively - don't read stdin
 	if (process.stdin.isTTY) {
 		return undefined;
@@ -129,7 +129,10 @@ async function readPipedStdin(): Promise<string | undefined> {
 			data += chunk;
 		});
 		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
+			// Preserve the piped content verbatim (leading/trailing whitespace and
+			// newlines are meaningful to the model); trim only to decide whether the
+			// pipe was effectively empty and should be treated as absent.
+			resolve(data.trim().length > 0 ? data : undefined);
 		});
 		process.stdin.resume();
 	});

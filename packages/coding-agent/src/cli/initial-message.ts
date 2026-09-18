@@ -36,8 +36,21 @@ export function buildInitialMessage({
 		parsed.messages.shift();
 	}
 
+	// Join with a single newline between parts so piped stdin, @file text, and the
+	// first CLI message stay distinct instead of being concatenated. Parts that
+	// already end in a newline (an @file block always does) contribute their own
+	// separator, so only insert one when the running text does not already end in
+	// one — avoiding a spurious blank line at those boundaries.
+	let initialMessage = "";
+	for (const part of parts) {
+		if (initialMessage.length > 0 && !initialMessage.endsWith("\n")) {
+			initialMessage += "\n";
+		}
+		initialMessage += part;
+	}
+
 	return {
-		initialMessage: parts.length > 0 ? parts.join("") : undefined,
+		initialMessage: initialMessage.length > 0 ? initialMessage : undefined,
 		initialImages: fileImages && fileImages.length > 0 ? fileImages : undefined,
 	};
 }
