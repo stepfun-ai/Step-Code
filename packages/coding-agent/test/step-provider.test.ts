@@ -23,6 +23,7 @@ import {
 	STEP_STATIC_REFRESH_TOKEN,
 	startStepCallbackServer,
 	stepHighestEffort,
+	stepModelsDetailBaseUrl,
 	stepOpenAiBaseUrl,
 	stepProviderInlineExtension,
 	stepThinkingLevelMap,
@@ -483,6 +484,47 @@ describe("Step dynamic model discovery", () => {
 		expect(stepOpenAiBaseUrl("https://api.stepfun.com")).toBe("https://api.stepfun.com/v1");
 		// Idempotent for a base that already carries a `/v1` suffix.
 		expect(stepOpenAiBaseUrl("https://api.stepfun.com/v1")).toBe("https://api.stepfun.com/v1");
+	});
+
+	it("derives the domain-root /v1 for per-model detail lookups", () => {
+		// The detail endpoint lives at the domain root, even for step_plan whose
+		// chat/list base carries a /step_plan subpath (the subpath variant 404s).
+		expect(stepModelsDetailBaseUrl("https://api.stepfun.com/step_plan/v1")).toBe("https://api.stepfun.com/v1");
+		expect(stepModelsDetailBaseUrl("https://api.stepfun.com/v1")).toBe("https://api.stepfun.com/v1");
+		expect(stepModelsDetailBaseUrl("https://api.stepfun.ai/step_plan/v1")).toBe("https://api.stepfun.ai/v1");
+	});
+
+	it("carries reasoning_effort_support_list from the list into thinkingLevelMap", async () => {
+		const resolved = resolveStepProviderOptions({ env: {} });
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "step-3.7-flash",
+								model_type: "大语言模型",
+								reasoning_effort_support_list: ["low", "medium", "high"],
+							},
+						],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+		const models = await fetchStepModels(
+			refreshContext({ credential: { type: "oauth", access: "t", refresh: "", expires: 0 } }),
+			{ ...resolved, fetch: fetchMock },
+		);
+		expect(models[0]?.reasoning).toBe(true);
+		expect(models[0]?.thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+			max: null,
+		});
 	});
 
 	it("fetches models from {base}/v1/models with the bearer token", async () => {
