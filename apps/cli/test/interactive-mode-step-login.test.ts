@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import { writeStepLoginCredential } from "../../../packages/coding-agent/src/step/login-flow.ts";
+import { resolveStepLoginProfiles } from "../../../packages/coding-agent/src/step/onboarding.ts";
 
 const handleLoginCommand = (
 	InteractiveMode.prototype as unknown as {
@@ -124,8 +125,11 @@ describe("Step login command routing", () => {
 
 			expect(stepLogin).not.toHaveBeenCalled();
 			expect(context.createStepLoginHost).not.toHaveBeenCalled();
+			// The profile title carries its sign-in URL; read it back rather than
+			// restating it, so editing a title is not a test change.
+			const title = resolveStepLoginProfiles().find((profile) => profile.id === "step_plan")?.title;
 			expect(showStatus).toHaveBeenCalledWith(
-				"Already signed in with Step Plan. Run `/logout` before signing in again.",
+				`Already signed in with ${title}. Run \`/logout\` before signing in again.`,
 			);
 		} finally {
 			await rm(root, { recursive: true, force: true });
