@@ -379,7 +379,10 @@ export async function executeSubagent(
 		for (let index = 0; index < chain.length; index++) {
 			const task = {
 				...chain[index],
-				task: chain[index].task.replace(/\{previous\}/g, previous),
+				// Function replacement inserts `previous` verbatim. A string replacement would
+				// let $-patterns in the prior subagent's output ($&, $`, $', $$) be reinterpreted
+				// by String.prototype.replace, corrupting the next task's prompt.
+				task: chain[index].task.replace(/\{previous\}/g, () => previous),
 			};
 			const record = await runOne(task, index);
 			previous = finalOutput(record.messages) || resultText(record);
