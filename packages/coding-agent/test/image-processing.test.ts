@@ -97,10 +97,7 @@ describe("resizeImage", () => {
 		expect(result!.height).toBeLessThanOrEqual(50);
 	});
 
-	it("should resize image exceeding byte limit", async () => {
-		const originalBuffer = Buffer.from(LARGE_PNG_200x200, "base64");
-		const originalSize = originalBuffer.length;
-
+	it("re-encodes at original dimensions when exceeding the byte limit", async () => {
 		// Set maxBytes to less than the original encoded image size
 		const result = await resizeImage(imageBytes(LARGE_PNG_200x200), "image/png", {
 			maxWidth: 2000,
@@ -108,21 +105,31 @@ describe("resizeImage", () => {
 			maxBytes: Math.floor(LARGE_PNG_200x200.length * 0.9),
 		});
 
-		// Should have tried to reduce size
+		// Claude Code parity: a byte-only overage re-encodes at the original
+		// dimensions instead of shrinking the image, and never returns null.
 		expect(result).not.toBeNull();
-		const resultBuffer = Buffer.from(result!.data, "base64");
-		expect(resultBuffer.length).toBeLessThan(originalSize);
-		expect(result!.data.length).toBeLessThan(LARGE_PNG_200x200.length);
+		expect(result!.width).toBe(200);
+		expect(result!.height).toBe(200);
+		expect(result!.wasResized).toBe(false);
 	});
 
-	it("should return null when image cannot be resized below maxBytes", async () => {
+	it("returns a best-effort JPEG instead of dropping the image when maxBytes is unreachable", async () => {
+		// Claude Code parity: an unreachable byte budget must not omit the
+		// image — the last-resort JPEG (quality 20, up-to-1000px width) is
+		// returned even though it still exceeds maxBytes.
 		const result = await resizeImage(imageBytes(LARGE_PNG_200x200), "image/png", {
 			maxWidth: 2000,
 			maxHeight: 2000,
 			maxBytes: 1,
 		});
 
-		expect(result).toBeNull();
+		expect(result).not.toBeNull();
+		expect(result!.mimeType).toBe("image/jpeg");
+		expect(result!.data.length).toBeGreaterThan(0);
+		expect(result!.originalWidth).toBe(200);
+		expect(result!.originalHeight).toBe(200);
+		expect(result!.width).toBe(200);
+		expect(result!.height).toBe(200);
 	});
 
 	it("should handle JPEG input", async () => {
