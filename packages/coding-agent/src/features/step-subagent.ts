@@ -107,6 +107,8 @@ export interface StepSubagentRunInput {
 	onUpdate?: (result: StepSubagentRunResult) => void;
 	/** Called when the child emits a `{"type":"progress-report"}` event to nag the parent. */
 	onNeedsInput?: (message: string) => void;
+	/** Called when a prior child for this session died and a new one is spawned to resume it. */
+	onChildRespawn?: () => void;
 	/**
 	 * Stable child session id (`--session-id`). Reusing the id across turns and
 	 * respawns continues the same on-disk transcript; generated when omitted.
@@ -382,10 +384,16 @@ function stringifyLiveValue(value: unknown): string | undefined {
  * follow-up replies reuse its provider cache and transcript. A dead child is
  * respawned with the same session id and resumes the transcript from disk.
  */
+/** Session ids that ever spawned a child in this process; a hit with no live
+ * child means the previous child died and the new spawn is a recovery. */
+const spawnedSubagentSessions = new Set<string>();
+
 export async function runStepSubagentProcess(input: StepSubagentRunInput): Promise<StepSubagentRunResult> {
 	const sessionId = input.sessionId?.trim() || `subagent-${randomUUID()}`;
 	const live = getLiveSubagentSession(sessionId);
 	if (live) return live.runTurn(input);
+	if (spawnedSubagentSessions.has(sessionId)) input.onChildRespawn?.();
+	spawnedSubagentSessions.add(sessionId);
 	const session = await createSubagentRpcSession(input, sessionId);
 	return session.runTurn(input);
 }

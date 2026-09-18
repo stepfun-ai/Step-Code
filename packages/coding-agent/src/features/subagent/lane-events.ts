@@ -15,7 +15,8 @@ export type BackgroundLaneEvent =
 	| "background_failed"
 	| "background_interrupted"
 	| "background_needs_input"
-	| "background_progress";
+	| "background_progress"
+	| "background_restarted";
 
 /** Minimum interval between background_progress notifications per lane. */
 const PROGRESS_NOTIFY_INTERVAL_MS = 15_000;
@@ -50,7 +51,9 @@ export function notifyLaneEvent(
 			? `Background agent ${label} requests input.`
 			: event === "background_progress"
 				? `Background agent ${label} progress.`
-				: `Background agent ${label} ${lane.status}.`;
+				: event === "background_restarted"
+					? `Background agent ${label} restarted its child process.`
+					: `Background agent ${label} ${lane.status}.`;
 	const body = detail?.trim() ? `${headline}\n${detail.trim()}` : headline;
 	pi.sendMessage(
 		{
@@ -88,7 +91,28 @@ export function notifyLaneFinal(pi: ExtensionAPI, lane: BackgroundAgentLane): vo
 				? "background_interrupted"
 				: "background_done";
 	const output = laneOutputText(lane);
-	notifyLaneEvent(pi, lane, event, output ? truncateText(output, 2_000) : undefined);
+	// The aggregate output can omit why a task failed (multi-task lanes surface
+	// only their combined text). Always carry each failed task's cause, unless
+	// the output already states it verbatim.
+	const failureReasons =
+		lane.status === "failed"
+			? lane.details.results
+					.map((record, index) => ({ record, index }))
+					.filter(({ record }) => record.status === "failed")
+					.map(({ record, index }) => ({
+						label: `task ${record.step ?? index + 1} (${record.agent})`,
+						cause: record.errorMessage?.trim() || record.stderr?.trim() || "no error detail captured",
+					}))
+					.filter(({ cause }) => !output.includes(cause))
+					.map(({ label, cause }) => `- ${label}: ${truncateText(cause, 400)}`)
+			: [];
+	const detail = [
+		output ? truncateText(output, 2_000) : "",
+		failureReasons.length > 0 ? `Failure reasons:\n${failureReasons.join("\n")}` : "",
+	]
+		.filter(Boolean)
+		.join("\n\n");
+	notifyLaneEvent(pi, lane, event, detail || undefined);
 }
 
 function laneProgressDetail(lane: BackgroundAgentLane): string {
