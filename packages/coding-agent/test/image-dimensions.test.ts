@@ -62,4 +62,25 @@ describe("readImageDimensions", () => {
 	it("returns null for a truncated PNG header", () => {
 		expect(readImageDimensions(b64(TINY_PNG_2x2).slice(0, 16))).toBeNull();
 	});
+
+	it("returns null for a JPEG whose SOFn was stripped before SOS", () => {
+		// Handcrafted JPEG: SOI + APP0 (skippable) + SOS. No SOF. A permissive
+		// parser that length-skips SOS would walk into entropy data and might
+		// misread stuffing bytes as a fake SOF.
+		const buf = Buffer.concat([
+			Buffer.from([0xff, 0xd8]), // SOI
+			Buffer.from([0xff, 0xe0, 0x00, 0x04, 0x00, 0x00]), // APP0 len=4
+			Buffer.from([0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00]), // SOS
+			// Entropy-coded payload containing 0xFF 0xC0 (would fake a baseline SOF).
+			Buffer.from([0xff, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0x2c, 0x01, 0x2c, 0x03, 0x01, 0x22, 0x00]),
+			Buffer.from([0xff, 0xd9]), // EOI
+		]);
+		expect(readImageDimensions(new Uint8Array(buf))).toBeNull();
+	});
+
+	it("returns null for a JPEG segment length that overruns the buffer", () => {
+		// SOI + APP0 marker with declared length past end of buffer.
+		const buf = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x7f, 0xff, 0x00, 0x00]);
+		expect(readImageDimensions(new Uint8Array(buf))).toBeNull();
+	});
 });

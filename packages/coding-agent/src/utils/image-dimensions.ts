@@ -42,7 +42,7 @@ function readJpeg(bytes: Uint8Array): ImageDimensions | null {
 	if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
 
 	let offset = 2;
-	while (offset < bytes.length) {
+	while (offset + 1 < bytes.length) {
 		if (bytes[offset] !== 0xff) return null;
 		let marker = bytes[offset + 1];
 		offset += 2;
@@ -53,18 +53,25 @@ function readJpeg(bytes: Uint8Array): ImageDimensions | null {
 		}
 		if (marker === undefined) return null;
 
-		// Standalone markers with no length: SOI (D8), EOI (D9), RSTn (D0-D7), TEM (01).
-		if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+		// Bail cleanly once we reach start-of-scan or end-of-image: any bytes
+		// past SOS are entropy-coded scan data, and treating a random 0xff xx
+		// stuff-byte as another marker would produce garbage dimensions instead
+		// of a null verdict.
+		if (marker === 0xda || marker === 0xd9) return null;
+
+		// Standalone markers with no length: SOI (D8), TEM (01), RSTn (D0-D7).
+		if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
 			continue;
 		}
 
 		if (offset + 2 > bytes.length) return null;
 		const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
 		if (segmentLength < 2) return null;
+		if (offset + segmentLength > bytes.length) return null;
 
 		// SOFn markers except DHT (0xC4), JPG (0xC8), DAC (0xCC).
 		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-			if (offset + 7 > bytes.length) return null;
+			if (segmentLength < 7 || offset + 7 > bytes.length) return null;
 			const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
 			const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
 			if (width === 0 || height === 0) return null;
