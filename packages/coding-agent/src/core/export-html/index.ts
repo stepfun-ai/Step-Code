@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
 import { getCurrentThemeName, getResolvedThemeColors, getThemeExportColors } from "../../theme/theme.ts";
-import { normalizePath, resolvePath } from "../../utils/paths.ts";
+import { canonicalizePath, normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { SessionManager } from "../session-manager.ts";
@@ -189,18 +189,20 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 	const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
 	// Build the CSS with theme variables injected
+	// Function replacements insert the values verbatim; a string replacement would let a
+	// `$&`/`$`/`$'`/`$$` sequence in the injected content be reinterpreted by String.prototype.replace.
 	const css = templateCss
-		.replace("{{THEME_VARS}}", themeVars)
-		.replace("{{BODY_BG}}", bodyBg)
-		.replace("{{CONTAINER_BG}}", containerBg)
-		.replace("{{INFO_BG}}", infoBg);
+		.replace("{{THEME_VARS}}", () => themeVars)
+		.replace("{{BODY_BG}}", () => bodyBg)
+		.replace("{{CONTAINER_BG}}", () => containerBg)
+		.replace("{{INFO_BG}}", () => infoBg);
 
 	return template
-		.replace("{{CSS}}", css)
-		.replace("{{JS}}", templateJs)
-		.replace("{{SESSION_DATA}}", sessionDataBase64)
-		.replace("{{MARKED_JS}}", markedJs)
-		.replace("{{HIGHLIGHT_JS}}", hljsJs);
+		.replace("{{CSS}}", () => css)
+		.replace("{{JS}}", () => templateJs)
+		.replace("{{SESSION_DATA}}", () => sessionDataBase64)
+		.replace("{{MARKED_JS}}", () => markedJs)
+		.replace("{{HIGHLIGHT_JS}}", () => hljsJs);
 }
 
 /** Tools rendered directly by the HTML template (not pre-rendered via TUI→ANSI→HTML pipeline) */
@@ -259,6 +261,18 @@ function preRenderCustomTools(
 }
 
 /**
+ * Refuse to export a session on top of its own source file. The output path may be
+ * relative (normalizePath keeps it as given) while the input path is absolute, so
+ * canonicalize both before comparing — realpath collapses symlinks, and a not-yet-created
+ * output falls back to its resolved path so distinct targets never match.
+ */
+function assertOutputIsNotInput(outputPath: string, resolvedInputPath: string): void {
+	if (canonicalizePath(resolvePath(outputPath)) === canonicalizePath(resolvedInputPath)) {
+		throw new Error(`Refusing to overwrite the input session file: ${resolvedInputPath}`);
+	}
+}
+
+/**
  * Export session to HTML using SessionManager and AgentState.
  * Used by TUI's /export command.
  */
@@ -306,6 +320,7 @@ export async function exportSessionToHtml(
 		outputPath = `${APP_NAME}-session-${sessionBasename}.html`;
 	}
 
+	assertOutputIsNotInput(outputPath, resolvePath(sessionFile));
 	writeFileSync(outputPath, html, "utf8");
 	return outputPath;
 }
@@ -340,6 +355,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 		outputPath = `${APP_NAME}-session-${inputBasename}.html`;
 	}
 
+	assertOutputIsNotInput(outputPath, resolvedInputPath);
 	writeFileSync(outputPath, html, "utf8");
 	return outputPath;
 }
