@@ -34,6 +34,41 @@ function makeWebpVp8x(width: number, height: number): Uint8Array {
 	return buf;
 }
 
+// Handcrafted RIFF/WEBP lossy (VP8 ): 0x9d 0x01 0x2a start code then 14-bit LE dims.
+function makeWebpVp8(width: number, height: number): Uint8Array {
+	const buf = Buffer.alloc(30);
+	buf.write("RIFF", 0, "ascii");
+	buf.writeUInt32LE(22, 4);
+	buf.write("WEBP", 8, "ascii");
+	buf.write("VP8 ", 12, "ascii");
+	buf.writeUInt32LE(10, 16);
+	buf[23] = 0x9d;
+	buf[24] = 0x01;
+	buf[25] = 0x2a;
+	buf.writeUInt16LE(width & 0x3fff, 26);
+	buf.writeUInt16LE(height & 0x3fff, 28);
+	return buf;
+}
+
+// Handcrafted RIFF/WEBP lossless (VP8L): 0x2f signature then 14-bit width-1/height-1
+// packed across 4 bytes (width low8 | width high6 + height low2 | height mid8 | height high4).
+function makeWebpVp8l(width: number, height: number): Uint8Array {
+	const buf = Buffer.alloc(30);
+	buf.write("RIFF", 0, "ascii");
+	buf.writeUInt32LE(22, 4);
+	buf.write("WEBP", 8, "ascii");
+	buf.write("VP8L", 12, "ascii");
+	buf.writeUInt32LE(10, 16);
+	buf[20] = 0x2f;
+	const w = width - 1;
+	const h = height - 1;
+	buf[21] = w & 0xff;
+	buf[22] = ((w >> 8) & 0x3f) | ((h & 0x03) << 6);
+	buf[23] = (h >> 2) & 0xff;
+	buf[24] = (h >> 10) & 0x0f;
+	return buf;
+}
+
 function b64(base64: string): Uint8Array {
 	return new Uint8Array(Buffer.from(base64, "base64"));
 }
@@ -53,6 +88,14 @@ describe("readImageDimensions", () => {
 
 	it("reads WebP VP8X extended dimensions", () => {
 		expect(readImageDimensions(makeWebpVp8x(1148, 642))).toEqual({ width: 1148, height: 642 });
+	});
+
+	it("reads WebP VP8 (lossy) dimensions", () => {
+		expect(readImageDimensions(makeWebpVp8(300, 430))).toEqual({ width: 300, height: 430 });
+	});
+
+	it("reads WebP VP8L (lossless) dimensions across the packed byte boundary", () => {
+		expect(readImageDimensions(makeWebpVp8l(300, 430))).toEqual({ width: 300, height: 430 });
 	});
 
 	it("returns null for unrecognized bytes", () => {

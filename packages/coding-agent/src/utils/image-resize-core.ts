@@ -5,7 +5,7 @@ import { loadPhoton } from "./photon.ts";
 export interface ImageResizeOptions {
 	maxWidth?: number; // Default: 2000
 	maxHeight?: number; // Default: 2000
-	maxBytes?: number; // Default: 4.5MB of base64 payload (below Anthropic's 5MB limit)
+	maxBytes?: number; // Default: 100MB of base64 payload (see DEFAULT_MAX_BYTES)
 	jpegQuality?: number; // Default: 80
 }
 
@@ -19,8 +19,11 @@ export interface ResizedImage {
 	wasResized: boolean;
 }
 
-// 4.5MB of base64 payload. Provides headroom below Anthropic's 5MB limit.
-const DEFAULT_MAX_BYTES = 4.5 * 1024 * 1024;
+// 100MB of base64 payload. The Step backend accepts far larger inline images than
+// Anthropic's 5MB cap, so images within the pixel budget are sent without byte-driven
+// re-compression. Callers targeting a 5MB-capped dialect (e.g. anthropic) should pass a
+// smaller maxBytes explicitly.
+const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 
 const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
 	maxWidth: 2000,
