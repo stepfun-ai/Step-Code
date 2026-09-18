@@ -1,7 +1,7 @@
 /**
  * Ultraloop opt-in for the workflow tool, mirroring Claude Code's opt-in surface.
- * STEP_ENABLE_WORKFLOW gates tool REGISTRATION at process start; this extension
- * gates USAGE via two independent signals — either grants consent:
+ * Tool REGISTRATION is on by default (STEP_DISABLE_WORKFLOW turns it off); this
+ * extension gates USAGE via two independent signals — either grants consent:
  *
  *   1) per-turn signal: the keyword "ultraloop" (or Claude Code's spelling
  *      "ultracode") or an explicit trigger phrase in the current message.

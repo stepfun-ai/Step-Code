@@ -16,25 +16,36 @@ afterEach(() => {
 });
 
 describe("resolveWorkflowRegistration", () => {
-	test("reports why registration was refused", () => {
+	test("registers by default and reports why registration was refused", () => {
 		vi.stubEnv("STEP_ENABLE_WORKFLOW", "");
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
-		expect(resolveWorkflowRegistration({}, true)).toEqual({ enabled: false, reason: "not-enabled" });
+		// Default-on (Claude Code parity): no option and no env var registers.
+		expect(resolveWorkflowRegistration({}, true)).toEqual({ enabled: true });
+		expect(resolveWorkflowRegistration({ enabled: true }, true)).toEqual({ enabled: true });
 
+		// Embedder opt-out; STEP_ENABLE_WORKFLOW is no longer read and cannot override it.
+		expect(resolveWorkflowRegistration({ enabled: false }, true)).toEqual({
+			enabled: false,
+			reason: "not-enabled",
+		});
+		vi.stubEnv("STEP_ENABLE_WORKFLOW", "1");
+		expect(resolveWorkflowRegistration({ enabled: false }, true)).toEqual({
+			enabled: false,
+			reason: "not-enabled",
+		});
+
+		// The env kill switch beats both the default and an explicit enable.
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "1");
+		expect(resolveWorkflowRegistration({}, true)).toEqual({ enabled: false, reason: "disabled-by-env" });
 		expect(resolveWorkflowRegistration({ enabled: true }, true)).toEqual({
 			enabled: false,
 			reason: "disabled-by-env",
 		});
 
+		// The default-on path still requires a VM (or an injected executor standing in for it).
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
-		expect(resolveWorkflowRegistration({ enabled: true }, false)).toEqual({
-			enabled: false,
-			reason: "vm-unavailable",
-		});
-		// An injected executor stands in for the native module.
-		expect(resolveWorkflowRegistration({ enabled: true, vmExecutor: () => {} }, false)).toEqual({ enabled: true });
-		expect(resolveWorkflowRegistration({ enabled: true }, true)).toEqual({ enabled: true });
+		expect(resolveWorkflowRegistration({}, false)).toEqual({ enabled: false, reason: "vm-unavailable" });
+		expect(resolveWorkflowRegistration({ vmExecutor: () => {} }, false)).toEqual({ enabled: true });
 	});
 });
 
@@ -58,10 +69,10 @@ describe("workflow registration warning", () => {
 		return { api, tools, handlers, notifications, ctx };
 	}
 
-	test("an explicitly enabled workflow with no VM warns once at session start", () => {
+	test("a default-registered workflow with no VM warns once at session start", () => {
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 		const h = harness();
-		createStepWorkflowExtension({ enabled: true })(h.api);
+		createStepWorkflowExtension({})(h.api);
 		expect(h.tools.size).toBe(0);
 		for (const handler of h.handlers.get("session_start") ?? []) handler({ type: "session_start" }, h.ctx);
 		for (const handler of h.handlers.get("session_start") ?? []) handler({ type: "session_start" }, h.ctx);
@@ -69,20 +80,24 @@ describe("workflow registration warning", () => {
 		expect(h.notifications[0]?.message).toContain("isolated-vm");
 	});
 
-	test("a workflow that was never enabled stays silent", () => {
-		vi.stubEnv("STEP_ENABLE_WORKFLOW", "");
+	test("a workflow turned off by option or env registers nothing and stays silent", () => {
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
-		const h = harness();
-		createStepWorkflowExtension({})(h.api);
-		expect(h.tools.size).toBe(0);
-		expect(h.handlers.size).toBe(0);
+		const optedOut = harness();
+		createStepWorkflowExtension({ enabled: false })(optedOut.api);
+		expect(optedOut.tools.size).toBe(0);
+		expect(optedOut.handlers.size).toBe(0);
+
+		vi.stubEnv("STEP_DISABLE_WORKFLOW", "1");
+		const envOff = harness();
+		createStepWorkflowExtension({})(envOff.api);
+		expect(envOff.tools.size).toBe(0);
+		expect(envOff.handlers.size).toBe(0);
 	});
 
-	test("an injected vmExecutor keeps registration working without the native module", () => {
+	test("an injected vmExecutor keeps default registration working without the native module", () => {
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 		const h = harness();
 		createStepWorkflowExtension({
-			enabled: true,
 			vmExecutor: async () => ({ value: null, meta: {} }),
 		})(h.api);
 		expect(h.tools.has("workflow")).toBe(true);

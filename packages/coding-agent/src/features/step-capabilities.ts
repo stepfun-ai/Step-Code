@@ -14,7 +14,7 @@ export interface StepCapabilitiesExtensionOptions {
 	subagent?: StepSubagentExtensionOptions;
 	/** Optional process reporter; capability adapters never own delivery. */
 	telemetry?: StepTelemetryReporter;
-	/** Workflow is opt-in because its native isolation dependency is optional. */
+	/** Workflow registers by default (Claude Code parity); `enabled: false` or STEP_DISABLE_WORKFLOW=1 turns it off. */
 	workflow?: StepWorkflowExtensionOptions;
 }
 
