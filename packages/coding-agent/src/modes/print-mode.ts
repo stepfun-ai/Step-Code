@@ -199,25 +199,27 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			await session.prompt(message);
 		}
 
-		if (mode === "text") {
-			for (const block of terminatingBlocks) {
-				console.error(`Blocked ${block.toolName}: ${block.reason}`);
-			}
-			if (terminatingBlocks.length > 0) exitCode = 1;
+		// Exit-code determination applies to both text and json modes so a failed
+		// request or a hook-terminated run reports a non-zero status consistently;
+		// only the assistant-text stdout print is text-mode specific. Diagnostics go
+		// to stderr, keeping the json event stream on stdout parseable.
+		for (const block of terminatingBlocks) {
+			console.error(`Blocked ${block.toolName}: ${block.reason}`);
+		}
+		if (terminatingBlocks.length > 0) exitCode = 1;
 
-			const state = session.state;
-			const lastMessage = state.messages[state.messages.length - 1];
+		const state = session.state;
+		const lastMessage = state.messages[state.messages.length - 1];
 
-			if (lastMessage?.role === "assistant") {
-				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-					exitCode = 1;
-				} else {
-					for (const content of assistantMsg.content) {
-						if (content.type === "text") {
-							writeRawStdout(`${content.text}\n`);
-						}
+		if (lastMessage?.role === "assistant") {
+			const assistantMsg = lastMessage as AssistantMessage;
+			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+				console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+				exitCode = 1;
+			} else if (mode === "text") {
+				for (const content of assistantMsg.content) {
+					if (content.type === "text") {
+						writeRawStdout(`${content.text}\n`);
 					}
 				}
 			}

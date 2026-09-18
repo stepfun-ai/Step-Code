@@ -17,6 +17,7 @@ type FakeSession = {
 	extensionRunner: FakeExtensionRunner;
 	bindExtensions: ReturnType<typeof vi.fn>;
 	subscribe: ReturnType<typeof vi.fn>;
+	getUnknownToolSelectors: () => { tools: string[]; excludeTools: string[]; knownTools: string[] };
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
 	emitToListeners: (event: unknown) => void;
@@ -75,6 +76,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 			listeners.push(listener);
 			return () => {};
 		}),
+		getUnknownToolSelectors: () => ({ tools: [], excludeTools: [], knownTools: [] }),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
 		emitToListeners: (event: unknown) => {
@@ -225,5 +227,22 @@ describe("runPrintMode", () => {
 		expect(errorSpy).toHaveBeenCalledWith("provider failure");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	// Feedback: json mode returned exit code 0 on a failed request even though the
+	// stream carried a stopReason:error message. Exit code must match text mode.
+	it("returns non-zero on assistant error in json mode", async () => {
+		const runtimeHost = createRuntimeHost(
+			createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" }),
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "json",
+			initialMessage: "OK",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalledWith("provider failure");
 	});
 });
