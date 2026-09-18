@@ -393,6 +393,23 @@ By default step sends per-tool `eager_input_streaming: true`. If a proxy or Anth
 
 Some Anthropic models require adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) instead of the legacy budget-based thinking payload. Built-in models set this automatically. For custom providers or aliases that route to those models, set `forceAdaptiveThinking` to `true`.
 
+A model injected through `STEPCLI_CONFIG_PATH` inherits `forceAdaptiveThinking` and the model's `thinkingLevelMap` from the built-in catalog when its wire model id matches a catalog entry and the wire dialect is `anthropic-messages`; an alias the catalog does not know is left untouched. To opt such an alias in, state the flag in the injected config:
+
+```json
+{
+  "providers": {
+    "stepcode-anthropic": {
+      "api": "anthropic-messages",
+      "models": [{ "id": "deepseek-v4-flash", "compat": { "forceAdaptiveThinking": true } }]
+    }
+  }
+}
+```
+
+An injected entry's own `compat` block is layered over the inherited value, so a key it states wins and its siblings are kept. Every boolean `compat` key on this page is read there; `allowedFallbackModels` is not, because a non-empty value makes step request the server-side fallback beta. `compat` is read only for the `anthropic-messages` dialect.
+
+`supportsTemperature`, `supportsStrictTools`, and `allowedFallbackModels` are not *inherited* from the catalog, because they change request shape on an endpoint that is not first-party Anthropic; state them explicitly when the injected endpoint accepts them.
+
 Some Anthropic-compatible providers emit thinking blocks with empty signatures and still expect them on replay. Set `allowEmptySignature` to `true` only for those providers; real Anthropic rejects empty thinking signatures.
 
 Built-in Anthropic models enable `supportsStrictTools` in their model metadata. Custom Anthropic-compatible models must set it to `true` when their endpoint accepts strict JSON-schema tool definitions.
@@ -428,7 +445,7 @@ Built-in Anthropic models enable `supportsStrictTools` in their model metadata. 
 | `supportsLongCacheRetention` | Whether the provider accepts Anthropic long cache retention (`cache_control.ttl: "1h"`) when cache retention is `long`. Default: `true`. |
 | `sendSessionAffinityHeaders` | Whether to send `x-session-affinity` from the session id when caching is enabled. Default: auto-detected for known providers. |
 | `supportsCacheControlOnTools` | Whether the provider accepts Anthropic-style `cache_control` markers on tool definitions. Default: `true`. |
-| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Built-in adaptive models set this automatically. Default: `false`. |
+| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Built-in adaptive models set this automatically. A model injected through `STEPCLI_CONFIG_PATH` inherits it when its wire model id matches a built-in catalog entry. Default: `false`. |
 | `allowEmptySignature` | Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: `false`. |
 | `supportsStrictTools` | Whether the provider accepts strict JSON-schema tool definitions. Default: `false`; built-in Anthropic models enable it in generated metadata. |
 

@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getBuiltinModels } from "@step-harness/providers/providers/all";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { ExtensionAPI } from "../src/core/extensions/types.ts";
+import type { ExtensionAPI, ProviderModelConfig } from "../src/core/extensions/types.ts";
 import { createStepSettingsManager } from "../src/step/settings-manager.ts";
 import {
 	applyStepCodeConfigDefaults,
@@ -288,5 +289,122 @@ describe("StepCode config compatibility", () => {
 		expect(inputOf("opted-out")).toEqual(["text"]);
 		expect(inputOf("declared")).toEqual(["text", "image"]);
 		expect(inputOf("explicit")).toEqual(["text"]);
+	});
+});
+
+describe("StepCode config built-in catalog metadata", () => {
+	function builtinModel(modelId: string) {
+		return getBuiltinModels("anthropic").find((model) => model.id === modelId);
+	}
+
+	async function loadAnthropicModels(models: unknown[]): Promise<Record<string, ProviderModelConfig>> {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-builtin-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				baseUrl: "https://models-proxy.example/v1",
+				providers: { "stepcode-anthropic": { api: "anthropic-messages", models } },
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const byId = new Map<string, ProviderModelConfig>();
+		for (const model of config?.providers[0]?.config.models ?? []) {
+			byId.set(model.id, model);
+		}
+		return Object.fromEntries(byId);
+	}
+
+	test("inherits adaptive thinking metadata for a catalogued model", async () => {
+		const builtin = builtinModel("claude-opus-5");
+		expect(builtin?.compat?.forceAdaptiveThinking).toBe(true);
+		const models = await loadAnthropicModels([{ id: "claude-opus-5" }]);
+		expect(models["claude-opus-5"]).toMatchObject({ compat: { forceAdaptiveThinking: true } });
+		expect(models["claude-opus-5"]).toMatchObject({ thinkingLevelMap: builtin?.thinkingLevelMap });
+	});
+
+	test("inherits an unsupported `off` level from the catalog", async () => {
+		const models = await loadAnthropicModels([{ id: "claude-fable-5" }]);
+		expect(models["claude-fable-5"]).toMatchObject({
+			compat: { forceAdaptiveThinking: true },
+			thinkingLevelMap: { off: null },
+		});
+	});
+
+	test("leaves an unknown alias untouched", async () => {
+		const models = await loadAnthropicModels([{ id: "water18-0910-for-step" }]);
+		expect(models["water18-0910-for-step"]).not.toHaveProperty("compat");
+		expect(models["water18-0910-for-step"]).not.toHaveProperty("thinkingLevelMap");
+	});
+
+	test("lets the StepCode config override the inherited value", async () => {
+		const models = await loadAnthropicModels([{ id: "claude-opus-5", compat: { forceAdaptiveThinking: false } }]);
+		expect(models["claude-opus-5"]).toMatchObject({ compat: { forceAdaptiveThinking: false } });
+	});
+
+	test("declares the flag for an alias the catalog does not know", async () => {
+		const models = await loadAnthropicModels([{ id: "deepseek-v4-flash", compat: { forceAdaptiveThinking: true } }]);
+		expect(models["deepseek-v4-flash"]).toMatchObject({ compat: { forceAdaptiveThinking: true } });
+	});
+
+	test("does not inherit Anthropic metadata for another wire dialect", async () => {
+		const models = await loadAnthropicModels([{ id: "claude-opus-5", api: "openai-completions" }]);
+		expect(models["claude-opus-5"]).not.toHaveProperty("compat");
+		expect(models["claude-opus-5"]).not.toHaveProperty("thinkingLevelMap");
+	});
+
+	test("keeps an explicit StepCode thinking level map over the inherited one", async () => {
+		const models = await loadAnthropicModels([
+			{ id: "claude-opus-5", thinkingLevelMap: { off: "none", medium: "medium" } },
+		]);
+		expect(models["claude-opus-5"]).toMatchObject({
+			compat: { forceAdaptiveThinking: true },
+			thinkingLevelMap: { off: "none", medium: "medium" },
+		});
+	});
+
+	test("keeps sibling compat keys next to the inherited flag", async () => {
+		const models = await loadAnthropicModels([
+			{ id: "claude-opus-5", compat: { allowEmptySignature: true, supportsTemperature: false } },
+		]);
+		expect(models["claude-opus-5"]?.compat).toEqual({
+			forceAdaptiveThinking: true,
+			allowEmptySignature: true,
+			supportsTemperature: false,
+		});
+	});
+
+	test("keeps sibling compat keys for an alias the catalog does not know", async () => {
+		const models = await loadAnthropicModels([{ id: "deepseek-v4-flash", compat: { supportsStrictTools: true } }]);
+		expect(models["deepseek-v4-flash"]?.compat).toEqual({ supportsStrictTools: true });
+	});
+
+	test("ignores a non-boolean compat flag without clobbering the inherited value", async () => {
+		const models = await loadAnthropicModels([{ id: "claude-opus-5", compat: { forceAdaptiveThinking: "yes" } }]);
+		expect(models["claude-opus-5"]?.compat).toEqual({ forceAdaptiveThinking: true });
+	});
+
+	test("does not carry `allowedFallbackModels` from the StepCode config", async () => {
+		const models = await loadAnthropicModels([
+			{
+				id: "claude-opus-5",
+				compat: {
+					allowedFallbackModels: [
+						{ provider: "anthropic", model: "claude-opus-4-8", cost: { input: 5, output: 25 } },
+					],
+				},
+			},
+		]);
+		expect(models["claude-opus-5"]?.compat).toEqual({ forceAdaptiveThinking: true });
+	});
+
+	test("hands out a copy of the inherited thinking level map", async () => {
+		const builtin = builtinModel("claude-opus-5");
+		const models = await loadAnthropicModels([{ id: "claude-opus-5" }, { id: "claude-opus-5", name: "second" }]);
+		const inherited = models["claude-opus-5"]?.thinkingLevelMap;
+		expect(inherited).toEqual(builtin?.thinkingLevelMap);
+		// The generated catalog is not frozen, so an injected model must not alias it.
+		expect(inherited).not.toBe(builtin?.thinkingLevelMap);
 	});
 });

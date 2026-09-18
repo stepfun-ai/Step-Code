@@ -3,7 +3,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import type { Api } from "@step-harness/providers";
+import type { AnthropicMessagesCompat, Api, Model } from "@step-harness/providers";
+import { getBuiltinModels, getBuiltinProviders } from "@step-harness/providers/providers/all";
 import lockfile from "proper-lockfile";
 import type { ExtensionAPI, InlineExtension, ProviderConfig, ProviderModelConfig } from "../core/extensions/types.ts";
 import { normalizeProviderBaseUrl } from "../core/provider-base-url.ts";
@@ -547,6 +548,42 @@ function normalizeProvider(
 	return { id: providerId, config };
 }
 
+/**
+ * Capability metadata a built-in catalog entry can lend to a StepCode alias.
+ *
+ * StepCode supplies its own endpoint and token limits, so inheritance is limited
+ * to the thinking contract — the one thing an alias silently gets wrong and
+ * cannot recover from, because the upstream rejects the request outright.
+ * `supportsTemperature`, `supportsStrictTools` and `allowedFallbackModels` are
+ * deliberately not inherited: they change request shape on an endpoint whose
+ * behaviour differs from first-party Anthropic, and getting them wrong degrades
+ * a request rather than failing it. A StepCode entry can still state any of them
+ * itself; see {@link readAnthropicCompat}.
+ */
+interface BuiltinModelMetadata {
+	readonly forceAdaptiveThinking?: boolean;
+	readonly thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
+}
+
+const BUILTIN_MODEL_METADATA: ReadonlyMap<string, BuiltinModelMetadata> = buildBuiltinModelMetadata();
+
+function buildBuiltinModelMetadata(): ReadonlyMap<string, BuiltinModelMetadata> {
+	const metadata = new Map<string, BuiltinModelMetadata>();
+	for (const provider of getBuiltinProviders()) {
+		for (const model of getBuiltinModels(provider)) {
+			if (model.api !== "anthropic-messages") continue;
+			const compat = model.compat as AnthropicMessagesCompat | undefined;
+			metadata.set(model.id, {
+				...(compat?.forceAdaptiveThinking !== undefined
+					? { forceAdaptiveThinking: compat.forceAdaptiveThinking }
+					: {}),
+				...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+			});
+		}
+	}
+	return metadata;
+}
+
 function normalizeModel(
 	model: JsonObject | undefined,
 	provider: JsonObject,
@@ -575,7 +612,32 @@ function normalizeModel(
 	const name = readString(model.name) ?? alias ?? wireModel;
 	const baseUrl = normalizeBaseUrl(sharedBaseUrl ?? readString(model.baseUrl) ?? readString(provider.baseUrl), api);
 	if (!baseUrl) return undefined;
+	// A StepCode alias of a model the built-in catalog already describes must keep
+	// that model's thinking contract. Without this, an alias such as
+	// `stepcode-anthropic/claude-opus-5` loses `forceAdaptiveThinking` and the
+	// adapter falls back to the legacy `thinking.type: "enabled"` payload, which
+	// Anthropic-compatible upstreams that require adaptive thinking reject with a
+	// 400. Matching is by wire model id *and* api so an alias declared with a
+	// different wire dialect never inherits Anthropic-only metadata.
+	const builtin = api === "anthropic-messages" ? BUILTIN_MODEL_METADATA.get(wireModel) : undefined;
 	const thinkingLevelMap = readThinkingLevelMap(model.thinkingLevelMap);
+	// Copy the inherited map before handing it out. It is the generated catalog's
+	// own object and the catalog is not frozen, so sharing it would let a later
+	// in-place edit to one StepCode model's levels change the built-in entry for
+	// the rest of the process.
+	const effectiveThinkingLevelMap =
+		thinkingLevelMap ?? (builtin?.thinkingLevelMap ? { ...builtin.thinkingLevelMap } : undefined);
+	// Layer the StepCode entry's own `compat` block over the inherited value so a
+	// declared key wins and its siblings survive; building the result from
+	// `forceAdaptiveThinking` alone would silently drop every other key the entry
+	// states.
+	const inheritedCompat: AnthropicMessagesCompat | undefined =
+		builtin?.forceAdaptiveThinking !== undefined
+			? { forceAdaptiveThinking: builtin.forceAdaptiveThinking }
+			: undefined;
+	const declaredCompat = api === "anthropic-messages" ? readAnthropicCompat(model.compat) : undefined;
+	const compat: AnthropicMessagesCompat | undefined =
+		inheritedCompat || declaredCompat ? { ...inheritedCompat, ...declaredCompat } : undefined;
 	return {
 		id: wireModel,
 		name,
@@ -586,7 +648,8 @@ function normalizeModel(
 		cost,
 		contextWindow,
 		maxTokens,
-		...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+		...(effectiveThinkingLevelMap ? { thinkingLevelMap: effectiveThinkingLevelMap } : {}),
+		...(compat ? { compat } : {}),
 	};
 }
 
@@ -734,6 +797,37 @@ function readThinkingLevelMap(value: unknown): ProviderModelConfig["thinkingLeve
 		if (typeof entry === "string" || entry === null) result[level] = entry;
 	}
 	return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * Boolean `compat` keys a StepCode entry may state for the Anthropic dialect.
+ *
+ * `allowedFallbackModels` is intentionally absent: it is a typed list rather than
+ * a flag, and a non-empty value makes the adapter request the server-side
+ * fallback beta, which is not something an injected config should switch on
+ * implicitly. Nothing reads `compat` for the OpenAI dialects.
+ */
+const ANTHROPIC_COMPAT_FLAGS = [
+	"supportsEagerToolInputStreaming",
+	"supportsLongCacheRetention",
+	"sendSessionAffinityHeaders",
+	"supportsCacheControlOnTools",
+	"supportsTemperature",
+	"forceAdaptiveThinking",
+	"allowEmptySignature",
+	"supportsStrictTools",
+	"supportsToolReferences",
+] as const satisfies readonly (keyof AnthropicMessagesCompat)[];
+
+function readAnthropicCompat(value: unknown): AnthropicMessagesCompat | undefined {
+	const raw = asObject(value);
+	if (!raw) return undefined;
+	const compat: { [K in (typeof ANTHROPIC_COMPAT_FLAGS)[number]]?: boolean } = {};
+	for (const flag of ANTHROPIC_COMPAT_FLAGS) {
+		const declared = readBoolean(raw[flag]);
+		if (declared !== undefined) compat[flag] = declared;
+	}
+	return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
 function firstSupportedApi(value: unknown): string | undefined {
