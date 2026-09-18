@@ -174,6 +174,12 @@ When reviewing PRs:
 - Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
 - If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
 
+When opening a merge request (MR):
+
+- Title uses the same `{feat,fix,docs}[(scope)]: <summary>` convention as commits.
+- Write the description in the repository house style: Chinese, technical, concise, with `##` sections in this order — `## 背景` (the problem; use `## 背景与判据` when the fix is selective and you must state the criterion for what to fix vs leave), `## 实现` / `## 修复` (grouped; numbered **bold** sub-headers, affected files in backticks, a "修复前:" contrast line where it clarifies), `## 验证` (tests added, pass counts, `npm run check` status, exec-plan landed), and an optional `## 边界` (what this version intentionally does not do). End AI-authored descriptions with the AI-generated attribution line.
+- Write the body to a temp file and pass it with `glab mr create --description "$(cat <file>)"` (or `glab mr update <id> --description ...`); never a fragile inline multi-line string.
+
 When creating issues:
 
 - Add `pkg:*` labels for affected packages (`pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:tui`); use all that apply.
