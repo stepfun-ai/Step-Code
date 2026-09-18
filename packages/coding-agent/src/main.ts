@@ -981,6 +981,18 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	// A bare --resume opens the interactive session selector (createSessionManager checks
+	// parsed.resume before parsed.continue). Without a terminal it can never receive a
+	// selection and would hang until killed, so reject it before the picker opens.
+	// --resume <path|id> sets parsed.session instead, so non-interactive resume-by-id still works.
+	if (parsed.resume && appMode !== "interactive") {
+		console.error(
+			chalk.red(
+				"Error: --resume opens an interactive session selector and needs a terminal. Pass --resume <path|id> to resume a specific session, or --continue to resume the most recent one.",
+			),
+		);
+		return { kind: "completed", exitCode: 1 };
+	}
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
