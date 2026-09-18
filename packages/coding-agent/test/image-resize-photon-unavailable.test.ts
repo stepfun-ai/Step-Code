@@ -92,3 +92,71 @@ describe("resizeImageInProcess without Photon", () => {
 		expect(result).toBeNull();
 	});
 });
+
+type PhotonModule = NonNullable<Awaited<ReturnType<typeof loadPhoton>>>;
+
+// Photon loads fine but rejects this specific image (container variants its
+// decoder does not support, corrupt metadata). The throw must land in the
+// resize path's catch block, not the module-missing branch.
+function photonThatThrowsOnDecode(decodeSpy: () => never): PhotonModule {
+	return {
+		PhotonImage: {
+			new_from_byteslice: decodeSpy,
+		},
+	} as unknown as PhotonModule;
+}
+
+describe("resizeImageInProcess when Photon throws on decode", () => {
+	const decodeSpy = vi.fn<() => never>(() => {
+		throw new Error("unsupported image container");
+	});
+
+	beforeEach(() => {
+		decodeSpy.mockClear();
+		vi.mocked(loadPhoton).mockReset();
+		vi.mocked(loadPhoton).mockResolvedValue(photonThatThrowsOnDecode(decodeSpy));
+	});
+
+	afterEach(() => {
+		vi.mocked(loadPhoton).mockReset();
+	});
+
+	it("passes an in-budget original through untouched when decoding throws", async () => {
+		const bytes = b64(TINY_PNG_2x2);
+		const result = await resizeImageInProcess(bytes, "image/png");
+
+		expect(decodeSpy).toHaveBeenCalledTimes(1);
+		expect(result).not.toBeNull();
+		expect(result!.wasResized).toBe(false);
+		expect(result!.mimeType).toBe("image/png");
+		expect(result!.originalWidth).toBe(2);
+		expect(result!.originalHeight).toBe(2);
+		expect(result!.width).toBe(2);
+		expect(result!.height).toBe(2);
+		expect(result!.data).toBe(TINY_PNG_2x2);
+	});
+
+	it("still refuses an oversize image when decoding throws", async () => {
+		const oversize = makeOversizePngHeader(4000, 4000);
+		const result = await resizeImageInProcess(oversize, "image/png");
+
+		expect(decodeSpy).toHaveBeenCalledTimes(1);
+		expect(result).toBeNull();
+	});
+
+	it("still refuses an image whose base64 payload blows the byte budget when decoding throws", async () => {
+		const bytes = b64(TINY_PNG_2x2);
+		const result = await resizeImageInProcess(bytes, "image/png", { maxBytes: 1 });
+
+		expect(decodeSpy).toHaveBeenCalledTimes(1);
+		expect(result).toBeNull();
+	});
+
+	it("still refuses data with an unrecognized image container when decoding throws", async () => {
+		const junk = new Uint8Array([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]);
+		const result = await resizeImageInProcess(junk, "image/png");
+
+		expect(decodeSpy).toHaveBeenCalledTimes(1);
+		expect(result).toBeNull();
+	});
+});
