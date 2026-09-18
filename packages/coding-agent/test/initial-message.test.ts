@@ -45,4 +45,40 @@ describe("buildInitialMessage", () => {
 		expect(result.initialMessage).toBe("stdin\nfile\nExplain it");
 		expect(parsed.messages).toEqual(["Second message"]);
 	});
+
+	// Feedback: piped stdin without a trailing newline used to be concatenated
+	// directly onto the CLI message ("STDIN_PARTCLI_PART"). Parts must stay
+	// separated by a newline.
+	test("inserts a newline between stdin without a trailing newline and the CLI message", () => {
+		const parsed = createArgs(["CLI_PART"]);
+		const result = buildInitialMessage({
+			parsed,
+			stdinContent: "STDIN_PART",
+		});
+
+		expect(result.initialMessage).toBe("STDIN_PART\nCLI_PART");
+	});
+
+	// Feedback: stdin original formatting (leading/trailing whitespace) must be
+	// preserved, with a single newline before the CLI message. Uses stdin with no
+	// trailing newline so it also fails on the old join("") behavior.
+	test("preserves stdin whitespace and separates it from the CLI message with one newline", () => {
+		const parsed = createArgs(["CLI_PART"]);
+		const result = buildInitialMessage({
+			parsed,
+			stdinContent: "  STDIN_PART  ",
+		});
+
+		expect(result.initialMessage).toBe("  STDIN_PART  \nCLI_PART");
+	});
+
+	test("does not add a blank line when a part already ends with a newline", () => {
+		const parsed = createArgs(["Explain it"]);
+		const result = buildInitialMessage({
+			parsed,
+			fileText: '<file name="/abs/notes.txt">\nhello\n</file>\n',
+		});
+
+		expect(result.initialMessage).toBe('<file name="/abs/notes.txt">\nhello\n</file>\nExplain it');
+	});
 });

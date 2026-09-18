@@ -243,7 +243,12 @@ function processProxyEvent(
 ): AssistantMessageEvent | undefined {
 	switch (proxyEvent.type) {
 		case "start":
-			return { type: "start", partial };
+			// `start` marks an empty initial message; the shared `partial` is mutated
+			// in place by the deltas that follow, so give the start event its own
+			// empty content array rather than aliasing the live one (matches the
+			// provider stream contract; prevents message_start from serializing
+			// already-streamed content on the proxy transport).
+			return { type: "start", partial: { ...partial, content: [] } };
 
 		case "text_start":
 			partial.content[proxyEvent.contentIndex] = { type: "text", text: "" };

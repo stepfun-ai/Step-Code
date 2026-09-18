@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setCapabilityOverrides } from "@step-harness/pi-tui";
 import { type ImageContent, modelsAreEqual } from "@step-harness/providers";
+import { STEP_PROVIDER_ID } from "@step-harness/providers/step-provider";
 import chalk from "chalk";
 import { type Args, type Mode, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import {
@@ -40,6 +41,7 @@ import {
 	expandTildePath,
 	getAgentDir,
 	getPackageDir,
+	STEP_ENTRYPOINT,
 	VERSION,
 } from "./config.ts";
 import type { AgentSession } from "./core/agent-session.ts";
@@ -114,7 +116,7 @@ const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP
  * Read all content from piped stdin.
  * Returns undefined if stdin is a TTY (interactive terminal).
  */
-async function readPipedStdin(): Promise<string | undefined> {
+export async function readPipedStdin(): Promise<string | undefined> {
 	// If stdin is a TTY, we're running interactively - don't read stdin
 	if (process.stdin.isTTY) {
 		return undefined;
@@ -127,7 +129,10 @@ async function readPipedStdin(): Promise<string | undefined> {
 			data += chunk;
 		});
 		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
+			// Preserve the piped content verbatim (leading/trailing whitespace and
+			// newlines are meaningful to the model); trim only to decide whether the
+			// pipe was effectively empty and should be treated as absent.
+			resolve(data.trim().length > 0 ? data : undefined);
 		});
 		process.stdin.resume();
 	});
@@ -770,6 +775,7 @@ export interface MainOptions {
 		| "stepLogin"
 		| "stepLogout"
 		| "stepMcpImport"
+		| "stepThemePrompt"
 		| "onStartup"
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */
@@ -1187,6 +1193,20 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		// The Step catalog is discovered from `{base}/v1/models` and has no built-in
+		// baseline. When a Step credential is configured, refresh it from the network
+		// before resolving the initial model, so startup finds the account's models
+		// instead of reporting "no models available". Best-effort and bounded.
+		if (STEP_ENTRYPOINT && modelRuntime.getProviderAuthStatus(STEP_PROVIDER_ID).configured) {
+			await modelRuntime
+				.refresh({
+					allowNetwork: true,
+					force: true,
+					providers: [STEP_PROVIDER_ID],
+					signal: AbortSignal.timeout(15_000),
+				})
+				.catch(() => {});
+		}
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
@@ -1299,6 +1319,22 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 
 	if (parsed.listModels !== undefined) {
 		reportDiagnostics(startupSettingsDiagnostics);
+		// The one-shot model listing is otherwise cache-only. On the Step
+		// entrypoint, when a Step credential is configured, refresh the Step
+		// catalog from the network first so it lists the account's real usable
+		// models (discovered from `{base}/v1/models`) instead of the built-in
+		// baseline. Skipped when logged out so listing stays offline. Best-effort
+		// and bounded; on failure the cached/baseline list is shown.
+		if (STEP_ENTRYPOINT && modelRuntime.getProviderAuthStatus(STEP_PROVIDER_ID).configured) {
+			await modelRuntime
+				.refresh({
+					allowNetwork: true,
+					force: true,
+					providers: [STEP_PROVIDER_ID],
+					signal: AbortSignal.timeout(15_000),
+				})
+				.catch(() => {});
+		}
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRuntime, searchPattern, AbortSignal.timeout(15_000));
 		return { kind: "completed", exitCode: 0 };

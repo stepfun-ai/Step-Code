@@ -89,7 +89,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
@@ -98,7 +98,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			const handler = () => {
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143);
 				});
 			};
 			process.on(signal, handler);
@@ -174,6 +174,23 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 
 		await rebindSession();
 
+		// Extensions have registered by now, so the tool set is final: report any
+		// --tools/--exclude-tools name that matches nothing instead of silently
+		// ignoring it. Warnings go to stderr to keep the text answer and the JSON
+		// event stream on stdout parseable.
+		const unknownSelectors = session.getUnknownToolSelectors();
+		if (unknownSelectors.tools.length > 0 || unknownSelectors.excludeTools.length > 0) {
+			for (const [flag, names] of [
+				["--tools", unknownSelectors.tools],
+				["--exclude-tools", unknownSelectors.excludeTools],
+			] as const) {
+				if (names.length > 0) {
+					console.error(`Warning: ${flag}: unrecognized tool name(s) ignored: ${names.join(", ")}`);
+				}
+			}
+			console.error(`Available tools: ${unknownSelectors.knownTools.join(", ") || "(none)"}`);
+		}
+
 		if (initialMessage) {
 			await session.prompt(initialMessage, { images: initialImages });
 		}
@@ -182,25 +199,27 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			await session.prompt(message);
 		}
 
-		if (mode === "text") {
-			for (const block of terminatingBlocks) {
-				console.error(`Blocked ${block.toolName}: ${block.reason}`);
-			}
-			if (terminatingBlocks.length > 0) exitCode = 1;
+		// Exit-code determination applies to both text and json modes so a failed
+		// request or a hook-terminated run reports a non-zero status consistently;
+		// only the assistant-text stdout print is text-mode specific. Diagnostics go
+		// to stderr, keeping the json event stream on stdout parseable.
+		for (const block of terminatingBlocks) {
+			console.error(`Blocked ${block.toolName}: ${block.reason}`);
+		}
+		if (terminatingBlocks.length > 0) exitCode = 1;
 
-			const state = session.state;
-			const lastMessage = state.messages[state.messages.length - 1];
+		const state = session.state;
+		const lastMessage = state.messages[state.messages.length - 1];
 
-			if (lastMessage?.role === "assistant") {
-				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-					exitCode = 1;
-				} else {
-					for (const content of assistantMsg.content) {
-						if (content.type === "text") {
-							writeRawStdout(`${content.text}\n`);
-						}
+		if (lastMessage?.role === "assistant") {
+			const assistantMsg = lastMessage as AssistantMessage;
+			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+				console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+				exitCode = 1;
+			} else if (mode === "text") {
+				for (const content of assistantMsg.content) {
+					if (content.type === "text") {
+						writeRawStdout(`${content.text}\n`);
 					}
 				}
 			}
@@ -211,6 +230,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
 	} finally {
+		// Sweep any detached background children on the normal/error-return path; the
+		// signal path already sweeps in its handler before process.exit.
+		killTrackedDetachedChildren();
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}

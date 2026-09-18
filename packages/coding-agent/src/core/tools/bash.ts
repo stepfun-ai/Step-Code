@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import type { AgentTool } from "@step-harness/agent-core";
 import { Container, Text, truncateToWidth } from "@step-harness/pi-tui";
-import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../render/keybinding-hints.ts";
 import { truncateToVisualLines } from "../../render/visual-truncate.ts";
@@ -13,6 +12,7 @@ import {
 	getShellEnv,
 	killProcessTree,
 	type ShellConfig,
+	spawnShellChild,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
@@ -99,18 +99,12 @@ export function createLocalShellOperations(
 				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute ${shellName} commands.`);
 			}
 
-			const commandFromStdin = shellConfig.commandTransport === "stdin";
-			const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+			const child = spawnShellChild(shellConfig, command, {
 				cwd,
-				detached: process.platform !== "win32",
 				env: env ?? getShellEnv(agentDir),
-				stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-				windowsHide: true,
+				stdout: "pipe",
+				stderr: "pipe",
 			});
-			if (commandFromStdin) {
-				child.stdin?.on("error", () => {});
-				child.stdin?.end(command);
-			}
 			if (child.pid) trackDetachedChildPid(child.pid);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;

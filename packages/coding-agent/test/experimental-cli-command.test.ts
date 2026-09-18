@@ -38,13 +38,15 @@ describe("experimental CLI commands", () => {
 		});
 	});
 
-	test("leaves experimental-looking existing option values with the existing parser", () => {
-		expect(experimentalCli.parse(["--system-prompt", "--listen", "unix:///tmp/pi.sock"])).toMatchObject({
-			ok: true,
-			command: {
-				command: "pi",
-				options: { systemPrompt: "--listen", messages: ["unix:///tmp/pi.sock"] },
-			},
+	test("hands an experimental-looking existing option value to the existing parser, which now rejects it", () => {
+		// `--system-prompt` is a legacy value option, so the whole token stream is handed to
+		// the existing parser and the experimental `--listen` handler never fires. That parser
+		// now rejects a flag-like value (starts with `-`, no whitespace), so `--listen` is not
+		// swallowed as the prompt; the legacy "requires a value" diagnostic surfaces instead.
+		// (Interception would instead yield ok:true or an "Invalid --listen address" error.)
+		expect(experimentalCli.parse(["--system-prompt", "--listen", "unix:///tmp/pi.sock"])).toEqual({
+			ok: false,
+			errors: ["--system-prompt requires a value"],
 		});
 	});
 

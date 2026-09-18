@@ -124,24 +124,33 @@ export function needsStepLoginBeforeInteractive(input: {
 	return readStepLoginCredential(input.authPath) === undefined;
 }
 
-/** Update the provider endpoint hint used by the Step extension on reload. */
+/**
+ * Update the provider endpoint hints used by the Step extension on reload.
+ *
+ * Both the model endpoint and the developer-center login page follow the stored
+ * profile, so a mainland and an overseas plan never cross regions.
+ */
 export function syncStepLoginProfileEndpoint(
 	authPath: string,
 	env: Record<string, string | undefined> = process.env,
 ): void {
 	const profileId = readStepLoginProfile(authPath);
-	if (!profileId) {
+	const profile = profileId
+		? resolveStepLoginProfiles(env).find((candidate) => candidate.id === profileId)
+		: undefined;
+	if (!profile) {
 		delete env.STEP_LOGIN_PROFILE_API_URL;
+		delete env.STEP_LOGIN_PROFILE_AUTH_URL;
 		return;
 	}
-	const profile = resolveStepLoginProfiles(env).find((candidate) => candidate.id === profileId);
-	if (profile) env.STEP_LOGIN_PROFILE_API_URL = profile.baseUrl;
+	env.STEP_LOGIN_PROFILE_API_URL = profile.baseUrl;
+	env.STEP_LOGIN_PROFILE_AUTH_URL = profile.authBaseUrl;
 }
 
 export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<StepLoginOutcome> {
 	const authPath = options.authPath ?? "auth.json";
 	const profiles = resolveStepLoginProfiles(options.env);
-	const host = options.createHost?.() ?? createStandaloneHost();
+	const host = options.createHost?.() ?? createStandaloneStepHost();
 	// `step login` runs before main() initializes the product theme. Reusing the
 	// configured theme is safe in-session; only initialize when this is the first
 	// renderer in the process.
@@ -273,7 +282,14 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 	}
 }
 
-function createStandaloneHost(): StepLoginHost {
+/**
+ * A screen of its own for a startup flow that runs before the main UI exists.
+ *
+ * `preserveScreen` plus an explicit clear is what keeps these screens from
+ * bleeding into whatever renders next: the login, the MCP import offer and the
+ * theme picker each own the terminal for their turn and hand it back empty.
+ */
+export function createStandaloneStepHost(): StepLoginHost {
 	const ui = new TuiMainScreen(new ProcessTerminal());
 	return {
 		addChild: (child) => ui.addChild(child as Parameters<TUI["addChild"]>[0]),

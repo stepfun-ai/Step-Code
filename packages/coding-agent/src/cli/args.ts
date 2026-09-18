@@ -83,6 +83,93 @@ export function normalizeSessionName(value: string): string | undefined {
 	return name.length > 0 ? name : undefined;
 }
 
+/**
+ * Split a single `@`-prefixed CLI argument into its file token and any trailing
+ * message text, recording both on `result`.
+ *
+ * The file token follows the same rule the interactive editor teaches users
+ * (see packages/tui/src/components/editor.ts `buildDebouncePattern`, which matches
+ * `@(?:"[^"]*|[^\s]*)`): it runs to the first whitespace (JS `\s`, so Unicode-aware —
+ * the same boundary the editor uses), unless it is written as `@"..."`, in which case
+ * the closing quote bounds it and spaces inside are part of the path. The boundary is
+ * deliberately whitespace + the `@"..."` quote ONLY — not the wider autocomplete
+ * `PATH_DELIMITERS` set, which also treats `'` and `=` as boundaries; those are
+ * valid filename characters that must not truncate a path here.
+ *
+ * A bare `@` (or `@` followed only by whitespace, or an empty `@""`) is not a file
+ * reference; the original argument is kept as message text instead.
+ */
+function pushAtFileArg(result: Args, rawArg: string): void {
+	const rest = rawArg.slice(1); // strip leading "@"
+
+	let file: string;
+	let message: string;
+	if (rest.startsWith('"')) {
+		const close = rest.indexOf('"', 1);
+		if (close === -1) {
+			// Unclosed quote: tolerant, matching the editor — the whole rest is the path.
+			file = rest.slice(1);
+			message = "";
+		} else {
+			file = rest.slice(1, close);
+			message = rest.slice(close + 1).trim();
+		}
+	} else {
+		const wsIndex = rest.search(/\s/);
+		if (wsIndex === -1) {
+			file = rest;
+			message = "";
+		} else {
+			file = rest.slice(0, wsIndex);
+			message = rest.slice(wsIndex).trim();
+		}
+	}
+
+	if (file.length > 0) {
+		result.fileArgs.push(file);
+		if (message.length > 0) {
+			result.messages.push(message);
+		}
+	} else {
+		// No usable file token (bare "@", `@""`, or "@ ..."): keep the literal argument as text.
+		result.messages.push(rawArg);
+	}
+}
+
+/**
+ * Read the value for a value-taking option.
+ *
+ * If the next token is missing or looks like another option, record a
+ * "requires a value" diagnostic and return undefined WITHOUT consuming the token,
+ * so it is still parsed on the next loop iteration: `--session-dir --version`
+ * reports the missing value and leaves `--version` to be parsed as the flag it is,
+ * instead of creating a directory named "--version".
+ *
+ * "Looks like another option" means it starts with "-" AND contains no whitespace,
+ * because an option token never contains whitespace. That distinction matters for
+ * free-text options: `--append-system-prompt "- be terse"` and a prompt opening
+ * with YAML front matter are ordinary values, not options, and must still be
+ * accepted. A dash-leading single word (`--system-prompt -terse`) is genuinely
+ * ambiguous and is rejected; pass such text via a file instead, which
+ * resolvePromptInput already supports.
+ *
+ * `flag` is the canonical long name used in the message, even when a short alias
+ * (e.g. `-t`) was typed, so it lines up with the help text.
+ */
+function takeOptionValue(
+	args: string[],
+	i: number,
+	flag: string,
+	result: Args,
+): { value: string; nextIndex: number } | undefined {
+	const next = args[i + 1];
+	if (next === undefined || (next.startsWith("-") && !/\s/.test(next))) {
+		result.diagnostics.push({ type: "error", message: `${flag} requires a value` });
+		return undefined;
+	}
+	return { value: next, nextIndex: i + 1 };
+}
+
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
@@ -97,7 +184,7 @@ export function parseArgs(args: string[]): Args {
 		if (arg === "--") {
 			for (const positionalArg of args.slice(i + 1)) {
 				if (positionalArg.startsWith("@")) {
-					result.fileArgs.push(positionalArg.slice(1));
+					pushAtFileArg(result, positionalArg);
 				} else {
 					result.messages.push(positionalArg);
 				}
@@ -107,10 +194,13 @@ export function parseArgs(args: string[]): Args {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
-		} else if (arg === "--mode" && i + 1 < args.length) {
-			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc") {
-				result.mode = mode;
+		} else if (arg === "--mode") {
+			const taken = takeOptionValue(args, i, "--mode", result);
+			if (taken) {
+				i = taken.nextIndex;
+				if (taken.value === "text" || taken.value === "json" || taken.value === "rpc") {
+					result.mode = taken.value;
+				}
 			}
 		} else if (arg === "--approval-mode" || arg.startsWith("--approval-mode=")) {
 			const value = arg === "--approval-mode" ? args[i + 1] : arg.slice("--approval-mode=".length);
@@ -180,58 +270,109 @@ export function parseArgs(args: string[]): Args {
 			} else {
 				result.resume = true;
 			}
-		} else if (arg === "--provider" && i + 1 < args.length) {
-			result.provider = args[++i];
-		} else if (arg === "--model" && i + 1 < args.length) {
-			result.model = args[++i];
-		} else if (arg === "--api-key" && i + 1 < args.length) {
-			result.apiKey = args[++i];
-		} else if (arg === "--system-prompt" && i + 1 < args.length) {
-			result.systemPrompt = args[++i];
-		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
-			result.appendSystemPrompt = result.appendSystemPrompt ?? [];
-			result.appendSystemPrompt.push(args[++i]);
+		} else if (arg === "--provider") {
+			const taken = takeOptionValue(args, i, "--provider", result);
+			if (taken) {
+				result.provider = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--model") {
+			const taken = takeOptionValue(args, i, "--model", result);
+			if (taken) {
+				result.model = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--api-key") {
+			const taken = takeOptionValue(args, i, "--api-key", result);
+			if (taken) {
+				result.apiKey = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--system-prompt") {
+			const taken = takeOptionValue(args, i, "--system-prompt", result);
+			if (taken) {
+				result.systemPrompt = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--append-system-prompt") {
+			const taken = takeOptionValue(args, i, "--append-system-prompt", result);
+			if (taken) {
+				result.appendSystemPrompt = result.appendSystemPrompt ?? [];
+				result.appendSystemPrompt.push(taken.value);
+				i = taken.nextIndex;
+			}
 		} else if (arg === "--name" || arg === "-n") {
-			if (i + 1 < args.length) {
-				result.name = args[++i];
-			} else {
-				result.diagnostics.push({ type: "error", message: "--name requires a value" });
+			const taken = takeOptionValue(args, i, "--name", result);
+			if (taken) {
+				result.name = taken.value;
+				i = taken.nextIndex;
 			}
 		} else if (arg === "--no-session") {
 			result.noSession = true;
-		} else if (arg === "--session" && i + 1 < args.length) {
-			result.session = args[++i];
-		} else if (arg === "--session-id" && i + 1 < args.length) {
-			result.sessionId = args[++i];
-		} else if (arg === "--fork" && i + 1 < args.length) {
-			result.fork = args[++i];
-		} else if (arg === "--session-dir" && i + 1 < args.length) {
-			result.sessionDir = args[++i];
-		} else if (arg === "--models" && i + 1 < args.length) {
-			result.models = args[++i].split(",").map((s) => s.trim());
+		} else if (arg === "--session") {
+			const taken = takeOptionValue(args, i, "--session", result);
+			if (taken) {
+				result.session = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--session-id") {
+			const taken = takeOptionValue(args, i, "--session-id", result);
+			if (taken) {
+				result.sessionId = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--fork") {
+			const taken = takeOptionValue(args, i, "--fork", result);
+			if (taken) {
+				result.fork = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--session-dir") {
+			const taken = takeOptionValue(args, i, "--session-dir", result);
+			if (taken) {
+				result.sessionDir = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--models") {
+			const taken = takeOptionValue(args, i, "--models", result);
+			if (taken) {
+				result.models = taken.value.split(",").map((s) => s.trim());
+				i = taken.nextIndex;
+			}
 		} else if (arg === "--no-tools" || arg === "-nt") {
 			result.noTools = true;
 		} else if (arg === "--no-builtin-tools" || arg === "-nbt") {
 			result.noBuiltinTools = true;
-		} else if ((arg === "--tools" || arg === "-t") && i + 1 < args.length) {
-			result.tools = args[++i]
-				.split(",")
-				.map((s) => s.trim())
-				.filter((name) => name.length > 0);
-		} else if ((arg === "--exclude-tools" || arg === "-xt") && i + 1 < args.length) {
-			result.excludeTools = args[++i]
-				.split(",")
-				.map((s) => s.trim())
-				.filter((name) => name.length > 0);
-		} else if (arg === "--thinking" && i + 1 < args.length) {
-			const level = args[++i];
-			if (isValidThinkingLevel(level)) {
-				result.thinking = level;
-			} else {
-				result.diagnostics.push({
-					type: "warning",
-					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
-				});
+		} else if (arg === "--tools" || arg === "-t") {
+			const taken = takeOptionValue(args, i, "--tools", result);
+			if (taken) {
+				result.tools = taken.value
+					.split(",")
+					.map((s) => s.trim())
+					.filter((name) => name.length > 0);
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--exclude-tools" || arg === "-xt") {
+			const taken = takeOptionValue(args, i, "--exclude-tools", result);
+			if (taken) {
+				result.excludeTools = taken.value
+					.split(",")
+					.map((s) => s.trim())
+					.filter((name) => name.length > 0);
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--thinking") {
+			const taken = takeOptionValue(args, i, "--thinking", result);
+			if (taken) {
+				i = taken.nextIndex;
+				if (isValidThinkingLevel(taken.value)) {
+					result.thinking = taken.value;
+				} else {
+					result.diagnostics.push({
+						type: "warning",
+						message: `Invalid thinking level "${taken.value}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+					});
+				}
 			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
@@ -240,22 +381,42 @@ export function parseArgs(args: string[]): Args {
 				result.messages.push(next);
 				i++;
 			}
-		} else if (arg === "--export" && i + 1 < args.length) {
-			result.export = args[++i];
-		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
-			result.extensions = result.extensions ?? [];
-			result.extensions.push(args[++i]);
+		} else if (arg === "--export") {
+			const taken = takeOptionValue(args, i, "--export", result);
+			if (taken) {
+				result.export = taken.value;
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--extension" || arg === "-e") {
+			const taken = takeOptionValue(args, i, "--extension", result);
+			if (taken) {
+				result.extensions = result.extensions ?? [];
+				result.extensions.push(taken.value);
+				i = taken.nextIndex;
+			}
 		} else if (arg === "--no-extensions" || arg === "-ne") {
 			result.noExtensions = true;
-		} else if (arg === "--skill" && i + 1 < args.length) {
-			result.skills = result.skills ?? [];
-			result.skills.push(args[++i]);
-		} else if (arg === "--prompt-template" && i + 1 < args.length) {
-			result.promptTemplates = result.promptTemplates ?? [];
-			result.promptTemplates.push(args[++i]);
-		} else if (arg === "--theme" && i + 1 < args.length) {
-			result.themes = result.themes ?? [];
-			result.themes.push(args[++i]);
+		} else if (arg === "--skill") {
+			const taken = takeOptionValue(args, i, "--skill", result);
+			if (taken) {
+				result.skills = result.skills ?? [];
+				result.skills.push(taken.value);
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--prompt-template") {
+			const taken = takeOptionValue(args, i, "--prompt-template", result);
+			if (taken) {
+				result.promptTemplates = result.promptTemplates ?? [];
+				result.promptTemplates.push(taken.value);
+				i = taken.nextIndex;
+			}
+		} else if (arg === "--theme") {
+			const taken = takeOptionValue(args, i, "--theme", result);
+			if (taken) {
+				result.themes = result.themes ?? [];
+				result.themes.push(taken.value);
+				i = taken.nextIndex;
+			}
 		} else if (arg === "--use-theme") {
 			const themeName = args[i + 1];
 			if (themeName === undefined || themeName.startsWith("-")) {
@@ -320,7 +481,7 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--sdk-stdio") {
 			result.sdkStdio = true;
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			pushAtFileArg(result, arg); // "@path [message]" — split file token from trailing text
 		} else if (arg.startsWith("--")) {
 			const eqIndex = arg.indexOf("=");
 			if (eqIndex !== -1) {

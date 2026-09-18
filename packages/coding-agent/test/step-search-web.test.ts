@@ -39,6 +39,9 @@ describe("Step search_web tool", () => {
 		expect(resolveSearchWebServerUrl(undefined, {}, "platform_oversea")).toBe(
 			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
 		);
+		expect(resolveSearchWebServerUrl(undefined, {}, "step_plan_oversea")).toBe(
+			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
+		);
 		expect(resolveSearchWebServerUrl(undefined, {}, "unknown")).toBe("https://api.stepfun.com/v1/mcp/web_search/mcp");
 	});
 
@@ -121,23 +124,25 @@ describe("Step search_web tool", () => {
 		});
 	});
 
-	it("selects the overseas endpoint from the persisted login profile", async () => {
+	it("selects the overseas endpoint from either persisted overseas login profile", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-search-web-profile-"));
 		const authPath = join(root, "auth.json");
 		try {
-			await writeFile(
-				authPath,
-				JSON.stringify({ step: { type: "oauth", access: "search-key", profile: "platform_oversea" } }),
-				"utf8",
-			);
-			let serverUrl = "";
-			const tool = createSearchWebTool({ env: {}, authPath }, async (input) => {
-				serverUrl = input.serverUrl;
-				return { structuredContent: { results: [] } };
-			});
+			for (const profile of ["platform_oversea", "step_plan_oversea"]) {
+				await writeFile(
+					authPath,
+					JSON.stringify({ step: { type: "oauth", access: "search-key", profile } }),
+					"utf8",
+				);
+				let serverUrl = "";
+				const tool = createSearchWebTool({ env: {}, authPath }, async (input) => {
+					serverUrl = input.serverUrl;
+					return { structuredContent: { results: [] } };
+				});
 
-			await tool.execute("profile-call", { query: "query" }, undefined, undefined, undefined as never);
-			expect(serverUrl).toBe("https://api.stepfun.ai/v1/mcp/web_search/mcp");
+				await tool.execute("profile-call", { query: "query" }, undefined, undefined, undefined as never);
+				expect(serverUrl).toBe("https://api.stepfun.ai/v1/mcp/web_search/mcp");
+			}
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

@@ -60,7 +60,7 @@ export function resolveSearchWebServerUrl(
 	profile?: string,
 ): string {
 	const profileDefault =
-		profile === "platform_oversea"
+		profile === "platform_oversea" || profile === "step_plan_oversea"
 			? SEARCH_WEB_OVERSEA_URL
 			: profile === "step_plan" || profile === "platform_cn"
 				? SEARCH_WEB_MAINLAND_URL

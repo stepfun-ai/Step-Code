@@ -4,12 +4,15 @@
 
 ### Added
 
+- Added the `step_plan_oversea` login profile (base `https://api.stepfun.ai/step_plan`, developer center `https://platform.stepfun.ai`, overridable through `STEP_CLI_STEP_PLAN_API_OVERSEA_URL` / `STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL`). `resolveStepLoginProfiles` now defines each profile — title, credential source, endpoints and override variables — in one table, the onboarding reducer picks the browser or API-key page from `credentialSource` instead of a hardcoded id, `resolveSearchWebServerUrl` routes the new profile to the overseas search endpoint, and `StepLoginStatus` gains the `step_plan_oversea` login method plus the resolved `profile` id. `syncStepLoginProfileEndpoint` now exports the profile's developer center as `STEP_LOGIN_PROFILE_AUTH_URL` alongside `STEP_LOGIN_PROFILE_API_URL`, and clears both when no credential is stored.
+- Added `runStepThemePrompt` / `buildStepThemeOptions` and the `stepThemePrompt` interactive-mode option: a one-time first-run theme picker that runs on its own screen before `init()` (the phase the MCP import offer uses), applies each option as it is highlighted, and returns the setting for the interactive mode to persist before it builds the UI. A dismissed screen returns the product default rather than nothing, so the persisted `theme` is the only state the flow needs.
 - Added extension-owned task widgets and native task tool renderers, keeping `/todos` with the task extension.
 - Added the Step binary startup update check and native installer integration for Step CLI hosts.
 - Added an `overlay` option to the extension `select` and `input` dialogs, which renders them over the transcript instead of inside it.
 
 ### Changed
 
+- Changed the standalone Step startup screens (login, MCP import, theme picker) to share one `createStandaloneStepHost()` full-screen host instead of three copies of it.
 - Changed the default permission preset to Bypass when no CLI flag, `STEP_*` env var, or persisted preset is set; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
@@ -18,6 +21,7 @@
 
 ### Fixed
 
+- Fixed `prepareMain` resolving the initial model against an empty Step catalog: on the Step entrypoint with a configured Step credential it now refreshes the `step` provider from the network (bounded at 15s, failures ignored) after service setup and before `createAgentSessionFromServices`, so a signed-in start no longer reports `No models available`. Step models are discovered per run and never written to `models-store.json`, so the cache-only refresh in service setup always left the catalog empty.
 - Fixed extension select/input dialogs leaving unresolved promises or stale waiting state after cancellation, replacement, reset, stop, or reentrant focus restoration.
 - Fixed Step approval presentation with per-call identity and reversible waiting indicators, and kept multiline tool titles/summaries within one physical terminal row without changing execution arguments.
 - Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. `grep.ts` and `find.ts` now walk a ladder — injected custom search → downloaded/PATH rg/fd → `git grep`/`git ls-files` when the search path is inside a worktree → POSIX `grep`/`find` — and only throw when nothing at all is available. `GrepOperations` gains an optional `search` primitive so remote injectors can substitute text search the way `FindOperations.glob` already substitutes file listing.
@@ -34,6 +38,7 @@
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+- Fixed StepCode model catalogs with omitted vision metadata defaulting to text-only input, which made the read tool drop image attachments. `readInputTypes` now mirrors `hasReasoning` and defaults an omitted capability to `["text", "image"]`; an explicit `supportsVision: false` or a declared `input` list still wins.
 - Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
 - Fixed `/feedback` pages growing the rendered transcript, which scrolled the screen and left the editor above the bottom row once a page closed.
 - Fixed Step `search_files` discarding valid match rows with `[`- or `WARNING:`-prefixed paths; native notices remain excluded and match/truncation metadata is preserved.

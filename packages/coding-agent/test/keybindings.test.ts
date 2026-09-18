@@ -25,6 +25,9 @@ describe("Windows keybinding defaults", () => {
 		const nativeWindows = process.platform === "win32";
 
 		expect(KEYBINDINGS["tui.input.newLine"].defaultKeys).toEqual(["shift+enter", "alt+enter", "ctrl+j"]);
+		// Image paste is ctrl+v on macOS/Linux, alt+v on Windows/WSL (where the
+		// terminal owns ctrl+v). macOS Cmd+V is handled via the empty bracketed
+		// paste path (CustomEditor.onEmptyPaste), not this keybinding.
 		expect(KEYBINDINGS["app.clipboard.pasteImage"].defaultKeys).toBe(windowsKeybindings ? "alt+v" : "ctrl+v");
 		expect(KEYBINDINGS["tui.altScreen.search"].defaultKeys).toBe(windowsKeybindings ? "ctrl+f" : "ctrl+shift+f");
 		expect(KEYBINDINGS["app.message.followUp"].defaultKeys).toEqual([]);

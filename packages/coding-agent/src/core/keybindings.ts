@@ -144,6 +144,9 @@ export const KEYBINDINGS = {
 		description: "Restore queued messages",
 	},
 	"app.clipboard.pasteImage": {
+		// ctrl+v on macOS/Linux; alt+v on Windows/WSL, where the terminal owns ctrl+v
+		// as its own paste and the app never receives it as a keypress. macOS Cmd+V is
+		// handled separately via the empty bracketed paste (see CustomEditor.onEmptyPaste).
 		defaultKeys: windowsKeybindings ? "alt+v" : "ctrl+v",
 		description: "Paste image from clipboard (text fallback)",
 	},

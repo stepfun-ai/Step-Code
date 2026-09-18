@@ -9,6 +9,7 @@ import {
 	readStepLoginCredential,
 	readStepLoginProfile,
 	runStepLogin,
+	syncStepLoginProfileEndpoint,
 	writeStepLoginCredential,
 } from "../src/step/login-flow.ts";
 import { getCurrentThemeName } from "../src/theme/theme.ts";
@@ -93,6 +94,26 @@ describe("shared Step login flow storage", () => {
 		}
 	});
 
+	it("points the provider at the stored profile's region and clears it when signed out", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-login-sync-"));
+		const authPath = join(root, "agent", "auth.json");
+		try {
+			const env: Record<string, string | undefined> = {};
+			await writeStepLoginCredential({ authPath, profile: "step_plan_oversea", apiKey: "oversea-key" });
+			syncStepLoginProfileEndpoint(authPath, env);
+			expect(env).toEqual({
+				STEP_LOGIN_PROFILE_API_URL: "https://api.stepfun.ai/step_plan",
+				STEP_LOGIN_PROFILE_AUTH_URL: "https://platform.stepfun.ai",
+			});
+
+			syncStepLoginProfileEndpoint(join(root, "missing.json"), env);
+			expect(env.STEP_LOGIN_PROFILE_API_URL).toBeUndefined();
+			expect(env.STEP_LOGIN_PROFILE_AUTH_URL).toBeUndefined();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("gates only interactive startup when no stored or environment credential exists", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-login-gate-"));
 		const authPath = join(root, "agent", "auth.json");
@@ -126,6 +147,8 @@ describe("shared Step login flow storage", () => {
 					setFocus: () => {},
 					requestRender: () => {},
 					start: () => {
+						// Two rows down from Step Plan: the mainland platform API-key row.
+						view?.handleInput("\x1b[B");
 						view?.handleInput("\x1b[B");
 						view?.handleInput("\r");
 						view?.handleInput("platform-key");

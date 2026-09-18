@@ -1,6 +1,9 @@
 import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
+/** Horizontal alignment of each line within the content area (inside paddingX). */
+export type TextAlign = "left" | "center" | "right";
+
 /**
  * Text component - displays multi-line text with word wrapping
  */
@@ -9,17 +12,25 @@ export class Text implements Component {
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private customBgFn?: (text: string) => string;
+	private align: TextAlign;
 
 	// Cache for rendered output
 	private cachedText?: string;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
-	constructor(text: string = "", paddingX: number = 1, paddingY: number = 1, customBgFn?: (text: string) => string) {
+	constructor(
+		text: string = "",
+		paddingX: number = 1,
+		paddingY: number = 1,
+		customBgFn?: (text: string) => string,
+		align: TextAlign = "left",
+	) {
 		this.text = text;
 		this.paddingX = paddingX;
 		this.paddingY = paddingY;
 		this.customBgFn = customBgFn;
+		this.align = align;
 	}
 
 	setText(text: string): void {
@@ -73,8 +84,17 @@ export class Text implements Component {
 		const contentLines: string[] = [];
 
 		for (const line of wrappedLines) {
+			// Align within the content area: distribute the leftover width to the
+			// left of the line for center/right (the trailing right-pad below fills
+			// the rest). Left alignment adds nothing, so it stays byte-identical.
+			let leftExtra = 0;
+			if (this.align !== "left") {
+				const slack = Math.max(0, contentWidth - visibleWidth(line));
+				leftExtra = this.align === "center" ? Math.floor(slack / 2) : slack;
+			}
+
 			// Add margins
-			const lineWithMargins = leftMargin + line + rightMargin;
+			const lineWithMargins = leftMargin + " ".repeat(leftExtra) + line + rightMargin;
 
 			// Apply background if specified (this also pads to full width)
 			if (this.customBgFn) {

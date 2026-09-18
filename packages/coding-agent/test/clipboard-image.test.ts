@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 const mocks = vi.hoisted(() => {
 	return {
 		spawnSync: vi.fn<(command: string, args: string[], options: unknown) => SpawnSyncReturns<Buffer>>(),
+		// The module does `promisify(execFile)` at import time, so the mock must
+		// expose execFile even though these tests only exercise the spawnSync paths.
+		execFile: vi.fn(),
 		clipboard: {
 			hasImage: vi.fn<() => boolean>(),
 			getImageBinary: vi.fn<() => Promise<Uint8Array | null>>(),
@@ -15,7 +18,24 @@ const mocks = vi.hoisted(() => {
 vi.mock("child_process", () => {
 	return {
 		spawnSync: mocks.spawnSync,
+		execFile: mocks.execFile,
 	};
+});
+
+// isWSL() falls back to reading /proc/version, so on a WSL host the "non-WSL"
+// tests below would otherwise take the WSL branch and fail. Stub only that one
+// read so the suite is host-independent; every other fs call (the temp-file
+// write/read in the WSL test) keeps the real implementation.
+vi.mock("fs", async (importOriginal) => {
+	const actual = await importOriginal();
+	return Object.assign({}, actual as object, {
+		readFileSync: (path: unknown, ...rest: unknown[]): unknown => {
+			if (String(path) === "/proc/version") {
+				throw new Error("simulated: /proc/version unavailable in test");
+			}
+			return (actual as { readFileSync: (...args: unknown[]) => unknown }).readFileSync(path, ...rest);
+		},
+	});
 });
 
 vi.mock("../src/utils/clipboard-native.js", () => {
@@ -180,5 +200,22 @@ describe("readClipboardImage", () => {
 		expect(result).not.toBeNull();
 		expect(result?.mimeType).toBe("image/png");
 		expect(Array.from(result?.bytes ?? [])).toEqual([8, 9]);
+	});
+});
+
+// The isWSL gate in wslPathToPosix cannot be exercised host-independently in
+// clean-pasted-path.test.ts (isWSL falls back to reading /proc/version). Here the
+// fs mock above stubs /proc/version to throw, so env:{} yields isWSL === false.
+describe("wslPathToPosix off-WSL gate", () => {
+	test("returns null without shelling out when not on WSL", async () => {
+		const { wslPathToPosix } = await import("../src/utils/clipboard-image.ts");
+		let called = false;
+		const run = async (): Promise<string | null> => {
+			called = true;
+			return "/mnt/c/Users/a/pic.png";
+		};
+		const result = await wslPathToPosix("C:\\Users\\a\\pic.png", { env: {}, run });
+		expect(result).toBeNull();
+		expect(called).toBe(false);
 	});
 });

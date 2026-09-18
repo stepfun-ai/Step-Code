@@ -324,4 +324,22 @@ describe("AgentSession retry", () => {
 		await session.prompt("Follow-up");
 		expect(callCount).toBe(4);
 	});
+
+	it("clears the retry counter when a retry continuation throws", async () => {
+		const created = await createSession({ failCount: 1 });
+
+		// The first call fails with a retryable error, so _prepareRetry bumps the
+		// counter to 1 and the run continues via agent.continue(). Make that
+		// continuation throw: it escapes the retry state machine's three normal
+		// exits, which is the only way a non-zero count can outlive the run.
+		created.session.agent.continue = async () => {
+			throw new Error("continuation exploded");
+		};
+
+		await expect(created.session.prompt("Test")).rejects.toThrow("continuation exploded");
+
+		// A stale count here would make the next prompt skip its working-tracker
+		// reset and show the previous run's elapsed/token totals.
+		expect(created.session.retryAttempt).toBe(0);
+	});
 });

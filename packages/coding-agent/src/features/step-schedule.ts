@@ -9,8 +9,8 @@ import type {
 	ExtensionContext,
 	ExtensionFactory,
 } from "../core/extensions/types.ts";
-import { isUserMessage } from "../core/messages.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import { formatElapsedTime } from "../utils/time.ts";
 
 const MAX_OBJECTIVE_LENGTH = 16_000;
 const MAX_ID_LENGTH = 100;
@@ -60,6 +60,8 @@ interface GoalHostCallbacks {
 interface GoalRunState {
 	/** One product run can contain retries, compaction, and native follow-ups. */
 	attemptActive: boolean;
+	/** True while the current attempt was started by a goal continuation message. */
+	continuationDriven: boolean;
 	messages: AgentMessage[];
 	seenMessages: Set<object>;
 	goalId?: string;
@@ -325,6 +327,13 @@ export class StepGoalRuntime {
 	private lastErrorMessage: string | undefined;
 	private continuationPending = false;
 	private continuationQueued = false;
+	/**
+	 * A continuation message was handed to the host and no attempt has started
+	 * since. Unlike continuationQueued this survives a user pause: the message
+	 * stays in the host queue, so the runtime must still recognize the attempt
+	 * it eventually starts.
+	 */
+	private continuationOutstanding = false;
 
 	constructor(options: StepGoalRuntimeOptions = {}) {
 		this.now = options.now ?? Date.now;
@@ -346,6 +355,50 @@ export class StepGoalRuntime {
 		return cloneGoal(this.goal);
 	}
 
+	/**
+	 * Active-only elapsed seconds, including the span since the last accounting
+	 * boundary. Mirrors the accounting math so a live readout never disagrees
+	 * with the next persisted value; paused and terminal goals stay frozen at
+	 * the persisted counter.
+	 */
+	elapsedActiveSeconds(): number {
+		if (!this.goal) return 0;
+		if (this.goal.status !== "active") return this.goal.timeUsedSeconds;
+		const now = this.readNow();
+		if (this.run?.participated && this.run.goalId === this.goal.id) {
+			const elapsedMs = Math.max(0, now - (this.run.goalStartedAt ?? now)) + this.run.baseTimeRemainderMs;
+			return Math.min(MAX_COUNTER, this.run.baseTimeUsedSeconds + Math.floor(elapsedMs / 1_000));
+		}
+		const elapsedMs = Math.max(0, now - (this.goalClockAt ?? now)) + this.timeRemainderMs;
+		return Math.min(MAX_COUNTER, this.goal.timeUsedSeconds + Math.floor(elapsedMs / 1_000));
+	}
+
+	/**
+	 * True while an attempt started by a goal continuation is running for the
+	 * active goal. User-initiated turns that merely participate in accounting
+	 * report false, so pausing never interrupts output the user asked for.
+	 */
+	isContinuationRunActive(): boolean {
+		return Boolean(
+			this.goal &&
+				this.goal.status === "active" &&
+				this.run?.attemptActive &&
+				this.run.continuationDriven &&
+				this.run.participated &&
+				this.run.goalId === this.goal.id,
+		);
+	}
+
+	/**
+	 * True when a continuation-driven attempt is running although the goal can
+	 * no longer accept it (paused, stopped, or cleared after the continuation
+	 * message was queued). The host cannot unsend a queued message, so the
+	 * attempt it starts must be stopped instead.
+	 */
+	isStaleContinuationAttempt(): boolean {
+		return Boolean(this.run?.attemptActive && this.run.continuationDriven && this.goal?.status !== "active");
+	}
+
 	restoreSnapshot(value: unknown, sessionId: string): StepGoalRestoreResult {
 		const result = parseSnapshot(value, sessionId);
 		this.goal = result.goal;
@@ -356,6 +409,7 @@ export class StepGoalRuntime {
 		this.lastErrorMessage = undefined;
 		this.continuationPending = false;
 		this.continuationQueued = false;
+		this.continuationOutstanding = false;
 		return { ...result, goal: cloneGoal(result.goal) };
 	}
 
@@ -588,10 +642,13 @@ export class StepGoalRuntime {
 	}
 
 	onAgentStart(): void {
+		const continuationDriven = this.continuationOutstanding;
+		this.continuationOutstanding = false;
 		if (!this.run) {
 			if (this.goal?.status === "active") this.accountIdleProgress(this.readNow());
 			this.run = {
 				attemptActive: true,
+				continuationDriven,
 				messages: [],
 				seenMessages: new Set(),
 				goalTokenBaseline: 0,
@@ -609,6 +666,10 @@ export class StepGoalRuntime {
 		}
 
 		this.run.attemptActive = true;
+		// Per attempt, not sticky per run: a user follow-up attempt inside a
+		// continuation-started run must drop the flag, or pausing would
+		// interrupt output the user explicitly asked for.
+		this.run.continuationDriven = continuationDriven;
 		this.continuationQueued = false;
 		if (this.goal?.status === "active" && (!this.run.participated || this.run.goalId !== this.goal.id)) {
 			this.activateGoalInRun(this.goal, this.readNow(), assistantTokens(this.run.messages));
@@ -712,6 +773,7 @@ export class StepGoalRuntime {
 		this.lastErrorMessage = undefined;
 		this.continuationPending = false;
 		this.continuationQueued = false;
+		this.continuationOutstanding = false;
 	}
 
 	private requestContinuation(forceDelivery?: "immediate" | "queued"): GoalContinuation | undefined {
@@ -729,6 +791,7 @@ export class StepGoalRuntime {
 				forceDelivery === "immediate" && !idle ? "queued" : (forceDelivery ?? (idle ? "immediate" : "queued")),
 		};
 		this.continuationQueued = true;
+		this.continuationOutstanding = true;
 		try {
 			this.host.requestContinuation(continuation);
 			if (this.telemetry) {
@@ -740,6 +803,7 @@ export class StepGoalRuntime {
 			return continuation;
 		} catch {
 			this.continuationQueued = false;
+			this.continuationOutstanding = false;
 			return undefined;
 		}
 	}
@@ -886,18 +950,28 @@ function envFlagEnabled(value: string | undefined): boolean {
 	return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "on";
 }
 
-/** Compact elapsed time: 45s, 58m 25s, 1h 02m. */
-export function formatDuration(totalSeconds: number): string {
-	const total = Math.max(0, Math.floor(totalSeconds));
-	const hours = Math.floor(total / 3600);
-	const minutes = Math.floor((total % 3600) / 60);
-	const seconds = total % 60;
-	if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-	if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-	return `${total}s`;
+const GOAL_COMMANDS_HINT = "Goal commands: /goal status · /goal pause · /goal resume · /goal clear";
+
+/**
+ * User-facing guidance when the runtime silently stops an active goal at a
+ * settle boundary (abort, error, usage limit, or budget exhaustion). The footer
+ * only carries "Goal: paused", so without this a stop to blocked, usage_limited,
+ * or budget_limited is silent and the goal just reads as stuck.
+ */
+const GOAL_STOP_HINTS: Partial<Record<StepGoalStatus, string>> = {
+	paused: "Goal paused (run interrupted). Run /goal resume to continue.",
+	blocked: "Goal marked blocked after a run error. Run /goal resume to retry, or /goal clear to drop it.",
+	usage_limited: "Goal stopped on a provider usage limit. Run /goal resume to retry.",
+	budget_limited: "Goal token budget exhausted. Run /goal edit to revise it, or /goal clear to drop it.",
+};
+
+function unfinishedGoalHint(status: StepGoalStatus): string {
+	if (status === "active") return "Run /goal status to inspect it, or /goal clear to end it.";
+	if (status === "budget_limited") return "Run /goal edit to revise it, or /goal clear to drop it.";
+	return "Run /goal resume to continue it, /goal edit to change it, or /goal clear to drop it.";
 }
 
-function formatGoalStatus(goal: StepGoalRecord | undefined): string {
+function formatGoalStatus(goal: StepGoalRecord | undefined, elapsedSeconds?: number): string {
 	if (!goal) return "No goal is currently set.";
 	const budget = goal.tokenBudget === undefined ? "unbounded" : `${goal.tokensUsed}/${goal.tokenBudget}`;
 	return [
@@ -905,7 +979,7 @@ function formatGoalStatus(goal: StepGoalRecord | undefined): string {
 		`Objective: ${goal.objective}`,
 		`Created: ${goal.createdAt}`,
 		`Updated: ${goal.updatedAt}`,
-		`Time: ${formatDuration(goal.timeUsedSeconds)}`,
+		`Time: ${formatElapsedTime(elapsedSeconds ?? goal.timeUsedSeconds)}`,
 		`Tokens: ${budget}`,
 	].join("\n");
 }
@@ -953,6 +1027,13 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			// is the one state worth nagging about persistently.
 			ctx.ui.setStatus("step-goal", runtime.get()?.status === "paused" ? "Goal: paused" : undefined);
 		};
+		const notifyAutoStop = (before: StepGoalStatus | undefined, ctx: ExtensionContext): void => {
+			if (before !== "active") return;
+			const status = runtime.get()?.status;
+			if (!status || status === before) return;
+			const hint = GOAL_STOP_HINTS[status];
+			if (hint) ctx.ui.notify(hint, "warning");
+		};
 
 		pi.on("session_start", (_event, ctx) => {
 			setContext(ctx);
@@ -971,12 +1052,27 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 				}
 			}
 			if (!restored) runtime.restoreSnapshot(undefined, sessionId);
+			const before = runtime.get()?.status;
 			runtime.onSessionReady();
+			notifyAutoStop(before, ctx);
 			updateStatus(ctx);
 		});
 		pi.on("agent_start", (_event, ctx) => {
 			setContext(ctx);
 			runtime.onAgentStart();
+			if (runtime.isStaleContinuationAttempt()) {
+				try {
+					ctx.abort();
+				} catch {
+					// The host may not support aborting here; the turn then just runs out.
+				}
+				const status = runtime.get()?.status;
+				const resumable = status === "paused" || status === "blocked" || status === "usage_limited";
+				ctx.ui.notify(
+					`Stopped a queued goal turn (${status ? `goal is ${status}` : "no goal is set"}).${resumable ? " Run /goal resume to continue it." : ""}`,
+					"info",
+				);
+			}
 			updateStatus(ctx);
 		});
 		pi.on("agent_end", (event, ctx) => {
@@ -987,18 +1083,32 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 		pi.on("message_end", (event, ctx) => {
 			setContext(ctx);
 			runtime.onMessageEnd(event.message);
+			updateStatus(ctx);
 		});
 		pi.on("agent_settled", (_event, ctx) => {
 			setContext(ctx);
+			const before = runtime.get()?.status;
 			runtime.onAgentSettled();
+			notifyAutoStop(before, ctx);
 			updateStatus(ctx);
 		});
 		pi.on("session_shutdown", () => runtime.shutdown());
-		pi.on("message_start", (event, ctx) => {
-			if (!isUserMessage(event.message)) return;
-			if (runtime.get()?.status !== "paused") return;
+
+		let resumeHintShownFor: string | undefined;
+		pi.on("input", (event, ctx) => {
+			const goal = runtime.get();
+			if (!goal || (goal.status !== "paused" && goal.status !== "blocked" && goal.status !== "usage_limited"))
+				return;
+			const text = event.text.trim();
+			// Slash commands manage the goal themselves and bash-mode input never
+			// reaches the agent; only a plain message risks reading as "the goal is
+			// continuing" when it is not.
+			if (!text || text.startsWith("/") || text.startsWith("!")) return;
+			const episode = `${goal.id}:${goal.status}:${goal.updatedAt}`;
+			if (episode === resumeHintShownFor) return;
+			resumeHintShownFor = episode;
 			ctx.ui.notify(
-				"Goal is paused; ordinary prompts do not advance it. /goal resume to continue (or /goal clear to end).",
+				`Goal ${goal.id} is ${goal.status}; this message runs as a normal turn and does not resume it. Run /goal resume to continue it, or /goal clear to end it.`,
 				"warning",
 			);
 		});
@@ -1057,7 +1167,7 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 				recordGoalCommand(options.telemetry, telemetrySubcommand);
 				try {
 					if (subcommand === "status") {
-						ctx.ui.notify(formatGoalStatus(runtime.get()), "info");
+						ctx.ui.notify(formatGoalStatus(runtime.get(), runtime.elapsedActiveSeconds()), "info");
 						return;
 					}
 					if (subcommand === "clear") {
@@ -1066,10 +1176,22 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 						return;
 					}
 					if (subcommand === "pause" || subcommand === "resume") {
+						const interruptsRun = subcommand === "pause" && runtime.isContinuationRunActive();
 						runtime.setUserStatus(subcommand === "resume" ? "active" : "paused");
+						if (interruptsRun) {
+							try {
+								ctx.abort();
+							} catch {
+								// Pause already holds; the in-flight turn then just runs out.
+							}
+						}
 						updateStatus(ctx);
 						ctx.ui.notify(
-							subcommand === "pause" ? "Goal paused. Resume with /goal resume." : "Goal resumed.",
+							subcommand === "resume"
+								? "Goal resumed."
+								: interruptsRun
+									? "Goal paused; interrupted the in-flight goal turn. Run /goal resume to continue."
+									: "Goal paused. Run /goal resume to continue.",
 							"info",
 						);
 						return;
@@ -1098,12 +1220,21 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 						ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume]", "warning");
 						return;
 					}
+					const existing = runtime.get();
+					if (existing && existing.status !== "complete") {
+						ctx.ui.notify(
+							`An unfinished goal is already ${existing.status}: ${existing.id}. ${unfinishedGoalHint(existing.status)}`,
+							"warning",
+						);
+						return;
+					}
 					const goal = runtime.start(objective, ctx.sessionManager.getSessionId());
 					runtime.onSessionReady();
 					updateStatus(ctx);
 					// The objective is text the user just typed, so it is shown the way
 					// their input is shown rather than as a dim agent status line.
 					ctx.ui.notify(`Goal set: ${goal.objective}`, "info", { echoesInput: true });
+					ctx.ui.notify(GOAL_COMMANDS_HINT, "info");
 				} catch (error) {
 					ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
 				}

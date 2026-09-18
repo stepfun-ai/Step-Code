@@ -1,4 +1,5 @@
 import {
+	fetchStepModels,
 	getStepOAuthApiKey,
 	loginStepOAuth,
 	normalizeStepModel,
@@ -7,6 +8,7 @@ import {
 	refreshStepOAuth,
 	resolveStepProviderOptions,
 	type StepProviderOptions,
+	stepOpenAiBaseUrl,
 } from "@step-harness/providers/step-provider";
 import type { ExtensionAPI, InlineExtension, ProviderConfig } from "../../core/extensions/types.ts";
 
@@ -24,19 +26,25 @@ export function createStepProviderConfig(options: StepProviderOptions = {}): Pro
 }
 
 function createStepProviderConfigFromResolved(resolved: ResolvedStepProviderOptions): ProviderConfig {
+	// All Step profile URLs speak OpenAI Chat Completions; discovery and chat
+	// both use the `.../v1` base for the active profile.
+	const openaiBaseUrl = stepOpenAiBaseUrl(resolved.apiBaseUrl);
 	return {
 		name: resolved.name,
-		baseUrl: resolved.apiBaseUrl,
+		baseUrl: openaiBaseUrl,
 		apiKey: `$${resolved.apiKeyEnv}`,
-		api: "anthropic-messages",
-		// The built-in catalog is a default; keep custom models migrated from
-		// the legacy Step CLI layout (and later user additions) in this provider.
+		api: "openai-completions",
+		// The built-in catalog is an offline/pre-login baseline; keep custom models
+		// migrated from the legacy Step CLI layout (and later user additions).
 		mergeModelsJson: true,
 		// models.json is user-owned and can outlive the provider defaults. Normalize
 		// the final composed list as a last line of defense for embedded hosts that
 		// do not run Step's startup migration first.
-		normalizeModels: (models) => models.map((model) => normalizeStepModel(model, resolved.apiBaseUrl)),
+		normalizeModels: (models) => models.map((model) => normalizeStepModel(model, openaiBaseUrl)),
 		models: resolved.models.map((model) => normalizeStepModelConfig(model)),
+		// After login, replace the baseline with the account's real usable models
+		// discovered from `{base}/v1/models`.
+		refreshModels: (context) => fetchStepModels(context, resolved),
 		oauth: {
 			name: "Step Plan",
 			isSubscription: true,
