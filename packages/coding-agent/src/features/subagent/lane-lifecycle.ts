@@ -48,6 +48,8 @@ export interface BackgroundAgentLane {
 export interface StepSubagentLaneRuntime {
 	/** Parent-side hook invoked when the child emits a progress-report event. */
 	onNeedsInput?: (message: string) => void;
+	/** Parent-side hook fired when a dead keep-alive child is respawned. */
+	onChildRespawn?: () => void;
 	/** Stable per-lane child session id; task index N > 0 gets a `-N` suffix. */
 	sessionId?: string;
 	/** Keep rpc children alive after each turn so replies reuse the process. */
@@ -169,6 +171,15 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			onNeedsInput: (message) => {
 				if (lane.runGeneration !== generation) return;
 				notifyLaneEvent(pi, lane, "background_needs_input", message);
+			},
+			onChildRespawn: () => {
+				if (lane.runGeneration !== generation) return;
+				notifyLaneEvent(
+					pi,
+					lane,
+					"background_restarted",
+					"the previous child process exited; a new child resumed its transcript from disk",
+				);
 			},
 			sessionId: lane.sessionId,
 			keepAlive: true,

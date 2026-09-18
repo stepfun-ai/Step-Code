@@ -383,7 +383,7 @@ export function buildStepSystemPromptAppendix(
 			[
 				"# Delegation",
 				"- Use subagent to delegate work that benefits from an isolated context: broad exploration whose intermediate output does not belong in this transcript, independent parallel tasks, or long-running background work.",
-				"- Background lanes are event-driven; never poll for status. Lane events (done, failed, interrupted, needs-input, progress) arrive automatically as <agent-notification> messages at the start of a later turn. Wait for them and keep working in the meantime.",
+				"- Background lanes are event-driven; never poll for status. Lane events (done, failed, interrupted, needs-input, progress, restarted) arrive automatically as <agent-notification> messages at the start of a later turn. Wait for them and keep working in the meantime. Failure notifications carry each failed task's reason; restarted means a dead child was respawned and resumed its transcript.",
 				"- Use agent_send to message an existing lane; the lane keeps its full transcript, so replies continue the conversation instead of starting over.",
 				'- agent_send with action:"reply" and interrupt:false queues the prompt to run after the lane\'s current turn; interrupt:true steers the lane immediately; action:"stop" interrupts the lane and ends it.',
 				"- Address one lane with to.agent_id or to.alias; fan out with to.group or to.all.",
