@@ -157,7 +157,11 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
-			stream.push({ type: "start", partial: output });
+			// `start` marks an empty initial message; deltas build content and the
+			// final event is authoritative. `output.content` is mutated in place as
+			// chunks arrive and the event stream runs ahead of the consumer, so give
+			// `start` its own empty content array rather than aliasing the live one.
+			stream.push({ type: "start", partial: { ...output, content: [] } });
 
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,

@@ -76,4 +76,35 @@ describe("streamProxy", () => {
 			namespace: "dynamic_tools",
 		});
 	});
+
+	// Feedback: message_start must not carry already-streamed content. The proxy
+	// transport shares one mutable `partial` across all reconstructed events, so
+	// the start event must expose an empty content array that stays empty even
+	// after the following deltas mutate the message.
+	it("keeps the start event content empty after deltas mutate the message", async () => {
+		const proxyEvents: ProxyAssistantMessageEvent[] = [
+			{ type: "start" },
+			{ type: "thinking_start", contentIndex: 0 },
+			{ type: "thinking_delta", contentIndex: 0, delta: "The" },
+			{ type: "thinking_end", contentIndex: 0 },
+			{ type: "done", reason: "stop", usage },
+		];
+		const body = proxyEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(body, { status: 200 })),
+		);
+
+		const stream = streamProxy(
+			model,
+			{ systemPrompt: "", messages: [] },
+			{ authToken: "test-token", proxyUrl: "https://proxy.example.com" },
+		);
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) events.push(event);
+
+		expect(events.some((event) => event.type === "thinking_delta" && event.delta === "The")).toBe(true);
+		const start = events.find((event) => event.type === "start");
+		expect(start?.type === "start" ? start.partial.content : undefined).toEqual([]);
+	});
 });

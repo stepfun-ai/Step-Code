@@ -367,7 +367,13 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
-			stream.push({ type: "start", partial: output });
+			// The `start` event marks an empty initial message; deltas build content
+			// and `done` carries the authoritative final message. `output.content` is
+			// mutated in place as chunks arrive, and consumers may serialize this event
+			// after the producer has advanced (the event stream runs ahead of the
+			// consumer), so give `start` its own empty content array rather than
+			// aliasing the live one.
+			stream.push({ type: "start", partial: { ...output, content: [] } });
 
 			interface StreamingToolCallBlock extends ToolCall {
 				partialArgs?: string;
