@@ -8,7 +8,7 @@ import { createStepSubagentExtension, type StepSubagentExtensionOptions } from "
 import { createStepTasksExtension } from "./step-tasks.ts";
 import { registerWorkflowChildAcl } from "./workflow/acl-extension.ts";
 import { createStepWorkflowExtension, type StepWorkflowExtensionOptions } from "./workflow/step-workflow.ts";
-import { createUltraloopOptInExtension } from "./workflow/ultraloop-opt-in.ts";
+import { createUltraloopOptInExtension, type UltraloopTurnState } from "./workflow/ultraloop-opt-in.ts";
 
 export interface StepCapabilitiesExtensionOptions {
 	subagent?: StepSubagentExtensionOptions;
@@ -26,13 +26,16 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 		...options.subagent,
 		telemetry: options.telemetry,
 	});
+	const workflowTurnState: UltraloopTurnState = {};
 	const workflow = createStepWorkflowExtension({
 		...options.workflow,
 		telemetry: options.workflow?.telemetry ?? options.telemetry,
+		turnState: workflowTurnState,
 	});
 	const ultraloopOptIn = createUltraloopOptInExtension({
 		enabled: options.workflow?.enabled,
 		vmExecutor: options.workflow?.vmExecutor,
+		turnState: workflowTurnState,
 	});
 	return (pi: ExtensionAPI): void => {
 		registerWorkflowChildAcl(pi, options.telemetry);

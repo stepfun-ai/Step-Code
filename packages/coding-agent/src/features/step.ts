@@ -1,7 +1,9 @@
 import process from "node:process";
+import type { Api, Model } from "@step-harness/providers";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
+	ExtensionContext,
 	ExtensionFactory,
 	InlineExtension,
 } from "../core/extensions/types.ts";
@@ -21,7 +23,13 @@ import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
-import { registerStepProvider } from "./step-provider/index.ts";
+import {
+	fetchStepModelEfforts,
+	registerStepProvider,
+	STEP_PROVIDER_ID,
+	stepHighestEffort,
+	stepThinkingLevelMap,
+} from "./step-provider/index.ts";
 import { registerStepStreamRecovery } from "./step-stream-recovery.ts";
 
 export interface StepExtensionOptions {
@@ -35,11 +43,75 @@ export interface StepExtensionOptions {
 	feedbackIdentity?: () => FeedbackIdentity;
 }
 
+/**
+ * Enrich an active Step model with its supported reasoning-effort levels so the
+ * `/effort` picker only offers what `{base}/v1/models/{id}` reports. Mutates the
+ * model in place — the session's active model is the same object the picker
+ * reads — and fetches at most once per model (skips when a map already exists).
+ */
+async function enrichStepModelEffort(
+	model: Model<Api> | undefined,
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+): Promise<void> {
+	try {
+		if (!model || model.provider !== STEP_PROVIDER_ID || model.thinkingLevelMap) return;
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok || !auth.apiKey) return;
+		const baseUrl = auth.baseUrl ?? model.baseUrl;
+		if (!baseUrl) return;
+		const efforts = await fetchStepModelEfforts({
+			baseUrl,
+			modelId: model.id,
+			apiKey: auth.apiKey,
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!efforts) return;
+		model.thinkingLevelMap = stepThinkingLevelMap(efforts);
+		model.reasoning = true;
+		// Default a Step model to its highest supported effort.
+		const highest = stepHighestEffort(efforts);
+		if (highest) pi.setThinkingLevel(highest);
+	} catch {
+		// Best-effort; the model keeps its existing thinking-level defaults.
+	}
+}
+
 /** Product extension layered on pi's native coding-agent runtime. */
 export function createStepExtension(options: StepExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		registerStepProvider(pi);
 		registerStepStreamRecovery(pi);
+		// The Step provider discovers its usable models from `{base}/v1/models`
+		// (see fetchStepModels), but the runtime only refreshes model catalogs from
+		// the network on an explicit request. Trigger one for the Step provider when
+		// a session starts and a Step credential is configured, so `/models` reflects
+		// the account's real usable models instead of the built-in baseline. This is
+		// fire-and-forget with a timeout so it never blocks session start.
+		pi.on("session_start", (_event, ctx) => {
+			try {
+				if (!ctx.modelRegistry.getProviderAuthStatus(STEP_PROVIDER_ID).configured) return;
+				void ctx.modelRegistry
+					.refresh({
+						allowNetwork: true,
+						force: true,
+						providers: [STEP_PROVIDER_ID],
+						signal: AbortSignal.timeout(15_000),
+					})
+					.catch(() => {});
+			} catch {
+				// Discovery is best-effort; the built-in baseline remains available.
+			}
+		});
+		// Populate a Step model's supported reasoning-effort levels (the `/effort`
+		// picker) from `{base}/v1/models/{id}` the first time it becomes active.
+		// Fire-and-forget; failures leave the model's defaults untouched.
+		pi.on("session_start", (_event, ctx) => {
+			void enrichStepModelEffort(ctx.model, ctx, pi);
+		});
+		pi.on("model_select", (event, ctx) => {
+			void enrichStepModelEffort(event.model, ctx, pi);
+		});
 		// Declarative plugins (including StepPage) contribute MCP servers. The
 		// bridge is loaded as part of the Step product extension so ordinary Pi
 		// sessions remain unchanged.

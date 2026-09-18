@@ -760,6 +760,7 @@ export {
 	trackStepTelemetryCrash,
 	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
+export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from "./step/theme-prompt.ts";
 export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {
@@ -808,7 +809,16 @@ export { stripAnsi } from "./utils/ansi.ts";
 export { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "./utils/changelog.ts";
 // Clipboard utilities
 export { copyToClipboard, readClipboardText } from "./utils/clipboard.ts";
-export { extensionForImageMimeType, readClipboardImage } from "./utils/clipboard-image.ts";
+export {
+	cleanPastedPath,
+	extensionForImageMimeType,
+	hasClipboardImage,
+	isImageFilePath,
+	isWindowsPath,
+	readClipboardImage,
+	readClipboardImagePath,
+	wslPathToPosix,
+} from "./utils/clipboard-image.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { parseGitUrl } from "./utils/git.ts";
 export { convertToPng } from "./utils/image-convert.ts";
@@ -825,4 +835,5 @@ export { getPiUserAgent } from "./utils/pi-user-agent.ts";
 export { getPowerShellConfig, getShellConfig, killTrackedDetachedChildren } from "./utils/shell.ts";
 export { loadAllHighlightLanguages } from "./utils/syntax-highlight.ts";
 export { stripBom } from "./utils/text.ts";
+export { formatElapsedTime } from "./utils/time.ts";
 export { ensureTool, type ToolStatus } from "./utils/tools-manager.ts";

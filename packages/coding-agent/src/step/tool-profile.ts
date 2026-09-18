@@ -7,7 +7,11 @@
  * are equivalent.
  */
 
+import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { closeSync, openSync } from "node:fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
 import type { Component } from "@step-harness/pi-tui";
@@ -44,6 +48,13 @@ import type { ReadToolOptions } from "../core/tools/read.ts";
 import type { WriteToolOptions } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { resolvePath } from "../utils/paths.ts";
+import {
+	getShellConfig,
+	getShellEnv,
+	spawnShellChild,
+	trackDetachedChildPid,
+	untrackDetachedChildPid,
+} from "../utils/shell.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { createSearchWebTool, type SearchWebToolOptions } from "./search-web-tool.ts";
 
@@ -122,6 +133,12 @@ const runCommandSchema = Type.Object({
 	timeout_ms: Type.Optional(Type.Integer({ minimum: 1000, maximum: 600000 })),
 	max_output_chars: Type.Optional(
 		Type.Integer({ minimum: 200, maximum: 120000, description: "Output character cap for stdout+stderr" }),
+	),
+	run_in_background: Type.Optional(
+		Type.Boolean({
+			description:
+				"Start the command detached and return immediately with its pid and a log file capturing stdout+stderr. Use for long-running processes such as dev servers: read the log to confirm readiness, then stop it (and the processes it spawned) with the kill command returned in the result. The process is terminated when the session exits; timeout_ms and max_output_chars do not apply.",
+		}),
 	),
 });
 
@@ -1134,6 +1151,77 @@ function createFindToolsDefinition(
 	};
 }
 
+/**
+ * Detached run for long-lived processes (dev servers, watchers). The child
+ * outlives the tool call but not the session: its pid stays in the detached
+ * registry until it exits, and session shutdown kills whatever is left.
+ */
+async function startBackgroundCommand(
+	command: string,
+	commandCwd: string,
+	options: { shellPath?: string; agentDir?: string },
+): Promise<AnyResult> {
+	try {
+		await fsStat(commandCwd);
+	} catch {
+		throw new Error(`Working directory does not exist: ${commandCwd}`);
+	}
+	const shellConfig = getShellConfig(options.shellPath);
+	const logPath = path.join(os.tmpdir(), `step-run-bg-${process.pid}-${randomUUID().slice(0, 8)}.log`);
+	const logFd = openSync(logPath, "a", 0o600);
+	let child: ChildProcess;
+	try {
+		child = spawnShellChild(shellConfig, command, {
+			cwd: commandCwd,
+			env: getShellEnv(options.agentDir),
+			stdout: logFd,
+			stderr: logFd,
+		});
+	} finally {
+		// The child holds its own duplicated descriptors after spawn.
+		closeSync(logFd);
+	}
+	await new Promise<void>((resolve, reject) => {
+		child.once("spawn", () => resolve());
+		child.once("error", (error) => reject(error));
+	});
+	const pid = child.pid;
+	if (pid !== undefined) {
+		trackDetachedChildPid(pid);
+		child.once("exit", () => untrackDetachedChildPid(pid));
+	}
+	child.unref();
+	// Stop the whole process tree, not just the wrapper shell. The child is spawned
+	// detached (a process-group leader on Unix), so a bare `kill <pid>` signals only the
+	// wrapper and orphans the real process (e.g. the dev server it launched). Unix:
+	// `kill -TERM -<pid>` signals the group — a leading `-<pid>` without a signal token
+	// parses as a signal number, so -TERM is required. Windows run_command routes through
+	// Git Bash, so MSYS_NO_PATHCONV=1 keeps it from mangling taskkill's /F /T /PID flags
+	// (without it MSYS rewrites `/F` to `F:/` and taskkill rejects the argument). Verified
+	// on real Git Bash (MINGW64): the returned command terminates the whole tree (exit 0).
+	const stopCommand =
+		pid === undefined
+			? undefined
+			: process.platform === "win32"
+				? `MSYS_NO_PATHCONV=1 taskkill /F /T /PID ${pid}`
+				: `kill -TERM -${pid}`;
+	return {
+		content: [
+			{
+				type: "text",
+				text: [
+					`Started background command (pid ${pid ?? "unknown"}).`,
+					`Log: ${logPath}`,
+					stopCommand === undefined
+						? "Check progress with read_file on the log."
+						: `Check progress with read_file on the log; stop it and its child processes with run_command(${JSON.stringify(stopCommand)}).`,
+				].join("\n"),
+			},
+		],
+		details: { background: true, pid: pid ?? null, logPath },
+	};
+}
+
 /** Create Step-facing definitions backed by Pi's native tools. */
 export function createStepToolProfile(cwd: string, options: StepToolProfileOptions = {}): AnyToolDefinition[] {
 	// A Step profile is also used by embedded hosts that do not launch
@@ -1313,6 +1401,12 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		execute: async (toolCallId, args, signal, onUpdate, ctx) => {
 			const effectiveCwd = getToolCwd(ctx, cwd);
 			const commandCwd = resolveToCwd(args.cwd ?? ".", effectiveCwd);
+			if (args.run_in_background === true) {
+				return startBackgroundCommand(args.command, commandCwd, {
+					...(nativeBashOptions.shellPath ? { shellPath: nativeBashOptions.shellPath } : {}),
+					agentDir,
+				});
+			}
 			const nativeForCwd =
 				args.cwd === undefined ? nativeBash : createBashToolDefinition(commandCwd, nativeBashOptions);
 			const result = await nativeForCwd.execute(toolCallId, mapRunCommandArgs(args, ctx), signal, onUpdate, ctx);

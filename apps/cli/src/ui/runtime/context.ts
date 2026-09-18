@@ -142,7 +142,7 @@ export interface RuntimeContext {
 	getAllQueuedMessages(): { steering: string[]; followUp: string[] };
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handleClearCommand(): Promise<void>;
-	handleClipboardPaste(): Promise<void>;
+	handleClipboardPaste(imageOnly?: boolean): Promise<void>;
 	handleCloneCommand(): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;
 	handleCopyCommand(options?: { flashConfirmation?: boolean; preferSelection?: boolean }): Promise<void>;

@@ -61,6 +61,7 @@ import {
 	runStepConfigCommand,
 	runStepLogin,
 	runStepMcpImportPrompt,
+	runStepThemePrompt,
 	runStepUpdateCommand,
 	STEP_CLI_VERSION,
 	STEP_DEFAULT_MODEL,
@@ -226,6 +227,7 @@ const stepMainOptions: MainOptions = {
 			}),
 		stepMcpImport: async () =>
 			describeStepMcpImportOutcome(await runStepMcpImportPrompt({ themeName: getStepDefaultTheme() })),
+		stepThemePrompt: () => runStepThemePrompt({ themeName: getStepDefaultTheme() }),
 		stepLogout: async () => {
 			const report = await logoutStepCredentials({
 				nativePath: getStepAuthPath(),

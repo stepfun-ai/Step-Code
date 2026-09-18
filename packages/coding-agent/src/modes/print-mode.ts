@@ -89,7 +89,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
@@ -98,7 +98,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			const handler = () => {
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143);
 				});
 			};
 			process.on(signal, handler);
@@ -228,6 +228,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
 	} finally {
+		// Sweep any detached background children on the normal/error-return path; the
+		// signal path already sweeps in its handler before process.exit.
+		killTrackedDetachedChildren();
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}

@@ -684,11 +684,15 @@ function readStringRecord(value: unknown): Record<string, string> | undefined {
 }
 
 function readInputTypes(value: unknown, supportsVision: unknown): ("text" | "image")[] {
+	// StepCode's managed catalog omits capability metadata for most models, so a
+	// missing `input`/`supportsVision` used to register vision-capable models as
+	// text-only and the read tool dropped every image. Mirror hasReasoning: honor
+	// an explicit opt-out, but default an omitted capability to enabled.
 	const input = Array.isArray(value)
 		? value.filter((entry): entry is "text" | "image" => entry === "text" || entry === "image")
 		: [];
 	if (input.length > 0) return [...new Set(input)];
-	return supportsVision === true ? ["text", "image"] : ["text"];
+	return supportsVision === false ? ["text"] : ["text", "image"];
 }
 
 function readCost(value: unknown): ProviderModelConfig["cost"] {

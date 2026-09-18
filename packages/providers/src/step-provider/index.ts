@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import process from "node:process";
-import type { OAuthCredentials } from "../auth/types.ts";
+import type { Credential, OAuthCredentials } from "../auth/types.ts";
 import type { OAuthLoginCallbacks } from "../compat/extension-oauth-types.ts";
-import type { Api, Model } from "../types.ts";
+import type { RefreshModelsContext } from "../models.ts";
+import type { Api, Model, ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from "../types.ts";
 
 /**
  * Model catalog entry for the Step provider. Structurally identical to coding-agent's
@@ -71,8 +72,8 @@ export const STEP_PROVIDER_ENV = {
 
 /** Production defaults; every endpoint can be replaced through the options/env. */
 export const STEP_PROVIDER_DEFAULTS = {
-	// Pi's Anthropic adapter appends `/v1/messages` itself, so this must be the
-	// route prefix rather than the versioned operation URL.
+	// The OpenAI adapter appends `/chat/completions` to `{baseUrl}/v1`, so this
+	// must be the route prefix rather than a versioned operation URL.
 	apiBaseUrl: "https://api.stepfun.com/step_plan",
 	authBaseUrl: "https://platform.stepfun.com",
 	callbackHost: "127.0.0.1",
@@ -83,59 +84,63 @@ export const STEP_PROVIDER_DEFAULTS = {
 /** Marker used for credentials that contain a non-expiring Step API key. */
 export const STEP_STATIC_REFRESH_TOKEN = "step-static-credential";
 
-const STEP_MODEL_COMPAT = {
-	forceAdaptiveThinking: true,
-	supportsToolReferences: false,
+/**
+ * Wire dialect for every Step model. All Step profile URLs speak the OpenAI
+ * Chat Completions API (`{baseUrl}/chat/completions`), so both the built-in
+ * baseline and the models discovered from `{baseUrl}/models` use it.
+ */
+const STEP_MODEL_API: Api = "openai-completions";
+
+/**
+ * `{base}/v1/models` tags each entry with a `model_type`. Step is a coding
+ * agent, so only chat-capable types are usable — large-language models and
+ * routers; other types (web search, TTS, ASR, realtime voice, text-to-image)
+ * are filtered out. Endpoints that do not yet return `model_type` are left
+ * unfiltered for backward compatibility.
+ */
+const STEP_USABLE_MODEL_TYPES = new Set(["大语言模型", "路由模型"]);
+
+/** Metadata `{base}/v1/models` does not always return; used as fallbacks. */
+const STEP_MODEL_DEFAULTS = {
+	reasoning: false,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 256_000,
 } as const;
 
-/** Models exposed by the Step Plan provider. */
-export const STEP_MODELS: readonly StepModelConfig[] = [
-	{
-		id: "step-3.7-flash",
-		name: "Step 3.7 Flash",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-	{
-		id: "step-3.5-flash-2603",
-		name: "Step 3.5 Flash (2603)",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-	{
-		id: "step-3.5-flash",
-		name: "Step 3.5 Flash",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-	{
-		id: "step-router-v1",
-		name: "Step Router v1",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 256_000,
-		maxTokens: 32_000,
-		compat: STEP_MODEL_COMPAT,
-	},
-] as const;
+/** Per-model capabilities parsed from `{base}/v1/models` (any field may be absent). */
+interface StepModelMeta {
+	/** `max_input_tokens` -> context window. */
+	contextWindow?: number;
+	/** `enable_reason` -> extended-thinking support. */
+	reasoning?: boolean;
+	/** `enable_vision_input` -> image input support. */
+	vision?: boolean;
+}
 
-// These ids are owned by the Step provider. A stale models.json can carry a
-// legacy wire dialect for one of them, but Pi must still send the built-in
-// Step catalog through the Anthropic Messages adapter.
-const STEP_BUILTIN_MODEL_IDS = new Set(STEP_MODELS.map((model) => model.id.toLowerCase()));
+/** Build a Step model entry, using discovered metadata where present. */
+function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: StepModelMeta): StepModelConfig {
+	const contextWindow = meta?.contextWindow ?? STEP_MODEL_DEFAULTS.contextWindow;
+	return {
+		id,
+		name,
+		api: STEP_MODEL_API,
+		...(baseUrl ? { baseUrl } : {}),
+		// Default to no thinking and text-only unless the endpoint reports otherwise.
+		reasoning: meta?.reasoning ?? STEP_MODEL_DEFAULTS.reasoning,
+		input: meta?.vision ? ["text", "image"] : ["text"],
+		cost: { ...STEP_MODEL_DEFAULTS.cost },
+		contextWindow,
+		// The endpoint reports no max-output; default it to the input window.
+		maxTokens: contextWindow,
+	};
+}
+
+/**
+ * No built-in baseline: the Step catalog is discovered entirely from
+ * `{base}/v1/models` after login (see `fetchStepModels`). When discovery is
+ * unavailable (offline / logged out / request failure) the list stays empty.
+ */
+export const STEP_MODELS: readonly StepModelConfig[] = [];
 
 const API_BASE_URL_ENV_NAMES = [
 	"STEP_PROVIDER_API_URL",
@@ -199,7 +204,7 @@ export type CallbackServerFactory = (options: StartStepCallbackServerOptions) =>
 /** Resolve provider settings at registration time, after environment setup. */
 export function resolveStepProviderOptions(options: StepProviderOptions = {}): ResolvedStepProviderOptions {
 	const env = options.env ?? process.env;
-	const apiBaseUrl = normalizeStepAnthropicBaseUrl(
+	const apiBaseUrl = normalizeStepApiBaseUrl(
 		validateHttpEndpoint(
 			options.apiBaseUrl ?? readFirstEnv(env, API_BASE_URL_ENV_NAMES) ?? STEP_PROVIDER_DEFAULTS.apiBaseUrl,
 			"Step API base URL",
@@ -230,8 +235,9 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 
 	const clientId = options.clientId ?? readFirstEnv(env, [STEP_PROVIDER_ENV.clientId]);
 	const scope = options.scope ?? readFirstEnv(env, [STEP_PROVIDER_ENV.scope]);
+	// Empty is allowed: the Step catalog is discovered dynamically from
+	// `{base}/v1/models`; there is no built-in baseline.
 	const models = options.models ?? STEP_MODELS;
-	if (models.length === 0) throw new Error("Step provider must expose at least one model");
 
 	return {
 		providerId,
@@ -255,31 +261,24 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 }
 
 /**
- * A model entry may override the provider URL. Keep that override compatible
- * with Pi's Anthropic adapter as well; otherwise a caller that supplies
- * `/v1/messages` at model level bypasses the provider-level repair.
+ * A model entry may omit its dialect. Default it to the shared Step wire
+ * dialect (OpenAI Chat Completions) so a bare custom entry streams correctly.
  */
 export function normalizeStepModelConfig(model: StepModelConfig): StepModelConfig {
-	const api = model.api ?? "anthropic-messages";
 	return {
 		...model,
-		...(api === "anthropic-messages" && model.baseUrl
-			? { baseUrl: normalizeStepAnthropicBaseUrl(model.baseUrl) }
-			: {}),
+		api: model.api ?? STEP_MODEL_API,
 		input: [...model.input],
 	};
 }
 
-export function normalizeStepModel(model: Model<Api>, canonicalBaseUrl: string): Model<Api> {
-	if (STEP_BUILTIN_MODEL_IDS.has(model.id.toLowerCase())) {
-		// Step owns these ids. Always restore both the wire dialect and endpoint,
-		// including files that already say `anthropic-messages` but still point at
-		// an old proxy host. Otherwise the models.json overlay can override the
-		// provider default and recreate the 404 after a successful login.
-		return { ...model, api: "anthropic-messages", baseUrl: canonicalBaseUrl };
-	}
-	if (model.api !== "anthropic-messages") return model;
-	return { ...model, baseUrl: normalizeStepAnthropicBaseUrl(model.baseUrl) };
+/**
+ * Every Step model uses the active profile's OpenAI endpoint and dialect.
+ * Restore both so a stale models.json overlay (e.g. an old proxy host or the
+ * legacy Anthropic dialect) cannot misroute a Step model.
+ */
+export function normalizeStepModel(model: Model<Api>, openaiBaseUrl: string): Model<Api> {
+	return { ...model, api: STEP_MODEL_API, baseUrl: openaiBaseUrl };
 }
 
 export async function loginStepOAuth(
@@ -563,12 +562,13 @@ function validateHttpEndpoint(value: string, label: string): string {
 }
 
 /**
- * Pi's Anthropic SDK always appends `/v1/messages` to `baseUrl`. Step's older
- * configuration accepted either that operation URL or its `/v1` parent, so
- * normalize all three supported spellings to the route prefix before handing
- * the model to Pi.
+ * Reduce a Step endpoint to its route prefix. Step's configuration (and older
+ * models.json files) accepted the versioned operation URL (`/v1/messages`),
+ * the `/messages` operation, or the `/v1` parent; strip any of those trailing
+ * segments so callers can append the correct suffix for the active dialect
+ * (`stepOpenAiBaseUrl` re-appends `/v1`).
  */
-export function normalizeStepAnthropicBaseUrl(value: string): string {
+export function normalizeStepApiBaseUrl(value: string): string {
 	try {
 		const url = new URL(value);
 		let pathname = url.pathname.replace(/\/+$/u, "");
@@ -587,9 +587,163 @@ export function normalizeStepAnthropicBaseUrl(value: string): string {
 	} catch {
 		// The provider resolver validates its own endpoint. This exported helper is
 		// also used while repairing an existing models.json, where malformed custom
-		// entries must remain intact for Pi's normal validation diagnostics.
+		// entries must remain intact for normal validation diagnostics.
 		return value;
 	}
+}
+
+/**
+ * OpenAI-style base (`.../v1`) for the active profile. `resolved.apiBaseUrl` is
+ * already normalized (trailing `/v1` stripped), so appending `/v1` yields the
+ * OpenAI base for every profile:
+ *   step_plan   -> https://api.stepfun.com/step_plan/v1
+ *   platform_cn -> https://api.stepfun.com/v1
+ * The OpenAI adapter appends `/chat/completions`; discovery uses `/models`.
+ */
+export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
+	return `${normalizeStepApiBaseUrl(apiBaseUrl)}/v1`;
+}
+
+/**
+ * Discover the chat-capable models the current credential can use from
+ * `{base}/v1/models`, filtered by the endpoint's `model_type` (see
+ * {@link STEP_USABLE_MODEL_TYPES}). Per-model capabilities are taken from the
+ * response where present: `max_input_tokens` -> context window, `enable_reason`
+ * -> thinking support, `enable_vision_input` -> image input; missing fields use
+ * the metadata defaults.
+ *
+ * When discovery is unavailable — offline, unauthenticated, on any
+ * transport/parse failure, or when the endpoint returns no usable models — it
+ * returns the configured baseline (empty by default), so the Step catalog is
+ * simply empty until a successful fetch.
+ */
+export async function fetchStepModels(
+	context: RefreshModelsContext,
+	resolved: ResolvedStepProviderOptions,
+): Promise<StepModelConfig[]> {
+	const baseline = (): StepModelConfig[] => resolved.models.map((model) => ({ ...model, input: [...model.input] }));
+	if (!context.allowNetwork || context.signal.aborted) return baseline();
+	const token = readStepBearerToken(context.credential);
+	if (!token) return baseline();
+	const baseUrl = stepOpenAiBaseUrl(resolved.apiBaseUrl);
+	const fetchFn = resolveFetch(resolved.fetch);
+	let response: Response;
+	try {
+		response = await fetchFn(`${baseUrl}/models`, {
+			method: "GET",
+			headers: { accept: "application/json", authorization: `Bearer ${token}` },
+			signal: context.signal,
+		});
+	} catch {
+		return baseline();
+	}
+	if (!response.ok) return baseline();
+	const payload = await readJsonObject(response);
+	const data = Array.isArray(payload.data) ? payload.data : [];
+	const entries: { id: string; modelType?: string; meta: StepModelMeta }[] = [];
+	for (const entry of data) {
+		if (!entry || typeof entry !== "object") continue;
+		const record = entry as Record<string, unknown>;
+		const id = readString(record, "id");
+		if (!id) continue;
+		entries.push({
+			id,
+			modelType: readString(record, "model_type"),
+			meta: {
+				contextWindow: readPositiveNumber(record, "max_input_tokens"),
+				reasoning: readBoolean(record, "enable_reason"),
+				vision: readBoolean(record, "enable_vision_input"),
+			},
+		});
+	}
+	// Keep only large-language models when the endpoint tags model types; if no
+	// entry carries a type (older/other endpoints), leave the list unfiltered.
+	const typed = entries.some((entry) => entry.modelType !== undefined);
+	const usable = typed
+		? entries.filter((entry) => entry.modelType !== undefined && STEP_USABLE_MODEL_TYPES.has(entry.modelType))
+		: entries;
+	const seen = new Set<string>();
+	const models: StepModelConfig[] = [];
+	for (const entry of usable) {
+		if (seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		models.push(stepModelConfig(entry.id, entry.id, baseUrl, entry.meta));
+	}
+	return models.length > 0 ? models : baseline();
+}
+
+/** Reasoning-effort levels the Step endpoint may report, in ascending order. */
+const STEP_EFFORT_LEVELS: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** All selectable thinking levels, including the "off" (no reasoning) option. */
+const STEP_THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", ...STEP_EFFORT_LEVELS];
+
+/**
+ * Convert a `reasoning_effort_support_list` into a `thinkingLevelMap`: listed
+ * levels map to their own effort value; every other level (including `off` when
+ * the list omits it) is marked `null` (unsupported), so the `/effort` picker
+ * shows exactly what the endpoint reports.
+ */
+export function stepThinkingLevelMap(efforts: readonly string[]): ThinkingLevelMap {
+	const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
+	const map: ThinkingLevelMap = {};
+	for (const level of STEP_THINKING_LEVELS) {
+		map[level] = supported.has(level) ? level : null;
+	}
+	return map;
+}
+
+/** Highest supported reasoning effort (used as the default level for a model). */
+export function stepHighestEffort(efforts: readonly string[]): ThinkingLevel | undefined {
+	const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
+	for (let index = STEP_EFFORT_LEVELS.length - 1; index >= 0; index -= 1) {
+		const level = STEP_EFFORT_LEVELS[index]!;
+		if (supported.has(level)) return level;
+	}
+	return undefined;
+}
+
+export interface FetchStepModelEffortsInput {
+	/** OpenAI-style base (`.../v1`); the request targets `{baseUrl}/models/{modelId}`. */
+	readonly baseUrl: string;
+	readonly modelId: string;
+	readonly apiKey: string;
+	readonly fetch?: typeof fetch;
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * Fetch a single model's supported reasoning efforts from
+ * `{baseUrl}/models/{modelId}` (`reasoning_effort_support_list`). Returns
+ * `undefined` on any transport/parse failure or when the field is absent.
+ */
+export async function fetchStepModelEfforts(input: FetchStepModelEffortsInput): Promise<string[] | undefined> {
+	if (!input.apiKey.trim()) return undefined;
+	const base = input.baseUrl.replace(/\/+$/u, "");
+	const fetchFn = resolveFetch(input.fetch);
+	let response: Response;
+	try {
+		response = await fetchFn(`${base}/models/${encodeURIComponent(input.modelId)}`, {
+			method: "GET",
+			headers: { accept: "application/json", authorization: `Bearer ${input.apiKey}` },
+			signal: input.signal,
+		});
+	} catch {
+		return undefined;
+	}
+	if (!response.ok) return undefined;
+	const payload = await readJsonObject(response);
+	const list = payload.reasoning_effort_support_list;
+	if (!Array.isArray(list)) return undefined;
+	const efforts = list.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+	return efforts.length > 0 ? efforts : undefined;
+}
+
+function readStepBearerToken(credential: Credential | undefined): string | undefined {
+	if (!credential) return undefined;
+	if (credential.type === "oauth") return credential.access.trim() || undefined;
+	if (credential.type === "api_key") return credential.key?.trim() || undefined;
+	return undefined;
 }
 
 function nonEmpty(value: string, label: string): string {
@@ -607,6 +761,11 @@ function readPositiveNumber(value: Record<string, unknown>, key: string): number
 	const result = value[key];
 	if (typeof result !== "number" || !Number.isFinite(result) || result <= 0) return undefined;
 	return result;
+}
+
+function readBoolean(value: Record<string, unknown>, key: string): boolean | undefined {
+	const result = value[key];
+	return typeof result === "boolean" ? result : undefined;
 }
 
 function tokenErrorDetail(value: Record<string, unknown>): string {
