@@ -98,6 +98,19 @@ describe("readImageDimensions", () => {
 		expect(readImageDimensions(makeWebpVp8l(300, 430))).toEqual({ width: 300, height: 430 });
 	});
 
+	it("reads WebP VP8L dimensions using the high-order width/height bits", () => {
+		// 1600x1200 forces the top VP8L byte (height bits 10-13) and the full 6-bit
+		// width high field non-zero, which 300x430 leaves at 0.
+		expect(readImageDimensions(makeWebpVp8l(1600, 1200))).toEqual({ width: 1600, height: 1200 });
+	});
+
+	it("ignores WebP VP8 scale bits in the top two dimension bits", () => {
+		const buf = makeWebpVp8(300, 430);
+		buf[27] |= 0xc0; // horizontal scale bits, stripped by the 0x3fff mask
+		buf[29] |= 0xc0; // vertical scale bits
+		expect(readImageDimensions(buf)).toEqual({ width: 300, height: 430 });
+	});
+
 	it("returns null for unrecognized bytes", () => {
 		expect(readImageDimensions(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))).toBeNull();
 	});
