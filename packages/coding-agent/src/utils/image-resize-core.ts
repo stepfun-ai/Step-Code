@@ -1,4 +1,5 @@
 import { applyExifOrientation } from "./exif-orientation.ts";
+import { readImageDimensions } from "./image-dimensions.ts";
 import { loadPhoton } from "./photon.ts";
 
 export interface ImageResizeOptions {
@@ -47,8 +48,11 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
  * Resize an image to fit within the specified max dimensions and encoded file size.
  * Returns null if the image cannot be resized below maxBytes.
  *
- * Uses Photon (Rust/WASM) for image processing. If Photon is not available,
- * returns null.
+ * Uses Photon (Rust/WASM) for image processing. When Photon is unavailable
+ * (release-binary layout gaps, WASM load failures), fall back to a header-only
+ * dimension read: if the raw image already fits both the pixel and base64 size
+ * budgets, pass it through untouched; otherwise return null so the caller
+ * surfaces a real "cannot resize" error instead of dropping a compliant image.
  *
  * Strategy for staying under maxBytes:
  * 1. First resize to maxWidth/maxHeight
@@ -66,7 +70,7 @@ export async function resizeImageInProcess(
 
 	const photon = await loadPhoton();
 	if (!photon) {
-		return null;
+		return passthroughIfWithinLimits(inputBytes, mimeType, inputBase64Size, opts);
 	}
 
 	let image: ReturnType<typeof photon.PhotonImage.new_from_byteslice> | undefined;
@@ -161,4 +165,35 @@ export async function resizeImageInProcess(
 			image.free();
 		}
 	}
+}
+
+/**
+ * When Photon/WASM cannot be loaded, we still want a compliant image to reach
+ * the model. Read raw pixel dimensions from the container header and pass the
+ * original bytes through iff both the pixel budget and the base64 budget are
+ * already satisfied. Anything oversized returns null so the caller reports a
+ * real "cannot resize below the inline limit" error instead of silently
+ * shipping an unbounded image.
+ */
+function passthroughIfWithinLimits(
+	inputBytes: Uint8Array,
+	mimeType: string,
+	inputBase64Size: number,
+	opts: Required<ImageResizeOptions>,
+): ResizedImage | null {
+	const dimensions = readImageDimensions(inputBytes);
+	if (!dimensions) return null;
+	if (dimensions.width > opts.maxWidth || dimensions.height > opts.maxHeight) return null;
+	if (inputBase64Size >= opts.maxBytes) return null;
+
+	const format = mimeType.split("/")[1] ?? "png";
+	return {
+		data: Buffer.from(inputBytes).toString("base64"),
+		mimeType: mimeType || `image/${format}`,
+		originalWidth: dimensions.width,
+		originalHeight: dimensions.height,
+		width: dimensions.width,
+		height: dimensions.height,
+		wasResized: false,
+	};
 }
