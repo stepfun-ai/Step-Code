@@ -73,14 +73,35 @@ model, startup restores its `anthropic-messages` API and Step endpoint as well.
 Upgrading from an earlier Step build therefore does not require signing
 in again.
 
+The login page offers one profile per plan and region. Each profile owns its
+model endpoint, its developer-center login page and the environment variables
+that override them:
+
+| Profile | Credential | Model base URL | Login page | Overrides |
+| --- | --- | --- | --- | --- |
+| `step_plan` | browser | `https://api.stepfun.com/step_plan` | `https://platform.stepfun.com` | `STEP_CLI_STEP_PLAN_API_URL`, `STEP_CLI_DEVCENTER_AUTH_CN_URL` |
+| `step_plan_oversea` | browser | `https://api.stepfun.ai/step_plan` | `https://platform.stepfun.ai` | `STEP_CLI_STEP_PLAN_API_OVERSEA_URL`, `STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL` |
+| `platform_cn` | API key | `https://api.stepfun.com/v1` | `https://platform.stepfun.com/interface-key` | `STEP_CLI_PLATFORM_API_URL`, `STEP_CLI_PLATFORM_AUTH_URL` |
+| `platform_oversea` | API key | `https://api.stepfun.ai/v1` | `https://platform.stepfun.ai/interface-key` | `STEP_CLI_PLATFORM_API_OVERSEA_URL`, `STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL` |
+
+The chosen profile is stored in `auth.json` next to the credential, and it is
+the single source of the region afterwards: login writes the profile base URL to
+`STEP_LOGIN_PROFILE_API_URL` and its developer center to
+`STEP_LOGIN_PROFILE_AUTH_URL` for the provider, `search_web` picks its endpoint
+from it, and `step login status` validates the credential against that profile's
+`/v1/models` and reports `Step Plan` or `Step Plan Oversea`. Telemetry, feedback,
+binary updates and the steppage plugin still use mainland endpoints regardless of
+profile.
+
 The Step tool profile also registers `search_web`, backed by the remote
 `stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
 resolved from an explicit `step --api-key`, then `STEP_CLI_SEARCH_API_KEY`,
 `STEPCLI_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
-	only as a Bearer header. `platform_oversea` login profiles use
-	`https://api.stepfun.ai/v1/mcp/web_search/mcp`; `step_plan` and
-	`platform_cn` use `https://api.stepfun.com/v1/mcp/web_search/mcp`. An
-	unrecognized profile falls back to that same mainland endpoint.
+	only as a Bearer header. The `step_plan_oversea` and `platform_oversea`
+	login profiles use `https://api.stepfun.ai/v1/mcp/web_search/mcp`;
+	`step_plan` and `platform_cn` use
+	`https://api.stepfun.com/v1/mcp/web_search/mcp`. An unrecognized profile
+	falls back to that same mainland endpoint.
 	`STEP_CLI_SEARCH_WEB_MCP_URL` and `STEPCLI_SEARCH_WEB_MCP_URL` override this
 	profile-based selection. This adapter does not add a separate search
 	credential store or `integrations.search` settings surface. The

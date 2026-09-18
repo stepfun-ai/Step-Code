@@ -489,7 +489,13 @@ try {
 					process.stdout.write("Not signed in. Run `step login`.\n");
 				} else {
 					process.stdout.write(`Signed in${status.account ? ` as ${status.account}` : ""}.\n`);
-					process.stdout.write(`Login method: ${status.loginMethod === "api_key" ? "apiKey" : "Step Plan"}.\n`);
+					const loginMethodLabel =
+						status.loginMethod === "api_key"
+							? "apiKey"
+							: status.loginMethod === "step_plan_oversea"
+								? "Step Plan Oversea"
+								: "Step Plan";
+					process.stdout.write(`Login method: ${loginMethodLabel}.\n`);
 					const validity =
 						status.validity === "valid"
 							? "check passed"

@@ -65,6 +65,37 @@ describe("Step login status", () => {
 		expect(unavailable).toMatchObject({ loginMethod: "api_key", validity: "unavailable" });
 	});
 
+	test("validates an overseas plan credential against the overseas endpoint", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "step-status-"));
+		dirs.push(dir);
+		const authPath = join(dir, "auth.json");
+		await AuthStorage.create(authPath).modify("step", async () => ({
+			type: "oauth",
+			access: "oversea-token",
+			refresh: "step-static-credential",
+			expires: Number.MAX_SAFE_INTEGER,
+			profile: "step_plan_oversea",
+			uid: "user-456",
+		}));
+		let requestedUrl = "";
+		const status = await getStepLoginStatus({
+			authPath,
+			env: {},
+			fetch: async (input) => {
+				requestedUrl = String(input);
+				return response(200);
+			},
+		});
+		expect(status).toEqual({
+			loggedIn: true,
+			loginMethod: "step_plan_oversea",
+			profile: "step_plan_oversea",
+			account: "user-456",
+			validity: "valid",
+		});
+		expect(requestedUrl).toBe("https://api.stepfun.ai/step_plan/v1/models");
+	});
+
 	test("recognizes an API key stored in the OAuth-shaped auth file", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "step-status-"));
 		dirs.push(dir);

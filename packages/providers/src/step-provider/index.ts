@@ -161,7 +161,15 @@ const API_BASE_URL_ENV_NAMES = [
 	"STEP_LOGIN_PROFILE_API_URL",
 	"STEP_CLI_STEP_PLAN_API_URL",
 ] as const;
-const AUTH_BASE_URL_ENV_NAMES = ["STEP_PROVIDER_AUTH_URL", "STEP_AUTH_URL", STEP_PROVIDER_ENV.authBaseUrl] as const;
+const AUTH_BASE_URL_ENV_NAMES = [
+	"STEP_PROVIDER_AUTH_URL",
+	"STEP_AUTH_URL",
+	// Set by the shared Step login flow from the stored profile, so a provider-side
+	// re-login opens the region's own developer center. Below the explicit user
+	// overrides, like its API counterpart.
+	"STEP_LOGIN_PROFILE_AUTH_URL",
+	STEP_PROVIDER_ENV.authBaseUrl,
+] as const;
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const MAX_ERROR_DETAIL_LENGTH = 240;
 
