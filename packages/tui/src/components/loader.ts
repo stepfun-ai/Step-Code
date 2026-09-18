@@ -1,4 +1,4 @@
-import type { TUI } from "../tui.ts";
+import { isIncrementalRenderDisabled, type TUI } from "../tui.ts";
 import { Text } from "./text.ts";
 
 export interface LoaderIndicatorOptions {
@@ -24,6 +24,7 @@ export class Loader extends Text {
 	private spinnerColorFn: (str: string) => string;
 	private messageColorFn: (str: string) => string;
 	private message: string = "Loading...";
+	private cache?: { width: number; native: string[]; lines: string[] };
 
 	constructor(
 		ui: TUI,
@@ -41,7 +42,21 @@ export class Loader extends Text {
 	}
 
 	render(width: number): string[] {
-		return ["", ...super.render(width)];
+		// The leading blank row is static, so the array can be reused while the text is
+		// unchanged. A stable ref lets the parent container keep its cached prefix.
+		const native = super.render(width);
+		const cached = this.cache;
+		if (
+			!isIncrementalRenderDisabled() &&
+			cached !== undefined &&
+			cached.width === width &&
+			cached.native === native
+		) {
+			return cached.lines;
+		}
+		const lines = ["", ...native];
+		this.cache = { width, native, lines };
+		return lines;
 	}
 
 	start(): void {
@@ -58,6 +73,12 @@ export class Loader extends Text {
 
 	setMessage(message: string): void {
 		this.message = message;
+		this.updateDisplay();
+	}
+
+	/** Swaps the indicator paint at runtime (e.g. a color pulse between frames). */
+	setSpinnerColor(colorFn: (str: string) => string): void {
+		this.spinnerColorFn = colorFn;
 		this.updateDisplay();
 	}
 

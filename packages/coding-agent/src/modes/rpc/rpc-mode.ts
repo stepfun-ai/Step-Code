@@ -25,8 +25,8 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { type Theme, theme } from "../../theme/theme.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
-import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {

@@ -1,4 +1,7 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import {
@@ -7,7 +10,8 @@ import {
 	routeSubagentRpcLine,
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
-} from "../src/extensions/step-subagent.ts";
+} from "../src/features/step-subagent.ts";
+import { builtinStepAgents, resolveStepAgent, type StepAgentConfig } from "../src/features/step-subagent-agents.ts";
 
 interface SentMessage {
 	customType: string;
@@ -163,6 +167,129 @@ test("background lane completion steers an escaped agent-notification", async ()
 	expect(done.content).toContain('alias="audit&quot; role=&quot;admin"');
 	expect(done.content).not.toContain('alias="audit" role="admin"');
 	expect(done.content).toContain("lane output");
+});
+
+test("accepts the descriptive general-purpose name as an alias for the built-in general agent", async () => {
+	const { api, tools } = createApi();
+	const agents: string[] = [];
+	createStepSubagentExtension({
+		includeBuiltinAgents: true,
+		agentDir: "/tmp/step-agent-test",
+		runner: async (input) => {
+			agents.push(input.agent.name);
+			return textResult("alias output");
+		},
+	})(api);
+	const result = (await tools
+		.get("subagent")!
+		.execute(
+			"call",
+			{ agent: "general-purpose", task: "inspect" } as never,
+			undefined,
+			undefined,
+			createContext("/workspace"),
+		)) as AgentToolResult<unknown>;
+
+	expect(agents).toEqual(["general"]);
+	expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("alias output") });
+});
+
+test("an exact custom agent name takes precedence over a descriptive alias", () => {
+	const custom: StepAgentConfig = {
+		name: "general-purpose",
+		description: "Custom review role",
+		systemPrompt: "Review only.",
+		source: "user",
+	};
+	expect(resolveStepAgent([...builtinStepAgents, custom], "general-purpose")).toBe(custom);
+});
+
+test.each(["single", "parallel"])(
+	"a %s alias call confirms the resolved project agent before running",
+	async (mode) => {
+		const cwd = await mkdtemp(join(tmpdir(), "step-agent-alias-"));
+		try {
+			const projectAgentsDir = join(cwd, ".step-cli", "agents");
+			await mkdir(projectAgentsDir, { recursive: true });
+			await writeFile(
+				join(projectAgentsDir, "general.md"),
+				"---\nname: general\ndescription: Project general agent\n---\nUse the project instructions.\n",
+			);
+			const { api, tools } = createApi();
+			let runs = 0;
+			let confirmations = 0;
+			createStepSubagentExtension({
+				includeBuiltinAgents: true,
+				agentDir: join(cwd, "user"),
+				configDirName: ".step-cli",
+				runner: async () => {
+					runs++;
+					return textResult("unexpected run");
+				},
+			})(api);
+			const ctx = createContext(cwd);
+			ctx.hasUI = true;
+			ctx.isProjectTrusted = () => false;
+			ctx.ui.confirm = async () => {
+				confirmations++;
+				return false;
+			};
+			const task = { agent: "general-purpose", task: "inspect" };
+			const result = await tools
+				.get("subagent")!
+				.execute(
+					"call",
+					{ agentScope: "both", ...(mode === "parallel" ? { tasks: [task] } : task) } as never,
+					undefined,
+					undefined,
+					ctx,
+				);
+			expect(confirmations).toBe(1);
+			expect(runs).toBe(0);
+			expect(result.content[0]).toMatchObject({
+				type: "text",
+				text: "Canceled: project-local agents not approved.",
+			});
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	},
+);
+
+test("returns invalid background parameters immediately without creating a notification lane", async () => {
+	const { api, tools, sent } = createApi();
+	let runs = 0;
+	createStepSubagentExtension({
+		includeBuiltinAgents: true,
+		agentDir: "/tmp/step-agent-test",
+		runner: async () => {
+			runs += 1;
+			return textResult("unexpected run");
+		},
+	})(api);
+	const result = (await tools
+		.get("subagent")!
+		.execute(
+			"call",
+			{ run_in_background: true } as never,
+			undefined,
+			undefined,
+			createContext("/workspace"),
+		)) as AgentToolResult<unknown>;
+
+	expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Invalid parameters") });
+	expect(runs).toBe(0);
+	expect(sent).toHaveLength(0);
+	const lanes = await tools
+		.get("agent_send")!
+		.execute(
+			"call",
+			{ to: { all: true }, action: "stop" } as never,
+			undefined,
+			undefined,
+			createContext("/workspace"),
+		);
+	expect(lanes.content[0]).toMatchObject({ type: "text", text: "agent_send: no matching background agents" });
 });
 
 test("a hostile alias cannot forge the notification wrapper close from the content body", async () => {

@@ -319,7 +319,8 @@ function Install-ManagedTool {
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)][string]$Repository,
     [Parameter(Mandatory = $true)][string]$TargetId,
-    [Parameter(Mandatory = $true)][string]$WorkDir
+    [Parameter(Mandatory = $true)][string]$WorkDir,
+    [string]$ExtractDir
   )
 
   $toolDir = Join-Path $AgentDir 'bin'
@@ -331,6 +332,18 @@ function Install-ManagedTool {
   $systemNames = if ($Name -eq 'fd') { @('fd.exe', 'fd', 'fdfind.exe', 'fdfind') } else { @('rg.exe', 'rg') }
   if (Test-CommandAvailable -Names $systemNames) {
     return
+  }
+
+  # Prefer the binary shipped inside the release archive (tools\) so a packaged
+  # install needs no network. Fall back to the GitHub download below when the
+  # archive did not carry it.
+  if ($ExtractDir) {
+    $bundled = Join-Path $ExtractDir (Join-Path 'tools' $binaryName)
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) {
+      New-Item -ItemType Directory -Path $toolDir -Force | Out-Null
+      Copy-FileWithRetry -Source $bundled -Destination $destination
+      return
+    }
   }
 
   try {
@@ -359,20 +372,20 @@ function Install-ManagedTool {
     Copy-FileWithRetry -Source $found[0].FullName -Destination $destination
   } catch {
     # fd/rg are convenience dependencies. A system installation or a later
-    # migration can still provide them, so a failed optional download must not
-    # make the main Step installation fail.
-    Write-Log "warning: could not install $Name ($($_.Exception.Message)); install it manually if needed"
+    # migration can still provide them, and grep/find fall back to git/POSIX at
+    # runtime, so a failed optional download is silently ignored (no warning).
   }
 }
 
 function Install-ManagedTools {
   param(
     [Parameter(Mandatory = $true)][string]$TargetId,
-    [Parameter(Mandatory = $true)][string]$WorkDir
+    [Parameter(Mandatory = $true)][string]$WorkDir,
+    [string]$ExtractDir
   )
   New-Item -ItemType Directory -Path (Join-Path $AgentDir 'bin') -Force | Out-Null
-  Install-ManagedTool -Name 'fd' -Repository 'sharkdp/fd' -TargetId $TargetId -WorkDir $WorkDir
-  Install-ManagedTool -Name 'rg' -Repository 'BurntSushi/ripgrep' -TargetId $TargetId -WorkDir $WorkDir
+  Install-ManagedTool -Name 'fd' -Repository 'sharkdp/fd' -TargetId $TargetId -WorkDir $WorkDir -ExtractDir $ExtractDir
+  Install-ManagedTool -Name 'rg' -Repository 'BurntSushi/ripgrep' -TargetId $TargetId -WorkDir $WorkDir -ExtractDir $ExtractDir
 }
 
 function Test-Install {
@@ -383,22 +396,141 @@ function Test-Install {
   }
 }
 
+function Get-MissingPathEntries {
+  # Return the entries from $Candidates that are not already present in the
+  # persistent PATH string $PathValue. $PathValue is the un-expanded registry
+  # value; $Candidates are the (already expanded) directories we want on PATH.
+  #
+  # Idempotency depends on comparing *expanded* paths: a literal candidate such
+  # as C:\Users\me\.step-cli\bin must match an existing %USERPROFILE%\.step-cli\bin
+  # entry, otherwise every run double-appends. So each existing entry is run
+  # through [Environment]::ExpandEnvironmentVariables() FOR COMPARISON ONLY --
+  # the caller writes the original un-expanded strings back untouched. On top of
+  # that, comparison is case-insensitive and trailing-backslash normalized.
+  param(
+    [AllowNull()][AllowEmptyString()][string]$PathValue,
+    [Parameter(Mandatory = $true)][string[]]$Candidates
+  )
+  # Set-StrictMode makes $null.Split(...) throw; coalesce before any string call.
+  if ($null -eq $PathValue) { $PathValue = '' }
+
+  $existing = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($entry in ($PathValue -split ';')) {
+    if ($entry) {
+      [void]$existing.Add([Environment]::ExpandEnvironmentVariables($entry).TrimEnd('\').ToLowerInvariant())
+    }
+  }
+
+  $missing = @()
+  foreach ($candidate in $Candidates) {
+    $normalized = [Environment]::ExpandEnvironmentVariables($candidate).TrimEnd('\').ToLowerInvariant()
+    if (-not $existing.Contains($normalized)) {
+      $missing += $candidate
+    }
+  }
+  return $missing
+}
+
+function Send-EnvironmentChangeBroadcast {
+  # Broadcast WM_SETTINGCHANGE so Explorer and subsequently-launched processes
+  # pick up the new PATH without a reboot. It does NOT refresh already-open
+  # shells' $env:PATH -- those must be reopened. Best-effort: a broadcast failure
+  # must never fail the install.
+  try {
+    # Unique type name (namespaced) so a repeated Add-Type in the same session
+    # -- e.g. self-update re-running the installer -- does not throw; guard on
+    # the type already being loaded before defining it again.
+    $typeName = 'StepCliInstaller.NativeEnvironmentBroadcast'
+    if (-not ([System.Management.Automation.PSTypeName]$typeName).Type) {
+      Add-Type -Namespace 'StepCliInstaller' -Name 'NativeEnvironmentBroadcast' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);
+'@
+    }
+    $HWND_BROADCAST = [IntPtr]0xffff
+    $WM_SETTINGCHANGE = 0x001A
+    $SMTO_ABORTIFHUNG = 0x0002
+    $result = [UIntPtr]::Zero
+    [void][StepCliInstaller.NativeEnvironmentBroadcast]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [IntPtr]::Zero, 'Environment', $SMTO_ABORTIFHUNG, 5000, [ref]$result)
+  } catch {
+    # Ignore: notifying other processes is a convenience, not a requirement.
+  }
+}
+
 function Write-Result {
   param([Parameter(Mandatory = $true)][string]$ResolvedVersion)
   $binaryPath = Join-Path $InstallDir 'step.exe'
   Write-Host "  installed step-cli $ResolvedVersion to $binaryPath" -ForegroundColor Green
-  $pathEntries = @($env:PATH -split ';' | Where-Object { $_ })
+
+  # Persist $InstallDir / $AgentDir\bin as resolved (these already carry any
+  # custom STEP_INSTALL_DIR / STEP_CODING_AGENT_DIR values), not hardcoded
+  # defaults.
   $managedBin = Join-Path $AgentDir 'bin'
-  $missing = @($InstallDir, $managedBin) | Where-Object { $pathEntries -notcontains $_ }
-  if ($missing.Count -gt 0) {
-    Write-Host ''
-    Write-Log 'note: add these directories to PATH for future sessions:'
-    foreach ($entry in $missing) {
-      Write-Host "  $entry"
+  $candidates = @($InstallDir, $managedBin)
+
+  try {
+    # Persist PATH by writing HKCU\Environment directly. This is deliberate --
+    # do NOT "simplify" it into setx or [Environment]::SetEnvironmentVariable:
+    #   * SetEnvironmentVariable('Path',...,'User') reads the already-expanded
+    #     value and writes it back as REG_SZ, permanently flattening any
+    #     REG_EXPAND_SZ entry (e.g. %USERPROFILE%\bin, %JAVA_HOME%\bin) to a
+    #     literal -- data corruption for anyone whose PATH uses %VAR%.
+    #   * setx truncates PATH at 1024 characters.
+    # A direct registry read with DoNotExpandEnvironmentNames + write with
+    # RegistryValueKind.ExpandString is the only route that both preserves
+    # %VAR% references un-expanded and avoids the 1024-char truncation.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    if ($null -eq $key) {
+      # A pristine user profile may not have the Environment subkey yet.
+      $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
     }
-    Write-Log 'for the current PowerShell session:'
-    $pathCommand = '  $env:PATH = "' + (($missing -join ';') + ';$env:PATH"')
-    Write-Host $pathCommand
+    try {
+      $currentPath = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+      # Coalesce a missing/null value to '' BEFORE any string method (StrictMode).
+      if ($null -eq $currentPath) { $currentPath = '' }
+      $currentPath = [string]$currentPath
+
+      $missing = @(Get-MissingPathEntries -PathValue $currentPath -Candidates $candidates)
+      if ($missing.Count -gt 0) {
+        # Join without producing ';;' or a leading ';'.
+        $trimmed = $currentPath.TrimEnd(';')
+        $newPath = if ($trimmed) { $trimmed + ';' + ($missing -join ';') } else { $missing -join ';' }
+        # Write the original un-expanded PATH plus the new dirs as ExpandString
+        # so any %VAR% entries survive.
+        $key.SetValue('Path', $newPath, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+
+        # Update the current session too. Append (do not prepend) so a
+        # pre-existing system `step` earlier on PATH is not shadowed. Guarded on
+        # $missing being non-empty so this never leaves a trailing ';'.
+        $env:PATH = ($env:PATH.TrimEnd(';') + ';' + ($missing -join ';'))
+
+        Send-EnvironmentChangeBroadcast
+
+        Write-Host ''
+        Write-Log 'added to your PATH (User):'
+        foreach ($entry in $missing) {
+          Write-Host "  $entry"
+        }
+        Write-Log 'open a new shell to use step'
+      }
+    } finally {
+      $key.Close()
+    }
+  } catch {
+    # Locked-down HKCU (or any registry failure): degrade to the printed
+    # advisory rather than failing the install.
+    $pathEntries = @($env:PATH -split ';' | Where-Object { $_ })
+    $missing = @($candidates | Where-Object { $pathEntries -notcontains $_ })
+    if ($missing.Count -gt 0) {
+      Write-Host ''
+      Write-Log 'note: add these directories to PATH for future sessions:'
+      foreach ($entry in $missing) {
+        Write-Host "  $entry"
+      }
+      Write-Log 'for the current PowerShell session:'
+      $pathCommand = '  $env:PATH = "' + (($missing -join ';') + ';$env:PATH"')
+      Write-Host $pathCommand
+    }
   }
 }
 
@@ -444,7 +576,7 @@ try {
   Install-Package -ArchivePath $archivePath -ExtractDir $extractDir -Destination $InstallDir
 
   Write-Progress-Step -Step 5 -Total 6 -Message 'installing managed fd and rg tools'
-  Install-ManagedTools -TargetId $targetId -WorkDir $workDir
+  Install-ManagedTools -TargetId $targetId -WorkDir $workDir -ExtractDir $extractDir
 
   Write-Progress-Step -Step 6 -Total 6 -Message 'running smoke test'
   Test-Install -BinaryPath (Join-Path $InstallDir 'step.exe')

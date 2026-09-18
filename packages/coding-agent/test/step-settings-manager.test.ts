@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import {
+	readGlobalStepDefaults,
+	readStepConfig,
+	StepTomlSettingsStorage,
+	writeStepConfig,
+} from "../src/step/config-toml.ts";
 import {
 	createStepSettingsManager,
 	decorateStepSettingsManager,
@@ -250,13 +256,146 @@ describe("Step settings manager decorator", () => {
 		expect(readFileSync(fixture.paths.global, "utf8")).toBe("{broken");
 	});
 
-	it("creates the default Step sidecar paths through the factory", () => {
+	it("treats missing project TOML as empty on load, reload and trust changes", async () => {
+		const fixture = makeRoot();
+		fixture.paths.global = join(fixture.root, "config.toml");
+		fixture.paths.project = join(fixture.projectDir, ".step-cli", "config.toml");
+		writeFileSync(fixture.paths.global, 'permissionPreset = "ask"\n');
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({ permissionPreset: "ask" });
+		expect(manager.drainErrors()).toEqual([]);
+		await manager.reload();
+		manager.setProjectTrusted(false);
+		manager.setProjectTrusted(true);
+		expect(manager.getStepProjectSettings()).toEqual({});
+		expect(manager.drainErrors()).toEqual([]);
+		expect(existsSync(fixture.paths.project)).toBe(false);
+		expect(existsSync(join(fixture.projectDir, ".step-cli"))).toBe(false);
+
+		manager.setProjectStepSettings({ permissionPreset: "read-only" });
+		expect(manager.drainErrors()).toEqual([]);
+		expect(readStepConfig(fixture.paths.project)).toEqual({ permissionPreset: "read-only" });
+		await manager.reload();
+		expect(manager.getStepSettings()).toEqual({ permissionPreset: "read-only" });
+		expect(manager.drainErrors()).toEqual([]);
+	});
+
+	it("continues reporting malformed project TOML without overwriting it", () => {
+		const fixture = makeRoot();
+		fixture.paths.project = join(fixture.projectDir, "config.toml");
+		writeFileSync(fixture.paths.project, "permissionPreset = [");
+		const { manager } = makeManager(fixture);
+		expect(manager.drainErrors()).toMatchObject([{ scope: "project", path: fixture.paths.project }]);
+		manager.setProjectStepSettings({ permissionPreset: "ask" });
+		expect(manager.drainErrors()).toMatchObject([{ scope: "project", path: fixture.paths.project }]);
+		expect(readFileSync(fixture.paths.project, "utf8")).toBe("permissionPreset = [");
+	});
+
+	it("reports project TOML read errors other than ENOENT", () => {
+		const fixture = makeRoot();
+		fixture.paths.project = join(fixture.projectDir, "config.toml");
+		mkdirSync(fixture.paths.project);
+		const { manager } = makeManager(fixture);
+		expect(manager.drainErrors()).toMatchObject([{ scope: "project", path: fixture.paths.project }]);
+	});
+
+	it("uses unified TOML paths through the factory", () => {
 		const fixture = makeRoot();
 		const manager = createStepSettingsManager(fixture.projectDir, fixture.agentDir);
 
 		expect(manager.getStepSettingsPaths()).toEqual({
-			global: join(fixture.agentDir, "step-settings.json"),
-			project: join(fixture.projectDir, ".step-cli", "step-settings.json"),
+			global: resolve(fixture.agentDir, "..", "config.toml"),
+			project: join(fixture.projectDir, ".step-cli", "config.toml"),
 		});
+	});
+
+	it("keeps the header comment and the MCP table across a settings write", () => {
+		const fixture = makeRoot();
+		const path = join(fixture.root, "config.toml");
+		writeFileSync(
+			path,
+			[
+				"# Step CLI configuration",
+				"# hand written note",
+				"",
+				'defaultModel = "keep"',
+				"",
+				"[mcp_servers.demo]",
+				'command = "demo"',
+				"",
+			].join("\n"),
+		);
+		const storage = new StepTomlSettingsStorage(fixture.projectDir, process.env, { global: path, project: path });
+
+		storage.withLock("global", (current) => {
+			expect(JSON.parse(current ?? "{}")).toEqual({ defaultModel: "keep" });
+			return JSON.stringify({ defaultModel: "next" });
+		});
+
+		const written = readFileSync(path, "utf8");
+		expect(written.startsWith("# Step CLI configuration\n# hand written note\n")).toBe(true);
+		expect(readStepConfig(path)).toEqual({ defaultModel: "next", mcp_servers: { demo: { command: "demo" } } });
+	});
+
+	it("drops cleared values instead of reshaping the document", () => {
+		const fixture = makeRoot();
+		const path = join(fixture.root, "config.toml");
+		writeStepConfig(path, { defaultModel: "keep", cleared: null, nested: { keep: 1, gone: null } } as never);
+
+		expect(readStepConfig(path)).toEqual({ defaultModel: "keep", nested: { keep: 1 } });
+	});
+});
+
+describe("Step global defaults", () => {
+	const roots: string[] = [];
+
+	function makeConfigRoot(): { env: NodeJS.ProcessEnv; configRoot: string } {
+		const root = join(process.cwd(), `test-step-defaults-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+		const configRoot = join(root, ".step-cli");
+		mkdirSync(configRoot, { recursive: true });
+		roots.push(root);
+		return { env: { HOME: root, STEP_CODING_AGENT_DIR: join(configRoot, "agent") }, configRoot };
+	}
+
+	afterEach(() => {
+		for (const root of roots.splice(0)) {
+			if (existsSync(root)) rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reads the persisted provider, model and telemetry from the unified config", () => {
+		const { env, configRoot } = makeConfigRoot();
+		writeFileSync(
+			join(configRoot, "config.toml"),
+			['defaultProvider = "acme"', 'defaultModel = "acme-1"', "[telemetry]", "enabled = false", ""].join("\n"),
+		);
+
+		expect(readGlobalStepDefaults(env)).toEqual({
+			provider: "acme",
+			model: "acme-1",
+			// A saved opt-out has to survive: the telemetry runtime is built from
+			// this value before Pi's settings manager exists.
+			telemetry: { enabled: false },
+		});
+	});
+
+	it("returns no defaults when the config is missing or malformed", () => {
+		const { env, configRoot } = makeConfigRoot();
+		expect(readGlobalStepDefaults(env)).toEqual({});
+
+		writeFileSync(join(configRoot, "config.toml"), "defaultProvider = \n");
+		expect(readGlobalStepDefaults(env)).toEqual({});
+	});
+
+	it("resolves the global config beside an injected agent directory", () => {
+		const { env, configRoot } = makeConfigRoot();
+		// `step mcp add`, MCP discovery and the settings manager must address one
+		// file even when a host points the agent directory somewhere unusual.
+		env.STEP_CODING_AGENT_DIR = join(configRoot, "nested", "agent");
+		mkdirSync(join(configRoot, "nested"), { recursive: true });
+		writeFileSync(join(configRoot, "nested", "config.toml"), 'defaultModel = "nested"\n');
+
+		expect(readGlobalStepDefaults(env)).toEqual({ model: "nested" });
 	});
 });

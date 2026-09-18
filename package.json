@@ -3,44 +3,53 @@
 	"private": true,
 	"type": "module",
 	"workspaces": [
+		"apps/*",
 		"packages/*",
-		"packages/session-backends/*",
+		"packages/extensions/*",
 		"packages/coding-agent/examples/extensions/with-deps",
 		"packages/coding-agent/examples/extensions/custom-provider-anthropic",
 		"packages/coding-agent/examples/extensions/custom-provider-gitlab-duo",
 		"packages/coding-agent/examples/extensions/sandbox",
 		"packages/coding-agent/examples/extensions/gondolin"
 	],
+	"packageManager": "pnpm@9.15.9",
 	"scripts": {
-		"clean": "npm run clean --workspaces",
-		"build": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../session-backends/sqlite-node && npm run build && cd ../../protocol && npm run build && cd ../client && npm run build && cd ../server && npm run build && cd ../coding-agent && npm run build",
-		"build:offline": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../ai && npm run build:offline && cd ../agent && npm run build && cd ../session-backends/sqlite-node && npm run build && cd ../../protocol && npm run build && cd ../client && npm run build && cd ../server && npm run build && cd ../coding-agent && npm run build",
+		"clean": "pnpm -r --if-present clean",
+		"build": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
+		"build:offline": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build:offline && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
 		"build:binaries": "bash scripts/build-binaries.sh --product step --offline-model-data",
-		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:shrinkwrap && npm run check:install-lock:coding-agent && tsgo --noEmit && npm run check:browser-smoke",
+		"check": "biome check --write --error-on-warnings . && pnpm run check:pinned-deps && pnpm run check:ts-imports && pnpm run check:layer-direction && pnpm run check:ui-layer && pnpm run check:workspace-registry && pnpm run check:tui-no-ai && pnpm run check:coding-agent-entry-freeze && pnpm run check:contracts-deps-empty && pnpm run check:derived-compat-only && pnpm run check:no-provider-dispatch && pnpm run check:metadata-not-in-dispatch && pnpm run check:no-secret-leak && pnpm run check:legacy-scope-prefix && tsgo --noEmit && pnpm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
-		"check:shrinkwrap": "node scripts/generate-coding-agent-shrinkwrap.mjs --check",
-		"check:install-lock:coding-agent": "node scripts/generate-coding-agent-install-lock.mjs --check",
 		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",
-		"generate:models": "npm --prefix packages/ai run generate-models && npm --prefix packages/ai run generate-image-models",
-		"hydrate:model-data": "npm --prefix packages/ai run hydrate-model-data",
-		"check:model-data": "npm --prefix packages/ai run check:model-data",
-		"generate:model-catalog": "npm --prefix packages/ai run generate-model-catalog",
+		"check:layer-direction": "node scripts/check-layer-direction.mjs",
+		"check:ui-layer": "node scripts/check-ui-layer.mjs",
+		"check:workspace-registry": "node scripts/check-workspace-registry.mjs",
+		"check:tui-no-ai": "node scripts/check-tui-no-ai.mjs",
+		"check:coding-agent-entry-freeze": "node scripts/check-coding-agent-entry-freeze.mjs",
+		"check:contracts-deps-empty": "node scripts/check-contracts-deps-empty.mjs",
+		"check:derived-compat-only": "node scripts/check-derived-compat-only.mjs",
+		"check:no-provider-dispatch": "node scripts/check-no-provider-dispatch.mjs",
+		"check:metadata-not-in-dispatch": "node scripts/check-metadata-not-in-dispatch.mjs",
+		"check:no-secret-leak": "node scripts/check-no-secret-leak.mjs",
+		"check:legacy-scope-prefix": "node scripts/check-legacy-scope-prefix.mjs",
+		"generate:models": "npm --prefix packages/providers run generate-models",
+		"hydrate:model-data": "npm --prefix packages/providers run hydrate-model-data",
+		"check:model-data": "npm --prefix packages/providers run check:model-data",
+		"generate:model-catalog": "npm --prefix packages/providers run generate-model-catalog",
 		"diff:model-catalog": "node scripts/diff-model-catalog.mjs",
-		"eval": "npm run eval --workspace=@earendil-works/pi-evals --",
+		"eval": "npm run eval --workspace=@step-harness/evals --",
 		"check:model-catalog": "node scripts/publish-model-catalog.mjs --input .artifacts/model-catalog --dry-run",
 		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
 		"profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
-		"step": "tsx --tsconfig tsconfig.json packages/coding-agent/src/step-cli.ts",
-		"test": "npm run test:scripts && npm run test --workspaces --if-present",
+		"step": "tsx --tsconfig tsconfig.json apps/cli/src/main.ts",
+		"test": "pnpm run test:scripts && pnpm -r --if-present test",
 		"test:scripts": "node --test scripts/*.test.mjs",
-		"version:patch": "npm version patch --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
-		"version:minor": "npm version minor --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
-		"version:major": "npm version major --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
-		"version:set": "npm version --workspaces --no-workspaces-update",
+		"version:patch": "pnpm -r exec npm version patch --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:minor": "pnpm -r exec npm version minor --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:major": "pnpm -r exec npm version major --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:set": "pnpm -r exec npm version --no-git-tag-version",
 		"release:local": "node scripts/local-release.mjs",
-		"shrinkwrap:coding-agent": "node scripts/generate-coding-agent-shrinkwrap.mjs",
-		"install-lock:coding-agent": "node scripts/generate-coding-agent-install-lock.mjs",
 		"release:step": "node scripts/release.mjs --step",
 		"release:bundle": "node infra/release/release-bundle.mjs",
 		"release:fix-links": "node scripts/release-notes.mjs fix-github-releases",
@@ -56,17 +65,21 @@
 		"husky": "9.1.7",
 		"shx": "0.4.0",
 		"tsx": "4.22.1",
-		"typescript": "5.9.3"
+		"typescript": "5.9.3",
+		"yaml": "2.9.0"
 	},
 	"engines": {
 		"node": ">=22.19.0"
 	},
 	"version": "0.3.1",
-	"overrides": {
-		"protobufjs": "7.6.5",
-		"rimraf": "6.1.2",
-		"gaxios": {
-			"rimraf": "6.1.2"
+	"pnpm": {
+		"overrides": {
+			"protobufjs": "7.6.5",
+			"rimraf": "6.1.2",
+			"gaxios>rimraf": "6.1.2"
 		}
+	},
+	"dependencies": {
+		"smol-toml": "1.8.0"
 	}
 }

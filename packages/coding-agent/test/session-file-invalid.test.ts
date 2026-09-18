@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
-const cliPath = resolve(__dirname, "../src/cli.ts");
+const cliPath = resolve(__dirname, "../../../apps/cli/src/main.ts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -28,7 +28,10 @@ async function runCli(args: string[], cwd: string, agentDir: string): Promise<{ 
 			env: {
 				...process.env,
 				[ENV_AGENT_DIR]: agentDir,
-				PI_OFFLINE: "1",
+				// The @step-harness/cli entry resolves the Step storage namespace, so
+				// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
+				// from this test process's APP_NAME, which may differ from the child's).
+				STEP_CODING_AGENT_DIR: agentDir,
 				TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 			},
 			stdio: ["ignore", "ignore", "pipe"],
@@ -57,7 +60,7 @@ describe("--session invalid file handling", () => {
 		const result = await runCli(["--session", sessionFile, "-p", "hi"], projectDir, agentDir);
 
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain(`Error: Session file is not a valid pi session: ${sessionFile}`);
+		expect(result.stderr).toContain(`Error: Session file is not a valid step session: ${sessionFile}`);
 		expect(result.stderr).not.toContain("SessionManager.open");
 		expect(result.stderr).not.toContain("at ");
 		expect(readFileSync(sessionFile, "utf8")).toBe(originalContent);

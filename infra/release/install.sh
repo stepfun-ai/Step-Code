@@ -77,13 +77,23 @@ copy_runtime_dir() {
 }
 
 install_managed_tool() {
-	local name="$1" binary="$2" asset="$3" repo="$4" tag_prefix="$5" tool_dir="$AGENT_DIR/bin"
+	local name="$1" binary="$2" asset="$3" repo="$4" tag_prefix="$5" bundled_root="$6" tool_dir="$AGENT_DIR/bin"
 	local target="${tool_dir}/${binary}"
 	[[ -x "$target" || -x "${target}.exe" ]] && return 0
 	if has_cmd "$binary" || { [[ "$name" == fd ]] && has_cmd fdfind; }; then return 0; fi
+	# Prefer the binary shipped inside the release archive (tools/) so a packaged
+	# install needs no network. Fall back to the GitHub download below when the
+	# archive did not carry it (older archive, skipped build, unbundled platform).
+	if [[ -n "$bundled_root" && -f "${bundled_root}/tools/${binary}" ]]; then
+		mkdir -p "$tool_dir"
+		cp "${bundled_root}/tools/${binary}" "$target"
+		chmod 755 "$target" 2>/dev/null || true
+		return 0
+	fi
 	local metadata="${WORK_DIR}/${name}.json" version archive extract found
+	# A missing search tool is non-fatal (grep/find fall back to git/POSIX at
+	# runtime), so every failure below silently skips instead of warning.
 	if ! download "https://api.github.com/repos/${repo}/releases/latest" "$metadata"; then
-		printf 'warning: could not resolve %s; install it manually if unavailable in PATH\n' "$name" >&2
 		return 0
 	fi
 	version="$(awk -F'"' '/"tag_name"[[:space:]]*:/ { print $4; exit }' "$metadata")"
@@ -92,28 +102,155 @@ install_managed_tool() {
 	extract="${WORK_DIR}/${name}.extract"
 	mkdir -p "$extract" "$tool_dir"
 	if ! download_progress "https://github.com/${repo}/releases/download/${tag_prefix}${version}/${asset//VERSION/$version}" "$archive"; then
-		printf 'warning: could not download %s; continuing without bundled tool\n' "$name" >&2
 		return 0
 	fi
 	if [[ "$archive" == *.zip ]]; then unzip -q "$archive" -d "$extract" || return 0
 	else tar -xzf "$archive" -C "$extract" || return 0; fi
 	found="$(find "$extract" -type f -name "$binary" -print -quit)"
-	[[ -n "$found" ]] || { printf 'warning: %s archive did not contain %s\n' "$name" "$binary" >&2; return 0; }
+	[[ -n "$found" ]] || return 0
 	cp "$found" "$target"
 	chmod 755 "$target" 2>/dev/null || true
 }
 
 install_managed_tools() {
 	# These are the same managed paths used by the Pi runtime wrapper. Existing
-	# system commands remain valid; missing tools are fetched into Step storage.
+	# system commands remain valid; missing tools are copied from the release
+	# archive's tools/ dir when present, otherwise fetched into Step storage.
+	local bundled_root="$1"
 	mkdir -p "$AGENT_DIR/bin"
 	local fd_asset rg_asset
 	if [[ "$TARGET_ID" == darwin-arm64 ]]; then fd_asset='fd-vVERSION-aarch64-apple-darwin.tar.gz'; rg_asset='ripgrep-VERSION-aarch64-apple-darwin.tar.gz'
 	elif [[ "$TARGET_ID" == darwin-x64 ]]; then fd_asset='fd-vVERSION-x86_64-apple-darwin.tar.gz'; rg_asset='ripgrep-VERSION-x86_64-apple-darwin.tar.gz'
 	elif [[ "$TARGET_ID" == linux-arm64 ]]; then fd_asset='fd-vVERSION-aarch64-unknown-linux-gnu.tar.gz'; rg_asset='ripgrep-VERSION-aarch64-unknown-linux-gnu.tar.gz'
 	else fd_asset='fd-vVERSION-x86_64-unknown-linux-gnu.tar.gz'; rg_asset='ripgrep-VERSION-x86_64-unknown-linux-musl.tar.gz'; fi
-	install_managed_tool fd fd "$fd_asset" sharkdp/fd v
-	install_managed_tool rg rg "$rg_asset" BurntSushi/ripgrep ''
+	install_managed_tool fd fd "$fd_asset" sharkdp/fd v "$bundled_root"
+	install_managed_tool rg rg "$rg_asset" BurntSushi/ripgrep '' "$bundled_root"
+}
+
+path_hint() {
+	# Emit the manual instruction used both when PATH edits are opted out and as
+	# the reminder for the current (already-started) shell.
+	printf 'add %s to PATH for the current shell:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >&2
+}
+
+profile_targets() {
+	# The rc file(s) a future login/interactive shell of the user's login shell
+	# will source. One path per line so callers can read it safely. Only reached
+	# for shells whose PATH syntax is `export PATH=` (zsh/bash/POSIX); fish and
+	# csh/tcsh are handled separately in configure_shell_path.
+	case "$(basename "${SHELL:-}")" in
+		zsh) printf '%s\n' "${ZDOTDIR:-$HOME}/.zshrc" ;;
+		bash)
+			# macOS Terminal opens login shells (.bash_profile); most Linux
+			# interactive shells read .bashrc. Cover both so PATH sticks either way.
+			printf '%s\n' "$HOME/.bashrc"
+			[[ "$(uname -s)" == Darwin ]] && printf '%s\n' "$HOME/.bash_profile"
+			;;
+		*) printf '%s\n' "$HOME/.profile" ;;
+	esac
+}
+
+strip_step_block() {
+	# Remove a previously written, WELL-FORMED "# step-cli ... # step-cli end"
+	# block (and any blank lines directly above it) so reinstalls stay idempotent.
+	# A lone start marker with no matching end (a hand-edited rc, an interrupted
+	# prior write, or an unrelated "# step-cli" comment) is emitted verbatim
+	# rather than truncating everything below it to EOF. Returns non-zero (leaving
+	# the file untouched) if the rewrite could not be produced, so the caller can
+	# avoid appending a duplicate block on top of one it failed to remove.
+	local file="$1" tmp
+	tmp="$(mktemp "${file}.step.XXXXXX")" || return 1
+	if awk '
+		{
+			if (inblock) {
+				block = block $0 "\n"
+				if ($0 == "# step-cli end") { inblock = 0; block = ""; blank = "" }
+				next
+			}
+			if ($0 == "# step-cli") { inblock = 1; block = $0 "\n"; next }
+			if ($0 ~ /^[[:space:]]*$/) { blank = blank $0 "\n"; next }
+			if (blank != "") { printf "%s", blank; blank = "" }
+			print
+		}
+		END {
+			# Unterminated block: restore its lines (and preceding blanks) instead
+			# of dropping them. Trailing blanks are preserved.
+			if (inblock) { if (blank != "") printf "%s", blank; printf "%s", block }
+			else if (blank != "") printf "%s", blank
+		}
+	' "$file" >"$tmp"; then
+		cat "$tmp" >"$file"
+		rm -f "$tmp"
+		return 0
+	fi
+	rm -f "$tmp"
+	return 1
+}
+
+configure_shell_path() {
+	# Persist INSTALL_DIR onto PATH for future shells. Without this the installer
+	# drops the binary into a directory nothing sources, so a fresh shell reports
+	# "command not found: step". Opt out with STEP_NO_MODIFY_PATH=1 (package
+	# managers, CI, or callers that manage PATH themselves).
+	case ":${PATH}:" in *":${INSTALL_DIR}:"*) return 0 ;; esac
+	if [[ -n "${STEP_NO_MODIFY_PATH:-}" ]]; then path_hint; return 0; fi
+
+	# The install dir is interpolated into a shell-sourced file. Refuse to edit an
+	# rc when a path contains characters that could break quoting or inject a
+	# command, and fall back to a manual hint instead.
+	case "${INSTALL_DIR}:${AGENT_DIR}/bin" in
+		*'"'* | *'`'* | *'$'* | *$'\n'*)
+			printf 'note: install dir contains characters unsafe to write into a shell profile; add it to PATH manually:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$AGENT_DIR" >&2
+			return 0
+			;;
+	esac
+
+	local shell_name updated=0 rc
+	shell_name="$(basename "${SHELL:-}")"
+
+	case "$shell_name" in
+		fish)
+			# fish never sources ~/.profile and does not understand `export PATH=`;
+			# it manages PATH with fish_add_path in config.fish.
+			local fishcfg="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+			if mkdir -p "$(dirname "$fishcfg")" 2>/dev/null; then
+				if [[ -f "$fishcfg" ]] && grep -qxF '# step-cli' "$fishcfg" 2>/dev/null && ! strip_step_block "$fishcfg"; then
+					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$fishcfg" >&2
+				elif printf '\n# step-cli\nfish_add_path "%s" "%s/bin"\n# step-cli end\n' "$INSTALL_DIR" "$AGENT_DIR" >>"$fishcfg"; then
+					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$fishcfg"
+					updated=1
+				fi
+			fi
+			;;
+		csh | tcsh)
+			# csh/tcsh use a separate rc and `setenv` syntax we do not manage.
+			printf 'note: %s is not auto-configured; add this to your ~/.%src:\n  setenv PATH "%s:%s/bin:$PATH"\n' "$shell_name" "$shell_name" "$INSTALL_DIR" "$AGENT_DIR" >&2
+			return 0
+			;;
+		*)
+			# zsh, bash, and POSIX sh/ksh/dash all accept `export PATH=`. The written
+			# block guards against re-prepending, so sourcing it twice (e.g. a macOS
+			# .bash_profile that sources .bashrc) still leaves a single PATH entry.
+			while IFS= read -r rc; do
+				[[ -n "$rc" ]] || continue
+				mkdir -p "$(dirname "$rc")" 2>/dev/null || continue
+				if [[ -f "$rc" ]] && grep -qxF '# step-cli' "$rc" 2>/dev/null && ! strip_step_block "$rc"; then
+					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$rc" >&2
+					continue
+				fi
+				if printf '\n# step-cli\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:%s/bin:$PATH" ;;\nesac\n# step-cli end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >>"$rc"; then
+					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$rc"
+					updated=1
+				fi
+			done < <(profile_targets)
+			;;
+	esac
+
+	if [[ "$updated" -eq 1 ]]; then
+		printf 'restart your shell (or run: exec %s) to pick it up.\n' "${shell_name:-your shell}"
+	else
+		path_hint
+	fi
 }
 
 main() {
@@ -169,9 +306,10 @@ main() {
 	chmod 755 "$temporary" 2>/dev/null || true
 	mv -f "$temporary" "$destination"
 	for dir in native theme assets export-html docs examples; do copy_runtime_dir "$archive_root" "$dir"; done
-	install_managed_tools
+	install_managed_tools "$archive_root"
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
 	printf 'installed Step CLI %s to %s\n' "$VERSION" "$destination"
+	configure_shell_path
 }
 
 main "$@"

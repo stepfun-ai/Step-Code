@@ -1036,6 +1036,16 @@ export function applyBackgroundToLine(line: string, width: number, bgFn: (text: 
 
 	// Apply background to content + padding
 	const withPadding = line + padding;
+	// Nested styles (e.g. inline code chips) reset the background mid-line.
+	// Re-assert the container's background after every inner reset so the row
+	// stays painted to the edge instead of falling back to the terminal default.
+	const openOnly = bgFn("").replace(/\x1b\[49m$/u, "");
+	if (openOnly && (withPadding.includes("\x1b[49m") || withPadding.includes("\x1b[0m"))) {
+		const reasserted = withPadding
+			.replaceAll("\x1b[49m", `\x1b[49m${openOnly}`)
+			.replaceAll("\x1b[0m", `\x1b[0m${openOnly}`);
+		return bgFn(reasserted);
+	}
 	return bgFn(withPadding);
 }
 

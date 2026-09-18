@@ -1,6 +1,6 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Transport } from "@earendil-works/pi-ai";
-import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@earendil-works/pi-tui";
+import type { ThinkingLevel } from "@step-harness/agent-core";
+import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@step-harness/pi-tui";
+import type { Transport } from "@step-harness/providers";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -107,6 +107,7 @@ export interface Settings {
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
+	statusTips?: boolean; // default: true - one-line tip under the working status row, one per turn
 	showCacheMissNotices?: boolean; // default: false - show prompt-cache miss and compaction cost notices
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
@@ -115,7 +116,6 @@ export interface Settings {
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
 	collapseChangelog?: boolean; // Show condensed changelog after update
-	enableInstallTelemetry?: boolean; // default: true - anonymous version/update ping after changelog-detected updates
 	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
@@ -214,6 +214,38 @@ function toSettingsError(scope: SettingsScope, error: unknown, path?: string): S
 	};
 }
 
+/**
+ * Take an exclusive lock on a settings file, retrying briefly while another
+ * process holds it. Every storage that edits a settings file on disk must go
+ * through this so concurrent sessions cannot lose each other's writes.
+ */
+export function acquireSettingsLockSync(path: string): () => void {
+	const maxAttempts = 10;
+	const delayMs = 20;
+	let lastError: unknown;
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		try {
+			return lockfile.lockSync(path, { realpath: false });
+		} catch (error) {
+			const code =
+				typeof error === "object" && error !== null && "code" in error
+					? String((error as { code?: unknown }).code)
+					: undefined;
+			if (code !== "ELOCKED" || attempt === maxAttempts) {
+				throw error;
+			}
+			lastError = error;
+			const start = Date.now();
+			while (Date.now() - start < delayMs) {
+				// Sleep synchronously to avoid changing callers to async.
+			}
+		}
+	}
+
+	throw (lastError as Error) ?? new Error("Failed to acquire settings lock");
+}
+
 export class FileSettingsStorage implements SettingsStorage {
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
@@ -226,33 +258,6 @@ export class FileSettingsStorage implements SettingsStorage {
 		this.projectSettingsPath = join(resolvedCwd, resolvedConfigDirName, "settings.json");
 	}
 
-	private acquireLockSyncWithRetry(path: string): () => void {
-		const maxAttempts = 10;
-		const delayMs = 20;
-		let lastError: unknown;
-
-		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			try {
-				return lockfile.lockSync(path, { realpath: false });
-			} catch (error) {
-				const code =
-					typeof error === "object" && error !== null && "code" in error
-						? String((error as { code?: unknown }).code)
-						: undefined;
-				if (code !== "ELOCKED" || attempt === maxAttempts) {
-					throw error;
-				}
-				lastError = error;
-				const start = Date.now();
-				while (Date.now() - start < delayMs) {
-					// Sleep synchronously to avoid changing callers to async.
-				}
-			}
-		}
-
-		throw (lastError as Error) ?? new Error("Failed to acquire settings lock");
-	}
-
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
 		const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
 		const dir = dirname(path);
@@ -262,7 +267,7 @@ export class FileSettingsStorage implements SettingsStorage {
 			// Only create directory and lock if file exists or we need to write
 			const fileExists = existsSync(path);
 			if (fileExists) {
-				release = this.acquireLockSyncWithRetry(path);
+				release = acquireSettingsLockSync(path);
 			}
 			const current = fileExists ? readFileSync(path, "utf-8") : undefined;
 			const next = fn(current);
@@ -272,7 +277,7 @@ export class FileSettingsStorage implements SettingsStorage {
 					mkdirSync(dir, { recursive: true });
 				}
 				if (!release) {
-					release = this.acquireLockSyncWithRetry(path);
+					release = acquireSettingsLockSync(path);
 				}
 				writeFileSync(path, next, "utf-8");
 			}
@@ -937,6 +942,16 @@ export class SettingsManager {
 		return this.settings.hideThinkingBlock ?? false;
 	}
 
+	getStatusTips(): boolean {
+		return this.settings.statusTips ?? true;
+	}
+
+	setStatusTips(enabled: boolean): void {
+		this.globalSettings.statusTips = enabled;
+		this.markModified("statusTips");
+		this.save();
+	}
+
 	getShowCacheMissNotices(): boolean {
 		return this.settings.showCacheMissNotices ?? false;
 	}
@@ -1024,16 +1039,6 @@ export class SettingsManager {
 	setCollapseChangelog(collapse: boolean): void {
 		this.globalSettings.collapseChangelog = collapse;
 		this.markModified("collapseChangelog");
-		this.save();
-	}
-
-	getEnableInstallTelemetry(): boolean {
-		return this.settings.enableInstallTelemetry ?? true;
-	}
-
-	setEnableInstallTelemetry(enabled: boolean): void {
-		this.globalSettings.enableInstallTelemetry = enabled;
-		this.markModified("enableInstallTelemetry");
 		this.save();
 	}
 

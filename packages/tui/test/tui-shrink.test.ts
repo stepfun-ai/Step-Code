@@ -42,4 +42,36 @@ describe("TUI shrinking content", () => {
 
 		tui.stop();
 	});
+
+	it("keeps the transcript anchored to the bottom row across an overlay dialog", async () => {
+		// A transcript taller than the terminal has already scrolled the screen, so growing the
+		// rendered document scrolls it further and the shrink on dismissal cannot scroll it back.
+		// Overlays composite onto the rows the document already occupies, so its length never
+		// changes and the last row stays where it was.
+		const terminal = new VirtualTerminal(40, 10);
+		const tui: TUI = new TuiMainScreen(terminal);
+		const transcript = new Lines(Array.from({ length: 40 }, (_, index) => `history ${index}`));
+		const editor = new Lines(["editor"]);
+		tui.addChild(transcript);
+		tui.addChild(editor);
+		tui.start();
+		await terminal.waitForRender();
+
+		assert.strictEqual(terminal.getViewport().at(-1), "editor");
+
+		const handle = tui.showOverlay(new Lines(Array.from({ length: 8 }, (_, index) => `dialog ${index}`)));
+		tui.requestRender();
+		await terminal.waitForRender();
+		assert.ok(terminal.getViewport().some((line) => line.includes("dialog 7")));
+
+		handle.hide();
+		tui.requestRender();
+		await terminal.waitForRender();
+
+		const viewport = terminal.getViewport();
+		assert.ok(!viewport.some((line) => line.includes("dialog")), "dialog rows should be gone");
+		assert.strictEqual(viewport.at(-1), "editor", "editor should still hold the bottom row");
+
+		tui.stop();
+	});
 });

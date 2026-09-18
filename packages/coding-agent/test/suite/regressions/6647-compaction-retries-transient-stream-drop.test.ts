@@ -1,5 +1,9 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, createAssistantMessageEventStream, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@step-harness/agent-core";
+import {
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	fauxAssistantMessage,
+} from "@step-harness/providers";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "../harness.ts";
 

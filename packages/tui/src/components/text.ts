@@ -97,11 +97,12 @@ export class Text implements Component {
 
 		const result = [...emptyLines, ...contentLines, ...emptyLines];
 
-		// Update cache
+		// Update cache. A zero-row result still has to be memoized: returning a
+		// freshly allocated array here would leave every container holding this Text
+		// permanently dirty from that child onward, so no prefix could ever be reused.
 		this.cachedText = this.text;
 		this.cachedWidth = width;
-		this.cachedLines = result;
-
-		return result.length > 0 ? result : [""];
+		this.cachedLines = result.length > 0 ? result : [""];
+		return this.cachedLines;
 	}
 }

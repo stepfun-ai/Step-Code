@@ -6,7 +6,8 @@
  * - `pi --mode json "prompt"` - JSON event stream
  */
 
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@step-harness/providers";
+import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
@@ -26,6 +27,42 @@ export interface PrintModeOptions {
 	initialImages?: ImageContent[];
 }
 
+interface TerminatingBlock {
+	toolName: string;
+	reason: string;
+}
+
+function isTextPart(part: unknown): part is { type: "text"; text: string } {
+	if (typeof part !== "object" || part === null) return false;
+	const candidate = part as { type?: unknown; text?: unknown };
+	return candidate.type === "text" && typeof candidate.text === "string";
+}
+
+/**
+ * Return the tool name and reason when an event is a tool call that a hook
+ * blocked and asked the run to stop on.
+ *
+ * Ordinary tool errors are recoverable and the model routinely works around
+ * them, so reporting every one of them would turn successful runs into
+ * failures. `terminate` marks the blocks that actually end the run, which is
+ * the case a non-interactive caller cannot otherwise see.
+ */
+function getTerminatingBlock(event: AgentSessionEvent): TerminatingBlock | undefined {
+	if (event.type !== "tool_execution_end" || !event.isError) return undefined;
+	const result: unknown = event.result;
+	if (typeof result !== "object" || result === null) return undefined;
+	const { terminate, content } = result as { terminate?: unknown; content?: unknown };
+	if (terminate !== true) return undefined;
+	const reason = Array.isArray(content)
+		? content
+				.filter(isTextPart)
+				.map((part) => part.text)
+				.join("\n")
+				.trim()
+		: "";
+	return { toolName: event.toolName, reason: reason || "no reason given" };
+}
+
 /**
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
@@ -38,6 +75,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	let unsubscribeBackpressure: (() => void) | undefined;
 	let disposed = false;
 	const signalCleanupHandlers: Array<() => void> = [];
+	// Tool calls a hook blocked and asked the run to stop on. Without a UI these
+	// only reach the model, so a denied call looked like the run doing nothing.
+	// Feedback issue-d8b499026f19831c.
+	const terminatingBlocks: TerminatingBlock[] = [];
 
 	const disposeRuntime = async (): Promise<void> => {
 		if (disposed) return;
@@ -80,6 +121,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		unsubscribeBackpressure?.();
 		session = nextSession;
 		unsubscribe = session.subscribe((event) => {
+			const block = getTerminatingBlock(event);
+			if (block) terminatingBlocks.push(block);
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(toJsonEvent(event))}\n`);
 			}
@@ -140,6 +183,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		}
 
 		if (mode === "text") {
+			for (const block of terminatingBlocks) {
+				console.error(`Blocked ${block.toolName}: ${block.reason}`);
+			}
+			if (terminatingBlocks.length > 0) exitCode = 1;
+
 			const state = session.state;
 			const lastMessage = state.messages[state.messages.length - 1];
 

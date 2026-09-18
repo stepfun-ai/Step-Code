@@ -54,11 +54,14 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Enable pnpm
+        run: corepack enable
+
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Hydrate release model data
-        run: npm run hydrate:model-data
+        run: pnpm run hydrate:model-data
 
       - name: Create source archive
         run: |
@@ -82,7 +85,7 @@ jobs:
           STEP_CLI_BUILD_VERSION="${VERSION}" \
           STEP_CLI_BUILD_CHANNEL="release" \
           STEP_CLI_BUILD_COMMIT="${GITHUB_SHA:0:12}" \
-          "${build_root}/pi-${VERSION}/scripts/build-binaries.sh" \
+          "${build_root}/step-${VERSION}/scripts/build-binaries.sh" \
             --product step \
             --offline-model-data \
             --out "${GITHUB_WORKSPACE}/packages/coding-agent/binaries"

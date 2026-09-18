@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@step-harness/agent-core";
+import type { Model } from "@step-harness/providers";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
@@ -37,6 +37,8 @@ export interface AgentSessionRuntimeDiagnostic {
  * reach this function, so later cwd switches do not reinterpret them.
  */
 export interface CreateAgentSessionServicesOptions {
+	/** Optional model catalog path for product-specific layouts. */
+	modelCatalogPath?: string;
 	cwd: string;
 	agentDir?: string;
 	/** Project resource directory name. Defaults to Pi's configured value. */
@@ -157,7 +159,9 @@ export async function createAgentSessionServices(
 		options.modelRuntime ??
 		(await ModelRuntime.create({
 			authPath: options.authPath ? resolvePath(options.authPath, cwd) : join(agentDir, "auth.json"),
-			modelsPath: join(agentDir, "models.json"),
+			modelsPath: options.modelCatalogPath
+				? resolvePath(options.modelCatalogPath, cwd)
+				: join(agentDir, "models.json"),
 			signal: options.modelRuntimeSignal,
 		}));
 	const configDirName = options.configDirName?.trim() || options.resourceLoaderOptions?.configDirName?.trim();

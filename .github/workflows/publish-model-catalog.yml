@@ -11,7 +11,7 @@ on:
       - '.github/workflows/publish-model-catalog.yml'
       - '.gitignore'
       - 'package.json'
-      - 'packages/ai/**'
+      - 'packages/providers/**'
       - 'scripts/publish-model-catalog.mjs'
   # GitHub schedules use UTC. Run hourly candidates across the CET/CEST
   # boundaries; the publish job only uploads at 10:17, 12:17, and 14:17
@@ -51,16 +51,18 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
-          cache: npm
+
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Generate model catalog JSON
-        run: npm run generate:model-catalog
+        run: pnpm run generate:model-catalog
 
       - name: Validate model catalog JSON
-        run: npm run check:model-catalog
+        run: pnpm run check:model-catalog
 
       - name: Upload model catalog JSON
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

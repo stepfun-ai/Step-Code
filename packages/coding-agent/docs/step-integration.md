@@ -95,7 +95,7 @@ Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
 binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
 operations to the active Step agent root. Runtime replacement flows (`/new`,
 `/resume`, `/fork`, and `/import`) use that same bound factory, so a later
-operation cannot fall back to Pi's default `~/.pi/agent/sessions` directory.
+operation cannot fall back to Pi's default `~/.step-cli/agent/sessions` directory.
 Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
@@ -112,13 +112,14 @@ does not pass these options and keeps its upstream defaults.
 Step also injects a settings decorator through `settingsManagerFactory`. The
 decorator delegates Pi's complete `SettingsManager` API, including global and
 project merging, trust, reload, and flush. Product-only permission policy is
-kept in separate `step-settings.json` sidecars under the Step global agent and
-workspace directories, with the same global-then-project precedence and file
-locking. This keeps fields such as `permissionPreset` and `autoResume` out of
-Pi's native `settings.json` schema while leaving ordinary Pi startup unchanged.
+kept in the unified `config.toml` files at `~/.step-cli/config.toml` and
+`<cwd>/.step-cli/config.toml`, with the same global-then-project precedence and
+file locking. This keeps fields such as `permissionPreset` and `autoResume` out
+of Pi's native `settings.json` schema while leaving ordinary Pi startup
+unchanged.
 
 Top-level `step feedback` and interactive `/feedback` use a Step-owned gate,
-configured by `feedbackEnabled` in the Step sidecar and the legacy feedback
+configured by `feedbackEnabled` in the Step config and the legacy feedback
 opt-out environment variables. This gate is independent of Step telemetry:
 disabling analytics does not disable user feedback, while the optional
 `feedback_submitted` analytics event still follows the telemetry gate.
@@ -153,6 +154,55 @@ they need to control where the Step sidecar is stored.
 normal user-message path. The model inspects the project and uses pi's native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
+
+## Interactive tool rendering
+
+Step's projected tool titles and collapsed summaries are single physical
+terminal rows. Row-control whitespace in command, path, and query previews is
+normalized before width clipping: CR/LF becomes a space and tabs use the same
+space expansion as the native text renderer. This prevents multiline scripts
+from advancing the terminal cursor outside the differential renderer's row
+accounting during spinner updates. The executed arguments, persisted messages,
+and native expanded call/result bodies remain unchanged.
+
+## Interactive tool approval
+
+When its policy requires confirmation, Step asks for tool approval in an
+overlay. The heading contains the tool name and the last eight characters of
+its call ID; the body includes the full ID, the policy reason, and a bounded
+input summary. Long body lines can be clipped
+to the terminal width. The short ID helps distinguish consecutive prompts;
+compare full call IDs when diagnosing whether calls are actually identical.
+Navigation, confirm, and cancel keys come from the existing keybindings. Step
+wraps their hints on narrow terminals instead of clipping the cancel hint.
+
+A parallel tool batch prepares its approvals one at a time before executing
+approved tools. For example, approving `run_command [12345678]` can immediately
+show `run_command [87654321]` while the first command has not executed yet.
+Two prompts with the same tool name do not establish repeated execution.
+Check the distinct call IDs and their eventual tool results, not just the
+number of dialogs or the duration of a tool-start event.
+
+During a confirmation, an existing working row shows static
+`Waiting for approval…`, without a running verb, token count, elapsed time, or
+tip. Step tool-row animation pauses too, and its elapsed suffix excludes this
+approval wait. After the dialog closes, running presentation resumes with the
+saved working settings, including changes made during the wait. A hidden
+working row stays hidden. Turn-wide elapsed time and runtime/telemetry durations
+remain wall-clock measurements; their semantics are not changed by this UI
+pause. Native result text such as `Took ...` may therefore include the approval
+wait. Ordinary select/input dialogs do not enable the approval-wait state.
+
+Approval policy and batch scheduling are unchanged. Each Yes applies to that
+call; No, cancel, abort, or an explicitly configured timeout do not approve it.
+There is no new default timeout and no automatic approval. Replacing a simple
+select/confirm/input dialog, resetting extension UI, or stopping the TUI
+cancels its pending promise. Old callbacks cannot dismiss a replacement dialog;
+a mount failure cleans up and rejects the pending request. While replacement
+cleanup or reset/stop is running, a simple dialog requested synchronously by an
+editor refocus/disposal callback is cancelled before mounting. This prevents
+an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
+refocused editor to open the next dialog.
 
 ## Plans and tasks
 
@@ -224,7 +274,7 @@ service and are not silently faked by this fork.
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
-| Step CLI OAuth login/logout and legacy credential migration | `extensions/step-provider`, `step/auth.ts`, `step/config-migration.ts` | aligned; endpoint migration is tested |
+| Step CLI OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |

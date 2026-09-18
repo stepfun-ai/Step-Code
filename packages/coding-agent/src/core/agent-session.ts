@@ -24,8 +24,8 @@ import type {
 	AgentTool,
 	PrepareNextTurnContext,
 	ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
-import { contentText } from "@earendil-works/pi-ai";
+} from "@step-harness/agent-core";
+import { contentText } from "@step-harness/providers";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -35,7 +35,7 @@ import type {
 	ProviderHeaders,
 	TextContent,
 	Usage,
-} from "@earendil-works/pi-ai/compat";
+} from "@step-harness/providers/compat";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -47,8 +47,8 @@ import {
 	type RetryCallbacks,
 	resetApiProviders,
 	streamSimple,
-} from "@earendil-works/pi-ai/compat";
-import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
+} from "@step-harness/providers/compat";
+import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";

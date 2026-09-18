@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@earendil-works/pi-ai/compat";
+import { getModel } from "@step-harness/providers/compat";
 import { describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -275,6 +275,112 @@ describe("Step tool profile", () => {
 			expect(text(result)).toContain("sample.txt:2: target");
 			expect(text(result)).toContain("sample.txt:1-");
 			expect(text(result)).toContain("sample.txt:3-");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each(
+		["[slug]", "[...slug]", "[[...slug]]"].flatMap((route) =>
+			[undefined, "routes"].flatMap((searchPath) =>
+				[0, 1].map((contextLines) => ({ route, searchPath, contextLines })),
+			),
+		),
+	)(
+		"preserves $route matches from $searchPath with context $contextLines",
+		async ({ route, searchPath, contextLines }) => {
+			const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+			try {
+				const searchRoot = searchPath ? join(root, searchPath) : root;
+				await mkdir(join(searchRoot, route), { recursive: true });
+				await mkdir(join(searchRoot, "static"), { recursive: true });
+				await writeFile(join(searchRoot, route, "page.tsx"), "before\n// TODO dynamic route\nafter\n");
+				await writeFile(join(searchRoot, "static", "page.tsx"), "// TODO static route\n");
+				const search = createStepToolProfile(root).find((tool) => tool.name === "search_files")!;
+
+				const result = await search.execute(
+					"search-routes",
+					{
+						pattern: "TODO",
+						...(searchPath ? { path: searchPath } : {}),
+						...(contextLines ? { context_lines: contextLines } : {}),
+					},
+					undefined,
+					undefined,
+					undefined as never,
+				);
+				expect(text(result)).toContain(`${route}/page.tsx:2: // TODO dynamic route`);
+				expect(text(result)).toContain("static/page.tsx:1: // TODO static route");
+				if (contextLines > 0) {
+					expect(text(result)).toContain(`${route}/page.tsx:1- before`);
+					expect(text(result)).toContain(`${route}/page.tsx:3- after`);
+				}
+				expect(result.details).toMatchObject({
+					matches: 2,
+					filesMatched: 2,
+					truncated: false,
+					timedOut: false,
+					stepTruncated: false,
+				});
+			} finally {
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("keeps bracket-prefixed matches without counting native limit notices", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			await mkdir(join(root, "[slug]"));
+			await writeFile(join(root, "[slug]", "page.tsx"), "TODO first\nTODO second\n");
+			const search = createStepToolProfile(root).find((tool) => tool.name === "search_files")!;
+			const result = await search.execute(
+				"search-limited-route",
+				{ pattern: "TODO", max_results: 1 },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(result)).toBe("[slug]/page.tsx:1: TODO first");
+			expect(result.details).toMatchObject({
+				matchLimitReached: 1,
+				matches: 1,
+				filesMatched: 1,
+				truncated: true,
+				timedOut: false,
+				stepTruncated: false,
+			});
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps remote match paths that start with warning text", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			// A remote backend can return names that the local filesystem does not support.
+			const content = "// TODO warning-prefixed file\n";
+			const search = createStepToolProfile(root, {
+				grep: {
+					operations: {
+						isDirectory: () => true,
+						readFile: () => content,
+						search: ({ searchPath }) => ({
+							matches: [{ filePath: join(searchPath, "WARNING:notes.ts"), lineNumber: 1, lineText: content }],
+							matchLimitReached: false,
+						}),
+					},
+				},
+			}).find((tool) => tool.name === "search_files")!;
+			const result = await search.execute(
+				"search-warning-path",
+				{ pattern: "TODO" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(result)).toBe("WARNING:notes.ts:1: // TODO warning-prefixed file");
+			expect(result.details).toMatchObject({ backend: "custom", matches: 1, filesMatched: 1, truncated: false });
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

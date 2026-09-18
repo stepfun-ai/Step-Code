@@ -8,7 +8,7 @@
 
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@step-harness/agent-core";
 import type {
 	AgentEndEvent,
 	ExtensionContext,
@@ -134,6 +134,12 @@ export interface StepPermissionState {
 	mode: StepPermissionMode;
 	nonInteractiveApproval: StepNonInteractiveApproval;
 	autoResume: boolean;
+	/**
+	 * True when nothing selected this policy: no CLI flag, no `STEP_*` env var,
+	 * no persisted or trusted-project preset. Only the interactive default is
+	 * permissive, so a run without a UI must not inherit it.
+	 */
+	defaulted?: boolean;
 	/** Per-tool policy overrides supplied by the Step CLI or an embedding host. */
 	toolOverrides?: Readonly<Record<string, StepToolPermissionMode>>;
 }
@@ -210,8 +216,20 @@ export function normalizeStepPermissionMode(value: string | undefined): StepPerm
 export function resolveInitialStepPermissionPreset(
 	options: StepPermissionControllerOptions = {},
 ): StepPermissionPresetId {
+	return resolveStepPermissionPresetWithProvenance(options).preset;
+}
+
+interface ResolvedStepPermissionPreset {
+	preset: StepPermissionPresetId;
+	/** True only for the final fallback, where nothing selected a policy. */
+	defaulted: boolean;
+}
+
+function resolveStepPermissionPresetWithProvenance(
+	options: StepPermissionControllerOptions = {},
+): ResolvedStepPermissionPreset {
 	if (options.initialPreset && getStepPermissionPreset(options.initialPreset)) {
-		return options.initialPreset;
+		return { preset: options.initialPreset, defaulted: false };
 	}
 
 	const env = options.env ?? process.env;
@@ -223,21 +241,40 @@ export function resolveInitialStepPermissionPreset(
 			options.nonInteractiveApproval ??
 			(env.STEP_NON_INTERACTIVE_APPROVAL ?? env.STEP_NONINTERACTIVE_APPROVAL)?.trim().toLowerCase();
 		const autoResume = options.autoResume ?? (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME));
-		if (explicitMode === "auto") return autoResume && nonInteractive !== "deny" ? "autopilot" : "bypass";
-		return explicitMode === "strict" ? "read-only" : "ask";
+		if (explicitMode === "auto") {
+			return {
+				preset: autoResume && nonInteractive !== "deny" ? "autopilot" : "bypass",
+				defaulted: false,
+			};
+		}
+		return {
+			preset: explicitMode === "strict" ? "read-only" : "ask",
+			defaulted: false,
+		};
 	}
 	const explicitPreset = env.STEP_PERMISSION_PRESET?.trim().toLowerCase();
 	const normalizedExplicitPreset = normalizeStepPermissionPresetId(explicitPreset);
-	if (normalizedExplicitPreset) return normalizedExplicitPreset;
+	if (normalizedExplicitPreset) return { preset: normalizedExplicitPreset, defaulted: false };
 
 	const mode = env.STEP_PERMISSION_MODE?.trim().toLowerCase();
-	if (mode === "strict" || mode === "read-only" || mode === "readonly") return "read-only";
-	if (mode === "auto" || mode === "bypass" || mode === "bypasspermissions") {
-		return isTruthy(env.STEP_AUTOPILOT) ? "autopilot" : "bypass";
+	if (mode === "strict" || mode === "read-only" || mode === "readonly") {
+		return { preset: "read-only", defaulted: false };
 	}
-	if (mode === "confirm" || mode === "ask") return "ask";
-	if (isTruthy(env.STEP_AUTOPILOT)) return "autopilot";
-	return "ask";
+	if (mode === "auto" || mode === "bypass" || mode === "bypasspermissions") {
+		return {
+			preset: isTruthy(env.STEP_AUTOPILOT) ? "autopilot" : "bypass",
+			defaulted: false,
+		};
+	}
+	if (mode === "confirm" || mode === "ask") return { preset: "ask", defaulted: false };
+	if (isTruthy(env.STEP_AUTOPILOT)) return { preset: "autopilot", defaulted: false };
+	// Default to bypass: tools run without approval prompts. Explicit CLI flags,
+	// STEP_* env vars, and any persisted preset are all resolved above this line,
+	// so they continue to override the default. Dangerous commands (see
+	// decideStepToolCall / isDangerousCommand) still require confirmation even
+	// under bypass, and a run with no UI refuses the defaulted policy outright
+	// (see StepPermissionController.handleToolCall).
+	return { preset: "bypass", defaulted: true };
 }
 
 export function stepPermissionStateForPreset(presetId: StepPermissionPresetId): StepPermissionState {
@@ -266,7 +303,8 @@ export function normalizeAutoResume(
  */
 export function resolveInitialStepPermissionState(options: StepPermissionControllerOptions = {}): StepPermissionState {
 	const env = options.env ?? process.env;
-	const preset = stepPermissionStateForPreset(resolveInitialStepPermissionPreset(options));
+	const presetResolution = resolveStepPermissionPresetWithProvenance(options);
+	const preset = stepPermissionStateForPreset(presetResolution.preset);
 	const mode = options.approvalMode ?? normalizeStepPermissionMode(env.STEP_APPROVAL_MODE);
 	const rawNonInteractive =
 		options.nonInteractiveApproval ??
@@ -291,6 +329,12 @@ export function resolveInitialStepPermissionState(options: StepPermissionControl
 				candidate.autoResume === resolved.autoResume,
 		) ?? STEP_PERMISSION_PRESETS.find((candidate) => candidate.mode === resolved.mode);
 	if (matchingPreset) resolved.preset = matchingPreset.id;
+	// Only a grant counts as configuring the policy. An explicit `deny` asks for
+	// less access, so it must not move the policy out of the defaulted bucket and
+	// re-enable the permissive default.
+	if (presetResolution.defaulted && mode === undefined && rawNonInteractive !== "allow") {
+		resolved.defaulted = true;
+	}
 	if (options.toolOverrides && Object.keys(options.toolOverrides).length > 0) {
 		resolved.toolOverrides = cloneToolOverrides(options.toolOverrides);
 	}
@@ -358,6 +402,14 @@ export function decideStepToolCall(
 	};
 }
 
+/** Why a tool call cannot fall back to unattended approval. */
+interface UnattendedCause {
+	/** The policy explicitly refuses unattended approvals. */
+	refused: boolean;
+	/** Nothing selected a policy, so only the permissive default applies. */
+	unconfigured: boolean;
+}
+
 /** Mutable policy state used by the Step extension instance for one session. */
 export class StepPermissionController {
 	private state: StepPermissionState;
@@ -390,8 +442,16 @@ export class StepPermissionController {
 		return this.getState();
 	}
 
-	decide(toolName: string, input: Record<string, unknown>): StepToolDecision {
-		return decideStepToolCall(toolName, input, this.state, this.toolOverrides);
+	/**
+	 * Decide a call the way `handleToolCall` will decide it.
+	 *
+	 * `hasUI` has to be supplied by the caller, because the effective policy
+	 * differs without a terminal (see unattendedCause). A caller that omits it
+	 * asks for the interactive policy.
+	 */
+	decide(toolName: string, input: Record<string, unknown>, hasUI = true): StepToolDecision {
+		const cause = this.unattendedCause(hasUI);
+		return decideStepToolCall(toolName, input, this.effectiveState(cause), this.toolOverrides);
 	}
 
 	getOverrides(): Record<string, StepToolPermissionMode> {
@@ -411,10 +471,44 @@ export class StepPermissionController {
 		else this.state.toolOverrides = { ...this.toolOverrides };
 	}
 
+	/**
+	 * Why a call may not run unattended. Two cases qualify:
+	 *
+	 *   - nothing selected the policy at all, so the call would inherit the
+	 *     interactive Bypass default with nobody watching;
+	 *   - the caller explicitly refused unattended approvals.
+	 *
+	 * Feedback issue-287bfff1a5fe7668.
+	 */
+	private unattendedCause(hasUI: boolean): UnattendedCause {
+		if (hasUI) return { refused: false, unconfigured: false };
+		return {
+			refused: this.state.nonInteractiveApproval === "deny",
+			unconfigured: this.state.defaulted === true,
+		};
+	}
+
+	/**
+	 * The policy one call is actually decided under.
+	 *
+	 * An unattended cause needs the mode downgraded rather than just the no-UI
+	 * fallback consulted, because `auto` decides every call as `allow` and
+	 * returns before the fallback is reached. Without this,
+	 * `--non-interactive-approval deny` silently does nothing. Only `auto` needs
+	 * it: `confirm` and `strict` already route through the fallback with their
+	 * own reasons, and demoting `strict` would weaken read-only mode.
+	 */
+	private effectiveState(cause: UnattendedCause): StepPermissionState {
+		if (this.state.mode !== "auto" || !(cause.refused || cause.unconfigured)) return this.state;
+		return { ...this.state, mode: "confirm", nonInteractiveApproval: "deny" };
+	}
+
 	/** Apply the policy through Pi's before-tool-call result contract. */
 	async handleToolCall(event: ToolCallEvent, context: ExtensionContext): Promise<ToolCallEventResult | undefined> {
 		const input = event.input;
-		const decision = this.decide(event.toolName, input);
+		const cause = this.unattendedCause(context.hasUI);
+		const state = this.effectiveState(cause);
+		const decision = decideStepToolCall(event.toolName, input, state, this.toolOverrides);
 		if (decision.action === "allow") return undefined;
 
 		if (decision.action === "deny") {
@@ -425,25 +519,56 @@ export class StepPermissionController {
 			// Match the old Step policy: an explicit non-interactive `allow` can
 			// approve an ordinary confirmation once, while hazardous commands always
 			// fail closed. The default remains deny.
-			if (!decision.hazardous && this.state.nonInteractiveApproval === "allow") return undefined;
+			if (!decision.hazardous && state.nonInteractiveApproval === "allow") return undefined;
 			return {
 				block: true,
 				terminate: true,
-				reason:
-					decision.hazardous || this.state.nonInteractiveApproval === "deny"
-						? `${decision.reason} (no interactive approval is available)`
-						: decision.reason,
+				reason: formatUnattendedBlockReason(decision, cause),
 			};
 		}
 
 		const approved = await context.ui.confirm(
-			decision.hazardous ? "Confirm dangerous tool call" : "Approve tool call",
-			`${decision.reason}\n\n${summarizeToolInput(event.toolName, input)}`,
-			{ signal: context.signal },
+			`${decision.hazardous ? "Dangerous" : "Approve"} ${event.toolName} [${event.toolCallId.slice(-8)}]`,
+			`Call: ${event.toolCallId}\n${decision.reason}\n\n${summarizeToolInput(event.toolName, input)}\n\nBatch calls may ask separately\nbefore approved tools begin running.`,
+			{ signal: context.signal, overlay: true },
 		);
 		if (approved) return undefined;
 		return { block: true, reason: `Tool call denied: ${event.toolName}` };
 	}
+}
+
+/**
+ * Explain a block that happened without a UI, and say how to permit it.
+ *
+ * The three cases need different advice. A hazardous command is never permitted
+ * unattended, so pointing at `--approval-mode auto` there would be wrong: it
+ * still confirms. Otherwise the caller either configured no policy at all or
+ * configured one that refuses unattended approvals, and each has its own
+ * shortest way out.
+ */
+function formatUnattendedBlockReason(decision: StepToolDecision, cause: UnattendedCause): string {
+	if (decision.hazardous) {
+		return (
+			`${decision.reason} (no interactive approval is available). Dangerous commands always require ` +
+			"interactive confirmation; no flag or preset overrides that. Run it in an interactive session."
+		);
+	}
+	// A policy that refuses unattended approvals is a deliberate setting, so say
+	// that rather than "nothing is configured" — the caller already knows what
+	// they chose and needs the way back, not a description of an empty config.
+	if (cause.refused) {
+		return (
+			`${decision.reason} (no interactive approval is available, and this run's policy denies unattended ` +
+			`approvals). Permit them with --non-interactive-approval allow or --approval-mode auto.`
+		);
+	}
+	if (cause.unconfigured) {
+		return (
+			`${decision.reason} (no interactive approval is available and no permission preset is configured). ` +
+			`Permit unattended writes with --non-interactive-approval allow or --approval-mode auto.`
+		);
+	}
+	return `${decision.reason} (no interactive approval is available).`;
 }
 
 function cloneToolOverrides(overrides: Record<string, StepToolPermissionMode>): Record<string, StepToolPermissionMode> {

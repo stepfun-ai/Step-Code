@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-tui",
+	"name": "@step-harness/pi-tui",
 	"version": "0.84.4",
 	"private": true,
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
@@ -38,7 +38,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://gitlab.basemind.com/aiagent/step-harness.git",
 		"directory": "packages/tui"
 	},
 	"engines": {

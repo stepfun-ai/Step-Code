@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildStepSystemPromptAppendix } from "../src/step/system-prompt.ts";
+import { buildStepSystemPromptAppendix, invalidateGitEnvironmentCache } from "../src/step/system-prompt.ts";
 
 const hasGit = ((): boolean => {
 	try {
@@ -96,6 +96,19 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).toContain("- read_file:");
 		expect(prompt).not.toContain("- write_file:");
 		expect(prompt).not.toContain("- run_command:");
+	});
+
+	it("adds frontend visual verification only when a browser or screenshot tool is active", () => {
+		const withBrowser = buildStepSystemPromptAppendix(["read_file", "playwright__browser_take_screenshot"]);
+		expect(withBrowser).toContain("# Frontend visual verification");
+		expect(withBrowser).toContain("read_file the saved path");
+		expect(withBrowser).toContain("Subagent reports are text-only");
+
+		const withoutBrowser = buildStepSystemPromptAppendix(["read_file", "run_command"]);
+		expect(withoutBrowser).not.toContain("# Frontend visual verification");
+		// The validation step still nudges visual verification unconditionally.
+		expect(withoutBrowser).toContain("verify visually");
+		expect(withoutBrowser).toContain("playwright plugin");
 	});
 
 	it("adds event-driven delegation guidance only when the subagent tool is active", () => {
@@ -216,11 +229,27 @@ describe("Step system prompt appendix", () => {
 		expect(withoutOrchestration).not.toContain("# Coordination primitives");
 	});
 
-	it("carries a cost-and-consent contract", () => {
+	it("carries a cost-and-consent contract without steer-and-wait phrasing", () => {
 		const prompt = buildStepSystemPromptAppendix(["read_file"]);
 		expect(prompt).toContain("# Cost and consent");
-		expect(prompt).toContain("opt-in gate");
-		expect(prompt).toContain("necessary but not sufficient consent");
+		expect(prompt).toContain("Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger");
+		expect(prompt).not.toContain("necessary but not sufficient consent");
+		expect(prompt).not.toContain("so the user can steer before you spend");
+	});
+
+	it("omits the ask-and-wait clauses that end unattended runs early", () => {
+		const prompt = buildStepSystemPromptAppendix(["read_file", "edit_file", "run_command"]);
+		expect(prompt).not.toContain("unless a critical ambiguity or approval is required");
+		expect(prompt).toContain("proceed with a reasonable assumption.");
+		expect(prompt).not.toContain("when the runtime permits a confirmation");
+		expect(prompt).toContain("are never routine.");
+		expect(prompt).not.toContain("Ask or assume");
+		// Workflow list stays contiguous after the removal.
+		expect(prompt).toContain("3. Test first when feasible");
+		expect(prompt).toContain("4. Act in small, verifiable steps");
+		expect(prompt).toContain("5. Validate");
+		expect(prompt).toContain("6. Stay in scope");
+		expect(prompt).not.toMatch(/\n7\. /);
 	});
 
 	it("reports the operating mode inside the env block", () => {
@@ -243,6 +272,9 @@ describe("Step system prompt appendix", () => {
 
 				expect(spawnSync("git", ["init", "-b", "step-env-test"], { cwd: root, encoding: "utf8" }).status).toBe(0);
 				await writeFile(path.join(root, "pending.txt"), "uncommitted\n");
+				// Git facts are cached per working directory; the repository was created
+				// after the first build, so drop the "not a repository" entry.
+				invalidateGitEnvironmentCache(root);
 				const repo = buildStepSystemPromptAppendix([], { cwd: root });
 				expect(repo).toContain("Git branch: step-env-test");
 				expect(repo).toContain("Uncommitted changes: 1");
@@ -251,6 +283,25 @@ describe("Step system prompt appendix", () => {
 			}
 		},
 	);
+
+	it.skipIf(!hasGit)("reuses cached git facts across rebuilds until invalidated", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "step-prompt-cache-"));
+		try {
+			expect(spawnSync("git", ["init", "-b", "cache-a"], { cwd: root, encoding: "utf8" }).status).toBe(0);
+			invalidateGitEnvironmentCache(root);
+			expect(buildStepSystemPromptAppendix([], { cwd: root })).toContain("Git branch: cache-a");
+
+			// A rebuild burst (one per registered tool) must not re-read git state.
+			expect(spawnSync("git", ["branch", "-m", "cache-b"], { cwd: root, encoding: "utf8" }).status).toBe(0);
+			expect(buildStepSystemPromptAppendix([], { cwd: root })).toContain("Git branch: cache-a");
+
+			invalidateGitEnvironmentCache(root);
+			expect(buildStepSystemPromptAppendix([], { cwd: root })).toContain("Git branch: cache-b");
+		} finally {
+			invalidateGitEnvironmentCache(root);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
 
 	it("never crashes on a nonexistent working directory", () => {
 		const prompt = buildStepSystemPromptAppendix([], { cwd: "/nonexistent/step-prompt-env" });

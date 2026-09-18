@@ -15,7 +15,7 @@ export { CancellableLoader } from "./components/cancellable-loader.ts";
 export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.ts";
 export { HStack } from "./components/h-stack.ts";
 export { Image, type ImageOptions, type ImageTheme } from "./components/image.ts";
-export { Input } from "./components/input.ts";
+export { Input, type InputOptions } from "./components/input.ts";
 export { Loader, type LoaderIndicatorOptions } from "./components/loader.ts";
 export { type DefaultTextStyle, Markdown, type MarkdownOptions, type MarkdownTheme } from "./components/markdown.ts";
 export {
@@ -121,6 +121,7 @@ export {
 	compositeTuiLine,
 	type Focusable,
 	isFocusable,
+	isIncrementalRenderDisabled,
 	isViewportTUI,
 	type OverlayAnchor,
 	type OverlayHandle,

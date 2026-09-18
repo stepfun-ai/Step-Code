@@ -1,18 +1,18 @@
 /**
  * Step-only credential compatibility helpers.
  *
- * Pi stores credentials under `<agentDir>/auth.json`. Step CLI follows that
- * layout under `~/.step-cli/agent/`; credentials written by the retired
+ * Pi stores credentials under `<agentDir>/auth.json`. Step CLI stores its
+ * provider credential at the top-level `~/.step-cli/auth.json`; credentials written by the retired
  * namespace remain migration fallbacks.
  */
 
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
-import type { Credential } from "@earendil-works/pi-ai";
+import type { Credential } from "@step-harness/providers";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
-import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../extensions/step-provider/index.ts";
-import { LEGACY_RENAMED_CONFIG_DIR, resolveStepAgentDir, resolveStepHomeDir } from "./environment.ts";
+import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
+import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } from "./environment.ts";
 
 /** Current Pi-shaped credential path under the Step CLI agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
@@ -21,7 +21,7 @@ export function getStepAuthPath(env: Record<string, string | undefined> = proces
 		// This is a Step-only surface. Always resolve through the Step namespace,
 		// even when an embedded host has a stale PI_CODING_AGENT_DIR in its
 		// process environment. The Pi entrypoint uses getAgentDir() directly.
-		join(resolveStepAgentDir(env), "auth.json")
+		join(resolveStepConfigRoot(env), "auth.json")
 	);
 }
 

@@ -121,6 +121,21 @@ interface GitEnvironment {
 }
 
 /**
+ * Git state changes far more slowly than the prompt is rebuilt. A single MCP
+ * server registering N tools rebuilds the prompt N times within a few hundred
+ * milliseconds, and each rebuild used to pay two synchronous git spawns
+ * (~29 ms). Cache per working directory so a registration burst pays once.
+ */
+const GIT_ENVIRONMENT_TTL_MS = 5_000;
+const gitEnvironmentCache = new Map<string, { readonly value: GitEnvironment; readonly expiresAt: number }>();
+
+/** Drop cached git facts so the next prompt build re-reads the repository. */
+export function invalidateGitEnvironmentCache(cwd?: string): void {
+	if (cwd === undefined) gitEnvironmentCache.clear();
+	else gitEnvironmentCache.delete(cwd.trim());
+}
+
+/**
  * Best-effort git facts for the environment block. Every failure path —
  * missing git binary, not a repository, nonexistent cwd, timeout — returns
  * an empty object so prompt construction can never crash on git state.
@@ -128,6 +143,15 @@ interface GitEnvironment {
 function collectGitEnvironment(cwd: string | undefined): GitEnvironment {
 	const workingDirectory = cwd?.trim();
 	if (!workingDirectory) return {};
+	const now = Date.now();
+	const cached = gitEnvironmentCache.get(workingDirectory);
+	if (cached && cached.expiresAt > now) return cached.value;
+	const value = readGitEnvironment(workingDirectory);
+	gitEnvironmentCache.set(workingDirectory, { value, expiresAt: now + GIT_ENVIRONMENT_TTL_MS });
+	return value;
+}
+
+function readGitEnvironment(workingDirectory: string): GitEnvironment {
 	const runGitCommand = (gitArguments: string[]): string | undefined => {
 		try {
 			const spawnResult = spawnSync("git", gitArguments, {
@@ -243,7 +267,7 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Workflow orchestration",
 				[
-					'- workflow is opt-in: reach for it only when the user\'s current message contains the keyword "ultraloop" or an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop is on for the session (a system-reminder confirms it and repeats every turn until /ultraloop off); the user invokes a saved workflow by name; or a skill instructs it. A system-reminder confirms per-turn and session-standing opt-ins (saved-workflow and skill invocations are valid without one); never infer opt-in from task shape, and never carry a per-turn opt-in forward.',
+					'- workflow is opt-in: reach for it only when the user\'s current message contains the keyword "ultraloop" (or its Claude Code spelling "ultracode") or an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop is on for the session (a system-reminder confirms it and repeats every turn until /ultraloop off); the user invokes a saved workflow by name; or a skill instructs it. A system-reminder confirms per-turn and session-standing opt-ins (saved-workflow and skill invocations are valid without one); never infer opt-in from task shape, and never carry a per-turn opt-in forward.',
 					"- When ultraloop is on for the session that opt-in is standing: author and run a workflow for every substantive task by default, treat token cost as unconstrained, and aim for the most exhaustive correct answer. Multi-phase work often means several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits. When session mode is off, revert to the per-turn opt-in rule.",
 					"- Without any signal, prefer targeted tools — search_files, read_file, or a single subagent — and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
 					"- With opt-in, workflow fits broad multi-subsystem audits, mechanical migrations across many sites, multi-way parallel review with adversarial verification, research sweeps, and HoH convergence on a spec.",
@@ -255,6 +279,19 @@ export function buildStepSystemPromptAppendix(
 					"- Resume with resumeFromRunId: the same script and args replay the unchanged call prefix as a 100% cache hit; the first mismatched call and everything after it re-run live.",
 					"- Scripts must be deterministic: Date, new Date(), and Math.random() throw in the isolated runtime, and process, require, and network access are unavailable. Pass timestamps through args and vary prompts by index.",
 					"- Default to a medium-sized run and stay under roughly 15 agents unless the user asks for scale or ultraloop is on for the session.",
+				].join("\n"),
+			]
+		: [];
+
+	const hasBrowserTool = [...active].some((name) => /screenshot|playwright|browser|puppeteer/iu.test(name));
+	const frontendSection = hasBrowserTool
+		? [
+				"# Frontend visual verification",
+				[
+					"- For UI work, tests and builds are not enough: render the page, capture a screenshot, and look at it before reporting done.",
+					"- Screenshot tools that return images attach them directly. When a tool saves the capture to disk instead, read_file the saved path — read_file returns real image content for PNG, JPEG, GIF, and WebP.",
+					"- Iterate visually: compare the render against the request (layout, spacing, color, empty/loading/error states), fix, and re-capture until it matches.",
+					"- Subagent reports are text-only; have a subagent save screenshots to files and return the paths, then read_file them yourself.",
 				].join("\n"),
 			]
 		: [];
@@ -272,7 +309,7 @@ export function buildStepSystemPromptAppendix(
 
 		"# Communication",
 		"- Everything outside tool calls is user-visible. Do not reveal private deliberation or invent tool results.",
-		"- Respond in the user's language and keep explanations concise. For a concrete implementation request, proceed with a reasonable assumption unless a critical ambiguity or approval is required.",
+		"- Respond in the user's language and keep explanations concise. For a concrete implementation request, proceed with a reasonable assumption.",
 		"- Final reports should name changed paths and exact validation outcomes. Never claim a test, build, edit, or command succeeded without its result.",
 
 		"# Security",
@@ -283,21 +320,19 @@ export function buildStepSystemPromptAppendix(
 
 		"# Destructive actions",
 		"- Hard-to-reverse or outward-facing actions require the runtime's approval when approval is configured: deleting user files, force flags, history rewrites, git push, publishing, schema migrations, and remote-system mutations.",
-		"- `rm -rf`, `git reset --hard`, `git clean`, force-push, and similar commands are never routine. State the exact target and intent before proceeding when the runtime permits a confirmation.",
+		"- `rm -rf`, `git reset --hard`, `git clean`, force-push, and similar commands are never routine.",
 		"- A permission denial is final for that call. Do not retry it verbatim or disguise the same action as another tool call.",
 
 		"# Cost and consent",
-		"- Before crossing an opt-in gate (workflow, ultraloop) or committing durable side effects (cron durable:true, wide file writes), name the intended action and its rough cost so the user can steer before you spend.",
-		"- Treat 'the task benefits from scale' as necessary but not sufficient consent; the user always has the option of a smaller, cheaper answer.",
+		"- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger; do not invoke them uninvited.",
 
 		"# Workflow",
 		"1. Understand first: read relevant code and project instructions, then investigate until the root cause is clear.",
 		"2. Plan when useful: for work with several non-trivial steps or real uncertainty, keep a concise plan and update it as facts change.",
-		"3. Ask or assume: ask one focused question only when ambiguity changes the outcome; otherwise state the assumption and continue.",
-		"4. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
-		"5. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
-		"6. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly.",
-		"7. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
+		"3. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
+		"4. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
+		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly. For UI-facing changes, also verify visually when a browser or screenshot tool is available; when none is, suggest installing the playwright plugin.",
+		"6. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
 
 		...planningSection,
 
@@ -309,6 +344,8 @@ export function buildStepSystemPromptAppendix(
 		...goalSection,
 
 		...workflowSection,
+
+		...frontendSection,
 
 		"# Code conventions",
 		"- Match surrounding style, naming, patterns, and dependencies. Check the project manifest or existing imports before assuming a dependency exists.",
@@ -324,6 +361,12 @@ export function buildStepSystemPromptAppendix(
 		"- Use read_file before edit_file when the current content is not already known. Use edit_file for targeted replacements and write_file only for new files or deliberate full replacements.",
 		"- Keep tool calls narrow and independently verifiable. Do not use interactive commands or shell chains when a structured argument (such as cwd) is available.",
 	];
+
+	if (hasWrite || hasExecute) {
+		sections.push(
+			"For large source files and reports, create a small initial section, then grow it with focused edits across separate responses. Keep generated code or text in tool arguments to roughly 100 lines or a few kilobytes per response when practical; this is a planning guideline, not permission to truncate content. Do not combine many large writes in one response or embed the same large payload in a shell command. Complete all sections before final validation and report any unfinished work.",
+		);
+	}
 
 	if (!hasRead && !hasWrite && !hasExecute) {
 		sections.push(

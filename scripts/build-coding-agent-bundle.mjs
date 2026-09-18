@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +10,13 @@ import { build } from "esbuild";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const codingAgentDir = join(repoRoot, "packages", "coding-agent");
-const aiDistDir = join(repoRoot, "packages", "ai", "dist");
+// The process entry moved to the @step-harness/cli app (S3). The bundle's `step`
+// entry is that app's compiled main; the `index` library entry stays here. The
+// package directory is parameterised so a future move only touches this const.
+const appEntryDir = join(repoRoot, "apps", "cli");
+const appEntryDistDir = join(appEntryDir, "dist");
+const aiDir = join(repoRoot, "packages", "providers");
+const aiDistDir = join(aiDir, "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
 const bundleDir = join(codingAgentDistDir, "bundle");
 const stepBuildDefines = readStepBuildDefines();
@@ -70,7 +77,7 @@ const httpsProxyAgentNamedExportPlugin = {
 			() => ({
 				contents: 'export { HttpsProxyAgent } from "https-proxy-agent";',
 				loader: "js",
-				resolveDir: repoRoot,
+				resolveDir: aiDir,
 			}),
 		);
 	},
@@ -163,14 +170,17 @@ function outputBytes(metafiles) {
 	);
 }
 
+// The bundle's `step` entry is the compiled app. Compile it here (against the
+// coding-agent dist produced by build:unbundled) so coding-agent's `build`
+// stays self-contained despite the entry now living in the app package. Always
+// rebuild rather than trusting a pre-existing dist/main.js: a stale app compile
+// from an earlier checkout would otherwise be baked into the bundle.
+execFileSync("npm", ["--prefix", appEntryDir, "run", "build"], { stdio: "inherit", cwd: repoRoot });
+
 for (const entry of [
-	join(codingAgentDistDir, "cli.js"),
-	join(codingAgentDistDir, "step-cli.js"),
+	join(appEntryDistDir, "main.js"),
 	join(codingAgentDistDir, "index.js"),
-	join(codingAgentDistDir, "rpc-entry.js"),
-	join(codingAgentDistDir, "client", "index.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-	join(aiDistDir, "api", "bedrock-converse-stream.js"),
 	join(aiDistDir, "auth", "oauth", "anthropic.js"),
 ]) {
 	if (!existsSync(entry)) {
@@ -185,23 +195,16 @@ const mainResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
 	entryPoints: {
-		cli: join(codingAgentDistDir, "cli.js"),
-		step: join(codingAgentDistDir, "step-cli.js"),
-		client: join(codingAgentDistDir, "client", "index.js"),
+		step: join(appEntryDistDir, "main.js"),
 		index: join(codingAgentDistDir, "index.js"),
-		"rpc-entry": join(codingAgentDistDir, "rpc-entry.js"),
 	},
 	outdir: bundleDir,
 	chunkNames: "chunks/[name]-[hash]",
 	splitting: true,
 });
 
-const bedrockLoaderOutput = findContainingOutput(mainResult.metafile, "packages/ai/dist/api/bedrock-converse-stream.lazy.js");
-const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "packages/ai/dist/auth/oauth/load.js");
+const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "packages/providers/dist/auth/oauth/load.js");
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/utils/image-resize.js");
-if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
-	throw new Error("Bedrock and OAuth lazy loaders were emitted into different directories");
-}
 
 // These implementations are reached through variable-specifier imports or a
 // worker URL, so the main bundle cannot follow them. Emit one self-contained
@@ -211,28 +214,19 @@ const lazyResult = await build({
 	entryNames: "[name]",
 	entryPoints: {
 		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
-		"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
-		"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
 		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
-		"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
-		openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
-		radius: join(aiDistDir, "auth", "oauth", "radius.js"),
-		xai: join(aiDistDir, "auth", "oauth", "xai.js"),
 	},
-	outdir: dirname(bedrockLoaderOutput),
+	outdir: dirname(oauthLoaderOutput),
 	splitting: false,
 });
 
-const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-resize-worker.js");
+const imageResizeWorkerOutput = resolve(dirname(oauthLoaderOutput), "image-resize-worker.js");
 if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 	throw new Error("Image resize implementation and worker were emitted into different directories");
 }
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
-chmodSync(join(bundleDir, "cli.js"), 0o755);
 chmodSync(join(bundleDir, "step.js"), 0o755);
-chmodSync(join(bundleDir, "rpc-entry.js"), 0o755);
 
 const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size;
 const mib = outputBytes([mainResult.metafile, lazyResult.metafile]) / (1024 * 1024);

@@ -7,8 +7,8 @@
 
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
-import { setCapabilityOverrides } from "@earendil-works/pi-tui";
+import { setCapabilityOverrides } from "@step-harness/pi-tui";
+import { type ImageContent, modelsAreEqual } from "@step-harness/providers";
 import chalk from "chalk";
 import { type Args, type Mode, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import {
@@ -33,13 +33,6 @@ import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import { selectSession } from "./cli/session-picker.ts";
-import {
-	type StartupTuiPathOptions,
-	shouldRunFirstTimeSetup,
-	showFirstTimeSetup,
-	showStartupSelector,
-} from "./cli/startup-ui.ts";
 import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
@@ -49,6 +42,7 @@ import {
 	getPackageDir,
 	VERSION,
 } from "./config.ts";
+import type { AgentSession } from "./core/agent-session.ts";
 import {
 	type AgentSessionRuntime,
 	type AgentSessionRuntimeHost,
@@ -64,12 +58,14 @@ import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension, ToolDefinition } from "./core/extensions/types.ts";
+import { shouldRunFirstTimeSetup } from "./core/first-time-setup-gate.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import type { ModelRequestObserver } from "./core/model-request-observer.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
-import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { type AppMode, ProjectTrustDeclinedError, resolveProjectTrusted } from "./core/project-trust.ts";
+import type { ResourceLoader } from "./core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -89,17 +85,11 @@ import { SettingsManager, type SettingsManagerCreateOptions } from "./core/setti
 import type { SystemPromptProduct } from "./core/system-prompt.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { builtInExtensions } from "./extensions/index.ts";
+import { builtInExtensions } from "./features/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, type InteractiveModeOptions, runPrintMode, runRpcMode } from "./modes/index.ts";
-import {
-	detectTerminalBackgroundFromEnv,
-	initTheme,
-	resolveThemeSetting,
-	setThemeStorageDir,
-	stopThemeWatcher,
-} from "./modes/interactive/theme/theme.ts";
-import { cleanupManagedInstall, handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
+import { runPrintMode, runRpcMode } from "./modes/index.ts";
+import type { InteractiveModeOptions, StartupTuiPathOptions, StartupUiHooks } from "./modes/interactive-contract.ts";
+import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import {
 	continueStepSession,
 	createStepSessionManager,
@@ -108,6 +98,13 @@ import {
 	listStepSessions,
 	openStepSession,
 } from "./step/session.ts";
+import {
+	detectTerminalBackgroundFromEnv,
+	initTheme,
+	resolveThemeSetting,
+	setThemeStorageDir,
+	stopThemeWatcher,
+} from "./theme/theme.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
@@ -149,7 +146,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
+export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
 	if (parsed.sdkStdio) {
 		// The Step SDK host has its own framed stdin protocol. Treat it as a
 		// headless mode so normal piped-prompt handling never consumes the stream.
@@ -167,7 +164,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
+export function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -502,6 +499,7 @@ export async function createSessionManager(
 	settingsManager: SettingsManager,
 	startupTuiPaths?: StartupTuiPathOptions,
 	sessionRoot?: string,
+	selectSession?: StartupUiHooks["selectSession"],
 ): Promise<SessionManager> {
 	const agentDir = startupTuiPaths?.agentDir;
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
@@ -557,6 +555,9 @@ export async function createSessionManager(
 
 	if (parsed.resume) {
 		try {
+			if (!selectSession) {
+				throw new Error("The interactive session selector (uiHooks.selectSession) is required to --resume.");
+			}
 			const selectedPath = await selectSession(
 				(onProgress) =>
 					agentDir
@@ -704,6 +705,7 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 async function promptForMissingSessionCwd(
 	issue: SessionCwdIssue,
 	settingsManager: SettingsManager,
+	showStartupSelector: StartupUiHooks["showStartupSelector"],
 	paths?: StartupTuiPathOptions,
 ): Promise<string | undefined> {
 	return showStartupSelector(
@@ -725,6 +727,8 @@ export interface MainOptions {
 	configDirName?: string;
 	/** Optional credential file override for product entrypoints. */
 	authPath?: string;
+	/** Optional model catalog path for product entrypoints. */
+	modelsPath?: string;
 	/** Session construction facade used by replacement flows such as /new and /fork. */
 	sessionManagerFactory?: SessionManagerFactory;
 	/**
@@ -765,11 +769,19 @@ export interface MainOptions {
 		| "allowedAuthProviders"
 		| "stepLogin"
 		| "stepLogout"
+		| "stepMcpImport"
+		| "stepThemePrompt"
 		| "onStartup"
-		| "offline"
 	>;
 	/** Run a product-owned framed stdio host after Pi creates the runtime. */
 	stdioModeFactory?: (runtimeHost: AgentSessionRuntimeHost) => Promise<void>;
+	/**
+	 * Startup UI selectors injected by the product shell (dependency inversion).
+	 * The interactive selectors live in @step-harness/cli; `prepareMain` calls
+	 * them through this bag so this package never imports the shell. Absent when
+	 * coding-agent's own `main()` runs a non-interactive command.
+	 */
+	uiHooks?: StartupUiHooks;
 	/** Optional best-effort observer for provider request lifecycle metrics. */
 	modelRequestObserver?: ModelRequestObserver;
 	/** Optional product identity used by the default system prompt. */
@@ -791,7 +803,65 @@ export interface MainOptions {
 	}) => Array<ToolDefinition<any, any, any>>;
 }
 
-export async function main(args: string[], options?: MainOptions) {
+/**
+ * Outcome of the argv → assembly → mode-resolution pipeline that pi's `main()`
+ * runs before it dispatches into a run mode.
+ *
+ * `prepareMain()` performs every step of the former `main()` body up to (but not
+ * including) the final `switch (appMode)`: it parses argv, runs the short-lived
+ * metadata/auth/package/config commands, builds the runtime, resolves the final
+ * `appMode` (including the piped-stdin → print flip), and applies the same
+ * module-global side effects (timings buffer, stdout takeover, theme watcher).
+ *
+ *  - `kind: "completed"` — a short-command path already produced all output and
+ *    the process should stop. `exitCode` encodes pi's historical exit contract:
+ *    a command that always called `process.exit(n)` reports that `n` (including
+ *    an explicit `0` for `--version` / `--help` / `--export` / `--list-models`),
+ *    while the soft-return commands that only set `process.exitCode` (auth,
+ *    config, sdk-stdio, the Windows `update` drain) omit `exitCode` entirely.
+ *    `main()` hard-exits when `exitCode` is defined; a product shell treats a
+ *    zero/undefined `exitCode` as "return, do not exit" so telemetry/finally
+ *    blocks always run, then force-exits the finished one-shot command (so a
+ *    leaked extension handle cannot keep it alive) unless `drainNaturally` is
+ *    set — sdk-stdio's framed host and the win32 `update` teardown must drain
+ *    naturally. `--sdk-stdio` reports this kind *after* its framed host has run,
+ *    so its byte-exact framing is never routed through the switch.
+ *  - `kind: "dispatch"` — everything needed to run a full session mode. The
+ *    `appMode` field is the final value (already flipped for piped stdin); the
+ *    dispatcher must use it verbatim and never re-resolve it.
+ */
+export type MainPreparation =
+	| { kind: "completed"; exitCode?: number; drainNaturally?: boolean }
+	| {
+			kind: "dispatch";
+			appMode: AppMode;
+			runtimeHost: AgentSessionRuntimeHost;
+			session: AgentSession;
+			modelFallbackMessage: string | undefined;
+			settingsManager: SettingsManager;
+			resourceLoader: ResourceLoader;
+			modelRuntime: ModelRuntime;
+			migratedProviders: string[];
+			startupDiagnostics: AgentSessionRuntimeDiagnostic[];
+			autoTrustOnReloadCwd: string | undefined;
+			initialMessage: string | undefined;
+			initialImages: ImageContent[] | undefined;
+			sessionRoot: string | undefined;
+			startupBenchmark: boolean;
+			parsed: Args;
+			// Computed here (not raw options) so the dispatcher and an embedding
+			// shell build InteractiveMode from the same resolved values pi uses.
+			configDirName: string;
+			authPath: string | undefined;
+	  };
+
+/**
+ * Run everything pi's `main()` does before the run-mode `switch`, returning a
+ * {@link MainPreparation}. Product shells (apps/cli) call this directly and then
+ * own their own dispatch switch, bypassing `main()` so their process-lifecycle
+ * bookkeeping (telemetry finally blocks) is never skipped by a `process.exit()`.
+ */
+export async function prepareMain(args: string[], options?: MainOptions): Promise<MainPreparation> {
 	resetTimings();
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
 	const configDirName = options?.configDirName?.trim() || CONFIG_DIR_NAME;
@@ -807,29 +877,18 @@ export async function main(args: string[], options?: MainOptions) {
 		: options?.agentDir
 			? join(agentDir, "auth.json")
 			: undefined;
-	// Keep explicit offline mode separate from the product switch that only
-	// disables Pi's optional catalog/update/install services. Step uses the
-	// latter by default but must still be able to open its OAuth login flow.
-	const explicitOfflineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
-	// `disableBackgroundServices` is deliberately narrower than offline mode:
-	// it suppresses catalog/update/install work, but provider requests and the
-	// interactive OAuth flow must remain available to product entrypoints.
-	const offlineMode = explicitOfflineMode;
-	if (offlineMode) {
-		process.env.PI_OFFLINE = "1";
-		process.env.PI_SKIP_VERSION_CHECK = "1";
-	}
 
 	if (
 		await runAuthCommand(args, options?.authRuntimeSetup, authPath, options?.agentDir, options?.allowedAuthProviders)
 	) {
-		return;
+		// runAuthCommand set process.exitCode (0 ready / 1 not_ready / 2 invalid);
+		// carry that side effect through the completed result unchanged.
+		return { kind: "completed" };
 	}
 
 	if (process.platform === "win32") {
 		cleanupWindowsSelfUpdateQuarantine(getPackageDir());
 	}
-	cleanupManagedInstall();
 
 	const createSettingsManager =
 		options?.settingsManagerFactory ??
@@ -848,18 +907,22 @@ export async function main(args: string[], options?: MainOptions) {
 			agentDir,
 			settingsManagerFactory: options?.settingsManagerFactory,
 			configDirName,
+			uiHooks: options?.uiHooks,
 		})
 	) {
-		const exitCode = process.exitCode ?? 0;
+		// process.exitCode is typed `number | string | undefined`; handlePackageCommand
+		// only ever sets a numeric code, so normalize to a number for the result.
+		const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
 		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
-			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
-			// one-shot commands alive. On Windows, Node can assert after fetch() if process.exit(0)
-			// runs during teardown; let successful `pi update` drain naturally instead.
+			// Package commands are force-exited by the product shell after its telemetry
+			// finally so a bad extension cannot keep a one-shot command alive with a
+			// leaked libuv handle. On Windows, Node can assert after fetch() if
+			// process.exit(0) runs during teardown, so flag a successful `pi update`
+			// to drain naturally instead of being hard-exited.
 			// https://github.com/nodejs/node/issues/56645
-			return;
+			return { kind: "completed", drainNaturally: true };
 		}
-		process.exit(exitCode);
-		return;
+		return { kind: "completed", exitCode };
 	}
 
 	if (
@@ -868,9 +931,10 @@ export async function main(args: string[], options?: MainOptions) {
 			agentDir,
 			settingsManagerFactory: options?.settingsManagerFactory,
 			configDirName,
+			uiHooks: options?.uiHooks,
 		})
 	) {
-		return;
+		return { kind: "completed" };
 	}
 
 	const parsed = parseArgs(args);
@@ -880,14 +944,14 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(color(`${d.type === "error" ? "Error" : "Warning"}: ${d.message}`));
 		}
 		if (parsed.diagnostics.some((d) => d.type === "error")) {
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 	}
 	time("parseArgs");
 
 	if (parsed.version) {
 		console.log(VERSION);
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	if (parsed.export) {
@@ -905,10 +969,10 @@ export async function main(args: string[], options?: MainOptions) {
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
 			console.error(chalk.red(`Error: ${message}`));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 		console.log(`Exported to: ${result}`);
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
@@ -919,7 +983,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		console.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 
 	validateForkFlags(parsed);
@@ -943,7 +1007,7 @@ export async function main(args: string[], options?: MainOptions) {
 		parsed.listModels === undefined &&
 		shouldRunFirstTimeSetup(join(agentDir, "settings.json"))
 	) {
-		await showFirstTimeSetup(startupSettingsManager, { agentDir, configDirName });
+		await options?.uiHooks?.showFirstTimeSetup(startupSettingsManager, { agentDir, configDirName });
 		time("firstTimeSetup");
 	}
 
@@ -981,16 +1045,27 @@ export async function main(args: string[], options?: MainOptions) {
 		startupSettingsManager,
 		productStoragePaths,
 		sessionRoot,
+		options?.uiHooks?.selectSession,
 	);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
-			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager, {
-				agentDir,
-				configDirName,
-			});
+			if (!options?.uiHooks?.showStartupSelector) {
+				throw new Error(
+					"The startup selector (uiHooks.showStartupSelector) is required to resolve a missing session cwd.",
+				);
+			}
+			const selectedCwd = await promptForMissingSessionCwd(
+				missingSessionCwdIssue,
+				startupSettingsManager,
+				options.uiHooks.showStartupSelector,
+				{
+					agentDir,
+					configDirName,
+				},
+			);
 			if (!selectedCwd) {
-				process.exit(0);
+				return { kind: "completed", exitCode: 0 };
 			}
 			sessionManager = agentDir
 				? openStepSession(missingSessionCwdIssue.sessionFile!, {
@@ -1001,14 +1076,14 @@ export async function main(args: string[], options?: MainOptions) {
 				: SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
 			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 	}
 	if (parsed.name !== undefined) {
 		const name = normalizeSessionName(parsed.name);
 		if (name === undefined) {
 			console.error(chalk.red("Error: --name requires a non-empty value"));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
 		sessionManager.appendSessionInfo(name);
 	}
@@ -1038,14 +1113,14 @@ export async function main(args: string[], options?: MainOptions) {
 		const isInitialRuntime = sessionStartEvent === undefined;
 		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
 		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-		const hasTrustRequiringResources = hasTrustRequiringProjectResources(cwd, configDirName);
-		const shouldResolveProjectTrust =
-			parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined && hasTrustRequiringResources;
+		// Asked for every directory, not only those shipping project config. The
+		// config is one of two things trust covers; the other is the file contents
+		// the agent is about to read, and a hostile file is a prompt-injection
+		// vector whether or not the directory also ships a settings.json.
+		const shouldResolveProjectTrust = parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined;
 		const projectTrusted = shouldResolveProjectTrust
 			? false
-			: (cachedProjectTrust ??
-				parsed.projectTrustOverride ??
-				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
+			: (cachedProjectTrust ?? parsed.projectTrustOverride ?? trustStore.get(cwd) === true);
 		const runtimeSettingsManager = createSettingsManager(cwd, agentDir, {
 			projectTrusted,
 			configDirName,
@@ -1056,6 +1131,7 @@ export async function main(args: string[], options?: MainOptions) {
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,
+			modelCatalogPath: options?.modelsPath,
 			configDirName,
 			authPath,
 			settingsManager: runtimeSettingsManager,
@@ -1070,6 +1146,9 @@ export async function main(args: string[], options?: MainOptions) {
 								configDirName,
 								trustOverride: parsed.projectTrustOverride,
 								defaultProjectTrust: startupSettingsManager.getDefaultProjectTrust(),
+								// A session reads the directory's files into the model, so the
+								// question applies even where there is no project config.
+								alwaysAsk: true,
 								extensionsResult,
 								projectTrustContext:
 									projectTrustContext ??
@@ -1079,6 +1158,12 @@ export async function main(args: string[], options?: MainOptions) {
 										settingsManager: startupSettingsManager,
 										hasUI: isInitialRuntime && trustPromptMode === "interactive",
 										paths: { agentDir, configDirName },
+										ui: options?.uiHooks
+											? {
+													showStartupSelector: options.uiHooks.showStartupSelector,
+													showStartupInput: options.uiHooks.showStartupInput,
+												}
+											: undefined,
 									}),
 								onExtensionError: (message) => projectTrustDiagnostics.push({ type: "warning", message }),
 							});
@@ -1182,12 +1267,20 @@ export async function main(args: string[], options?: MainOptions) {
 		};
 	};
 	time("createRuntime");
-	const runtime = await createAgentSessionRuntime(createRuntime, {
-		cwd: sessionManager.getCwd(),
-		agentDir,
-		sessionManager,
-		sessionManagerFactory: options?.sessionManagerFactory,
-	});
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
+	try {
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: sessionManager.getCwd(),
+			agentDir,
+			sessionManager,
+			sessionManagerFactory: options?.sessionManagerFactory,
+		});
+	} catch (error) {
+		// Declining trust is a decision, not a failure: leave without a stack
+		// trace and without the alternate screen ever being entered.
+		if (error instanceof ProjectTrustDeclinedError) return { kind: "completed" };
+		throw error;
+	}
 	time("createAgentSessionRuntime");
 	const runtimeHost = options?.runtimeHostFactory?.(runtime) ?? runtime;
 	const { services, session, modelFallbackMessage } = runtime;
@@ -1202,14 +1295,14 @@ export async function main(args: string[], options?: MainOptions) {
 			.getExtensions()
 			.extensions.flatMap((extension) => Array.from(extension.flags.values()));
 		printHelp(extensionFlags);
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	if (parsed.listModels !== undefined) {
 		reportDiagnostics(startupSettingsDiagnostics);
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRuntime, searchPattern, AbortSignal.timeout(15_000));
-		process.exit(0);
+		return { kind: "completed", exitCode: 0 };
 	}
 
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
@@ -1247,32 +1340,37 @@ export async function main(args: string[], options?: MainOptions) {
 		if (runtime.diagnostics.some((diagnostic) => diagnostic.message.includes("Failed to load extension"))) {
 			console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT));
 		}
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 	time("createAgentSession");
 
 	if (appMode !== "interactive" && !session.model) {
 		console.error(chalk.red(formatNoModelsAvailableMessage()));
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 
 	if (parsed.sdkStdio) {
 		if (!options?.stdioModeFactory) {
 			console.error(chalk.red("Error: --sdk-stdio is only available from the step entrypoint"));
-			process.exit(1);
+			return { kind: "completed", exitCode: 1 };
 		}
+		// The framed stdio host runs entirely inside the preparation step so its
+		// byte-exact length-prefixed protocol is never routed through the dispatch
+		// switch (which would risk interleaving diagnostics with frames).
 		await options.stdioModeFactory(runtimeHost);
-		return;
+		// The shell must not force-exit this path: the framed host owns its own
+		// lifetime and its final length-prefixed frames on stdout must drain naturally.
+		return { kind: "completed", drainNaturally: true };
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
 	if (startupBenchmark && appMode !== "interactive") {
 		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
-		process.exit(1);
+		return { kind: "completed", exitCode: 1 };
 	}
 
 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
-	if (!offlineMode && !options?.disableBackgroundServices && appMode === "rpc") {
+	if (!options?.disableBackgroundServices && appMode === "rpc") {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), 15_000);
 		void modelRuntime
@@ -1281,62 +1379,81 @@ export async function main(args: string[], options?: MainOptions) {
 			.finally(() => clearTimeout(timeout));
 	}
 
+	return {
+		kind: "dispatch",
+		appMode,
+		runtimeHost,
+		session,
+		modelFallbackMessage,
+		settingsManager,
+		resourceLoader,
+		modelRuntime,
+		migratedProviders,
+		startupDiagnostics,
+		autoTrustOnReloadCwd,
+		initialMessage,
+		initialImages,
+		sessionRoot,
+		startupBenchmark,
+		parsed,
+		configDirName,
+		authPath,
+	};
+}
+
+/**
+ * Run the full session mode selected during {@link prepareMain}. This holds the
+ * exact `switch (appMode)` pi's `main()` has always run; it is a private helper
+ * so `main()` stays a thin `prepare → dispatch` wrapper while product shells run
+ * their own dispatch against the returned {@link MainPreparation}.
+ */
+async function dispatchAppMode(
+	prep: Extract<MainPreparation, { kind: "dispatch" }>,
+	_options?: MainOptions,
+): Promise<void> {
+	const { appMode, runtimeHost } = prep;
 	if (appMode === "rpc") {
 		printTimings();
 		await runRpcMode(runtimeHost);
 	} else if (appMode === "interactive") {
-		const interactiveMode = new InteractiveMode(runtimeHost, {
-			configDirName,
-			authPath,
-			migratedProviders,
-			startupDiagnostics,
-			modelFallbackMessage,
-			autoTrustOnReloadCwd,
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-			tuiMode: parsed.tuiMode,
-			initialThemeSetting: parsed.useTheme,
-			defaultTheme: options?.defaultTheme,
-			disableBackgroundServices: options?.disableBackgroundServices,
-			...options?.interactiveModeOptions,
-			sessionRoot,
-			offline: explicitOfflineMode || options?.interactiveModeOptions?.offline === true,
-		});
-		if (startupBenchmark) {
-			await interactiveMode.init();
-			time("interactiveMode.init");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-			await new Promise((resolve) => setTimeout(resolve, 150));
-			interactiveMode.stop();
-			stopThemeWatcher();
-			printTimings();
-			if (process.stdout.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
-			}
-			if (process.stderr.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
-			}
-			return;
-		}
-
-		printTimings();
-		await interactiveMode.run();
+		// The interactive TUI moved to @step-harness/cli (S4-0). coding-agent's own
+		// main() no longer dispatches it; product shells construct InteractiveMode
+		// from the returned MainPreparation and run their own dispatch switch.
+		throw new Error("interactive mode moved to @step-harness/cli; coding-agent main() no longer dispatches the TUI");
 	} else {
 		printTimings();
 		const exitCode = await runPrintMode(runtimeHost, {
 			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
+			messages: prep.parsed.messages,
+			initialMessage: prep.initialMessage,
+			initialImages: prep.initialImages,
 		});
 		stopThemeWatcher();
 		restoreStdout();
 		if (exitCode !== 0) {
 			process.exitCode = exitCode;
 		}
+	}
+}
+
+/**
+ * Entry point kept for embedders and tests: prepare, then dispatch. Short
+ * commands that finish inside {@link prepareMain} return here without a session
+ * mode. `main()` reproduces pi's historical exit contract for direct callers:
+ * any `completed` result with a defined `exitCode` (including an explicit `0`
+ * for the short commands that always ran `process.exit(0)`) is applied with
+ * `process.exit`, while the soft-return commands (auth/config/sdk-stdio, which
+ * only set `process.exitCode`) omit `exitCode` and return without exiting. A
+ * product shell instead reads `exitCode` off the result and never hard-exits, so
+ * its process-lifecycle bookkeeping is preserved.
+ */
+export async function main(args: string[], options?: MainOptions): Promise<void> {
+	const prep = await prepareMain(args, options);
+	if (prep.kind === "completed") {
+		if (prep.exitCode !== undefined) {
+			process.exit(prep.exitCode);
+		}
 		return;
 	}
+	await dispatchAppMode(prep, options);
 }

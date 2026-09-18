@@ -1,6 +1,6 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
+Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.step-cli/agent/models.json`.
 
 ## Table of Contents
 
@@ -34,9 +34,9 @@ For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
 }
 ```
 
-The `apiKey` value is a placeholder because Ollama ignores it. pi still treats models as requiring auth before they appear in `/model`, so keyless local servers should keep a dummy value, save a key for that provider with `/login`, or pass `--api-key` when selecting the model.
+The `apiKey` value is a placeholder because Ollama ignores it. step still treats models as requiring auth before they appear in `/model`, so keyless local servers should keep a dummy value, save a key for that provider with `/login`, or pass `--api-key` when selecting the model.
 
-Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so pi sends the system prompt as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too.
+Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so step sends the system prompt as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too.
 
 You can set `compat` at the provider level to apply to all models, or at the model level to override a specific model. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
 
@@ -136,7 +136,6 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `baseUrl` | API endpoint URL |
 | `api` | API type (see above) |
 | `apiKey` | Optional API key config (see value resolution below). Omit it when auth is provided by `/login`/`auth.json` or CLI `--api-key`. |
-| `oauth` | Dynamic OAuth provider type. Currently supports `"radius"`; requires the gateway `baseUrl`. |
 | `headers` | Custom headers (see value resolution below) |
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
 | `models` | Array of model configurations |
@@ -169,7 +168,7 @@ The `apiKey` and `headers` fields support command execution, environment interpo
   "apiKey": "sk-..."
   ```
 
-For `models.json`, shell commands are resolved at request time. pi intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and pi cannot infer the right one.
+For `models.json`, shell commands are resolved at request time. step intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and step cannot infer the right one.
 
 If your command is slow, expensive, rate-limited, or should keep using a previous value on transient failures, wrap it in your own script or command that implements the caching or TTL behavior you want.
 
@@ -202,7 +201,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `name` | No | `id` | Human-readable model label. Used for matching (`--model` patterns) and shown as secondary model detail text. |
 | `api` | No | provider's `api` | Override provider's API for this model |
 | `reasoning` | No | `false` | Supports extended thinking |
-| `thinkingLevelMap` | No | omitted | Maps pi thinking levels to provider values and marks unsupported levels (see below) |
+| `thinkingLevelMap` | No | omitted | Maps step thinking levels to provider values and marks unsupported levels (see below) |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
 | `contextWindow` | No | `128000` | Context window size in tokens |
 | `maxTokens` | No | `16384` | Maximum output tokens |
@@ -238,7 +237,7 @@ Current behavior:
 
 ### Sampling Parameters
 
-`samplingParams` is a free-form object merged verbatim into every request body for the model, after the fields pi sets itself, so its keys win. Use it to send sampling parameters pi does not model — including server-specific ones like llama.cpp's `min_p` or vLLM's `top_k`:
+`samplingParams` is a free-form object merged verbatim into every request body for the model, after the fields step sets itself, so its keys win. Use it to send sampling parameters step does not model — including server-specific ones like llama.cpp's `min_p` or vLLM's `top_k`:
 
 ```json
 {
@@ -252,13 +251,13 @@ Current behavior:
 }
 ```
 
-Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override pi's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
+Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override step's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
 
 A constant thinking-token cap can go here too, but it will not follow `thinkingBudgets` or leave room for the answer. Prefer `compat.thinkingTokenBudgetField` (or the `supportsThinkingTokenBudget` alias) for that.
 
 ### Thinking Level Map
 
-Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are pi thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Maps may contain holes; for example, a model can expose `high` and `max` without exposing `xhigh`.
+Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are step thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Maps may contain holes; for example, a model can expose `high` and `max` without exposing `xhigh`.
 
 Values are tristate:
 
@@ -390,7 +389,7 @@ Behavior notes:
 
 For providers or proxies using `api: "anthropic-messages"`, use `compat` to control Anthropic-specific request compatibility.
 
-By default pi sends per-tool `eager_input_streaming: true`. If a proxy or Anthropic-compatible backend rejects that field, set `supportsEagerToolInputStreaming` to `false`. Pi will omit `tools[].eager_input_streaming` and send the legacy `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests instead.
+By default step sends per-tool `eager_input_streaming: true`. If a proxy or Anthropic-compatible backend rejects that field, set `supportsEagerToolInputStreaming` to `false`. Step will omit `tools[].eager_input_streaming` and send the legacy `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests instead.
 
 Some Anthropic models require adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) instead of the legacy budget-based thinking payload. Built-in models set this automatically. For custom providers or aliases that route to those models, set `forceAdaptiveThinking` to `true`.
 
@@ -462,7 +461,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `supportsDeveloperRole` | Use `developer` vs `system` role |
 | `supportsReasoningEffort` | Support for `reasoning_effort` parameter |
 | `supportsUsageInStreaming` | Supports `stream_options: { include_usage: true }` (default: `true`) |
-| `supportsFinishReason` | Whether streamed responses include `finish_reason`. When `false`, pi infers `stop` or `toolUse` when the stream ends. Default: `true`. |
+| `supportsFinishReason` | Whether streamed responses include `finish_reason`. When `false`, step infers `stop` or `toolUse` when the stream ends. Default: `true`. |
 | `maxTokensField` | Use `max_completion_tokens` or `max_tokens` |
 | `requiresToolResultName` | Include `name` on tool result messages |
 | `requiresAssistantAfterToolResult` | Insert an assistant message before a user message after tool results |

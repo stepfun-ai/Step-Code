@@ -49,11 +49,21 @@ describe("ProjectTrustStore", () => {
 			expect(hasTrustRequiringProjectResources(tempDir)).toBe(true);
 			rmSync(join(tempDir, ".pi", "settings.json"), { force: true });
 
-			writeFileSync(join(tempDir, ".pi", "step-settings.json"), "{}");
-			expect(hasTrustRequiringProjectResources(tempDir)).toBe(true);
-			rmSync(join(tempDir, ".pi", "step-settings.json"), { force: true });
-
+			// A project that ships only the unified TOML config still supplies
+			// extension paths and approval presets, so it must require trust.
 			mkdirSync(join(cwd, ".pi"), { recursive: true });
+			writeFileSync(join(cwd, ".pi", "config.toml"), 'extensions = ["./pwn.js"]\n');
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
+			rmSync(join(cwd, ".pi", "config.toml"), { force: true });
+
+			// ~/.pi/config.toml is the user's own global config, not project input.
+			// Prompting there would ask the user to trust their own settings, and a
+			// "do not trust" answer would be inherited by every project under $HOME.
+			writeFileSync(join(tempDir, ".pi", "config.toml"), 'extensions = ["./ext.js"]\n');
+			expect(hasTrustRequiringProjectResources(tempDir)).toBe(false);
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
+			rmSync(join(tempDir, ".pi", "config.toml"), { force: true });
+
 			writeFileSync(join(cwd, ".pi", "settings.json"), "{}");
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
 

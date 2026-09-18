@@ -9,8 +9,8 @@
 
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Component } from "@earendil-works/pi-tui";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import type { Component } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type {
 	AgentToolUpdateCallback,
@@ -633,7 +633,7 @@ function parseNativeSearchRows(text: string): SearchRow[] {
 	const rows: SearchRow[] = [];
 	for (const rawLine of text.split("\n")) {
 		const line = rawLine.trimEnd();
-		if (!line || line.startsWith("[") || line.startsWith("WARNING:")) continue;
+		// Match the row shape, not a prefix: "[" and "WARNING:" can start valid paths.
 		const match = /^(.*):(\d+): (.*)$/u.exec(line);
 		if (match) {
 			rows.push({ display: match[1] ?? "", line: Number(match[2]), text: match[3] ?? "" });

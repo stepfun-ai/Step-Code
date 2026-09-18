@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { INITIAL_STEP_LOGIN_STEP, reduceStepLogin, resolveStepLoginProfiles } from "../src/step/onboarding.ts";
 import { StepOnboardingView } from "../src/step/onboarding-view.ts";
+import { initTheme } from "../src/theme/theme.ts";
 
 describe("Step login onboarding", () => {
 	it("offers the three Step login profiles in step-cli order", () => {

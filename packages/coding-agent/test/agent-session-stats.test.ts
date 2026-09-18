@@ -1,11 +1,11 @@
-import { Agent } from "@earendil-works/pi-agent-core";
+import { Agent } from "@step-harness/agent-core";
 import {
 	type AssistantMessage,
 	getModel,
 	streamSimple,
 	type ToolResultMessage,
 	type Usage,
-} from "@earendil-works/pi-ai/compat";
+} from "@step-harness/providers/compat";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";

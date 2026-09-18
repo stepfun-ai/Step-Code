@@ -1,5 +1,5 @@
 import { readStoredCredential } from "../core/auth-storage.ts";
-import { createStepProviderConfig } from "../extensions/step-provider/index.ts";
+import { createStepProviderConfig } from "../features/step-provider/index.ts";
 import { resolveStepLoginProfiles } from "./onboarding.ts";
 
 export type StepLoginMethod = "step_plan" | "api_key" | null;

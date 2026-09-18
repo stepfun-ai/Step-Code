@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@step-harness/agent-core";
 import { describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import {
@@ -7,7 +7,7 @@ import {
 	type StepGoalRecord,
 	StepGoalRuntime,
 	type StepGoalSnapshot,
-} from "../src/extensions/step-schedule.ts";
+} from "../src/features/step-schedule.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 function assistant(
@@ -335,6 +335,26 @@ describe("StepGoalRuntime", () => {
 		expect(h.continuations[0]?.delivery).toBe("queued");
 	});
 
+	test("reports live active seconds and freezes them while paused", () => {
+		let now = 1_000;
+		const harness = runtimeHarness({ idle: true, now: () => now });
+		harness.runtime.start("Track live elapsed", "session-1");
+		now = 4_000;
+		expect(harness.runtime.elapsedActiveSeconds()).toBe(3);
+		harness.runtime.setUserStatus("paused");
+		now = 60_000;
+		// Paused goals freeze at the persisted counter; the pause span never counts.
+		expect(harness.runtime.elapsedActiveSeconds()).toBe(3);
+		harness.runtime.setUserStatus("active");
+		now = 62_000;
+		expect(harness.runtime.elapsedActiveSeconds()).toBe(5);
+		expect(harness.runtime.get()?.timeUsedSeconds).toBe(3);
+		harness.runtime.onAgentStart();
+		now = 65_000;
+		// During a participating run the readout follows the run baseline.
+		expect(harness.runtime.elapsedActiveSeconds()).toBe(8);
+	});
+
 	test("a throwing continuation request does not crash and retries on the next completed run", () => {
 		let throwOnce = true;
 		const persisted: Array<StepGoalSnapshot | undefined> = [];
@@ -377,21 +397,23 @@ interface ExtensionHarness {
 	entries: Array<{ type: "custom"; customType: "step-goal"; data: unknown }>;
 	handlers: Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>;
 	ctx: ExtensionContext;
+	setIdle: (value: boolean) => void;
 }
 
-function extensionHarness(options: { telemetry?: StepTelemetryReporter } = {}): ExtensionHarness {
+function extensionHarness(options: { telemetry?: StepTelemetryReporter; idle?: boolean } = {}): ExtensionHarness {
 	const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 	const sent: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
 	const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>();
 	const entries: Array<{ type: "custom"; customType: "step-goal"; data: unknown }> = [];
-	const idle = true;
+	let idle = options.idle ?? true;
 	const ctx = {
 		mode: "tui",
 		hasUI: true,
 		cwd: "/workspace",
 		isIdle: () => idle,
 		hasPendingMessages: () => false,
+		abort: vi.fn(),
 		ui: { notify: vi.fn(), input: vi.fn(async () => undefined), setStatus: vi.fn() },
 		sessionManager: { getSessionId: () => "session-1", getEntries: () => entries, getBranch: () => entries },
 	} as unknown as ExtensionContext;
@@ -415,7 +437,17 @@ function extensionHarness(options: { telemetry?: StepTelemetryReporter } = {}): 
 		},
 	} as unknown as ExtensionAPI;
 	createStepGoalExtension({ telemetry: options.telemetry })(api);
-	return { tools, commands, sent, entries, handlers, ctx };
+	return {
+		tools,
+		commands,
+		sent,
+		entries,
+		handlers,
+		ctx,
+		setIdle: (value: boolean) => {
+			idle = value;
+		},
+	};
 }
 
 async function emit(harness: ExtensionHarness, event: string, payload: Record<string, unknown> = {}): Promise<void> {
@@ -564,5 +596,150 @@ describe("Step goal extension", () => {
 			.reverse()
 			.find((data) => !("cleared" in data));
 		expect(latestGoalSnapshot).toMatchObject({ id: "goal-overbudget", status: "budget_limited" });
+	});
+
+	test("goal creation lists the companion commands", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("ship the release", harness.ctx);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("Goal commands: /goal status · /goal pause · /goal resume · /goal clear"),
+			"info",
+		);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+			"step-goal",
+			expect.stringMatching(/^Goal: active · \d+s$/u),
+		);
+	});
+
+	test("pause explains how to resume", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("ship the release", harness.ctx);
+		await harness.commands.get("goal")?.("pause", harness.ctx);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Goal paused. Run /goal resume to continue.", "info");
+	});
+
+	test("formats status time with minute and hour units", async () => {
+		const harness = extensionHarness();
+		harness.entries.push({
+			type: "custom",
+			customType: "step-goal",
+			data: {
+				id: "goal-timed",
+				sessionId: "session-1",
+				objective: "time me",
+				status: "paused",
+				tokensUsed: 0,
+				timeUsedSeconds: 3505,
+				createdAt: new Date(500).toISOString(),
+				updatedAt: new Date(600).toISOString(),
+				iteration: 1,
+			},
+		});
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("status", harness.ctx);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Time: 58m 25s"), "info");
+	});
+
+	test("starting over an unfinished goal points at the next commands", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("first objective", harness.ctx);
+		await harness.commands.get("goal")?.("pause", harness.ctx);
+		await harness.commands.get("goal")?.("second objective", harness.ctx);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("An unfinished goal is already paused"),
+			"warning",
+		);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("Run /goal resume to continue it"),
+			"warning",
+		);
+		const result = (await harness.tools
+			.get("get_goal")
+			?.execute("call-1", {}, undefined, undefined, harness.ctx)) as { details: { goal: StepGoalRecord } };
+		expect(result.details.goal.objective).toBe("first objective");
+	});
+
+	test("an aborted run pauses the goal and tells the user how to resume", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("ship it", harness.ctx);
+		await emit(harness, "agent_start");
+		await emit(harness, "agent_end", { messages: [assistant("aborted")] });
+		await emit(harness, "agent_settled");
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			"Goal paused (run interrupted). Run /goal resume to continue.",
+			"warning",
+		);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", expect.stringContaining("Goal: paused"));
+	});
+
+	test("hints once per pause that a plain message does not resume the goal", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("ship it", harness.ctx);
+		await harness.commands.get("goal")?.("pause", harness.ctx);
+		const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
+		notify.mockClear();
+		await emit(harness, "input", { text: "继续", source: "interactive" });
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Run /goal resume to continue the goal"), "info");
+		// Repeats within the same pause episode and slash commands stay silent.
+		await emit(harness, "input", { text: "继续", source: "interactive" });
+		await emit(harness, "input", { text: "/help", source: "interactive" });
+		expect(notify).toHaveBeenCalledTimes(1);
+		await harness.commands.get("goal")?.("resume", harness.ctx);
+		notify.mockClear();
+		await emit(harness, "input", { text: "继续", source: "interactive" });
+		expect(notify).not.toHaveBeenCalled();
+	});
+
+	test("pause interrupts an in-flight goal continuation turn", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("ship it", harness.ctx);
+		await emit(harness, "agent_start");
+		await harness.commands.get("goal")?.("pause", harness.ctx);
+		expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			"Goal paused; interrupted the in-flight goal turn. Run /goal resume to continue.",
+			"info",
+		);
+	});
+
+	test("pause does not interrupt a user-initiated turn", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-1", { objective: "mid-run goal" }, undefined, undefined, harness.ctx);
+		await harness.commands.get("goal")?.("pause", harness.ctx);
+		expect(harness.ctx.abort).not.toHaveBeenCalled();
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Goal paused. Run /goal resume to continue.", "info");
+	});
+
+	test("stops a queued goal continuation that starts after pause", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-1", { objective: "grind" }, undefined, undefined, harness.ctx);
+		harness.setIdle(false);
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
+		expect(harness.sent[0]?.options).toMatchObject({ deliverAs: "followUp" });
+		await harness.commands.get("goal")?.("pause", harness.ctx);
+		expect(harness.ctx.abort).not.toHaveBeenCalled();
+		await emit(harness, "agent_start");
+		expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			"Stopped a queued goal turn (goal is paused). Run /goal resume to continue it.",
+			"info",
+		);
 	});
 });

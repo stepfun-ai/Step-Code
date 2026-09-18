@@ -1,12 +1,16 @@
 variables:
   # The release builder contains Node 22, pnpm, Bun, zip and the native build
   # toolchain used by scripts/build-binaries.sh. CI installs from the checked-in
-  # npm lockfile because the historical pnpm lock does not describe all current
-  # workspace importers.
+  # pnpm-lock.yaml with `pnpm install --frozen-lockfile`.
   RELEASE_BUILDER_IMAGE: "hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:c6538968b0f1d223b02016bf1689c35a6b26d6945fb273629ce66d1f3e36a7fc"
   RELEASE_BUNDLE_VERSION: "v0.3.1"
   STEP_RELEASE_BASE_URL: "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli"
   STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcli"
+  # Internal mirror for the rg/fd search-tool binaries: this project's own GitLab
+  # generic package registry. scripts/copy-search-tools.mjs fetches from here
+  # (authenticating with the runner's CI_JOB_TOKEN) so the release archive bundles
+  # rg/fd without reaching github.com. Falls back to GitHub if unset/unreachable.
+  STEP_TOOLS_BASE_URL: "https://gitlab.basemind.com/api/v4/projects/10933/packages/generic/search-tools/1.0.0"
   STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
   STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
   STEP_CLI_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
@@ -90,9 +94,9 @@ lint:
   image: "$RELEASE_BUILDER_IMAGE"
   extends: .release_builder_dependencies
   script:
-    - npm ci --ignore-scripts
-    - npm run hydrate:model-data
-    - npm run check
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    - pnpm run check
   cache:
     key: "npm-$CI_COMMIT_REF_SLUG"
     paths:
@@ -108,12 +112,12 @@ test:
     RELEASE_BUILDER_GIT: "true"
     RELEASE_BUILDER_SEARCH_TOOLS: "true"
   script:
-    - npm ci --ignore-scripts
-    - npm run hydrate:model-data
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
     # Workspace packages expose their dist entrypoints through package.json.
     # Build them before Vitest starts child processes that import those entrypoints.
-    - npm run build:offline
-    - npm test
+    - pnpm run build:offline
+    - pnpm test
   cache:
     key: "npm-$CI_COMMIT_REF_SLUG"
     paths:
@@ -131,10 +135,10 @@ test:
       when: on_success
     - when: never
   script:
-    - npm ci --ignore-scripts
-    - npm run hydrate:model-data
-    - npm run build:offline
-    - npm test
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    - pnpm run build:offline
+    - pnpm test
 
 test:windows:
   extends: .native_test
@@ -181,8 +185,8 @@ release_bundle_upload:
     - when: never
   script:
     - export STEP_RELEASE_VERSION="${CI_COMMIT_TAG:-$RELEASE_BUNDLE_VERSION}"
-    - npm ci --ignore-scripts
-    - npm run hydrate:model-data
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
     - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_BASE_URL" --upload
     - |
       base="${STEP_RELEASE_BASE_URL%/}"
@@ -233,8 +237,8 @@ release_bundle_upload_prod:
     - export STEP_TOS_ENDPOINT="$STEP_TOS_PROD_ENDPOINT"
     - export STEP_TOS_ACCESS_KEY="$STEP_TOS_PROD_ACCESS_KEY"
     - export STEP_TOS_SECRET_KEY="$STEP_TOS_PROD_SECRET_KEY"
-    - npm ci --ignore-scripts
-    - npm run hydrate:model-data
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
     - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --upload
 
 publish_release:

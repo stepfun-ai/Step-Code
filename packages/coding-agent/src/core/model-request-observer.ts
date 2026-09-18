@@ -6,7 +6,7 @@ import {
 	createAssistantMessageEventStream,
 	type Model,
 	type Usage,
-} from "@earendil-works/pi-ai";
+} from "@step-harness/providers";
 
 /** Wire outcome used by the Step-compatible model-request event. */
 export type ModelRequestOutcome = "ok" | "http_error" | "transport_error";

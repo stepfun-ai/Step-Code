@@ -7,10 +7,10 @@ import {
 	type Result,
 	Session,
 	type ShellExecOptions,
-} from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createModels } from "@earendil-works/pi-ai";
-import { getModel } from "@earendil-works/pi-ai/compat";
+} from "@step-harness/agent-core";
+import { NodeExecutionEnv } from "@step-harness/agent-core/node";
+import { createModels } from "@step-harness/providers";
+import { getModel } from "@step-harness/providers/compat";
 import { Type } from "typebox";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -65,7 +65,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("google", "gemini-2.5-flash"),
+			model: getModel("anthropic", "claude-haiku-4-5"),
 			thinkingLevel: "high",
 			env,
 			streamOptions: { maxTokens: 123 },
@@ -115,7 +115,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("google", "gemini-2.5-flash"),
+			model: getModel("anthropic", "claude-haiku-4-5"),
 			env,
 			tools: [customTool],
 			activeToolNames: [],
@@ -139,7 +139,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("google", "gemini-2.5-flash"),
+			model: getModel("anthropic", "claude-haiku-4-5"),
 			thinkingLevel: "high",
 			env,
 			sessionFile: "/sessions/current.jsonl",
@@ -155,14 +155,14 @@ describe("coding-agent Harness construction", () => {
 			expect(env.executionOverrides).toEqual({
 				PI_SESSION_ID: "session-file-harness",
 				PI_SESSION_FILE: "/sessions/current.jsonl",
-				PI_PROVIDER: "google",
-				PI_MODEL: "gemini-2.5-flash",
+				PI_PROVIDER: "anthropic",
+				PI_MODEL: "claude-haiku-4-5",
 				PI_REASONING_LEVEL: "high",
 			});
 			expect(result.content).toEqual([
 				{
 					type: "text",
-					text: "session-file-harness|/sessions/current.jsonl|google|gemini-2.5-flash|high|true",
+					text: "session-file-harness|/sessions/current.jsonl|anthropic|claude-haiku-4-5|high|true",
 				},
 			]);
 		} finally {
@@ -180,7 +180,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("google", "gemini-2.5-flash"),
+			model: getModel("anthropic", "claude-haiku-4-5"),
 			thinkingLevel: "high",
 			env,
 		});
@@ -228,7 +228,7 @@ describe("coding-agent Harness construction", () => {
 			const created = await createCodingAgentHarness({
 				session,
 				models: createModels(),
-				model: getModel("google", "gemini-2.5-flash"),
+				model: getModel("anthropic", "claude-haiku-4-5"),
 				env,
 			});
 			createSpy.mockRestore();

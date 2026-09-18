@@ -2,12 +2,14 @@ import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { type Component, setKeybindings } from "@step-harness/pi-tui";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { createStepPlanExtension } from "../src/extensions/step-plan.ts";
-import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
+import { createStepPlanExtension } from "../src/features/step-plan.ts";
+import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 // Preserve real file I/O while making the ESM read export spyable for EACCES tests.
@@ -29,12 +31,34 @@ interface Harness {
 	notifications: Array<{ message: string; type?: string }>;
 	userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>>;
 	statuses: Map<string, string | undefined>;
+	customCalls: () => number;
+	reviewComponent: () => (Component & { handleInput?(data: string): void }) | undefined;
 	activeTools: () => string[];
 	emit: (event: { type: string } & Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 	ctx: (overrides?: Record<string, unknown>) => ExtensionContext;
 }
 
+/** Keys the review dialog reacts to, spelled the way the terminal sends them. */
+const REVIEW_KEYS = { enter: "\r", escape: "\u001b", down: "\u001b[B", up: "\u001b[A" } as const;
+
+function typeReview(text: string): string[] {
+	return [...text];
+}
+
+// Identity styling: the plan is rendered as markdown, so the double has to
+// cover everything getMarkdownTheme reaches for, not just fg/bold.
+const fakeReviewTheme = {
+	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+	italic: (text: string) => text,
+	underline: (text: string) => text,
+};
+
 const cleanups: Array<() => void> = [];
+
+// The review component resolves keys through the global keybindings registry.
+beforeAll(() => setKeybindings(new KeybindingsManager()));
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -54,6 +78,8 @@ function createHarness(
 		flags?: Record<string, boolean | string>;
 		select?: (title: string, options: string[]) => Promise<string | undefined>;
 		editor?: (title: string, prefill?: string) => Promise<string | undefined>;
+		/** Keystrokes fed to the plan review component mounted through ui.custom. */
+		review?: string[];
 	} = {},
 ): Harness {
 	const tools = new Map<string, ToolDefinition>();
@@ -64,6 +90,8 @@ function createHarness(
 	const userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>> = [];
 	const statuses = new Map<string, string | undefined>();
 	const cwd = options.cwd ?? "/workspace";
+	let customCalls = 0;
+	let lastReviewComponent: (Component & { handleInput?(data: string): void }) | undefined;
 	const session = SessionManager.inMemory(cwd, { id: "sess-1" });
 	for (const entry of options.entries ?? []) session.appendCustomEntry(entry.customType, entry.data);
 	let active = ["read_file", "find_files", "search_files", "list_directory", "run_command", "write_file", "edit_file"];
@@ -111,6 +139,30 @@ function createHarness(
 				},
 				select: options.select ?? (async () => undefined),
 				editor: options.editor ?? (async () => undefined),
+				custom: async <T>(
+					factory: (
+						tui: unknown,
+						theme: unknown,
+						keybindings: unknown,
+						done: (result: T) => void,
+					) => Component & { focused?: boolean; handleInput?(data: string): void },
+				): Promise<T | undefined> => {
+					customCalls += 1;
+					let result: T | undefined;
+					let settled = false;
+					const component = factory({ requestRender: () => {} }, fakeReviewTheme, {}, (value: T) => {
+						if (settled) return;
+						settled = true;
+						result = value;
+					});
+					lastReviewComponent = component;
+					component.focused = true;
+					for (const key of options.review ?? []) {
+						if (settled) break;
+						component.handleInput?.(key);
+					}
+					return result;
+				},
 				setStatus: (key: string, text: string | undefined) => {
 					statuses.set(key, text);
 				},
@@ -131,6 +183,8 @@ function createHarness(
 		notifications,
 		userMessages,
 		statuses,
+		customCalls: () => customCalls,
+		reviewComponent: () => lastReviewComponent,
 		activeTools: () => [...active],
 		emit: async (event, context) => {
 			// Mirror ExtensionRunner semantics: handlers run in registration order,
@@ -412,7 +466,7 @@ test("session_start restores the chip: user for --plan, unknown for persisted st
 test("plan telemetry carries the source dim across enter, update, and exit", async () => {
 	const cwd = makeWorkspace();
 	const { telemetry, events } = createTelemetryRecorder();
-	const harness = createHarness({ cwd, select: async () => "Execute the plan" });
+	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
 	createStepPlanExtension({ telemetry })(harness.api);
 	const context = harness.ctx();
 
@@ -447,14 +501,7 @@ test("plan telemetry carries the source dim across enter, update, and exit", asy
 test("rpc-mode exit_plan_mode auto-approves without the UI select", async () => {
 	const cwd = makeWorkspace();
 	const { telemetry, events } = createTelemetryRecorder();
-	let selectCalls = 0;
-	const harness = createHarness({
-		cwd,
-		select: async () => {
-			selectCalls += 1;
-			return "Stay in plan mode";
-		},
-	});
+	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
 	createStepPlanExtension({ telemetry })(harness.api);
 	// rpc children have a dialog bridge (hasUI true) but no real user.
 	const context = harness.ctx({ mode: "rpc" });
@@ -471,7 +518,7 @@ test("rpc-mode exit_plan_mode auto-approves without the UI select", async () => 
 	expect(text).toContain("Cannot gate approval in rpc child context.");
 	expect(text).toContain(planPath);
 	expect(text).toContain("caller should approve externally");
-	expect(selectCalls).toBe(0);
+	expect(harness.customCalls()).toBe(0);
 
 	// Plan mode actually exited: tools restored, chip cleared, state persisted off.
 	expect(harness.activeTools()).toContain("write_file");
@@ -489,16 +536,9 @@ test("rpc-mode exit_plan_mode auto-approves without the UI select", async () => 
 	});
 });
 
-test("tui-mode exit_plan_mode still gates through the UI select", async () => {
+test("tui-mode exit_plan_mode still gates through the review dialog", async () => {
 	const cwd = makeWorkspace();
-	let selectCalls = 0;
-	const harness = createHarness({
-		cwd,
-		select: async () => {
-			selectCalls += 1;
-			return "Stay in plan mode";
-		},
-	});
+	const harness = createHarness({ cwd, review: [REVIEW_KEYS.escape] });
 	createStepPlanExtension()(harness.api);
 	const context = harness.ctx();
 
@@ -509,10 +549,51 @@ test("tui-mode exit_plan_mode still gates through the UI select", async () => {
 
 	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
 		content: Array<{ type: string; text: string }>;
+		terminate?: boolean;
 	};
-	expect(selectCalls).toBe(1);
+	expect(harness.customCalls()).toBe(1);
 	expect(result.content[0]!.text).toContain("Staying in plan mode.");
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+	// Escape hands the turn back to the user. Without this the model re-submits
+	// the unchanged plan straight away and the dialog re-opens on every Escape.
+	expect(result.terminate).toBe(true);
+	expect(result.content[0]!.text).toContain("do not call exit_plan_mode again");
+});
+
+test("only a dismissed review ends the turn; approval and notes let the agent keep going", async () => {
+	const cwd = makeWorkspace();
+	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const cases = [
+		{ keys: [REVIEW_KEYS.enter], terminate: false, outcome: "approved" },
+		{
+			keys: [REVIEW_KEYS.down, ...typeReview("use canvas"), REVIEW_KEYS.enter],
+			terminate: false,
+			outcome: "feedback",
+			feedback: "use canvas",
+		},
+		{ keys: [REVIEW_KEYS.escape], terminate: true, outcome: "dismissed" },
+	];
+	for (const { keys, terminate, outcome, feedback } of cases) {
+		const harness = createHarness({ cwd, review: keys });
+		createStepPlanExtension()(harness.api);
+		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		mkdirSync(path.dirname(planPath), { recursive: true });
+		writeFileSync(planPath, "# The plan\n");
+
+		const result = (await runTool(harness, "exit_plan_mode", {}, harness.ctx())) as {
+			terminate?: boolean;
+			details?: unknown;
+		};
+		expect(result.terminate).toBe(terminate);
+		// Every reviewed outcome carries the plan so the tool row can replay it
+		// after the dialog — the only place it was drawn — has been torn down.
+		expect(result.details).toEqual({
+			planFilePath: planPath,
+			planContents: "# The plan\n",
+			outcome,
+			...(feedback === undefined ? {} : { feedback }),
+		});
+	}
 });
 
 // ---------------------------------------------------------------------------
@@ -809,7 +890,7 @@ for (const type of ["session_start", "session_tree"] as const) {
 			const savedTools = [...originalTools];
 			const harness = createHarness({
 				cwd,
-				select: async () => "Execute the plan",
+				review: [REVIEW_KEYS.enter],
 				entries: [
 					{
 						type: "custom",
@@ -972,70 +1053,102 @@ for (const mode of ["tui", "print", "rpc"] as const) {
 	);
 }
 
-test.each(["Execute the plan", "Stay in plan mode", undefined])(
-	"a readable plain-text proposal preserves the %s approval choice",
-	async (choice) => {
-		const cwd = makeWorkspace();
-		const { telemetry, events } = createTelemetryRecorder();
-		const select = vi.fn(async () => choice);
-		const harness = createHarness({ cwd, select });
-		const originalTools = ["read_file", "custom_tool"];
-		harness.api.setActiveTools(originalTools);
-		createStepPlanExtension({ telemetry })(harness.api);
-		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
-		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
-		mkdirSync(path.dirname(planPath), { recursive: true });
-		const proposal = "Change the parser, add focused regression coverage, then verify the result.";
-		writeFileSync(planPath, proposal);
+test.each([
+	{ name: "approve", keys: [REVIEW_KEYS.enter], approved: true },
+	// Escape is the only way to keep planning now that the third option is gone.
+	{ name: "dismiss", keys: [REVIEW_KEYS.escape], approved: false },
+	// Enter on an empty feedback row must not read as approval or as a note.
+	{ name: "empty feedback", keys: [REVIEW_KEYS.down, REVIEW_KEYS.enter], approved: false },
+])("a readable plain-text proposal preserves the $name outcome", async ({ keys, approved }) => {
+	const cwd = makeWorkspace();
+	const { telemetry, events } = createTelemetryRecorder();
+	const harness = createHarness({ cwd, review: keys });
+	const originalTools = ["read_file", "custom_tool"];
+	harness.api.setActiveTools(originalTools);
+	createStepPlanExtension({ telemetry })(harness.api);
+	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	const proposal = "Change the parser, add focused regression coverage, then verify the result.";
+	writeFileSync(planPath, proposal);
 
-		await runTool(harness, "exit_plan_mode", {}, harness.ctx());
-		expect(select).toHaveBeenCalledWith(expect.stringContaining(proposal), [
-			"Execute the plan",
-			"Stay in plan mode",
-			"Refine the plan",
-		]);
-		if (choice === "Execute the plan") {
-			expect(lastPlanEntry(harness)).toMatchObject({ enabled: false, planSource: undefined });
-			expect(harness.activeTools()).toEqual(originalTools);
-			expect(events.at(-1)).toEqual({
-				event: "plan_mode_exited",
-				properties: { source: "agent", outcome: "approved" },
-			});
-		} else {
-			expect(lastPlanEntry(harness).enabled).toBe(true);
-			expect(harness.appended).toHaveLength(1);
-			expect(events).toHaveLength(1);
-		}
-	},
-);
+	await runTool(harness, "exit_plan_mode", {}, harness.ctx());
+	expect(harness.customCalls()).toBe(1);
+	expect(harness.userMessages).toEqual([]);
+	if (approved) {
+		expect(lastPlanEntry(harness)).toMatchObject({ enabled: false, planSource: undefined });
+		expect(harness.activeTools()).toEqual(originalTools);
+		expect(events.at(-1)).toEqual({
+			event: "plan_mode_exited",
+			properties: { source: "agent", outcome: "approved" },
+		});
+	} else {
+		expect(lastPlanEntry(harness).enabled).toBe(true);
+		expect(harness.appended).toHaveLength(1);
+		expect(events).toHaveLength(1);
+	}
+});
 
-test.each(["  Cover the migration edge case.  ", "", " \n ", undefined])(
-	"plan refinement preserves the follow-up/cancel behavior for notes %j",
+test.each(["Cover the migration edge case.", "  padded note  "])(
+	"typing %j on the feedback row steers it into the next turn and keeps planning",
 	async (notes) => {
 		const cwd = makeWorkspace();
-		const harness = createHarness({ cwd, select: async () => "Refine the plan", editor: async () => notes });
+		const harness = createHarness({
+			cwd,
+			review: [REVIEW_KEYS.down, ...typeReview(notes), REVIEW_KEYS.enter],
+		});
 		createStepPlanExtension()(harness.api);
 		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
 		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
 		mkdirSync(path.dirname(planPath), { recursive: true });
 		writeFileSync(planPath, "Draft proposal.");
+
 		const result = await runTool(harness, "exit_plan_mode", {}, harness.ctx());
 		expect(lastPlanEntry(harness).enabled).toBe(true);
 		expect(harness.appended).toHaveLength(1);
 		expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
-		if (notes?.trim()) {
-			expect(harness.userMessages).toEqual([
-				[`Plan refinement requested. Update ${planPath} based on:\n\n${notes.trim()}`, { deliverAs: "followUp" }],
-			]);
-			expect(result).toMatchObject({ content: [{ text: expect.stringContaining("Awaiting user notes") }] });
-		} else {
-			expect(harness.userMessages).toEqual([]);
-			expect(result).toMatchObject({ content: [{ text: expect.stringContaining("Refinement cancelled") }] });
-		}
+		// Steering, not follow-up: this tool result keeps the agent running, and the
+		// follow-up queue only drains once it would stop, so the note has to jump the
+		// queue or the model answers the empty turn by asking what to change.
+		expect(harness.userMessages).toEqual([
+			[`Plan refinement requested. Update ${planPath} based on:\n\n${notes.trim()}`, { deliverAs: "steer" }],
+		]);
+		expect(result).toMatchObject({
+			content: [{ text: expect.stringContaining("do not ask what to change") }],
+		});
 	},
 );
 
-test("a valid headless proposal exits with external approval and a bounded preview", async () => {
+test("the review dialog shows the whole plan, however long", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
+	createStepPlanExtension()(harness.api);
+	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	const proposal = [
+		"# Heading",
+		"",
+		...Array.from({ length: 200 }, (_, index) => `step ${index}: ${"detail ".repeat(10)}`),
+		"",
+		"## Last section",
+		"the final line of the plan",
+	].join("\n");
+	writeFileSync(planPath, proposal);
+
+	await runTool(harness, "exit_plan_mode", {}, harness.ctx());
+	// Approving a plan whose end is hidden is approving something unread. The
+	// plan renders as markdown, which reflows consecutive lines into paragraphs,
+	// so compare with whitespace collapsed: words survive, line breaks need not.
+	const collapse = (text: string): string => text.replace(/\s+/gu, " ");
+	const rendered = collapse((harness.reviewComponent()?.render(200) ?? []).join("\n"));
+	for (const line of proposal.split("\n")) {
+		if (line.trim().length > 0) expect(rendered).toContain(collapse(line.trim()));
+	}
+	expect(rendered).not.toContain("truncated");
+});
+
+test("a valid headless proposal exits with external approval and the whole plan", async () => {
 	const cwd = makeWorkspace();
 	const { telemetry, events } = createTelemetryRecorder();
 	const select = vi.fn(async () => "Execute the plan");
@@ -1046,12 +1159,13 @@ test("a valid headless proposal exits with external approval and a bounded previ
 	await runTool(harness, "enter_plan_mode", {}, context);
 	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
-	writeFileSync(planPath, `${"p".repeat(2000)}not in preview`);
+	writeFileSync(planPath, `${"p".repeat(2000)}tail of the plan`);
 
 	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { content: Array<{ text: string }> };
 	expect(result.content[0].text).toContain("caller must gate approval externally");
-	expect(result.content[0].text).toContain("truncated, full plan in file");
-	expect(result.content[0].text).not.toContain("not in preview");
+	// A caller that has to gate approval externally cannot do it on a clipped plan.
+	expect(result.content[0].text).toContain("tail of the plan");
+	expect(result.content[0].text).not.toContain("truncated");
 	expect(select).not.toHaveBeenCalled();
 	expect(lastPlanEntry(harness).enabled).toBe(false);
 	expect(harness.activeTools()).toEqual(originalTools);
@@ -1085,4 +1199,59 @@ test("exit_plan_mode describes review and mode-specific approval rather than unc
 	expect(tool.description).toContain("exits without interactive approval");
 	expect(tool.description).toContain("caller must gate approval externally");
 	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
+});
+
+// ---------------------------------------------------------------------------
+// `/plan <task>` — enable plan mode and hand the task over in one submission
+// ---------------------------------------------------------------------------
+
+test("/plan with a task enables plan mode and sends the task as a user turn", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("实现一个俄罗斯方块,简单版", context);
+
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	expect(harness.userMessages).toEqual([["实现一个俄罗斯方块,简单版", {}]]);
+	// The turn must start under the plan-mode tool set, not the unrestricted one.
+	expect(harness.activeTools()).not.toContain("edit_file_unrestricted");
+	expect(harness.activeTools()).toContain("read_file");
+});
+
+test("/plan with a task never toggles plan mode off", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("", context);
+	await harness.commands.get("plan")!.handler("now plan the next thing", context);
+
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	expect(harness.userMessages.map(([text]) => text)).toEqual(["now plan the next thing"]);
+});
+
+test("/plan with a task queues as a follow-up while the agent is streaming", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+
+	await harness.commands.get("plan")!.handler("plan this too", harness.ctx({ isIdle: () => false }));
+
+	expect(harness.userMessages).toEqual([["plan this too", { deliverAs: "followUp" }]]);
+});
+
+test("bare /plan still toggles plan mode and sends nothing", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("", context);
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	await harness.commands.get("plan")!.handler("   ", context);
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
+	expect(harness.userMessages).toEqual([]);
 });

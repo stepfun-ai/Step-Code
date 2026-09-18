@@ -72,6 +72,7 @@ export type {
 	ExtensionFlag,
 	ExtensionHandler,
 	ExtensionMode,
+	ExtensionNotifyOptions,
 	// Runtime
 	ExtensionRuntime,
 	ExtensionShortcut,

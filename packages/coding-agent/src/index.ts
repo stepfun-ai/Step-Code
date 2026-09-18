@@ -1,15 +1,32 @@
 // Core session management
 
-export { type Args, parseArgs } from "./cli/args.ts";
-
+export { type Args, type Mode, parseArgs } from "./cli/args.ts";
+// -----------------------------------------------------------------------------
+// S4-0 barrel widening: symbols consumed by the interactive UI that moved to the
+// product shell (@step-harness/cli). Adding named exports to the existing "."
+// subpath is allowed by the entry-freeze gate (only subpath/bin KEYS are frozen).
+// -----------------------------------------------------------------------------
+export { getAuthCredential } from "./cli/auth-command.ts";
+// BorderedLoader and CustomEditor stay resident in this package (consumed by
+// coding-agent examples/extensions via the barrel); re-export them so external
+// barrel consumers keep working after the interactive UI moved to the shell.
+export { BorderedLoader } from "./components/bordered-loader.ts";
+export { CustomEditor } from "./components/custom-editor.ts";
 // Config paths
 export {
+	APP_NAME,
+	APP_TITLE,
 	CONFIG_DIR_NAME,
+	ENV_AGENT_DIR,
 	getAgentDir,
+	getBundledInteractiveAssetPath,
 	getDocsPath,
 	getExamplesPath,
 	getPackageDir,
 	getReadmePath,
+	getSettingsPath,
+	IS_STEP_ENTRYPOINT,
+	PACKAGE_NAME,
 	VERSION,
 } from "./config.ts";
 export {
@@ -23,7 +40,15 @@ export {
 	parseSkillBlock,
 	type SessionStats,
 } from "./core/agent-session.ts";
+export { SessionImportFileNotFoundError } from "./core/agent-session-runtime.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
+export {
+	CACHE_TTL_MS,
+	type CacheMiss,
+	collectCacheMisses,
+	computeCacheWaste,
+	detectCacheMiss,
+} from "./core/cache-stats.ts";
 // Compaction
 export {
 	type BranchPreparation,
@@ -48,11 +73,13 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./core/compaction/index.ts";
+export { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
 export {
 	createEventBus,
 	type EventBus,
 	type EventBusController,
 } from "./core/event-bus.ts";
+export { areExperimentalFeaturesEnabled } from "./core/experimental.ts";
 // Extension system
 export type {
 	AgentEndEvent,
@@ -73,6 +100,7 @@ export type {
 	ContextEvent,
 	ContextUsage,
 	CustomToolCallEvent,
+	EditorFactory,
 	EditToolCallEvent,
 	EntryRenderer,
 	EntryRenderOptions,
@@ -90,6 +118,7 @@ export type {
 	ExtensionFactory,
 	ExtensionFlag,
 	ExtensionHandler,
+	ExtensionNotifyOptions,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
@@ -101,7 +130,6 @@ export type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
-	KeybindingsManager,
 	LoadExtensionsResult,
 	LsToolCallEvent,
 	MarkdownTransformContext,
@@ -174,9 +202,35 @@ export {
 	wrapRegisteredTool,
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";
+export type { ToolRenderContext } from "./core/extensions/types.ts";
+export { shouldRunFirstTimeSetup } from "./core/first-time-setup-gate.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
-export { convertToLlm } from "./core/messages.ts";
+export { FooterDataProvider } from "./core/footer-data-provider.ts";
+// -----------------------------------------------------------------------------
+// Entry-composition surface (S3).
+//
+// The process entry, argv dispatch and mode selection now live in the
+// @step-harness/cli app. These are the product-side pieces that the app's
+// composition root imports to build MainOptions, resolve the run mode, and run
+// its own dispatch switch. They stay in this product package (product
+// behaviour, not shell), and are re-exported through the single "." export
+// subpath (no new export subpath, so the entry-freeze gate stays green).
+//
+// printTimings / restoreStdout / stopThemeWatcher operate on module-global state
+// owned here (the timings buffer, the stdout takeover installed by prepareMain,
+// and the theme file watcher). The shell MUST call these exported functions
+// rather than reimplement them, or it would act on empty/detached local state.
+// -----------------------------------------------------------------------------
+export { configureHttpDispatcher, formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "./core/http-dispatcher.ts";
+export { KeybindingsManager } from "./core/keybindings.ts";
+export {
+	type BranchSummaryMessage,
+	type CompactionSummaryMessage,
+	type CustomMessage,
+	convertToLlm,
+	createCompactionSummaryMessage,
+} from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export {
 	type ModelRequestCompleted,
@@ -190,10 +244,13 @@ export {
 	observeModelRequestStream,
 } from "./core/model-request-observer.ts";
 export {
+	defaultModelPerProvider,
+	findExactModelReferenceMatch,
 	type ModelScopeDiagnostic,
 	type ResolveCliModelResult,
 	type ResolveModelScopeResult,
 	resolveCliModel,
+	resolveModelScopeFromModels,
 	resolveModelScopeWithDiagnostics,
 	type ScopedModel,
 } from "./core/model-resolver.ts";
@@ -204,6 +261,7 @@ export {
 	ModelRuntime,
 	type ModelRuntimeAuthOverrides,
 } from "./core/model-runtime.ts";
+export { restoreStdout } from "./core/output-guard.ts";
 export type {
 	PackageManager,
 	PathMetadata,
@@ -213,6 +271,7 @@ export type {
 	ResolvedResource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
+export type { AppMode } from "./core/project-trust.ts";
 export type {
 	ResourceCollision,
 	ResourceDiagnostic,
@@ -252,6 +311,9 @@ export {
 	createWriteTool,
 	type PromptTemplate,
 } from "./core/sdk.ts";
+export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
+export { exportSessionToJsonl } from "./core/session-export.ts";
+export type { SessionListProgress } from "./core/session-manager.ts";
 export {
 	type BranchSummaryEntry,
 	buildContextEntries,
@@ -282,6 +344,7 @@ export {
 	nativeSessionManagerFactory,
 	type SessionManagerFactory,
 } from "./core/session-manager-factory.ts";
+export type { MermaidRenderingMode, WarningSettings } from "./core/settings-manager.ts";
 export {
 	type CompactionSettings,
 	type DefaultProjectTrust,
@@ -303,7 +366,9 @@ export {
 	type Skill,
 	type SkillFrontmatter,
 } from "./core/skills.ts";
+export { BUILTIN_SLASH_COMMANDS } from "./core/slash-commands.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export { printTimings, time } from "./core/timings.ts";
 export {
 	type EditDiffResult,
 	generateDiffString,
@@ -317,6 +382,7 @@ export {
 	type BashToolDetails,
 	type BashToolInput,
 	type BashToolOptions,
+	createAllToolDefinitions,
 	createBashToolDefinition,
 	createEditToolDefinition,
 	createFindToolDefinition,
@@ -356,6 +422,7 @@ export {
 	type ReadToolDetails,
 	type ReadToolInput,
 	type ReadToolOptions,
+	type ToolName,
 	type ToolsOptions,
 	type TruncationOptions,
 	type TruncationResult,
@@ -367,20 +434,25 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
+export { getTextOutput, renderToolPath, replaceTabs } from "./core/tools/render-utils.ts";
 export {
+	getProjectTrustOptions,
 	hasTrustRequiringProjectResources,
 	type ProjectTrustDecision,
+	type ProjectTrustOption,
 	ProjectTrustStore,
 	type ProjectTrustStoreEntry,
 	type ProjectTrustUpdate,
 } from "./core/trust-manager.ts";
+export { addUsageToTotals, createUsageTotals, getUsageCostBreakdown } from "./core/usage-totals.ts";
 export {
 	createStepExtension,
 	createStepExtensionInline,
 	type StepExtensionOptions,
 	stepExtension,
 	stepExtensionInline,
-} from "./extensions/step.ts";
+} from "./features/step.ts";
+export { createStepCapabilitiesExtensionInline } from "./features/step-capabilities.ts";
 export {
 	type CronCreateResult,
 	type CronDelivery,
@@ -393,7 +465,8 @@ export {
 	StepCronRuntime,
 	type StepCronRuntimeOptions,
 	stepCronExtensionInline,
-} from "./extensions/step-cron.ts";
+} from "./features/step-cron.ts";
+export { createStepProviderConfig, STEP_PROVIDER_ID } from "./features/step-provider/index.ts";
 export {
 	CreateGoalParams,
 	continuationPrompt,
@@ -412,18 +485,22 @@ export {
 	stepGoalExtensionInline,
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
-} from "./extensions/step-schedule.ts";
-
+} from "./features/step-schedule.ts";
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.
-export * from "./extensions/workflow/index.ts";
+export * from "./features/workflow/index.ts";
 // Main entry point
-export { type MainOptions, main } from "./main.ts";
+export {
+	type MainOptions,
+	type MainPreparation,
+	main,
+	prepareMain,
+	resolveAppMode,
+	toPrintOutputMode,
+} from "./main.ts";
 // Run modes for programmatic SDK usage
 export {
-	InteractiveMode,
-	type InteractiveModeOptions,
 	type JsonAgentSessionEvent,
 	type ModelInfo,
 	type PrintModeOptions,
@@ -438,67 +515,64 @@ export {
 	runPrintMode,
 	runRpcMode,
 } from "./modes/index.ts";
-// UI components for extensions
+// Interactive UI contract. The interactive UI itself lives in the product shell
+// (@step-harness/cli); this package only describes it so MainOptions and the
+// injected startup selectors can be typed without a reverse dependency.
+export type {
+	ConfigSelectorOptions,
+	InteractiveModeOptions,
+	InteractiveStartupContext,
+	ScopedResolvedPaths,
+	SessionsLoader,
+	StartupTuiPathOptions,
+	StartupUiHooks,
+} from "./modes/interactive-contract.ts";
+// Render helpers used by extensions and by the moved interactive UI. Re-exported
+// directly from ./render/* (which stays in this package) so external barrel
+// consumers keep working after the UI components moved to the shell.
+export { type RenderDiffOptions, renderDiff } from "./render/diff.ts";
+export { DynamicBorder } from "./render/dynamic-border.ts";
+export { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./render/keybinding-hints.ts";
+export { truncateToVisualLines, type VisualTruncateResult } from "./render/visual-truncate.ts";
 export {
-	ArminComponent,
-	AssistantMessageComponent,
-	BashExecutionComponent,
-	BorderedLoader,
-	BranchSummaryMessageComponent,
-	CompactionSummaryMessageComponent,
-	CustomEditor,
-	CustomMessageComponent,
-	DynamicBorder,
-	ExtensionEditorComponent,
-	ExtensionInputComponent,
-	ExtensionSelectorComponent,
-	FooterComponent,
-	keyHint,
-	keyText,
-	LoginDialogComponent,
-	ModelSelectorComponent,
-	OAuthSelectorComponent,
-	type RenderDiffOptions,
-	rawKeyHint,
-	renderDiff,
-	SessionSelectorComponent,
-	type SettingsCallbacks,
-	type SettingsConfig,
-	SettingsSelectorComponent,
-	ShowImagesSelectorComponent,
-	SkillInvocationMessageComponent,
-	ThemeSelectorComponent,
-	ThinkingSelectorComponent,
-	ToolExecutionComponent,
-	type ToolExecutionOptions,
-	TreeSelectorComponent,
-	truncateToVisualLines,
-	UserMessageComponent,
-	UserMessageSelectorComponent,
-	type VisualTruncateResult,
-} from "./modes/interactive/components/index.ts";
-// Theme utilities for custom tools and extensions
+	getLegacyStepAuthPath,
+	getStepAuthPath,
+	logoutStepCredentials,
+	migrateLegacyStepCredential,
+} from "./step/auth.ts";
 export {
-	getLanguageFromPath,
-	getMarkdownTheme,
-	getSelectListTheme,
-	getSettingsListTheme,
-	highlightCode,
-	initTheme,
-	setThemeStorageDir,
-	Theme,
-	type ThemeColor,
-} from "./modes/interactive/theme/theme.ts";
+	isStepConfigCommand,
+	normalizeStepSessionSelectorArgs,
+	parseStepUpdateCommand,
+	runStepConfigCommand,
+	translateStepCommandArgs,
+} from "./step/command-compat.ts";
 export {
-	migrateStepConfig,
-	type StepConfigMigrationOptions,
-	type StepConfigMigrationReport,
-	type StepConfigMigrationRootReport,
-} from "./step/config-migration.ts";
+	ensureStepConfigFile,
+	ensureStepGlobalConfig,
+	readGlobalStepConfig,
+	readGlobalStepDefaults,
+	readStepConfig,
+	resolveStepConfigPath,
+	STEP_CONFIG_FILE_NAME,
+	type StepConfigDocument,
+	type StepGlobalDefaults,
+	type StepMcpServerConfig,
+	updateGlobalMcpConfig,
+	updateGlobalStepConfig,
+} from "./step/config-toml.ts";
+export {
+	getStepDefaultTheme,
+	isStepServicesDisabled,
+	STEP_DEFAULT_MODEL,
+	STEP_DEFAULT_PROVIDER,
+	withStepDefaults,
+} from "./step/defaults.ts";
 export {
 	readOrCreateStepDeviceId,
 	readStepDeviceId,
 	resolveStepDeviceIdPath,
+	resolveStepStorageRoot,
 	type StepDeviceIdResult,
 } from "./step/device-id.ts";
 export {
@@ -508,12 +582,35 @@ export {
 	LEGACY_STEP_CONFIG_DIR,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
+	resolveStepConfigRoot,
 	resolveStepHomeDir,
 	resolveStepSessionDir,
 	STEP_CLI_CONFIG_DIR,
 	type StepEnvironmentOptions,
 } from "./step/environment.ts";
+export { runFeedbackCommand } from "./step/feedback/command.ts";
+export { readFeedbackUsername } from "./step/feedback/context.ts";
 export { STEP_INIT_PROMPT } from "./step/init-prompt.ts";
+export { maybeUpdateStep, runStepUpdateCommand } from "./step/local-update.ts";
+export {
+	isStepInteractiveLoginStartup,
+	needsStepLoginBeforeInteractive,
+	readStepLoginCredential,
+	readStepLoginProfile,
+	runStepLogin,
+	type StepLoginHost,
+	type StepLoginOutcome,
+	syncStepLoginProfileEndpoint,
+} from "./step/login-flow.ts";
+export {
+	getStepLoginStatus,
+	type StepCredentialValidity,
+	type StepLoginMethod,
+	type StepLoginStatus,
+} from "./step/login-status.ts";
+export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
+export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
+export { resolveStepLoginProfiles } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,
 	decideStepToolCall,
@@ -567,13 +664,17 @@ export {
 export {
 	createStepSettingsManager,
 	decorateStepSettingsManager,
-	STEP_SETTINGS_FILE_NAME,
 	type StepSettings,
 	type StepSettingsDecoratorOptions,
 	type StepSettingsManager,
 	type StepSettingsManagerCreateOptions,
 	type StepSettingsPaths,
 } from "./step/settings-manager.ts";
+export {
+	flushStderrDevLog,
+	installProcessStderrDevLogCapture,
+	setStderrDevLogStorageRootDirectory,
+} from "./step/stderr-dev-log.ts";
 export type {
 	PiHarnessEvent,
 	PiHarnessEventBridge,
@@ -612,6 +713,15 @@ export {
 	StepStdioProtocolViolation,
 } from "./step/stdio.ts";
 export { StepStdioHost, type StepStdioHostOptions } from "./step/stdio-host.ts";
+export {
+	applyStepCodeConfigDefaults,
+	createStepCodeProviderInlineExtension,
+	decorateStepCodeSettingsManager,
+	hasConfiguredStepCodeCredential,
+	loadStepCodeConfig,
+	type StepCodeConfig,
+} from "./step/stepcode-config.ts";
+export { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 export {
 	classifyStepEndpoint,
 	createStepLifecycleTelemetry,
@@ -656,6 +766,9 @@ export {
 	trackStepTelemetryCrash,
 	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
+export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from "./step/theme-prompt.ts";
+export { createStepToolProfile } from "./step/tool-profile.ts";
+export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {
 	resolveStepCliVersion,
 	STEP_CLI_BUILD_VERSION_ENV,
@@ -669,9 +782,42 @@ export {
 	type StepCli,
 	type StepCliSession,
 } from "./step-cli-runtime.ts";
+// Theme utilities for custom tools and extensions
+export {
+	detectTerminalBackgroundFromEnv,
+	detectTerminalThemeForAuto,
+	getAvailableThemes,
+	getAvailableThemesWithPaths,
+	getEditorTheme,
+	getLanguageFromPath,
+	getMarkdownTheme,
+	getSelectListTheme,
+	getSettingsListTheme,
+	getThemeByName,
+	highlightCode,
+	initTheme,
+	loadThemeFromPath,
+	onThemeChange,
+	parseAutoThemeSetting,
+	resolveThemeSetting,
+	setRegisteredThemes,
+	setTheme,
+	setThemeStorageDir,
+	stopThemeWatcher,
+	type TerminalTheme,
+	Theme,
+	type ThemeColor,
+	theme,
+} from "./theme/theme.ts";
+export { InteractiveThemeController } from "./theme/theme-controller.ts";
+export { raceWithAbortSignal } from "./utils/abort.ts";
+export { stripAnsi } from "./utils/ansi.ts";
+export { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "./utils/changelog.ts";
 // Clipboard utilities
-export { copyToClipboard } from "./utils/clipboard.ts";
+export { copyToClipboard, readClipboardText } from "./utils/clipboard.ts";
+export { extensionForImageMimeType, readClipboardImage } from "./utils/clipboard-image.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
+export { parseGitUrl } from "./utils/git.ts";
 export { convertToPng } from "./utils/image-convert.ts";
 export {
 	formatDimensionNote,
@@ -679,5 +825,12 @@ export {
 	resizeImage,
 } from "./utils/image-resize.ts";
 export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.ts";
+export { openBrowser } from "./utils/open-browser.ts";
+export { canonicalizePath, getCwdRelativePath, isLocalPath, resolvePath } from "./utils/paths.ts";
+export { getPiUserAgent } from "./utils/pi-user-agent.ts";
 // Shell utilities
-export { getPowerShellConfig, getShellConfig } from "./utils/shell.ts";
+export { getPowerShellConfig, getShellConfig, killTrackedDetachedChildren } from "./utils/shell.ts";
+export { loadAllHighlightLanguages } from "./utils/syntax-highlight.ts";
+export { stripBom } from "./utils/text.ts";
+export { formatElapsedTime } from "./utils/time.ts";
+export { ensureTool, type ToolStatus } from "./utils/tools-manager.ts";

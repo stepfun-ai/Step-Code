@@ -19,12 +19,6 @@ function getToolsDir(agentDir?: string): string {
 	return resolvedAgentDir ? join(resolvedAgentDir, "bin") : getBinDir();
 }
 
-function isOfflineModeEnabled(): boolean {
-	const value = process.env.PI_OFFLINE;
-	if (!value) return false;
-	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
-}
-
 interface ToolConfig {
 	name: string;
 	repo: string; // GitHub repo (e.g., "sharkdp/fd")
@@ -78,8 +72,10 @@ const TOOLS: Record<string, ToolConfig> = {
 	},
 };
 
-// Check if a command exists in PATH by trying to run it
-function commandExists(cmd: string): boolean {
+// Check if a command exists in PATH by trying to run it. Exported so grep/find
+// fallback backends can probe for `git`, `grep`, `find` without duplicating the
+// same spawn-and-swallow-ENOENT dance.
+export function commandExists(cmd: string): boolean {
 	try {
 		const result = spawnSync(cmd, ["--version"], { stdio: "pipe" });
 		// Check for ENOENT error (command not found)
@@ -358,11 +354,6 @@ export async function ensureTool(
 
 	const config = TOOLS[tool];
 	if (!config) return undefined;
-
-	if (isOfflineModeEnabled()) {
-		onStatus?.({ type: "warning", message: `${config.name} not found. Offline mode enabled, skipping download.` });
-		return undefined;
-	}
 
 	// On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
 	// Users must install via pkg.

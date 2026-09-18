@@ -1,12 +1,8 @@
-import type { AgentState } from "@earendil-works/pi-agent-core";
+import type { AgentState } from "@step-harness/agent-core";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
-import {
-	getCurrentThemeName,
-	getResolvedThemeColors,
-	getThemeExportColors,
-} from "../../modes/interactive/theme/theme.ts";
+import { getCurrentThemeName, getResolvedThemeColors, getThemeExportColors } from "../../theme/theme.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
@@ -47,6 +43,7 @@ const USER_MESSAGE_COLOR_TOKENS = [
 	"text",
 	"muted",
 	"mdHeading",
+	"mdTableHeader",
 	"mdLink",
 	"mdLinkUrl",
 	"mdCode",

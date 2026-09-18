@@ -1,10 +1,10 @@
-> pi can create extensions. Ask it to build one for your use case.
+> step can create extensions. Ask it to build one for your use case.
 
 # Extensions
 
-Extensions are TypeScript modules that extend pi's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
+Extensions are TypeScript modules that extend step's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
 
-> **Placement for /reload:** Put extensions in `~/.pi/agent/extensions/` (global) or `.pi/extensions/` (project-local) for auto-discovery. Use `pi -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
+> **Placement for /reload:** Put extensions in `~/.step-cli/agent/extensions/` (global) or `.step-cli/extensions/` (project-local) for auto-discovery. Use `step -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
 
 **Key capabilities:**
 - **Custom tools** - Register tools the LLM can call via `pi.registerTool()`
@@ -55,10 +55,10 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 
 ## Quick Start
 
-Create `~/.pi/agent/extensions/my-extension.ts`:
+Create `~/.step-cli/agent/extensions/my-extension.ts`:
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -103,21 +103,21 @@ export default function (pi: ExtensionAPI) {
 Test with `--extension` (or `-e`) flag:
 
 ```bash
-pi -e ./my-extension.ts
+step -e ./my-extension.ts
 ```
 
 ## Extension Locations
 
 > **Security:** Extensions run with your full system permissions and can execute arbitrary code. Only install from sources you trust.
 
-Extensions are auto-discovered from trusted locations. Project-local `.pi/extensions` entries load only after the project is trusted.
+Extensions are auto-discovered from trusted locations. Project-local `.step-cli/extensions` entries load only after the project is trusted.
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/extensions/*.ts` | Global (all projects) |
-| `~/.pi/agent/extensions/*/index.ts` | Global (subdirectory) |
-| `.pi/extensions/*.ts` | Project-local |
-| `.pi/extensions/*/index.ts` | Project-local (subdirectory) |
+| `~/.step-cli/agent/extensions/*.ts` | Global (all projects) |
+| `~/.step-cli/agent/extensions/*/index.ts` | Global (subdirectory) |
+| `.step-cli/extensions/*.ts` | Project-local |
+| `.step-cli/extensions/*/index.ts` | Project-local (subdirectory) |
 
 Additional paths via `settings.json`:
 
@@ -134,20 +134,20 @@ Additional paths via `settings.json`:
 }
 ```
 
-To share extensions via npm or git as pi packages, see [packages.md](packages.md).
+To share extensions via npm or git as step packages, see [packages.md](packages.md).
 
 ## Available Imports
 
 | Package | Purpose |
 |---------|---------|
-| `@earendil-works/pi-coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
+| `@step-harness/coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `typebox` | Schema definitions for tool parameters |
-| `@earendil-works/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
-| `@earendil-works/pi-tui` | TUI components for custom rendering |
+| `@step-harness/providers` | AI utilities (`StringEnum` for Google-compatible enums) |
+| `@step-harness/pi-tui` | TUI components for custom rendering |
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
-For distributed pi packages installed with `pi install` (npm or git), runtime deps must be in `dependencies`. Package installation uses production installs (`npm install --omit=dev`) by default, so `devDependencies` are not available at runtime; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers.
+For distributed step packages installed with `step install` (npm or git), runtime deps must be in `dependencies`. Package installation uses production installs (`npm install --omit=dev`) by default, so `devDependencies` are not available at runtime; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers.
 
 Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 
@@ -156,7 +156,7 @@ Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 An extension exports a default factory function that receives `ExtensionAPI`. The factory can be synchronous or asynchronous:
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // Subscribe to events
@@ -178,14 +178,14 @@ export default function (pi: ExtensionAPI) {
 
 Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript works without compilation.
 
-If the factory returns a `Promise`, pi awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
+If the factory returns a `Promise`, step awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
 
 ### Async factory functions
 
 Use an async factory for one-time startup work such as fetching remote configuration or dynamically discovering available models.
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 
 export default async function (pi: ExtensionAPI) {
   const response = await fetch("http://localhost:1234/v1/models");
@@ -215,7 +215,7 @@ export default async function (pi: ExtensionAPI) {
 }
 ```
 
-This pattern makes the fetched models available during normal startup and to `pi --list-models`.
+This pattern makes the fetched models available during normal startup and to `step --list-models`.
 
 ### Long-lived resources and shutdown
 
@@ -228,14 +228,14 @@ Defer background resource startup until `session_start` or the command/tool/even
 **Single file** - simplest, for small extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.step-cli/agent/extensions/
 └── my-extension.ts
 ```
 
 **Directory with index.ts** - for multi-file extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.step-cli/agent/extensions/
 └── my-extension/
     ├── index.ts        # Entry point (exports default function)
     ├── tools.ts        # Helper module
@@ -245,7 +245,7 @@ Defer background resource startup until `session_start` or the command/tool/even
 **Package with dependencies** - for extensions that need npm packages:
 
 ```
-~/.pi/agent/extensions/
+~/.step-cli/agent/extensions/
 └── my-extension/
     ├── package.json    # Declares dependencies and entry points
     ├── package-lock.json
@@ -275,7 +275,7 @@ Run `npm install` in the extension directory, then imports from `node_modules/` 
 ### Lifecycle Overview
 
 ```
-pi starts
+step starts
   │
   ├─► project_trust (user/global and CLI extensions only, before project resources load)
   ├─► session_start { reason: "startup" }
@@ -352,7 +352,7 @@ exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM)
 
 #### project_trust
 
-Fired before pi decides whether to trust a project with dynamic configs (`.pi` or `.agents/skills`). It runs during startup and when session replacement (for example `/resume`) enters a cwd whose trust has not been resolved in the current process. Only user/global extensions and CLI `-e` extensions participate; project-local extensions are not loaded until after trust is resolved.
+Fired before step decides whether to trust a project with dynamic configs (`.step-cli` or `.agents/skills`). It runs during startup and when session replacement (for example `/resume`) enters a cwd whose trust has not been resolved in the current process. Only user/global extensions and CLI `-e` extensions participate; project-local extensions are not loaded until after trust is resolved.
 
 ```typescript
 pi.on("project_trust", async (event, ctx) => {
@@ -365,7 +365,7 @@ pi.on("project_trust", async (event, ctx) => {
 });
 ```
 
-A `project_trust` handler must return `{ trusted: "yes" | "no" | "undecided" }`. A user/global or CLI extension that returns `"yes"` or `"no"` owns the decision; the first yes/no decision wins and suppresses the built-in trust prompt. Use `remember: true` to persist a yes/no decision; otherwise it applies only to the current process. Return `"undecided"` to let later handlers or the built-in trust flow decide. Check `ctx.hasUI` before prompting. If no handler returns yes/no, normal trust resolution continues: saved `trust.json` decisions apply first, then `defaultProjectTrust` controls whether pi asks, trusts, or declines by default.
+A `project_trust` handler must return `{ trusted: "yes" | "no" | "undecided" }`. A user/global or CLI extension that returns `"yes"` or `"no"` owns the decision; the first yes/no decision wins and suppresses the built-in trust prompt. Use `remember: true` to persist a yes/no decision; otherwise it applies only to the current process. Return `"undecided"` to let later handlers or the built-in trust flow decide. Check `ctx.hasUI` before prompting. If no handler returns yes/no, normal trust resolution continues: saved `trust.json` decisions apply first, then `defaultProjectTrust` controls whether step asks, trusts, or declines by default.
 
 ### Resource Events
 
@@ -429,7 +429,7 @@ pi.on("session_before_switch", async (event, ctx) => {
 });
 ```
 
-After a successful switch or new-session action, pi emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "new" | "resume"` and `previousSessionFile`.
+After a successful switch or new-session action, step emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "new" | "resume"` and `previousSessionFile`.
 Do cleanup work in `session_shutdown`, then reestablish any in-memory state in `session_start`.
 
 #### session_before_fork
@@ -446,7 +446,7 @@ pi.on("session_before_fork", async (event, ctx) => {
 });
 ```
 
-After a successful fork or clone, pi emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "fork"` and `previousSessionFile`.
+After a successful fork or clone, step emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "fork"` and `previousSessionFile`.
 Do cleanup work in `session_shutdown`, then reestablish any in-memory state in `session_start`.
 
 #### session_before_compact / session_compact / session_compact_failed
@@ -560,13 +560,13 @@ pi.on("before_agent_start", async (event, ctx) => {
 });
 ```
 
-The `systemPromptOptions` field gives extensions access to the same structured data Pi uses to build the system prompt. This lets you inspect what Pi has loaded — custom prompts, guidelines, tool snippets, context files, skills — without re-discovering resources or re-parsing flags. Use it when your extension needs to make deep, informed changes to the system prompt while respecting user-provided configuration.
+The `systemPromptOptions` field gives extensions access to the same structured data Step uses to build the system prompt. This lets you inspect what Step has loaded — custom prompts, guidelines, tool snippets, context files, skills — without re-discovering resources or re-parsing flags. Use it when your extension needs to make deep, informed changes to the system prompt while respecting user-provided configuration.
 
 Inside `before_agent_start`, `event.systemPrompt` and `ctx.getSystemPrompt()` both reflect the chained system prompt as of the current handler. Later `before_agent_start` handlers can still modify it again.
 
 #### agent_start / agent_end / agent_settled
 
-`agent_start` fires when a low-level agent run begins. `agent_end` fires when that run ends, but Pi may still auto-retry, auto-compact and retry, or continue with queued follow-up messages. Use `agent_settled` for status integrations that need to know Pi will not continue running automatically.
+`agent_start` fires when a low-level agent run begins. `agent_end` fires when that run ends, but Step may still auto-retry, auto-compact and retry, or continue with queued follow-up messages. Use `agent_settled` for status integrations that need to know Step will not continue running automatically.
 
 ```typescript
 pi.on("agent_start", async (_event, ctx) => {});
@@ -594,7 +594,7 @@ pi.on("ui_prompt_start", async (event, ctx) => {
 });
 
 pi.on("ui_prompt_end", async (event, ctx) => {
-  // Pi is no longer waiting on that UI prompt span.
+  // Step is no longer waiting on that UI prompt span.
 });
 ```
 
@@ -695,7 +695,7 @@ pi.on("before_provider_headers", (event, ctx) => {
   // Add or override — e.g. a session id for gateway tracing/attribution
   event.headers["x-session-id"] = ctx.sessionManager.getSessionId();
 
-  // Drop a tracking header pi adds for this call
+  // Drop a tracking header step adds for this call
   event.headers["X-OpenRouter-Title"] = null;
 });
 ```
@@ -706,7 +706,7 @@ Runs once per provider request; retries reuse the same headers rather than re-fi
 
 Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
 
-This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Pi's system prompt string rather than the final serialized provider payload.
+This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Step's system prompt string rather than the final serialized provider payload.
 
 ```typescript
 pi.on("before_provider_request", (event, ctx) => {
@@ -779,7 +779,7 @@ Use this to update extension UI when `pi.setThinkingLevel()`, model changes, or 
 
 Fired after `tool_execution_start`, before the tool executes. **Can block.** Use `isToolCallEventType` to narrow and get typed inputs.
 
-Before `tool_call` runs, pi waits for previously emitted Agent events to finish draining through `AgentSession`. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
+Before `tool_call` runs, step waits for previously emitted Agent events to finish draining through `AgentSession`. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
 
 In the default parallel tool execution mode, sibling tool calls from the same assistant message are preflighted sequentially, then executed concurrently. `tool_call` is not guaranteed to see sibling tool results from that same assistant message in `ctx.sessionManager`.
 
@@ -793,7 +793,7 @@ Behavior guarantees:
 - `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating
 
 ```typescript
-import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@step-harness/coding-agent";
 
 pi.on("tool_call", async (event, ctx) => {
   // event.toolName - "bash", "read", "write", "edit", etc.
@@ -829,7 +829,7 @@ export type MyToolInput = Static<typeof myToolSchema>;
 Use `isToolCallEventType` with explicit type parameters:
 
 ```typescript
-import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@step-harness/coding-agent";
 import type { MyToolInput } from "my-extension";
 
 pi.on("tool_call", (event) => {
@@ -853,7 +853,7 @@ In parallel tool mode, `tool_result` and `tool_execution_end` may interleave in 
 Use `ctx.signal` for nested async work inside the handler. This lets Esc cancel model calls, `fetch()`, and other abort-aware operations started by the extension.
 
 ```typescript
-import { isBashToolResult } from "@earendil-works/pi-coding-agent";
+import { isBashToolResult } from "@step-harness/coding-agent";
 
 pi.on("tool_result", async (event, ctx) => {
   // event.toolName, event.toolCallId, event.input
@@ -881,7 +881,7 @@ pi.on("tool_result", async (event, ctx) => {
 Fired when user executes `!` or `!!` commands. **Can intercept.**
 
 ```typescript
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { createLocalBashOperations } from "@step-harness/coding-agent";
 
 pi.on("user_bash", (event, ctx) => {
   // event.command - the bash command
@@ -891,7 +891,7 @@ pi.on("user_bash", (event, ctx) => {
   // Option 1: Provide custom operations (e.g., SSH)
   return { operations: remoteBashOps };
 
-  // Option 2: Wrap pi's built-in local bash backend
+  // Option 2: Wrap step's built-in local bash backend
   const local = createLocalBashOperations();
   return {
     operations: {
@@ -977,10 +977,10 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 
 Current working directory.
 
-Use `CONFIG_DIR_NAME` instead of hardcoding `.pi` when constructing project-local config paths. Rebranded distributions can use a different config directory name.
+Use `CONFIG_DIR_NAME` instead of hardcoding `.step-cli` when constructing project-local config paths. Rebranded distributions can use a different config directory name.
 
 ```typescript
-import { CONFIG_DIR_NAME, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, type ExtensionAPI } from "@step-harness/coding-agent";
 import { join } from "node:path";
 
 export default function (pi: ExtensionAPI) {
@@ -1026,7 +1026,7 @@ Use this for abort-aware nested work started by extension handlers, for example:
 - file or process helpers that accept `AbortSignal`
 
 `ctx.signal` is typically defined during active turn events such as `tool_call`, `tool_result`, `message_update`, and `turn_end`.
-It is usually `undefined` in idle or non-turn contexts such as session events, extension commands, and shortcuts fired while pi is idle.
+It is usually `undefined` in idle or non-turn contexts such as session events, extension commands, and shortcuts fired while step is idle.
 
 ```typescript
 pi.on("tool_result", async (event, ctx) => {
@@ -1043,11 +1043,11 @@ pi.on("tool_result", async (event, ctx) => {
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
-Control flow helpers. `ctx.isIdle()` is false while Pi is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
+Control flow helpers. `ctx.isIdle()` is false while Step is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
 
 ### ctx.shutdown()
 
-Request a graceful shutdown of pi.
+Request a graceful shutdown of step.
 
 - **Interactive mode:** Deferred until the agent becomes idle (after processing all queued steering and follow-up messages).
 - **RPC mode:** Deferred until the next idle state (after completing the current command response, when waiting for the next command).
@@ -1092,7 +1092,7 @@ ctx.compact({
 
 ### ctx.getSystemPrompt()
 
-Returns Pi's current system prompt string.
+Returns Step's current system prompt string.
 
 - During `before_agent_start`, this reflects chained system-prompt changes made so far for the current turn.
 - It does not include later `context` message mutations.
@@ -1112,7 +1112,7 @@ Command handlers receive `ExtensionCommandContext`, which extends `ExtensionCont
 
 ### ctx.getSystemPromptOptions()
 
-Returns the base inputs Pi currently uses to build the system prompt.
+Returns the base inputs Step currently uses to build the system prompt.
 
 ```typescript
 const options = ctx.getSystemPromptOptions();
@@ -1167,7 +1167,7 @@ if (result.cancelled) {
 Options:
 - `parentSession`: parent session file to record in the new session header
 - `setup`: mutate the new session's `SessionManager` before `withSession` runs
-- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
+- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `step` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 ### ctx.fork(entryId, options?)
 
@@ -1193,7 +1193,7 @@ if (cloneResult.cancelled) {
 Options:
 - `position`: `"before"` (default) forks before the selected user message, restoring that prompt into the editor
 - `position`: `"at"` duplicates the active path through the selected entry without restoring editor text
-- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
+- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `step` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 ### ctx.navigateTree(targetId, options?)
 
@@ -1230,12 +1230,12 @@ if (result.cancelled) {
 ```
 
 Options:
-- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
+- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `step` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 To discover available sessions, use the static `SessionManager.list()` or `SessionManager.listAll()` methods:
 
 ```typescript
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@step-harness/coding-agent";
 
 pi.registerCommand("switch", {
   description: "Switch to another session",
@@ -1264,7 +1264,7 @@ pi.registerCommand("switch", {
 Lifecycle and footguns:
 - `withSession` runs only after the old session has emitted `session_shutdown`, the old runtime has been torn down, the replacement session has been rebound, and the new extension instance has already received `session_start`.
 - The callback still executes in the original closure, not inside the new extension instance. That means your old extension instance may already have run its shutdown cleanup before `withSession` starts.
-- Captured old `pi` / old command `ctx` session-bound objects are stale after replacement and will throw if used. Use only the `ctx` passed to `withSession` for session-bound work.
+- Captured old `step` / old command `ctx` session-bound objects are stale after replacement and will throw if used. Use only the `ctx` passed to `withSession` for session-bound work.
 - Previously extracted raw objects are still your responsibility. For example, if you capture `const sm = ctx.sessionManager` before replacement, `sm` is still the old `SessionManager` object. Do not reuse it after replacement.
 - Code in `withSession` should assume any state invalidated by your `session_shutdown` handler is already gone. Only capture plain data that survives shutdown cleanly, such as strings, ids, and serialized config.
 
@@ -1329,7 +1329,7 @@ Tools run with `ExtensionContext`, so they cannot call `ctx.reload()` directly. 
 Example tool the LLM can call to trigger reload:
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -1378,7 +1378,7 @@ See [dynamic-tools.ts](../examples/extensions/dynamic-tools.ts) for a full examp
 
 ```typescript
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum } from "@step-harness/providers";
 
 pi.registerTool({
   name: "my_tool",
@@ -1526,7 +1526,7 @@ Labels persist in the session and survive restarts. Use them to mark important p
 
 Register a command.
 
-If multiple extensions register the same command name, pi keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
+If multiple extensions register the same command name, step keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
 
 ```typescript
 pi.registerCommand("stats", {
@@ -1541,7 +1541,7 @@ pi.registerCommand("stats", {
 Optional: add argument auto-completion for `/command ...`:
 
 ```typescript
-import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import type { AutocompleteItem } from "@step-harness/pi-tui";
 
 pi.registerCommand("deploy", {
   description: "Deploy to an environment",
@@ -1596,7 +1596,7 @@ Register a custom TUI renderer for custom messages with your `customType`. Custo
 
 ### pi.registerMarkdownTransformer(transformer)
 
-Register a transformer for the Markdown in normal user text, assistant text, and thinking blocks. Transformers run in extension load order, and each transformer receives the Markdown returned by the previous transformer. After the chain finishes, Pi renders the transformed content with its built-in renderer.
+Register a transformer for the Markdown in normal user text, assistant text, and thinking blocks. Transformers run in extension load order, and each transformer receives the Markdown returned by the previous transformer. After the chain finishes, Step renders the transformed content with its built-in renderer.
 
 The transformer receives the Markdown string and a context with:
 
@@ -1613,14 +1613,14 @@ pi.registerMarkdownTransformer((markdown, { messageType, isStreaming }) => {
 });
 ```
 
-If a transformer throws, Pi keeps the Markdown produced so far and continues with the next transformer. The hook is display-only: the original message remains unchanged in the session and model context. It runs for new user messages, assistant streaming updates, restored session messages, and terminal width changes, so transformers should remain synchronous and inexpensive.
+If a transformer throws, Step keeps the Markdown produced so far and continues with the next transformer. The hook is display-only: the original message remains unchanged in the session and model context. It runs for new user messages, assistant streaming updates, restored session messages, and terminal width changes, so transformers should remain synchronous and inexpensive.
 
 ### pi.registerEntryRenderer(customType, renderer)
 
 Register a custom TUI renderer for custom entries with your `customType`. Custom entries are created with `pi.appendEntry()` and do not participate in LLM context.
 
 ```typescript
-import { Box, Text } from "@earendil-works/pi-tui";
+import { Box, Text } from "@step-harness/pi-tui";
 
 pi.registerEntryRenderer("status-card", (entry, { expanded }, theme) => {
   const data = entry.data as { title: string; count: number };
@@ -1739,14 +1739,14 @@ Register or override a model provider dynamically. Useful for proxies, custom en
 
 Calls made during the extension factory function are queued and applied once the runner initialises. Calls made after that — for example from a command handler following a user setup flow — take effect immediately without requiring a `/reload`.
 
-Dynamic providers can implement `refreshModels`. Pi calls it during model refresh, publishes the returned list synchronously through the provider, and passes the canonical credential/stored-catalog/network/signal context. The extension decides whether to persist catalog metadata through generation-checked `context.publish({ persist: entry })`; live servers such as llama.cpp can return models without persisting them.
+Dynamic providers can implement `refreshModels`. Step calls it during model refresh, publishes the returned list synchronously through the provider, and passes the canonical credential/stored-catalog/network/signal context. The extension decides whether to persist catalog metadata through generation-checked `context.publish({ persist: entry })`; live servers such as llama.cpp can return models without persisting them.
 
 `context.signal` is always a concrete signal and provider callbacks must pass it to blocking I/O. Public `ModelRuntime.refresh()` and `ModelRegistry.refresh()` calls accept an optional signal and are unbounded when it is omitted; extensions and applications choose their own deadlines. Cancellation stops the caller waiting even if a provider ignores the signal, but cooperation is still required to stop the underlying work.
 
-Extensions that need native provider auth, filtering, refresh, or stream behavior can register a complete `Provider` from `@earendil-works/pi-ai`. The provider becomes the composition base and `models.json` overrides still apply above it.
+Extensions that need native provider auth, filtering, refresh, or stream behavior can register a complete `Provider` from `@step-harness/providers`. The provider becomes the composition base and `models.json` overrides still apply above it.
 
 ```typescript
-import { createProvider, openAICompletionsApi } from "@earendil-works/pi-ai";
+import { createProvider, openAICompletionsApi } from "@step-harness/providers";
 
 const provider = createProvider({
   id: "local-server",
@@ -1929,7 +1929,7 @@ Pass the real target file path to `withFileMutationQueue()`, not the raw user ar
 Queue the entire mutation window on that target path. That includes read-modify-write logic, not just the final write.
 
 ```typescript
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue } from "@step-harness/coding-agent";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
@@ -1954,8 +1954,8 @@ async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 
 ```typescript
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
+import { StringEnum } from "@step-harness/providers";
+import { Text } from "@step-harness/pi-tui";
 
 pi.registerTool({
   name: "my_tool",
@@ -2010,7 +2010,7 @@ pi.registerTool({
 });
 ```
 
-**Usage accounting:** If a tool makes nested LLM calls, return their combined `Usage` as `usage`. Pi persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value.
+**Usage accounting:** If a tool makes nested LLM calls, return their combined `Usage` as `usage`. Step persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value.
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 
@@ -2026,9 +2026,9 @@ async execute(toolCallId, params) {
 }
 ```
 
-**Important:** Use `StringEnum` from `@earendil-works/pi-ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
+**Important:** Use `StringEnum` from `@step-harness/providers` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
 
-**Argument preparation:** `prepareArguments(args)` is optional. If defined, it runs before schema validation and before `execute()`. Use it to mimic an older accepted input shape when pi resumes an older session whose stored tool call arguments no longer match the current schema. Return the object you want validated against `parameters`. Keep the public schema strict. Do not add deprecated compatibility fields to `parameters` just to keep old resumed sessions working.
+**Argument preparation:** `prepareArguments(args)` is optional. If defined, it runs before schema validation and before `execute()`. Use it to mimic an older accepted input shape when step resumes an older session whose stored tool call arguments no longer match the current schema. Return the object you want validated against `parameters`. Keep the public schema strict. Do not add deprecated compatibility fields to `parameters` just to keep old resumed sessions working.
 
 Example: an older session may contain an `edit` tool call with top-level `oldText` and `newText`, while the current schema only accepts `edits: [{ oldText, newText }]`.
 
@@ -2081,13 +2081,13 @@ Extensions can override built-in tools (`read`, `bash`, `powershell`, `edit`, `w
 
 ```bash
 # Extension's read tool replaces built-in read
-pi -e ./tool-override.ts
+step -e ./tool-override.ts
 ```
 
 Alternatively, use `--no-builtin-tools` to start without any built-in tools while keeping extension tools enabled:
 ```bash
 # No built-in tools, only extension tools
-pi --no-builtin-tools -e ./my-extension.ts
+step --no-builtin-tools -e ./my-extension.ts
 ```
 
 See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.ts) for a complete example that overrides `read` with logging and access control.
@@ -2099,21 +2099,21 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
-- [read.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
-- [bash.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
-- [powershell.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/powershell.ts) - `PowerShellToolDetails`
-- [edit.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/edit.ts)
-- [write.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/write.ts)
-- [grep.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
-- [find.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
-- [ls.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
+- [read.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
+- [bash.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
+- [powershell.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/powershell.ts) - `PowerShellToolDetails`
+- [edit.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/edit.ts)
+- [write.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/write.ts)
+- [grep.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
+- [find.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
+- [ls.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
 
 ### Remote Execution
 
 Built-in tools support pluggable operations for delegating to remote systems (SSH, containers, etc.):
 
 ```typescript
-import { createReadTool, createBashTool, type ReadOperations } from "@earendil-works/pi-coding-agent";
+import { createReadTool, createBashTool, type ReadOperations } from "@step-harness/coding-agent";
 
 // Create tool with custom operations
 const remoteRead = createReadTool(cwd, {
@@ -2139,12 +2139,12 @@ pi.registerTool({
 
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `PowerShellOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
 
-For `user_bash`, extensions can reuse pi's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
+For `user_bash`, extensions can reuse step's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
 
 The `bash` and `powershell` tools also support a spawn hook to adjust the command, cwd, or env before execution:
 
 ```typescript
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool } from "@step-harness/coding-agent";
 
 const bashTool = createBashTool(cwd, {
   spawnHook: ({ command, cwd, env }) => ({
@@ -2182,7 +2182,7 @@ import {
   formatSize,        // Human-readable size (e.g., "50KB", "1.5MB")
   DEFAULT_MAX_BYTES, // 50KB
   DEFAULT_MAX_LINES, // 2000
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 
 async execute(toolCallId, params, signal, onUpdate, ctx) {
   const output = await runCommand();
@@ -2237,7 +2237,7 @@ export default function (pi: ExtensionAPI) {
 
 ### Custom Rendering
 
-Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
+Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
 
 By default, tool output is wrapped in a `Box` that handles padding and background. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 
@@ -2273,7 +2273,7 @@ Use `context.state` for cross-slot shared state. Keep slot-local caches on the r
 Renders the tool call or header:
 
 ```typescript
-import { Text } from "@earendil-works/pi-tui";
+import { Text } from "@step-harness/pi-tui";
 
 renderCall(args, theme, context) {
   const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
@@ -2318,7 +2318,7 @@ If a slot intentionally has no visible content, return an empty `Component` such
 Use `keyHint()` to display keybinding hints that respect the active keybinding configuration:
 
 ```typescript
-import { keyHint } from "@earendil-works/pi-coding-agent";
+import { keyHint } from "@step-harness/coding-agent";
 
 renderResult(result, { expanded }, theme, context) {
   let text = theme.fg("success", "✓ Done");
@@ -2362,7 +2362,7 @@ If a slot renderer is not defined or throws:
 
 ### Dynamic Tool Loading
 
-Extensions can register many tools while keeping only a small initial set active. A tool can then add more tools with `pi.setActiveTools()` during execution. Pi detects purely additive changes, records the newly available tool names on that tool result, and applies the updated active set before the next model request.
+Extensions can register many tools while keeping only a small initial set active. A tool can then add more tools with `pi.setActiveTools()` during execution. Step detects purely additive changes, records the newly available tool names on that tool result, and applies the updated active set before the next model request.
 
 This works with every model. Models with native deferred-loading support preserve the stable prompt prefix and load the new definitions at the tool-result position. Other models use the fallback described below.
 
@@ -2371,8 +2371,8 @@ The lifecycle is:
 1. Register every tool with `pi.registerTool()` so it appears in `pi.getAllTools()`.
 2. Keep loader tools, such as `search_tools`, active and leave searchable tools inactive.
 3. During loader execution, call `pi.setActiveTools([...currentTools, ...matchingTools])`. The change must be additive: do not remove currently active tools in the same call.
-4. Pi records which tools were added on the loader's tool result.
-5. Before the next model response, Pi exposes the added definitions using native deferred loading when supported, or the normal active tool list otherwise.
+4. Step records which tools were added on the loader's tool result.
+5. Before the next model response, Step exposes the added definitions using native deferred loading when supported, or the normal active tool list otherwise.
 
 You do not need to return provider-specific tool references or mark the loader as a special search tool. The active-tool change is the signal. Names passed to `pi.setActiveTools()` must already be registered; unknown names are ignored.
 
@@ -2383,15 +2383,15 @@ You do not need to return provider-specific tool references or mark the loader a
   - **Native representation:** Deferred definitions use `defer_loading`; the load point uses `tool_reference` content.
 - **OpenAI**
   - **Models:** `gpt-5.4` and newer family
-  - **Native representation:** Pi adds completed client `tool_search_call` and `tool_search_output` items at the load point.
+  - **Native representation:** Step adds completed client `tool_search_call` and `tool_search_output` items at the load point.
 
 For a verified custom model or proxy, native handling can be enabled with `compat.supportsToolReferences: true` for `anthropic-messages`, or `compat.supportsToolSearch: true` for `openai-responses` and `openai-codex-responses`. Leave these disabled unless the endpoint and model accept the corresponding native protocol.
 
 #### Fallback behavior
 
-For all other models and providers, dynamic activation still works: Pi sends the complete current active tool list normally on the next request. The model can call the newly activated tools, but adding their definitions may invalidate the provider's cached prompt prefix.
+For all other models and providers, dynamic activation still works: Step sends the complete current active tool list normally on the next request. The model can call the newly activated tools, but adding their definitions may invalidate the provider's cached prompt prefix.
 
-Pi also uses this safe fallback when the active set is not purely additive, such as replacing one group of tools with another. Tool removals therefore work, but they do not use deferred loading.
+Step also uses this safe fallback when the active set is not purely additive, such as replacing one group of tools with another. Tool removals therefore work, but they do not use deferred loading.
 
 For the best cache behavior, keep the loader tool active for the whole session and add tools instead of replacing the active set. Also note that activating a tool with `promptSnippet` or `promptGuidelines` rebuilds the system prompt; that system-prompt change can invalidate the prefix even when the provider supports deferred schemas. Lazily loaded tools should usually rely on their tool `description` and omit active-only prompt metadata.
 
@@ -2400,7 +2400,7 @@ For the best cache behavior, keep the loader tool active for the whole session a
 The following extension registers two searchable tools, removes them from the initial active set, and keeps only `search_tools` as their loader. The example uses simple keyword matching, but the search implementation could use BM25, embeddings, a remote catalog, or project-specific routing.
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 import { Type } from "typebox";
 
 const SEARCHABLE_TOOL_NAMES = new Set(["lookup_weather", "search_issues"]);
@@ -2528,6 +2528,11 @@ const text = await ctx.ui.editor("Edit:", "prefilled text");
 
 // Notification (non-blocking)
 ctx.ui.notify("Done!", "info");  // "info" | "warning" | "error"
+
+// An "info" notification that quotes what the user just typed. `echoesInput`
+// renders it on the user-message background bar instead of as a dim status
+// line, so it reads as their input. Modes without a transcript ignore it.
+ctx.ui.notify(`Goal set: ${objective}`, "info", { echoesInput: true });
 ```
 
 #### Timed Dialogs with Countdown
@@ -2731,7 +2736,7 @@ See [github-issue-autocomplete.ts](../examples/extensions/github-issue-autocompl
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@earendil-works/pi-tui";
+import { Text, Component } from "@step-harness/pi-tui";
 
 const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
   const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
@@ -2796,8 +2801,8 @@ See [tui.md](tui.md) for the full `OverlayOptions` and `OverlayHandle` API and [
 Replace the main input editor with a custom implementation (vim mode, emacs mode, etc.):
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
+import { CustomEditor, type ExtensionAPI } from "@step-harness/coding-agent";
+import { matchesKey } from "@step-harness/pi-tui";
 
 class VimEditor extends CustomEditor {
   private mode: "normal" | "insert" = "insert";
@@ -2847,7 +2852,7 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 Register a custom renderer for messages with your `customType`. Use message renderers for content that should participate in LLM context:
 
 ```typescript
-import { Text } from "@earendil-works/pi-tui";
+import { Text } from "@step-harness/pi-tui";
 
 pi.registerMessageRenderer("my-extension", (message, options, theme) => {
   const { expanded, outputPad } = options;
@@ -2906,7 +2911,7 @@ theme.strikethrough(text)
 For syntax highlighting in custom tool renderers:
 
 ```typescript
-import { highlightCode, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
+import { highlightCode, getLanguageFromPath } from "@step-harness/coding-agent";
 
 // Highlight code with explicit language
 const highlighted = highlightCode("const x = 1;", "typescript", theme);

@@ -2,7 +2,7 @@ import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } f
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import { applyBackgroundToLine, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -199,6 +199,8 @@ export interface DefaultTextStyle {
  */
 export interface MarkdownTheme {
 	heading: (text: string) => string;
+	/** Dimmed `#` markers preceding heading text (falls back to heading style) */
+	headingPrefix?: (text: string) => string;
 	link: (text: string) => string;
 	linkUrl: (text: string) => string;
 	code: (text: string) => string;
@@ -208,6 +210,8 @@ export interface MarkdownTheme {
 	quoteBorder: (text: string) => string;
 	hr: (text: string) => string;
 	listBullet: (text: string) => string;
+	/** Table header cell text (falls back to bold) */
+	tableHeader?: (text: string) => string;
 	bold: (text: string) => string;
 	italic: (text: string) => string;
 	strikethrough: (text: string) => string;
@@ -244,6 +248,13 @@ export class Markdown implements Component {
 
 	// Cache for rendered output
 	private cachedText?: string;
+
+	/**
+	 * Lines emitted by fenced code blocks during the current render pass.
+	 * Code is never soft-wrapped — an over-wide line is hard-clipped instead
+	 * so indentation and structure survive copying (Codex TUI behavior).
+	 */
+	private nowrapLines = new Set<string>();
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
@@ -303,6 +314,7 @@ export class Markdown implements Component {
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
+		this.nowrapLines.clear();
 
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
@@ -313,11 +325,16 @@ export class Markdown implements Component {
 			}
 		}
 
-		// Wrap lines (NO padding, NO background yet)
+		// Wrap lines (NO padding, NO background yet). Code-block lines skip
+		// soft wrapping and are clipped instead, keeping code copyable.
 		const wrappedLines: string[] = [];
 		for (const line of renderedLines) {
 			if (isImageLine(line)) {
 				wrappedLines.push(line);
+			} else if (this.nowrapLines.has(line)) {
+				wrappedLines.push(
+					visibleWidth(line) > contentWidth ? truncateToWidth(line, contentWidth, "", false) : line,
+				);
 			} else {
 				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
 					wrappedLines.push(wrappedLine);
@@ -480,7 +497,10 @@ export class Markdown implements Component {
 				};
 
 				const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
-				const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
+				// All levels keep the literal `#` markers, dimmed via headingPrefix so
+				// the colored text (not the syntax) carries the hierarchy signal.
+				const styledHeading =
+					(this.theme.headingPrefix?.(headingPrefix) ?? headingStyleFn(headingPrefix)) + headingText;
 				lines.push(styledHeading);
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after headings (unless space token follows)
@@ -523,13 +543,17 @@ export class Markdown implements Component {
 				if (this.theme.highlightCode) {
 					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
-						lines.push(`${indent}${hlLine}`);
+						const row = `${indent}${hlLine}`;
+						this.nowrapLines.add(row);
+						lines.push(row);
 					}
 				} else {
 					// Split code by newlines and style each line
 					const codeLines = token.text.split("\n");
 					for (const codeLine of codeLines) {
-						lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
+						const row = `${indent}${this.theme.codeBlock(codeLine)}`;
+						this.nowrapLines.add(row);
+						lines.push(row);
 					}
 				}
 				lines.push(this.theme.codeBlockBorder("```"));
@@ -603,7 +627,7 @@ export class Markdown implements Component {
 			}
 
 			case "hr":
-				lines.push(this.theme.hr("─".repeat(Math.min(width, 80))));
+				lines.push(this.theme.hr("———"));
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after horizontal rules (unless space token follows)
 				}
@@ -762,6 +786,7 @@ export class Markdown implements Component {
 		for (let i = 0; i < token.items.length; i++) {
 			const item = token.items[i];
 			const isLastItem = i === token.items.length - 1;
+			const itemStartLine = lines.length;
 			const bullet = token.ordered
 				? this.options.preserveOrderedListMarkers
 					? (this.getOrderedListMarker(item) ?? `${startNumber + i}. `)
@@ -795,6 +820,13 @@ export class Markdown implements Component {
 
 			if (!renderedAnyLine) {
 				lines.push(firstPrefix);
+			}
+
+			// A multi-line item gets breathing room before the next item
+			// (Codex TUI behavior); loose lists already insert blank lines.
+			const itemLineCount = lines.length - itemStartLine;
+			if (itemLineCount > 1 && !isLastItem && !token.loose) {
+				lines.push("");
 			}
 
 			if (token.loose && !isLastItem) {
@@ -852,9 +884,8 @@ export class Markdown implements Component {
 			return lines;
 		}
 
-		// Calculate border overhead: "│ " + (n-1) * " │ " + " │"
-		// = 2 + (n-1) * 3 + 2 = 3n + 1
-		const borderOverhead = 3 * numCols + 1;
+		// Calculate gutter overhead: (n-1) two-space gaps between columns
+		const borderOverhead = 2 * (numCols - 1);
 		const availableForCells = availableWidth - borderOverhead;
 		if (availableForCells < numCols) {
 			// Too narrow to render a stable table. Fall back to raw markdown.
@@ -956,32 +987,46 @@ export class Markdown implements Component {
 			}
 		}
 
-		// Render top border
-		const topBorderCells = columnWidths.map((w) => "─".repeat(w));
-		lines.push(`┌─${topBorderCells.join("─┬─")}─┐`);
-
-		// Render header with wrapping
+		// Render header with wrapping (Codex-style open table: no vertical
+		// borders, heavy rule under the header, light rules between rows,
+		// two-space column gutters — reads lighter than a closed box frame)
+		const columnGap = "  ";
 		const headerCellLines: string[][] = token.header.map((cell, i) => {
 			const text = this.renderInlineTokens(cell.tokens || [], styleContext);
 			return this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix);
 		});
 		const headerLineCount = Math.max(...headerCellLines.map((c) => c.length));
 
+		const align = token.align ?? [];
+		const padCell = (text: string, colIdx: number): string => {
+			const cellWidth = columnWidths[colIdx];
+			const textWidth = visibleWidth(text);
+			const padding = Math.max(0, cellWidth - textWidth);
+			const cellAlign = align[colIdx];
+			if (cellAlign === "center") {
+				const left = Math.floor(padding / 2);
+				return " ".repeat(left) + text + " ".repeat(padding - left);
+			}
+			if (cellAlign === "right") {
+				return " ".repeat(padding) + text;
+			}
+			return text + " ".repeat(padding);
+		};
+
 		for (let lineIdx = 0; lineIdx < headerLineCount; lineIdx++) {
 			const rowParts = headerCellLines.map((cellLines, colIdx) => {
-				const text = cellLines[lineIdx] || "";
-				const padded = text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
-				return this.theme.bold(padded);
+				const cell = padCell(cellLines[lineIdx] || "", colIdx);
+				return this.theme.tableHeader ? this.theme.tableHeader(cell) : this.theme.bold(cell);
 			});
-			lines.push(`│ ${rowParts.join(" │ ")} │`);
+			lines.push(rowParts.join(columnGap));
 		}
 
-		// Render separator
-		const separatorCells = columnWidths.map((w) => "─".repeat(w));
-		const separatorLine = `├─${separatorCells.join("─┼─")}─┤`;
-		lines.push(separatorLine);
+		// Heavy rule under the header marks the head/body boundary
+		const heavyRule = this.theme.hr(columnWidths.map((w) => "━".repeat(w)).join(columnGap));
+		lines.push(heavyRule);
 
 		// Render rows with wrapping
+		const lightRule = this.theme.hr(columnWidths.map((w) => "─".repeat(w)).join(columnGap));
 		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
 			const row = token.rows[rowIndex];
 			const rowCellLines: string[][] = row.map((cell, i) => {
@@ -991,21 +1036,14 @@ export class Markdown implements Component {
 			const rowLineCount = Math.max(...rowCellLines.map((c) => c.length));
 
 			for (let lineIdx = 0; lineIdx < rowLineCount; lineIdx++) {
-				const rowParts = rowCellLines.map((cellLines, colIdx) => {
-					const text = cellLines[lineIdx] || "";
-					return text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
-				});
-				lines.push(`│ ${rowParts.join(" │ ")} │`);
+				const rowParts = rowCellLines.map((cellLines, colIdx) => padCell(cellLines[lineIdx] || "", colIdx));
+				lines.push(rowParts.join(columnGap));
 			}
 
 			if (rowIndex < token.rows.length - 1) {
-				lines.push(separatorLine);
+				lines.push(lightRule);
 			}
 		}
-
-		// Render bottom border
-		const bottomBorderCells = columnWidths.map((w) => "─".repeat(w));
-		lines.push(`└─${bottomBorderCells.join("─┴─")}─┘`);
 
 		if (nextTokenType && nextTokenType !== "space") {
 			lines.push(""); // Add spacing after table

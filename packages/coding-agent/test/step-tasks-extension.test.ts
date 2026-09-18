@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import type { AgentToolResult } from "@step-harness/agent-core";
+import { visibleWidth } from "@step-harness/pi-tui";
 import { expect, test, vi } from "vitest";
 import type {
 	ExtensionAPI,
@@ -8,8 +8,8 @@ import type {
 	ToolRenderContext,
 } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { createStepTasksExtension, type StepTask } from "../src/extensions/step-tasks.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
+import type { Theme } from "../src/theme/theme.ts";
 
 interface TasksSnapshot {
 	tasks: StepTask[];

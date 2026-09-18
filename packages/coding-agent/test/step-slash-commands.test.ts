@@ -1,15 +1,15 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@step-harness/pi-tui";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../src/core/slash-commands.ts";
-import { createStepExtension } from "../src/extensions/step.ts";
-import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { createStepExtension } from "../src/features/step.ts";
 import { formatStepStatus, registerStepPiCommandAdapters } from "../src/step/slash-commands.ts";
 import { resolveStderrDevLogPath } from "../src/step/stderr-dev-log.ts";
+import { initTheme, type Theme, theme } from "../src/theme/theme.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -369,6 +369,40 @@ describe("Step Pi slash command adapters", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	test("renders every feedback page over the transcript", async () => {
+		// An inline page grows the rendered document, which scrolls a transcript that is already
+		// taller than the terminal and leaves the editor above the bottom row once the page closes.
+		// The consent page is an overlay, so the rest of the flow has to be one too.
+		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
+		temporaryRoots.push(root);
+		const diagnosticsDir = join(root, "diagnostics");
+		await mkdir(diagnosticsDir, { recursive: true });
+		await writeFile(join(diagnosticsDir, "input-trace-1.jsonl"), '{"src":"note","text":"failed"}\n');
+		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubGlobal("fetch", vi.fn<typeof fetch>());
+		const { commands } = registerCommands();
+		const select = vi
+			.fn()
+			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
+			.mockResolvedValueOnce("No · Send feedback without files");
+		const input = vi.fn().mockResolvedValue("It failed");
+
+		await getCommand(commands, "feedback").handler("", {
+			mode: "rpc",
+			hasUI: true,
+			ui: { select, input, confirm: vi.fn().mockResolvedValue(false), notify: vi.fn() },
+			sessionManager: {
+				getSessionId: () => "session-1",
+				getSessionFile: () => undefined,
+			},
+		} as unknown as ExtensionCommandContext);
+
+		expect(select.mock.calls[0]?.[2]).toEqual({ overlay: true });
+		expect(input.mock.calls[0]?.[2]).toEqual({ overlay: true });
+		expect(select.mock.calls[1]?.[2]).toEqual({ overlay: true });
+	});
+
 	test("neutralizes a diagnostics filename before showing the upload selector", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
@@ -451,10 +485,12 @@ describe("Step Pi slash command adapters", () => {
 		expect(select).toHaveBeenCalledTimes(2);
 		const uploadTitle = String(select.mock.calls[1]?.[0]);
 		expect(uploadTitle).toBe(`UPLOAD LOGS?\nlogs/${basename(devLogPath)}, events.jsonl, dev.log`);
-		expect(select).toHaveBeenNthCalledWith(2, uploadTitle, [
-			"Yes · Include the listed files",
-			"No · Send feedback without files",
-		]);
+		expect(select).toHaveBeenNthCalledWith(
+			2,
+			uploadTitle,
+			["Yes · Include the listed files", "No · Send feedback without files"],
+			{ overlay: true },
+		);
 		expect(uploadTitle).not.toContain("before");
 		expect(uploadTitle).not.toContain("Error: renderer failed");
 		expect(uploadTitle).not.toContain("after");

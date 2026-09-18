@@ -9,7 +9,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createSessionManager } from "../src/main.ts";
 
-const cliPath = resolve(__dirname, "../src/cli.ts");
+const cliPath = resolve(__dirname, "../../../apps/cli/src/main.ts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -59,7 +59,10 @@ async function runCli(args: string[]): Promise<{ code: number | null; agentDir: 
 			env: {
 				...process.env,
 				[ENV_AGENT_DIR]: agentDir,
-				PI_OFFLINE: "1",
+				// The @step-harness/cli entry resolves the Step storage namespace, so
+				// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
+				// from this test process's APP_NAME, which may differ from the child's).
+				STEP_CODING_AGENT_DIR: agentDir,
 				TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 			},
 			stdio: ["ignore", "ignore", "ignore"],

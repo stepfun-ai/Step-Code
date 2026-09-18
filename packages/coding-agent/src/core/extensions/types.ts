@@ -14,7 +14,18 @@ import type {
 	AgentToolUpdateCallback,
 	ThinkingLevel,
 	ToolExecutionMode,
-} from "@earendil-works/pi-agent-core";
+} from "@step-harness/agent-core";
+import type {
+	AutocompleteItem,
+	AutocompleteProvider,
+	Component,
+	EditorComponent,
+	EditorTheme,
+	KeyId,
+	OverlayHandle,
+	OverlayOptions,
+	TUI,
+} from "@step-harness/pi-tui";
 import type {
 	Api,
 	AssistantMessageEvent,
@@ -32,20 +43,9 @@ import type {
 	TextContent,
 	ToolResultMessage,
 	Usage,
-} from "@earendil-works/pi-ai";
-import type {
-	AutocompleteItem,
-	AutocompleteProvider,
-	Component,
-	EditorComponent,
-	EditorTheme,
-	KeyId,
-	OverlayHandle,
-	OverlayOptions,
-	TUI,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/providers";
 import type { Static, TSchema } from "typebox";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import type { Theme } from "../../theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
@@ -100,6 +100,16 @@ export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/**
+	 * Render the dialog over the transcript instead of inside it. Interactive mode only.
+	 *
+	 * An inline dialog replaces the editor within the rendered document, so the document
+	 * grows by the dialog's extra rows. Once the transcript is taller than the terminal that
+	 * growth scrolls the screen, and the shrink on dismissal cannot scroll it back, so the
+	 * editor is left stranded above the bottom row. Use this for multi-step flows, where the
+	 * drift is visible because no output follows the dialog to fill the gap back in.
+	 */
+	overlay?: boolean;
 }
 
 /** Placement for extension widgets. */
@@ -109,6 +119,16 @@ export type WidgetPlacement = "aboveEditor" | "belowEditor";
 export interface ExtensionWidgetOptions {
 	/** Where the widget is rendered. Defaults to "aboveEditor". */
 	placement?: WidgetPlacement;
+}
+
+/** Extra presentation hints for {@link ExtensionUIContext.notify}. */
+export interface ExtensionNotifyOptions {
+	/**
+	 * Render the message the way typed input is rendered — a full-width
+	 * background bar — for an `info` notification that echoes what the user just
+	 * entered. Modes without a transcript ignore it.
+	 */
+	echoesInput?: boolean;
 }
 
 /** Raw terminal input listener for extensions. */
@@ -141,7 +161,7 @@ export interface ExtensionUIContext {
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
 	/** Show a notification to the user. */
-	notify(message: string, type?: "info" | "warning" | "error"): void;
+	notify(message: string, type?: "info" | "warning" | "error", options?: ExtensionNotifyOptions): void;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
@@ -208,6 +228,22 @@ export interface ExtensionUIContext {
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
+			/**
+			 * Hide the footer row while the component is mounted (inline dialogs only).
+			 *
+			 * Use it when the dialog owns the whole decision and a live status row under
+			 * it would read as if the session were still accepting input. The previous
+			 * footer, custom or built-in, is restored when the dialog closes.
+			 */
+			hideFooter?: boolean;
+			/**
+			 * Mark the dialog as blocking on a user decision (inline dialogs only).
+			 *
+			 * Freezes the working indicator and the tool spinner for as long as it is
+			 * mounted, and keeps the wait out of the displayed tool duration, the same
+			 * way a tool-approval prompt does.
+			 */
+			waitingForApproval?: boolean;
 		},
 	): Promise<T>;
 
@@ -235,12 +271,12 @@ export interface ExtensionUIContext {
 	 * - `keybindings`: KeybindingsManager for app-level keybindings
 	 *
 	 * For full app keybinding support (escape, ctrl+d, model switching, etc.),
-	 * extend `CustomEditor` from `@earendil-works/pi-coding-agent` and call
+	 * extend `CustomEditor` from `@step-harness/coding-agent` and call
 	 * `super.handleInput(data)` for keys you don't handle.
 	 *
 	 * @example
 	 * ```ts
-	 * import { CustomEditor } from "@earendil-works/pi-coding-agent";
+	 * import { CustomEditor } from "@step-harness/coding-agent";
 	 *
 	 * class VimEditor extends CustomEditor {
 	 *   private mode: "normal" | "insert" = "insert";
@@ -1312,6 +1348,13 @@ export interface ExtensionAPI {
 	registerTool<TParams extends TSchema = TSchema, TDetails = unknown, TState = any>(
 		tool: ToolDefinition<TParams, TDetails, TState>,
 	): void;
+
+	/**
+	 * Register several tools and refresh the tool registry once. Registering a
+	 * large catalog one tool at a time rebuilds the registry and the system
+	 * prompt per tool, which is quadratic work on the startup path.
+	 */
+	registerTools(tools: readonly ToolDefinition<any, any, any>[]): void;
 
 	// =========================================================================
 	// Command, Shortcut, Flag Registration

@@ -63,7 +63,7 @@ const currentThinkingOutput = join(temporaryRoot, "after-thinking");
 let worktreeAdded = false;
 
 function generateCatalog(cwd, outputDir, pretty = false) {
-	const args = ["packages/ai/scripts/generate-models.ts", "--strict", "--json-only", "--json-output", outputDir];
+	const args = ["packages/providers/scripts/generate-models.ts", "--strict", "--json-only", "--json-output", outputDir];
 	if (pretty) args.push("--pretty");
 	run(process.execPath, args, { cwd, capture: true });
 }

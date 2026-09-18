@@ -1,7 +1,8 @@
-import type { Component } from "../tui.ts";
+import { type Component, isIncrementalRenderDisabled } from "../tui.ts";
 import { applyBackgroundToLine, visibleWidth } from "../utils.ts";
 
 type RenderCache = {
+	childRefs: string[][];
 	childLines: string[];
 	width: number;
 	bgSample: string | undefined;
@@ -79,10 +80,42 @@ export class Box implements Component {
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
 		const leftPad = " ".repeat(this.paddingX);
 
+		// Check if bgFn output changed by sampling
+		const bgSample = this.bgFn ? this.bgFn("test") : undefined;
+
+		// Re-padding every child line is O(rendered lines), which a long transcript
+		// must not pay per keystroke. Children that hand back the same array instance
+		// as last render produced identical lines, so the cached output still holds.
+		const cache = this.cache;
+		let childRefs: string[][] | undefined;
+		let reusedRefs = false;
+		if (
+			!isIncrementalRenderDisabled() &&
+			cache !== undefined &&
+			cache.width === width &&
+			cache.bgSample === bgSample &&
+			cache.childRefs.length === this.children.length
+		) {
+			const refs: string[][] = new Array(this.children.length);
+			let changed = false;
+			for (let i = 0; i < this.children.length; i++) {
+				const rendered = this.children[i].render(contentWidth);
+				refs[i] = rendered;
+				if (rendered !== cache.childRefs[i]) changed = true;
+			}
+			if (!changed) {
+				return cache.lines;
+			}
+			childRefs = refs;
+			reusedRefs = true;
+		}
+
 		// Render all children
 		const childLines: string[] = [];
-		for (const child of this.children) {
-			const lines = child.render(contentWidth);
+		childRefs ??= new Array(this.children.length);
+		for (let i = 0; i < this.children.length; i++) {
+			const lines = reusedRefs ? childRefs[i] : this.children[i].render(contentWidth);
+			childRefs[i] = lines;
 			for (const line of lines) {
 				childLines.push(leftPad + line);
 			}
@@ -91,9 +124,6 @@ export class Box implements Component {
 		if (childLines.length === 0) {
 			return [];
 		}
-
-		// Check if bgFn output changed by sampling
-		const bgSample = this.bgFn ? this.bgFn("test") : undefined;
 
 		// Check cache validity
 		if (this.matchCache(width, childLines, bgSample)) {
@@ -119,7 +149,7 @@ export class Box implements Component {
 		}
 
 		// Update cache
-		this.cache = { childLines, width, bgSample, lines: result };
+		this.cache = { childRefs, childLines, width, bgSample, lines: result };
 
 		return result;
 	}

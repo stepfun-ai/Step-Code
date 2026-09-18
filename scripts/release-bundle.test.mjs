@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { renderInstallTemplate } from "../infra/release/release-bundle.mjs";
@@ -109,3 +111,363 @@ test(
 		assert.match(`${result.stdout}${result.stderr}`, /release base URL was not configured/);
 	},
 );
+
+// ---------------------------------------------------------------------------
+// PATH-persistence coverage (2026-09-09-installer-path-persistence.md).
+//
+// These target the release scripts directly. step-local-update.test.ts mocks
+// installUpdate, so the real installer never runs there — the persistence logic
+// added to install.ps1 / install.sh has no other coverage.
+//
+// CI runs on Linux and cannot execute PowerShell, so the install.ps1 checks are
+// STATIC assertions on the rendered script's structure (addendum 7). Anything
+// that actually executes a shell is gated behind commandAvailable(), mirroring
+// the base-URL execution tests above.
+// ---------------------------------------------------------------------------
+
+// Drop whole-line PowerShell comments so "does not call X" assertions cannot be
+// fooled by X merely being named in an explanatory comment (the install.ps1
+// block documents *why* it avoids setx / SetEnvironmentVariable).
+function stripPowerShellLineComments(source) {
+	return source
+		.split("\n")
+		.filter((line) => !line.trimStart().startsWith("#"))
+		.join("\n");
+}
+
+test("install.ps1 persists PATH via HKCU\\Environment with DoNotExpandEnvironmentNames + ExpandString (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	assert.ok(
+		rendered.includes("[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)"),
+		"must open HKCU\\Environment writable",
+	);
+	assert.ok(
+		rendered.includes("CreateSubKey('Environment')"),
+		"must create the Environment subkey when a pristine profile lacks it",
+	);
+	assert.ok(
+		rendered.includes("GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)"),
+		"must read Path un-expanded (DoNotExpandEnvironmentNames)",
+	);
+	assert.ok(
+		rendered.includes("[Microsoft.Win32.RegistryValueKind]::ExpandString"),
+		"must write Path back as ExpandString so %VAR% entries survive",
+	);
+});
+
+test("install.ps1 does not persist PATH via setx or SetEnvironmentVariable (static)", async () => {
+	const code = stripPowerShellLineComments(renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL));
+	assert.ok(
+		!/\bSetEnvironmentVariable\b/.test(code),
+		"must not call SetEnvironmentVariable (flattens REG_EXPAND_SZ %VAR% entries to REG_SZ)",
+	);
+	assert.ok(!/\bsetx\b/.test(code), "must not call setx (truncates PATH at 1024 chars)");
+});
+
+test("install.ps1 updates the session PATH and broadcasts WM_SETTINGCHANGE (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	// Session update appends (addendum 8) so a pre-existing system `step` is not shadowed.
+	assert.ok(
+		rendered.includes("$env:PATH = ($env:PATH.TrimEnd(';') + ';' + ($missing -join ';'))"),
+		"must append the missing dirs to the current session $env:PATH",
+	);
+	assert.ok(rendered.includes("Send-EnvironmentChangeBroadcast"), "must invoke the broadcast helper");
+	assert.ok(rendered.includes("SendMessageTimeout"), "broadcast must use SendMessageTimeout P/Invoke");
+	assert.ok(rendered.includes("WM_SETTINGCHANGE") && rendered.includes("0x001A"), "broadcast must send WM_SETTINGCHANGE");
+	assert.ok(rendered.includes("HWND_BROADCAST"), "broadcast must target HWND_BROADCAST");
+});
+
+test("install.ps1 guards the registry write and session update on missing entries (idempotency, static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	// Missing dirs computed by the extracted helper; both the write and the
+	// session update sit inside a single `if ($missing.Count -gt 0)` so a re-run
+	// with nothing missing appends nothing (addendum 2).
+	assert.ok(
+		rendered.includes("Get-MissingPathEntries -PathValue $currentPath -Candidates $candidates"),
+		"must compute missing entries via the testable helper",
+	);
+	assert.ok(rendered.includes("if ($missing.Count -gt 0)"), "must guard persistence on missing being non-empty");
+	// The helper compares EXPANDED paths, case-insensitively, trailing-\ trimmed
+	// (addendum 1) so a literal candidate matches an existing %VAR% entry.
+	assert.match(
+		rendered,
+		/\[Environment\]::ExpandEnvironmentVariables\(\$entry\)\.TrimEnd\('\\'\)\.ToLowerInvariant\(\)/,
+		"existing entries must be expanded + normalized for comparison only",
+	);
+	assert.match(
+		rendered,
+		/\[Environment\]::ExpandEnvironmentVariables\(\$candidate\)\.TrimEnd\('\\'\)\.ToLowerInvariant\(\)/,
+		"candidates must be expanded + normalized the same way",
+	);
+});
+
+test("install.ps1 preserves %VAR% entries un-expanded across the round-trip (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	// Read un-expanded, and write back a value derived from the un-expanded
+	// $currentPath so an existing %SOMEVAR%\bin survives as-is.
+	assert.ok(rendered.includes("DoNotExpandEnvironmentNames"), "read must be un-expanded");
+	assert.ok(
+		rendered.includes("$trimmed = $currentPath.TrimEnd(';')") &&
+			rendered.includes("$key.SetValue('Path', $newPath, [Microsoft.Win32.RegistryValueKind]::ExpandString)"),
+		"write must be the original un-expanded PATH plus new dirs, as ExpandString",
+	);
+	// The helper returns original (un-expanded) candidate strings, never the expanded form.
+	assert.ok(rendered.includes("$missing += $candidate"), "helper must append the original candidate string");
+});
+
+test("install.ps1 avoids ';;' and leading ';' for malformed User PATH (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	// null coalesced before any string method (StrictMode), trailing ';' trimmed,
+	// and an empty base skips the separator entirely.
+	assert.ok(rendered.includes("if ($null -eq $PathValue) { $PathValue = '' }"), "helper must null-coalesce PathValue");
+	assert.ok(
+		rendered.includes("$newPath = if ($trimmed) { $trimmed + ';' + ($missing -join ';') } else { $missing -join ';' }"),
+		"join must skip the ';' separator when the existing PATH is empty (no leading ';')",
+	);
+});
+
+test("install.ps1 persists the resolved $InstallDir/$AgentDir, honoring STEP_INSTALL_DIR (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	// $InstallDir resolves from STEP_INSTALL_DIR when set; persistence uses that
+	// variable (and $AgentDir\bin), never a hardcoded default (addendum 5).
+	assert.ok(rendered.includes("$env:STEP_INSTALL_DIR"), "InstallDir must be resolvable from STEP_INSTALL_DIR");
+	assert.ok(rendered.includes("$managedBin = Join-Path $AgentDir 'bin'"), "managed bin derives from $AgentDir");
+	assert.ok(
+		rendered.includes("$candidates = @($InstallDir, $managedBin)"),
+		"PATH candidates must be the resolved variables, not hardcoded paths",
+	);
+});
+
+test("install.sh persists PATH via a guarded, env-var-honoring # step-cli block (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(shPath, "utf8"), BASE_URL);
+	assert.ok(rendered.includes("# step-cli"), "must use the # step-cli marker block");
+	assert.ok(rendered.includes("# step-cli end"), "marker block must be terminated");
+	assert.ok(
+		rendered.includes("grep -qxF '# step-cli'"),
+		"must grep for the marker before rewriting the block (idempotent)",
+	);
+	assert.ok(
+		rendered.includes('case ":$PATH:" in'),
+		"written block must self-guard so sourcing it twice does not double-prepend",
+	);
+	assert.ok(
+		rendered.includes('export PATH="%s:%s/bin:$PATH"'),
+		"export must use the resolved INSTALL_DIR/AGENT_DIR (honors STEP_INSTALL_DIR/STEP_CODING_AGENT_DIR)",
+	);
+	assert.ok(rendered.includes('fish_add_path "%s" "%s/bin"'), "fish must be configured via fish_add_path");
+	assert.ok(rendered.includes("STEP_NO_MODIFY_PATH"), "must honor the STEP_NO_MODIFY_PATH opt-out");
+	assert.ok(rendered.includes("configure_shell_path"), "main must call configure_shell_path");
+});
+
+const powershellShell = commandAvailable("pwsh", "--version")
+	? "pwsh"
+	: commandAvailable("powershell", "-Help")
+		? "powershell"
+		: null;
+
+test(
+	"Get-MissingPathEntries is idempotent, null-safe, and normalizes case/trailing-backslash (pwsh)",
+	{ skip: powershellShell ? false : "powershell/pwsh unavailable" },
+	async () => {
+		const source = await readFile(ps1Path, "utf8");
+		const match = source.match(/function Get-MissingPathEntries \{[\s\S]*?\n\}/);
+		assert.ok(match, "must be able to extract the Get-MissingPathEntries helper from install.ps1");
+
+		// Exercises the helper's own comparison logic across the four plan scenarios.
+		// The result is captured into a variable first (the correct way to consume a
+		// `return ,$array`) so this isolates the comparison math from the caller's
+		// array handling.
+		// A: an existing %VAR% entry must match its expanded literal candidate → nothing missing.
+		// B: a $null PATH must not throw and yields every candidate.
+		// C: case + trailing-backslash differences must still match.
+		// D: a partial match returns exactly the genuinely-missing dir.
+		const harness = String.raw`
+function CountAndJoin($pathValue, $cands) {
+  $r = Get-MissingPathEntries -PathValue $pathValue -Candidates $cands
+  $arr = @($r)
+  return ('' + $arr.Count + '#' + ($arr -join '|'))
+}
+$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.step-cli\bin')
+$out = [ordered]@{
+  a = (CountAndJoin '%USERPROFILE%\.step-cli\bin' @($var))
+  b = (CountAndJoin $null @('C:\x\bin','C:\y\bin'))
+  c = (CountAndJoin 'C:\FOO\BIN\' @('c:\foo\bin'))
+  d = (CountAndJoin 'C:\other;C:\keep\bin' @('C:\keep\bin','C:\new\bin'))
+}
+$out | ConvertTo-Json -Compress
+`;
+		const dir = await mkdtemp(join(tmpdir(), "step-ps1-helper-"));
+		const scriptPath = join(dir, "helper-test.ps1");
+		try {
+			await writeFile(scriptPath, `${match[0]}\n${harness}`, "utf8");
+			const result = spawnSync(
+				powershellShell,
+				["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+				{ encoding: "utf8" },
+			);
+			assert.equal(result.status, 0, `helper harness should exit 0: ${result.stderr}`);
+			const json = JSON.parse(result.stdout.trim().match(/\{.*\}/s)[0]);
+			assert.equal(json.a, "0#", "A: %VAR% entry matching its expanded candidate must not be re-appended");
+			assert.equal(json.b, "2#C:\\x\\bin|C:\\y\\bin", "B: a null PATH is null-safe and returns every candidate");
+			assert.equal(json.c, "0#", "C: case + trailing-backslash differences must still match");
+			assert.equal(json.d, "1#C:\\new\\bin", "D: only the genuinely-missing dir is returned");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	},
+);
+
+test(
+	"install.ps1 Write-Result joins missing dirs onto PATH without array-nesting corruption (pwsh)",
+	{ skip: powershellShell ? false : "powershell/pwsh unavailable" },
+	async () => {
+		const source = await readFile(ps1Path, "utf8");
+		const match = source.match(/function Get-MissingPathEntries \{[\s\S]*?\n\}/);
+		assert.ok(match, "must be able to extract the Get-MissingPathEntries helper from install.ps1");
+
+		// Reproduces Write-Result's EXACT consumption of the helper (the `$missing =
+		// @(Get-MissingPathEntries ...)` assignment and the `$newPath` join, copied
+		// verbatim from install.ps1) for a fresh install where PATH has neither dir.
+		// The resolved PATH must end with the two literal dirs — never the string
+		// 'System.Object[]' that results if the helper's return value is nested.
+		const harness = String.raw`
+$currentPath = 'C:\Windows;C:\Windows\System32'
+$candidates = @('C:\Users\me\.step-cli\bin', 'C:\Users\me\.step-cli\agent\bin')
+$missing = @(Get-MissingPathEntries -PathValue $currentPath -Candidates $candidates)
+$trimmed = $currentPath.TrimEnd(';')
+$newPath = if ($trimmed) { $trimmed + ';' + ($missing -join ';') } else { $missing -join ';' }
+$newPath
+`;
+		const dir = await mkdtemp(join(tmpdir(), "step-ps1-writeresult-"));
+		const scriptPath = join(dir, "writeresult-test.ps1");
+		try {
+			await writeFile(scriptPath, `${match[0]}\n${harness}`, "utf8");
+			const result = spawnSync(
+				powershellShell,
+				["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+				{ encoding: "utf8" },
+			);
+			assert.equal(result.status, 0, `write-result harness should exit 0: ${result.stderr}`);
+			const newPath = result.stdout.trim();
+			assert.ok(
+				!newPath.includes("System.Object[]"),
+				`resolved PATH must not contain a stringified nested array (got: ${newPath})`,
+			);
+			assert.equal(
+				newPath,
+				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.step-cli\\bin;C:\\Users\\me\\.step-cli\\agent\\bin",
+				"fresh-install PATH must append both literal dirs",
+			);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	},
+);
+
+test(
+	"strip_step_block is idempotent and never truncates on an unterminated marker (bash)",
+	{ skip: commandAvailable("bash", "--version") ? false : "bash unavailable" },
+	async () => {
+		const source = await readFile(shPath, "utf8");
+		const match = source.match(/strip_step_block\(\) \{[\s\S]*?\n\}/);
+		assert.ok(match, "must be able to extract strip_step_block from install.sh");
+
+		const dir = await mkdtemp(join(tmpdir(), "step-sh-helper-"));
+		const rcWell = join(dir, "rc-well").replace(/\\/g, "/");
+		const rcUnterm = join(dir, "rc-unterm").replace(/\\/g, "/");
+		const scriptPath = join(dir, "helper-test.sh");
+		try {
+			// A well-formed "# step-cli ... # step-cli end" block (and the blank line
+			// above it) must be removed while surrounding lines survive; a LONE start
+			// marker with no end must be preserved verbatim rather than truncating the
+			// rest of the rc to EOF (the reviewed data-loss guard).
+			const harness = String.raw`
+set -euo pipefail
+${match[0]}
+printf 'keep1\n\n# step-cli\nexport PATH=x\n# step-cli end\nkeep2\n' > "$1"
+strip_step_block "$1"
+printf '# step-cli\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
+strip_step_block "$2"
+printf 'WELL:%s\n' "$(tr '\n' '|' < "$1")"
+printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
+`;
+			await writeFile(scriptPath, harness, "utf8");
+			const result = spawnSync("bash", [scriptPath, rcWell, rcUnterm], { encoding: "utf8" });
+			assert.equal(result.status, 0, `strip_step_block harness should exit 0: ${result.stderr}`);
+			assert.match(
+				result.stdout,
+				/WELL:keep1\|keep2\|/,
+				"well-formed block and its preceding blank must be stripped, surrounding lines intact",
+			);
+			assert.match(
+				result.stdout,
+				/UNTERM_KEEP:1/,
+				"an unterminated # step-cli marker must not truncate user content below it",
+			);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Bundled search-tool (rg/fd) prefetch — scripts/copy-search-tools.mjs.
+// Pre-fetching rg/fd into the archive lets the installer copy them into
+// ~/.step-cli/agent/bin with no GitHub download. These assert the asset-naming
+// map (pure, no network) and that both installers copy the bundled binary
+// before falling back to a download.
+// ---------------------------------------------------------------------------
+
+import { assetInfoFor, RG_VERSION, FD_VERSION } from "./copy-search-tools.mjs";
+
+test("copy-search-tools asset naming matches the runtime/installer scheme", () => {
+	// ripgrep: musl (static) for linux-x64, gnu for linux-arm64, no tag prefix.
+	assert.equal(assetInfoFor("rg", "linux-x64").assetName, `ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz`);
+	assert.equal(assetInfoFor("rg", "linux-arm64").assetName, `ripgrep-${RG_VERSION}-aarch64-unknown-linux-gnu.tar.gz`);
+	assert.equal(assetInfoFor("rg", "darwin-arm64").assetName, `ripgrep-${RG_VERSION}-aarch64-apple-darwin.tar.gz`);
+	assert.equal(assetInfoFor("rg", "darwin-arm64").tag, `${RG_VERSION}`);
+
+	// fd: gnu for linux, v-prefixed tag, .exe on windows.
+	assert.equal(assetInfoFor("fd", "linux-x64").assetName, `fd-v${FD_VERSION}-x86_64-unknown-linux-gnu.tar.gz`);
+	assert.equal(assetInfoFor("fd", "darwin-x64").tag, `v${FD_VERSION}`);
+	assert.equal(assetInfoFor("fd", "windows-x64").assetName, `fd-v${FD_VERSION}-x86_64-pc-windows-msvc.zip`);
+	assert.equal(assetInfoFor("fd", "windows-x64").binaryName, "fd.exe");
+	assert.equal(assetInfoFor("rg", "windows-arm64").binaryName, "rg.exe");
+	// ripgrep has no aarch64 Windows build: windows-arm64 falls back to the x64 asset.
+	assert.equal(assetInfoFor("rg", "windows-arm64").assetName, `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`);
+	assert.equal(assetInfoFor("rg", "linux-x64").binaryName, "rg");
+
+	assert.throws(() => assetInfoFor("rg", "solaris-sparc"), /Unknown target/);
+	assert.throws(() => assetInfoFor("awk", "linux-x64"), /Unknown tool/);
+});
+
+test("install.sh copies the bundled tool before downloading (static)", async () => {
+	const source = await readFile(shPath, "utf8");
+	assert.match(
+		source,
+		/if \[\[ -n "\$bundled_root" && -f "\$\{bundled_root\}\/tools\/\$\{binary\}" \]\]; then/,
+		"install.sh must prefer the archive's tools/ binary",
+	);
+	// The prefer-bundled branch must sit before the GitHub metadata download.
+	assert.ok(
+		source.indexOf('${bundled_root}/tools/${binary}') < source.indexOf("api.github.com/repos"),
+		"the bundled copy must be attempted before the GitHub download fallback",
+	);
+	assert.match(source, /install_managed_tools "\$archive_root"/, "main must pass the archive root to install_managed_tools");
+});
+
+test("install.ps1 copies the bundled tool before downloading (static)", async () => {
+	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
+	assert.ok(
+		rendered.includes("$bundled = Join-Path $ExtractDir (Join-Path 'tools' $binaryName)"),
+		"install.ps1 must resolve the archive's tools\\ binary",
+	);
+	assert.ok(
+		rendered.indexOf("Join-Path 'tools' $binaryName") < rendered.indexOf("api.github.com/repos"),
+		"the bundled copy must be attempted before the GitHub download fallback",
+	);
+	assert.ok(
+		rendered.includes("Install-ManagedTools -TargetId $targetId -WorkDir $workDir -ExtractDir $extractDir"),
+		"main must pass the extract dir to Install-ManagedTools",
+	);
+});

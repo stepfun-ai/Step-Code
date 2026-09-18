@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from "./defaults.ts";
 
 /** Canonical project directory for Step CLI state and resources. */
@@ -37,6 +37,26 @@ export function resolveStepConfigDir(env: NodeJS.ProcessEnv = process.env): stri
 /** Resolve the product's global agent directory. */
 export function resolveStepAgentDir(env: NodeJS.ProcessEnv = process.env): string {
 	return env.STEP_CODING_AGENT_DIR?.trim() || join(resolveStepHomeDir(env), resolveStepConfigDir(env), "agent");
+}
+
+/**
+ * Resolve the directory that holds `config.toml`, `auth.json` and
+ * `models.json`. These sit next to the agent directory, not inside it.
+ *
+ * Resolve the agent directory to an absolute path before taking its parent.
+ * Appending `".."` is textual, so a relative `STEP_CODING_AGENT_DIR` would
+ * place credentials beside the process's working directory instead, and the
+ * resolved location would move again if the process later changed directory.
+ */
+export function resolveStepConfigRoot(env: NodeJS.ProcessEnv = process.env): string {
+	const override = env.STEP_CODING_AGENT_DIR?.trim();
+	if (!override) return join(resolveStepHomeDir(env), resolveStepConfigDir(env));
+	const agentDir = resolve(override);
+	const parent = dirname(agentDir);
+	// A filesystem root has no sibling directory to hold these files. Keep them
+	// inside the agent directory rather than writing credentials outside the
+	// namespace the host asked for.
+	return parent === agentDir ? agentDir : parent;
 }
 
 /** Resolve the product's session directory. */

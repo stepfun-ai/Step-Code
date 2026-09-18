@@ -2,15 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { WorkflowBudgetExceeded } from "../src/extensions/workflow/budget.ts";
+import { WorkflowBudgetExceeded } from "../src/features/workflow/budget.ts";
 import {
 	createWorkflowRunPaths,
 	readJsonLines,
 	WorkflowJournal,
 	type WorkflowRunPaths,
-} from "../src/extensions/workflow/journal.ts";
-import { WorkflowRuntime } from "../src/extensions/workflow/runtime.ts";
-import { checkWorkflowPathAccess, checkWorkflowToolCall } from "../src/extensions/workflow/tool-profile.ts";
+} from "../src/features/workflow/journal.ts";
+import { WorkflowRuntime } from "../src/features/workflow/runtime.ts";
+import { checkWorkflowPathAccess, checkWorkflowToolCall } from "../src/features/workflow/tool-profile.ts";
 import type {
 	IterateResult,
 	WorkflowAgentOptions,
@@ -18,7 +18,7 @@ import type {
 	WorkflowAgentRunner,
 	WorkflowProgress,
 	WorkflowTelemetryRecord,
-} from "../src/extensions/workflow/types.ts";
+} from "../src/features/workflow/types.ts";
 
 const cleanups: string[] = [];
 let runSequence = 0;
@@ -214,26 +214,105 @@ test("budget failure accounts the completed call and persists a terminal status"
 	expect(telemetry.at(-1)).toMatchObject({ event: "workflow_finished", properties: { status: "budget_exceeded" } });
 });
 
+test("budget fails closed even when the script swallows per-call budget errors", async () => {
+	const cwd = await workspace();
+	let runnerCalls = 0;
+	// Mimic parallel()/pipeline() null-on-error: swallow each agent() rejection and keep going.
+	// Without a pre-spend gate every call would run and overspend (5 calls * 7 = 35 tokens on a
+	// budget of 5); the gate must refuse calls once the budget is exhausted, and the run must
+	// still terminate as budget_exceeded rather than silently completing.
+	const execution = runtimeAt(
+		cwd,
+		async (input) => {
+			runnerCalls += 1;
+			return result(input.prompt, 7);
+		},
+		{
+			budgetTotal: 5,
+			maxConcurrency: 1,
+			vmExecutor: async (_script, _args, host) => {
+				for (let index = 0; index < 5; index += 1) {
+					try {
+						await host.agent(`item-${index}`, {});
+					} catch {
+						// swallowed, exactly like the VM parallel()/pipeline() primitives
+					}
+				}
+				return { value: null, meta: {} };
+			},
+		},
+	);
+
+	await expect(execution.runtime.runScript("swallowing script", null)).rejects.toBeInstanceOf(WorkflowBudgetExceeded);
+	expect(runnerCalls).toBe(1);
+	expect(execution.runtime.budget.spent()).toBe(7);
+	const progress = JSON.parse(await readFile(execution.paths.progressPath, "utf8")) as WorkflowProgress;
+	expect(progress).toMatchObject({ status: "budget_exceeded", spentTokens: 7 });
+});
+
+test("budget gate bounds overspend to one in-flight concurrency wave", async () => {
+	const cwd = await workspace();
+	const concurrency = 4;
+	let runnerCalls = 0;
+	// Fire 20 agents at once under a budget of 1 with concurrency 4. Every agent() reaches the
+	// semaphore in the same tick while spent() is still 0, so up to `concurrency` are admitted
+	// before any of them account spend; the rest must be gated. This is the concurrent case the
+	// gate is really about — the serial test above only proves the maxConcurrency:1 case.
+	const execution = runtimeAt(
+		cwd,
+		async (input) => {
+			runnerCalls += 1;
+			return result(input.prompt, 7);
+		},
+		{
+			budgetTotal: 1,
+			maxConcurrency: concurrency,
+			vmExecutor: async (_script, _args, host) => {
+				await Promise.all(
+					Array.from({ length: 20 }, (_unused, index) => host.agent(`item-${index}`, {}).catch(() => null)),
+				);
+				return { value: null, meta: {} };
+			},
+		},
+	);
+
+	await expect(execution.runtime.runScript("swallowing fan-out", null)).rejects.toBeInstanceOf(WorkflowBudgetExceeded);
+	expect(runnerCalls).toBeGreaterThan(1); // the concurrent wave ran more than one (not the serial bound)
+	expect(runnerCalls).toBeLessThanOrEqual(concurrency); // but overspend is capped to the wave, not all 20
+	expect(execution.runtime.budget.spent()).toBeLessThanOrEqual(concurrency * 7);
+});
+
 test("agent concurrency stays within the configured semaphore limit", async () => {
 	const cwd = await workspace();
+	const limit = 2;
 	let active = 0;
 	let peak = 0;
+	// Gate each runner until `limit` runners are concurrently active so the peak is
+	// observed deterministically instead of relying on a fixed sleep to overlap — the
+	// pre-runner progress I/O can otherwise stagger the calls and hide the true peak.
+	let releaseWhenSaturated!: () => void;
+	const saturated = new Promise<void>((resolve) => {
+		releaseWhenSaturated = resolve;
+	});
 	const { runtime, journal } = runtimeAt(
 		cwd,
 		async (input) => {
 			active += 1;
 			peak = Math.max(peak, active);
-			await new Promise((resolve) => setTimeout(resolve, 10));
+			if (active >= limit) releaseWhenSaturated();
+			// Fall back to a timeout so a broken semaphore (that never saturates) still
+			// resolves and lets the assertion fail with the observed peak.
+			await Promise.race([saturated, new Promise((resolve) => setTimeout(resolve, 200))]);
 			active -= 1;
 			return result(input.prompt);
 		},
-		{ maxConcurrency: 2 },
+		{ maxConcurrency: limit },
 	);
 	await journal.initialize("concurrency");
 
 	await Promise.all(Array.from({ length: 6 }, (_, index) => runtime.agent(`call-${index}`)));
-	expect(peak).toBe(2);
-	expect(runtime.semaphore.peak).toBe(2);
+	expect(peak).toBe(limit);
+	expect(runtime.semaphore.peak).toBe(limit);
 });
 
 test("parallel calls cannot race past the workflow agent limit", async () => {

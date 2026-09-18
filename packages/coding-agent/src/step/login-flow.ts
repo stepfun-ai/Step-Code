@@ -1,12 +1,7 @@
-import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
+import { ProcessTerminal, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
-import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../extensions/step-provider/index.ts";
-import {
-	detectTerminalBackgroundFromEnv,
-	initTheme,
-	resolveThemeSetting,
-	theme,
-} from "../modes/interactive/theme/theme.ts";
+import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
+import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import {
 	INITIAL_STEP_LOGIN_STEP,
@@ -97,7 +92,6 @@ export function isStepInteractiveLoginStartup(input: {
 		readonly export?: string;
 		readonly listModels?: string | true;
 		readonly sdkStdio?: boolean;
-		readonly offline?: boolean;
 		readonly messages: readonly string[];
 		readonly fileArgs: readonly string[];
 		readonly print?: boolean;
@@ -112,7 +106,6 @@ export function isStepInteractiveLoginStartup(input: {
 		input.args.export === undefined &&
 		input.args.listModels === undefined &&
 		input.args.sdkStdio !== true &&
-		input.args.offline !== true &&
 		input.args.messages.length === 0 &&
 		input.args.fileArgs.length === 0 &&
 		input.args.print !== true &&
@@ -148,7 +141,7 @@ export function syncStepLoginProfileEndpoint(
 export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<StepLoginOutcome> {
 	const authPath = options.authPath ?? "auth.json";
 	const profiles = resolveStepLoginProfiles(options.env);
-	const host = options.createHost?.() ?? createStandaloneHost();
+	const host = options.createHost?.() ?? createStandaloneStepHost();
 	// `step login` runs before main() initializes the product theme. Reusing the
 	// configured theme is safe in-session; only initialize when this is the first
 	// renderer in the process.
@@ -280,7 +273,14 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 	}
 }
 
-function createStandaloneHost(): StepLoginHost {
+/**
+ * A screen of its own for a startup flow that runs before the main UI exists.
+ *
+ * `preserveScreen` plus an explicit clear is what keeps these screens from
+ * bleeding into whatever renders next: the login, the MCP import offer and the
+ * theme picker each own the terminal for their turn and hand it back empty.
+ */
+export function createStandaloneStepHost(): StepLoginHost {
 	const ui = new TuiMainScreen(new ProcessTerminal());
 	return {
 		addChild: (child) => ui.addChild(child as Parameters<TUI["addChild"]>[0]),

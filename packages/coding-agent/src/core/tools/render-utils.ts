@@ -1,8 +1,8 @@
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@step-harness/pi-tui";
+import type { ImageContent, TextContent } from "@step-harness/providers";
+import type { Theme } from "../../theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
@@ -32,8 +32,29 @@ export function replaceTabs(text: string): string {
 	return text.replace(/\t/g, "   ");
 }
 
+/**
+ * Collapses carriage-return refresh sequences (progress bars, spinners from
+ * npm/docker/curl) to their final frame instead of stacking every frame on
+ * its own line.
+ */
+export function collapseCarriageReturns(text: string): string {
+	return text
+		.replace(/\r\n/g, "\n")
+		.split("\n")
+		.map((line) => {
+			const frames = line.split("\r");
+			// Take the last non-empty frame: a line ending in a bare \r
+			// (e.g. "[####] 100%\r") splits into a trailing "" that would
+			// otherwise blank out the whole line.
+			let i = frames.length - 1;
+			while (i > 0 && frames[i] === "") i--;
+			return frames[i] ?? "";
+		})
+		.join("\n");
+}
+
 export function normalizeDisplayText(text: string): string {
-	return text.replace(/\r/g, "");
+	return collapseCarriageReturns(text);
 }
 
 export function getTextOutput(
@@ -45,7 +66,9 @@ export function getTextOutput(
 	const textBlocks = result.content.filter((c) => c.type === "text");
 	const imageBlocks = result.content.filter((c) => c.type === "image");
 
-	let output = textBlocks.map((c) => sanitizeBinaryOutput(stripAnsi(c.text || "")).replace(/\r/g, "")).join("\n");
+	let output = textBlocks
+		.map((c) => collapseCarriageReturns(sanitizeBinaryOutput(stripAnsi(c.text || ""))))
+		.join("\n");
 
 	const caps = getCapabilities();
 	if (imageBlocks.length > 0 && (!caps.images || !showImages)) {
@@ -81,5 +104,7 @@ export function renderToolPath(
 	if (rawPath === null) return invalidArgText(theme);
 	const value = rawPath || options?.emptyFallback;
 	if (!value) return theme.fg("toolOutput", "...");
-	return linkPath(theme.fg("accent", shortenPath(value)), value, cwd);
+	// 路径跟随工具名（toolTitle）而非 accent——accent 是交互色，品牌紫锚点
+	// 只保留在工具行（名字+路径）上，spinner/选中态不再共用它。
+	return linkPath(theme.fg("toolTitle", shortenPath(value)), value, cwd);
 }

@@ -35,9 +35,9 @@ import {
 	type ProviderRequestOptions,
 	type SimpleStreamOptions,
 	type StreamOptions,
-} from "@earendil-works/pi-ai";
-import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
-import { getAgentDir } from "../config.ts";
+} from "@step-harness/providers";
+import * as builtinProviderCatalog from "@step-harness/providers/providers/all";
+import { getAgentDir, STEP_ENTRYPOINT } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
@@ -52,7 +52,6 @@ import {
 	resolveConfiguredModelHeaders,
 	validateExtensionProvider,
 } from "./provider-composer.ts";
-import { withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 
 interface ModelRuntimeSnapshot {
@@ -74,11 +73,15 @@ export interface CreateModelRuntimeOptions {
 	allowModelNetwork?: boolean;
 	/** Timeout for the create-time network model refresh. */
 	modelRefreshTimeoutMs?: number;
-	catalogBaseUrl?: string;
 	/** Optional caller cancellation for initial cache restoration and availability checks. */
 	signal?: AbortSignal;
 	/** Skip initial catalog and availability refresh. Static models remain available. */
 	refreshOnCreate?: boolean;
+	/**
+	 * Seed the runtime with the default anthropic/openai builtin providers.
+	 * Defaults to false under the Step entrypoint (StepFun-only), true otherwise.
+	 */
+	includeDefaultBuiltins?: boolean;
 }
 
 export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
@@ -136,7 +139,6 @@ export class ModelRuntime implements Models {
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
 	private readonly compositionErrors = new Map<string, string>();
 	private readonly modelsPath: string | undefined;
-	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
 		all: [],
@@ -157,12 +159,10 @@ export class ModelRuntime implements Models {
 		modelsPath: string | undefined,
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
-		modelNetworkEnabled: boolean,
 	) {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
-		this.modelNetworkEnabled = modelNetworkEnabled;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
 		this.models = createModels({ credentials, modelsStore });
@@ -179,25 +179,12 @@ export class ModelRuntime implements Models {
 			(modelsPath
 				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
-		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
-		const providers = builtinProviderCatalog
-			.builtinProviders()
-			.map((provider) =>
-				provider.id === "radius"
-					? provider
-					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
-			);
-		const runtime = new ModelRuntime(
-			credentials,
-			config,
-			modelsPath,
-			modelsStore,
-			providers,
-			process.env.PI_OFFLINE === undefined,
-		);
-		runtime.configureRadiusProviders();
+		const includeDefaultBuiltins = options.includeDefaultBuiltins ?? !STEP_ENTRYPOINT;
+		const providers = includeDefaultBuiltins ? builtinProviderCatalog.builtinProviders() : [];
+		const runtime = new ModelRuntime(credentials, config, modelsPath, modelsStore, providers);
+		runtime.resetBuiltinProviders();
 		runtime.rebuildProviders();
-		const refreshFromNetwork = runtime.modelNetworkEnabled && options.allowModelNetwork === true;
+		const refreshFromNetwork = options.allowModelNetwork === true;
 		const controller =
 			refreshFromNetwork && options.modelRefreshTimeoutMs !== undefined ? new AbortController() : undefined;
 		const timeout = controller ? setTimeout(() => controller.abort(), options.modelRefreshTimeoutMs) : undefined;
@@ -216,21 +203,9 @@ export class ModelRuntime implements Models {
 		return runtime;
 	}
 
-	private configureRadiusProviders(): void {
+	private resetBuiltinProviders(): void {
 		this.builtins.clear();
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
-		for (const providerId of this.config.getProviderIds()) {
-			const config = this.config.getProvider(providerId);
-			if (config?.oauth !== "radius" || !config.baseUrl) continue;
-			this.builtins.set(
-				providerId,
-				builtinProviderCatalog.radiusProvider({
-					id: providerId,
-					name: config.name ?? providerId,
-					gateway: config.baseUrl.replace(/\/v1\/?$/u, ""),
-				}),
-			);
-		}
 	}
 
 	private providerIds(): Set<string> {
@@ -689,7 +664,7 @@ export class ModelRuntime implements Models {
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
 		this.config = await ModelConfig.load(this.modelsPath);
-		this.configureRadiusProviders();
+		this.resetBuiltinProviders();
 		if (options.providers) {
 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
 			this.updateModelSnapshot();
@@ -698,7 +673,7 @@ export class ModelRuntime implements Models {
 		}
 		const refreshOptions = {
 			...options,
-			allowNetwork: options.allowNetwork ?? this.modelNetworkEnabled,
+			allowNetwork: options.allowNetwork ?? true,
 		};
 		// Published pi-ai builds before ModelsStore returned void and accepted a provider ID.
 		// The fallback keeps source-mode CLI tests working without rebuilding workspace dependencies.
@@ -730,13 +705,24 @@ export class ModelRuntime implements Models {
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
 
+	/**
+	 * Best-effort background refresh after a provider (un)registration. The
+	 * returned promise is intentionally discarded, so a transient failure — e.g.
+	 * the credential store being torn down under a concurrent test, or a flaky
+	 * filesystem — must be swallowed here rather than escaping as an unhandled
+	 * rejection. Refresh failures are already recorded via `availabilityError`.
+	 */
+	private scheduleBackgroundRefresh(): void {
+		void this.refresh({ allowNetwork: false }).catch(() => {});
+	}
+
 	registerNativeProvider(provider: Provider): void {
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
 		this.recomposeProvider(provider.id);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleBackgroundRefresh();
 	}
 
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
@@ -774,7 +760,7 @@ export class ModelRuntime implements Models {
 				available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
 			};
 		}
-		void this.refresh({ allowNetwork: false });
+		this.scheduleBackgroundRefresh();
 	}
 
 	unregisterProvider(providerId: string): void {
@@ -782,6 +768,6 @@ export class ModelRuntime implements Models {
 		this.nativeExtensionProviders.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleBackgroundRefresh();
 	}
 }

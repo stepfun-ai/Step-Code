@@ -5,11 +5,11 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+} from "@step-harness/pi-tui";
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
 import type { Keybinding, KeybindingsManager } from "../../core/keybindings.ts";
-import { formatKeyText } from "../../modes/interactive/components/keybinding-hints.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { formatKeyText } from "../../render/keybinding-hints.ts";
+import type { Theme } from "../../theme/theme.ts";
 import { describeFeedbackBundle } from "./bundle.ts";
 import type { FeedbackBundle, FeedbackSubmission } from "./types.ts";
 

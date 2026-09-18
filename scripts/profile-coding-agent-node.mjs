@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
 const packageDir = join(repoRoot, "packages", "coding-agent");
-const distCliPath = join(packageDir, "dist", "cli.js");
-const bundledDistCliPath = join(packageDir, "dist", "bundle", "cli.js");
-const srcCliPath = join(packageDir, "src", "cli.ts");
+const appEntryDir = join(repoRoot, "apps", "cli");
+const distCliPath = join(appEntryDir, "dist", "main.js");
+const bundledDistCliPath = join(packageDir, "dist", "bundle", "step.js");
+const srcCliPath = join(appEntryDir, "src", "main.ts");
 const defaultNodeProfileDir = join(repoRoot, "profiles-node");
 const defaultBunProfileDir = join(repoRoot, "profiles-bun");
 const agentDirEnvName = "PI_CODING_AGENT_DIR";
@@ -23,8 +24,8 @@ function printHelp() {
 Profiles coding-agent startup with the runtime selected below:
 - npm run profile:tui     -> builds packages/coding-agent and profiles TUI startup with Node
 - npm run profile:rpc     -> builds packages/coding-agent and profiles RPC startup with Node
-- bun run profile:tui     -> profiles TUI startup from src/cli.ts directly with Bun
-- bun run profile:rpc     -> profiles RPC startup from src/cli.ts directly with Bun
+- bun run profile:tui     -> profiles TUI startup from apps/cli/src/main.ts directly with Bun
+- bun run profile:rpc     -> profiles RPC startup from apps/cli/src/main.ts directly with Bun
 
 Options:
   --mode <name>          tui or rpc (default: tui)
@@ -36,7 +37,7 @@ Options:
   --runtime <name>       node, bun, or auto (default: auto)
   --agent-dir <dir>      Use a specific PI_CODING_AGENT_DIR for the benchmark run
   --isolated-agent-dir   Use a fresh temporary agent dir instead of the normal one
-  --bundle               Build and profile the bundled Node entrypoint instead of dist/cli.js
+  --bundle               Build and profile the bundled Node entrypoint instead of dist/main.js
   --no-offline           Do not force PI_OFFLINE=1 / PI_SKIP_VERSION_CHECK=1
   --skip-build           Reuse the selected build output without rebuilding first (Node only)
   --cpu-profile          Write CPU profiles for benchmark runs
@@ -302,18 +303,20 @@ async function runBuild(bundle) {
 				"--workspace",
 				"packages/telemetry",
 				"--workspace",
-				"packages/ai",
+				"packages/providers",
 				"--workspace",
-				"packages/agent",
+				"packages/agent-core",
 				"--workspace",
-				"packages/protocol",
-				"--workspace",
-				"packages/client",
+				"packages/config",
 			],
 		},
 		{
 			label: "Coding-agent build",
 			args: ["run", bundle ? "build" : "build:unbundled", "--workspace", "packages/coding-agent"],
+		},
+		{
+			label: "App entry build",
+			args: ["run", "build:unbundled", "--workspace", "@step-harness/cli"],
 		},
 	];
 
@@ -581,7 +584,7 @@ async function main() {
 	}
 	if (runtime === "bun") {
 		process.stdout.write(
-			`Using Bun runtime with ${options.mode === "rpc" ? "packages/coding-agent/src/cli.ts --mode rpc" : "packages/coding-agent/src/cli.ts"}\n`,
+			`Using Bun runtime with ${options.mode === "rpc" ? "apps/cli/src/main.ts --mode rpc" : "apps/cli/src/main.ts"}\n`,
 		);
 	}
 
@@ -591,9 +594,9 @@ async function main() {
 		!options.bundle &&
 		!options.build &&
 		existsSync(distCliPath) &&
-		readFileSync(distCliPath, "utf8").includes('import "./bundle/cli.js";')
+		readFileSync(distCliPath, "utf8").includes('import "./bundle/step.js";')
 	) {
-		throw new Error("dist/cli.js is a bundled facade; rerun without --skip-build for an unbundled profile");
+		throw new Error("dist/main.js is a bundled facade; rerun without --skip-build for an unbundled profile");
 	}
 	if (!existsSync(entryPath)) {
 		throw new Error(`CLI entrypoint not found: ${entryPath}`);

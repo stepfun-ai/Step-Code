@@ -10,9 +10,9 @@ import {
 	Agent,
 	type AgentMessage,
 	projectContextForRequest as coreProjectContextForRequest,
-} from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model, ToolResultMessage, Usage } from "@earendil-works/pi-ai/compat";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
+} from "@step-harness/agent-core";
+import type { Api, Message, Model, ToolResultMessage, Usage } from "@step-harness/providers/compat";
+import { streamSimple } from "@step-harness/providers/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session.ts";

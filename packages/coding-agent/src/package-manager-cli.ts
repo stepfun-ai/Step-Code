@@ -1,32 +1,7 @@
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
-import { join, resolve } from "node:path";
-import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { join } from "node:path";
 import chalk from "chalk";
-import lockfile from "proper-lockfile";
-import { selectConfig } from "./cli/config-selector.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import {
-	APP_NAME,
-	CONFIG_DIR_NAME,
-	detectInstallMethod,
-	getAgentDir,
-	getPackageDir,
-	getSelfUpdateCommand,
-	getSelfUpdateUnavailableInstruction,
-	PACKAGE_NAME,
-	type SelfUpdateCommand,
-	type SelfUpdatePackageTarget,
-	VERSION,
-} from "./config.ts";
+import { APP_NAME, CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { DefaultPackageManager } from "./core/package-manager.ts";
@@ -34,226 +9,29 @@ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager, type SettingsManagerCreateOptions } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import type { StartupUiHooks } from "./modes/interactive-contract.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "./step/environment.ts";
-import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
-import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
-import { getPiUserAgent } from "./utils/pi-user-agent.ts";
-import { formatVersionCheckError, getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
-import {
-	cleanupWindowsSelfUpdateQuarantine,
-	quarantineWindowsNativeDependencies,
-} from "./utils/windows-self-update.ts";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
 
-type UpdateTarget = { type: "all" } | { type: "self" } | { type: "extensions"; source?: string } | { type: "models" };
+type UpdateTarget =
+	| { type: "all" }
+	| { type: "extensions"; source?: string }
+	| { type: "models" }
+	| { type: "self-unsupported" };
 
-const DEFAULT_INSTALLER_API_BASE = "https://pi.dev/api/installer/releases";
-const MANAGED_INSTALL_MARKER = "managed-install.json";
-const MANAGED_RELEASE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const SELF_UPDATE_NAME = APP_NAME === "pi" ? "pi" : APP_NAME;
-const PRODUCT_DISPLAY_NAME = APP_NAME === "pi" ? "Pi" : APP_NAME;
 
 /** Resolve the active product root for command surfaces that can be embedded. */
 function resolveCommandAgentDir(agentDir?: string): string {
 	return agentDir ?? (isStepStorageContext() ? resolveStepAgentDir() : getAgentDir());
 }
 
-function getActiveManagedInstallRoot(): string | undefined {
-	const configuredRoot = process.env.PI_MANAGED_INSTALL_ROOT?.trim();
-	if (!configuredRoot) return undefined;
-
-	const managedRoot = resolve(configuredRoot);
-	const releasesDir = canonicalizePath(join(managedRoot, "releases"));
-	// The launcher environment is inherited by child processes. Do not classify a
-	// source checkout or another Pi installation launched from managed Pi as managed.
-	if (getCwdRelativePath(canonicalizePath(getPackageDir()), releasesDir) === undefined) return undefined;
-
-	const markerPath = join(managedRoot, MANAGED_INSTALL_MARKER);
-	try {
-		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
-			kind?: unknown;
-			layout?: unknown;
-			schemaVersion?: unknown;
-		};
-		if (marker.kind !== "pi-managed-install" || marker.schemaVersion !== 1 || marker.layout !== "releases-v1") {
-			throw new Error();
-		}
-	} catch {
-		throw new Error(`Managed install marker is missing or invalid: ${markerPath}`);
-	}
-
-	return managedRoot;
-}
-
-async function fetchInstallerArtifact(url: string, label: string): Promise<string> {
-	const response = await fetch(url, { headers: { "User-Agent": getPiUserAgent(VERSION) } });
-	if (!response.ok) {
-		throw new Error(`Could not download managed installer ${label} from ${url}: HTTP ${response.status}`);
-	}
-	return await response.text();
-}
-
-async function runManagedNpmCi(stageDir: string): Promise<void> {
-	const args = [
-		"ci",
-		"--ignore-scripts",
-		"--min-release-age=0",
-		"--omit=dev",
-		"--include=optional",
-		"--no-fund",
-		"--no-audit",
-		"--loglevel=error",
-		"--progress=false",
-	];
-	const code = await waitForChildProcess(spawnProcess("npm", args, { cwd: stageDir, stdio: "inherit" }));
-	if (code !== 0) throw new Error(`npm ${args.join(" ")} exited with code ${code ?? "unknown"}`);
-}
-
-function verifyManagedRelease(releaseDir: string, expectedVersion: string): void {
-	const binPath = join(
-		releaseDir,
-		"node_modules",
-		".bin",
-		process.platform === "win32" ? `${APP_NAME}.cmd` : APP_NAME,
-	);
-	const result = spawnProcessSync(binPath, ["--version"], {
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	if (result.error || result.status !== 0) {
-		const reason = result.error?.message || result.stderr.trim() || `exit code ${result.status ?? "unknown"}`;
-		throw new Error(`Could not verify managed ${PRODUCT_DISPLAY_NAME} ${expectedVersion}: ${reason}`);
-	}
-	const installedVersion = result.stdout.trim();
-	if (installedVersion !== expectedVersion) {
-		throw new Error(
-			`Managed ${PRODUCT_DISPLAY_NAME} smoke test returned version ${installedVersion}; expected ${expectedVersion}.`,
-		);
-	}
-}
-
-function activateManagedRelease(managedRoot: string, version: string): void {
-	const currentPath = join(managedRoot, "current-version");
-	const temporaryPath = join(managedRoot, `current-version.tmp.${process.pid}-${Date.now()}`);
-	try {
-		writeFileSync(temporaryPath, `${version}\n`);
-		renameSync(temporaryPath, currentPath);
-	} finally {
-		rmSync(temporaryPath, { force: true });
-	}
-}
-
-function cleanupManagedStaging(managedRoot: string): void {
-	const stagingRoot = join(managedRoot, "staging");
-	try {
-		for (const entry of readdirSync(stagingRoot)) {
-			if (entry.startsWith("update-")) {
-				rmSync(join(stagingRoot, entry), { force: true, recursive: true });
-			}
-		}
-	} catch {
-		// The staging directory does not exist yet or is not writable.
-	}
-}
-
-export function cleanupManagedInstall(): void {
-	let managedRoot: string | undefined;
-	try {
-		managedRoot = getActiveManagedInstallRoot();
-	} catch {
-		return;
-	}
-	if (!managedRoot) return;
-
-	try {
-		const releaseLock = lockfile.lockSync(join(managedRoot, "update"), { realpath: false });
-		try {
-			cleanupManagedStaging(managedRoot);
-		} finally {
-			releaseLock();
-		}
-	} catch {
-		// A live update owns the staging directory, or cleanup is unavailable.
-	}
-}
-
-async function runManagedSelfUpdate(managedRoot: string, version: string): Promise<void> {
-	if (!MANAGED_RELEASE_VERSION_RE.test(version)) {
-		throw new Error(`Invalid managed release version: ${version}`);
-	}
-
-	let releaseLock: () => Promise<void>;
-	try {
-		releaseLock = await lockfile.lock(join(managedRoot, "update"), { realpath: false });
-	} catch (error: unknown) {
-		if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
-			throw new Error(`Another managed ${PRODUCT_DISPLAY_NAME} update is already running.`);
-		}
-		throw error;
-	}
-
-	let stageDir: string | undefined;
-	try {
-		cleanupManagedStaging(managedRoot);
-		const installerApiBase = (process.env.PI_INSTALLER_API_BASE?.trim() || DEFAULT_INSTALLER_API_BASE).replace(
-			/\/+$/,
-			"",
-		);
-		const releaseUrl = `${installerApiBase}/${encodeURIComponent(version)}`;
-		const stagingRoot = join(managedRoot, "staging");
-		const releasesRoot = join(managedRoot, "releases");
-		mkdirSync(releasesRoot, { recursive: true });
-		const releaseDir = join(releasesRoot, version);
-		if (existsSync(releaseDir)) {
-			verifyManagedRelease(releaseDir, version);
-			activateManagedRelease(managedRoot, version);
-			return;
-		}
-
-		mkdirSync(stagingRoot, { recursive: true });
-		stageDir = mkdtempSync(join(stagingRoot, "update-"));
-		const [packageJsonContent, packageLockContent] = await Promise.all([
-			fetchInstallerArtifact(`${releaseUrl}/package.json`, "package.json"),
-			fetchInstallerArtifact(`${releaseUrl}/package-lock.json`, "package-lock.json"),
-		]);
-		writeFileSync(join(stageDir, "package.json"), packageJsonContent);
-		writeFileSync(join(stageDir, "package-lock.json"), packageLockContent);
-
-		await runManagedNpmCi(stageDir);
-		verifyManagedRelease(stageDir, version);
-		renameSync(stageDir, releaseDir);
-		activateManagedRelease(managedRoot, version);
-	} finally {
-		if (stageDir) rmSync(stageDir, { force: true, recursive: true });
-		await releaseLock();
-	}
-}
-
-const SELF_UPDATE_NOTE_MARKDOWN_THEME: MarkdownTheme = {
-	heading: (text) => chalk.bold(chalk.yellow(text)),
-	link: (text) => chalk.cyan(text),
-	linkUrl: (text) => chalk.dim(text),
-	code: (text) => chalk.yellow(text),
-	codeBlock: (text) => chalk.dim(text),
-	codeBlockBorder: (text) => chalk.dim(text),
-	quote: (text) => chalk.dim(text),
-	quoteBorder: (text) => chalk.dim(text),
-	hr: (text) => chalk.dim(text),
-	listBullet: (text) => chalk.yellow(text),
-	bold: (text) => chalk.bold(text),
-	italic: (text) => chalk.italic(text),
-	strikethrough: (text) => chalk.strikethrough(text),
-	underline: (text) => chalk.underline(text),
-};
-
 interface PackageCommandOptions {
 	command: PackageCommand;
 	source?: string;
 	updateTarget?: UpdateTarget;
-	showExtensionsSkippedNote: boolean;
 	local: boolean;
-	force: boolean;
 	projectTrustOverride?: boolean;
 	help: boolean;
 	invalidOption?: string;
@@ -279,7 +57,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
 		case "remove":
 			return `${APP_NAME} remove <source> [-l] [--approve|--no-approve]`;
 		case "update":
-			return `${APP_NAME} update [source|self|${SELF_UPDATE_NAME}] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
+			return `${APP_NAME} update [source] [--extensions|--models|--all] [--extension <source>] [--approve|--no-approve]`;
 		case "list":
 			return `${APP_NAME} list [--approve|--no-approve]`;
 	}
@@ -292,11 +70,11 @@ function printConfigCommandHelp(): void {
   ${CONFIG_COMMAND_USAGE}
 
 Open the resource configuration TUI to enable or disable package resources.
-Without -l, starts in global settings (~/${CONFIG_DIR_NAME}/agent/settings.json).
+Without -l, starts in global settings (~/${CONFIG_DIR_NAME}/config.toml).
 Press Tab in the TUI to switch between global and project-local modes.
 
 Options:
-  -l, --local       Edit project overrides (${CONFIG_DIR_NAME}/settings.json)
+  -l, --local       Edit project overrides (${CONFIG_DIR_NAME}/config.toml)
   -a, --approve     Trust project-local files for this command with -l
   -na, --no-approve Ignore project-local files for this command with -l
 `);
@@ -311,7 +89,7 @@ function printPackageCommandHelp(command: PackageCommand): void {
 Install a package and add it to settings.
 
 Options:
-  -l, --local       Install project-locally (${CONFIG_DIR_NAME}/settings.json)
+  -l, --local       Install project-locally (${CONFIG_DIR_NAME}/config.toml)
   -a, --approve     Trust project-local files for this command
   -na, --no-approve Ignore project-local files for this command
 
@@ -333,7 +111,7 @@ Remove a package and its source from settings.
 Alias: ${APP_NAME} uninstall <source> [-l]
 
 Options:
-  -l, --local       Remove from project settings (${CONFIG_DIR_NAME}/settings.json)
+  -l, --local       Remove from project settings (${CONFIG_DIR_NAME}/config.toml)
   -a, --approve     Trust project-local files for this command
   -na, --no-approve Ignore project-local files for this command
 
@@ -347,24 +125,21 @@ Examples:
 			console.log(`${chalk.bold("Usage:")}
   ${getPackageCommandUsage("update")}
 
-Update ${APP_NAME}, installed packages, or model catalogs.
+Update installed packages or model catalogs.
 
 Options:
-  --self                  Update ${APP_NAME} only (default when no target is given)
   --extensions            Update installed packages only
   --models                Refresh model catalogs only
-  --all                   Update ${APP_NAME} and installed packages
+  --all                   Update all installed packages
   --extension <source>    Update one package only
   -a, --approve           Trust project-local files for this command
   -na, --no-approve       Ignore project-local files for this command
-  --force                 Reinstall ${APP_NAME} even if the current version is latest
 
 Short forms:
-  ${APP_NAME} update                Update ${APP_NAME} only
-  ${APP_NAME} update --all          Update ${APP_NAME} and all extensions
+  ${APP_NAME} update --extensions   Update all installed packages
+  ${APP_NAME} update --all          Update all installed packages
   ${APP_NAME} update --models       Refresh model catalogs only
   ${APP_NAME} update <source>       Update one package
-  ${APP_NAME} update ${SELF_UPDATE_NAME}             Update ${APP_NAME} only (self is an alias)
 `);
 			return;
 
@@ -395,7 +170,6 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 	}
 
 	let local = false;
-	let force = false;
 	let projectTrustOverride: boolean | undefined;
 	let help = false;
 	let invalidOption: string | undefined;
@@ -471,15 +245,6 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 			continue;
 		}
 
-		if (arg === "--force") {
-			if (command === "update") {
-				force = true;
-			} else {
-				invalidOption = invalidOption ?? arg;
-			}
-			continue;
-		}
-
 		if (arg === "--extension") {
 			if (command !== "update") {
 				invalidOption = invalidOption ?? arg;
@@ -512,7 +277,6 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 	}
 
 	let updateTarget: UpdateTarget | undefined;
-	let showExtensionsSkippedNote = false;
 	if (command === "update") {
 		if (allFlag && (selfFlag || extensionsFlag || modelsFlag || extensionFlagSource)) {
 			conflictingOptions =
@@ -543,7 +307,7 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 		} else if (source) {
 			const sourceIsSelf = source === "self" || source === "pi" || source === SELF_UPDATE_NAME;
 			if (sourceIsSelf) {
-				updateTarget = extensionsFlag ? { type: "all" } : { type: "self" };
+				updateTarget = extensionsFlag ? { type: "all" } : { type: "self-unsupported" };
 			} else {
 				if (extensionsFlag || selfFlag || allFlag) {
 					conflictingOptions =
@@ -557,12 +321,11 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 		} else if (selfFlag && extensionsFlag) {
 			updateTarget = { type: "all" };
 		} else if (selfFlag) {
-			updateTarget = { type: "self" };
+			updateTarget = { type: "self-unsupported" };
 		} else if (extensionsFlag) {
 			updateTarget = { type: "extensions" };
 		} else {
-			updateTarget = { type: "self" };
-			showExtensionsSkippedNote = true;
+			updateTarget = { type: "self-unsupported" };
 		}
 	}
 
@@ -570,9 +333,7 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 		command,
 		source,
 		updateTarget,
-		showExtensionsSkippedNote,
 		local,
-		force,
 		projectTrustOverride,
 		help,
 		invalidOption,
@@ -582,10 +343,6 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 	};
 }
 
-function updateTargetIncludesSelf(target: UpdateTarget): boolean {
-	return target.type === "all" || target.type === "self";
-}
-
 function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
 	return target.type === "all" || target.type === "extensions";
 }
@@ -593,6 +350,7 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
 async function refreshModelCatalogs(agentDir: string): Promise<void> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 15_000);
+	let providerCount = 0;
 	try {
 		const modelRuntime = await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
@@ -600,6 +358,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 			allowModelNetwork: false,
 			signal: controller.signal,
 		});
+		providerCount = modelRuntime.getProviders().length;
 		const result = await modelRuntime.refresh({
 			allowNetwork: true,
 			force: true,
@@ -615,120 +374,9 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 	} finally {
 		clearTimeout(timeout);
 	}
-	console.log(chalk.green("Model catalogs refreshed"));
-}
-
-function printSelfUpdateUnavailable(
-	npmCommand?: string[],
-	updatePackageTarget: SelfUpdatePackageTarget = PACKAGE_NAME,
-): void {
-	console.error(`error: ${APP_NAME} cannot self-update this installation.`);
-	console.error(getSelfUpdateUnavailableInstruction(PACKAGE_NAME, npmCommand, updatePackageTarget));
-
-	const entrypoint = process.argv[1];
-	if (entrypoint) {
-		console.error("");
-		console.error(`Location of ${APP_NAME} executable: ${entrypoint}`);
-	}
-}
-
-function printSelfUpdateFallback(command: SelfUpdateCommand): void {
-	console.error(chalk.dim(`If this keeps failing, run this command yourself: ${command.display}`));
-}
-
-function printPnpmSelfUpdateMetadataHint(): void {
-	console.error(chalk.yellow("If pnpm reports missing package versions, its cached registry metadata may be stale."));
-	console.error(chalk.yellow(`Run \`pnpm store prune\` and retry \`${APP_NAME} update --self\`.`));
-}
-
-function printSelfUpdateNote(note: string): void {
-	const trimmedNote = note.trim();
-	if (!trimmedNote) {
-		return;
-	}
-
-	console.log();
-	console.log(chalk.bold(chalk.yellow("Update note")));
-	try {
-		const width = Math.max(20, process.stdout.columns ?? 80);
-		const renderedLines = new Markdown(trimmedNote, 0, 0, SELF_UPDATE_NOTE_MARKDOWN_THEME)
-			.render(width)
-			.map((line) => line.trimEnd());
-		console.log(renderedLines.join("\n"));
-	} catch {
-		console.log(trimmedNote);
-	}
-	console.log();
-}
-
-interface SelfUpdatePlan {
-	packageName: string;
-	installSpec: string;
-	version: string;
-	shouldRun: boolean;
-	note?: string;
-}
-
-async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
-	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
-	try {
-		latestRelease = await getLatestPiRelease(VERSION, { retry: true });
-	} catch (error: unknown) {
-		throw new Error(`Could not determine latest ${APP_NAME} version: ${formatVersionCheckError(error)}`, {
-			cause: error,
-		});
-	}
-	if (!latestRelease) {
-		throw new Error(`Could not determine latest ${APP_NAME} version.`);
-	}
-
-	const packageName = latestRelease.packageName ?? PACKAGE_NAME;
-	const installSpec = `${packageName}@${latestRelease.version}`;
-	if (force || packageName !== PACKAGE_NAME || isNewerPackageVersion(latestRelease.version, VERSION)) {
-		return {
-			packageName,
-			installSpec,
-			version: latestRelease.version,
-			...(latestRelease.note ? { note: latestRelease.note } : {}),
-			shouldRun: true,
-		};
-	}
-
-	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
-	return { packageName, installSpec, version: latestRelease.version, shouldRun: false };
-}
-
-async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
-	console.log(chalk.dim(`Updating ${APP_NAME} with ${command.display}...`));
-	for (const step of command.steps ?? [command]) {
-		await new Promise<void>((resolve, reject) => {
-			const child = spawnProcess(step.command, step.args, {
-				stdio: "inherit",
-			});
-			child.on("error", (error) => {
-				reject(error);
-			});
-			child.on("close", (code, signal) => {
-				if (code === 0) {
-					resolve();
-				} else if (signal) {
-					reject(new Error(`${step.display} terminated by signal ${signal}`));
-				} else {
-					reject(new Error(`${step.display} exited with code ${code ?? "unknown"}`));
-				}
-			});
-		});
-	}
-}
-
-function prepareWindowsNpmSelfUpdate(): void {
-	if (process.platform !== "win32") {
-		return;
-	}
-
-	const packageDir = getPackageDir();
-	cleanupWindowsSelfUpdateQuarantine(packageDir);
-	quarantineWindowsNativeDependencies(packageDir);
+	// With no providers registered (e.g. the Step entrypoint seeds no remote
+	// catalog providers) there is nothing to refresh — don't claim success.
+	console.log(chalk.green(providerCount > 0 ? "Model catalogs refreshed" : "No model catalogs to refresh"));
 }
 
 export interface PackageCommandRuntimeOptions {
@@ -739,6 +387,13 @@ export interface PackageCommandRuntimeOptions {
 	configDirName?: string;
 	/** Product override for the Pi settings manager (Step decorates it). */
 	settingsManagerFactory?: (cwd: string, agentDir: string, options?: SettingsManagerCreateOptions) => SettingsManager;
+	/**
+	 * Startup UI selectors injected by the product shell. `config` uses
+	 * `selectConfig`; project-trust prompts use `showStartupSelector`/
+	 * `showStartupInput`. Absent when coding-agent's own `main()` runs a
+	 * non-interactive command.
+	 */
+	uiHooks?: StartupUiHooks;
 }
 
 interface CommandSettingsResult {
@@ -764,6 +419,7 @@ async function createCommandSettingsManager(options: {
 	extensionFactories?: InlineExtension[];
 	configDirName?: string;
 	settingsManagerFactory?: PackageCommandRuntimeOptions["settingsManagerFactory"];
+	uiHooks?: StartupUiHooks;
 }): Promise<CommandSettingsResult> {
 	const createSettingsManager = options.settingsManagerFactory ?? SettingsManager.create;
 	const settingsManager = createSettingsManager(options.cwd, options.agentDir, {
@@ -807,6 +463,12 @@ async function createCommandSettingsManager(options: {
 			settingsManager,
 			hasUI: appMode === "interactive",
 			paths: { agentDir: options.agentDir, configDirName: options.configDirName },
+			ui: options.uiHooks
+				? {
+						showStartupSelector: options.uiHooks.showStartupSelector,
+						showStartupInput: options.uiHooks.showStartupInput,
+					}
+				: undefined,
 		}),
 		onExtensionError: (message) => projectTrustWarnings.push(message),
 	});
@@ -859,6 +521,7 @@ export async function handleConfigCommand(
 		configDirName: runtimeOptions.configDirName,
 		extensionFactories: runtimeOptions.extensionFactories,
 		settingsManagerFactory: runtimeOptions.settingsManagerFactory,
+		uiHooks: runtimeOptions.uiHooks,
 	});
 	reportProjectTrustWarnings(projectTrustWarnings);
 	if (local && !settingsManager.isProjectTrusted()) {
@@ -886,7 +549,10 @@ export async function handleConfigCommand(
 			}).resolve()
 		: globalResolvedPaths;
 
-	await selectConfig({
+	if (!runtimeOptions.uiHooks?.selectConfig) {
+		throw new Error("The config selector (uiHooks.selectConfig) is required to run the `config` command.");
+	}
+	await runtimeOptions.uiHooks.selectConfig({
 		resolvedPaths: { global: globalResolvedPaths, project: projectResolvedPaths },
 		settingsManager,
 		cwd,
@@ -971,6 +637,7 @@ export async function handlePackageCommand(
 		extensionFactories: runtimeOptions.extensionFactories,
 		settingsManagerFactory: runtimeOptions.settingsManagerFactory,
 		configDirName: runtimeOptions.configDirName,
+		uiHooks: runtimeOptions.uiHooks,
 	});
 	reportProjectTrustWarnings(projectTrustWarnings);
 	if (!settingsManager.isProjectTrusted() && writesProjectPackageConfig) {
@@ -979,7 +646,6 @@ export async function handlePackageCommand(
 		return true;
 	}
 	reportSettingsErrors(settingsManager, "package command");
-	const selfUpdateNpmCommand = settingsManager.getGlobalSettings().npmCommand;
 
 	const packageManager = new DefaultPackageManager({
 		cwd,
@@ -1049,11 +715,16 @@ export async function handlePackageCommand(
 			}
 
 			case "update": {
-				const target = options.updateTarget ?? { type: "self" };
-				if (options.showExtensionsSkippedNote) {
-					console.log(
-						chalk.dim(`Extensions are skipped. Run ${APP_NAME} update --extensions to update extensions.`),
+				const target = options.updateTarget ?? { type: "self-unsupported" };
+				if (target.type === "self-unsupported") {
+					console.error(chalk.red(`${APP_NAME} cannot self-update this installation.`));
+					console.error(
+						chalk.dim(
+							`Update ${APP_NAME} with the package manager or installer you used to install it. To update extensions, run ${APP_NAME} update --extensions.`,
+						),
 					);
+					process.exitCode = 1;
+					return true;
 				}
 				if (updateTargetIncludesExtensions(target)) {
 					const updateSource = target.type === "extensions" ? target.source : undefined;
@@ -1063,77 +734,6 @@ export async function handlePackageCommand(
 					} else {
 						console.log(chalk.green("Updated packages"));
 					}
-				}
-				if (updateTargetIncludesSelf(target)) {
-					const managedInstallRoot = getActiveManagedInstallRoot();
-					if (managedInstallRoot && options.force) {
-						console.error(
-							chalk.red(
-								`Managed ${APP_NAME} installations do not support --force; rerun the installer to repair this installation.`,
-							),
-						);
-						process.exitCode = 1;
-						return true;
-					}
-					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
-					if (!selfUpdatePlan.shouldRun) {
-						return true;
-					}
-					if (managedInstallRoot) {
-						if (selfUpdatePlan.note) {
-							printSelfUpdateNote(selfUpdatePlan.note);
-						}
-						try {
-							console.log(chalk.dim(`Updating managed ${APP_NAME} installation...`));
-							await runManagedSelfUpdate(managedInstallRoot, selfUpdatePlan.version);
-						} catch (error: unknown) {
-							const message = error instanceof Error ? error.message : "Unknown managed update error";
-							console.error(chalk.red(`Error: ${message}`));
-							process.exitCode = 1;
-							return true;
-						}
-						console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
-						return true;
-					}
-
-					const installMethod = detectInstallMethod();
-					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
-						console.error(
-							chalk.red(`${APP_NAME} self-update on Windows is only supported for npm and pnpm installs.`),
-						);
-						console.error(chalk.dim(`Detected install method: ${installMethod}. Update ${APP_NAME} manually.`));
-						process.exitCode = 1;
-						return true;
-					}
-					const selfUpdateTarget = {
-						packageName: selfUpdatePlan.packageName,
-						installSpec: selfUpdatePlan.installSpec,
-					};
-					const selfUpdateCommand = getSelfUpdateCommand(PACKAGE_NAME, selfUpdateNpmCommand, selfUpdateTarget);
-					if (!selfUpdateCommand) {
-						printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdateTarget);
-						process.exitCode = 1;
-						return true;
-					}
-					if (selfUpdatePlan.note) {
-						printSelfUpdateNote(selfUpdatePlan.note);
-					}
-					try {
-						if (installMethod === "npm") {
-							prepareWindowsNpmSelfUpdate();
-						}
-						await runSelfUpdate(selfUpdateCommand);
-					} catch (error: unknown) {
-						const message = error instanceof Error ? error.message : "Unknown package command error";
-						console.error(chalk.red(`Error: ${message}`));
-						if (installMethod === "pnpm") {
-							printPnpmSelfUpdateMetadataHint();
-						}
-						printSelfUpdateFallback(selfUpdateCommand);
-						process.exitCode = 1;
-						return true;
-					}
-					console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
 				}
 				return true;
 			}

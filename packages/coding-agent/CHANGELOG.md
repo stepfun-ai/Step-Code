@@ -4,29 +4,42 @@
 
 ### Added
 
+- Added `runStepThemePrompt` / `buildStepThemeOptions` and the `stepThemePrompt` interactive-mode option: a one-time first-run theme picker that runs on its own screen before `init()` (the phase the MCP import offer uses), applies each option as it is highlighted, and returns the setting for the interactive mode to persist before it builds the UI. A dismissed screen returns the product default rather than nothing, so the persisted `theme` is the only state the flow needs.
 - Added extension-owned task widgets and native task tool renderers, keeping `/todos` with the task extension.
 - Added the Step binary startup update check and native installer integration for Step CLI hosts.
+- Added an `overlay` option to the extension `select` and `input` dialogs, which renders them over the transcript instead of inside it.
 
 ### Changed
 
+- Changed the standalone Step startup screens (login, MCP import, theme picker) to share one `createStandaloneStepHost()` full-screen host instead of three copies of it.
+- Changed the default permission preset to Bypass when no CLI flag, `STEP_*` env var, or persisted preset is set; explicit overrides keep precedence and dangerous commands still require confirmation.
 - Clarified Step tool descriptions and prompts: tasks are todos, plan mode produces a proposal, and submitting a plan for review is not unconditional approval.
 - Changed Step login/logout selectors and auth command validation to expose only the Step provider when launched through the Step entrypoint.
 - Changed Step user message backgrounds to softer Morandi-style gray tones that vary with the active theme.
+- Changed `buildStepSystemPromptAppendix` to drop the ask-and-wait clauses from the Communication, Destructive actions, Cost and consent, and Workflow sections: a concrete implementation request proceeds on a reasonable assumption rather than pausing for a clarifying question, a cost preview, or a stated target. Opt-in gated tools still require an explicit user trigger, the destructive-action caution and the security rules are unchanged, and approval remains the runtime's responsibility.
 
 ### Fixed
 
+- Fixed extension select/input dialogs leaving unresolved promises or stale waiting state after cancellation, replacement, reset, stop, or reentrant focus restoration.
+- Fixed Step approval presentation with per-call identity and reversible waiting indicators, and kept multiline tool titles/summaries within one physical terminal row without changing execution arguments.
+- Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. `grep.ts` and `find.ts` now walk a ladder — injected custom search → downloaded/PATH rg/fd → `git grep`/`git ls-files` when the search path is inside a worktree → POSIX `grep`/`find` — and only throw when nothing at all is available. `GrepOperations` gains an optional `search` primitive so remote injectors can substitute text search the way `FindOperations.glob` already substitutes file listing.
 - Fixed task snapshots and results aliasing live state, active-branch restoration, session-wide task ID allocation, and dependency-cycle validation.
 - Fixed `/plan`, `--plan`, and tool entry to share plan-file access, restore the active branch, and require a readable nonempty regular file before plan approval.
+- Fixed the Step queued-message preview and `update_plan` rendering dropping four characters at every wrap point by wrapping through Pi's shared text wrapper.
 - Fixed the Step entrypoint so `--api-key <key>` also authenticates the built-in `search_web` MCP tool.
 - Fixed `search_web` credential resolution so it no longer falls back to `STEP_API_KEY`, which addresses the StepCode-injected provider base URL rather than the fixed search endpoint.
 - Fixed Step non-agent commands and offline startup opening the login flow when no credential was configured.
 - Fixed the Step welcome logo intro playing on resumed sessions, where the welcome block starts outside the viewport and every frame forces a full-screen redraw.
+- Fixed the Step welcome logo intro outliving the first projected message, which forced a full-screen redraw per frame once the transcript outgrew the viewport.
 - Fixed login and logout provider option discovery for embedded hosts that omit the optional interactive options object.
 - Fixed StepCode compatibility for the legacy `--session-file` session selector.
 - Fixed StepCode config compatibility for injected provider catalogs and runtime credentials.
 - Fixed StepCode config authority so saved models and permission policies round-trip through `STEPCLI_CONFIG_PATH`.
 - Fixed StepCode model catalogs with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+- Fixed StepCode model catalogs with omitted vision metadata defaulting to text-only input, which made the read tool drop image attachments. `readInputTypes` now mirrors `hasReasoning` and defaults an omitted capability to `["text", "image"]`; an explicit `supportsVision: false` or a declared `input` list still wins.
 - Fixed Step message components reshaping settled rows on every render; rendered output is now cached until content, width, output padding, theme, or thinking/expanded state changes.
+- Fixed `/feedback` pages growing the rendered transcript, which scrolled the screen and left the editor above the bottom row once a page closed.
+- Fixed Step `search_files` discarding valid match rows with `[`- or `WARNING:`-prefixed paths; native notices remain excluded and match/truncation metadata is preserved.
 
 ## [0.84.4] - 2026-08-28
 

@@ -6,7 +6,7 @@ import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "@earendil-works/pi-agent-core";
+import { Agent } from "@step-harness/agent-core";
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
@@ -14,7 +14,7 @@ import {
 	getModel,
 	type ImageContent,
 	type TextContent,
-} from "@earendil-works/pi-ai/compat";
+} from "@step-harness/providers/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
@@ -58,12 +58,33 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+// Unique per-test suffix so concurrent tests (or two beforeEach calls within the
+// same millisecond) never share a temp dir, and a late credential read can't be
+// pointed at a dir another test already removed.
+let tempDirCounter = 0;
+
+/**
+ * Wait until the session has actually started streaming. A fixed setTimeout is
+ * flaky under CI parallelism: the async prompt setup (auth check + stream start)
+ * can take longer than a fixed delay on a loaded machine, leaving isStreaming
+ * false when the assertion runs.
+ */
+async function waitForStreaming(session: AgentSession, timeoutMs = 5000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!session.isStreaming) {
+		if (Date.now() > deadline) {
+			throw new Error("Timed out waiting for session.isStreaming to become true");
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
 describe("AgentSession concurrent prompt guard", () => {
 	let session: AgentSession;
 	let tempDir: string;
 
 	beforeEach(async () => {
-		tempDir = join(tmpdir(), `pi-concurrent-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `pi-concurrent-test-${process.pid}-${Date.now()}-${++tempDirCounter}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 
@@ -73,8 +94,16 @@ describe("AgentSession concurrent prompt guard", () => {
 		if (session) {
 			session.dispose();
 		}
+		// Let disposal's aborts and any in-flight background credential operations
+		// settle before removing the temp dir, so a late lockfile stat can't race
+		// rmSync and surface as an unhandled ENOENT rejection.
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		if (tempDir && existsSync(tempDir)) {
-			rmSync(tempDir, { recursive: true });
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				// Best-effort cleanup; the OS temp dir is reclaimed regardless.
+			}
 		}
 	});
 
@@ -133,10 +162,8 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Start first prompt (don't await, it will block until abort)
 		const firstPrompt = session.prompt("First message");
 
-		// Wait a tick for isStreaming to be set
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		// Verify we're streaming
+		// Wait for streaming to actually start (load-tolerant), then verify.
+		await waitForStreaming(session);
 		expect(session.isStreaming).toBe(true);
 
 		// Second prompt should reject
@@ -154,7 +181,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await waitForStreaming(session);
 
 		// steer should work while streaming
 		expect(() => session.steer("Steering message")).not.toThrow();
@@ -170,7 +197,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await waitForStreaming(session);
 
 		// followUp should work while streaming
 		expect(() => session.followUp("Follow-up message")).not.toThrow();
@@ -265,7 +292,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 
 		const firstPrompt = session.prompt("First message");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await waitForStreaming(session);
 		expect(session.isStreaming).toBe(true);
 
 		const pi = (

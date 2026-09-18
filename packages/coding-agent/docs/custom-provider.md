@@ -30,11 +30,11 @@ See these complete provider examples:
 
 ## Quick Reference
 
-Extensions can register either a complete pi-ai `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. Pi composes `models.json` overrides above registered native providers.
+Extensions can register either a complete pi-ai `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. Step composes `models.json` overrides above registered native providers.
 
 ```typescript
-import { createProvider, openAICompletionsApi } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createProvider, openAICompletionsApi } from "@step-harness/providers";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 
 export default function (pi: ExtensionAPI) {
   pi.registerProvider(createProvider({
@@ -88,7 +88,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. pi waits for the factory before startup continues, so the provider is available during interactive startup and to `pi --list-models`.
+The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. step waits for the factory before startup continues, so the provider is available during interactive startup and to `step --list-models`.
 
 ## Override Existing Provider
 
@@ -125,7 +125,7 @@ To add a completely new provider, specify `models` along with the required confi
 If the model list comes from a remote endpoint, use an async extension factory:
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@step-harness/coding-agent";
 
 export default async function (pi: ExtensionAPI) {
   const response = await fetch("http://localhost:1234/v1/models");
@@ -239,7 +239,7 @@ models: [{
   id: "custom-model",
   // ...
   reasoning: true,
-  thinkingLevelMap: {              // map pi levels to provider values; null hides unsupported levels
+  thinkingLevelMap: {              // map step levels to provider values; null hides unsupported levels
     minimal: null,
     low: null,
     medium: null,
@@ -288,7 +288,7 @@ The key is resolved for each request. An explicit request `Authorization` header
 Add OAuth/SSO authentication that integrates with `/login`:
 
 ```typescript
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@step-harness/providers";
 
 pi.registerProvider("corporate-ai", {
   baseUrl: "https://ai.corp.com/v1",
@@ -382,7 +382,7 @@ interface OAuthLoginCallbacks {
 
 ### OAuthCredentials
 
-Credentials are persisted in `~/.pi/agent/auth.json`:
+Credentials are persisted in `~/.step-cli/agent/auth.json`:
 
 ```typescript
 interface OAuthCredentials {
@@ -397,12 +397,12 @@ interface OAuthCredentials {
 For providers with non-standard APIs, implement `streamSimple`. Study the existing API implementations before writing your own:
 
 **Reference implementations:**
-- [anthropic-messages.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/api/anthropic-messages.ts) - Anthropic Messages API
-- [mistral-conversations.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/api/mistral-conversations.ts) - Mistral Conversations API
-- [openai-completions.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/api/openai-completions.ts) - OpenAI Chat Completions
-- [openai-responses.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/api/openai-responses.ts) - OpenAI Responses API
-- [google-generative-ai.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/api/google-generative-ai.ts) - Google Generative AI
-- [bedrock-converse-stream.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/api/bedrock-converse-stream.ts) - AWS Bedrock
+- [anthropic-messages.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/anthropic-messages.ts) - Anthropic Messages API
+- [mistral-conversations.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/mistral-conversations.ts) - Mistral Conversations API
+- [openai-completions.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/openai-completions.ts) - OpenAI Chat Completions
+- [openai-responses.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/openai-responses.ts) - OpenAI Responses API
+- [google-generative-ai.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/google-generative-ai.ts) - Google Generative AI
+- [bedrock-converse-stream.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/bedrock-converse-stream.ts) - AWS Bedrock
 
 ### Stream Pattern
 
@@ -417,7 +417,7 @@ import {
   type SimpleStreamOptions,
   calculateCost,
   createAssistantMessageEventStream,
-} from "@earendil-works/pi-ai";
+} from "@step-harness/providers";
 
 function streamMyProvider(
   model: Model<any>,
@@ -566,14 +566,14 @@ calculateCost(model, output.usage);
 
 ### Context Overflow Errors
 
-When a request exceeds the model's context window, pi can recover automatically by compacting the conversation and retrying. This recovery only kicks in if pi recognizes the failure as an overflow.
+When a request exceeds the model's context window, step can recover automatically by compacting the conversation and retrying. This recovery only kicks in if step recognizes the failure as an overflow.
 
 Detection runs on the finalized assistant message:
 
 - `stopReason === "error"`
-- `errorMessage` matches one of pi's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/utils/overflow.ts))
+- `errorMessage` matches one of step's known overflow patterns (see [`packages/providers/src/utils/overflow.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/utils/overflow.ts))
 
-If your provider returns overflow errors with a message pi does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase pi recognizes. The generic fallback `context_length_exceeded` is the safest choice.
+If your provider returns overflow errors with a message step does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase step recognizes. The generic fallback `context_length_exceeded` is the safest choice.
 
 ```typescript
 const MY_PROVIDER_OVERFLOW_PATTERN = /your provider's overflow phrase/i;
@@ -605,7 +605,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before pi tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what pi checks. With this in place, pi will:
+`message_end` runs before step tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what step checks. With this in place, step will:
 
 1. Detect the overflow from `errorMessage`.
 2. Drop the failed assistant message from live context.
@@ -615,7 +615,7 @@ export default function (pi: ExtensionAPI) {
 Guard the rewrite carefully:
 
 - Scope it to your provider (`message.provider` and `ctx.model?.provider`) so unrelated errors from other providers are untouched.
-- Match a provider-specific pattern, not pi's generic overflow patterns. Rewriting rate-limit or throttling errors (`rate limit`, `too many requests`) would falsely trigger compaction instead of pi's normal retry-with-backoff path.
+- Match a provider-specific pattern, not step's generic overflow patterns. Rewriting rate-limit or throttling errors (`rate limit`, `too many requests`) would falsely trigger compaction instead of step's normal retry-with-backoff path.
 - Skip when `errorMessage` already includes `context_length_exceeded` so the handler is idempotent.
 
 ### Registration
@@ -634,7 +634,7 @@ pi.registerProvider("my-provider", {
 
 ## Testing Your Implementation
 
-Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/ai/test/](https://github.com/earendil-works/pi-mono/tree/main/packages/ai/test):
+Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/providers/test/](https://gitlab.basemind.com/aiagent/step-harness/-/tree/main/packages/providers/test):
 
 | Test | Purpose |
 |------|---------|
@@ -713,7 +713,7 @@ interface ProviderModelConfig {
   /** Whether the model supports extended thinking. */
   reasoning: boolean;
 
-  /** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
+  /** Maps step thinking levels to provider/model-specific values; null marks a level unsupported. */
   thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
 
   /** Supported input types. */

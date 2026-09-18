@@ -2,12 +2,12 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@earendil-works/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
+**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@step-harness/coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
 
 ## Starting RPC Mode
 
 ```bash
-pi --mode rpc [options]
+step --mode rpc [options]
 ```
 
 Common options:
@@ -809,7 +809,7 @@ Response:
 }
 ```
 
-The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `pi --mode rpc` process.
+The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `step --mode rpc` process.
 
 ### Commands
 
@@ -829,9 +829,9 @@ Response:
   "success": true,
   "data": {
     "commands": [
-      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "path": "/home/user/.pi/agent/extensions/session.ts"},
-      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "location": "project", "path": "/home/user/myproject/.pi/agent/prompts/fix-tests.md"},
-      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "location": "user", "path": "/home/user/.pi/agent/skills/brave-search/SKILL.md"}
+      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "path": "/home/user/.step-cli/agent/extensions/session.ts"},
+      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "location": "project", "path": "/home/user/myproject/.step-cli/agent/prompts/fix-tests.md"},
+      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "location": "user", "path": "/home/user/.step-cli/agent/skills/brave-search/SKILL.md"}
     ]
   }
 }
@@ -845,8 +845,8 @@ Each command has:
   - `"prompt"`: Loaded from a prompt template `.md` file
   - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
 - `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.pi/agent/`)
-  - `"project"`: Project-level (`./.pi/agent/`)
+  - `"user"`: User-level (`~/.step-cli/agent/`)
+  - `"project"`: Project-level (`./.step-cli/agent/`)
   - `"path"`: Explicit path via CLI or settings
 - `path`: Absolute file path to the command source (optional)
 
@@ -904,7 +904,7 @@ Emitted when one low-level agent run completes. Contains all messages generated 
 
 ### agent_settled
 
-Emitted after the full session-level run settles. At this point Pi will not continue automatically through retry, compaction retry, or queued follow-up messages.
+Emitted after the full session-level run settles. At this point Step will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
 ```json
 {"type": "agent_settled"}
@@ -1400,7 +1400,7 @@ Parse errors:
 ## Types
 
 Source files:
-- [`packages/ai/src/types.ts`](../../ai/src/types.ts) - `Model`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`
+- [`packages/providers/src/types.ts`](../../providers/src/types.ts) - `Model`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`
 - [`packages/agent/src/types.ts`](../../agent/src/types.ts) - `AgentMessage`, `AgentEvent`
 - [`src/core/messages.ts`](../src/core/messages.ts) - `BashExecutionMessage`
 - [`src/modes/json-event.ts`](../src/modes/json-event.ts) - `JsonAgentSessionEvent`
@@ -1530,7 +1530,7 @@ import subprocess
 import json
 
 proc = subprocess.Popen(
-    ["pi", "--mode", "rpc", "--no-session"],
+    ["step", "--mode", "rpc", "--no-session"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     text=True
@@ -1569,7 +1569,7 @@ For a complete example of handling the extension UI protocol, see [`examples/rpc
 const { spawn } = require("child_process");
 const { StringDecoder } = require("string_decoder");
 
-const agent = spawn("pi", ["--mode", "rpc", "--no-session"]);
+const agent = spawn("step", ["--mode", "rpc", "--no-session"]);
 
 function attachJsonlReader(stream, onLine) {
     const decoder = new StringDecoder("utf8");

@@ -1,17 +1,17 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@step-harness/agent-core";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, ToolDefinition } from "../src/core/extensions/types.ts";
-import { registerWorkflowChildAcl, WORKFLOW_ACL_ENV } from "../src/extensions/workflow/acl-extension.ts";
+import { registerWorkflowChildAcl, WORKFLOW_ACL_ENV } from "../src/features/workflow/acl-extension.ts";
 import {
 	createStepWorkflowExtension,
 	resolveWorkflowScript,
 	type WorkflowRequest,
-} from "../src/extensions/workflow/step-workflow.ts";
-import type { WorkflowRunResult } from "../src/extensions/workflow/types.ts";
-import { isIsolatedVmAvailable } from "../src/extensions/workflow/vm.ts";
+} from "../src/features/workflow/step-workflow.ts";
+import type { WorkflowRunResult } from "../src/features/workflow/types.ts";
+import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 const cleanups: string[] = [];
@@ -187,6 +187,46 @@ test("workflow script resolution rejects ambiguous, oversized, and escaping sour
 		"inside the working directory",
 	);
 	await expect(resolveWorkflowScript(cwd, { name: "escape" }, homeRoot)).rejects.toThrow("was not found");
+});
+
+test("the turn-state budget applies unless an explicit budget parameter overrides it", async () => {
+	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
+	const cwd = await workspace();
+	const testHarness = harness();
+	createStepWorkflowExtension({
+		enabled: true,
+		turnState: { budgetTotal: 123 },
+		vmExecutor: async (_script, _args, vmHost) => {
+			await vmHost.agent("consume", {});
+			return { value: "done", meta: {} };
+		},
+		runner: async () => ({ text: "done", usage: { input: 100, output: 100 }, status: "completed" }),
+	})(testHarness.api);
+	const tool = testHarness.tools.get("workflow")!;
+
+	await expect(execute(tool, { script: "return null" }, cwd, testHarness.notifications)).rejects.toThrow(
+		/token budget exceeded/iu,
+	);
+	const overridden = await execute(tool, { script: "return null", budget: 1_000 }, cwd, testHarness.notifications);
+	expect(overridden).toMatchObject({ status: "completed", value: "done", spentTokens: 200 });
+});
+
+test("the workflow result exposes the persisted script path for iteration", async () => {
+	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
+	const cwd = await workspace();
+	const testHarness = harness();
+	createStepWorkflowExtension({
+		enabled: true,
+		vmExecutor: async () => ({ value: 7, meta: {} }),
+	})(testHarness.api);
+
+	const result = await execute(
+		testHarness.tools.get("workflow")!,
+		{ script: "return 7" },
+		cwd,
+		testHarness.notifications,
+	);
+	expect(result.scriptPath).toBe(path.join(cwd, ".step-cli", "workflows", "runs", result.runId, "script.js"));
 });
 
 test("workflow rejects a missing resume run instead of silently starting over", async () => {

@@ -5,7 +5,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "../src/core/extensions/types.ts";
-import { createStepExtension, stepExtension } from "../src/extensions/step.ts";
+import { createStepExtension, stepExtension } from "../src/features/step.ts";
 import { STEP_INIT_PROMPT } from "../src/step/init-prompt.ts";
 
 function commandContext(isIdle: boolean): ExtensionCommandContext {
@@ -176,6 +176,32 @@ describe("Step extension", () => {
 			nonInteractiveApproval: "allow",
 			autoResume: true,
 		});
+	});
+
+	// The Shift+Tab shortcut is an in-the-moment gesture by someone watching the
+	// session. Persisting it also wrote `nonInteractiveApproval: "allow"`, which
+	// granted every later `--print` run in that project unattended write access.
+	test("does not persist the Shift+Tab permission cycle", async () => {
+		const on = vi.fn();
+		const registerCommand = vi.fn();
+		const setEffectiveStepSettings = vi.fn();
+		const settings = { getStepSettings: () => ({}), setEffectiveStepSettings };
+		createStepExtension({ stepSettings: () => settings })({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		await command.handler("--cycle", commandContext(true));
+		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
+
+		// A named preset is a deliberate choice and still persists.
+		await command.handler("read-only", commandContext(true));
+		expect(setEffectiveStepSettings).toHaveBeenCalledWith(expect.objectContaining({ permissionPreset: "read-only" }));
 	});
 
 	test("keeps explicit environment policy ahead of persisted Step settings", async () => {

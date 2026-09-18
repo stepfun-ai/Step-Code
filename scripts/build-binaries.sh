@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
 #
-# Build Pi and/or Step binaries for all platforms locally.
-# Mirrors .github/workflows/build-binaries.yml
+# Build Step binaries for all platforms locally.
+# Mirrors .github/workflows/build-step-binaries.yml
 #
 # Usage:
-#   ./scripts/build-binaries.sh [--product <pi|step|both>] [--skip-install] [--skip-deps] [--skip-build] [--offline-model-data] [--platform <platform>] [--out <dir>]
+#   ./scripts/build-binaries.sh [--product <step>] [--skip-install] [--skip-deps] [--skip-build] [--offline-model-data] [--platform <platform>] [--out <dir>]
 #
 # Options:
-#   --skip-install       Skip npm ci
+#   --skip-install       Skip pnpm install
 #   --skip-deps          Skip installing cross-platform dependencies
 #   --skip-build         Skip the package build
 #   --offline-model-data Build with bundled model data instead of refreshing it
-#   --product <name>     Executables to build/archive (default: both; pi, step, or both)
+#   --product <name>     Executables to build/archive (default: step)
 #   --platform <name>    Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64)
 #   --out <dir>          Output directory (default: packages/coding-agent/binaries)
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
-#     pi-windows-arm64.zip
+#     step-darwin-arm64.tar.gz
+#     step-darwin-x64.tar.gz
+#     step-linux-x64.tar.gz
+#     step-linux-arm64.tar.gz
+#     step-windows-x64.zip
+#     step-windows-arm64.zip
 #
-# With --product step, the same platform set is emitted as step-*.tar.gz/zip
-# and contains only the Step executable.
+# Each archive contains only the Step executable.
 
 set -euo pipefail
 
@@ -37,8 +36,8 @@ SKIP_BUILD=false
 OFFLINE_MODEL_DATA=false
 PLATFORM=""
 OUTPUT_DIR=""
-PRODUCT="both"
-ARCHIVE_PREFIX="pi"
+PRODUCT="step"
+ARCHIVE_PREFIX="step"
 
 # Step's product identity is independent from the upstream Pi package version.
 # Release CI supplies these values from the tag; local/source builds use the
@@ -89,17 +88,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PRODUCT" in
-    pi|step|both)
+    step)
         ;;
     *)
         echo "Invalid product: $PRODUCT"
-        echo "Valid products: pi, step, both"
+        echo "Valid products: step"
         exit 1
         ;;
 esac
-if [[ "$PRODUCT" == "step" ]]; then
-    ARCHIVE_PREFIX="step"
-fi
 
 # A source archive does not contain `.git`, so a commit is optional there. For
 # local builds, include a short commit when it is available. These canonical
@@ -148,17 +144,19 @@ fi
 
 if [[ "$SKIP_INSTALL" == "false" ]]; then
     echo "==> Installing dependencies..."
-    npm ci --ignore-scripts
+    pnpm install --frozen-lockfile --ignore-scripts
 else
-    echo "==> Skipping npm ci (--skip-install)"
+    echo "==> Skipping pnpm install (--skip-install)"
 fi
 
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
-    # npm ci only installs optional deps for the current platform. Install the
-    # cross-platform packages in isolation so npm does not re-resolve and mutate
-    # the workspace dependency graph, which can trigger npm/arborist failures.
+    # A workspace install only installs optional deps for the current platform.
+    # Install the cross-platform packages in isolation so the package manager does
+    # not re-resolve and mutate the workspace dependency graph. npm is used here
+    # deliberately for this throwaway, lockfile-free fetch of platform-specific
+    # optional binaries; it never touches the pnpm workspace.
     NATIVE_DEPS_DIR=$(mktemp -d)
     cleanup_native_deps() {
         rm -rf "$NATIVE_DEPS_DIR"
@@ -195,10 +193,10 @@ fi
 if [[ "$SKIP_BUILD" == "false" ]]; then
     if [[ "$OFFLINE_MODEL_DATA" == "true" ]]; then
         echo "==> Building all packages with bundled model data..."
-        npm run build:offline
+        pnpm run build:offline
     else
         echo "==> Building all packages..."
-        npm run build
+        pnpm run build
     fi
 else
     echo "==> Skipping package build (--skip-build)"
@@ -259,20 +257,11 @@ for platform in "${PLATFORMS[@]}"; do
     # worker must be present in the compiled executable.
     #
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
-    # standalone binary before pi starts (see #7684).
-    if [[ "$PRODUCT" != "step" ]]; then
-        if [[ "$platform" == windows-* ]]; then
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
-        else
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
-        fi
-    fi
-    if [[ "$PRODUCT" != "pi" ]]; then
-        if [[ "$platform" == windows-* ]]; then
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
-        else
-            bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ./dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
-        fi
+    # standalone binary before step starts (see #7684).
+    if [[ "$platform" == windows-* ]]; then
+        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
+    else
+        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
     fi
 done
 
@@ -303,11 +292,9 @@ for platform in "${PLATFORMS[@]}"; do
     if [[ -f CHANGELOG.md ]]; then
         cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
     fi
-    cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm "$OUTPUT_DIR/$platform/"
+    node ../../scripts/copy-photon-wasm.mjs "$OUTPUT_DIR/$platform"
     mkdir -p "$OUTPUT_DIR/$platform/theme"
-    cp dist/modes/interactive/theme/*.json "$OUTPUT_DIR/$platform/theme/"
-    mkdir -p "$OUTPUT_DIR/$platform/assets"
-    cp dist/modes/interactive/assets/* "$OUTPUT_DIR/$platform/assets/"
+    cp dist/theme/*.json "$OUTPUT_DIR/$platform/theme/"
     cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
     cp -r docs "$OUTPUT_DIR/$platform/"
     cp -r examples "$OUTPUT_DIR/$platform/"
@@ -332,6 +319,12 @@ for platform in "${PLATFORMS[@]}"; do
         mkdir -p "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir"
         cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir/"
     fi
+
+    # Pre-fetch the ripgrep/fd search binaries for this target into tools/ so the
+    # archive ships them and the installer copies (not downloads) them into the
+    # runtime tools dir. Set STEP_SKIP_BUNDLED_TOOLS=1 for offline builds; the
+    # installer/runtime GitHub download then remains the only source.
+    node ../../scripts/copy-search-tools.mjs --target "$platform" --out "$OUTPUT_DIR/$platform"
 done
 
 # Create archives
@@ -369,10 +362,8 @@ echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
-        if [[ "$PRODUCT" != "step" ]]; then echo "  $OUTPUT_DIR/$platform/pi.exe"; fi
-        if [[ "$PRODUCT" != "pi" ]]; then echo "  $OUTPUT_DIR/$platform/step.exe"; fi
+        echo "  $OUTPUT_DIR/$platform/step.exe"
     else
-        if [[ "$PRODUCT" != "step" ]]; then echo "  $OUTPUT_DIR/$platform/pi"; fi
-        if [[ "$PRODUCT" != "pi" ]]; then echo "  $OUTPUT_DIR/$platform/step"; fi
+        echo "  $OUTPUT_DIR/$platform/step"
     fi
 done
