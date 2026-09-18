@@ -52,7 +52,13 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 
 	switch (event.type) {
 		case "agent_start":
-			if (ctx.presentation === "step") ctx.workingOutputTracker.reset();
+			// Skip the reset on a retry continuation (retryAttempt > 0): after a
+			// 502/timeout recovers, elapsed time and token counts should keep
+			// accumulating rather than restart from zero. A genuinely new prompt
+			// has retryAttempt === 0 and still resets.
+			if (ctx.presentation === "step" && ctx.session.retryAttempt === 0) {
+				ctx.workingOutputTracker.reset();
+			}
 			ctx.turnEndedAbnormally = false;
 			ctx.pendingTools.clear();
 			ctx.stepSpinner?.clear();
