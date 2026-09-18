@@ -1185,6 +1185,12 @@ export class AgentSession {
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
 			await this._emitAgentSettled();
+			// _retryAttempt is per-run state. The three normal exits already zero it
+			// (successful response, retries exhausted, backoff cancelled), but an
+			// exception escaping agent.continue() on a retry continuation bypasses
+			// all of them and would leave a stale count for the next prompt to read.
+			// Cleared last so agent_settled listeners still see the final count.
+			this._retryAttempt = 0;
 		}
 	}
 

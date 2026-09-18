@@ -602,6 +602,12 @@ export {
 	type StepLoginOutcome,
 	syncStepLoginProfileEndpoint,
 } from "./step/login-flow.ts";
+export {
+	getStepLoginStatus,
+	type StepCredentialValidity,
+	type StepLoginMethod,
+	type StepLoginStatus,
+} from "./step/login-status.ts";
 export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
 export { resolveStepLoginProfiles } from "./step/onboarding.ts";
