@@ -9,13 +9,13 @@ import {
 	BIRD_FRAME_DURATIONS_MS,
 	createStepLogoTheme,
 	paintStepBadge,
-	paintStepLogoColor,
 	renderBirdFrame,
 	renderBirdFrameCells,
 	renderBirdStatic,
 	renderBirdStaticCells,
 	renderStepMark,
 	STEP_MARK_COLUMNS,
+	stepLogoColorOpen,
 } from "./step-logo.ts";
 
 /** Live facts shown in the Step session welcome block. */
@@ -42,23 +42,32 @@ const STRIP_RIDE_MS = 1600;
  * strip.
  */
 const STRIP_WORD = "STEP CLI";
-const STRIP_FONT: Record<string, string[]> = {
+/**
+ * Upright squared letterforms for the dragged word (7 wide, 8 rows). The
+ * renderer shears them into an italic slant and adds bevel highlights.
+ */
+const STRIP_BASE_FONT: Record<string, string[]> = {
 	S: ["#######", "##     ", "##     ", "#######", "     ##", "     ##", "#######", "       "],
-	T: ["########", "   ##   ", "   ##   ", "   ##   ", "   ##   ", "   ##   ", "   ##   ", "        "],
-	E: ["####### ", "##      ", "##      ", "####### ", "##      ", "##      ", "####### ", "        "],
-	P: ["#######", "##    ##", "##    ##", "#######", "##      ", "##      ", "##      ", "        "],
-	C: ["#######", "##     ", "##     ", "##     ", "##     ", "##     ", "#######", "        "],
-	L: ["##      ", "##      ", "##      ", "##      ", "##      ", "##      ", "####### ", "        "],
+	T: ["#######", "   ##  ", "   ##  ", "   ##  ", "   ##  ", "   ##  ", "   ##  ", "       "],
+	E: ["#######", "##     ", "##     ", "#######", "##     ", "##     ", "#######", "       "],
+	P: ["#######", "##    ##", "##    ##", "#######", "##     ", "##     ", "##     ", "        "],
+	C: ["#######", "##     ", "##     ", "##     ", "##     ", "##     ", "#######", "       "],
+	L: ["##     ", "##     ", "##     ", "##     ", "##     ", "##     ", "#######", "       "],
 	I: ["###", " # ", " # ", " # ", " # ", " # ", "###", "   "],
 	" ": ["   ", "   ", "   ", "   ", "   ", "   ", "   ", "   "],
 };
+
+/** Italic shear: each row from the top shifts right by up to 3 cells. */
+function glyphShear(glyphRows: number): number[] {
+	return Array.from({ length: glyphRows }, (_, gy) => Math.round((glyphRows - 1 - gy) / 2.6));
+}
 /** Rope length between the word's last letter and the bird's tail, in cells. */
 const STRIP_ROPE_CELLS = 5;
 
 /** Visible width of the dragged word, in cells. */
 function stripWordWidth(): number {
 	let w = 0;
-	for (const ch of STRIP_WORD) w += STRIP_FONT[ch]![0]!.length + 1;
+	for (const ch of STRIP_WORD) w += STRIP_BASE_FONT[ch]![0]!.length + 3;
 	return w - 1; // no trailing letter gap
 }
 
@@ -71,6 +80,13 @@ function stripCompositionWidth(): number {
 const STRIP_MIN_INNER = stripCompositionWidth() + 4;
 
 const easeOutCubic = (p: number): number => 1 - (1 - p) ** 3;
+
+/** Dim SGR open for the letter shadow runs. */
+function stepLogoDimOpen(): string {
+	const dim = theme.fg("dim", "\u2588");
+	const open = dim.slice(0, dim.lastIndexOf("\u2588"));
+	return open;
+}
 
 /** Hex color mixed from violet to gold, for the word's letter gradient. */
 function mixVioletToGold(t: number): string {
@@ -146,6 +162,7 @@ function canRenderBird(): boolean {
 export class StepWelcomeComponent implements Component {
 	private readonly getInfo: () => StepWelcomeInfo;
 	private readonly requestRenderCallback: () => void;
+	private readonly requestForceRenderCallback: (() => void) | undefined;
 	private visible = true;
 	private showFirstMessageHint = false;
 	private logoFrame: number | null = null;
@@ -155,9 +172,20 @@ export class StepWelcomeComponent implements Component {
 	private introStartedAt: number | null = null;
 	private logoTimer: ReturnType<typeof setTimeout> | null = null;
 
-	constructor(getInfo: () => StepWelcomeInfo, options: (() => void) | { requestRender?: () => void } = {}) {
+	constructor(
+		getInfo: () => StepWelcomeInfo,
+		options:
+			| (() => void)
+			| {
+					requestRender?: () => void;
+					/** Full-repaint channel for the intro: the strip's dense per-cell styling corrupts incremental diff repaints, so intro frames repaint whole. */
+					requestForceRender?: () => void;
+			  } = {},
+	) {
 		this.getInfo = getInfo;
 		this.requestRenderCallback = typeof options === "function" ? options : (options.requestRender ?? (() => {}));
+		this.requestForceRenderCallback =
+			typeof options === "function" ? undefined : (options.requestForceRender ?? options.requestRender);
 	}
 
 	setVisible(visible: boolean): void {
@@ -176,7 +204,10 @@ export class StepWelcomeComponent implements Component {
 	setLogoFrame(frame: number | null): void {
 		if (this.logoFrame === frame) return;
 		this.logoFrame = frame;
-		this.requestRenderCallback();
+		// Intro frames repaint whole: the strip's per-cell styling (hundreds of
+		// SGR switches per row) trips the incremental diff renderer, leaving a
+		// corrupted mix of stale ride frames on screen.
+		(this.requestForceRenderCallback ?? this.requestRenderCallback)();
 	}
 
 	/**
@@ -244,9 +275,8 @@ export class StepWelcomeComponent implements Component {
 		const lettersRight = birdX - STRIP_ROPE_CELLS;
 		const lettersX = lettersRight - wordW;
 
-		const grid: (string | undefined)[][] = Array.from({ length: STRIP_ROWS }, () =>
-			new Array<string | undefined>(innerWidth).fill(undefined),
-		);
+		type Cell = string | { open: string; ch: string } | undefined;
+		const grid: Cell[][] = Array.from({ length: STRIP_ROWS }, () => new Array<Cell>(innerWidth).fill(undefined));
 
 		// The bird.
 		const birdCells = animating ? renderBirdFrameCells(logoTheme, this.logoFrame!) : renderBirdStaticCells(logoTheme);
@@ -257,31 +287,32 @@ export class StepWelcomeComponent implements Component {
 			});
 		});
 
-		// The dragged word: a violet→gold letter gradient with a dim drop
-		// shadow straight below, giving depth with flush square edges. The word
-		// rides rigidly behind the bird (no per-letter motion).
-		const shadow = theme.fg("dim", "\u2588");
+		// The dragged word: italic solid letters in a violet→gold gradient.
+		// Each glyph row shifts right toward the top (shear); the right/bottom
+		// edges carry a dim shadow and the top-left bevel a light highlight, so
+		// the block letters read as beveled 3D slabs.
+		const shadowRun = { open: stepLogoDimOpen(), ch: "\u2588" };
 		const letters = STRIP_WORD.split("");
 		const colored = letters.filter((ch) => ch !== " ");
+		const shears = glyphShear(8);
 		let cx = lettersX;
 		let seen = 0;
 		letters.forEach((ch) => {
-			const glyph = STRIP_FONT[ch]!;
-			const color = ch === " " ? "" : paintStepLogoColor(mixVioletToGold(seen / (colored.length - 1)), "\u2588");
+			const glyph = STRIP_BASE_FONT[ch]!;
+			const inkRun = { open: stepLogoColorOpen(mixVioletToGold(seen / (colored.length - 1))), ch: "\u2588" };
 			for (let gy = 0; gy < glyph.length; gy += 1) {
+				const shear = shears[gy]!;
 				for (let gx = 0; gx < glyph[gy]!.length; gx += 1) {
 					if (glyph[gy]![gx] !== "#") continue;
-					const x = cx + gx;
+					const x = cx + gx + shear;
 					const y = gy;
-					// Shadow first, straight below; the letter overwrites any
-					// shadow cell it overlaps. No horizontal offset keeps the
-					// outer edges flush and square.
-					if (x >= 0 && x < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x] = shadow;
-					if (x >= 0 && x < innerWidth) grid[y]![x] = color;
+					// Bottom shadow straight below for the beveled-slab depth.
+					if (x >= 0 && x < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x] = shadowRun;
+					if (x >= 0 && x < innerWidth) grid[y]![x] = inkRun;
 				}
 			}
 			if (ch !== " ") seen += 1;
-			cx += glyph[0]!.length + 1;
+			cx += glyph[0]!.length + 3;
 		});
 
 		// The rope: a dashed line from the bird's tail to the word's last letter,
@@ -293,7 +324,33 @@ export class StepWelcomeComponent implements Component {
 			grid[3 + sag]![x] = ropeDot;
 		}
 
-		return grid.map((row) => row.map((cell) => cell ?? " ").join(""));
+		// Run-length on output: consecutive cells sharing one SGR open merge
+		// into a single escape run, several-fold smaller per animation frame.
+		const joinRow = (row: Cell[]): string => {
+			let line = "";
+			let index = 0;
+			while (index < row.length) {
+				const cell = row[index]!;
+				if (typeof cell === "string") {
+					line += cell;
+					index += 1;
+					continue;
+				}
+				if (cell === undefined) {
+					let blanks = 0;
+					while (index + blanks < row.length && row[index + blanks] === undefined) blanks += 1;
+					line += " ".repeat(blanks);
+					index += blanks;
+					continue;
+				}
+				let run = 0;
+				while (index + run < row.length && row[index + run] === cell) run += 1;
+				line += `${cell.open}${cell.ch.repeat(run)}${cell.open === "" ? "" : "\x1b[39m"}`;
+				index += run;
+			}
+			return line;
+		};
+		return grid.map(joinRow);
 	}
 
 	/** Component compatibility hook; rendering is cheap and uncached. */

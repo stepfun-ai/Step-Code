@@ -731,7 +731,10 @@ export class InteractiveMode {
 					workspaceRoot: this.sessionManager.getCwd(),
 					sessionId: this.sessionManager.getSessionId(),
 				}),
-				{ requestRender: () => this.redraw.requestRender() },
+				{
+					requestRender: () => this.redraw.requestRender(),
+					requestForceRender: () => this.redraw.forceRender(),
+				},
 			);
 			this.stepWelcome.setFirstMessageHint(!this.hasConversationMessages(this.sessionManager.buildContextEntries()));
 			this.documentContainer.addChild(this.stepWelcome);

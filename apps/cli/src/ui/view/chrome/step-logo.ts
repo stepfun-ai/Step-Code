@@ -79,6 +79,19 @@ function rgbToAnsi256({ r, g, b }: RgbColor): number {
 	return 16 + 36 * nearestCubeLevel(r) + 6 * nearestCubeLevel(g) + nearestCubeLevel(b);
 }
 
+/** The opening SGR for a sprite color, for callers that style runs of cells. */
+export function stepLogoColorOpen(color: string): string {
+	const rgb = parseHexColor(color);
+	if (rgb === null) return "";
+	let mode: "truecolor" | "256color" = "truecolor";
+	try {
+		mode = theme.getColorMode();
+	} catch {
+		return "";
+	}
+	return mode === "truecolor" ? `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m` : `\x1b[38;5;${rgbToAnsi256(rgb)}m`;
+}
+
 /** Paint an arbitrary sprite color at the active Pi theme color depth. */
 export function paintStepLogoColor(color: string, text: string, layer: "fg" | "bg" = "fg"): string {
 	const rgb = parseHexColor(color);
