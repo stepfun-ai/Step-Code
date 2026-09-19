@@ -8,6 +8,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@step-harness/pi-tui";
+import { paintStepWordmarkBorder } from "../chrome/step-wordmark.ts";
 
 /** The hint shown before the first prompt is typed. */
 export const STEP_EDITOR_PLACEHOLDER = "Ask Step to do anything (/ for commands, @ for files, ! for shell)";
@@ -90,6 +91,11 @@ function createStepSelectListTheme(editorTheme: EditorTheme): EditorTheme["selec
  */
 export class StepEditor extends CustomEditor {
 	private readonly placeholder: string;
+	private highlightedText = "";
+	private highlights = new Map<number, { start: number; end: number; shimmer: boolean }[]>();
+	private keywordCount = 0;
+	private shimmerFrame = -1;
+	private shimmerTimer?: ReturnType<typeof setInterval>;
 
 	constructor(
 		tui: TUI,
@@ -112,7 +118,7 @@ export class StepEditor extends CustomEditor {
 				...stepTheme,
 				borderColor: (text: string) => {
 					try {
-						return theme.fg("borderAccent", text);
+						return paintStepWordmarkBorder(text);
 					} catch {
 						return fallbackBorderColor(text);
 					}
@@ -125,6 +131,7 @@ export class StepEditor extends CustomEditor {
 	}
 
 	override render(width: number): string[] {
+		this.updateHighlights();
 		const safeWidth = Number.isFinite(width) ? Math.max(1, Math.floor(width)) : 1;
 		const innerWidth = safeWidth - STEP_EDITOR_CHROME_WIDTH;
 		const minimumNativeWidth = this.minimumNativeWidth();
@@ -137,6 +144,88 @@ export class StepEditor extends CustomEditor {
 		// outside the rounded frame.
 		const inner = this.renderNative(innerWidth);
 		return this.clampToWidth(this.frameBox(inner, safeWidth), safeWidth);
+	}
+
+	override handleInput(data: string): void {
+		super.handleInput(data);
+		this.updateHighlights();
+	}
+
+	override setText(text: string): void {
+		super.setText(text);
+		this.updateHighlights();
+	}
+
+	dispose(): void {
+		if (this.shimmerTimer) clearInterval(this.shimmerTimer);
+		this.shimmerTimer = undefined;
+		this.shimmerFrame = -1;
+	}
+
+	private updateHighlights(): void {
+		const text = this.getText();
+		if (!this.focused) this.dispose();
+		if (text === this.highlightedText) return;
+		this.highlightedText = text;
+		this.highlights.clear();
+		let keywordCount = 0;
+		for (const [line, source] of this.getLines().entries()) {
+			const spans: { start: number; end: number; shimmer: boolean }[] = [];
+			const command = line === 0 ? /^\s*(\/[\w-]+)(?=\s|$)/u.exec(source) : null;
+			if (command) {
+				const start = command[0].length - command[1].length;
+				spans.push({ start, end: command[0].length, shimmer: false });
+			}
+			for (const match of source.matchAll(/\bultracode\b/giu)) {
+				if (spans.some((span) => match.index < span.end)) continue;
+				spans.push({ start: match.index, end: match.index + match[0].length, shimmer: true });
+				keywordCount++;
+			}
+			if (spans.length > 0) this.highlights.set(line, spans);
+		}
+		if (keywordCount === 0) this.dispose();
+		if (keywordCount > this.keywordCount && this.focused) {
+			this.dispose();
+			this.shimmerFrame = 0;
+			this.shimmerTimer = setInterval(() => {
+				if (!this.focused || !/\bultracode\b/iu.test(this.getText())) {
+					this.dispose();
+					return;
+				}
+				this.shimmerFrame++;
+				if (this.shimmerFrame >= 10) this.dispose();
+				this.tui.requestRender();
+			}, 60);
+			this.shimmerTimer.unref();
+		}
+		this.keywordCount = keywordCount;
+	}
+
+	protected override styleText(text: string, line: number, startIndex: number): string {
+		const spans = this.highlights.get(line);
+		if (!spans || !text) return text;
+		const cursor = this.getCursor();
+		let painted = "";
+		let offset = 0;
+		for (const span of spans) {
+			if (cursor.line === line && cursor.col >= span.start && cursor.col < span.end) continue;
+			const start = Math.max(0, span.start - startIndex);
+			const end = Math.min(text.length, span.end - startIndex);
+			if (start >= end) continue;
+			painted += text.slice(offset, start);
+			const highlighted = text.slice(start, end);
+			const glint = span.start + this.shimmerFrame - startIndex - start;
+			if (span.shimmer && this.shimmerFrame >= 0 && glint >= 0 && glint < highlighted.length) {
+				painted +=
+					theme.fg("accent", highlighted.slice(0, glint)) +
+					theme.bold(theme.fg("text", highlighted.slice(glint, glint + 1))) +
+					theme.fg("accent", highlighted.slice(glint + 1));
+			} else {
+				painted += theme.fg("accent", highlighted);
+			}
+			offset = end;
+		}
+		return painted + text.slice(offset);
 	}
 
 	/**

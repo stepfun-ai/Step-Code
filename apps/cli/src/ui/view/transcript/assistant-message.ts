@@ -177,7 +177,7 @@ export class AssistantMessageComponent extends Container {
 							thinkingBlocks.join("\n\n"),
 							this.outputPad,
 							0,
-							this.markdownTheme,
+							{ ...this.markdownTheme, code: (text: string) => theme.fg("muted", text) },
 							{
 								color: (text: string) => theme.fg("thinkingText", text),
 								italic: true,

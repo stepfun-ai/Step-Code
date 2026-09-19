@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core
 import {
 	continuationPrompt,
 	createStepGoalExtension,
+	getStepGoalStatus,
 	type StepGoalRecord,
 	StepGoalRuntime,
 	type StepGoalSnapshot,
@@ -60,6 +61,28 @@ describe("StepGoalRuntime", () => {
 			tokenBudget: 10_000,
 		});
 		expect(() => runtime.start("another objective", "session-1")).toThrow("unfinished");
+		runtime.setUserStatus("paused");
+		expect(() => runtime.start("another objective", "session-1")).toThrow(/\/goal resume.*\/goal clear/u);
+	});
+
+	test("projects only the newest valid goal on the supplied session branch", () => {
+		const { runtime } = runtimeHarness();
+		const active = runtime.start("Persist me", "session-1");
+		const entry = (data: unknown) => ({ type: "custom", customType: "step-goal", data });
+		const branch = [entry(active), entry({ ...active, status: "paused" })];
+		expect(getStepGoalStatus(branch, "session-1")).toBe("paused");
+		expect(getStepGoalStatus(branch.slice(0, 1), "session-1")).toBe("active");
+		expect(getStepGoalStatus(branch, "other-session")).toBeUndefined();
+		expect(getStepGoalStatus([...branch, entry({ status: "complete" })], "session-1")).toBe("paused");
+		expect(getStepGoalStatus([...branch, entry({ ...active, sessionId: "other-session" })], "session-1")).toBe(
+			"paused",
+		);
+		expect(
+			getStepGoalStatus(
+				[...branch, entry({ cleared: true, sessionId: "session-1", updatedAt: active.updatedAt })],
+				"session-1",
+			),
+		).toBeUndefined();
 	});
 
 	test("rejects empty and oversize objectives without silent truncation", () => {
@@ -606,10 +629,7 @@ describe("Step goal extension", () => {
 			expect.stringContaining("Goal commands: /goal status · /goal pause · /goal resume · /goal clear"),
 			"info",
 		);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
-			"step-goal",
-			expect.stringMatching(/^Goal: active · \d+s$/u),
-		);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
 	});
 
 	test("pause explains how to resume", async () => {
@@ -618,9 +638,22 @@ describe("Step goal extension", () => {
 		await harness.commands.get("goal")?.("ship the release", harness.ctx);
 		await harness.commands.get("goal")?.("pause", harness.ctx);
 		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Goal paused. Run /goal resume to continue.", "info");
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
+		await harness.commands.get("goal")?.("resume", harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
+		await harness.tools
+			.get("update_goal")
+			?.execute("complete", { status: "complete" }, undefined, undefined, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
 	});
 
-	test("formats status time with minute and hour units", async () => {
+	test.each([
+		[45, "45s"],
+		[3505, "58m 25s"],
+		[3720, "1h 02m"],
+	])("formats %s seconds as %s", async (seconds, formatted) => {
 		const harness = extensionHarness();
 		harness.entries.push({
 			type: "custom",
@@ -631,7 +664,7 @@ describe("Step goal extension", () => {
 				objective: "time me",
 				status: "paused",
 				tokensUsed: 0,
-				timeUsedSeconds: 3505,
+				timeUsedSeconds: seconds,
 				createdAt: new Date(500).toISOString(),
 				updatedAt: new Date(600).toISOString(),
 				iteration: 1,
@@ -639,7 +672,7 @@ describe("Step goal extension", () => {
 		});
 		await emit(harness, "session_start");
 		await harness.commands.get("goal")?.("status", harness.ctx);
-		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Time: 58m 25s"), "info");
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining(`Time: ${formatted}`), "info");
 	});
 
 	test("starting over an unfinished goal points at the next commands", async () => {
@@ -673,7 +706,7 @@ describe("Step goal extension", () => {
 			"Goal paused (run interrupted). Run /goal resume to continue.",
 			"warning",
 		);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", expect.stringContaining("Goal: paused"));
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
 	});
 
 	test("hints once per pause that a plain message does not resume the goal", async () => {
@@ -685,7 +718,7 @@ describe("Step goal extension", () => {
 		notify.mockClear();
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		expect(notify).toHaveBeenCalledTimes(1);
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Run /goal resume to continue the goal"), "info");
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Run /goal resume to continue the goal"), "warning");
 		// Repeats within the same pause episode and slash commands stay silent.
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		await emit(harness, "input", { text: "/help", source: "interactive" });

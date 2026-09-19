@@ -381,7 +381,7 @@ Place in `~/.pi/agent/extensions/`, `.pi/extensions/`, or a [pi package](#pi-pac
 
 ### Themes
 
-Built-in: `dark`, `light`, `sage`, `step`, `step-light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
+Built-in: `dark`, `light`, `sage`, `step-blue`, `step-violet`, `step-violet-light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
 
 Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) to share with others. See [docs/themes.md](docs/themes.md).
 
@@ -389,7 +389,7 @@ Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) t
 
 The `step` binary is a thin product entrypoint over the same pi coding-agent
 runtime and native TUI. It selects the `step` provider and model by default,
-uses the built-in `step-light/step` automatic theme pair, and stores sessions
+uses the built-in `step-blue` theme (one blue palette, no light/dark variants), and stores sessions
 under `~/.step-cli/`.
 
 ```bash

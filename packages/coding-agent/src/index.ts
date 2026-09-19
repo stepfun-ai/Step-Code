@@ -474,6 +474,7 @@ export {
 	createStepScheduleExtension,
 	GetGoalParams,
 	type GoalContinuation,
+	getStepGoalStatus,
 	type StepGoalClearSnapshot,
 	type StepGoalExtensionOptions,
 	type StepGoalRecord,

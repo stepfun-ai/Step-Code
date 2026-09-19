@@ -186,6 +186,15 @@ describe("Step system prompt appendix", () => {
 		expect(withoutGoal).not.toContain("# Long-running goals");
 	});
 
+	it("separates new plans from explicit historical resume without resetting each turn", () => {
+		const prompt = buildStepSystemPromptAppendix(["task_create", "task_update", "task_get", "task_list"]);
+		expect(prompt).toContain("newPlan");
+		expect(prompt).toContain("includeHistory:true");
+		expect(prompt).toContain("resumePlanId");
+		expect(prompt).toContain("explicitly asks to resume");
+		expect(prompt).toContain("Do not start a new plan merely because a turn ended");
+	});
+
 	it("adds calendar scheduling guidance only when cron tools are active", () => {
 		const withCron = buildStepSystemPromptAppendix(["read_file", "cron_create", "cron_list", "cron_delete"]);
 		expect(withCron).toContain("# Scheduled work");

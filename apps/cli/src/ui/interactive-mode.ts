@@ -177,6 +177,7 @@ import {
 } from "./view/chrome/status-indicator.ts";
 import type { StatusTipRotator } from "./view/chrome/status-tips.ts";
 import { StepWelcomeComponent } from "./view/chrome/step-welcome.ts";
+import { paintStepWordmarkBorder } from "./view/chrome/step-wordmark.ts";
 import { ExtensionEditorComponent } from "./view/dialogs/extension-editor.ts";
 import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
 import { ExtensionSelectorComponent } from "./view/dialogs/extension-selector.ts";
@@ -4096,6 +4097,7 @@ export class InteractiveMode {
 			// Restore the terminal to normal mode: disable focus reporting first,
 			// then stop the TUI.
 			this.disableFocusReporting();
+			if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -4156,8 +4158,8 @@ export class InteractiveMode {
 			// Step's composer keeps a fixed brand frame for thinking/model state,
 			// but bash mode is visible before submitting: `!` switches the frame
 			// to the error tone and `!!` (excluded from context) dims it.
-			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : "borderAccent";
-			this.editor.borderColor = (str: string) => theme.fg(colorKey, str);
+			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : undefined;
+			this.editor.borderColor = colorKey ? (str: string) => theme.fg(colorKey, str) : paintStepWordmarkBorder;
 			this.redraw.requestRender();
 			return;
 		}
@@ -4247,6 +4249,7 @@ export class InteractiveMode {
 		// on return if it was on.
 		const restoreFocusReporting = this.focusReportingEnabled;
 		this.disableFocusReporting();
+		if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 		this.ui.stop();
 		try {
 			const result = await editInExternalEditor({
@@ -6793,6 +6796,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		this.withExtensionDialogsBlocked(() => {
 			this.stepWelcome?.dispose();
 			this.stepSpinner?.dispose();
+			if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 			this.clearStatusIndicator();
 			this.hideExtensionSelector();
 			this.hideExtensionInput();

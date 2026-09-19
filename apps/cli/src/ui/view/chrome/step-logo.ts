@@ -140,6 +140,10 @@ export const BIRD_FRAME_DURATIONS_MS: readonly number[] = BIRD_SPRITE_FRAME_DURA
 /** Total run of one animation loop, in milliseconds. */
 export const BIRD_ANIMATION_DURATION_MS = BIRD_SPRITE_FRAME_DURATIONS_MS.reduce((sum, ms) => sum + ms, 0);
 
+const BIRD_WINK_STATIC = BIRD_SPRITE_STATIC.map((row, rowIndex) =>
+	rowIndex === 2 ? `${row.slice(0, 12)}1313${row.slice(16)}` : row,
+);
+
 /**
  * Pair two source pixels into one cell without merging their colors.
  * Returns styled single-width cells; `undefined` marks a blank cell so callers
@@ -198,8 +202,9 @@ export function renderBirdFrameCells(handle: StepLogoTheme, index: number): (str
 }
 
 /** Composite-ready cells (undefined = blank) of the settled bird. */
-export function renderBirdStaticCells(handle: StepLogoTheme): (string | undefined)[][] {
-	return BIRD_SPRITE_STATIC.map((_row, rowIndex) => spriteRowCells(handle, BIRD_SPRITE_STATIC, rowIndex));
+export function renderBirdStaticCells(handle: StepLogoTheme, wink = false): (string | undefined)[][] {
+	const frame = wink ? BIRD_WINK_STATIC : BIRD_SPRITE_STATIC;
+	return frame.map((_row, rowIndex) => spriteRowCells(handle, frame, rowIndex));
 }
 
 /** Renders animation frame `index` (wrapped into range) of the riding bird. */
@@ -210,8 +215,8 @@ export function renderBirdFrame(handle: StepLogoTheme, index: number): string[] 
 }
 
 /** Renders the settled riding bird shown after the launch animation ends. */
-export function renderBirdStatic(handle: StepLogoTheme): string[] {
-	return renderSprite(handle, BIRD_SPRITE_STATIC);
+export function renderBirdStatic(handle: StepLogoTheme, wink = false): string[] {
+	return renderSprite(handle, wink ? BIRD_WINK_STATIC : BIRD_SPRITE_STATIC);
 }
 
 /**

@@ -1,23 +1,23 @@
 {
   "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
-  "name": "step-light",
+  "name": "step-violet",
   "vars": {
-    "brand": "#5b21b6",
-    "accent": "#6d28d9",
-    "text": "#1a1a22",
-    "muted": "#5c5c66",
-    "dim": "#6b6b75",
-    "line": "#d9d5e4",
-    "selectedBg": "#e0d8f5",
-    "userMessageBg": "#e4e0dc",
-    "codeText": "#3c3c48",
-    "success": "#006b35",
-    "warning": "#8a5a00",
-    "error": "#b52d3a",
-    "syntaxKeyword": "#a21caf",
-    "syntaxFunction": "#1d5dc2",
-    "syntaxType": "#8a5a00",
-    "syntaxNumber": "#8f5210"
+    "brand": "#ab9eff",
+    "accent": "#8577ff",
+    "text": "#e8e8ea",
+    "muted": "#7e7e86",
+    "dim": "#52535e",
+    "line": "#434751",
+    "selectedBg": "#2a2247",
+    "userMessageBg": "#3d3b39",
+    "codeText": "#c9cad6",
+    "success": "#5fd08a",
+    "warning": "#e5b34a",
+    "error": "#f0616d",
+    "syntaxKeyword": "#e08fdf",
+    "syntaxFunction": "#82aaff",
+    "syntaxType": "#e8c076",
+    "syntaxNumber": "#f0a163"
   },
   "colors": {
     "accent": "brand",
@@ -32,9 +32,6 @@
     "text": "text",
     "thinkingText": "muted",
     "selectedBg": "selectedBg",
-    "scrollbarThumb": "selectedBg",
-    "searchMatchBg": "selectedBg",
-    "searchMatchText": "text",
     "userMessageBg": "userMessageBg",
     "userMessageText": "text",
     "customMessageBg": "",
@@ -47,7 +44,7 @@
     "toolTitle": "brand",
     "toolOutput": "muted",
     "mdHeading": "text",
-    "mdTableHeader": "#8f5210",
+    "mdTableHeader": "#f0a163",
     "mdLink": "syntaxFunction",
     "mdLinkUrl": "muted",
     "mdCode": "brand",
@@ -79,8 +76,8 @@
     "bashMode": "success"
   },
   "export": {
-    "pageBg": "#fbfaff",
-    "cardBg": "#f1eefb",
-    "infoBg": "#efeaf6"
+    "pageBg": "#0d1017",
+    "cardBg": "#14131f",
+    "infoBg": "#201b2e"
   }
 }

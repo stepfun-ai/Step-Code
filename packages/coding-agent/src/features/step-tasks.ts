@@ -1,7 +1,7 @@
 /**
  * Step's task-tracking extension.
  *
- * Four task_* tools maintain a session-scoped task list. Task tracking is
+ * Four task_* tools maintain an active checklist and archived plans. Task tracking is
  * fully decoupled from plan mode and works in any mode. State lives in an
  * in-memory map; every mutation appends a full snapshot (tasks plus the
  * monotonic id counter) as a Pi session entry so a reloaded session restores
@@ -13,7 +13,7 @@ import { Type } from "typebox";
 import type { EventBus } from "../core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { parseImportBatch, STEP_TASKS_IMPORT_CHANNEL, type StepTaskImportItem } from "./step-tasks-import.ts";
-import { formatTaskLine, renderTaskCall, renderTaskResult, taskWidgetLines } from "./step-tasks-render.ts";
+import { formatTaskLine, renderTaskCall, renderTaskResult } from "./step-tasks-render.ts";
 
 export type StepTaskStatus = "pending" | "in_progress" | "completed" | "deleted";
 
@@ -31,6 +31,19 @@ export interface StepTask {
 	updatedAt: number;
 }
 
+interface TaskPlan {
+	id: string;
+	title: string;
+	tasks: StepTask[];
+}
+
+interface TasksSnapshot {
+	tasks: StepTask[];
+	nextId: number;
+	activePlan?: Omit<TaskPlan, "tasks">;
+	archivedPlans?: TaskPlan[];
+}
+
 const TASK_STATUS_SCHEMA = Type.Union(
 	[Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")],
 	{ description: "Task status; deleted permanently removes the task" },
@@ -39,6 +52,13 @@ const TASK_STATUS_SCHEMA = Type.Union(
 const TASK_CREATE_PARAMS = Type.Object({
 	subject: Type.String({ description: "Brief, actionable task title in imperative form" }),
 	description: Type.String({ description: "What needs to be done" }),
+	newPlan: Type.Optional(
+		Type.String({
+			minLength: 1,
+			description:
+				"Start a separate plan with this title and archive the current checklist. Set only on the first task of a different user request; omit when adding steps to the current plan.",
+		}),
+	),
 	activeForm: Type.Optional(
 		Type.String({ description: "Present-continuous form shown while the task is in progress" }),
 	),
@@ -48,7 +68,15 @@ const TASK_CREATE_PARAMS = Type.Object({
 });
 
 const TASK_UPDATE_PARAMS = Type.Object({
-	taskId: Type.String({ description: "Id of the task to update" }),
+	taskId: Type.Optional(
+		Type.String({ description: "Id of a task in the active plan; required unless resuming a plan" }),
+	),
+	resumePlanId: Type.Optional(
+		Type.String({
+			description:
+				"Explicitly resume this archived plan when the user asks to continue it. Use alone, without taskId or other update fields; discover IDs with task_list(includeHistory:true).",
+		}),
+	),
 	status: Type.Optional(TASK_STATUS_SCHEMA),
 	subject: Type.Optional(Type.String({ description: "New task title" })),
 	description: Type.Optional(Type.String({ description: "New task description" })),
@@ -71,11 +99,21 @@ const TASK_GET_PARAMS = Type.Object({
 	taskId: Type.String({ description: "Id of the task to read" }),
 });
 
-const TASK_LIST_PARAMS = Type.Object({});
+const TASK_LIST_PARAMS = Type.Object({
+	includeHistory: Type.Optional(
+		Type.Boolean({
+			description:
+				"List current and archived plan summaries without switching plans; default lists only the active plan's tasks",
+		}),
+	),
+});
 
-function jsonResult(payload: unknown): AgentToolResult<unknown> {
+function jsonResult(payload: unknown, plan?: unknown): AgentToolResult<unknown> {
 	const details = structuredClone(payload);
-	return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
+	return {
+		content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+		details: plan === undefined ? details : { ...(details as Record<string, unknown>), plan: structuredClone(plan) },
+	};
 }
 
 /** Merge metadata updates into a task's existing map; a null value deletes the key. */
@@ -122,6 +160,8 @@ function assertNoDependencyCycle(tasks: ReadonlyMap<string, StepTask>, links: [s
 export function createStepTasksExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		const tasks = new Map<string, StepTask>();
+		const archivedPlans = new Map<string, TaskPlan>();
+		let activePlan: Omit<TaskPlan, "tasks"> | undefined;
 		let nextId = 1;
 		/** Import batches buffered until the active-branch snapshot restore ran. */
 		const pendingImports: StepTaskImportItem[][] = [];
@@ -134,7 +174,20 @@ export function createStepTasksExtension(): ExtensionFactory {
 		};
 
 		const persistTasks = (): void => {
-			pi.appendEntry("step-tasks", structuredClone({ tasks: [...tasks.values()], nextId }));
+			pi.appendEntry(
+				"step-tasks",
+				structuredClone({
+					tasks: [...tasks.values()],
+					nextId,
+					activePlan,
+					archivedPlans: [...archivedPlans.values()],
+				}),
+			);
+		};
+
+		const archiveCurrentPlan = (): void => {
+			if (activePlan)
+				archivedPlans.set(activePlan.id, { ...activePlan, tasks: structuredClone([...tasks.values()]) });
 		};
 
 		/** Create and store a task without persisting; callers persist once done. */
@@ -159,6 +212,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				updatedAt: now,
 			};
 			tasks.set(task.id, task);
+			activePlan ??= { id: `plan-${task.id}`, title: task.subject };
 			return task;
 		};
 
@@ -172,7 +226,16 @@ export function createStepTasksExtension(): ExtensionFactory {
 
 		const requireTask = (taskId: string): StepTask => {
 			const task = tasks.get(taskId);
-			if (!task) throw new Error(`No task with id "${taskId}". Use task_list to see existing tasks.`);
+			if (!task) {
+				const archived = [...archivedPlans.values()].find((plan) =>
+					plan.tasks.some((candidate) => candidate.id === taskId),
+				);
+				if (archived)
+					throw new Error(
+						`Task "${taskId}" belongs to archived plan "${archived.id}". Only if the user asks to continue it, call task_update with resumePlanId: "${archived.id}" first.`,
+					);
+				throw new Error(`No task with id "${taskId}". Use task_list to see existing tasks.`);
+			}
 			return task;
 		};
 
@@ -218,9 +281,6 @@ export function createStepTasksExtension(): ExtensionFactory {
 				owner: task.owner,
 				blockedBy: openBlockers(task),
 			}));
-		const updateWidget = (ctx: ExtensionContext): void => {
-			if (ctx.hasUI) ctx.ui.setWidget("step-tasks", taskWidgetLines(sortedTasks()));
-		};
 
 		pi.registerCommand("todos", {
 			description: "Show the session task list",
@@ -237,21 +297,31 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_create",
 			label: "Create task",
 			description:
-				"Create a todo item in the session execution checklist, with or without plan mode. Returns an id and starts as pending. This records work; it does not execute or delegate it.",
+				"Create a todo item in the active execution plan, with or without plan mode. For a different user request, set newPlan to its title on the first task to archive the old checklist; omit it for additional steps or cross-turn continuation. Returns task and plan IDs and starts as pending. This records work; it does not execute or delegate it.",
 			promptSnippet: "Record a todo item without executing work",
 			parameters: TASK_CREATE_PARAMS,
-			renderCall: (args, theme) => renderTaskCall("task_create", args.subject, theme),
-			renderResult: renderTaskResult,
-			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+			executionMode: "sequential",
+			renderShell: "self",
+			renderCall: (args, theme, context) => renderTaskCall("task_create", args.subject, theme, context),
+			renderResult: (result, options, theme, context) =>
+				renderTaskResult("task_create", result, options, theme, context),
+			execute: async (_toolCallId, params) => {
+				const title = params.newPlan?.trim();
+				if (params.newPlan !== undefined && !title) throw new Error("A new plan needs a nonempty title.");
+				if (title) {
+					archiveCurrentPlan();
+					tasks.clear();
+					activePlan = undefined;
+				}
 				const task = createTask({
 					subject: params.subject,
 					description: params.description,
 					...(params.activeForm !== undefined ? { activeForm: params.activeForm } : {}),
 					...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
 				});
+				if (title) activePlan = { id: `plan-${task.id}`, title };
 				persistTasks();
-				updateWidget(ctx);
-				return jsonResult({ id: task.id, subject: task.subject, status: task.status });
+				return jsonResult({ id: task.id, planId: activePlan!.id, subject: task.subject, status: task.status });
 			},
 		});
 
@@ -259,15 +329,46 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_update",
 			label: "Update task",
 			description:
-				"Update a todo item's progress, details, or dependencies by id. Set in_progress when starting, completed after finishing and validating, or deleted to remove it. This only changes tracking data; it does not execute or schedule work.",
+				"Update an active plan's todo item by taskId. Set in_progress when starting, completed after finishing and validating, or deleted to remove it. Alternatively, use resumePlanId alone to resume an archived checklist only when the user explicitly requests that work; the current plan is archived. This only changes tracking data; it does not execute or schedule work.",
 			promptSnippet: "Update a todo item's progress, details, or dependencies",
 			parameters: TASK_UPDATE_PARAMS,
-			renderCall: (args, theme) =>
-				renderTaskCall("task_update", `${args.taskId ?? ""}${args.status ? ` → ${args.status}` : ""}`, theme),
-			renderResult: renderTaskResult,
-			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+			executionMode: "sequential",
+			renderShell: "self",
+			renderCall: (args, theme, context) =>
+				renderTaskCall(
+					"task_update",
+					args.resumePlanId
+						? `resume ${args.resumePlanId}`
+						: `${args.taskId ?? ""}${args.status ? ` → ${args.status}` : ""}`,
+					theme,
+					context,
+				),
+			renderResult: (result, options, theme, context) =>
+				renderTaskResult("task_update", result, options, theme, context),
+			execute: async (_toolCallId, params) => {
+				if (params.resumePlanId !== undefined) {
+					if (Object.entries(params).some(([key, value]) => key !== "resumePlanId" && value !== undefined)) {
+						throw new Error("Resume a plan separately from task updates.");
+					}
+					if (activePlan?.id !== params.resumePlanId) {
+						const archived = archivedPlans.get(params.resumePlanId);
+						if (!archived)
+							throw new Error(
+								`No plan with id "${params.resumePlanId}". Use task_list with includeHistory:true to see plans.`,
+							);
+						const restored = structuredClone(archived);
+						archiveCurrentPlan();
+						archivedPlans.delete(restored.id);
+						tasks.clear();
+						for (const task of restored.tasks) tasks.set(task.id, task);
+						activePlan = { id: restored.id, title: restored.title };
+						persistTasks();
+					}
+					return jsonResult({ planId: activePlan.id, title: activePlan.title, tasks: listTasks() }, listTasks());
+				}
 				const { taskId, status, subject, description, activeForm, owner, metadata, addBlocks, addBlockedBy } =
 					params;
+				if (!taskId) throw new Error("Provide taskId to update a task, or resumePlanId alone to resume a plan.");
 				const task = requireTask(taskId);
 				const blocksTargets = resolveLinkTargets(task, addBlocks);
 				const blockedByTargets = resolveLinkTargets(task, addBlockedBy);
@@ -278,8 +379,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				if (status === "deleted") {
 					removeTaskAndDropLinks(task);
 					persistTasks();
-					updateWidget(ctx);
-					return jsonResult({ id: task.id, subject: task.subject, deleted: true });
+					return jsonResult({ id: task.id, subject: task.subject, deleted: true }, listTasks());
 				}
 				if (subject !== undefined) task.subject = subject;
 				if (description !== undefined) task.description = description;
@@ -291,8 +391,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				for (const blocker of blockedByTargets) linkTasks(blocker, task);
 				task.updatedAt = Date.now();
 				persistTasks();
-				updateWidget(ctx);
-				return jsonResult(task);
+				return jsonResult(task, listTasks());
 			},
 		});
 
@@ -303,8 +402,10 @@ export function createStepTasksExtension(): ExtensionFactory {
 				"Read a todo item's full details and all recorded dependencies, including completed ones. Use task_list to check which prerequisites remain unfinished.",
 			promptSnippet: "Read a todo item's full details and recorded dependencies",
 			parameters: TASK_GET_PARAMS,
-			renderCall: (args, theme) => renderTaskCall("task_get", args.taskId, theme),
-			renderResult: renderTaskResult,
+			renderShell: "self",
+			renderCall: (args, theme, context) => renderTaskCall("task_get", args.taskId, theme, context),
+			renderResult: (result, options, theme, context) =>
+				renderTaskResult("task_get", result, options, theme, context),
 			execute: async (_toolCallId, params) => jsonResult(requireTask(params.taskId)),
 		});
 
@@ -312,16 +413,38 @@ export function createStepTasksExtension(): ExtensionFactory {
 			name: "task_list",
 			label: "List tasks",
 			description:
-				"List session todo items with id, subject, status, owner, and unfinished prerequisites (blockedBy). Use it to resume existing work or choose the next open, unblocked item.",
+				"List the active plan's todo items with id, subject, status, owner, and unfinished prerequisites (blockedBy). Use it to resume existing work or choose the next open, unblocked item. Set includeHistory:true to inspect plan IDs and counts without switching; only an explicit task_update(resumePlanId) reactivates an archived plan.",
 			promptSnippet: "List todo progress and unfinished prerequisites",
 			parameters: TASK_LIST_PARAMS,
-			renderCall: (_args, theme) => renderTaskCall("task_list", undefined, theme),
-			renderResult: renderTaskResult,
-			execute: async () => jsonResult(listTasks()),
+			renderShell: "self",
+			renderCall: (_args, theme, context) => renderTaskCall("task_list", undefined, theme, context),
+			renderResult: (result, options, theme, context) =>
+				renderTaskResult("task_list", result, options, theme, context),
+			execute: async (_toolCallId, params) => {
+				if (!params.includeHistory) return jsonResult(listTasks());
+				const plans = [
+					...archivedPlans.values(),
+					...(activePlan ? [{ ...activePlan, tasks: [...tasks.values()] }] : []),
+				];
+				return jsonResult({
+					activePlanId: activePlan?.id,
+					plans: plans
+						.sort((first, second) => compareTaskIds(first.id.slice(5), second.id.slice(5)))
+						.map((plan) => ({
+							id: plan.id,
+							title: plan.title,
+							active: plan.id === activePlan?.id,
+							completed: plan.tasks.filter((task) => task.status === "completed").length,
+							total: plan.tasks.length,
+						})),
+				});
+			},
 		});
 
 		const restoreTasks = (ctx: ExtensionContext): void => {
 			tasks.clear();
+			archivedPlans.clear();
+			activePlan = undefined;
 			nextId = 1;
 			// Contents follow the active branch, but IDs must not collide with
 			// tasks referenced in sibling history (including deleted tasks).
@@ -342,7 +465,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				.getBranch()
 				.reverse()
 				.find((candidate) => candidate.type === "custom" && candidate.customType === "step-tasks") as
-				| { data?: { tasks?: StepTask[] } }
+				| { data?: Partial<TasksSnapshot> }
 				| undefined;
 			if (Array.isArray(snapshotEntry?.data?.tasks)) {
 				for (const task of structuredClone(snapshotEntry.data.tasks)) {
@@ -355,6 +478,15 @@ export function createStepTasksExtension(): ExtensionFactory {
 					const id = Number(task.id);
 					if (Number.isSafeInteger(id) && id > 0) nextId = Math.max(nextId, id + 1);
 				}
+			}
+			const firstTask = tasks.values().next().value;
+			activePlan = snapshotEntry?.data?.activePlan
+				? structuredClone(snapshotEntry.data.activePlan)
+				: firstTask
+					? { id: `plan-${firstTask.id}`, title: firstTask.subject }
+					: undefined;
+			for (const plan of structuredClone(snapshotEntry?.data?.archivedPlans ?? [])) {
+				if (plan.id !== activePlan?.id) archivedPlans.set(plan.id, plan);
 			}
 			// Apply buffered imports only after the snapshot restore so seeded
 			// tasks extend the restored list instead of racing it.
@@ -370,7 +502,6 @@ export function createStepTasksExtension(): ExtensionFactory {
 				}
 				persistTasks();
 			}
-			updateWidget(ctx);
 		};
 		pi.on("session_start", async (_event, ctx) => restoreTasks(ctx));
 		pi.on("session_tree", async (_event, ctx) => restoreTasks(ctx));

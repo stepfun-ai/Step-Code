@@ -5,7 +5,7 @@ import { StepQueuedMessagesComponent } from "../src/ui/view/transcript/step-queu
 import { initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 beforeEach(() => {
-	initTheme("step");
+	initTheme("step-blue");
 	setKeybindings(new KeybindingsManager());
 });
 
@@ -15,7 +15,7 @@ afterEach(() => {
 
 describe("StepQueuedMessagesComponent", () => {
 	test("renders queued messages without the legacy queue chrome", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepQueuedMessagesComponent();
 		component.setMessages({ steering: ["first"], followUp: ["second"] });
 		const lines = component.render(60).map(stripTerminalSequences);

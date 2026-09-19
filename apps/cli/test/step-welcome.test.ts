@@ -11,7 +11,7 @@ afterEach(() => {
 
 describe("StepWelcomeComponent", () => {
 	it("renders the branded rounded identity block", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
 			version: "0.3.1",
 			model: "step-model",
@@ -19,26 +19,24 @@ describe("StepWelcomeComponent", () => {
 			workspaceRoot: "/tmp/project",
 		}));
 		component.setFirstMessageHint(true);
-		const lines = component.render(100);
+		const lines = component.render(120);
 
-		// Wide terminal: the ride-in strip sits above the framed info box.
+		// Wide terminal: the wordmark strip sits above the framed info box.
 		expect(lines[0]).not.toContain("╭");
-		expect(lines[10]).toContain("╭"); // 9 strip rows + blank, then the info box
-		expect(lines.some((line) => line.includes("╰"))).toBe(true);
-		expect(lines.join("\n")).toContain("Step CLI");
-		expect(lines.join("\n")).toContain("step-model");
+		expect(lines[10]).toContain("╭");
+		expect(lines[10]).toContain("v0.3.1"); // version rides in the border title
+		// The wordmark art replaces the literal title text.
+		expect(lines.join("\n")).not.toContain("Step CLI");
 		expect(lines.join("\n")).toContain("step-model · high");
+		expect(lines.join("\n")).toContain("cwd");
 		expect(lines.at(-2)).toContain("Your first message will start a new session.");
 		for (const line of lines.slice(0, -2)) {
-			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
-		}
-		for (const line of lines.slice(11, -3)) {
-			if (line.length > 0) expect(visibleWidth(line)).toBe(100);
+			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(120);
 		}
 	});
 
 	it("shows reasoning off explicitly", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
 			model: "step-model",
 			thinkingLevel: "off",
@@ -51,7 +49,7 @@ describe("StepWelcomeComponent", () => {
 	});
 
 	it("removes the first-session hint after a message is projected", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
 			workspaceRoot: "/tmp/project",
 		}));
@@ -62,7 +60,7 @@ describe("StepWelcomeComponent", () => {
 	});
 
 	it("requests a render when visibility state changes", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		let renderRequests = 0;
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), {
 			requestRender: () => renderRequests++,
@@ -78,7 +76,7 @@ describe("StepWelcomeComponent", () => {
 	});
 
 	it("stops the logo intro early and settles on the static logo", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		try {
 			let renderRequests = 0;
@@ -107,34 +105,34 @@ describe("StepWelcomeComponent", () => {
 	});
 
 	it("rides in dragging the word, loops the pedals, then settles and never replays", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
-		const staticRows = component.render(100);
+		const staticRows = component.render(120);
 		const plain = staticRows.map(stripTerminalSequences).join("\n");
 		// The settled strip carries both the bird and the dragged word.
 		expect(plain).toContain("▀");
-		expect(plain).toContain("████");
+		expect(plain).toContain("▄▄▄▄");
 
 		component.playLogoIntro();
 		component.playLogoIntro();
 		// During the ride the layout differs from the settled strip and every
 		// pedal frame repaints.
-		let previous = component.render(100).join("\n");
+		let previous = component.render(120).join("\n");
 		expect(previous).not.toBe(staticRows.join("\n"));
 		for (let frame = 0; frame < BIRD_FRAME_COUNT; frame++) {
 			vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[frame]!);
-			const current = component.render(100).join("\n");
+			const current = component.render(120).join("\n");
 			expect(current).not.toBe(previous);
 			previous = current;
 		}
 		// The pedals keep looping inside the ~5s window…
 		vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[0]!);
-		expect(component.render(100).join("\n")).not.toBe(previous);
+		expect(component.render(120).join("\n")).not.toBe(previous);
 		// …and settle once it elapses.
 		vi.advanceTimersByTime(10_000);
-		expect(component.render(100)).toEqual(staticRows);
+		expect(component.render(120)).toEqual(staticRows);
 		expect(vi.getTimerCount()).toBe(0);
 		component.playLogoIntro();
 		component.invalidate();
@@ -142,13 +140,13 @@ describe("StepWelcomeComponent", () => {
 		component.setVisible(true);
 		requestRender.mockClear();
 		vi.advanceTimersByTime(BIRD_ANIMATION_DURATION_MS * 3);
-		expect(component.render(100)).toEqual(staticRows);
+		expect(component.render(120)).toEqual(staticRows);
 		expect(requestRender).not.toHaveBeenCalled();
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it("does not schedule or repaint after disposal", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
@@ -164,7 +162,7 @@ describe("StepWelcomeComponent", () => {
 	});
 
 	it("does nothing when stopping an intro that never played", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		let renderRequests = 0;
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), {
 			requestRender: () => renderRequests++,
@@ -175,7 +173,7 @@ describe("StepWelcomeComponent", () => {
 	});
 
 	it("does not overflow a very narrow terminal", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
 			workspaceRoot: "/tmp/project",
 		}));

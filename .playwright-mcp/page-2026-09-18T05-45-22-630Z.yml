@@ -1,0 +1,65 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - link "中文" [ref=f1e3] [cursor=pointer]:
+      - /url: index.html
+    - generic [ref=f1e4]: /
+    - link "EN" [ref=f1e5] [cursor=pointer]:
+      - /url: index_en.html
+  - generic [ref=f1e6]:
+    - img "Dify" [ref=f1e7]
+    - generic [ref=f1e8]: Dify x PUPU
+  - generic [ref=f1e9]: Press ↓ to explore
+  - application [ref=f1e10]:
+    - generic:
+      - generic [ref=f1e12]:
+        - heading "From Low-Code to Pro-Code" [level=1] [ref=f1e13]
+        - heading "How developers wield Dify for LLM apps" [level=3] [ref=f1e14]
+        - paragraph [ref=f1e15]: Dify x PUPU · Open, observable, extensible intelligent workflows and plugin ecosystem.
+        - generic [ref=f1e16]: Zheng Li · Head of Open Source Ecosystem @ Dify
+        - generic [ref=f1e17]: 2025 / Sharing Deck
+      - generic [aria-hidden]:
+        - generic:
+          - heading [level=2]: Agenda
+          - paragraph: "From Low‑Code to Pro‑Code: connect orchestration, engineering guardrails, ecosystem, triggers, and observability into a production loop."
+          - table:
+            - rowgroup:
+              - row:
+                - columnheader: Part
+                - columnheader: Module
+                - columnheader: Focus
+            - rowgroup:
+              - row:
+                - cell: "01"
+                - cell: Breakthrough
+                - cell: Pain points · positioning · why now
+              - row:
+                - cell: "02"
+                - cell: Fusion
+                - cell: Visual DSL ↔ Pro‑Code · debugging view · collaboration
+              - row:
+                - cell: "03"
+                - cell: Extension
+                - cell: Plugins & Marketplace · tooling security · reuse
+              - row:
+                - cell: "04"
+                - cell: Connection
+                - cell: Triggers · types & matrix · hands-on cases
+              - row:
+                - cell: "05"
+                - cell: Observability
+                - cell: OpenTelemetry · multi-DB · cost/perf visibility
+              - row:
+                - cell: "06"
+                - cell: Summary
+                - cell: Evolution path · call to action
+      - generic [aria-hidden]:
+        - generic:
+          - generic:
+            - heading [level=2]: Breaking the mold · Next-gen LLM app paradigm
+            - paragraph: Start from pain points; map Dify's role.
+        - text:                   
+      - text:                                                     
+    - complementary:
+      - button "next slide" [ref=f1e23] [cursor=pointer]
+    - text: Speaker notes
+    - generic [ref=f1e26]: From Low-Code to Pro-Code How developers wield Dify for LLM apps Dify x PUPU · Open, observable, extensible intelligent workflows and plugin ecosystem. Zheng Li · Head of Open Source Ecosystem @ Dify 2025 / Sharing Deck

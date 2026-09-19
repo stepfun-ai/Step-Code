@@ -68,7 +68,7 @@ afterEach(() => {
 
 describe("approved pelican sprite", () => {
 	it("retains every pixel and transparent hole in all frames and the PNG", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.spyOn(Theme.prototype, "getColorMode").mockReturnValue("truecolor");
 		const painter = createStepLogoTheme();
 		expect([BIRD_COLUMNS, BIRD_ROWS]).toEqual([20, 9]);
@@ -88,7 +88,7 @@ describe("approved pelican sprite", () => {
 	});
 
 	it("keeps a single lower-right eye highlight and a connected tail in every frame", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.spyOn(Theme.prototype, "getColorMode").mockReturnValue("truecolor");
 		const painter = createStepLogoTheme();
 		for (let frame = 0; frame < BIRD_SPRITE_FRAMES.length; frame++) {
@@ -99,7 +99,7 @@ describe("approved pelican sprite", () => {
 	});
 
 	it("joins same-color vertical seams without filling wheel holes", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const painter = createStepLogoTheme();
 		for (const [frameIndex, source] of BIRD_SPRITE_FRAMES.entries()) {
 			const rendered = renderBirdFrame(painter, frameIndex);
@@ -114,7 +114,7 @@ describe("approved pelican sprite", () => {
 	});
 
 	it("keeps the same glyph geometry across terminal brands and color depths", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const mode = vi.spyOn(Theme.prototype, "getColorMode").mockReturnValue("truecolor");
 		const painter = createStepLogoTheme();
 		const reference = renderBirdStatic(painter);

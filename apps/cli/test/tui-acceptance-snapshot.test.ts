@@ -118,7 +118,7 @@ function footerData(statuses: Record<string, string> = {}): ReadonlyFooterDataPr
 
 beforeEach(() => {
 	setCapabilities({ images: null, trueColor: true, hyperlinks: false });
-	initTheme("step");
+	initTheme("step-blue");
 });
 
 afterEach(() => {
@@ -137,7 +137,10 @@ describe("A. 欢迎屏快照", () => {
 			sessionId: "sess-1234",
 		}));
 		const lines = component.render(100);
-		expect(lines.join("\n")).toContain("Step CLI");
+		// The wordmark art replaces the literal title at this width; the
+		// version rides in the info-box border title instead.
+		expect(lines.join("\n")).toContain("v0.3.2");
+		expect(lines.join("\n")).toContain("step-3.8");
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
 		expect(plain(lines)).toMatchSnapshot("welcome-bird-100");
 	});
@@ -476,11 +479,11 @@ describe("E. 运行状态指示", () => {
 			// 未设置 tip 时只有一行
 			expect(indicator.render(80)).toHaveLength(1);
 
-			indicator.setStatusTip("Use /theme to switch themes (step / step-light)");
+			indicator.setStatusTip("Use /theme to switch themes (step-blue / step-violet)");
 			const rows = indicator.render(80).map((row) => stripTerminalSequences(row));
 			expect(rows).toHaveLength(2);
 			expect(rows[0]).toContain("Working...");
-			expect(rows[1]).toContain("  tip: Use /theme to switch themes (step / step-light)");
+			expect(rows[1]).toContain("  tip: Use /theme to switch themes (step-blue / step-violet)");
 			// tip 比 Working 行更弱（dim），不与状态行争注意力
 			expect(indicator.render(80)[1]).toContain(theme.getFgAnsi("dim"));
 
@@ -544,15 +547,13 @@ describe("F/G. 选中样式与页脚快照", () => {
 		const flat = lines.join("\n");
 		expect(stripTerminalSequences(flat)).toContain("⏵ Ask");
 		expect(stripTerminalSequences(flat)).toContain("step-3.8");
-		// 6-1：右侧读出 = 会话 token 花费 + 剩余上下文（紧凑写法 ctx left）
-		expect(stripTerminalSequences(flat)).toContain("ctx left");
+		expect(stripTerminalSequences(flat)).toContain("context left");
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(120);
 		expect(plain(lines)).toMatchSnapshot("footer-step-120");
 	});
 
-	test("页脚 token 用量段与 context 变色（G4/6-1）", () => {
+	test("页脚隐藏 token 用量并保留 context 变色（G4/6-1）", () => {
 		const session = footerSession();
-		// 会话累计 12k in + 3k out + 60k cacheRead → 75k tok 显示在右侧
 		session.sessionManager.getEntries = () =>
 			[
 				{
@@ -565,10 +566,9 @@ describe("F/G. 选中样式与页脚快照", () => {
 			] as never;
 		const footer = new FooterComponent(session, footerData(), { presentation: "step" });
 		const flat = stripTerminalSequences(footer.render(120).join("\n"));
-		expect(flat).toContain("75k tok");
-		expect(flat).toContain("88% ctx left");
+		expect(flat).not.toContain("75k tok");
+		expect(flat).toContain("88% context left");
 
-		// 低水位：88% ctx left 保持 muted（无 error/warning 色）
 		const calm = footer.render(120).join("\n");
 		expect(calm).not.toContain(theme.getFgAnsi("warning"));
 		expect(calm).not.toContain(theme.getFgAnsi("error"));

@@ -209,6 +209,19 @@ function parseSnapshot(value: unknown, sessionId: string): StepGoalRestoreResult
 	}
 }
 
+export function getStepGoalStatus(
+	entries: readonly { type: string; customType?: string; data?: unknown }[],
+	sessionId: string,
+): StepGoalStatus | undefined {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
+		const snapshot = parseSnapshot(entry.data, sessionId);
+		if (snapshot.valid) return snapshot.goal?.status;
+	}
+	return undefined;
+}
+
 function makeId(idFactory: () => string, current?: StepGoalRecord): string {
 	for (let attempt = 0; attempt < 10; attempt++) {
 		try {
@@ -422,7 +435,7 @@ export class StepGoalRuntime {
 		const text = validateObjective(objective);
 		if (this.goal && this.goal.status !== "complete") {
 			throw new Error(
-				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. Complete or clear it first.`,
+				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. ${unfinishedGoalHint(this.goal.status)}`,
 			);
 		}
 		const budget = tokenBudget(tokenBudgetValue);
@@ -1023,10 +1036,7 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 		};
 		const updateStatus = (ctx: ExtensionContext): void => {
 			const goal = runtime.get();
-			ctx.ui.setStatus(
-				"step-goal",
-				goal ? `Goal: ${goal.status} · ${formatElapsedTime(runtime.elapsedActiveSeconds())}` : undefined,
-			);
+			ctx.ui.setStatus("step-goal", goal?.status === "paused" ? "Goal: paused" : undefined);
 		};
 		const notifyAutoStop = (before: StepGoalStatus | undefined, ctx: ExtensionContext): void => {
 			if (before !== "active") return;
@@ -1110,7 +1120,7 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			resumeHintShownFor = episode;
 			ctx.ui.notify(
 				`Goal ${goal.id} is ${goal.status}; this message runs as a normal turn and does not resume it. Run /goal resume to continue the goal.`,
-				"info",
+				"warning",
 			);
 		});
 

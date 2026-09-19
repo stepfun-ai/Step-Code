@@ -1,5 +1,5 @@
 import { visibleWidth } from "@step-harness/pi-tui";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../../../packages/coding-agent/src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../packages/coding-agent/src/core/footer-data-provider.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/ui/view/chrome/footer.ts";
@@ -270,8 +270,20 @@ describe("FooterComponent width handling", () => {
 		expect(plain).toContain("⏵ Ask");
 		expect(plain).toContain("test-model");
 		expect(plain).toContain("high");
-		expect(plain).toContain("88% ctx left");
+		expect(plain).toContain("88% context left");
 		expect(visibleWidth(line)).toBe(120);
+	});
+
+	it("does not scan token totals or invent unknown context usage in the Step footer", () => {
+		const session = createSession({ sessionName: "" });
+		const entries = vi.spyOn(session.sessionManager, "getEntries");
+		const footer = new FooterComponent(session, createFooterData(1), { presentation: "step" });
+		expect(stripAnsi(footer.render(120)[0])).toMatch(/88% context left$/u);
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		const unknown = stripAnsi(footer.render(120)[0]);
+		expect(unknown).not.toContain("context left");
+		expect(unknown).not.toContain(" tok");
+		expect(entries).not.toHaveBeenCalled();
 	});
 
 	// Feedback issue-b39a464025061aa5: the footer named the permission mode but
