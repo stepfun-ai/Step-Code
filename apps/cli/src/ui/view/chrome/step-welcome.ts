@@ -258,7 +258,7 @@ export class StepWelcomeComponent implements Component {
 		});
 
 		// The dragged word: a violet→gold letter gradient with a dim drop
-		// shadow one cell down-right, giving the block letters depth. The word
+		// shadow straight below, giving depth with flush square edges. The word
 		// rides rigidly behind the bird (no per-letter motion).
 		const shadow = theme.fg("dim", "\u2588");
 		const letters = STRIP_WORD.split("");
@@ -273,9 +273,10 @@ export class StepWelcomeComponent implements Component {
 					if (glyph[gy]![gx] !== "#") continue;
 					const x = cx + gx;
 					const y = gy;
-					// Shadow first, one cell down-right; the letter overwrites
-					// any shadow cell it overlaps.
-					if (x + 1 >= 0 && x + 1 < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x + 1] = shadow;
+					// Shadow first, straight below; the letter overwrites any
+					// shadow cell it overlaps. No horizontal offset keeps the
+					// outer edges flush and square.
+					if (x >= 0 && x < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x] = shadow;
 					if (x >= 0 && x < innerWidth) grid[y]![x] = color;
 				}
 			}
