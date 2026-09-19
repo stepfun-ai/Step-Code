@@ -36,18 +36,24 @@ const LOGO_INTRO_TOTAL_MS = 5000;
 /** Ride-in phase of the intro: the bird races in while the word trails behind. */
 const STRIP_RIDE_MS = 1600;
 
-/** 5-row block letters dragged behind the bird (one glyph pixel = one cell). */
+/**
+ * 7-wide 8-row letterforms dragged behind the bird. Each glyph pixel renders
+ * as one solid cell; row 8 stays empty so the drop shadow fits inside the
+ * strip.
+ */
 const STRIP_WORD = "STEP CLI";
 const STRIP_FONT: Record<string, string[]> = {
-	S: ["####", "#   ", "####", "   #", "####"],
-	T: ["#####", "  #  ", "  #  ", "  #  ", "  #  "],
-	E: ["#####", "#    ", "#### ", "#    ", "#####"],
-	P: ["#### ", "#   #", "#### ", "#    ", "#    "],
-	C: [" ####", "#    ", "#    ", "#    ", " ####"],
-	L: ["#    ", "#    ", "#    ", "#    ", "#####"],
-	I: ["###", " # ", " # ", " # ", "###"],
-	" ": ["  ", "  ", "  ", "  ", "  "],
+	S: [" ######", "##    ##", "##      ", " ###### ", "      ##", "##    ##", " ###### ", "        "],
+	T: ["########", "   ##   ", "   ##   ", "   ##   ", "   ##   ", "   ##   ", "   ##   ", "        "],
+	E: ["####### ", "##      ", "##      ", "####### ", "##      ", "##      ", "####### ", "        "],
+	P: ["######  ", "##    ##", "##    ##", "######  ", "##      ", "##      ", "##      ", "        "],
+	C: [" ###### ", "##      ", "##      ", "##      ", "##      ", "##      ", " ###### ", "        "],
+	L: ["##      ", "##      ", "##      ", "##      ", "##      ", "##      ", "####### ", "        "],
+	I: ["###", " # ", " # ", " # ", " # ", " # ", "###", "   "],
+	" ": ["   ", "   ", "   ", "   ", "   ", "   ", "   ", "   "],
 };
+/** Rope length between the word's last letter and the bird's tail, in cells. */
+const STRIP_ROPE_CELLS = 5;
 
 /** Visible width of the dragged word, in cells. */
 function stripWordWidth(): number {
@@ -57,8 +63,12 @@ function stripWordWidth(): number {
 }
 
 const STRIP_ROWS = 9;
-/** Strip needs the word + rope gap + bird + a right margin to be worth it. */
-const STRIP_MIN_INNER = stripWordWidth() + 4 + BIRD_COLUMNS + 2;
+/** Whole composition width: word + rope + bird, centered in the strip. */
+function stripCompositionWidth(): number {
+	return stripWordWidth() + STRIP_ROPE_CELLS + BIRD_COLUMNS;
+}
+/** Strip needs the composition plus a little margin to be worth it. */
+const STRIP_MIN_INNER = stripCompositionWidth() + 4;
 
 const easeOutCubic = (p: number): number => 1 - (1 - p) ** 3;
 
@@ -227,9 +237,11 @@ export class StepWelcomeComponent implements Component {
 		const progress = easeOutCubic(ride);
 
 		const wordW = stripWordWidth();
-		const stopBirdX = innerWidth - BIRD_COLUMNS - 1;
+		// Center the settled composition; the ride-in targets that spot.
+		const compositionX = Math.max(0, Math.floor((innerWidth - stripCompositionWidth()) / 2));
+		const stopBirdX = compositionX + wordW + STRIP_ROPE_CELLS;
 		const birdX = Math.round(-BIRD_COLUMNS - 2 + (stopBirdX + BIRD_COLUMNS + 2) * progress);
-		const lettersRight = birdX - 4;
+		const lettersRight = birdX - STRIP_ROPE_CELLS;
 		const lettersX = lettersRight - wordW;
 
 		const grid: (string | undefined)[][] = Array.from({ length: STRIP_ROWS }, () =>
@@ -260,7 +272,7 @@ export class StepWelcomeComponent implements Component {
 				for (let gx = 0; gx < glyph[gy]!.length; gx += 1) {
 					if (glyph[gy]![gx] !== "#") continue;
 					const x = cx + gx;
-					const y = 2 + gy;
+					const y = gy;
 					// Shadow first, one cell down-right; the letter overwrites
 					// any shadow cell it overlaps.
 					if (x + 1 >= 0 && x + 1 < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x + 1] = shadow;
@@ -277,7 +289,7 @@ export class StepWelcomeComponent implements Component {
 		for (let x = lettersRight + 1; x < birdX; x += 2) {
 			if (x < 0 || x >= innerWidth) continue;
 			const sag = x > lettersRight + 1 && x < birdX - 1 && (x - lettersRight) % 4 === 0 ? 1 : 0;
-			grid[4 + sag]![x] = ropeDot;
+			grid[3 + sag]![x] = ropeDot;
 		}
 
 		return grid.map((row) => row.map((cell) => cell ?? " ").join(""));

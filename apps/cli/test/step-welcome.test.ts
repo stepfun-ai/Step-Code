@@ -19,7 +19,7 @@ describe("StepWelcomeComponent", () => {
 			workspaceRoot: "/tmp/project",
 		}));
 		component.setFirstMessageHint(true);
-		const lines = component.render(80);
+		const lines = component.render(100);
 
 		// Wide terminal: the ride-in strip sits above the framed info box.
 		expect(lines[0]).not.toContain("╭");
@@ -30,10 +30,10 @@ describe("StepWelcomeComponent", () => {
 		expect(lines.join("\n")).toContain("step-model · high");
 		expect(lines.at(-2)).toContain("Your first message will start a new session.");
 		for (const line of lines.slice(0, -2)) {
-			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
 		}
 		for (const line of lines.slice(11, -3)) {
-			if (line.length > 0) expect(visibleWidth(line)).toBe(80);
+			if (line.length > 0) expect(visibleWidth(line)).toBe(100);
 		}
 	});
 
@@ -111,7 +111,7 @@ describe("StepWelcomeComponent", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
-		const staticRows = component.render(80);
+		const staticRows = component.render(100);
 		const plain = staticRows.map(stripTerminalSequences).join("\n");
 		// The settled strip carries both the bird and the dragged word.
 		expect(plain).toContain("▀");
@@ -121,20 +121,20 @@ describe("StepWelcomeComponent", () => {
 		component.playLogoIntro();
 		// During the ride the layout differs from the settled strip and every
 		// pedal frame repaints.
-		let previous = component.render(80).join("\n");
+		let previous = component.render(100).join("\n");
 		expect(previous).not.toBe(staticRows.join("\n"));
 		for (let frame = 0; frame < BIRD_FRAME_COUNT; frame++) {
 			vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[frame]!);
-			const current = component.render(80).join("\n");
+			const current = component.render(100).join("\n");
 			expect(current).not.toBe(previous);
 			previous = current;
 		}
 		// The pedals keep looping inside the ~5s window…
 		vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[0]!);
-		expect(component.render(80).join("\n")).not.toBe(previous);
+		expect(component.render(100).join("\n")).not.toBe(previous);
 		// …and settle once it elapses.
 		vi.advanceTimersByTime(10_000);
-		expect(component.render(80)).toEqual(staticRows);
+		expect(component.render(100)).toEqual(staticRows);
 		expect(vi.getTimerCount()).toBe(0);
 		component.playLogoIntro();
 		component.invalidate();
@@ -142,7 +142,7 @@ describe("StepWelcomeComponent", () => {
 		component.setVisible(true);
 		requestRender.mockClear();
 		vi.advanceTimersByTime(BIRD_ANIMATION_DURATION_MS * 3);
-		expect(component.render(80)).toEqual(staticRows);
+		expect(component.render(100)).toEqual(staticRows);
 		expect(requestRender).not.toHaveBeenCalled();
 		expect(vi.getTimerCount()).toBe(0);
 	});
