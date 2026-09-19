@@ -95,6 +95,8 @@ export class StepWelcomeComponent implements Component {
 	private visible = true;
 	private showFirstMessageHint = false;
 	private logoFrame: number | null = null;
+	private logoIntroPlayed = false;
+	private disposed = false;
 	private logoTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(getInfo: () => StepWelcomeInfo, options: (() => void) | { requestRender?: () => void } = {}) {
@@ -127,7 +129,8 @@ export class StepWelcomeComponent implements Component {
 	 * `dispose()` when the interactive mode is torn down.
 	 */
 	playLogoIntro(): void {
-		if (this.logoTimer !== null || BIRD_FRAME_COUNT === 0) return;
+		if (this.disposed || this.logoIntroPlayed || BIRD_FRAME_COUNT === 0) return;
+		this.logoIntroPlayed = true;
 		let frame = 0;
 		this.setLogoFrame(frame);
 		const advance = (): void => {
@@ -153,6 +156,7 @@ export class StepWelcomeComponent implements Component {
 
 	/** Drops the intro timer on teardown; unlike `stopLogoIntro`, it repaints nothing. */
 	dispose(): void {
+		this.disposed = true;
 		if (this.logoTimer !== null) {
 			clearTimeout(this.logoTimer);
 			this.logoTimer = null;

@@ -1,9 +1,11 @@
 import { visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BIRD_FRAME_COUNT, BIRD_FRAME_DURATIONS_MS } from "../src/ui/view/chrome/step-logo.ts";
 import { BIRD_ANIMATION_DURATION_MS, StepWelcomeComponent } from "../src/ui/view/chrome/step-welcome.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 afterEach(() => {
+	vi.useRealTimers();
 	initTheme("dark");
 });
 
@@ -98,6 +100,51 @@ describe("StepWelcomeComponent", () => {
 		}
 	});
 
+	it("plays each frame once, then restores the PNG and never replays", () => {
+		initTheme("step");
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
+		const expected = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }));
+		const staticRows = component.render(80);
+		component.playLogoIntro();
+		component.playLogoIntro();
+		for (let frame = 0; frame < BIRD_FRAME_COUNT; frame++) {
+			expected.setLogoFrame(frame);
+			expect(component.render(80)).toEqual(expected.render(80));
+			vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[frame]! - 1);
+			expect(component.render(80)).toEqual(expected.render(80));
+			vi.advanceTimersByTime(1);
+		}
+		expect(component.render(80)).toEqual(staticRows);
+		expect(requestRender).toHaveBeenCalledTimes(BIRD_FRAME_COUNT + 1);
+		component.playLogoIntro();
+		component.invalidate();
+		component.setVisible(false);
+		component.setVisible(true);
+		requestRender.mockClear();
+		vi.advanceTimersByTime(BIRD_ANIMATION_DURATION_MS * 3);
+		expect(component.render(80)).toEqual(staticRows);
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("does not schedule or repaint after disposal", () => {
+		initTheme("step");
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
+		component.playLogoIntro();
+		vi.advanceTimersByTime(140);
+		requestRender.mockClear();
+		component.dispose();
+		component.dispose();
+		component.playLogoIntro();
+		vi.advanceTimersByTime(BIRD_ANIMATION_DURATION_MS * 2);
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("does nothing when stopping an intro that never played", () => {
 		initTheme("step");
 		let renderRequests = 0;
@@ -114,7 +161,7 @@ describe("StepWelcomeComponent", () => {
 		const component = new StepWelcomeComponent(() => ({
 			workspaceRoot: "/tmp/project",
 		}));
-		for (const width of [1, 4, 7, 8, 11]) {
+		for (const width of [1, 4, 7, 8, 11, 30, 46, 47, 58, 59, 60, 80, 100]) {
 			for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 	});
