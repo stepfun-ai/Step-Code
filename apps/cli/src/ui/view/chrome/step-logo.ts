@@ -127,43 +127,66 @@ export const BIRD_FRAME_DURATIONS_MS: readonly number[] = BIRD_SPRITE_FRAME_DURA
 /** Total run of one animation loop, in milliseconds. */
 export const BIRD_ANIMATION_DURATION_MS = BIRD_SPRITE_FRAME_DURATIONS_MS.reduce((sum, ms) => sum + ms, 0);
 
-/** Pair two source pixels into one cell without merging their colors. */
-function renderSprite(handle: StepLogoTheme, rows: readonly string[]): string[] {
-	return rows.map((row, rowIndex) => {
-		let line = "";
-		for (let i = 0; i < row.length; i += 2) {
-			const upper = BIRD_SPRITE_PALETTE[Number.parseInt(row[i]!, 16) - 1];
-			const lower = BIRD_SPRITE_PALETTE[Number.parseInt(row[i + 1]!, 16) - 1];
-			if (upper === undefined) {
-				// Underline fills the lower glyph's baseline gap without adding
-				// pixels to its transparent upper half on cell-aligned renderers.
-				line += lower === undefined ? " " : `\x1b[4m${handle.fg(lower, "▄")}\x1b[24m`;
-			} else if (lower === undefined) {
-				// Overline does the corresponding edge fill for the upper half.
-				// Terminals without overline support may ignore SGR 53/55.
-				const connectedAbove = rows[rowIndex - 1]?.[i + 1] === row[i];
-				if (connectedAbove) {
-					// Continue the same-color pixel above without a glyph-top gap
-					// (beak, tail, wheel rims). Cut out the transparent lower half
-					// using inverse video; underline clears the cutout's bottom rim.
-					// Default background is preserved without guessing its RGB.
-					line += `\x1b[7m\x1b[4m${handle.fg(upper, "▄")}\x1b[24m\x1b[27m`;
-				} else {
-					line += `\x1b[53m${handle.fg(upper, "▀")}\x1b[55m`;
-				}
-			} else if (upper === lower) {
-				// A background-colored space covers the cell independently of
-				// full-block font metrics, including any inter-line glyph gap.
-				line += handle.bg(upper, " ");
+/**
+ * Pair two source pixels into one cell without merging their colors.
+ * Returns styled single-width cells; `undefined` marks a blank cell so callers
+ * can composite the mark into a larger canvas (the welcome ride-in strip).
+ */
+function spriteRowCells(handle: StepLogoTheme, rows: readonly string[], rowIndex: number): (string | undefined)[] {
+	const row = rows[rowIndex]!;
+	const cells: (string | undefined)[] = [];
+	for (let i = 0; i < row.length; i += 2) {
+		const upper = BIRD_SPRITE_PALETTE[Number.parseInt(row[i]!, 16) - 1];
+		const lower = BIRD_SPRITE_PALETTE[Number.parseInt(row[i + 1]!, 16) - 1];
+		if (upper === undefined) {
+			// Underline fills the lower glyph's baseline gap without adding
+			// pixels to its transparent upper half on cell-aligned renderers.
+			cells.push(lower === undefined ? undefined : `\x1b[4m${handle.fg(lower, "▄")}\x1b[24m`);
+		} else if (lower === undefined) {
+			// Overline does the corresponding edge fill for the upper half.
+			// Terminals without overline support may ignore SGR 53/55.
+			const connectedAbove = rows[rowIndex - 1]?.[i + 1] === row[i];
+			if (connectedAbove) {
+				// Continue the same-color pixel above without a glyph-top gap
+				// (beak, tail, wheel rims). Cut out the transparent lower half
+				// using inverse video; underline clears the cutout's bottom rim.
+				// Default background is preserved without guessing its RGB.
+				cells.push(`\x1b[7m\x1b[4m${handle.fg(upper, "▄")}\x1b[24m\x1b[27m`);
 			} else {
-				// Paint the upper color as background and the lower as an
-				// underlined half-block: lower colors cannot bleed above the
-				// upper glyph (notably a false second eye glint / beak stripe).
-				line += handle.bg(upper, `\x1b[4m${handle.fg(lower, "▄")}\x1b[24m`);
+				cells.push(`\x1b[53m${handle.fg(upper, "▀")}\x1b[55m`);
 			}
+		} else if (upper === lower) {
+			// A background-colored space covers the cell independently of
+			// full-block font metrics, including any inter-line glyph gap.
+			cells.push(handle.bg(upper, " "));
+		} else {
+			// Paint the upper color as background and the lower as an
+			// underlined half-block: lower colors cannot bleed above the
+			// upper glyph (notably a false second eye glint / beak stripe).
+			cells.push(handle.bg(upper, `\x1b[4m${handle.fg(lower, "▄")}\x1b[24m`));
 		}
-		return line;
-	});
+	}
+	return cells;
+}
+
+function renderSprite(handle: StepLogoTheme, rows: readonly string[]): string[] {
+	return rows.map((_row, rowIndex) =>
+		spriteRowCells(handle, rows, rowIndex)
+			.map((cell) => cell ?? " ")
+			.join(""),
+	);
+}
+
+/** Composite-ready cells (undefined = blank) of animation frame `index`. */
+export function renderBirdFrameCells(handle: StepLogoTheme, index: number): (string | undefined)[][] {
+	const frame =
+		BIRD_SPRITE_FRAMES[((index % BIRD_FRAME_COUNT) + BIRD_FRAME_COUNT) % BIRD_FRAME_COUNT] ?? BIRD_SPRITE_STATIC;
+	return frame.map((_row, rowIndex) => spriteRowCells(handle, frame, rowIndex));
+}
+
+/** Composite-ready cells (undefined = blank) of the settled bird. */
+export function renderBirdStaticCells(handle: StepLogoTheme): (string | undefined)[][] {
+	return BIRD_SPRITE_STATIC.map((_row, rowIndex) => spriteRowCells(handle, BIRD_SPRITE_STATIC, rowIndex));
 }
 
 /** Renders animation frame `index` (wrapped into range) of the riding bird. */

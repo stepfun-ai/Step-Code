@@ -10,7 +10,9 @@ import {
 	createStepLogoTheme,
 	paintStepBadge,
 	renderBirdFrame,
+	renderBirdFrameCells,
 	renderBirdStatic,
+	renderBirdStaticCells,
 	renderStepMark,
 	STEP_MARK_COLUMNS,
 } from "./step-logo.ts";
@@ -30,6 +32,34 @@ const WELCOME_MARK = renderStepMark();
 const WELCOME_MARK_GAP = 3;
 /** Total intro run: the pedal cycle loops until this window elapses. */
 const LOGO_INTRO_TOTAL_MS = 5000;
+/** Ride-in phase of the intro: the bird races in while the word trails behind. */
+const STRIP_RIDE_MS = 1600;
+
+/** 5-row block letters dragged behind the bird (one glyph pixel = one cell). */
+const STRIP_WORD = "STEP CLI";
+const STRIP_FONT: Record<string, string[]> = {
+	S: ["####", "#   ", "####", "   #", "####"],
+	T: ["#####", "  #  ", "  #  ", "  #  ", "  #  "],
+	E: ["#####", "#    ", "#### ", "#    ", "#####"],
+	P: ["#### ", "#   #", "#### ", "#    ", "#    "],
+	C: [" ####", "#    ", "#    ", "#    ", " ####"],
+	L: ["#    ", "#    ", "#    ", "#    ", "#####"],
+	I: ["###", " # ", " # ", " # ", "###"],
+	" ": ["  ", "  ", "  ", "  ", "  "],
+};
+
+/** Visible width of the dragged word, in cells. */
+function stripWordWidth(): number {
+	let w = 0;
+	for (const ch of STRIP_WORD) w += STRIP_FONT[ch]![0]!.length + 1;
+	return w - 1; // no trailing letter gap
+}
+
+const STRIP_ROWS = 9;
+/** Strip needs the word + rope gap + bird + a right margin to be worth it. */
+const STRIP_MIN_INNER = stripWordWidth() + 4 + BIRD_COLUMNS + 2;
+
+const easeOutCubic = (p: number): number => 1 - (1 - p) ** 3;
 const WELCOME_MARK_MIN_TEXT_WIDTH = 32;
 const FIRST_SESSION_HINT = "Your first message will start a new session.";
 const ansiBold = (text: string): string => `\x1b[1m${text}\x1b[22m`;
@@ -99,6 +129,8 @@ export class StepWelcomeComponent implements Component {
 	private logoFrame: number | null = null;
 	private logoIntroPlayed = false;
 	private disposed = false;
+	/** Ride-in start timestamp; null once the strip is settled. */
+	private introStartedAt: number | null = null;
 	private logoTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(getInfo: () => StepWelcomeInfo, options: (() => void) | { requestRender?: () => void } = {}) {
@@ -134,6 +166,7 @@ export class StepWelcomeComponent implements Component {
 	playLogoIntro(): void {
 		if (this.disposed || this.logoIntroPlayed || BIRD_FRAME_COUNT === 0) return;
 		this.logoIntroPlayed = true;
+		this.introStartedAt = Date.now();
 		const endsAt = Date.now() + LOGO_INTRO_TOTAL_MS;
 		let frame = 0;
 		this.setLogoFrame(frame);
@@ -141,6 +174,7 @@ export class StepWelcomeComponent implements Component {
 			frame = (frame + 1) % BIRD_FRAME_COUNT;
 			if (Date.now() >= endsAt) {
 				this.logoTimer = null;
+				this.introStartedAt = null;
 				this.setLogoFrame(null);
 				return;
 			}
@@ -155,6 +189,7 @@ export class StepWelcomeComponent implements Component {
 		if (this.logoTimer === null) return;
 		clearTimeout(this.logoTimer);
 		this.logoTimer = null;
+		this.introStartedAt = null;
 		this.setLogoFrame(null);
 	}
 
@@ -165,6 +200,66 @@ export class StepWelcomeComponent implements Component {
 			clearTimeout(this.logoTimer);
 			this.logoTimer = null;
 		}
+	}
+
+	/**
+	 * The ride-in strip: the bird pedals toward the right while the STEP CLI
+	 * block letters trail behind on a dashed rope, waving in the slipstream.
+	 * Settles to bird-right / word-left once the ride window elapses.
+	 */
+	private buildStrip(innerWidth: number): string[] {
+		const logoTheme = createStepLogoTheme();
+		const animating = this.logoFrame !== null;
+		const elapsed = this.introStartedAt === null ? Number.POSITIVE_INFINITY : Date.now() - this.introStartedAt;
+		const ride = Math.min(1, elapsed / STRIP_RIDE_MS);
+		const progress = easeOutCubic(ride);
+
+		const wordW = stripWordWidth();
+		const stopBirdX = innerWidth - BIRD_COLUMNS - 1;
+		const birdX = Math.round(-BIRD_COLUMNS - 2 + (stopBirdX + BIRD_COLUMNS + 2) * progress);
+		const lettersRight = birdX - 4;
+		const lettersX = lettersRight - wordW;
+
+		const grid: (string | undefined)[][] = Array.from({ length: STRIP_ROWS }, () =>
+			new Array<string | undefined>(innerWidth).fill(undefined),
+		);
+
+		// The bird.
+		const birdCells = animating ? renderBirdFrameCells(logoTheme, this.logoFrame!) : renderBirdStaticCells(logoTheme);
+		birdCells.forEach((row, r) => {
+			row.forEach((cell, c) => {
+				const x = birdX + c;
+				if (cell !== undefined && x >= 0 && x < innerWidth) grid[r]![x] = cell;
+			});
+		});
+
+		// The dragged word; each letter bounces on its own phase while riding.
+		const brand = (text: string): string => theme.fg("accent", text);
+		let cx = lettersX;
+		STRIP_WORD.split("").forEach((ch, col) => {
+			const glyph = STRIP_FONT[ch]!;
+			const bounce = animating ? Math.round(Math.sin(elapsed / 320 + col * 0.55) * 0.9) : 0;
+			for (let gy = 0; gy < glyph.length; gy += 1) {
+				for (let gx = 0; gx < glyph[gy]!.length; gx += 1) {
+					if (glyph[gy]![gx] !== "#") continue;
+					const x = cx + gx;
+					const y = 2 + gy + bounce;
+					if (x >= 0 && x < innerWidth && y >= 0 && y < STRIP_ROWS) grid[y]![x] = brand("#");
+				}
+			}
+			cx += glyph[0]!.length + 1;
+		});
+
+		// The rope: a dashed line from the bird's tail to the word's last letter,
+		// sagging one row in the middle.
+		const ropeDot = theme.fg("muted", "·");
+		for (let x = lettersRight + 1; x < birdX; x += 2) {
+			if (x < 0 || x >= innerWidth) continue;
+			const sag = x > lettersRight + 1 && x < birdX - 1 && (x - lettersRight) % 4 === 0 ? 1 : 0;
+			grid[4 + sag]![x] = ropeDot;
+		}
+
+		return grid.map((row) => row.map((cell) => cell ?? " ").join(""));
 	}
 
 	/** Component compatibility hook; rendering is cheap and uncached. */
@@ -185,7 +280,8 @@ export class StepWelcomeComponent implements Component {
 		const markFits = innerWidth - (STEP_MARK_COLUMNS + WELCOME_MARK_GAP) >= WELCOME_MARK_MIN_TEXT_WIDTH;
 		const markTier: "bird" | "mark" | "badge" = birdFits ? "bird" : markFits ? "mark" : "badge";
 		const markColumns = markTier === "bird" ? BIRD_COLUMNS : STEP_MARK_COLUMNS;
-		const headerWidth = markTier === "badge" ? innerWidth : innerWidth - markColumns - WELCOME_MARK_GAP;
+		const stripFits = markTier === "bird" && innerWidth >= STRIP_MIN_INNER;
+		const headerWidth = markTier === "badge" || stripFits ? innerWidth : innerWidth - markColumns - WELCOME_MARK_GAP;
 
 		const version = info.version?.trim() ?? "";
 		const versionSuffix = version === "" ? "" : ` ${muted(`/ ${version.startsWith("v") ? version : `v${version}`}`)}`;
@@ -227,35 +323,42 @@ export class StepWelcomeComponent implements Component {
 			}
 		}
 
-		let rows: string[];
-		if (markTier === "badge") {
-			rows = header;
-		} else {
-			const logoTheme = createStepLogoTheme();
-			const mark =
-				markTier === "bird"
-					? this.logoFrame === null
-						? renderBirdStatic(logoTheme)
-						: renderBirdFrame(logoTheme, this.logoFrame)
-					: WELCOME_MARK;
-			rows = alignMarkWithBody(mark, header, {
-				gap: WELCOME_MARK_GAP,
-				markColumns,
-			});
-		}
-
 		const borderInnerWidth = Math.max(1, safeWidth - 2);
 		const top = brand(`╭${"─".repeat(borderInnerWidth)}╮`);
 		const bottom = brand(`╰${"─".repeat(borderInnerWidth)}╯`);
-		const framed = rows.map((row) => {
+		const frameRow = (row: string): string => {
 			// Match the former TranscriptView: frame first, then clamp the complete
 			// styled row to the terminal width. Clipping the body before adding the
 			// rails changes where the ellipsis appears on narrow terminals.
 			const padding = Math.max(0, innerWidth - visibleWidth(row));
 			return `${brand("│ ")}${row}${" ".repeat(padding)}${brand(" │")}`;
-		});
+		};
 
-		const lines = [top, ...framed, bottom, ""];
+		let lines: string[];
+		if (stripFits) {
+			// Wide terminals: the ride-in strip sits above the framed info box.
+			const framedHeader = header.map(frameRow);
+			lines = [...this.buildStrip(innerWidth), "", top, ...framedHeader, bottom, ""];
+		} else {
+			let rows: string[];
+			if (markTier === "badge") {
+				rows = header;
+			} else {
+				const logoTheme = createStepLogoTheme();
+				const mark =
+					markTier === "bird"
+						? this.logoFrame === null
+							? renderBirdStatic(logoTheme)
+							: renderBirdFrame(logoTheme, this.logoFrame)
+						: WELCOME_MARK;
+				rows = alignMarkWithBody(mark, header, {
+					gap: WELCOME_MARK_GAP,
+					markColumns,
+				});
+			}
+			const framed = rows.map(frameRow);
+			lines = [top, ...framed, bottom, ""];
+		}
 		if (this.showFirstMessageHint) {
 			lines.push(muted(FIRST_SESSION_HINT), "");
 		}

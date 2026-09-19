@@ -1,4 +1,4 @@
-import { visibleWidth } from "@step-harness/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BIRD_FRAME_COUNT, BIRD_FRAME_DURATIONS_MS } from "../src/ui/view/chrome/step-logo.ts";
 import { BIRD_ANIMATION_DURATION_MS, StepWelcomeComponent } from "../src/ui/view/chrome/step-welcome.ts";
@@ -21,12 +21,18 @@ describe("StepWelcomeComponent", () => {
 		component.setFirstMessageHint(true);
 		const lines = component.render(80);
 
-		expect(lines[0]).toContain("╭");
+		// Wide terminal: the ride-in strip sits above the framed info box.
+		expect(lines[0]).not.toContain("╭");
+		expect(lines[10]).toContain("╭"); // 9 strip rows + blank, then the info box
+		expect(lines.some((line) => line.includes("╰"))).toBe(true);
 		expect(lines.join("\n")).toContain("Step CLI");
 		expect(lines.join("\n")).toContain("step-model");
 		expect(lines.join("\n")).toContain("step-model · high");
 		expect(lines.at(-2)).toContain("Your first message will start a new session.");
 		for (const line of lines.slice(0, -2)) {
+			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+		}
+		for (const line of lines.slice(11, -3)) {
 			if (line.length > 0) expect(visibleWidth(line)).toBe(80);
 		}
 	});
@@ -100,27 +106,33 @@ describe("StepWelcomeComponent", () => {
 		}
 	});
 
-	it("loops the pedal cycle for the intro window, then restores the PNG and never replays", () => {
+	it("rides in dragging the word, loops the pedals, then settles and never replays", () => {
 		initTheme("step");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
-		const expected = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }));
 		const staticRows = component.render(80);
+		const plain = staticRows.map(stripTerminalSequences).join("\n");
+		// The settled strip carries both the bird and the dragged word.
+		expect(plain).toContain("▀");
+		expect(plain).toContain("####");
+
 		component.playLogoIntro();
 		component.playLogoIntro();
-		// A full first cycle must show every frame in order.
+		// During the ride the layout differs from the settled strip and every
+		// pedal frame repaints.
+		let previous = component.render(80).join("\n");
+		expect(previous).not.toBe(staticRows.join("\n"));
 		for (let frame = 0; frame < BIRD_FRAME_COUNT; frame++) {
-			expected.setLogoFrame(frame);
-			expect(component.render(80)).toEqual(expected.render(80));
-			vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[frame]! - 1);
-			expect(component.render(80)).toEqual(expected.render(80));
-			vi.advanceTimersByTime(1);
+			vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[frame]!);
+			const current = component.render(80).join("\n");
+			expect(current).not.toBe(previous);
+			previous = current;
 		}
-		// The cycle keeps looping inside the ~5s window…
-		expected.setLogoFrame(0);
-		expect(component.render(80)).toEqual(expected.render(80));
-		// …and settles on the static frame once it elapses.
+		// The pedals keep looping inside the ~5s window…
+		vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[0]!);
+		expect(component.render(80).join("\n")).not.toBe(previous);
+		// …and settle once it elapses.
 		vi.advanceTimersByTime(10_000);
 		expect(component.render(80)).toEqual(staticRows);
 		expect(vi.getTimerCount()).toBe(0);
