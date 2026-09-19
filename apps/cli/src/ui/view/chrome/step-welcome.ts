@@ -427,11 +427,9 @@ export class StepWelcomeComponent implements Component {
 
 		let lines: string[];
 		if (stripFits) {
-			// Wide terminals: the ride-in strip sits above the info block. The
-			// block has no outline — like the letters, it floats over a dim
-			// shadow band one row below.
-			const shadowRow = `${" ".repeat(2)}${theme.fg("dim", "\u2584".repeat(Math.max(0, innerWidth - 3)))}`;
-			lines = [...this.buildStrip(innerWidth), "", ...header.map((row) => ` ${row}`), shadowRow, ""];
+			// Wide terminals: the ride-in strip sits above the framed info box.
+			const framedHeader = header.map(frameRow);
+			lines = [...this.buildStrip(innerWidth), "", top, ...framedHeader, bottom, ""];
 		} else {
 			let rows: string[];
 			if (markTier === "badge") {
