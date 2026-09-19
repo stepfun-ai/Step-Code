@@ -28,6 +28,8 @@ export interface StepWelcomeInfo {
 const WELCOME_TITLE = "Step CLI";
 const WELCOME_MARK = renderStepMark();
 const WELCOME_MARK_GAP = 3;
+/** Total intro run: the pedal cycle loops until this window elapses. */
+const LOGO_INTRO_TOTAL_MS = 5000;
 const WELCOME_MARK_MIN_TEXT_WIDTH = 32;
 const FIRST_SESSION_HINT = "Your first message will start a new session.";
 const ansiBold = (text: string): string => `\x1b[1m${text}\x1b[22m`;
@@ -124,18 +126,20 @@ export class StepWelcomeComponent implements Component {
 	}
 
 	/**
-	 * Plays the same one-shot riding-bird intro as the former Step TUI. The
-	 * settled static frame is restored after the final frame; callers should call
-	 * `dispose()` when the interactive mode is torn down.
+	 * Plays the one-shot riding-bird intro: the pedal cycle loops until
+	 * LOGO_INTRO_TOTAL_MS (~5s, several wheel turns) elapses, then settles on
+	 * the static frame. Callers should call `dispose()` when the interactive
+	 * mode is torn down.
 	 */
 	playLogoIntro(): void {
 		if (this.disposed || this.logoIntroPlayed || BIRD_FRAME_COUNT === 0) return;
 		this.logoIntroPlayed = true;
+		const endsAt = Date.now() + LOGO_INTRO_TOTAL_MS;
 		let frame = 0;
 		this.setLogoFrame(frame);
 		const advance = (): void => {
-			frame += 1;
-			if (frame >= BIRD_FRAME_COUNT) {
+			frame = (frame + 1) % BIRD_FRAME_COUNT;
+			if (Date.now() >= endsAt) {
 				this.logoTimer = null;
 				this.setLogoFrame(null);
 				return;

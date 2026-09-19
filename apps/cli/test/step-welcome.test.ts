@@ -100,7 +100,7 @@ describe("StepWelcomeComponent", () => {
 		}
 	});
 
-	it("plays each frame once, then restores the PNG and never replays", () => {
+	it("loops the pedal cycle for the intro window, then restores the PNG and never replays", () => {
 		initTheme("step");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
@@ -109,6 +109,7 @@ describe("StepWelcomeComponent", () => {
 		const staticRows = component.render(80);
 		component.playLogoIntro();
 		component.playLogoIntro();
+		// A full first cycle must show every frame in order.
 		for (let frame = 0; frame < BIRD_FRAME_COUNT; frame++) {
 			expected.setLogoFrame(frame);
 			expect(component.render(80)).toEqual(expected.render(80));
@@ -116,8 +117,13 @@ describe("StepWelcomeComponent", () => {
 			expect(component.render(80)).toEqual(expected.render(80));
 			vi.advanceTimersByTime(1);
 		}
+		// The cycle keeps looping inside the ~5s window…
+		expected.setLogoFrame(0);
+		expect(component.render(80)).toEqual(expected.render(80));
+		// …and settles on the static frame once it elapses.
+		vi.advanceTimersByTime(10_000);
 		expect(component.render(80)).toEqual(staticRows);
-		expect(requestRender).toHaveBeenCalledTimes(BIRD_FRAME_COUNT + 1);
+		expect(vi.getTimerCount()).toBe(0);
 		component.playLogoIntro();
 		component.invalidate();
 		component.setVisible(false);
