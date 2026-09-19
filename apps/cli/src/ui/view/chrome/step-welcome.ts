@@ -16,7 +16,7 @@ import {
 	renderStepMark,
 	STEP_MARK_COLUMNS,
 } from "./step-logo.ts";
-import { renderStepWordmarkCells, STEP_WORDMARK_COLUMNS } from "./step-wordmark.ts";
+import { paintStepWordmarkBorder, renderStepWordmarkCells, STEP_WORDMARK_COLUMNS } from "./step-wordmark.ts";
 
 /** Live facts shown in the Step session welcome block. */
 export interface StepWelcomeInfo {
@@ -28,21 +28,21 @@ export interface StepWelcomeInfo {
 	sessionId?: string;
 }
 
-const WELCOME_TITLE = "Step CLI";
 const WELCOME_MARK = renderStepMark();
 const WELCOME_MARK_GAP = 3;
 /** Ride-in phase of the intro: the bird races in while the word trails behind. */
 const STRIP_RIDE_MS = 1600;
-/** Total intro run: the ride-in only; the wordmark version settles on arrival. */
+/** Pedaling stops on arrival; a single wink follows in the static pose. */
 const LOGO_INTRO_TOTAL_MS = STRIP_RIDE_MS;
+const LOGO_WINK_MS = 180;
 
-/** Rope length between the word's last letter and the bird's tail, in cells. */
-const STRIP_ROPE_CELLS = 5;
+/** Transparent gap between the wordmark and the bird, in cells. */
+const STRIP_GAP_CELLS = 5;
 
-const STRIP_ROWS = 9; // bird height; the 8-row wordmark rides at the top
-/** Whole composition width: word + rope + bird, centered in the strip. */
+const STRIP_ROWS = 9;
+/** Whole composition width: word + gap + bird, centered in the strip. */
 function stripCompositionWidth(): number {
-	return STEP_WORDMARK_COLUMNS + STRIP_ROPE_CELLS + BIRD_COLUMNS;
+	return STEP_WORDMARK_COLUMNS + STRIP_GAP_CELLS + BIRD_COLUMNS;
 }
 /** Strip needs the composition plus a little margin to be worth it. */
 const STRIP_MIN_INNER = stripCompositionWidth() + 4;
@@ -50,7 +50,20 @@ const STRIP_MIN_INNER = stripCompositionWidth() + 4;
 const easeOutCubic = (p: number): number => 1 - (1 - p) ** 3;
 const WELCOME_MARK_MIN_TEXT_WIDTH = 32;
 const FIRST_SESSION_HINT = "Your first message will start a new session.";
-const ansiBold = (text: string): string => `\x1b[1m${text}\x1b[22m`;
+const WELCOME_TIPS = [
+	{
+		command: "/cron",
+		description: "View and manage scheduled tasks.",
+	},
+	{
+		command: "/goal",
+		description: "Set a goal and keep working toward it across turns.",
+	},
+	{
+		command: "ultracode",
+		description: "Include this keyword in your prompt to enable parallel subagents.",
+	},
+] as const;
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, {
 	granularity: "grapheme",
@@ -116,6 +129,7 @@ export class StepWelcomeComponent implements Component {
 	private visible = true;
 	private showFirstMessageHint = false;
 	private logoFrame: number | null = null;
+	private logoWinking = false;
 	private logoIntroPlayed = false;
 	private disposed = false;
 	/** Ride-in start timestamp; null once the strip is settled. */
@@ -151,9 +165,10 @@ export class StepWelcomeComponent implements Component {
 	}
 
 	/** Selects an animation frame, or `null` for the settled logo. */
-	setLogoFrame(frame: number | null): void {
-		if (this.logoFrame === frame) return;
+	setLogoFrame(frame: number | null, wink = false): void {
+		if (this.logoFrame === frame && this.logoWinking === wink) return;
 		this.logoFrame = frame;
+		this.logoWinking = wink;
 		// Intro frames repaint whole: the strip's per-cell styling (hundreds of
 		// SGR switches per row) trips the incremental diff renderer, leaving a
 		// corrupted mix of stale ride frames on screen.
@@ -162,8 +177,8 @@ export class StepWelcomeComponent implements Component {
 
 	/**
 	 * Plays the one-shot riding-bird intro: the pedal cycle loops until
-	 * LOGO_INTRO_TOTAL_MS (~5s, several wheel turns) elapses, then settles on
-	 * the static frame. Callers should call `dispose()` when the interactive
+	 * LOGO_INTRO_TOTAL_MS (1600ms) elapses, then winks once for 180ms in
+	 * the static pose. Callers should call `dispose()` when the interactive
 	 * mode is torn down.
 	 */
 	playLogoIntro(): void {
@@ -176,13 +191,16 @@ export class StepWelcomeComponent implements Component {
 		const advance = (): void => {
 			frame = (frame + 1) % BIRD_FRAME_COUNT;
 			if (Date.now() >= endsAt) {
-				this.logoTimer = null;
 				this.introStartedAt = null;
-				this.setLogoFrame(null);
+				this.logoTimer = setTimeout(() => {
+					this.logoTimer = null;
+					this.setLogoFrame(null);
+				}, LOGO_WINK_MS);
+				this.setLogoFrame(null, true);
 				return;
 			}
 			this.setLogoFrame(frame);
-			this.logoTimer = setTimeout(advance, BIRD_FRAME_DURATIONS_MS[frame] ?? 80);
+			this.logoTimer = setTimeout(advance, Math.min(BIRD_FRAME_DURATIONS_MS[frame] ?? 80, endsAt - Date.now()));
 		};
 		this.logoTimer = setTimeout(advance, BIRD_FRAME_DURATIONS_MS[0] ?? 80);
 	}
@@ -199,6 +217,7 @@ export class StepWelcomeComponent implements Component {
 	/** Drops the intro timer on teardown; unlike `stopLogoIntro`, it repaints nothing. */
 	dispose(): void {
 		this.disposed = true;
+		this.logoWinking = false;
 		if (this.logoTimer !== null) {
 			clearTimeout(this.logoTimer);
 			this.logoTimer = null;
@@ -207,7 +226,7 @@ export class StepWelcomeComponent implements Component {
 
 	/**
 	 * The ride-in strip: the bird pedals toward the right while the STEP CLI
-	 * block letters trail behind on a dashed rope, waving in the slipstream.
+	 * block letters follow with a transparent gap.
 	 * Settles to bird-right / word-left once the ride window elapses.
 	 */
 	private buildStrip(innerWidth: number): string[] {
@@ -220,16 +239,18 @@ export class StepWelcomeComponent implements Component {
 		const wordW = STEP_WORDMARK_COLUMNS;
 		// Center the settled composition; the ride-in targets that spot.
 		const compositionX = Math.max(0, Math.floor((innerWidth - stripCompositionWidth()) / 2));
-		const stopBirdX = compositionX + wordW + STRIP_ROPE_CELLS;
+		const stopBirdX = compositionX + wordW + STRIP_GAP_CELLS;
 		const birdX = Math.round(-BIRD_COLUMNS - 2 + (stopBirdX + BIRD_COLUMNS + 2) * progress);
-		const lettersRight = birdX - STRIP_ROPE_CELLS;
+		const lettersRight = birdX - STRIP_GAP_CELLS;
 		const lettersX = lettersRight - wordW;
 
 		type Cell = string | undefined;
 		const grid: Cell[][] = Array.from({ length: STRIP_ROWS }, () => new Array<Cell>(innerWidth).fill(undefined));
 
 		// The bird.
-		const birdCells = animating ? renderBirdFrameCells(logoTheme, this.logoFrame!) : renderBirdStaticCells(logoTheme);
+		const birdCells = animating
+			? renderBirdFrameCells(logoTheme, this.logoFrame!)
+			: renderBirdStaticCells(logoTheme, this.logoWinking);
 		birdCells.forEach((row, r) => {
 			row.forEach((cell, c) => {
 				const x = birdX + c;
@@ -245,15 +266,6 @@ export class StepWelcomeComponent implements Component {
 				if (cell !== undefined && x >= 0 && x < innerWidth) grid[r]![x] = cell;
 			});
 		});
-
-		// The rope: a dashed line from the bird's tail to the word's last letter,
-		// sagging one row in the middle.
-		const ropeDot = theme.fg("muted", "·");
-		for (let x = lettersRight + 1; x < birdX; x += 2) {
-			if (x < 0 || x >= innerWidth) continue;
-			const sag = x > lettersRight + 1 && x < birdX - 1 && (x - lettersRight) % 4 === 0 ? 1 : 0;
-			grid[3 + sag]![x] = ropeDot;
-		}
 
 		// Wordmark cells are self-contained styled chars; plain join suffices.
 		return grid.map((row) => row.map((cell) => cell ?? " ").join(""));
@@ -281,15 +293,10 @@ export class StepWelcomeComponent implements Component {
 		const headerWidth = markTier === "badge" || stripFits ? innerWidth : innerWidth - markColumns - WELCOME_MARK_GAP;
 
 		const version = info.version?.trim() ?? "";
-		const versionSuffix = version === "" ? "" : ` ${muted(`/ ${version.startsWith("v") ? version : `v${version}`}`)}`;
-		// The old Step renderer emitted bold explicitly (rather than delegating to
-		// Chalk, which disables attributes for captured/non-TTY output).
-		const title = `${ansiBold(WELCOME_TITLE)}${versionSuffix}`;
 		const badge = brand(paintStepBadge(" STEP "));
-		const header: string[] = [markTier === "badge" ? `${badge} ${title}` : title];
+		const header: string[] = markTier === "badge" ? [badge, ""] : [];
 
 		if (info !== undefined) {
-			header.push("");
 			const sessionId = info.sessionId?.trim();
 			const model = info.model?.trim() || "unknown model";
 			const thinkingLevel = info.thinkingLevel?.trim();
@@ -321,21 +328,46 @@ export class StepWelcomeComponent implements Component {
 		}
 
 		const borderInnerWidth = Math.max(1, safeWidth - 2);
-		const top = brand(`╭${"─".repeat(borderInnerWidth)}╮`);
-		const bottom = brand(`╰${"─".repeat(borderInnerWidth)}╯`);
+		const versionLabel =
+			version === "" || borderInnerWidth < 4
+				? ""
+				: truncateToWidth(` ${version.startsWith("v") ? version : `v${version}`} `, borderInnerWidth - 2);
+		const top = versionLabel
+			? [
+					paintStepWordmarkBorder("╭─"),
+					muted(versionLabel),
+					paintStepWordmarkBorder(`${"─".repeat(borderInnerWidth - visibleWidth(versionLabel) - 1)}╮`),
+				].join("")
+			: paintStepWordmarkBorder(`╭${"─".repeat(borderInnerWidth)}╮`);
+		const bottom = paintStepWordmarkBorder(`╰${"─".repeat(borderInnerWidth)}╯`);
 		const frameRow = (row: string): string => {
 			// Match the former TranscriptView: frame first, then clamp the complete
 			// styled row to the terminal width. Clipping the body before adding the
 			// rails changes where the ellipsis appears on narrow terminals.
 			const padding = Math.max(0, innerWidth - visibleWidth(row));
-			return `${brand("│ ")}${row}${" ".repeat(padding)}${brand(" │")}`;
+			return `${paintStepWordmarkBorder("│ ")}${row}${" ".repeat(padding)}${paintStepWordmarkBorder(" │")}`;
 		};
+		const tips = ["", muted("Tips")];
+		const prefixWidth = Math.max(...WELCOME_TIPS.map((tip) => visibleWidth(tip.command))) + 2;
+		for (const tip of WELCOME_TIPS) {
+			const prefix = tip.command + " ".repeat(prefixWidth - visibleWidth(tip.command));
+			if (innerWidth - prefixWidth < 24) {
+				tips.push(...wrapMultiline(tip.command, innerWidth).map(brand));
+				tips.push(...wrapMultiline(tip.description, innerWidth - 2).map((line) => `  ${muted(line)}`));
+				continue;
+			}
+			const descriptionLines = wrapMultiline(tip.description, innerWidth - prefixWidth);
+			for (const [index, line] of descriptionLines.entries()) {
+				tips.push(`${index === 0 ? brand(prefix) : " ".repeat(prefixWidth)}${muted(line)}`);
+			}
+		}
+		const framedTips = tips.map(frameRow);
 
 		let lines: string[];
 		if (stripFits) {
 			// Wide terminals: the ride-in strip sits above the framed info box.
 			const framedHeader = header.map(frameRow);
-			lines = [...this.buildStrip(innerWidth), "", top, ...framedHeader, bottom, ""];
+			lines = [...this.buildStrip(innerWidth), "", top, ...framedHeader, ...framedTips, bottom, ""];
 		} else {
 			let rows: string[];
 			if (markTier === "badge") {
@@ -345,7 +377,7 @@ export class StepWelcomeComponent implements Component {
 				const mark =
 					markTier === "bird"
 						? this.logoFrame === null
-							? renderBirdStatic(logoTheme)
+							? renderBirdStatic(logoTheme, this.logoWinking)
 							: renderBirdFrame(logoTheme, this.logoFrame)
 						: WELCOME_MARK;
 				rows = alignMarkWithBody(mark, header, {
@@ -354,7 +386,7 @@ export class StepWelcomeComponent implements Component {
 				});
 			}
 			const framed = rows.map(frameRow);
-			lines = [top, ...framed, bottom, ""];
+			lines = [top, ...framed, ...framedTips, bottom, ""];
 		}
 		if (this.showFirstMessageHint) {
 			lines.push(muted(FIRST_SESSION_HINT), "");
