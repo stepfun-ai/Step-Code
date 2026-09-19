@@ -15,8 +15,8 @@ import {
 	renderBirdStaticCells,
 	renderStepMark,
 	STEP_MARK_COLUMNS,
-	stepLogoColorOpen,
 } from "./step-logo.ts";
+import { renderStepWordmarkCells, STEP_WORDMARK_COLUMNS } from "./step-wordmark.ts";
 
 /** Live facts shown in the Step session welcome block. */
 export interface StepWelcomeInfo {
@@ -31,73 +31,23 @@ export interface StepWelcomeInfo {
 const WELCOME_TITLE = "Step CLI";
 const WELCOME_MARK = renderStepMark();
 const WELCOME_MARK_GAP = 3;
-/** Total intro run: the pedal cycle loops until this window elapses. */
-const LOGO_INTRO_TOTAL_MS = 5000;
 /** Ride-in phase of the intro: the bird races in while the word trails behind. */
 const STRIP_RIDE_MS = 1600;
+/** Total intro run: the ride-in only; the wordmark version settles on arrival. */
+const LOGO_INTRO_TOTAL_MS = STRIP_RIDE_MS;
 
-/**
- * 7-wide 8-row letterforms dragged behind the bird. Each glyph pixel renders
- * as one solid cell; row 8 stays empty so the drop shadow fits inside the
- * strip.
- */
-const STRIP_WORD = "STEP CLI";
-/**
- * Upright squared letterforms for the dragged word (7 wide, 8 rows). The
- * renderer shears them into an italic slant and adds bevel highlights.
- */
-const STRIP_BASE_FONT: Record<string, string[]> = {
-	S: ["#######", "##     ", "##     ", "#######", "     ##", "     ##", "#######", "       "],
-	T: ["#######", "   ##  ", "   ##  ", "   ##  ", "   ##  ", "   ##  ", "   ##  ", "       "],
-	E: ["#######", "##     ", "##     ", "#######", "##     ", "##     ", "#######", "       "],
-	P: ["#######", "##    ##", "##    ##", "#######", "##     ", "##     ", "##     ", "        "],
-	C: ["#######", "##     ", "##     ", "##     ", "##     ", "##     ", "#######", "       "],
-	L: ["##     ", "##     ", "##     ", "##     ", "##     ", "##     ", "#######", "       "],
-	I: ["###", " # ", " # ", " # ", " # ", " # ", "###", "   "],
-	" ": ["   ", "   ", "   ", "   ", "   ", "   ", "   ", "   "],
-};
-
-/** Italic shear: each row from the top shifts right by up to 3 cells. */
-function glyphShear(glyphRows: number): number[] {
-	return Array.from({ length: glyphRows }, (_, gy) => Math.round((glyphRows - 1 - gy) / 2.6));
-}
 /** Rope length between the word's last letter and the bird's tail, in cells. */
 const STRIP_ROPE_CELLS = 5;
 
-/** Visible width of the dragged word, in cells. */
-function stripWordWidth(): number {
-	let w = 0;
-	for (const ch of STRIP_WORD) w += STRIP_BASE_FONT[ch]![0]!.length + 3;
-	return w - 1; // no trailing letter gap
-}
-
-const STRIP_ROWS = 9;
+const STRIP_ROWS = 9; // bird height; the 8-row wordmark rides at the top
 /** Whole composition width: word + rope + bird, centered in the strip. */
 function stripCompositionWidth(): number {
-	return stripWordWidth() + STRIP_ROPE_CELLS + BIRD_COLUMNS;
+	return STEP_WORDMARK_COLUMNS + STRIP_ROPE_CELLS + BIRD_COLUMNS;
 }
 /** Strip needs the composition plus a little margin to be worth it. */
 const STRIP_MIN_INNER = stripCompositionWidth() + 4;
 
 const easeOutCubic = (p: number): number => 1 - (1 - p) ** 3;
-
-/** Dim SGR open for the letter shadow runs. */
-function stepLogoDimOpen(): string {
-	const dim = theme.fg("dim", "\u2588");
-	const open = dim.slice(0, dim.lastIndexOf("\u2588"));
-	return open;
-}
-
-/** Hex color mixed from violet to gold, for the word's letter gradient. */
-function mixVioletToGold(t: number): string {
-	const from = [0xaa, 0x91, 0xf0];
-	const to = [0xf4, 0xd5, 0x6b];
-	const channel = (a: number, b: number): string =>
-		Math.round(a + (b - a) * Math.min(1, Math.max(0, t)))
-			.toString(16)
-			.padStart(2, "0");
-	return `#${channel(from[0]!, to[0]!)}${channel(from[1]!, to[1]!)}${channel(from[2]!, to[2]!)}`;
-}
 const WELCOME_MARK_MIN_TEXT_WIDTH = 32;
 const FIRST_SESSION_HINT = "Your first message will start a new session.";
 const ansiBold = (text: string): string => `\x1b[1m${text}\x1b[22m`;
@@ -267,7 +217,7 @@ export class StepWelcomeComponent implements Component {
 		const ride = Math.min(1, elapsed / STRIP_RIDE_MS);
 		const progress = easeOutCubic(ride);
 
-		const wordW = stripWordWidth();
+		const wordW = STEP_WORDMARK_COLUMNS;
 		// Center the settled composition; the ride-in targets that spot.
 		const compositionX = Math.max(0, Math.floor((innerWidth - stripCompositionWidth()) / 2));
 		const stopBirdX = compositionX + wordW + STRIP_ROPE_CELLS;
@@ -275,7 +225,7 @@ export class StepWelcomeComponent implements Component {
 		const lettersRight = birdX - STRIP_ROPE_CELLS;
 		const lettersX = lettersRight - wordW;
 
-		type Cell = string | { open: string; ch: string } | undefined;
+		type Cell = string | undefined;
 		const grid: Cell[][] = Array.from({ length: STRIP_ROWS }, () => new Array<Cell>(innerWidth).fill(undefined));
 
 		// The bird.
@@ -287,32 +237,13 @@ export class StepWelcomeComponent implements Component {
 			});
 		});
 
-		// The dragged word: italic solid letters in a violet→gold gradient.
-		// Each glyph row shifts right toward the top (shear); the right/bottom
-		// edges carry a dim shadow and the top-left bevel a light highlight, so
-		// the block letters read as beveled 3D slabs.
-		const shadowRun = { open: stepLogoDimOpen(), ch: "\u2588" };
-		const letters = STRIP_WORD.split("");
-		const colored = letters.filter((ch) => ch !== " ");
-		const shears = glyphShear(8);
-		let cx = lettersX;
-		let seen = 0;
-		letters.forEach((ch) => {
-			const glyph = STRIP_BASE_FONT[ch]!;
-			const inkRun = { open: stepLogoColorOpen(mixVioletToGold(seen / (colored.length - 1))), ch: "\u2588" };
-			for (let gy = 0; gy < glyph.length; gy += 1) {
-				const shear = shears[gy]!;
-				for (let gx = 0; gx < glyph[gy]!.length; gx += 1) {
-					if (glyph[gy]![gx] !== "#") continue;
-					const x = cx + gx + shear;
-					const y = gy;
-					// Bottom shadow straight below for the beveled-slab depth.
-					if (x >= 0 && x < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x] = shadowRun;
-					if (x >= 0 && x < innerWidth) grid[y]![x] = inkRun;
-				}
-			}
-			if (ch !== " ") seen += 1;
-			cx += glyph[0]!.length + 3;
+		// The dragged wordmark: ANSI-shadow letterforms with per-letter
+		// gradient ink and dim shadow strokes, riding rigidly behind the bird.
+		renderStepWordmarkCells().forEach((row, r) => {
+			row.forEach((cell, c) => {
+				const x = lettersX + c;
+				if (cell !== undefined && x >= 0 && x < innerWidth) grid[r]![x] = cell;
+			});
 		});
 
 		// The rope: a dashed line from the bird's tail to the word's last letter,
@@ -324,33 +255,8 @@ export class StepWelcomeComponent implements Component {
 			grid[3 + sag]![x] = ropeDot;
 		}
 
-		// Run-length on output: consecutive cells sharing one SGR open merge
-		// into a single escape run, several-fold smaller per animation frame.
-		const joinRow = (row: Cell[]): string => {
-			let line = "";
-			let index = 0;
-			while (index < row.length) {
-				const cell = row[index]!;
-				if (typeof cell === "string") {
-					line += cell;
-					index += 1;
-					continue;
-				}
-				if (cell === undefined) {
-					let blanks = 0;
-					while (index + blanks < row.length && row[index + blanks] === undefined) blanks += 1;
-					line += " ".repeat(blanks);
-					index += blanks;
-					continue;
-				}
-				let run = 0;
-				while (index + run < row.length && row[index + run] === cell) run += 1;
-				line += `${cell.open}${cell.ch.repeat(run)}${cell.open === "" ? "" : "\x1b[39m"}`;
-				index += run;
-			}
-			return line;
-		};
-		return grid.map(joinRow);
+		// Wordmark cells are self-contained styled chars; plain join suffices.
+		return grid.map((row) => row.map((cell) => cell ?? " ").join(""));
 	}
 
 	/** Component compatibility hook; rendering is cheap and uncached. */
