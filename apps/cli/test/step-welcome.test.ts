@@ -19,21 +19,20 @@ describe("StepWelcomeComponent", () => {
 			workspaceRoot: "/tmp/project",
 		}));
 		component.setFirstMessageHint(true);
-		const lines = component.render(100);
+		const lines = component.render(110);
 
-		// Wide terminal: the ride-in strip sits above the framed info box.
-		expect(lines[0]).not.toContain("╭");
-		expect(lines[10]).toContain("╭"); // 9 strip rows + blank, then the info box
-		expect(lines.some((line) => line.includes("╰"))).toBe(true);
-		expect(lines.join("\n")).toContain("Step CLI");
-		expect(lines.join("\n")).toContain("step-model");
-		expect(lines.join("\n")).toContain("step-model · high");
+		// Wide terminal: the ride-in strip sits above the borderless info
+		// block, which floats over a dim shadow band instead of outline rails.
+		const plain = lines.map(stripTerminalSequences);
+		expect(plain.join("\n")).not.toContain("╭");
+		expect(plain.join("\n")).not.toContain("╰");
+		expect(plain[10]).toContain("Step CLI");
+		expect(plain.some((line) => /^\s+▄+$/.test(line))).toBe(true); // shadow band
+		expect(plain.join("\n")).toContain("step-model");
+		expect(plain.join("\n")).toContain("step-model · high");
 		expect(lines.at(-2)).toContain("Your first message will start a new session.");
 		for (const line of lines.slice(0, -2)) {
-			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
-		}
-		for (const line of lines.slice(11, -3)) {
-			if (line.length > 0) expect(visibleWidth(line)).toBe(100);
+			if (line.length > 0) expect(visibleWidth(line)).toBeLessThanOrEqual(110);
 		}
 	});
 
@@ -111,7 +110,7 @@ describe("StepWelcomeComponent", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const component = new StepWelcomeComponent(() => ({ workspaceRoot: "/tmp/project" }), requestRender);
-		const staticRows = component.render(100);
+		const staticRows = component.render(110);
 		const plain = staticRows.map(stripTerminalSequences).join("\n");
 		// The settled strip carries both the bird and the dragged word.
 		expect(plain).toContain("▀");
@@ -121,20 +120,20 @@ describe("StepWelcomeComponent", () => {
 		component.playLogoIntro();
 		// During the ride the layout differs from the settled strip and every
 		// pedal frame repaints.
-		let previous = component.render(100).join("\n");
+		let previous = component.render(110).join("\n");
 		expect(previous).not.toBe(staticRows.join("\n"));
 		for (let frame = 0; frame < BIRD_FRAME_COUNT; frame++) {
 			vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[frame]!);
-			const current = component.render(100).join("\n");
+			const current = component.render(110).join("\n");
 			expect(current).not.toBe(previous);
 			previous = current;
 		}
 		// The pedals keep looping inside the ~5s window…
 		vi.advanceTimersByTime(BIRD_FRAME_DURATIONS_MS[0]!);
-		expect(component.render(100).join("\n")).not.toBe(previous);
+		expect(component.render(110).join("\n")).not.toBe(previous);
 		// …and settle once it elapses.
 		vi.advanceTimersByTime(10_000);
-		expect(component.render(100)).toEqual(staticRows);
+		expect(component.render(110)).toEqual(staticRows);
 		expect(vi.getTimerCount()).toBe(0);
 		component.playLogoIntro();
 		component.invalidate();
@@ -142,7 +141,7 @@ describe("StepWelcomeComponent", () => {
 		component.setVisible(true);
 		requestRender.mockClear();
 		vi.advanceTimersByTime(BIRD_ANIMATION_DURATION_MS * 3);
-		expect(component.render(100)).toEqual(staticRows);
+		expect(component.render(110)).toEqual(staticRows);
 		expect(requestRender).not.toHaveBeenCalled();
 		expect(vi.getTimerCount()).toBe(0);
 	});
