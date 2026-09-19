@@ -9,6 +9,7 @@ import {
 	BIRD_FRAME_DURATIONS_MS,
 	createStepLogoTheme,
 	paintStepBadge,
+	paintStepLogoColor,
 	renderBirdFrame,
 	renderBirdFrameCells,
 	renderBirdStatic,
@@ -60,6 +61,17 @@ const STRIP_ROWS = 9;
 const STRIP_MIN_INNER = stripWordWidth() + 4 + BIRD_COLUMNS + 2;
 
 const easeOutCubic = (p: number): number => 1 - (1 - p) ** 3;
+
+/** Hex color mixed from violet to gold, for the word's letter gradient. */
+function mixVioletToGold(t: number): string {
+	const from = [0xaa, 0x91, 0xf0];
+	const to = [0xf4, 0xd5, 0x6b];
+	const channel = (a: number, b: number): string =>
+		Math.round(a + (b - a) * Math.min(1, Math.max(0, t)))
+			.toString(16)
+			.padStart(2, "0");
+	return `#${channel(from[0]!, to[0]!)}${channel(from[1]!, to[1]!)}${channel(from[2]!, to[2]!)}`;
+}
 const WELCOME_MARK_MIN_TEXT_WIDTH = 32;
 const FIRST_SESSION_HINT = "Your first message will start a new session.";
 const ansiBold = (text: string): string => `\x1b[1m${text}\x1b[22m`;
@@ -233,20 +245,29 @@ export class StepWelcomeComponent implements Component {
 			});
 		});
 
-		// The dragged word; each letter bounces on its own phase while riding.
-		const brand = (text: string): string => theme.fg("accent", text);
+		// The dragged word: a violet→gold letter gradient with a dim drop
+		// shadow one cell down-right, giving the block letters depth. The word
+		// rides rigidly behind the bird (no per-letter motion).
+		const shadow = theme.fg("dim", "\u2592");
+		const letters = STRIP_WORD.split("");
+		const colored = letters.filter((ch) => ch !== " ");
 		let cx = lettersX;
-		STRIP_WORD.split("").forEach((ch, col) => {
+		let seen = 0;
+		letters.forEach((ch) => {
 			const glyph = STRIP_FONT[ch]!;
-			const bounce = animating ? Math.round(Math.sin(elapsed / 320 + col * 0.55) * 0.9) : 0;
+			const color = ch === " " ? "" : paintStepLogoColor(mixVioletToGold(seen / (colored.length - 1)), "#");
 			for (let gy = 0; gy < glyph.length; gy += 1) {
 				for (let gx = 0; gx < glyph[gy]!.length; gx += 1) {
 					if (glyph[gy]![gx] !== "#") continue;
 					const x = cx + gx;
-					const y = 2 + gy + bounce;
-					if (x >= 0 && x < innerWidth && y >= 0 && y < STRIP_ROWS) grid[y]![x] = brand("#");
+					const y = 2 + gy;
+					// Shadow first, one cell down-right; the letter overwrites
+					// any shadow cell it overlaps.
+					if (x + 1 >= 0 && x + 1 < innerWidth && y + 1 < STRIP_ROWS) grid[y + 1]![x + 1] = shadow;
+					if (x >= 0 && x < innerWidth) grid[y]![x] = color;
 				}
 			}
+			if (ch !== " ") seen += 1;
 			cx += glyph[0]!.length + 1;
 		});
 
