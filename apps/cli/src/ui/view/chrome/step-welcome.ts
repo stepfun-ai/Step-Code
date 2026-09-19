@@ -248,14 +248,14 @@ export class StepWelcomeComponent implements Component {
 		// The dragged word: a violet→gold letter gradient with a dim drop
 		// shadow one cell down-right, giving the block letters depth. The word
 		// rides rigidly behind the bird (no per-letter motion).
-		const shadow = theme.fg("dim", "\u2592");
+		const shadow = theme.fg("dim", "\u2588");
 		const letters = STRIP_WORD.split("");
 		const colored = letters.filter((ch) => ch !== " ");
 		let cx = lettersX;
 		let seen = 0;
 		letters.forEach((ch) => {
 			const glyph = STRIP_FONT[ch]!;
-			const color = ch === " " ? "" : paintStepLogoColor(mixVioletToGold(seen / (colored.length - 1)), "#");
+			const color = ch === " " ? "" : paintStepLogoColor(mixVioletToGold(seen / (colored.length - 1)), "\u2588");
 			for (let gy = 0; gy < glyph.length; gy += 1) {
 				for (let gx = 0; gx < glyph[gy]!.length; gx += 1) {
 					if (glyph[gy]![gx] !== "#") continue;

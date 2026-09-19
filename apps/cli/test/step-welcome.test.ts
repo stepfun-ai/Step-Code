@@ -115,7 +115,7 @@ describe("StepWelcomeComponent", () => {
 		const plain = staticRows.map(stripTerminalSequences).join("\n");
 		// The settled strip carries both the bird and the dragged word.
 		expect(plain).toContain("▀");
-		expect(plain).toContain("####");
+		expect(plain).toContain("████");
 
 		component.playLogoIntro();
 		component.playLogoIntro();
