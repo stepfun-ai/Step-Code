@@ -14,8 +14,3 @@ export function resolveFeedbackEndpoint(env: NodeJS.ProcessEnv = process.env, bu
 	if (env !== process.env) return undefined;
 	return (bundle ? INLINED_FEEDBACK_BUNDLE_ENDPOINT : INLINED_FEEDBACK_ENDPOINT)?.trim() || undefined;
 }
-
-/** Kept as a compatibility predicate; public builds have no built-in routes. */
-export function isBuiltInFeedbackEndpoint(_endpoint: string, _bundle = false): boolean {
-	return false;
-}
