@@ -71,8 +71,8 @@ pnpm run check         # Lint, format, and type check
 pnpm step            # Run the Step CLI entrypoint from sources
 ```
 
-Standalone Step binaries can update themselves from the published release
-manifests:
+Standalone Step binaries can update themselves from release manifests supplied
+by the release environment:
 
 ```bash
 step update          # Install the latest stable release
@@ -87,7 +87,9 @@ tool that provided them.
 
 ## Building standalone binaries from release source
 
-GitHub releases include a versioned source archive covered by the release's `SHA256SUMS` file. Extract it and run the same build script used for the official standalone binaries:
+The public source tree can also create a versioned source archive covered by a
+`SHA256SUMS` file. Extract an archive supplied by your release environment and
+run the same build script used for the standalone binaries:
 
 ```bash
 VERSION="<release-version>"

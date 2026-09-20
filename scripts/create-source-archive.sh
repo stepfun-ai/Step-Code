@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the deterministic source archive uploaded with GitHub releases.
+# Create the deterministic source archive consumed by the release environment.
 #
 # Usage:
 #   npm run hydrate:model-data
