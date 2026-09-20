@@ -2,8 +2,12 @@
  * Tests for image processing utilities using Photon.
  */
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { convertToPng } from "../src/utils/image-convert.ts";
+import { imageFileToContent } from "../src/utils/image-process.ts";
 import { formatDimensionNote, resizeImage } from "../src/utils/image-resize.ts";
 
 // Small 2x2 red PNG image (base64) - generated with ImageMagick
@@ -173,5 +177,39 @@ describe("formatDimensionNote", () => {
 		expect(note).toContain("original 2000x1000");
 		expect(note).toContain("displayed at 1000x500");
 		expect(note).toContain("2.00"); // scale factor
+	});
+});
+
+describe("imageFileToContent", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "image-file-to-content-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("reads a PNG file into an inline image attachment", async () => {
+		const filePath = join(dir, "pic.png");
+		writeFileSync(filePath, imageBytes(TINY_PNG));
+
+		const content = await imageFileToContent(filePath, { autoResizeImages: false });
+
+		expect(content).not.toBeNull();
+		expect(content?.type).toBe("image");
+		expect(content?.mimeType).toBe("image/png");
+		// The base64 payload decodes back to a valid PNG.
+		const buffer = Buffer.from(content?.data ?? "", "base64");
+		expect(buffer[0]).toBe(0x89);
+		expect(buffer[1]).toBe(0x50); // 'P'
+	});
+
+	it("returns null for a non-image file", async () => {
+		const filePath = join(dir, "notes.txt");
+		writeFileSync(filePath, "just text, not an image");
+
+		expect(await imageFileToContent(filePath, { autoResizeImages: false })).toBeNull();
 	});
 });
