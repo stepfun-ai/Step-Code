@@ -3,12 +3,12 @@ import { getStepDefaultTheme } from "../src/step/defaults.ts";
 import { applyStepEnvironment, isStepEntrypoint, resolveStepSessionDir } from "../src/step/environment.ts";
 
 describe("Step early environment", () => {
-	test("seeds the automatic Step theme pair for a clean launch", () => {
+	test("seeds the single blue theme for a clean launch", () => {
 		const env: NodeJS.ProcessEnv = {};
 
 		applyStepEnvironment(env);
 
-		expect(getStepDefaultTheme(env)).toBe("step-light/step");
+		expect(getStepDefaultTheme(env)).toBe("step-blue");
 	});
 
 	test("defaults the downstream client marker to step-cli, honoring an explicit value", () => {

@@ -18,7 +18,7 @@ Themes are JSON files that define colors for the TUI.
 
 Step loads themes from:
 
-- Built-in: `dark`, `light`, `sage`, `step`, `step-light`
+- Built-in: `dark`, `light`, `sage`, `step-blue`, `step-violet`, `step-violet-light`
 - Global: `~/.step-cli/agent/themes/*.json`
 - Project: `.step-cli/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
@@ -37,7 +37,27 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, step detects your terminal background and defaults to `dark` or `light`.
+Step defaults to `step-blue`, a single bright-blue palette with no light/dark variants.
+The first-run picker lists `step-blue (default)` first, followed by the other installed themes.
+
+| Theme | Appearance |
+|-------|------------|
+| `step-blue` | Default bright blue (`#68c0ff`), tuned for dark terminals |
+| `step-violet` | Original Step violet for dark terminals |
+| `step-violet-light` | Original Step violet for light terminals |
+| `dark` / `light` | General-purpose dark / light palettes |
+| `sage` | Sage green for dark terminals |
+
+The former violet `step` and `step-light` palettes now use the `step-violet` names.
+The old `step` and `step-light` names are no longer built-in themes or aliases.
+If a saved setting uses either old name or `step-light/step`, select `step-blue` via `/theme`.
+Use `step-violet-light/step-violet` for violet with automatic appearance switching.
+No personal configuration files are rewritten. Blue uses the existing truecolor / nearest-256-color pipeline.
+
+Built-in themes leave inline code, tool status blocks, and custom-message backgrounds transparent.
+The full-width user prompt background remains visible so user messages are easy to find.
+Selection, search-match, scrollbar, and word-level diff highlights remain functional feedback.
+The welcome logo retains its violet-to-gold gradient and its matching border color independently of the text theme.
 
 ### Initial Theme
 
@@ -195,6 +215,7 @@ Every theme must define all 51 required color tokens. The optional tokens preser
 | `userMessageBg` | User message background |
 | `userMessageText` | User message text |
 | `customMessageBg` | Extension message background |
+| `codeInlineBg` | Optional inline-code background; falls back to `customMessageBg` |
 | `customMessageText` | Extension message text |
 | `customMessageLabel` | Extension message label |
 | `toolPendingBg` | Tool box (pending) |
@@ -285,6 +306,10 @@ Four formats are supported:
 | Variable | `"primary"` | Reference to a `vars` entry |
 | Default | `""` | Terminal's default color |
 
+For inline code, an empty background renders foreground-only text without chip padding or background resets,
+so it inherits the enclosing user prompt background. Explicit custom inline-code backgrounds remain supported.
+HTML export resolves empty background tokens to CSS `transparent`, not to the default foreground color.
+
 ### 256-Color Palette
 
 - `0-15`: Basic ANSI colors (terminal-dependent)
@@ -319,5 +344,6 @@ See the built-in themes:
 - [dark.json](../src/theme/dark.json)
 - [light.json](../src/theme/light.json)
 - [sage.json](../src/theme/sage.json)
-- [step.json](../src/theme/step.json)
-- [step-light.json](../src/theme/step-light.json)
+- [step-blue.json](../src/theme/step-blue.json)
+- [step-violet.json](../src/theme/step-violet.json)
+- [step-violet-light.json](../src/theme/step-violet-light.json)

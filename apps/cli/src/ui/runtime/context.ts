@@ -36,7 +36,6 @@ import type { AssistantMessage, Usage } from "@step-harness/providers/compat";
 import type {
 	AssistantMessageComponent,
 	FooterComponent,
-	GoalTipState,
 	StatusIndicator,
 	StatusTipRotator,
 	StepToolSpinnerClock,
@@ -45,6 +44,10 @@ import type {
 	WorkingOutputTracker,
 } from "../view/index.ts";
 import type { PastedImageRegistry } from "./pasted-images.ts";
+
+/** Which goal state the tip pool should teach for. */
+export type GoalTipState = "active" | "paused" | "none";
+
 import type { Redraw } from "./redraw.ts";
 
 export interface RuntimeContext {

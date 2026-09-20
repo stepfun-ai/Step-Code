@@ -41,7 +41,7 @@ function expectPhysicalRows(component: ToolExecutionComponent, width: number): s
 	return rows.map(stripTerminalSequences);
 }
 
-beforeEach(() => initTheme("step"));
+beforeEach(() => initTheme("step-blue"));
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 	initTheme("dark");

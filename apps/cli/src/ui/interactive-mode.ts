@@ -174,8 +174,9 @@ import {
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./view/chrome/status-indicator.ts";
-import type { GoalTipState, StatusTipRotator } from "./view/chrome/status-tips.ts";
+import type { StatusTipRotator } from "./view/chrome/status-tips.ts";
 import { StepWelcomeComponent } from "./view/chrome/step-welcome.ts";
+import { paintStepWordmarkBorder } from "./view/chrome/step-wordmark.ts";
 import { ExtensionEditorComponent } from "./view/dialogs/extension-editor.ts";
 import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
 import { ExtensionSelectorComponent } from "./view/dialogs/extension-selector.ts";
@@ -544,19 +545,6 @@ export class InteractiveMode {
 	// read back here by showWorkingStatusIndicator().
 	statusTipRotator: StatusTipRotator | undefined = undefined;
 	currentStatusTip: string | undefined = undefined;
-
-	/** Latest persisted goal status for the state-aware tip pool. */
-	readGoalTipState(): GoalTipState {
-		const entries = this.sessionManager.getBranch();
-		for (let i = entries.length - 1; i >= 0; i -= 1) {
-			const entry = entries[i];
-			if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
-			const data = entry.data as { status?: string; cleared?: boolean } | undefined;
-			if (data?.cleared === true) return "none";
-			return data?.status === "active" || data?.status === "paused" ? data.status : "none";
-		}
-		return "none";
-	}
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
@@ -570,6 +558,9 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	// Alignment of the currently-tracked status row, so showStatus never merges a
+	// message onto a tracked Text of a different alignment (e.g. the centered
+	// clipboard-image hint onto a left-aligned status).
 	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
@@ -640,6 +631,9 @@ export class InteractiveMode {
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
 	}>();
+
+	// Clipboard-image hint: when the terminal regains focus (e.g. after a
+	// screenshot) and the clipboard holds an image, hint the paste key once.
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -735,7 +729,10 @@ export class InteractiveMode {
 					workspaceRoot: this.sessionManager.getCwd(),
 					sessionId: this.sessionManager.getSessionId(),
 				}),
-				{ requestRender: () => this.redraw.requestRender() },
+				{
+					requestRender: () => this.redraw.requestRender(),
+					requestForceRender: () => this.redraw.forceRender(),
+				},
 			);
 			this.stepWelcome.setFirstMessageHint(!this.hasConversationMessages(this.sessionManager.buildContextEntries()));
 			this.documentContainer.addChild(this.stepWelcome);
@@ -2583,14 +2580,14 @@ export class InteractiveMode {
 		removeExisting(this.extensionWidgetsAbove);
 		removeExisting(this.extensionWidgetsBelow);
 
-		let component: Component & { dispose?(): void };
-
-		if (options?.component) {
-			component = options.component(this.ui, theme);
-		} else if (content === undefined) {
+		if (content === undefined) {
 			this.renderWidgets();
 			return;
-		} else if (Array.isArray(content)) {
+		}
+
+		let component: Component & { dispose?(): void };
+
+		if (Array.isArray(content)) {
 			// Wrap string array in a Container with Text components
 			const container = new Container();
 			for (const line of content.slice(0, InteractiveMode.MAX_WIDGET_LINES)) {
@@ -2603,11 +2600,6 @@ export class InteractiveMode {
 		} else {
 			// Factory function - create component
 			component = content(this.ui, theme);
-		}
-
-		// Widgets that support expansion follow the global ctrl+o toggle.
-		if (isExpandable(component)) {
-			component.setExpanded(this.toolOutputExpanded);
 		}
 
 		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;
@@ -3802,6 +3794,19 @@ export class InteractiveMode {
 		);
 	}
 
+	/** Latest goal status for the tip pool (RuntimeContext member). */
+	readGoalTipState(): "active" | "paused" | "none" {
+		const entries = this.sessionManager.getBranch();
+		for (let i = entries.length - 1; i >= 0; i -= 1) {
+			const entry = entries[i];
+			if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
+			const data = entry.data as { status?: string; cleared?: boolean } | undefined;
+			if (data?.cleared === true) return "none";
+			return data?.status === "active" || data?.status === "paused" ? data.status : "none";
+		}
+		return "none";
+	}
+
 	async getUserInput(): Promise<string> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
@@ -3845,6 +3850,9 @@ export class InteractiveMode {
 	async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+
+		// Turn off focus reporting we enabled for the clipboard-image hint, so the
+		// terminal does not keep sending \x1b[I / \x1b[O to the parent shell.
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -3917,6 +3925,10 @@ export class InteractiveMode {
 		} catch {}
 		try {
 			killTrackedDetachedChildren();
+		} catch {}
+		try {
+			// isShuttingDown is set above, so shutdown()'s teardown never runs here;
+			// restore focus reporting ourselves or the escapes leak to the shell.
 		} catch {}
 		try {
 			this.ui.stop();
@@ -4006,7 +4018,7 @@ export class InteractiveMode {
 		});
 
 		try {
-			// Stop the TUI (restore terminal to normal mode)
+			if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -4076,8 +4088,8 @@ export class InteractiveMode {
 			// Step's composer keeps a fixed brand frame for thinking/model state,
 			// but bash mode is visible before submitting: `!` switches the frame
 			// to the error tone and `!!` (excluded from context) dims it.
-			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : "borderAccent";
-			this.editor.borderColor = (str: string) => theme.fg(colorKey, str);
+			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : undefined;
+			this.editor.borderColor = colorKey ? (str: string) => theme.fg(colorKey, str) : paintStepWordmarkBorder;
 			this.redraw.requestRender();
 			return;
 		}
@@ -4167,6 +4179,7 @@ export class InteractiveMode {
 	async handleOpenExternalEditor(): Promise<void> {
 		const editorCmd = this.settingsManager.getExternalEditorCommand();
 		const content = this.editor.getExpandedText?.() ?? this.editor.getText();
+		if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 		this.ui.stop();
 		try {
 			const result = await editInExternalEditor({
@@ -6715,6 +6728,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		this.withExtensionDialogsBlocked(() => {
 			this.stepWelcome?.dispose();
 			this.stepSpinner?.dispose();
+			if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 			this.clearStatusIndicator();
 			this.hideExtensionSelector();
 			this.hideExtensionInput();

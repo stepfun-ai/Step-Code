@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe("Step transient presentation", () => {
 	it("frames selectors while native SelectList owns movement and confirmation", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const keybindings = new KeybindingsManager();
 		setKeybindings(keybindings);
 		const selected: string[] = [];
@@ -55,7 +55,7 @@ describe("Step transient presentation", () => {
 	});
 
 	it("can frame an unstyled Pi selector without taking its focus or input", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const keybindings = new KeybindingsManager();
 		setKeybindings(keybindings);
 		const selected: boolean[] = [];
@@ -80,7 +80,7 @@ describe("Step transient presentation", () => {
 	});
 
 	it("renders the wrapped selector once per frame", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		let renderCount = 0;
 		const child = {
 			invalidate: () => undefined,
@@ -97,7 +97,7 @@ describe("Step transient presentation", () => {
 	});
 
 	it("keeps input/IME handling native inside the Step frame", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const keybindings = new KeybindingsManager();
 		setKeybindings(keybindings);
 		let submitted = "";
@@ -121,7 +121,7 @@ describe("Step transient presentation", () => {
 	});
 
 	it("frames the extension editor while retaining native editing", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const keybindings = new KeybindingsManager();
 		setKeybindings(keybindings);
 		let submitted = "";
@@ -151,7 +151,7 @@ describe("Step transient presentation", () => {
 	});
 
 	it("uses the same Step frame for OAuth and summary surfaces", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const login = new LoginDialogComponent(fakeTui, "step", () => {}, "Step", "Step setup", "step");
 		login.showDetails(["Open the browser to continue."]);
 		const loginRows = login.render(56);
@@ -192,7 +192,7 @@ describe("Step transient presentation", () => {
 	});
 
 	it("removes Pi Loader's reserved blank row for Step status", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const working = new WorkingStatusIndicator(fakeTui, "Working", undefined, "step");
 		const compaction = new CompactionStatusIndicator(fakeTui, "manual", "step");
 		const branch = new BranchSummaryStatusIndicator(fakeTui, "step");
