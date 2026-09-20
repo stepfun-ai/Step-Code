@@ -143,7 +143,7 @@ import {
 	TuiMainScreen,
 	visibleWidth,
 } from "@step-harness/pi-tui";
-import type { AuthEvent, AuthPrompt } from "@step-harness/providers";
+import type { AuthEvent, AuthPrompt, ImageContent } from "@step-harness/providers";
 import type { AssistantMessage, Message, Model, Usage } from "@step-harness/providers/compat";
 import chalk from "chalk";
 import { spawn } from "child_process";
@@ -274,6 +274,7 @@ class ExpandableText extends Text implements Expandable {
 type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
+	images?: ImageContent[];
 };
 
 type CompactionCostNotice = {
@@ -527,6 +528,7 @@ export class InteractiveMode {
 	isInitialized = false;
 	onInputCallback?: (text: string) => void;
 	pendingUserInputs: string[] = [];
+	readonly pastedImages = new PastedImageRegistry();
 	activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -1442,7 +1444,8 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				// Turn [Image #N] placeholders into attachments; see resolvePastedImages.
+				// Turn [Image #N] placeholders into attachments (and reset the registry
+				// for the next message); see resolvePastedImages.
 				const { text, images } = await resolvePastedImages(this.pastedImages, userInput, {
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
 				});
@@ -4040,7 +4043,10 @@ export class InteractiveMode {
 				this.editor.setText("");
 				await this.session.prompt(text);
 			} else {
-				this.queueCompactionMessage(text, "followUp");
+				const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
+					autoResizeImages: this.settingsManager.getImageAutoResize(),
+				});
+				this.queueCompactionMessage(message, "followUp", images.length ? images : undefined);
 			}
 			return;
 		}
@@ -4050,7 +4056,13 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
+				autoResizeImages: this.settingsManager.getImageAutoResize(),
+			});
+			await this.session.prompt(message, {
+				streamingBehavior: "followUp",
+				images: images.length ? images : undefined,
+			});
 			this.updatePendingMessagesDisplay();
 			this.redraw.requestRender();
 		}
@@ -4324,8 +4336,8 @@ export class InteractiveMode {
 		return allQueued.length;
 	}
 
-	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.compactionQueuedMessages.push({ text, mode });
+	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		this.compactionQueuedMessages.push({ text, mode, images });
 		this.editor.addToHistory?.(text);
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
@@ -4383,9 +4395,9 @@ export class InteractiveMode {
 					if (this.isExtensionCommand(message.text)) {
 						await this.session.prompt(message.text);
 					} else if (message.mode === "followUp") {
-						await this.session.followUp(message.text);
+						await this.session.followUp(message.text, message.images);
 					} else {
-						await this.session.steer(message.text);
+						await this.session.steer(message.text, message.images);
 					}
 				}
 				this.updatePendingMessagesDisplay();
@@ -4413,7 +4425,10 @@ export class InteractiveMode {
 
 			// Start a prompt when idle, or queue it into a run still finishing compaction.
 			const promptPromise = this.session
-				.prompt(firstPrompt.text, { streamingBehavior: firstPrompt.mode })
+				.prompt(firstPrompt.text, {
+					streamingBehavior: firstPrompt.mode,
+					images: firstPrompt.images?.length ? firstPrompt.images : undefined,
+				})
 				.catch((error) => {
 					restoreQueue(error);
 				});
@@ -4423,9 +4438,9 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(message.text)) {
 					await this.session.prompt(message.text);
 				} else if (message.mode === "followUp") {
-					await this.session.followUp(message.text);
+					await this.session.followUp(message.text, message.images);
 				} else {
-					await this.session.steer(message.text);
+					await this.session.steer(message.text, message.images);
 				}
 			}
 			this.updatePendingMessagesDisplay();
