@@ -174,6 +174,8 @@ it("agent_start 先于 turn_start 不因懒构建 tip 崩溃，且一轮只取�
 		retryEscapeHandler: undefined,
 		defaultEditor: { onEscape: undefined },
 		settingsManager: { getShowTerminalProgress: () => false, getStatusTips: () => true },
+		// tip 池是 goal 状态相关的，懒构建的闭包会在首次 next() 时回读它
+		readGoalTipState: () => "none" as const,
 		ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 		redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		session: { retryAttempt: 0 },
