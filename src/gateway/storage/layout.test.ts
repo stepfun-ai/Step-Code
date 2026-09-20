@@ -54,6 +54,18 @@ describe("encodeStorageKey / decodeStorageKey", () => {
   it("trims whitespace before encoding", () => {
     expect(encodeStorageKey("  key  ")).toBe(encodeStorageKey("key"));
   });
+
+  it.each([".", ".."])("encodes the reserved dot segment %s", (key) => {
+    const encoded = encodeStorageKey(key);
+    expect(encoded).not.toBe(key);
+    expect(decodeStorageKey(encoded)).toBe(key);
+    expect(encoded).not.toBe(encodeStorageKey(encoded));
+  });
+
+  it("preserves existing encodings for ordinary IDs containing dots", () => {
+    expect(encodeStorageKey("release.v1")).toBe("release.v1");
+    expect(encodeStorageKey(".hidden")).toBe(".hidden");
+  });
 });
 
 describe("resolveStorageLayout", () => {
@@ -80,6 +92,23 @@ describe("getSessionDirectory", () => {
     const dir = getSessionDirectory(layout, "my-session");
     expect(dir).toContain("sessions");
     expect(dir).toContain("my-session");
+  });
+
+  it.each([".", "..", " . ", " .. ", "../other", "a/b", "a\\b", "%2E%2E"])(
+    "keeps %s in its own direct child directory",
+    (sessionId) => {
+      const layout = createLayout("/root");
+      const dir = getSessionDirectory(layout, sessionId);
+      expect(path.dirname(dir)).toBe(getSessionsRootDirectory(layout));
+      expect(dir).not.toBe(getSessionsRootDirectory(layout));
+      expect(dir).not.toBe(layout.rootDir);
+    },
+  );
+
+  it.each(["", "   "])("rejects an empty storage key %j", (sessionId) => {
+    expect(() => getSessionDirectory(createLayout("/root"), sessionId)).toThrow(
+      "Session id must not be empty",
+    );
   });
 });
 

@@ -20,7 +20,12 @@ export interface StepCliResolvedStorageLayout {
 }
 
 export function encodeStorageKey(value: string): string {
-  return encodeURIComponent(value.trim());
+  const encoded = encodeURIComponent(value.trim());
+  // encodeURIComponent leaves dot segments unchanged, but path.join treats
+  // them as the current/parent directory instead of a session's own name.
+  return encoded === "." || encoded === ".."
+    ? encoded.replaceAll(".", "%2E")
+    : encoded;
 }
 
 export function decodeStorageKey(value: string): string {
@@ -41,10 +46,11 @@ export function getSessionDirectory(
   storage: StepCliResolvedStorageLayout,
   sessionId: string,
 ): string {
-  return path.join(
-    getSessionsRootDirectory(storage),
-    encodeStorageKey(sessionId),
-  );
+  const key = encodeStorageKey(sessionId);
+  if (!key) {
+    throw new Error("Session id must not be empty");
+  }
+  return path.join(getSessionsRootDirectory(storage), key);
 }
 
 export function getSessionEventsFilePath(
