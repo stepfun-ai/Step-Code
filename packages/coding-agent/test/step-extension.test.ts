@@ -330,7 +330,12 @@ describe("Step extension", () => {
 
 	test("limits trace headers to configured cloud-trace model requests", async () => {
 		const on = vi.fn();
-		stepExtension({
+		createStepExtension({
+			traceHeaderPolicy: {
+				allowedBaseUrls: ["https://trace.example.test/v1"],
+				highSensitivityFields: ["session-id", "workspace-id", "provider-id", "model"],
+			},
+		})({
 			registerProvider: vi.fn(),
 			on,
 			registerCommand: vi.fn(),
@@ -341,6 +346,7 @@ describe("Step extension", () => {
 			event: BeforeProviderHeadersEvent,
 			ctx: Pick<ExtensionContext, "model" | "cwd" | "sessionManager">,
 		) => void;
+
 		const headers = {} as Record<string, string | null>;
 		await handler({ type: "before_provider_headers", headers }, {
 			model: {

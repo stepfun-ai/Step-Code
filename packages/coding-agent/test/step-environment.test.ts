@@ -11,6 +11,20 @@ describe("Step early environment", () => {
 		expect(getStepDefaultTheme(env)).toBe("step-light/step");
 	});
 
+	test("defaults the downstream client marker to step-cli, honoring an explicit value", () => {
+		const fresh: NodeJS.ProcessEnv = {};
+		applyStepEnvironment(fresh);
+		expect(fresh.STEP_CLIENT).toBe("step-cli");
+
+		const explicit: NodeJS.ProcessEnv = { STEP_CLIENT: "embedding-host" };
+		applyStepEnvironment(explicit);
+		expect(explicit.STEP_CLIENT).toBe("embedding-host");
+
+		const blank: NodeJS.ProcessEnv = { STEP_CLIENT: "   " };
+		applyStepEnvironment(blank);
+		expect(blank.STEP_CLIENT).toBe("step-cli");
+	});
+
 	test("recognizes source, bundled, and binary launchers", () => {
 		expect(isStepEntrypoint(["node", "/tmp/step-cli.ts"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/tmp/step.js"])).toBe(true);

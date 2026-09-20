@@ -37,23 +37,25 @@ const TRACE_HEADER_ENV_NAMES = [
 ] as const;
 
 /**
- * Providers whose requests are routed through the legacy ObservableServer
- * detour.  The native Step provider is deliberately absent: its
- * `/step_plan/v1` endpoint is a direct model endpoint, not the cloud-trace
- * collector.  Treating every `step` URL as trusted would both leak the
- * high-sensitivity headers to custom Step-compatible endpoints and mark every
- * direct request as `routed_via_cloud_trace`.
+ * Providers whose model endpoint IS the ObservableServer cloud-trace detour.
+ * Used only by the cloud-trace URL allowlist below (telemetry's
+ * `routed_via_cloud_trace` and trusted-prefix resolution) — NOT by the
+ * attribution-header gate, which keys on the provider id (see the
+ * `sendAttribution` computation in features/step.ts). The native Step provider
+ * is absent here because its `/step_plan/v1` is a direct model endpoint, not
+ * the cloud-trace collector, so its requests must not be marked
+ * `routed_via_cloud_trace`.
  */
 const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 
 /**
  * Add Step attribution headers in place.
  *
- * `x-step-client` is deliberately sent to every Step request. Session and
- * workspace identifiers are only added for a trusted URL prefix. A missing
- * request URL is treated as the legacy trusted-provider case; Pi's resolved
- * model always has a URL, while this fallback keeps extension hosts that only
- * expose the old event shape source-compatible.
+ * `x-step-client` is sent on every request. The high-sensitivity fields
+ * (session/workspace/goal/...) are sent only when `options.sendAttribution` is
+ * set — the caller passes true only for Step-owned providers, so the local cwd
+ * and session id never egress to a third-party model endpoint. Values are
+ * size-bounded and header-safe via {@link encodeStepTraceHeaderValue}.
  */
 export function applyStepTraceHeaders(
 	headers: Record<string, string | null>,
