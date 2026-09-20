@@ -8,7 +8,8 @@ import { VirtualTerminal } from "../../../packages/tui/test/virtual-terminal.ts"
 // Feature: pasting a clipboard image. macOS Cmd+V of an image-only clipboard
 // arrives as an EMPTY bracketed paste -> onEmptyPaste (reads the clipboard image).
 // A copied image FILE is pasted as its name (non-empty) -> onPasteImagePath, which
-// resolves it to an `@` reference; returning false lets it paste as normal text.
+// resolves it to an `[Image #N]` placeholder; returning false lets it paste as
+// normal text.
 const EMPTY_PASTE = "\x1b[200~\x1b[201~";
 const bracket = (content: string): string => `\x1b[200~${content}\x1b[201~`;
 
