@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `STEP_LOGIN_PROFILE_AUTH_URL` to the Step provider's OAuth authorization-URL chain, below the explicit `STEP_PROVIDER_AUTH_URL` / `STEP_AUTH_URL` overrides. The Step login flow sets it from the stored profile, so a provider-side re-login opens that region's developer center instead of the mainland default.
+
 ## [0.84.4] - 2026-08-28
 
 ### Added

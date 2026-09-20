@@ -345,6 +345,7 @@ export async function executeSubagent(
 				signal,
 				onUpdate: update,
 				onNeedsInput: laneRuntime?.onNeedsInput,
+				onChildRespawn: laneRuntime?.onChildRespawn,
 				sessionId: laneRuntime?.sessionId
 					? index === 0
 						? laneRuntime.sessionId

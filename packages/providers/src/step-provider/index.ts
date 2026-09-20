@@ -115,23 +115,30 @@ interface StepModelMeta {
 	reasoning?: boolean;
 	/** `enable_vision_input` -> image input support. */
 	vision?: boolean;
+	/** `reasoning_effort_support_list` -> thinkingLevelMap (present on some endpoints). */
+	efforts?: readonly string[];
 }
 
 /** Build a Step model entry, using discovered metadata where present. */
 function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: StepModelMeta): StepModelConfig {
 	const contextWindow = meta?.contextWindow ?? STEP_MODEL_DEFAULTS.contextWindow;
+	const hasEfforts = (meta?.efforts?.length ?? 0) > 0;
 	return {
 		id,
 		name,
 		api: STEP_MODEL_API,
 		...(baseUrl ? { baseUrl } : {}),
 		// Default to no thinking and text-only unless the endpoint reports otherwise.
-		reasoning: meta?.reasoning ?? STEP_MODEL_DEFAULTS.reasoning,
+		// A non-empty effort list implies the model reasons.
+		reasoning: meta?.reasoning ?? (hasEfforts ? true : STEP_MODEL_DEFAULTS.reasoning),
 		input: meta?.vision ? ["text", "image"] : ["text"],
 		cost: { ...STEP_MODEL_DEFAULTS.cost },
 		contextWindow,
 		// The endpoint reports no max-output; default it to the input window.
 		maxTokens: contextWindow,
+		// When the list endpoint reports supported efforts (e.g. step_plan), carry
+		// them so `/effort` is correct without a per-model lookup.
+		...(hasEfforts ? { thinkingLevelMap: stepThinkingLevelMap(meta!.efforts!) } : {}),
 	};
 }
 
@@ -154,7 +161,15 @@ const API_BASE_URL_ENV_NAMES = [
 	"STEP_LOGIN_PROFILE_API_URL",
 	"STEP_CLI_STEP_PLAN_API_URL",
 ] as const;
-const AUTH_BASE_URL_ENV_NAMES = ["STEP_PROVIDER_AUTH_URL", "STEP_AUTH_URL", STEP_PROVIDER_ENV.authBaseUrl] as const;
+const AUTH_BASE_URL_ENV_NAMES = [
+	"STEP_PROVIDER_AUTH_URL",
+	"STEP_AUTH_URL",
+	// Set by the shared Step login flow from the stored profile, so a provider-side
+	// re-login opens the region's own developer center. Below the explicit user
+	// overrides, like its API counterpart.
+	"STEP_LOGIN_PROFILE_AUTH_URL",
+	STEP_PROVIDER_ENV.authBaseUrl,
+] as const;
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const MAX_ERROR_DETAIL_LENGTH = 240;
 
@@ -605,6 +620,20 @@ export function stepOpenAiBaseUrl(apiBaseUrl: string): string {
 }
 
 /**
+ * Base for per-model detail lookups (`{base}/models/{id}`). The detail endpoint
+ * lives at the domain-root `/v1` (e.g. `https://api.stepfun.com/v1`), even for
+ * the `step_plan` profile whose chat/list base is `.../step_plan/v1` — the
+ * subpath variant 404s. Falls back to the input if it is not a valid URL.
+ */
+export function stepModelsDetailBaseUrl(baseUrl: string): string {
+	try {
+		return `${new URL(baseUrl).origin}/v1`;
+	} catch {
+		return baseUrl;
+	}
+}
+
+/**
  * Discover the chat-capable models the current credential can use from
  * `{base}/v1/models`, filtered by the endpoint's `model_type` (see
  * {@link STEP_USABLE_MODEL_TYPES}). Per-model capabilities are taken from the
@@ -653,6 +682,7 @@ export async function fetchStepModels(
 				contextWindow: readPositiveNumber(record, "max_input_tokens"),
 				reasoning: readBoolean(record, "enable_reason"),
 				vision: readBoolean(record, "enable_vision_input"),
+				efforts: readStringArray(record, "reasoning_effort_support_list"),
 			},
 		});
 	}
@@ -766,6 +796,13 @@ function readPositiveNumber(value: Record<string, unknown>, key: string): number
 function readBoolean(value: Record<string, unknown>, key: string): boolean | undefined {
 	const result = value[key];
 	return typeof result === "boolean" ? result : undefined;
+}
+
+function readStringArray(value: Record<string, unknown>, key: string): string[] | undefined {
+	const result = value[key];
+	if (!Array.isArray(result)) return undefined;
+	const items = result.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+	return items.length > 0 ? items : undefined;
 }
 
 function tokenErrorDetail(value: Record<string, unknown>): string {

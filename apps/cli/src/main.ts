@@ -29,6 +29,7 @@ import {
 	getLegacyStepAuthPath,
 	getStepAuthPath,
 	getStepDefaultTheme,
+	getStepLoginStatus,
 	hasConfiguredStepCodeCredential,
 	installProcessStderrDevLogCapture,
 	installStepTelemetryCrashHandlers,
@@ -298,6 +299,7 @@ const stepMainOptions: MainOptions = {
 const topLevelStepCommand = process.argv[2];
 const isTopLevelMcp = topLevelStepCommand === "mcp";
 const isTopLevelLogin = topLevelStepCommand === "login";
+const isTopLevelLoginStatus = isTopLevelLogin && process.argv[3] === "status";
 const isTopLevelLogout = topLevelStepCommand === "logout";
 const isTopLevelFeedback = topLevelStepCommand === "feedback";
 const topLevelAuthHelp = process.argv.slice(3).some((arg) => arg === "--help" || arg === "-h");
@@ -467,7 +469,44 @@ try {
 			process.exitCode = 1;
 		}
 	} else if (isTopLevelLogin) {
-		if (topLevelAuthHelp) {
+		if (isTopLevelLoginStatus) {
+			const statusArgs = process.argv.slice(4);
+			const json = statusArgs.includes("--json");
+			const unknown = statusArgs.find((arg) => arg !== "--json" && arg !== "--help" && arg !== "-h");
+			if (unknown) {
+				process.stderr.write(`Unknown option "${unknown}" for "login status".\n`);
+				process.exitCode = 1;
+			} else if (statusArgs.includes("--help") || statusArgs.includes("-h")) {
+				process.stdout.write("Usage: step login status [--json]\nShow the current Step credential status.\n");
+			} else {
+				const status = await getStepLoginStatus({
+					authPath: getStepAuthPath(),
+					env: process.env,
+				});
+				if (json) {
+					process.stdout.write(`${JSON.stringify(status)}\n`);
+				} else if (status.validity === "missing") {
+					process.stdout.write("Not signed in. Run `step login`.\n");
+				} else {
+					process.stdout.write(`Signed in${status.account ? ` as ${status.account}` : ""}.\n`);
+					const loginMethodLabel =
+						status.loginMethod === "api_key"
+							? "apiKey"
+							: status.loginMethod === "step_plan_oversea"
+								? "Step Plan Oversea"
+								: "Step Plan";
+					process.stdout.write(`Login method: ${loginMethodLabel}.\n`);
+					const validity =
+						status.validity === "valid"
+							? "check passed"
+							: status.validity === "invalid"
+								? "credential is invalid or expired"
+								: "could not check credential validity (network error)";
+					process.stdout.write(`Validity: ${validity}.\n`);
+					if (status.validity === "invalid") process.exitCode = 1;
+				}
+			}
+		} else if (topLevelAuthHelp) {
 			process.stdout.write("Usage: step login\nSign in with the Step account and store a credential.\n");
 		} else if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
 			process.stderr.write(

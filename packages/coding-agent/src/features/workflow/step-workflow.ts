@@ -12,7 +12,7 @@ import type { StepTelemetryReporter } from "../../step/telemetry.ts";
 import { createDefaultWorkflowAgentRunner } from "./agent-runner.ts";
 import { createWorkflowRunPaths, newWorkflowRunId, resolveWorkflowRoot, WorkflowJournal } from "./journal.ts";
 import { formatWorkflowStatus, listSavedWorkflows, listWorkflowRuns } from "./progress.ts";
-import { isWorkflowRegistrationEnabled } from "./registration-gate.ts";
+import { resolveWorkflowRegistration, WORKFLOW_VM_UNAVAILABLE_WARNING } from "./registration-gate.ts";
 import { WorkflowRuntime, workflowToolResult } from "./runtime.ts";
 import { isWorkflowPathInside } from "./tool-profile.ts";
 import type { WorkflowAgentRunner } from "./types.ts";
@@ -125,7 +125,18 @@ async function exists(filePath: string): Promise<boolean> {
 /** Register the feature-gated Workflow tool and /workflows status command. */
 export function createStepWorkflowExtension(options: StepWorkflowExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
-		if (!isWorkflowRegistrationEnabled(options)) return;
+		const registration = resolveWorkflowRegistration(options);
+		if (!registration.enabled) {
+			if (registration.reason === "vm-unavailable") {
+				let warned = false;
+				pi.on("session_start", (_event, ctx) => {
+					if (warned) return;
+					warned = true;
+					ctx.ui.notify(WORKFLOW_VM_UNAVAILABLE_WARNING, "warning");
+				});
+			}
+			return;
+		}
 		const activeRuns = new Set<AbortController>();
 		const runner = options.runner ?? createDefaultWorkflowAgentRunner();
 		const homeRoot = options.homeRoot ?? resolveStepStorageRoot();

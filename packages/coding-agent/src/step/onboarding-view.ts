@@ -134,7 +134,7 @@ export class StepOnboardingView extends Container implements Component, Focusabl
 	private renderRows(width: number): string[] {
 		const muted = (value: string) => theme.fg("muted", value);
 		const rows: string[] = [
-			theme.fg("accent", theme.bold("Sign in to use Step CLI, or connect an API key for usage-based billing")),
+			theme.fg("accent", theme.bold("Sign in to use Step Plan, or connect an API key for usage-based billing")),
 			"",
 		];
 		switch (this.step.kind) {

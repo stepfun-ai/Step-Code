@@ -251,6 +251,7 @@ export interface ExtensionBindings {
 	uiContext?: ExtensionUIContext;
 	mode?: ExtensionMode;
 	commandContextActions?: ExtensionCommandContextActions;
+	/** Host UI cleanup after the session cancels its run (for example, restore queued input). */
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
 	onError?: ExtensionErrorListener;
@@ -336,6 +337,7 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
+	private _agentRunAbortController: AbortController | undefined;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -1202,17 +1204,30 @@ export class AgentSession {
 	// =========================================================================
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		const runAbortController = new AbortController();
+		this._agentRunAbortController = runAbortController;
 		this._isAgentRunActive = true;
 		try {
 			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun()) {
+			while (
+				!runAbortController.signal.aborted &&
+				(await this._handlePostAgentRun()) &&
+				!runAbortController.signal.aborted
+			) {
 				await this.agent.continue();
 			}
 		} finally {
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
+			this._agentRunAbortController = undefined;
 			await this._emitAgentSettled();
+			// _retryAttempt is per-run state. The three normal exits already zero it
+			// (successful response, retries exhausted, backoff cancelled), but an
+			// exception escaping agent.continue() on a retry continuation bypasses
+			// all of them and would leave a stale count for the next prompt to read.
+			// Cleared last so agent_settled listeners still see the final count.
+			this._retryAttempt = 0;
 		}
 	}
 
@@ -1226,6 +1241,8 @@ export class AgentSession {
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
 			return true;
 		}
+
+		if (this._agentRunAbortController?.signal.aborted) return false;
 
 		if (msg.stopReason === "error" && this._retryAttempt > 0) {
 			this._emit({
@@ -1721,9 +1738,16 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
-		this.abortRetry();
-		this.agent.abort();
+		this._abortCurrentRun();
 		await this.waitForIdle();
+	}
+
+	private _abortCurrentRun(): void {
+		// Cancellation spans the whole run, including gaps between agent attempts.
+		this._agentRunAbortController?.abort();
+		this.abortRetry();
+		this.abortCompaction();
+		this.agent.abort();
 	}
 
 	async waitForIdle(): Promise<void> {
@@ -2343,6 +2367,8 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		const runSignal = this._agentRunAbortController?.signal;
+		if (runSignal?.aborted) return false;
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 		let fromExtension = false;
@@ -2354,6 +2380,8 @@ export class AgentSession {
 
 			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
 
+			if (runSignal?.aborted) return false;
+
 			const pathEntries = this.sessionManager.getBranch();
 
 			const preparation = prepareCompaction(pathEntries, settings);
@@ -2361,8 +2389,8 @@ export class AgentSession {
 				return false;
 			}
 
-			this._emit({ type: "compaction_start", reason });
 			this._autoCompactionAbortController = new AbortController();
+			this._emit({ type: "compaction_start", reason });
 			started = true;
 
 			let extensionCompaction: CompactionResult | undefined;
@@ -2400,6 +2428,9 @@ export class AgentSession {
 					fromExtension = true;
 				}
 			}
+
+			// A cancelled extension hook must not fall back to another model request.
+			if (this._autoCompactionAbortController.signal.aborted) throw new Error("Compaction cancelled");
 
 			let summary: string;
 			let firstKeptEntryId: string;
@@ -2500,22 +2531,24 @@ export class AgentSession {
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {
-				const formattedErrorMessage =
-					reason === "overflow"
+				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;
+				const formattedErrorMessage = aborted
+					? undefined
+					: reason === "overflow"
 						? `Context overflow recovery failed: ${errorMessage}`
 						: `Auto-compaction failed: ${errorMessage}`;
 				this._emit({
 					type: "compaction_end",
 					reason,
 					result: undefined,
-					aborted: false,
+					aborted,
 					willRetry: false,
 					errorMessage: formattedErrorMessage,
 				});
 				await this._emitSessionCompactFailed({
 					reason,
 					errorMessage: formattedErrorMessage,
-					aborted: false,
+					aborted,
 					willRetry: false,
 					fromExtension,
 				});
@@ -2722,11 +2755,9 @@ export class AgentSession {
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,
 				abort: () => {
-					if (this._extensionAbortHandler) {
-						this._extensionAbortHandler();
-						return;
-					}
-					void this.abort();
+					this._abortCurrentRun();
+					// Hosts may restore queued input after the session has been cancelled.
+					this._extensionAbortHandler?.();
 				},
 				hasPendingMessages: () => this.pendingMessageCount > 0,
 				shutdown: () => {
@@ -3005,6 +3036,7 @@ export class AgentSession {
 		}
 
 		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		this._retryAbortController = new AbortController();
 
 		this._emit({
 			type: "auto_retry_start",
@@ -3021,7 +3053,6 @@ export class AgentSession {
 		}
 
 		// Wait with exponential backoff (abortable)
-		this._retryAbortController = new AbortController();
 		try {
 			await sleep(delayMs, this._retryAbortController.signal);
 		} catch {

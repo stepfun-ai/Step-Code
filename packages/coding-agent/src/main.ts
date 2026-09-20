@@ -1205,6 +1205,20 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		// The Step catalog is discovered from `{base}/v1/models` and has no built-in
+		// baseline. When a Step credential is configured, refresh it from the network
+		// before resolving the initial model, so startup finds the account's models
+		// instead of reporting "no models available". Best-effort and bounded.
+		if (STEP_ENTRYPOINT && modelRuntime.getProviderAuthStatus(STEP_PROVIDER_ID).configured) {
+			await modelRuntime
+				.refresh({
+					allowNetwork: true,
+					force: true,
+					providers: [STEP_PROVIDER_ID],
+					signal: AbortSignal.timeout(15_000),
+				})
+				.catch(() => {});
+		}
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
