@@ -818,7 +818,6 @@ export { copyToClipboard, readClipboardText } from "./utils/clipboard.ts";
 export {
 	cleanPastedPath,
 	extensionForImageMimeType,
-	hasClipboardImage,
 	isImageFilePath,
 	isWindowsPath,
 	readClipboardImage,
