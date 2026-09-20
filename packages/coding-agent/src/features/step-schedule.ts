@@ -422,7 +422,7 @@ export class StepGoalRuntime {
 		const text = validateObjective(objective);
 		if (this.goal && this.goal.status !== "complete") {
 			throw new Error(
-				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. Complete or clear it first.`,
+				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. Use /goal resume to continue it, or /goal clear to end it.`,
 			);
 		}
 		const budget = tokenBudget(tokenBudgetValue);
@@ -954,9 +954,9 @@ const GOAL_COMMANDS_HINT = "Goal commands: /goal status · /goal pause · /goal 
 
 /**
  * User-facing guidance when the runtime silently stops an active goal at a
- * settle boundary (abort, error, usage limit, or budget exhaustion). Without
- * this the only signal is the footer flipping to "Goal: paused", which reads
- * as the goal being stuck.
+ * settle boundary (abort, error, usage limit, or budget exhaustion). The footer
+ * only carries "Goal: paused", so without this a stop to blocked, usage_limited,
+ * or budget_limited is silent and the goal just reads as stuck.
  */
 const GOAL_STOP_HINTS: Partial<Record<StepGoalStatus, string>> = {
 	paused: "Goal paused (run interrupted). Run /goal resume to continue.",
@@ -1022,11 +1022,10 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			runtime.bindHost(host);
 		};
 		const updateStatus = (ctx: ExtensionContext): void => {
-			const goal = runtime.get();
-			ctx.ui.setStatus(
-				"step-goal",
-				goal ? `Goal: ${goal.status} · ${formatElapsedTime(runtime.elapsedActiveSeconds())}` : undefined,
-			);
+			// Only a paused goal earns a footer slot: active progress is visible
+			// in the stream and /goal status reports the rest. A forgotten pause
+			// is the one state worth nagging about persistently.
+			ctx.ui.setStatus("step-goal", runtime.get()?.status === "paused" ? "Goal: paused" : undefined);
 		};
 		const notifyAutoStop = (before: StepGoalStatus | undefined, ctx: ExtensionContext): void => {
 			if (before !== "active") return;
@@ -1109,8 +1108,8 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			if (episode === resumeHintShownFor) return;
 			resumeHintShownFor = episode;
 			ctx.ui.notify(
-				`Goal ${goal.id} is ${goal.status}; this message runs as a normal turn and does not resume it. Run /goal resume to continue the goal.`,
-				"info",
+				`Goal ${goal.id} is ${goal.status}; this message runs as a normal turn and does not resume it. Run /goal resume to continue it, or /goal clear to end it.`,
+				"warning",
 			);
 		});
 

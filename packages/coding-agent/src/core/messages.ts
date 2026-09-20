@@ -145,6 +145,11 @@ export function createCustomMessage(
  * - Compaction's generateSummary (for summarization)
  * - Custom extensions and tools
  */
+/** True when the message is user-authored input (not steering or system traffic). */
+export function isUserMessage(message: AgentMessage): boolean {
+	return message.role === "user";
+}
+
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	return messages
 		.map((m): Message | undefined => {

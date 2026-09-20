@@ -93,7 +93,7 @@ exports[`F/G. 选中样式与页脚快照 > 下拉选中行加粗 + accent（F4�
 
 exports[`F/G. 选中样式与页脚快照 > 页脚 step 呈现（G1/G2/G4） > footer-step-120 1`] = `
 [
-  "⏵ Ask · step-3.8 · high · /tmp/project                                                                      88% ctx left",
+  "⏵ Ask · step-3.8 · high · /tmp/project                                                                  88% context left",
 ]
 `;
 

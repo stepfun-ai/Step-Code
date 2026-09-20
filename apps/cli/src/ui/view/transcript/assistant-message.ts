@@ -172,12 +172,19 @@ export class AssistantMessageComponent extends Container {
 					);
 				} else {
 					// Render each run of thinking blocks as one Markdown section.
+					// Thinking is background reasoning: inline code keeps the
+					// muted thinking tone instead of the purple inline-code
+					// anchor used in the answer body (feedback: too loud).
+					const thinkingMarkdownTheme: MarkdownTheme = {
+						...this.markdownTheme,
+						code: (text) => theme.fg("thinkingText", ` ${text} `),
+					};
 					this.contentContainer.addChild(
 						new Markdown(
 							thinkingBlocks.join("\n\n"),
 							this.outputPad,
 							0,
-							this.markdownTheme,
+							thinkingMarkdownTheme,
 							{
 								color: (text: string) => theme.fg("thinkingText", text),
 								italic: true,
