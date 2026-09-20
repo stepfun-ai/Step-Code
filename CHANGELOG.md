@@ -37,6 +37,7 @@ Step CLI 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Fixed `/goal clear` leaving the current request thinking after the goal was removed; clearing a goal now interrupts a busy run, including retry backoff and automatic compaction, after persisting the cleared state.
 - Fixed `read_file` dropping small in-limit images with `Image omitted: could not be resized below the inline image size limit.` when Photon/WASM failed to load (for example in some Bun compiled binary layouts). The resize path now reads pixel dimensions directly from the PNG/JPEG/GIF/WebP header when Photon is unavailable and passes an image through untouched if it already fits both the pixel and base64 budgets; oversize images still return the same error instead of shipping unbounded bytes.
 - Fixed the same `Image omitted` error for in-budget images when Photon loads but throws while decoding that specific image (container variants its decoder rejects, corrupt metadata): the decode-failure path now falls back to the same header-only passthrough as the module-missing path, so an original within the 2000×2000 pixel and 4.5MB base64 budgets reaches the model untouched while oversize images keep returning the resize error.
 

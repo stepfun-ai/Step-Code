@@ -1172,8 +1172,28 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 						return;
 					}
 					if (subcommand === "clear") {
-						ctx.ui.notify(runtime.clear() ? "Goal cleared." : "No goal is currently set.", "info");
+						if (!runtime.get()) {
+							ctx.ui.notify("No goal is currently set.", "info");
+							return;
+						}
+						if (!runtime.clear()) {
+							ctx.ui.notify("Unable to clear goal state.", "warning");
+							return;
+						}
 						updateStatus(ctx);
+						// Clear before aborting so settlement cannot resume or pause the deleted goal.
+						if (!ctx.isIdle()) {
+							try {
+								ctx.abort();
+							} catch {
+								ctx.ui.notify(
+									"Goal cleared, but the current run could not be interrupted. Press Escape to stop it.",
+									"warning",
+								);
+								return;
+							}
+						}
+						ctx.ui.notify("Goal cleared.", "info");
 						return;
 					}
 					if (subcommand === "pause" || subcommand === "resume") {
