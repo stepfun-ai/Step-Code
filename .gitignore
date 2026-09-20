@@ -44,3 +44,8 @@ plans/
 .step-harness/
 collect.sh
 .playwright-mcp/
+
+# 本地探索/调试产物，不入库
+pixel-art/
+.playwright-mcp/
+*.pdf
