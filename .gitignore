@@ -53,3 +53,9 @@ pixel-art/
 # 仓库根目录的临时截图/草稿
 /*.png
 /goal-*.txt
+/README-draft.md
+/_scope_body.md
+/api-docs.md
+/delivery.md
+/goal-g3.md
+/goal-test.md
