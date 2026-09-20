@@ -47,6 +47,7 @@ import type { PastedImageRegistry } from "./pasted-images.ts";
 
 /** Which goal state the tip pool should teach for. */
 export type GoalTipState = "active" | "paused" | "none";
+
 import type { Redraw } from "./redraw.ts";
 
 export interface RuntimeContext {

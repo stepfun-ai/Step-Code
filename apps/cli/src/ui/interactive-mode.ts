@@ -488,8 +488,6 @@ export class InteractiveMode {
 	private loadedResourcesContainer: Container;
 	chatContainer: Container;
 	private documentContainer: Container;
-	/** [Image #N] placeholders from pasted files, resolved on submit. */
-	readonly pastedImages = new PastedImageRegistry();
 	stepWelcome: StepWelcomeComponent | undefined;
 	stepSpinner: StepToolSpinnerClock | undefined;
 	private _redraw: Redraw | undefined;
