@@ -724,13 +724,7 @@ export {
 export { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 export {
 	classifyStepEndpoint,
-	createStepLifecycleTelemetry,
-	createStepModelRequestObserver,
-	type StepLifecycleTelemetry,
-	type StepLifecycleTelemetryHandlers,
-	type StepLifecycleTelemetryOptions,
 	type StepModelRequestEventName,
-	type StepModelRequestObserverOptions,
 	type StepPermissionApprovalTelemetry,
 	type StepPermissionDecisionTelemetry,
 	type StepTelemetryContextPatch,
