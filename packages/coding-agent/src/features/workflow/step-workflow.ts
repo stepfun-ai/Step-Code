@@ -7,7 +7,7 @@ import type {
 	ExtensionFactory,
 	InlineExtension,
 } from "../../core/extensions/types.ts";
-import { resolveStepStorageRoot } from "../../step/device-id.ts";
+import { resolveStepStorageRoot } from "../../step/storage-root.ts";
 import type { StepTelemetryReporter } from "../../step/telemetry.ts";
 import { createDefaultWorkflowAgentRunner } from "./agent-runner.ts";
 import { createWorkflowRunPaths, newWorkflowRunId, resolveWorkflowRoot, WorkflowJournal } from "./journal.ts";

@@ -22,7 +22,8 @@ import {
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
-import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
+import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
+import { applyStepTraceHeaders } from "../step/trace-headers.ts";
 import {
 	fetchStepModelEfforts,
 	registerStepProvider,
@@ -41,6 +42,7 @@ export interface StepExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 	/** Current account identity, resolved when `/feedback` is invoked. */
 	feedbackIdentity?: () => FeedbackIdentity;
+	traceHeaderPolicy?: TraceHeaderPolicy;
 }
 
 /**
@@ -319,7 +321,8 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				{
 					clientType: process.env.STEP_CLIENT,
 					requestUrl: model.baseUrl,
-					allowedBaseUrls: resolveStepTraceRuntimeAllowlist(model.provider),
+					allowedBaseUrls: options.traceHeaderPolicy?.allowedBaseUrls ?? [],
+					highSensitivityFields: options.traceHeaderPolicy?.highSensitivityFields,
 				},
 			);
 		});

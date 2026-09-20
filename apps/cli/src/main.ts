@@ -15,12 +15,9 @@ import {
 	configureHttpDispatcher,
 	createStepCli,
 	createStepCodeProviderInlineExtension,
-	createStepModelRequestObserver,
 	createStepProviderConfig,
 	createStepSessionManagerFactory,
 	createStepSettingsManager,
-	createStepSystemMetricsCollector,
-	createStepTelemetryRuntime,
 	createStepToolProfile,
 	decorateStepCodeSettingsManager,
 	describeStepMcpImportOutcome,
@@ -32,7 +29,6 @@ import {
 	getStepLoginStatus,
 	hasConfiguredStepCodeCredential,
 	installProcessStderrDevLogCapture,
-	installStepTelemetryCrashHandlers,
 	isStepConfigCommand,
 	isStepInteractiveLoginStartup,
 	isStepServicesDisabled,
@@ -56,7 +52,6 @@ import {
 	resolveStepConfigDir,
 	resolveStepConfigRoot,
 	resolveStepStorageRoot,
-	resolveStepTraceHeaderBaseUrls,
 	restoreStdout,
 	runFeedbackCommand,
 	runStepConfigCommand,
@@ -73,7 +68,7 @@ import {
 	stopThemeWatcher,
 	syncStepLoginProfileEndpoint,
 	time,
-	trackStepTelemetryError,
+	trackStepTelemetry,
 	translateStepCommandArgs,
 	updateGlobalMcpConfig,
 	withStepDefaults,
@@ -85,6 +80,7 @@ import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
 import { InteractiveMode, runPrintMode, runRpcMode } from "#modes/index";
 import { createSdkStdioMode } from "#modes/sdk-stdio";
 import { selectConfig, selectSession, showFirstTimeSetup, showStartupInput, showStartupSelector } from "#ui/index";
+import { observability } from "./observability.ts";
 
 /**
  * Step's product entrypoint. The process still runs pi's main implementation;
@@ -119,18 +115,14 @@ const stepPermissionArgs = parseArgs(normalizeStepSessionSelectorArgs(process.ar
 // stream and retry loop; this reporter only receives the redacted dimensions
 // needed by the legacy Step analytics query system. The runtime is disabled in
 // test processes and can be opted out through the same Step environment flags.
-const telemetryRuntime = createStepTelemetryRuntime({
-	context: { version: STEP_CLI_VERSION.value },
+const telemetryReporter = observability.createReporter({
+	version: STEP_CLI_VERSION.value,
 	config: stepPersistedDefaults.telemetry,
 });
-const telemetryCrashHandlers = telemetryRuntime.enabled
-	? installStepTelemetryCrashHandlers(telemetryRuntime)
-	: undefined;
-const systemMetrics = telemetryRuntime.enabled ? createStepSystemMetricsCollector(telemetryRuntime) : undefined;
-systemMetrics?.start();
-const modelRequestObserver = createStepModelRequestObserver(telemetryRuntime, {
-	observerBaseUrls: resolveStepTraceHeaderBaseUrls(),
-});
+const telemetryCrashHandlers = observability.installCrashHandlers?.(telemetryReporter);
+const systemMetrics = observability.createSystemMetrics?.(telemetryReporter);
+systemMetrics?.start?.();
+const modelRequestObserver = observability.createModelRequestObserver(telemetryReporter);
 const telemetryStartedAt = Date.now();
 let telemetryExitRecorded = false;
 /**
@@ -148,13 +140,13 @@ const telemetryProcessExitHandler = (code: number): void => {
 	telemetryExitRecorded = true;
 	const effectiveCode = Number.isInteger(code) ? code : (process.exitCode ?? 0);
 	const exitReason = effectiveCode === 0 ? "normal" : effectiveCode === 130 ? "interrupt" : "error";
-	telemetryRuntime.track("cli_exited", {
+	trackStepTelemetry(telemetryReporter, "cli_exited", {
 		duration_ms: Date.now() - telemetryStartedAt,
 		exit_reason: exitReason,
 	});
 };
 process.prependListener("exit", telemetryProcessExitHandler);
-telemetryRuntime.track("cli_started", {
+trackStepTelemetry(telemetryReporter, "cli_started", {
 	entrypoint: readTelemetryEntrypoint(process.argv.slice(2)),
 	os: process.platform,
 	node_version: readTelemetryNodeVersion(),
@@ -192,7 +184,7 @@ const stepMainOptions: MainOptions = {
 	},
 	authPath: getStepAuthPath(),
 	extensionFactories: createStepExtensionFactories({
-		telemetry: telemetryRuntime,
+		telemetry: telemetryReporter,
 		stepSettings: () => currentStepSettingsManager,
 		feedbackIdentity: readCurrentFeedbackIdentity,
 		permission: {
@@ -200,6 +192,7 @@ const stepMainOptions: MainOptions = {
 			nonInteractiveApproval: stepPermissionArgs.nonInteractiveApproval,
 			toolOverrides: stepPermissionArgs.toolOverride ?? stepPermissionArgs.toolOverrides,
 		},
+		traceHeaderPolicy: observability.traceHeaderPolicy(),
 		stepCodeProviderExtension,
 	}),
 	authRuntimeSetup: (modelRuntime) => {
@@ -241,7 +234,7 @@ const stepMainOptions: MainOptions = {
 			};
 		},
 		onCredentialAuthenticated: ({ uid }) => {
-			if (uid) telemetryRuntime.setContext({ uid });
+			if (uid) telemetryReporter.setContext?.({ uid });
 		},
 		onStartup: async ({ ui, stop, dispose }) => {
 			// Auth-only startup uses the same InteractiveMode for its OAuth dialog,
@@ -262,7 +255,7 @@ const stepMainOptions: MainOptions = {
 			return outcome !== "restarted";
 		},
 	},
-	modelRequestObserver,
+	...(modelRequestObserver ? { modelRequestObserver } : {}),
 	systemPromptProduct: {
 		name: "Step",
 		role: "Step, an interactive terminal coding agent developed by StepFun",
@@ -332,7 +325,7 @@ try {
 			? undefined
 			: readCredentialUid(readStoredCredential(STEP_PROVIDER_ID, getStepAuthPath()));
 		if (storedUid) {
-			telemetryRuntime.setContext({ uid: storedUid });
+			telemetryReporter.setContext?.({ uid: storedUid });
 		}
 	}
 	if (isTopLevelLogout) {
@@ -535,7 +528,7 @@ try {
 			storageRootDir: resolveStepStorageRoot(process.env),
 			...(feedbackIdentity.uid ? { uid: feedbackIdentity.uid } : {}),
 			...(feedbackIdentity.username ? { username: feedbackIdentity.username } : {}),
-			telemetry: telemetryRuntime,
+			telemetry: telemetryReporter,
 			settings: feedbackSettingsManager,
 			env: process.env,
 		});
@@ -624,16 +617,19 @@ try {
 	// the takeover, and no redirection leaks past this entry.
 	restoreStdout();
 	telemetryExitReason = "error";
-	trackStepTelemetryError(telemetryRuntime, error, "cli_entry", false);
+	trackStepTelemetry(telemetryReporter, "crash", {
+		error_type: error instanceof Error ? error.name : "Error",
+		source: "cli_entry",
+	});
 	const message = error instanceof Error ? error.message : String(error);
 	process.stderr.write(`step error: ${message}\n`);
 	process.exitCode = 1;
 } finally {
-	systemMetrics?.sample();
-	systemMetrics?.stop();
+	systemMetrics?.sample?.();
+	systemMetrics?.stop?.();
 	if (!telemetryExitRecorded) {
 		telemetryExitRecorded = true;
-		telemetryRuntime.track("cli_exited", {
+		trackStepTelemetry(telemetryReporter, "cli_exited", {
 			duration_ms: Date.now() - telemetryStartedAt,
 			exit_reason: telemetryExitReason,
 		});
@@ -641,7 +637,7 @@ try {
 	process.off("exit", telemetryProcessExitHandler);
 	telemetryCrashHandlers?.dispose();
 	try {
-		await telemetryRuntime.shutdown();
+		await telemetryReporter.shutdown?.();
 	} finally {
 		await flushStderrDevLog();
 	}
@@ -665,12 +661,12 @@ function readTelemetryNodeVersion(): string {
 }
 
 async function initializeTelemetryIdentity(): Promise<void> {
-	if (!telemetryRuntime.enabled) return;
+	if (telemetryReporter.enabled === false) return;
 	try {
 		const result = await readOrCreateStepDeviceId(resolveStepStorageRoot());
-		if (result.deviceId) telemetryRuntime.setContext({ deviceId: result.deviceId });
+		if (result.deviceId) telemetryReporter.setContext?.({ deviceId: result.deviceId });
 		if (result.created) {
-			telemetryRuntime.track("first_launch", {
+			trackStepTelemetry(telemetryReporter, "first_launch", {
 				channel: process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
 			});
 		}
