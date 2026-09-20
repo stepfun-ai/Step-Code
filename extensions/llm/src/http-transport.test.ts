@@ -1,5 +1,123 @@
-import { describe, it, expect } from "vitest";
-import type { HttpStreamEvent } from "./http-transport.js";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import {
+  FetchHttpTransport,
+  type HttpRequest,
+  type HttpStreamEvent,
+  type HttpTraceRecord,
+} from "./http-transport.js";
+
+describe("FetchHttpTransport trace header redaction", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    [false, "success"],
+    [false, "http-error"],
+    [false, "network-error"],
+    [true, "success"],
+    [true, "http-error"],
+    [true, "empty"],
+    [true, "network-error"],
+  ] as const)(
+    "redacts credentials (stream=%s, outcome=%s)",
+    async (stream, outcome) => {
+      const requestHeaders = Object.freeze({
+        Authorization: "Bearer test-bearer-secret",
+        "PrOxY-AuThOrIzAtIoN": "Basic test-proxy-secret",
+        "X-API-Key": "test-anthropic-secret",
+        "api-key": "test-api-secret",
+        Cookie: "session=test-cookie-secret",
+        "content-type": "application/json",
+        "x-request-id": "request-123",
+      });
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => {
+          if (outcome === "network-error")
+            throw new Error("network unavailable");
+          return new Response(
+            outcome === "empty"
+              ? null
+              : stream && outcome === "success"
+                ? "data: {}\n\n"
+                : "{}",
+            {
+              status:
+                outcome === "http-error"
+                  ? 401
+                  : outcome === "empty"
+                    ? 204
+                    : 200,
+              headers: {
+                "Set-Cookie": "response=test-response-cookie-secret",
+                "x-request-id": "response-123",
+              },
+            },
+          );
+        });
+      const traces: HttpTraceRecord[] = [];
+      const transport = new FetchHttpTransport({
+        traceRecorder: {
+          record: (record) => {
+            traces.push(record);
+          },
+        },
+      });
+      const request: HttpRequest = {
+        url: "https://example.invalid/v1/messages",
+        method: "POST",
+        headers: requestHeaders,
+        body: "{}",
+        timeoutMs: 1000,
+        trace: {
+          sessionId: "session-1",
+          spanId: "span-1",
+          provider: "anthropic",
+          model: "test-model",
+        },
+      };
+      const work = stream
+        ? transport.requestStream(request, () => undefined)
+        : transport.request(request);
+      if (outcome === "network-error") {
+        await expect(work).rejects.toThrow("network unavailable");
+      } else {
+        await work;
+      }
+
+      const sentHeaders = fetchMock.mock.calls[0]?.[1]?.headers;
+      expect(sentHeaders).toMatchObject(requestHeaders);
+      expect(request.headers).toEqual(requestHeaders);
+      expect(traces).toHaveLength(1);
+      const trace = traces[0]!;
+      expect(trace.request.headers).toMatchObject({
+        Authorization: ["[REDACTED]"],
+        "PrOxY-AuThOrIzAtIoN": ["[REDACTED]"],
+        "X-API-Key": ["[REDACTED]"],
+        "api-key": ["[REDACTED]"],
+        Cookie: ["[REDACTED]"],
+        "content-type": ["application/json"],
+        "x-request-id": ["request-123"],
+      });
+      if (outcome !== "network-error") {
+        expect(trace.response?.headers).toMatchObject({
+          "set-cookie": ["[REDACTED]"],
+          "x-request-id": ["response-123"],
+        });
+      }
+      const serialized = JSON.stringify(trace);
+      for (const secret of [
+        "test-bearer-secret",
+        "test-proxy-secret",
+        "test-anthropic-secret",
+        "test-api-secret",
+        "test-cookie-secret",
+        "test-response-cookie-secret",
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    },
+  );
+});
 
 // ---------------------------------------------------------------------------
 // http-transport.ts  (test exported class behavior via mocks)

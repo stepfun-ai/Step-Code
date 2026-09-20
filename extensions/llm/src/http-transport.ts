@@ -444,16 +444,32 @@ function cloneRequestHeaders(
   headers: Record<string, string>,
 ): Record<string, string[]> {
   return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key, [value]]),
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      [redactTraceHeader(key, value)],
+    ]),
   );
 }
 
 function cloneFetchHeaders(headers: Headers): Record<string, string[]> {
   const cloned: Record<string, string[]> = {};
   headers.forEach((value, key) => {
-    cloned[key] = [value];
+    cloned[key] = [redactTraceHeader(key, value)];
   });
   return cloned;
+}
+
+const SENSITIVE_TRACE_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "api-key",
+  "cookie",
+  "set-cookie",
+]);
+
+function redactTraceHeader(name: string, value: string): string {
+  return SENSITIVE_TRACE_HEADERS.has(name.toLowerCase()) ? "[REDACTED]" : value;
 }
 
 function truncateTraceText(text: string, maxBytes: number): string {
