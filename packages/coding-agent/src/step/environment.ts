@@ -146,6 +146,10 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 	if (!env.STEP_CLI_DEFAULT_MODEL?.trim()) {
 		env.STEP_CLI_DEFAULT_MODEL = env.STEP_MODEL?.trim() || STEP_DEFAULT_MODEL;
 	}
+	// Downstream attribution marker sent as `x-step-client`. Keep it overridable
+	// so an embedding host can identify itself, but default shipped Step CLI
+	// requests to `step-cli`.
+	if (!env.STEP_CLIENT?.trim()) env.STEP_CLIENT = "step-cli";
 	// Step should not contact Pi's release/install services unless explicitly
 	// opted in by setting STEP_CLI_DISABLE_PI_SERVICES to a false value.
 	if (!env.STEP_CLI_DISABLE_PI_SERVICES?.trim()) env.STEP_CLI_DISABLE_PI_SERVICES = "1";
