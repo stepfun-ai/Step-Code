@@ -61,32 +61,36 @@ describe("Step trace headers", () => {
 		expect(value).toBe(encodeStepTraceHeaderValue(`/tmp/${"中".repeat(200)}`));
 	});
 
-	it("replaces client case variants without adding trace fields for untrusted URLs", () => {
-		const headers: Record<string, string | null> = {
-			"X-Step-Client": "stale",
-			"x-step-session-id": "stale-session",
-			accept: "application/json",
-		};
-		applyStepTraceHeaders(headers, trace, {
-			clientType: " cli ",
-			requestUrl: "https://other.example/v1/messages",
-			allowedBaseUrls: ["https://allowed.example/v1"],
-		});
-
+	it("sends the full attribution set when sendAttribution is set", () => {
+		const headers: Record<string, string | null> = { accept: "application/json" };
+		applyStepTraceHeaders(headers, trace, { clientType: "step-cli", sendAttribution: true });
 		expect(headers).toEqual({
-			"x-step-client": "cli",
-			"x-step-session-id": "stale-session",
 			accept: "application/json",
+			"x-step-client": "step-cli",
+			"x-step-session-id": "session-1",
+			"x-step-goal-id": "goal-1",
+			"x-step-attempt-id": "attempt-1",
+			"x-step-harness-id": "harness-1",
+			"x-step-span-id": "span-1",
+			"x-step-workspace-id": encodeStepTraceHeaderValue(trace.workspaceId),
+			"x-step-provider-id": "step",
+			"x-step-model": "step-3.7-flash",
 		});
 	});
 
-	it("treats an explicitly empty allowlist as untrusted", () => {
-		const headers: Record<string, string | null> = {};
-		applyStepTraceHeaders(headers, trace, {
-			requestUrl: "https://collector.example/v1/messages",
-			allowedBaseUrls: [],
-		});
-		expect(headers).toEqual({ "x-step-client": "cli" });
+	it("sends only the client marker when sendAttribution is not set", () => {
+		const headers: Record<string, string | null> = { accept: "application/json" };
+		applyStepTraceHeaders(headers, trace, { clientType: "step-cli" });
+		// Attribution (session/workspace/goal/...) must never egress to a non-Step
+		// provider; only the low-sensitivity client marker is universal.
+		expect(headers).toEqual({ accept: "application/json", "x-step-client": "step-cli" });
+	});
+
+	it("defaults the client marker to cli and replaces case variants", () => {
+		const headers: Record<string, string | null> = { "X-Step-Client": "stale" };
+		applyStepTraceHeaders(headers, trace, {});
+		expect(headers["x-step-client"]).toBe("cli");
+		expect(headers["X-Step-Client"]).toBeUndefined();
 	});
 
 	it("matches only a complete URL prefix", () => {

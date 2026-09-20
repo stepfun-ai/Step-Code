@@ -22,7 +22,7 @@ import {
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
-import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
+import { applyStepTraceHeaders, isStepTraceProductProvider } from "../step/trace-headers.ts";
 import {
 	fetchStepModelEfforts,
 	registerStepProvider,
@@ -300,10 +300,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		pi.on("before_provider_headers", (event, ctx) => {
 			const model = ctx.model;
 			if (!model) return;
-			// The low-sensitivity client marker belongs on every model request. High-
-			// sensitivity trace fields are gated by the configured URL allowlist below;
-			// Step/legacy MP providers additionally trust their resolved product URL so
-			// their cloud-trace requests keep the server-side observer context.
+			// x-step-client marks every request. The session/workspace/provider
+			// attribution follows only Step-owned providers (native step + product
+			// proxies), keyed by provider id, so it never egresses to a distinct
+			// third-party provider. Caveat: overriding STEP_BASE_URL under the
+			// "step" id points that provider at another host and attribution follows.
 			applyStepTraceHeaders(
 				event.headers,
 				{
@@ -318,8 +319,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				},
 				{
 					clientType: process.env.STEP_CLIENT,
-					requestUrl: model.baseUrl,
-					allowedBaseUrls: resolveStepTraceRuntimeAllowlist(model.provider),
+					sendAttribution: model.provider === STEP_PROVIDER_ID || isStepTraceProductProvider(model.provider),
 				},
 			);
 		});
