@@ -36,11 +36,6 @@
 	],
 	"author": "Mario Zechner",
 	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://gitlab.basemind.com/aiagent/step-harness.git",
-		"directory": "packages/tui"
-	},
 	"engines": {
 		"node": ">=22.19.0"
 	},

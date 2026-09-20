@@ -322,8 +322,8 @@ describe("Step Pi slash command adapters", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const feedbackIdentity = vi
 			.fn()
-			.mockReturnValueOnce({ uid: "uid-before", username: "before@stepfun.com" })
-			.mockReturnValueOnce({ uid: "uid-current", username: "kris@stepfun.com" });
+			.mockReturnValueOnce({ uid: "uid-before", username: "before@example.test" })
+			.mockReturnValueOnce({ uid: "uid-current", username: "account@example.test" });
 		const { commands } = registerCommands({ feedbackIdentity });
 
 		const context = {
@@ -341,11 +341,11 @@ describe("Step Pi slash command adapters", () => {
 		const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(firstBody.context).toMatchObject({ uid: "uid-before", username: "before@stepfun.com" });
+		expect(firstBody.context).toMatchObject({ uid: "uid-before", username: "before@example.test" });
 		expect(secondBody.context).toMatchObject({
 			sessionId: "session-1",
 			uid: "uid-current",
-			username: "kris@stepfun.com",
+			username: "account@example.test",
 		});
 	});
 

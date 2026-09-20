@@ -121,7 +121,7 @@ async function main() {
 		return;
 	}
 	const version = normalizeReleaseVersion(args.get("version") ?? process.env.CI_COMMIT_TAG ?? process.env.RELEASE_BUNDLE_VERSION);
-	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli").replace(/\/+$/u, "");
+	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://release.example.test/stepcli").replace(/\/+$/u, "");
 	const dryRun = args.has("dry-run");
 	const releaseDir = path.join(repoRoot, "dist", "release");
 	if (dryRun) {
