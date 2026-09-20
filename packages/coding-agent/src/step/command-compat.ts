@@ -357,6 +357,13 @@ const STEP_CONFIG_SUBCOMMAND_FLAGS: Record<string, readonly string[]> = {
 	init: ["--scope", "--path", "--force"],
 };
 
+/** `step config` subcommands with one-line summaries, surfaced by `config --help`. */
+export const STEP_CONFIG_SUBCOMMANDS: readonly { readonly name: string; readonly summary: string }[] = [
+	{ name: "path", summary: "Print the resolved Step config file paths." },
+	{ name: "show", summary: "Print the effective Step config (credentials omitted)." },
+	{ name: "init", summary: "Write a Step config template (--scope, --path, --force)." },
+];
+
 function stepConfigUsage(subcommand: string): string {
 	switch (subcommand) {
 		case "path":

@@ -10,6 +10,7 @@ import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager, type SettingsManagerCreateOptions } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import type { StartupUiHooks } from "./modes/interactive-contract.ts";
+import { STEP_CONFIG_SUBCOMMANDS } from "./step/command-compat.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "./step/environment.ts";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
@@ -66,6 +67,12 @@ function getPackageCommandUsage(command: PackageCommand): string {
 const CONFIG_COMMAND_USAGE = `${APP_NAME} config [-l] [--approve|--no-approve]`;
 
 function printConfigCommandHelp(): void {
+	// path/show/init exist only in the Step app shell (see isStepConfigCommand); a generic
+	// `pi config <sub>` is not intercepted, so list them only for the Step build.
+	const subcommands =
+		APP_NAME === "step"
+			? `\n\n${chalk.bold("Subcommands:")}\n${STEP_CONFIG_SUBCOMMANDS.map((sub) => `  ${sub.name.padEnd(6)} ${sub.summary}`).join("\n")}`
+			: "";
 	console.log(`${chalk.bold("Usage:")}
   ${CONFIG_COMMAND_USAGE}
 
@@ -76,7 +83,7 @@ Press Tab in the TUI to switch between global and project-local modes.
 Options:
   -l, --local       Edit project overrides (${CONFIG_DIR_NAME}/config.toml)
   -a, --approve     Trust project-local files for this command with -l
-  -na, --no-approve Ignore project-local files for this command with -l
+  -na, --no-approve Ignore project-local files for this command with -l${subcommands}
 `);
 }
 

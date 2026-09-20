@@ -119,6 +119,12 @@ export type WidgetPlacement = "aboveEditor" | "belowEditor";
 export interface ExtensionWidgetOptions {
 	/** Where the widget is rendered. Defaults to "aboveEditor". */
 	placement?: WidgetPlacement;
+	/**
+	 * Interactive component for this widget; takes precedence over the string
+	 * lines in interactive mode. The lines stay the transport for RPC and
+	 * stdio hosts, which cannot render components.
+	 */
+	component?: (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 }
 
 /** Extra presentation hints for {@link ExtensionUIContext.notify}. */

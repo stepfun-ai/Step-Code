@@ -305,6 +305,14 @@ main() {
 	cp "$binary" "$temporary"
 	chmod 755 "$temporary" 2>/dev/null || true
 	mv -f "$temporary" "$destination"
+	# Photon's wasm must sit next to the installed binary: photon.ts resolves it at
+	# execDir/photon_rs_bg.wasm, and without it image resizing is disabled — read_file
+	# can then only pass through images already within the inline budget, and larger
+	# ones fail with "could not be resized". install.ps1 and self-update already ship
+	# it; keep this Unix path in sync.
+	if [[ -f "${archive_root}/photon_rs_bg.wasm" ]]; then
+		cp "${archive_root}/photon_rs_bg.wasm" "${INSTALL_DIR}/photon_rs_bg.wasm"
+	fi
 	for dir in native theme assets export-html docs examples; do copy_runtime_dir "$archive_root" "$dir"; done
 	install_managed_tools "$archive_root"
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'

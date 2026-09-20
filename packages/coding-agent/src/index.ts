@@ -819,7 +819,6 @@ export { copyToClipboard, readClipboardText } from "./utils/clipboard.ts";
 export {
 	cleanPastedPath,
 	extensionForImageMimeType,
-	hasClipboardImage,
 	isImageFilePath,
 	isWindowsPath,
 	readClipboardImage,
@@ -829,6 +828,7 @@ export {
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { parseGitUrl } from "./utils/git.ts";
 export { convertToPng } from "./utils/image-convert.ts";
+export { imageFileToContent } from "./utils/image-process.ts";
 export {
 	formatDimensionNote,
 	type ResizedImage,

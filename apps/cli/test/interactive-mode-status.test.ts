@@ -150,12 +150,16 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		const header = { setExpanded: vi.fn() };
 		const loadedResourcesChild = { setExpanded: vi.fn() };
 		const chatChild = { setExpanded: vi.fn() };
+		const widgetAbove = { setExpanded: vi.fn() };
+		const widgetBelow = { setExpanded: vi.fn() };
 		const fakeThis: any = {
 			toolOutputExpanded: false,
 			customHeader: undefined,
 			builtInHeader: header,
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: { children: [chatChild] },
+			extensionWidgetsAbove: new Map([["above", widgetAbove]]),
+			extensionWidgetsBelow: new Map([["below", widgetBelow]]),
 			ui: { requestRender: vi.fn() },
 			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 			showStatus: vi.fn(),
@@ -167,6 +171,8 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
+		expect(widgetAbove.setExpanded).toHaveBeenCalledWith(true);
+		expect(widgetBelow.setExpanded).toHaveBeenCalledWith(true);
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: expanded");
 	});
 });

@@ -244,6 +244,36 @@ describe("StepEditor", () => {
 		expect(lines.some((line) => line.includes(CURSOR_MARKER))).toBe(true);
 	});
 
+	it("tints the leading slash command in the accent tone without changing width", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("/model hi");
+		const lines = editor.render(80);
+
+		expect(lines[1]).toContain(theme.fg("accent", "/model"));
+		expect(stripSgr(lines[1] ?? "")).toContain("/model hi");
+		for (const line of lines) expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("keeps plain text and a bare slash trigger untinted", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("plain text with /model inside");
+		expect(editor.render(80)[1]).not.toContain(theme.fg("accent", "/model"));
+		editor.setText("/");
+		expect(editor.render(80)[1]).not.toContain(theme.fg("accent", "/"));
+	});
+
+	it("skips the tint while the cursor overlays the token", () => {
+		initTheme("step");
+		const editor = createEditor();
+		editor.setText("/model hi");
+		for (let i = 0; i < 4; i += 1) editor.handleInput("\x1b[D"); // left into the token
+		const lines = editor.render(80);
+		expect(lines[1]).not.toContain(theme.fg("accent", "/model"));
+		expect(stripSgr(lines[1] ?? "")).toContain("/model hi");
+	});
+
 	it("delegates printable input and submit to the inherited editor", () => {
 		initTheme("step-blue");
 		const editor = createEditor();

@@ -1060,9 +1060,10 @@ async function executeStepEdit(
 				`Search string occurs ${occurrences} times in ${args.path}; provide a unique search string or set replace_all=true`,
 			);
 		}
-		const updated = args.replace_all
-			? original.split(search).join(replacement)
-			: original.replace(search, replacement);
+		// split/join replaces literally: unlike String.prototype.replace it never interprets
+		// `$&`, `$\``, `$'`, `$n`, or `$$` in the replacement. Without replace_all, occurrences
+		// is exactly 1 (guarded above), so this replaces just that one match.
+		const updated = original.split(search).join(replacement);
 		const replacedCount = args.replace_all ? occurrences : 1;
 		if (updated === original) {
 			return {

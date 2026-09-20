@@ -438,6 +438,45 @@ describe("Step tool profile", () => {
 		}
 	});
 
+	it("treats $-patterns in the replacement as literal text for a single edit", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			const path = join(root, "sample.ts");
+			const edit = createStepToolProfile(root).find((tool) => tool.name === "edit_file")!;
+
+			// `$&` would expand to the whole match under String.prototype.replace,
+			// rewriting the file to identical bytes (a silent no-op).
+			await writeFile(path, 'const example = "TARGET";\n');
+			const ampersand = await edit.execute(
+				"edit",
+				{ path: "sample.ts", search: "TARGET", replace: "$&" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(ampersand)).toContain("1 occurrence(s)");
+			expect(ampersand.details as { changed?: boolean; replacedCount?: number }).toMatchObject({
+				changed: true,
+				replacedCount: 1,
+			});
+			expect(await readFile(path, "utf8")).toBe('const example = "$&";\n');
+
+			// `$\`` would expand to everything before the match, injecting stray code.
+			await writeFile(path, 'const example = "TARGET";\n');
+			const backtick = await edit.execute(
+				"edit",
+				{ path: "sample.ts", search: "TARGET", replace: "$`" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(backtick)).toContain("1 occurrence(s)");
+			expect(await readFile(path, "utf8")).toBe('const example = "$`";\n');
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("maps find_tools queries onto the Step profile without exposing Pi names", async () => {
 		const findTools = createStepToolProfile(process.cwd()).find((tool) => tool.name === "find_tools")!;
 		const result = await findTools.execute(

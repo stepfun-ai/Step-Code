@@ -9,6 +9,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
+import { TaskWidgetComponent } from "../src/features/step-tasks-render.ts";
 import type { Theme } from "../src/theme/theme.ts";
 
 interface TasksSnapshot {
@@ -20,6 +21,7 @@ function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 	api: ExtensionAPI;
 	tools: Map<string, ToolDefinition>;
 	entries: TasksSnapshot[];
+	sentMessages: Array<{ customType: string; content: string; display: boolean; triggerTurn?: boolean }>;
 	sessionManager: SessionManager;
 	commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>;
 	emit: (event: { type: string } & Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
@@ -27,6 +29,7 @@ function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 	const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const entries: TasksSnapshot[] = [];
+	const sentMessages: Array<{ customType: string; content: string; display: boolean; triggerTurn?: boolean }> = [];
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	const api = {
 		registerTool(tool: ToolDefinition) {
@@ -49,13 +52,19 @@ function createApi(sessionManager = SessionManager.inMemory("/workspace")): {
 			entries.push(data);
 			sessionManager.appendCustomEntry(customType, data);
 		},
-		sendMessage: () => {},
+		sendMessage: (
+			message: { customType: string; content: string; display: boolean },
+			options?: { triggerTurn?: boolean },
+		) => {
+			sentMessages.push({ ...message, triggerTurn: options?.triggerTurn });
+		},
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
 	return {
 		api,
 		tools,
 		entries,
+		sentMessages,
 		sessionManager,
 		commands,
 		emit: async (event, ctx) => {
@@ -531,7 +540,7 @@ test("/todos belongs to task tracking and lists open blockers without plan mode"
 	expect(ctx.ui.notify).toHaveBeenLastCalledWith("done 1. Write the parser @worker-a\ntodo 2. Add tests", "info");
 });
 
-test("task updates retain the full ordered plan without creating a persistent RPC widget", async () => {
+test("task widget shows bounded progress with the active label first and plain RPC lines", async () => {
 	const { api, tools } = createApi();
 	createStepTasksExtension()(api);
 	const ctx = { ...createContext(), mode: "rpc" as const };
@@ -544,51 +553,232 @@ test("task updates retain the full ordered plan without creating a persistent RP
 		);
 	}
 	await run(tools, "task_update", { taskId: "1", status: "completed" }, ctx);
-	const result = await runResult(tools, "task_update", { taskId: "8", status: "in_progress" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
-	const rendered = renderResult(tools.get("task_update")!, result);
-	expect(rendered).toContain("✔ Task 1");
-	expect(rendered).toContain("Updated Plan (1/8)");
-	expect(rendered).toContain("◧ Task 8");
-	expect(rendered).not.toContain("(in progress)");
-	for (let index = 2; index <= 7; index++) expect(rendered).toContain(`□ Task ${index}`);
-	expect(rendered.indexOf("Task 1")).toBeLessThan(rendered.indexOf("Task 8"));
+	await run(tools, "task_update", { taskId: "8", status: "in_progress" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenCalled();
+	const [key, lines] = vi.mocked(ctx.ui.setWidget).mock.calls.at(-1)!;
+	expect(key).toBe("step-tasks");
+	expect(Array.isArray(lines)).toBe(true);
+	expect(lines).toEqual([
+		"Tasks: 1/8 completed",
+		"wip 8. Working on 8",
+		"todo 2. Task 2",
+		"todo 3. Task 3",
+		"todo 4. Task 4",
+		"todo 5. Task 5",
+		"... +3 more (1 done · 2 todo) · /todos to expand",
+	]);
 });
 
-test("task plan flattens untrusted titles without changing stored data", async () => {
+test("task widget flattens and clips untrusted titles without changing stored data", async () => {
 	const { api, tools } = createApi();
 	createStepTasksExtension()(api);
 	const ctx = createContext();
 	const subject = `\u001b[31mLong\n\t${"界".repeat(150)}\u001b[0m`;
 	await run(tools, "task_create", { subject, description: "raw data stays intact" }, ctx);
-	const result = await runResult(tools, "task_list", {}, ctx);
-	const lines = renderResult(tools.get("task_list")!, result).split("\n");
-	for (const line of lines) {
+	const lines: unknown = vi.mocked(ctx.ui.setWidget).mock.calls.at(-1)?.[1];
+	expect(Array.isArray(lines)).toBe(true);
+	for (const line of lines as string[]) {
 		expect(line).not.toMatch(/[\r\n\t\u001b]/);
-		expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+		expect(visibleWidth(line)).toBeLessThanOrEqual(100);
 	}
 	expect(await run(tools, "task_get", { taskId: "1" })).toMatchObject({ subject });
 });
 
-test("branch restores, completion, deletion and fresh sessions never mount a task widget", async () => {
+test("task widget component toggles between open preview and the full list via setExpanded", async () => {
+	const { api, tools } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	for (let i = 1; i <= 8; i++) {
+		await run(
+			tools,
+			"task_create",
+			{ subject: `Task ${i}`, description: "work", activeForm: `Working on ${i}` },
+			ctx,
+		);
+	}
+	await run(tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	await run(tools, "task_update", { taskId: "8", status: "in_progress" }, ctx);
+
+	const widget = (): { render(width: number): string[]; setExpanded(v: boolean): void } => {
+		const options = vi.mocked(ctx.ui.setWidget).mock.calls.at(-1)![2] as {
+			component?: (
+				tui: unknown,
+				theme: Theme,
+			) => {
+				render(width: number): string[];
+				setExpanded(v: boolean): void;
+			};
+		};
+		expect(options?.component).toBeTypeOf("function");
+		return options.component!(undefined, plainTheme);
+	};
+
+	const collapsed = widget().render(120);
+	expect(collapsed[0]).toBe("Tasks: 1/8 completed");
+	expect(collapsed).toContain("wip 8. Working on 8");
+	expect(collapsed).not.toContain("done 1. Task 1");
+	expect(collapsed.at(-1)).toBe("... +3 more (1 done · 2 todo) · ctrl+o to expand");
+
+	const expandedWidget = widget();
+	expandedWidget.setExpanded(true);
+	const expanded = expandedWidget.render(120);
+	expect(expanded[0]).toBe("Tasks: 1/8 completed");
+	expect(expanded).toContain("done 1. Task 1");
+	expect(expanded).toContain("todo 5. Task 5");
+	expect(expanded.at(-1)).toBe("all 8 items · ctrl+o to collapse");
+	expect(widget().render(120).at(-1)).toBe("... +3 more (1 done · 2 todo) · ctrl+o to expand");
+});
+
+test("expanded widget lists every task without a line cap", () => {
+	const tasks: StepTask[] = Array.from({ length: 12 }, (_, i) => ({
+		id: String(i + 1),
+		subject: `Task ${i + 1}`,
+		description: "",
+		status: i < 3 ? "completed" : "pending",
+		blocks: [],
+		blockedBy: [],
+		createdAt: 1,
+		updatedAt: 1,
+	}));
+	const component = new TaskWidgetComponent(tasks, plainTheme);
+	component.setExpanded(true);
+	const lines = component.render(120);
+	expect(lines).toHaveLength(14);
+	expect(lines).toContain("done 3. Task 3");
+	expect(lines).toContain("todo 12. Task 12");
+	expect(lines.at(-1)).toBe("all 12 items · ctrl+o to collapse");
+});
+
+test("/todos always notifies the full list and never re-renders the widget", async () => {
+	const { api, tools, commands } = createApi();
+	createStepTasksExtension()(api);
+	const ctx = createContext();
+	await run(tools, "task_create", { subject: "Only", description: "fits the preview" }, ctx);
+	const before = vi.mocked(ctx.ui.setWidget).mock.calls.length;
+	await commands.get("todos")!.handler("", ctx);
+	expect(vi.mocked(ctx.ui.setWidget).mock.calls.length).toBe(before);
+	expect(ctx.ui.notify).toHaveBeenLastCalledWith("todo 1. Only", "info");
+});
+
+test("task widget follows branch restores, completed tasks, deletion and fresh sessions", async () => {
 	const source = createApi();
 	createStepTasksExtension()(source.api);
 	const ctx = createContext([], source.sessionManager);
 	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
 	const pending = source.sessionManager.getLeafId()!;
 	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+		"step-tasks",
+		["Tasks: 1/1 completed", "... +1 more (1 done) · /todos to expand"],
+		{ component: expect.any(Function) },
+	);
 	source.sessionManager.branch(pending);
 	await source.emit({ type: "session_tree" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"], {
+		component: expect.any(Function),
+	});
 	await run(source.tools, "task_update", { taskId: "1", status: "deleted" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined, undefined);
 	source.sessionManager.branch(pending);
 	await source.emit({ type: "session_start" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", ["Tasks: 0/1 completed", "todo 1. One"], {
+		component: expect.any(Function),
+	});
 	source.sessionManager.newSession();
 	await source.emit({ type: "session_start" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined, undefined);
+});
+
+test("a fully-completed checklist survives the turn end and clears on the next prompt", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext();
+	const nextPrompt = () => userPrompt("next");
+	const runEnds = () => source.emit({ type: "agent_end" }, createContext());
+	const userPrompt = (content: string) =>
+		source.emit({ type: "message_start", message: { role: "user", content } }, ctx);
+	await userPrompt("Fix the login bug and report");
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	await run(source.tools, "task_create", { subject: "Two", description: "second" }, ctx);
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+
+	// Assistant traffic never retires the list; a new user prompt does.
+	await source.emit({ type: "message_start", message: { role: "assistant" } }, ctx);
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+
+	// The run ends with work still open: nothing is archived into the transcript.
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(0);
+
+	// Partially done: a new prompt arrives with work still open, so the list stays.
+	await nextPrompt();
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+
+	await run(source.tools, "task_update", { taskId: "2", status: "completed" }, ctx);
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+		"step-tasks",
+		["Tasks: 2/2 completed", "... +2 more (2 done) · /todos to expand"],
+		{ component: expect.any(Function) },
+	);
+
+	// Fully done: the receipt stays past the turn end (still listed) and is
+	// retired by the next prompt; the id counter survives so no id from this
+	// checklist is handed out again.
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+		"step-tasks",
+		["Tasks: 2/2 completed", "... +2 more (2 done) · /todos to expand"],
+		{ component: expect.any(Function) },
+	);
+	expect(await run(source.tools, "task_list", {})).toHaveLength(2);
+
+	// The run ends fully done: the checklist is archived as a transcript receipt
+	// that recaps the prompt the checklist was created for.
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(1);
+	expect(source.sentMessages[0]).toMatchObject({ customType: "step-tasks", display: true, triggerTurn: false });
+	expect(source.sentMessages[0]!.content).toContain("**Tasks: 2/2 completed**");
+	expect(source.sentMessages[0]!.content).toContain("> Fix the login bug and report");
+	expect(source.sentMessages[0]!.content).toContain("done 2. Two");
+
+	// The next prompt retires the panel; a second receipt is not posted.
+	await nextPrompt();
+	expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("step-tasks", undefined, undefined);
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(1);
+	expect(await run(source.tools, "task_list", {})).toEqual([]);
+	const next = (await run(source.tools, "task_create", { subject: "Three", description: "fresh" })) as { id: string };
+	expect(next.id).toBe("3");
+});
+
+test("the receipt posts exactly once across repeated runs and late retirement", async () => {
+	const source = createApi();
+	createStepTasksExtension()(source.api);
+	const ctx = createContext();
+	const userPrompt = (content: string) =>
+		source.emit({ type: "message_start", message: { role: "user", content } }, ctx);
+	const runEnds = () => source.emit({ type: "agent_end" }, createContext());
+	await userPrompt("build the feature");
+	await run(source.tools, "task_create", { subject: "One", description: "first" }, ctx);
+	await run(source.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+
+	// agent_end fires once per run; repeated runs must not duplicate the receipt.
+	await runEnds();
+	await runEnds();
+	expect(source.sentMessages).toHaveLength(1);
+	expect(source.sentMessages[0]!.content).toContain("> build the feature");
+
+	// A user message that retires the checklist before agent_end still archives it.
+	const second = createApi();
+	createStepTasksExtension()(second.api);
+	const ctx2 = createContext();
+	await second.emit({ type: "message_start", message: { role: "user", content: "fix the bug" } }, ctx2);
+	await run(second.tools, "task_create", { subject: "Two", description: "second" }, ctx2);
+	await run(second.tools, "task_update", { taskId: "1", status: "completed" }, ctx2);
+	// A later prompt does not become the origin of a checklist already started.
+	await second.emit({ type: "message_start", message: { role: "user", content: "unrelated" } }, ctx2);
+	expect(second.sentMessages).toHaveLength(1);
+	expect(second.sentMessages[0]!.content).toContain("> fix the bug");
+	expect(second.sentMessages[0]!.content).not.toContain("unrelated");
 });
 
 test("failed updates and read-only task tools do not refresh the widget", async () => {
@@ -596,11 +786,11 @@ test("failed updates and read-only task tools do not refresh the widget", async 
 	createStepTasksExtension()(api);
 	const ctx = createContext();
 	await run(tools, "task_create", { subject: "One", description: "first" }, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenCalledTimes(1);
 	await expect(run(tools, "task_update", { taskId: "1", addBlocks: ["1"] }, ctx)).rejects.toThrow();
 	await run(tools, "task_get", { taskId: "1" }, ctx);
 	await run(tools, "task_list", {}, ctx);
-	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+	expect(ctx.ui.setWidget).toHaveBeenCalledTimes(1);
 });
 
 test("headless task tracking needs no UI", async () => {
@@ -613,10 +803,10 @@ test("headless task tracking needs no UI", async () => {
 	expect(ctx.ui.setWidget).not.toHaveBeenCalled();
 });
 
-test("task calls stay hidden until a result provides the plan snapshot", async () => {
+test("all task tools own a compact native call/result renderer", async () => {
 	const { api, tools } = createApi();
 	createStepTasksExtension()(api);
-	for (const tool of tools.values()) {
+	for (const [name, tool] of tools) {
 		expect(tool.renderCall).toBeTypeOf("function");
 		expect(tool.renderResult).toBeTypeOf("function");
 		const lines = tool.renderCall!(
@@ -624,8 +814,9 @@ test("task calls stay hidden until a result provides the plan snapshot", async (
 			plainTheme,
 			renderContext(),
 		).render(40);
-		expect(tool.renderShell).toBe("self");
-		expect(lines).toEqual([]);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain(name);
+		expect(visibleWidth(lines[0])).toBeLessThanOrEqual(40);
 	}
 });
 
@@ -640,85 +831,27 @@ test("task result history renders its own snapshot and expands all task fields",
 	const fetched = await runResult(tools, "task_get", { taskId: "1" });
 	const updated = await runResult(tools, "task_update", { taskId: "1", status: "in_progress", owner: "worker-a" });
 	await run(tools, "task_update", { taskId: "1", status: "completed" });
-	expect(renderResult(tools.get("task_create")!, created)).toBe("");
-	expect(renderResult(tools.get("task_get")!, fetched)).toBe("");
+	expect(renderResult(tools.get("task_create")!, created)).toContain("todo 1. Write parser");
+	expect(renderResult(tools.get("task_get")!, fetched)).toContain("todo 1. Write parser");
 	expect(renderResult(tools.get("task_get")!, fetched)).not.toContain("Detailed grammar");
-	expect(renderResult(tools.get("task_update")!, updated)).toContain("Updated Plan (0/1)");
-	expect(renderResult(tools.get("task_update")!, updated)).toContain("◧ Write parser @worker-a");
-	expect(updated.content).not.toEqual(
-		expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining('"plan"') })]),
-	);
+	expect(renderResult(tools.get("task_update")!, updated)).toContain("wip 1. Write parser @worker-a");
 	const expanded = renderResult(tools.get("task_get")!, fetched, true);
 	expect(expanded).toContain("Detailed grammar");
 	expect(expanded).toContain('"lane": "syntax"');
 	expect(expanded).toContain('"blocks"');
 	const removed = await runResult(tools, "task_update", { taskId: "1", status: "deleted" });
-	expect(renderResult(tools.get("task_update")!, removed)).toContain("No tasks tracked.");
-	expect(renderResult(tools.get("task_update")!, removed)).toContain("Updated Plan (0/0)");
+	expect(renderResult(tools.get("task_update")!, removed)).toContain("deleted 1. Write parser");
 });
 
-test("parallel updates snapshot the committed task state without losing progress", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	for (let index = 1; index <= 5; index++) {
-		await run(source.tools, "task_create", { subject: `Task ${index}`, description: "work" });
-	}
-	const results = await Promise.all([
-		runResult(source.tools, "task_update", { taskId: "1", status: "completed" }),
-		runResult(source.tools, "task_update", { taskId: "2", status: "completed" }),
-		runResult(source.tools, "task_update", { taskId: "3", status: "in_progress" }),
-	]);
-	for (const [index, result] of results.entries()) {
-		const snapshot = source.entries[5 + index]!;
-		const completed = snapshot.tasks.filter((task) => task.status === "completed").length;
-		expect(result.details).toMatchObject({
-			plan: snapshot.tasks.map(({ id, subject, status }) => ({ id, subject, status })),
-		});
-		expect(renderResult(source.tools.get("task_update")!, result)).toContain(`Updated Plan (${completed}/5)`);
-	}
-	const latest = await runResult(source.tools, "task_list", {});
-	expect(renderResult(source.tools.get("task_list")!, latest)).toContain("Updated Plan (2/5)");
-	const writes = source.entries.length;
-	await expect(
-		run(source.tools, "task_update", { taskId: "3", status: "completed", addBlocks: ["999"] }),
-	).rejects.toThrow("No task with id");
-	expect(source.entries).toHaveLength(writes);
-	expect(await runResult(source.tools, "task_list", {})).toEqual(latest);
-	const reopened = await runResult(source.tools, "task_update", { taskId: "1", status: "in_progress" });
-	expect(renderResult(source.tools.get("task_update")!, reopened)).toContain("Updated Plan (1/5)");
-	const deleted = await runResult(source.tools, "task_update", { taskId: "2", status: "deleted" });
-	expect(renderResult(source.tools.get("task_update")!, deleted)).toContain("Updated Plan (0/4)");
-	expect(renderResult(source.tools.get("task_list")!, latest)).toContain("Updated Plan (2/5)");
-	const restored = createApi(source.sessionManager);
-	createStepTasksExtension()(restored.api);
-	await restored.emit({ type: "session_start" }, createContext([], source.sessionManager));
-	expect(renderResult(restored.tools.get("task_list")!, await runResult(restored.tools, "task_list", {}))).toContain(
-		"Updated Plan (0/4)",
-	);
-});
-
-test("partial results and legacy single-task results never invent a full-plan count", () => {
-	const { api, tools } = createApi();
-	createStepTasksExtension()(api);
-	const tool = tools.get("task_update")!;
-	const result = { content: [], details: { id: "1", subject: "Old task", status: "completed" } };
-	expect(renderResult(tool, result)).toContain("Updated Plan\n");
-	expect(renderResult(tool, result)).not.toContain("(1/1)");
-	expect(
-		tool.renderResult!(result, { expanded: false, isPartial: true }, plainTheme, renderContext()).render(80),
-	).toEqual([]);
-});
-
-test("task list shows every step without requiring expansion", async () => {
+test("task list rendering keeps only counts when collapsed and the full output when expanded", async () => {
 	const { api, tools } = createApi();
 	createStepTasksExtension()(api);
 	for (let i = 1; i <= 7; i++) await run(tools, "task_create", { subject: `Task ${i}`, description: "work" });
 	await run(tools, "task_update", { taskId: "2", addBlockedBy: ["1"] });
 	const result = await runResult(tools, "task_list", {});
 	const collapsed = renderResult(tools.get("task_list")!, result);
-	expect(collapsed).toContain("□ Task 2 (blocked by 1)");
-	expect(collapsed).toContain("□ Task 6");
-	expect(collapsed).toContain("□ Task 7");
+	expect(collapsed).toContain("7 tasks · 0 done · 7 open");
+	expect(collapsed).not.toContain("Task 2");
 	expect(renderResult(tools.get("task_list")!, result, true)).toContain("Task 7");
 });
 
@@ -795,190 +928,4 @@ test("task tool descriptions identify todos rather than work execution", () => {
 	expect(tools.get("task_get")!.description).toContain("including completed");
 	expect(tools.get("task_list")!.description).toContain("unfinished prerequisites");
 	expect(tools.get("task_list")!.description).toContain("resume existing work");
-});
-
-test("a new five-step plan excludes the previous three tasks and resumes them only explicitly", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	for (const subject of ["甲", "乙", "丙"]) {
-		await run(source.tools, "task_create", { subject, description: "旧任务" });
-	}
-	const oldResult = await runResult(source.tools, "task_update", { taskId: "1", status: "completed" });
-	const oldSnapshot = structuredClone(source.entries.at(-1));
-	for (const [index, subject] of ["梳理需求", "设计方案", "搭项目骨架", "编写实现", "验证收尾"].entries()) {
-		await run(source.tools, "task_create", {
-			subject,
-			description: "新任务",
-			...(index === 0 ? { newPlan: "实现新需求" } : {}),
-		});
-	}
-	const current = await runResult(source.tools, "task_update", { taskId: "4", status: "in_progress" });
-	expect(renderResult(source.tools.get("task_update")!, current)).toContain("Updated Plan (0/5)");
-	expect(renderResult(source.tools.get("task_update")!, current)).not.toMatch(/甲|乙|丙/);
-	const history = await run(source.tools, "task_list", { includeHistory: true });
-	expect(history).toMatchObject({
-		activePlanId: "plan-4",
-		plans: [
-			{ id: "plan-1", title: "甲", active: false, completed: 1, total: 3 },
-			{ id: "plan-4", title: "实现新需求", active: true, completed: 0, total: 5 },
-		],
-	});
-	expect(await run(source.tools, "task_list", {})).toHaveLength(5);
-	await expect(run(source.tools, "task_update", { taskId: "2", status: "completed" })).rejects.toThrow("resumePlanId");
-	await expect(run(source.tools, "task_update", { taskId: "4", addBlockedBy: ["2"] })).rejects.toThrow("resumePlanId");
-	const restored = await runResult(source.tools, "task_update", { resumePlanId: "plan-1" });
-	expect(renderResult(source.tools.get("task_update")!, restored)).toContain("Updated Plan (1/3)");
-	expect(await run(source.tools, "task_get", { taskId: "2" })).toMatchObject({ status: "pending" });
-	await run(source.tools, "task_update", { taskId: "2", status: "completed" });
-	const resumed = await runResult(source.tools, "task_update", { resumePlanId: "plan-4" });
-	expect(renderResult(source.tools.get("task_update")!, resumed)).toContain("Updated Plan (0/5)");
-	expect(await run(source.tools, "task_get", { taskId: "4" })).toMatchObject({ status: "in_progress" });
-	expect(renderResult(source.tools.get("task_update")!, oldResult)).toContain("Updated Plan (1/3)");
-	expect(source.entries[3]).toEqual(oldSnapshot);
-});
-
-test("plan boundaries survive turns, compaction and reload without reviving archived work", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	const ctx = createContext([], source.sessionManager);
-	await run(source.tools, "task_create", { subject: "Old", description: "old" });
-	await run(source.tools, "task_create", { subject: "Current", description: "new", newPlan: "Current plan" });
-	await run(source.tools, "task_update", { taskId: "2", status: "in_progress" });
-	await source.emit({ type: "turn_end" }, ctx);
-	await source.emit({ type: "agent_end" }, ctx);
-	await source.emit({ type: "turn_start" }, ctx);
-	expect(await run(source.tools, "task_list", {})).toEqual([
-		{ id: "2", subject: "Current", status: "in_progress", owner: undefined, blockedBy: [] },
-	]);
-	const kept = source.sessionManager.appendCustomEntry("retained", {});
-	source.sessionManager.appendCompaction("summary", kept, 1000);
-	const reloaded = createApi(source.sessionManager);
-	createStepTasksExtension()(reloaded.api);
-	await reloaded.emit({ type: "session_start" }, ctx);
-	expect(await run(reloaded.tools, "task_list", {})).toEqual(await run(source.tools, "task_list", {}));
-	expect(await run(reloaded.tools, "task_list", { includeHistory: true })).toMatchObject({ activePlanId: "plan-2" });
-	await run(reloaded.tools, "task_update", { resumePlanId: "plan-1" });
-	expect(await run(reloaded.tools, "task_get", { taskId: "1" })).toMatchObject({ subject: "Old" });
-});
-
-test("invalid plan switches leave current tasks, history and persistence unchanged", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	await run(source.tools, "task_create", { subject: "One", description: "old" });
-	await run(source.tools, "task_create", { subject: "Two", description: "new", newPlan: "Second" });
-	const snapshot = structuredClone(source.entries.at(-1));
-	const writes = source.entries.length;
-	await expect(run(source.tools, "task_update", { resumePlanId: "missing" })).rejects.toThrow("No plan");
-	await expect(
-		run(source.tools, "task_update", { resumePlanId: "plan-1", taskId: "1", status: "completed" }),
-	).rejects.toThrow("separately");
-	await expect(
-		run(source.tools, "task_create", { subject: "Invalid", description: "invalid", newPlan: "   " }),
-	).rejects.toThrow("title");
-	expect(source.entries).toHaveLength(writes);
-	expect(source.entries.at(-1)).toEqual(snapshot);
-	expect(await run(source.tools, "task_list", {})).toHaveLength(1);
-});
-
-test("branch navigation restores its selected plan and history without reusing sibling plan IDs", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	const ctx = createContext([], source.sessionManager);
-	await run(source.tools, "task_create", { subject: "Base", description: "base" });
-	const base = source.sessionManager.getLeafId()!;
-	await run(source.tools, "task_create", { subject: "Second", description: "second", newPlan: "Second plan" });
-	const second = source.sessionManager.getLeafId()!;
-	await run(source.tools, "task_update", { resumePlanId: "plan-1" });
-	const resumed = source.sessionManager.getLeafId()!;
-	source.sessionManager.branch(base);
-	await source.emit({ type: "session_tree" }, ctx);
-	expect(await run(source.tools, "task_list", { includeHistory: true })).toMatchObject({
-		activePlanId: "plan-1",
-		plans: [{ id: "plan-1", active: true, total: 1 }],
-	});
-	await expect(run(source.tools, "task_update", { resumePlanId: "plan-2" })).rejects.toThrow("No plan");
-	expect(
-		await run(source.tools, "task_create", { subject: "Sibling", description: "third", newPlan: "Sibling plan" }),
-	).toMatchObject({ id: "3", planId: "plan-3" });
-	source.sessionManager.branch(second);
-	await source.emit({ type: "session_tree" }, ctx);
-	expect(await run(source.tools, "task_list", { includeHistory: true })).toMatchObject({
-		activePlanId: "plan-2",
-		plans: [
-			{ id: "plan-1", active: false },
-			{ id: "plan-2", active: true },
-		],
-	});
-	source.sessionManager.branch(resumed);
-	await source.emit({ type: "session_tree" }, ctx);
-	expect(await run(source.tools, "task_list", { includeHistory: true })).toMatchObject({
-		activePlanId: "plan-1",
-		plans: [
-			{ id: "plan-1", active: true },
-			{ id: "plan-2", active: false },
-		],
-	});
-	source.sessionManager.newSession();
-	await source.emit({ type: "session_start" }, ctx);
-	expect(await run(source.tools, "task_list", { includeHistory: true })).toEqual({
-		activePlanId: undefined,
-		plans: [],
-	});
-});
-
-test("completing or deleting current tasks never automatically resumes an archived plan", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	const ctx = createContext([], source.sessionManager);
-	await run(source.tools, "task_create", { subject: "Old", description: "old" });
-	await run(source.tools, "task_create", { subject: "New", description: "new", newPlan: "New plan" });
-	await run(source.tools, "task_update", { taskId: "2", status: "completed" });
-	await source.emit({ type: "turn_end" }, ctx);
-	await source.commands.get("todos")!.handler("", ctx);
-	expect(ctx.ui.notify).toHaveBeenLastCalledWith("done 2. New", "info");
-	const removed = await runResult(source.tools, "task_update", { taskId: "2", status: "deleted" });
-	expect(renderResult(source.tools.get("task_update")!, removed)).toContain("Updated Plan (0/0)");
-	await source.emit({ type: "session_start" }, ctx);
-	expect(await run(source.tools, "task_list", {})).toEqual([]);
-	expect(await run(source.tools, "task_list", { includeHistory: true })).toMatchObject({ activePlanId: "plan-2" });
-	await run(source.tools, "task_update", { resumePlanId: "plan-1" });
-	await run(source.tools, "task_update", { resumePlanId: "plan-2" });
-	expect(await run(source.tools, "task_list", {})).toEqual([]);
-	const writes = source.entries.length;
-	await run(source.tools, "task_update", { resumePlanId: "plan-2" });
-	expect(source.entries).toHaveLength(writes);
-});
-
-test("resuming a plan preserves dependencies and metadata without mutating archived snapshots", async () => {
-	const source = createApi();
-	createStepTasksExtension()(source.api);
-	await run(source.tools, "task_create", { subject: "One", description: "one", metadata: { nested: { value: 1 } } });
-	await run(source.tools, "task_create", { subject: "Two", description: "two" });
-	await run(source.tools, "task_update", { taskId: "1", addBlocks: ["2"], owner: "worker" });
-	await run(source.tools, "task_create", { subject: "Three", description: "three", newPlan: "New" });
-	const archivedSnapshot = structuredClone(source.entries.at(-1));
-	const history = await run(source.tools, "task_list", { includeHistory: true });
-	const historyCopy = structuredClone(history);
-	await run(source.tools, "task_update", { resumePlanId: "plan-1" });
-	expect(await run(source.tools, "task_get", { taskId: "1" })).toMatchObject({
-		blocks: ["2"],
-		owner: "worker",
-		metadata: { nested: { value: 1 } },
-	});
-	expect(await run(source.tools, "task_get", { taskId: "2" })).toMatchObject({ blockedBy: ["1"] });
-	await run(source.tools, "task_update", { taskId: "1", status: "completed", metadata: { nested: { value: 2 } } });
-	expect(source.entries[3]).toEqual(archivedSnapshot);
-	expect(history).toEqual(historyCopy);
-	await run(source.tools, "task_update", { resumePlanId: "plan-3" });
-	await run(source.tools, "task_update", { resumePlanId: "plan-1" });
-	expect(await run(source.tools, "task_get", { taskId: "1" })).toMatchObject({
-		status: "completed",
-		metadata: { nested: { value: 2 } },
-	});
-	expect(await run(source.tools, "task_list", {})).toEqual([
-		{ id: "1", subject: "One", status: "completed", owner: "worker", blockedBy: [] },
-		{ id: "2", subject: "Two", status: "pending", owner: undefined, blockedBy: [] },
-	]);
-	expect(source.tools.get("task_create")!.executionMode).toBe("sequential");
-	expect(source.tools.get("task_update")!.executionMode).toBe("sequential");
 });
