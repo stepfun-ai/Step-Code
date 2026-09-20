@@ -237,10 +237,6 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		});
 
 		pi.on("tool_call", async (event, ctx) => {
-			// Same policy handleToolCall will apply, so the recorded decision matches
-			// the outcome even when a run without a UI downgrades the mode.
-			const _decision = permissions.decide(event.toolName, event.input, ctx.hasUI);
-
 			return await permissions.handleToolCall(event, ctx);
 		});
 
