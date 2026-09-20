@@ -19,6 +19,18 @@ and `auth.json` keep their own formats — they hold model definitions and
 credentials, not settings — and a stale Step endpoint recorded in `models.json`
 by an older release is still repaired in place at startup.
 
+## Mandatory command approval
+
+Permission presets and tool overrides cannot automatically approve commands
+matched by the built-in command rules. In particular, `rm` with both recursive
+and force options requires confirmation for every target, including `./build`
+and `/tmp/cache`. Bypass, auto, and autopilot still ask for each call. Read-only
+mode blocks it, and runs without an approval channel cannot execute it even
+with `nonInteractiveApproval = "allow"`.
+
+See [command permissions](command-permissions.md) for matching behavior and
+how to extend the built-in rules.
+
 ## First-run theme prompt
 
 The first interactive launch asks which theme reads best in the terminal, after

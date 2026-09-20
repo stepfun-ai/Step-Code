@@ -178,6 +178,35 @@ describe("Step extension", () => {
 		});
 	});
 
+	test.each(["bypass", "autopilot"] as const)(
+		"keeps recursive forced removal gated through the %s tool-call hook",
+		async (initialPreset) => {
+			const on = vi.fn();
+			createStepExtension({
+				permission: { env: {}, initialPreset, toolOverrides: { run_command: "allow" } },
+			})({
+				registerProvider: vi.fn(),
+				on,
+				registerCommand: vi.fn(),
+				sendUserMessage: vi.fn(),
+			} as unknown as ExtensionAPI);
+			const handler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<unknown>;
+			const event = {
+				type: "tool_call",
+				toolName: "run_command",
+				toolCallId: "remove-build",
+				input: { command: "rm -rf ./build" },
+			};
+			const confirm = vi.fn(async () => false);
+			expect(await handler(event, { hasUI: true, ui: { confirm } })).toMatchObject({ block: true });
+			expect(confirm).toHaveBeenCalledOnce();
+			expect(await handler(event, { hasUI: false })).toMatchObject({ block: true, terminate: true });
+		},
+	);
+
 	// The Shift+Tab shortcut is an in-the-moment gesture by someone watching the
 	// session. Persisting it also wrote `nonInteractiveApproval: "allow"`, which
 	// granted every later `--print` run in that project unattended write access.

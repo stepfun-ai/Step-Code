@@ -6,8 +6,6 @@
  * and schedules the optional autopilot continuation after a failed run.
  */
 
-import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "@step-harness/agent-core";
 import type {
 	AgentEndEvent,
@@ -16,6 +14,10 @@ import type {
 	ToolCallEvent,
 	ToolCallEventResult,
 } from "../core/extensions/types.ts";
+
+import { findCommandApprovalRule } from "./command-policy.ts";
+
+export { containsDangerousLifecycleCommand, isDangerousCommand } from "./command-policy.ts";
 
 export type StepPermissionPresetId = "ask" | "read-only" | "bypass" | "autopilot";
 export type StepPermissionMode = "confirm" | "strict" | "auto";
@@ -51,7 +53,7 @@ export const STEP_PERMISSION_PRESETS: readonly StepPermissionPreset[] = [
 	{
 		id: "bypass",
 		label: "Bypass",
-		description: "Run tools without approval prompts",
+		description: "Run ordinary tools without approval; dangerous commands still ask",
 		mode: "auto",
 		nonInteractiveApproval: "allow",
 		autoResume: false,
@@ -59,7 +61,7 @@ export const STEP_PERMISSION_PRESETS: readonly StepPermissionPreset[] = [
 	{
 		id: "autopilot",
 		label: "Autopilot",
-		description: "Bypass approvals and resume transient model failures",
+		description: "Bypass ordinary approvals and resume transient model failures",
 		mode: "auto",
 		nonInteractiveApproval: "allow",
 		autoResume: true,
@@ -93,36 +95,6 @@ const WRITE_OR_EXECUTE_TOOLS = new Set([
 	"powershell",
 	"user_bash",
 ]);
-
-const DANGEROUS_COMMAND_PATTERNS = [
-	/\bmkfs(?:\.[\w.-]+)?\b/iu,
-	/\bdd\s+if=/iu,
-	/\b:>\s*\/dev\//u,
-	/\bgit\s+(?:reset\s+--hard|clean\s+-[^\n]*f|push\s+[^\n]*--force(?:-with-lease)?)/iu,
-	/\b(?:drop\s+database|truncate\s+table)\b/iu,
-];
-
-const DANGEROUS_LIFECYCLE_COMMANDS = new Set(["reboot", "shutdown"]);
-const DANGEROUS_LIFECYCLE_SUBCOMMANDS = new Set(["init", "loginctl", "systemctl", "telinit"]);
-const COMMAND_WRAPPERS = new Set(["command", "doas", "env", "exec", "nohup", "sudo"]);
-const SHELL_INTERPRETERS = new Set(["bash", "dash", "fish", "ksh", "powershell", "pwsh", "sh", "zsh"]);
-const SHELL_CONTROL_PREFIXES = new Set(["!", "{", "}", "do", "elif", "else", "if", "then", "until", "while"]);
-const WRAPPER_OPTIONS_WITH_VALUES = new Set(["--chdir", "--chroot", "--group", "--user", "-c", "-r", "-g", "-u"]);
-const HOME_SHORTHAND_PATTERN = /^(~|\$HOME|\$\{HOME\})\/?$/u;
-const CRITICAL_RM_RF_ROOTS = [
-	"/",
-	"/etc",
-	"/usr",
-	"/bin",
-	"/sbin",
-	"/var",
-	"/boot",
-	"/root",
-	"/System",
-	"/Library",
-	"/Applications",
-	"/Users",
-];
 
 /** Backoff shared with the previous Step gateway host (5s, 15s, 45s, 2m, 5m). */
 const DEFAULT_AUTO_RESUME_DELAYS_MS = [5_000, 15_000, 45_000, 120_000, 300_000] as const;
@@ -354,17 +326,25 @@ export function decideStepToolCall(
 ): StepToolDecision {
 	const normalizedName = toolName.trim().toLowerCase();
 	const command = extractCommand(input);
-	const hazardous = command !== undefined && isDangerousCommand(command);
+	const commandRule = command === undefined ? undefined : findCommandApprovalRule(command);
+	const override = findToolOverride(normalizedName, overrides);
 
-	if (hazardous) {
+	if (override === "deny") {
 		return {
-			action: state.mode === "strict" ? "deny" : "confirm",
-			hazardous: true,
-			reason: `Dangerous command requires confirmation: ${summarizeToolInput(toolName, input)}`,
+			action: "deny",
+			hazardous: commandRule !== undefined,
+			reason: `Policy override for ${toolName}: deny`,
 		};
 	}
 
-	const override = findToolOverride(normalizedName, overrides);
+	if (commandRule) {
+		return {
+			action: state.mode === "strict" ? "deny" : "confirm",
+			hazardous: true,
+			reason: `Dangerous command requires confirmation (${commandRule}): ${summarizeToolInput(toolName, input)}`,
+		};
+	}
+
 	if (override) {
 		return {
 			action: override,
@@ -597,192 +577,6 @@ function extractCommand(input: Record<string, unknown>): string | undefined {
 		if (typeof value === "string" && value.trim().length > 0) return value;
 	}
 	return undefined;
-}
-
-export function isDangerousCommand(command: string): boolean {
-	const normalized = command.trim();
-	return (
-		containsDangerousRmRf(normalized) ||
-		containsDangerousLifecycleCommand(normalized) ||
-		DANGEROUS_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized))
-	);
-}
-
-/** Detect reboot/shutdown at a shell command position, including wrappers. */
-export function containsDangerousLifecycleCommand(command: string): boolean {
-	for (const match of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/gu)) {
-		const nested = match[1] ?? match[2];
-		if (nested && containsDangerousLifecycleCommand(nested)) return true;
-	}
-	return tokenizeShellCommands(command).some((tokens) => {
-		const commandToken = findShellCommandToken(tokens);
-		if (!commandToken) return false;
-		if (DANGEROUS_LIFECYCLE_COMMANDS.has(commandToken.name)) return true;
-		if (DANGEROUS_LIFECYCLE_SUBCOMMANDS.has(commandToken.name)) {
-			return tokens
-				.slice(commandToken.index + 1)
-				.some((token) => DANGEROUS_LIFECYCLE_COMMANDS.has(normalizeCommandToken(token)));
-		}
-		if (SHELL_INTERPRETERS.has(commandToken.name)) {
-			for (let index = commandToken.index + 1; index < tokens.length; index += 1) {
-				const option = normalizeCommandToken(tokens[index]!);
-				if (!/^-.*c$/u.test(option) && option !== "-command") continue;
-				return containsDangerousLifecycleCommand(tokens.slice(index + 1).join(" "));
-			}
-		}
-		return false;
-	});
-}
-
-function tokenizeShellCommands(command: string): string[][] {
-	const segments: string[][] = [];
-	let tokens: string[] = [];
-	let current = "";
-	let quote: "'" | '"' | "`" | undefined;
-	let escaped = false;
-	const pushToken = (): void => {
-		if (current.length > 0) tokens.push(current);
-		current = "";
-	};
-	const pushSegment = (): void => {
-		pushToken();
-		if (tokens.length > 0) segments.push(tokens);
-		tokens = [];
-	};
-	for (let index = 0; index < command.length; index += 1) {
-		const character = command[index]!;
-		if (escaped) {
-			current += character;
-			escaped = false;
-			continue;
-		}
-		if (quote === "'") {
-			if (character === "'") quote = undefined;
-			else current += character;
-			continue;
-		}
-		if (quote === '"' || quote === "`") {
-			if (character === quote) quote = undefined;
-			else if (character === "\\") escaped = true;
-			else current += character;
-			continue;
-		}
-		if (character === "\\") escaped = true;
-		else if (character === "'" || character === '"' || character === "`") quote = character;
-		else if (character === ";" || character === "&" || character === "|") {
-			pushSegment();
-			if (command[index + 1] === character) index += 1;
-		} else if (character === "\n" || character === "\r") pushSegment();
-		else if (/\s/u.test(character)) pushToken();
-		else current += character;
-	}
-	pushSegment();
-	return segments;
-}
-
-function findShellCommandToken(tokens: string[]): { name: string; index: number } | undefined {
-	let index = 0;
-	while (index < tokens.length) {
-		const rawToken = tokens[index]!;
-		const token = normalizeCommandToken(rawToken);
-		if (!token || token === "--" || SHELL_CONTROL_PREFIXES.has(token) || /^[A-Za-z_][A-Za-z0-9_]*=/u.test(rawToken)) {
-			index += 1;
-			continue;
-		}
-		if (COMMAND_WRAPPERS.has(token)) {
-			index += 1;
-			while (index < tokens.length) {
-				const option = normalizeCommandToken(tokens[index]!);
-				if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[index]!)) {
-					index += 1;
-					continue;
-				}
-				if (option === "--") {
-					index += 1;
-					break;
-				}
-				if (!option.startsWith("-")) break;
-				index += 1;
-				if (WRAPPER_OPTIONS_WITH_VALUES.has(option) && index < tokens.length) index += 1;
-			}
-			continue;
-		}
-		return { name: token, index };
-	}
-	return undefined;
-}
-
-function normalizeCommandToken(token: string): string {
-	const stripped = token
-		.trim()
-		.replace(/^[({!]+/u, "")
-		.replace(/[)}]+$/u, "");
-	if (!stripped) return "";
-	const basename = stripped.split(/[\\/]/u).at(-1) ?? stripped;
-	return basename.toLowerCase().replace(/\.exe$/u, "");
-}
-
-function containsDangerousRmRf(command: string): boolean {
-	for (const match of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/gu)) {
-		const nested = match[1] ?? match[2];
-		if (nested && containsDangerousRmRf(nested)) return true;
-	}
-	return tokenizeShellCommands(command).some((tokens) => {
-		const commandToken = findShellCommandToken(tokens);
-		if (!commandToken) return false;
-		if (SHELL_INTERPRETERS.has(commandToken.name)) {
-			for (let index = commandToken.index + 1; index < tokens.length; index += 1) {
-				const option = normalizeCommandToken(tokens[index]!);
-				if (!/^-.*c$/u.test(option) && option !== "-command") continue;
-				return containsDangerousRmRf(tokens.slice(index + 1).join(" "));
-			}
-			return false;
-		}
-		if (commandToken.name !== "rm") return false;
-		let recursive = false;
-		let force = false;
-		for (let index = commandToken.index + 1; index < tokens.length; index += 1) {
-			const token = tokens[index]!;
-			if (token === "--") {
-				return recursive && force && tokens.slice(index + 1).some(isCriticalRmTarget);
-			}
-			if (token.startsWith("-") && token !== "-") {
-				const option = token.toLowerCase();
-				if (option === "--recursive") recursive = true;
-				else if (option === "--force") force = true;
-				else if (option.startsWith("-") && !option.startsWith("--")) {
-					recursive ||= option.includes("r");
-					force ||= option.includes("f");
-				}
-				continue;
-			}
-			if (recursive && force && isCriticalRmTarget(token)) return true;
-		}
-		return false;
-	});
-}
-
-function isCriticalRmTarget(target: string): boolean {
-	const criticalRoots = new Set(CRITICAL_RM_RF_ROOTS.map(normalizeAbsolutePath));
-	try {
-		criticalRoots.add(normalizeAbsolutePath(os.homedir()));
-	} catch {
-		// Ignore environments without a resolvable home directory.
-	}
-	if (!target || target.startsWith("-")) return false;
-	if (HOME_SHORTHAND_PATTERN.test(target)) {
-		try {
-			return criticalRoots.has(normalizeAbsolutePath(os.homedir()));
-		} catch {
-			return false;
-		}
-	}
-	return target.startsWith("/") && criticalRoots.has(normalizeAbsolutePath(target));
-}
-
-function normalizeAbsolutePath(target: string): string {
-	const normalized = path.posix.normalize(target);
-	return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
 
 function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
