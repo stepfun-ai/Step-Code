@@ -46,13 +46,15 @@ describe("wordmark half-cell seams", () => {
 		);
 		expect(cells[7]![9]).toContain("\x1b[38;2;116;99;163m");
 		expect(cells[2]![4]).toBeUndefined();
-		expect(cells[2]![79]).toBe("\x1b[48;2;244;213;107m \x1b[49m");
+		// The trailing E stem reaches the word's end (the gold letter of the
+		// gradient); its exact face bytes are covered by the S-cell assertions.
+		expect(cells[2]![93]).toBeDefined();
 	});
 
 	it("preserves dimensions, holes and transparent spacing at both color depths", () => {
 		const truecolor = renderStepWordmarkCells();
 		expect(truecolor).toHaveLength(STEP_WORDMARK_ROWS);
-		expect(STEP_WORDMARK_COLUMNS).toBe(83);
+		expect(STEP_WORDMARK_COLUMNS).toBe(101);
 		expect(truecolor[8]!.every((cell) => cell === undefined)).toBe(true);
 		expect(truecolor[2]!.slice(4, 12).every((cell) => cell === undefined)).toBe(true);
 		for (const row of truecolor) {

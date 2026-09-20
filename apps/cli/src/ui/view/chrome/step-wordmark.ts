@@ -1,12 +1,12 @@
 /**
- * Chamfered block letterforms with inset highlights for "STEP CLI".
+ * Chamfered block letterforms with inset highlights for "STEP CODE".
  *
  * Four-column stems and two-row bars carry the violet→gold gradient. Half-block
  * corners and highlights stay inside the face; undefined cells are transparent.
  */
 import { paintStepLogoColor } from "./step-logo.ts";
 
-const WORD = "STEP CLI";
+const WORD = "STEP CODE";
 
 const GLYPHS: Record<string, string[]> = {
 	S: [
@@ -76,6 +76,28 @@ const GLYPHS: Record<string, string[]> = {
 		"           ",
 	],
 	I: ["▄██▄ ", "████ ", "████ ", "████ ", "████ ", "████ ", "████ ", "▀██▀ ", "     "],
+	O: [
+		"▄████████▄ ",
+		"██████████ ",
+		"████  ████ ",
+		"████  ████ ",
+		"████  ████ ",
+		"████  ████ ",
+		"████  ████ ",
+		"▀████████▀ ",
+		"           ",
+	],
+	D: [
+		"█████████▄ ",
+		"██████████ ",
+		"████    ██ ",
+		"████    ██ ",
+		"████    ██ ",
+		"████    ██ ",
+		"████    ██ ",
+		"▀████████▀ ",
+		"           ",
+	],
 	" ": ["   ", "   ", "   ", "   ", "   ", "   ", "   ", "   ", "   "],
 };
 
