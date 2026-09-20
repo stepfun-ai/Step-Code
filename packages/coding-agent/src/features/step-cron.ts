@@ -1,6 +1,6 @@
 /** Durable and session-only five-field cron scheduling for Step. */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	closeSync,
 	copyFileSync,
@@ -23,7 +23,8 @@ import type {
 } from "../core/extensions/types.ts";
 import type { StepTelemetryProperties, StepTelemetryReporter } from "../step/telemetry.ts";
 
-const TICK_INTERVAL_MS = 30_000;
+const TICK_INTERVAL_MS = 1_000;
+const MAX_JOBS = 50;
 const AUTO_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_SEARCH_MINUTES = 366 * 24 * 60;
 const MAX_PROMPT_LENGTH = 16_000;
@@ -99,11 +100,10 @@ export class SimpleCronExpression {
 	/** Return the first matching local-time minute strictly after `afterMs`. */
 	next(afterMs: number): number {
 		if (!Number.isFinite(afterMs)) throw new Error("Cron base time must be finite");
-		const cursor = new Date(afterMs);
-		cursor.setSeconds(0, 0);
+		const minute = Math.floor(afterMs / 60_000) * 60_000;
 		for (let offset = 1; offset <= MAX_SEARCH_MINUTES; offset++) {
-			const candidate = new Date(cursor.getTime());
-			candidate.setMinutes(candidate.getMinutes() + offset);
+			// Calendar setters skip the repeated hour at the fall-back DST boundary.
+			const candidate = new Date(minute + offset * 60_000);
 			if (this.matches(candidate)) return candidate.getTime();
 		}
 		throw new Error("Cron expression has no occurrence within the supported search window");
@@ -118,16 +118,18 @@ function parseField(text: string, min: number, max: number, name: string, normal
 		if (!rawPart) throw new Error(`Cron ${name} field contains an empty item`);
 		if ((rawPart.match(/\//gu) ?? []).length > 1) throw new Error(`Cron ${name} field contains multiple steps`);
 		const [rawBase, rawStep] = rawPart.split("/", 2);
-		if (rawPart.includes("/") && rawStep === undefined) throw new Error(`Cron ${name} step is missing`);
-		const step = rawStep === undefined ? 1 : Number.parseInt(rawStep, 10);
-		if (!Number.isInteger(step) || step < 1) throw new Error(`Cron ${name} step must be a positive integer`);
+		if (rawStep !== undefined && !/^\d+$/u.test(rawStep))
+			throw new Error(`Cron ${name} step must be a positive integer`);
+		const step = rawStep === undefined ? 1 : Number(rawStep);
+		if (!Number.isSafeInteger(step) || step < 1) throw new Error(`Cron ${name} step must be a positive integer`);
 		let start: number;
 		let end: number;
 		if (rawBase === "*") {
 			start = min;
 			end = max;
 		} else if (rawBase?.includes("-")) {
-			const [rawStart, rawEnd] = rawBase.split("-", 2);
+			if (!/^\d+-\d+$/u.test(rawBase)) throw new Error(`Cron ${name} range must contain two numeric values`);
+			const [rawStart, rawEnd] = rawBase.split("-");
 			start = parseNumber(rawStart ?? "", min, max, name);
 			end = parseNumber(rawEnd ?? "", min, max, name);
 			if (end < start) throw new Error(`Cron ${name} range must ascend`);
@@ -163,6 +165,7 @@ export class CronFileStore {
 	readonly filePath: string;
 	private readonly lockMaxAgeMs: number;
 	private readonly warn: (message: string) => void;
+	private readonly warnedRows = new Set<string>();
 
 	constructor(filePath: string, options: CronFileStoreOptions = {}) {
 		this.filePath = path.resolve(filePath);
@@ -171,41 +174,41 @@ export class CronFileStore {
 	}
 
 	load(): CronJob[] {
-		let content: string;
-		try {
-			content = readFileSync(this.filePath, "utf8");
-		} catch {
-			return [];
-		}
-		const jobs: CronJob[] = [];
-		for (const [index, line] of content.split(/\r?\n/u).entries()) {
-			if (!line.trim()) continue;
-			let value: unknown;
-			try {
-				value = JSON.parse(line);
-			} catch {
-				this.warn(`Skipping malformed cron record at line ${index + 1}`);
-				continue;
-			}
-			const job = parsePersistedJob(value);
-			if (!job) {
-				this.warn(`Skipping invalid cron record at line ${index + 1}`);
-				continue;
-			}
-			jobs.push(job);
-		}
-		return jobs;
+		return this.readRecords().records.flatMap(({ job }) => (job ? [job] : []));
 	}
 
 	save(jobs: readonly CronJob[]): void {
-		const directory = path.dirname(this.filePath);
-		mkdirSync(directory, { recursive: true });
+		this.update(() => jobs);
+	}
+
+	/** Hold the lock across read, mutation (including dispatch), and replacement. */
+	update(mutate: (jobs: CronJob[]) => readonly CronJob[]): void {
+		mkdirSync(path.dirname(this.filePath), { recursive: true });
 		const lockPath = `${this.filePath}.lock`;
 		const lockFd = this.acquireLock(lockPath);
 		const temporaryPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
 		try {
-			const data = jobs.map((job) => JSON.stringify(job)).join("\n");
-			writeFileSync(temporaryPath, data ? `${data}\n` : "", { encoding: "utf8", mode: 0o600 });
+			const { content, records } = this.readRecords();
+			const next = new Map(
+				mutate(records.flatMap(({ job }) => (job ? [{ ...job }] : []))).map((job) => [job.id, job]),
+			);
+			const rows: string[] = [];
+			for (const { raw, job } of records) {
+				if (!job) {
+					// A newer schema or a damaged row is not ours to delete.
+					rows.push(raw);
+					continue;
+				}
+				const updated = next.get(job.id);
+				if (updated) {
+					rows.push(JSON.stringify(updated) === JSON.stringify(job) ? raw : JSON.stringify(updated));
+					next.delete(job.id);
+				}
+			}
+			rows.push(...[...next.values()].map((job) => JSON.stringify(job)));
+			const data = rows.length ? `${rows.join("\n")}\n` : "";
+			if (data === content) return;
+			writeFileSync(temporaryPath, data, { encoding: "utf8", mode: 0o600 });
 			renameSync(temporaryPath, this.filePath);
 		} finally {
 			try {
@@ -225,9 +228,35 @@ export class CronFileStore {
 	backupBeforeMigration(): void {
 		try {
 			copyFileSync(this.filePath, `${this.filePath}.bak`);
-		} catch {
-			// A missing file has nothing to back up.
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
+	}
+
+	private readRecords(): { content: string; records: Array<{ raw: string; job?: CronJob }> } {
+		let content: string;
+		try {
+			content = readFileSync(this.filePath, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return { content: "", records: [] };
+			throw error;
+		}
+		const records: Array<{ raw: string; job?: CronJob }> = [];
+		for (const [index, raw] of content.split(/\r?\n/u).entries()) {
+			if (!raw.trim()) continue;
+			let job: CronJob | undefined;
+			try {
+				job = parsePersistedJob(JSON.parse(raw));
+			} catch {
+				// Keep the original line even when it cannot be parsed.
+			}
+			if (!job && !this.warnedRows.has(raw)) {
+				this.warnedRows.add(raw);
+				this.warn(`Ignoring invalid or unsupported cron record at line ${index + 1}; preserving it on disk`);
+			}
+			records.push({ raw, job });
+		}
+		return { content, records };
 	}
 
 	private acquireLock(lockPath: string): number {
@@ -263,24 +292,37 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 	if (candidate.schemaVersion !== 1 || candidate.durable !== true) return undefined;
 	if (
 		typeof candidate.id !== "string" ||
+		!candidate.id.trim() ||
 		typeof candidate.cron !== "string" ||
 		typeof candidate.prompt !== "string" ||
+		!candidate.prompt.trim() ||
+		candidate.prompt.length > MAX_PROMPT_LENGTH ||
 		typeof candidate.recurring !== "boolean" ||
 		typeof candidate.createdAt !== "number" ||
 		typeof candidate.nextFireAt !== "number"
 	) {
 		return undefined;
 	}
+	if (
+		![
+			candidate.createdAt,
+			candidate.nextFireAt,
+			candidate.lastFiredAt === undefined ? 0 : candidate.lastFiredAt,
+			candidate.autoExpireAt === undefined ? 0 : candidate.autoExpireAt,
+		].every((value) => typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 8.64e15)
+	)
+		return undefined;
 	try {
 		SimpleCronExpression.parse(candidate.cron);
 	} catch {
 		return undefined;
 	}
 	return {
+		...candidate,
 		schemaVersion: 1,
 		id: candidate.id,
 		cron: candidate.cron,
-		prompt: candidate.prompt.slice(0, MAX_PROMPT_LENGTH),
+		prompt: candidate.prompt,
 		recurring: candidate.recurring,
 		durable: true,
 		createdAt: candidate.createdAt,
@@ -295,7 +337,9 @@ export interface StepCronRuntimeOptions {
 	setInterval?: (callback: () => void, delayMs: number) => TimerHandle;
 	clearInterval?: (timer: TimerHandle) => void;
 	idFactory?: () => string;
+	/** Optional sampling override for tests; production offsets are derived from the task id. */
 	random?: () => number;
+	/** Recurring interval fraction, capped at 0.5. Zero disables all jitter. */
 	jitterRatio?: number;
 	storagePath?: string;
 	storeFactory?: (filePath: string) => CronFileStore;
@@ -316,41 +360,53 @@ export class StepCronRuntime {
 	private readonly startInterval: (callback: () => void, delayMs: number) => TimerHandle;
 	private readonly stopInterval: (timer: TimerHandle) => void;
 	private readonly idFactory: () => string;
-	private readonly random: () => number;
+	private readonly random?: () => number;
 	private readonly jitterRatio: number;
 	private readonly storagePath?: string;
 	private readonly storeFactory: (filePath: string) => CronFileStore;
 	private readonly isIdle: () => boolean;
 	private readonly sendMessage: (message: CronDelivery) => void;
 	private readonly telemetry?: StepTelemetryReporter;
-	private readonly warn?: (message: string) => void;
+	private readonly warn: (message: string) => void;
 	private readonly jobs = new Map<string, CronJob>();
 	private readonly deferred = new Set<string>();
-	private pendingMissed: CronJob[] = [];
+	private readonly pendingMissed = new Set<string>();
+	private readonly failures = new Map<string, string>();
 	private interval: TimerHandle | undefined;
 	private currentStore: CronFileStore | undefined;
 	private currentCwd: string | undefined;
 	private loaded = false;
+	private recoveryPending = false;
 
 	constructor(options: StepCronRuntimeOptions = {}) {
 		this.now = options.now ?? Date.now;
 		this.startInterval = options.setInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
 		this.stopInterval = options.clearInterval ?? ((timer) => clearInterval(timer));
 		this.idFactory = options.idFactory ?? (() => randomUUID().slice(0, 8));
-		this.random = options.random ?? Math.random;
-		this.jitterRatio = Math.max(0, Math.min(0.1, options.jitterRatio ?? 0.1));
+		this.random = options.random;
+		this.jitterRatio = Math.max(0, Math.min(0.5, options.jitterRatio ?? 0.5));
 		this.storagePath = options.storagePath;
 		this.storeFactory = options.storeFactory ?? ((filePath) => new CronFileStore(filePath, { warn: options.warn }));
 		this.isIdle = options.isIdle ?? (() => true);
 		this.sendMessage = options.sendMessage ?? (() => {});
 		this.telemetry = options.telemetry;
-		this.warn = options.warn;
+		this.warn = options.warn ?? ((message) => console.warn(`[step-cron] ${message}`));
 	}
 
 	start(cwd: string, trusted: boolean): void {
 		this.currentCwd = path.resolve(cwd);
-		if (!this.loaded) this.loadDurable(trusted);
-		if (!this.interval) this.interval = this.startInterval(() => this.tick(), TICK_INTERVAL_MS);
+		if (!this.loaded) {
+			this.recoveryPending = trusted;
+			try {
+				this.loadDurable(trusted);
+			} catch (error) {
+				this.reportFailure(
+					"storage",
+					`Unable to load cron storage: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		if (this.interval === undefined) this.interval = this.startInterval(() => this.tick(), TICK_INTERVAL_MS);
 	}
 
 	setContext(cwd: string): void {
@@ -358,205 +414,264 @@ export class StepCronRuntime {
 	}
 
 	create(cron: string, prompt: string, recurring = true, durable = false, trusted = true): CronCreateResult {
-		const trimmedCron = cron.trim();
-		if (trimmedCron.length > MAX_CRON_LENGTH)
-			throw new Error(`Cron expression exceeds ${MAX_CRON_LENGTH} characters`);
-		const normalizedCron = trimmedCron;
+		const normalizedCron = cron.trim();
 		const expression = SimpleCronExpression.parse(normalizedCron);
-		const normalizedPrompt = prompt.trim().slice(0, MAX_PROMPT_LENGTH);
+		const normalizedPrompt = prompt.trim();
 		if (!normalizedPrompt) throw new Error("cron_create requires a non-empty prompt");
+		if (normalizedPrompt.length > MAX_PROMPT_LENGTH)
+			throw new Error(`Cron prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
 		if (durable && !trusted) throw new Error("Durable cron jobs require a trusted project");
-		if (durable && !this.currentCwd && !this.storagePath)
-			throw new Error("No project directory is available for durable cron storage");
 		if (durable && !this.currentStore) {
 			const filePath = this.resolveStoragePath();
 			if (!filePath) throw new Error("No project directory is available for durable cron storage");
 			this.currentStore = this.storeFactory(filePath);
 		}
 		const createdAt = this.readNow();
-		const id = this.uniqueId();
 		const nominalNext = expression.next(createdAt);
-		const job: CronJob = {
-			schemaVersion: 1,
-			id,
-			cron: normalizedCron,
-			prompt: normalizedPrompt,
-			recurring,
-			durable,
-			createdAt,
-			nextFireAt: this.jitter(nominalNext, createdAt),
-			...(recurring ? { autoExpireAt: createdAt + AUTO_EXPIRE_MS } : {}),
-		};
-		this.jobs.set(id, job);
-		this.persist();
+		const job = this.withLatestJobs(() => {
+			if (this.jobs.size >= MAX_JOBS)
+				throw new Error(`At most ${MAX_JOBS} cron jobs can be scheduled; delete an existing job first`);
+			const id = this.uniqueId();
+			const next: CronJob = {
+				schemaVersion: 1,
+				id,
+				cron: normalizedCron,
+				prompt: normalizedPrompt,
+				recurring,
+				durable,
+				createdAt,
+				nextFireAt: this.jitter(nominalNext, createdAt, id, recurring, expression),
+				...(recurring ? { autoExpireAt: createdAt + AUTO_EXPIRE_MS } : {}),
+			};
+			this.jobs.set(id, next);
+			return { ...next };
+		});
 		this.emit("cron_scheduled", { recurring });
-		return { job: { ...job }, nextFireAt: job.nextFireAt };
+		return { job, nextFireAt: job.nextFireAt };
 	}
 
 	list(): CronJob[] {
+		this.refreshDurable();
 		return [...this.jobs.values()]
 			.sort((left, right) => left.nextFireAt - right.nextFireAt || left.id.localeCompare(right.id))
 			.map((job) => ({ ...job }));
 	}
 
 	delete(id: string): boolean {
-		const job = this.jobs.get(id);
-		if (!job) {
-			this.emit("cron_deleted", { found: false });
-			return false;
-		}
-		this.jobs.delete(id);
-		this.deferred.delete(id);
-		this.persist();
-		this.emit("cron_deleted", { found: true });
-		return true;
+		const found = this.withLatestJobs(() => {
+			if (!this.jobs.has(id)) return false;
+			this.removeJob(id);
+			return true;
+		});
+		this.emit("cron_deleted", { found });
+		return found;
 	}
 
 	tick(): void {
-		const now = this.readNow();
+		try {
+			if (this.recoveryPending) {
+				this.loadDurable(true);
+				return;
+			}
+			this.refreshDurable();
+			const now = this.readNow();
+			if (
+				[...this.jobs.values()].some(
+					(job) => job.nextFireAt <= now || (job.autoExpireAt !== undefined && job.autoExpireAt <= now),
+				)
+			) {
+				this.withLatestJobs(() => this.drain(now));
+			}
+			this.failures.delete("storage");
+		} catch (error) {
+			// A busy lock or failed write must not kill the timer or consume a job.
+			this.reportFailure(
+				"storage",
+				`Unable to update cron storage: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	onTurnEnd(): void {
+		this.tick();
+	}
+
+	stop(): void {
+		if (this.interval !== undefined) this.stopInterval(this.interval);
+		this.interval = undefined;
+		this.jobs.clear();
+		this.deferred.clear();
+		this.pendingMissed.clear();
+		this.failures.clear();
+		this.currentStore = undefined;
+		this.currentCwd = undefined;
+		this.loaded = false;
+		this.recoveryPending = false;
+	}
+
+	private loadDurable(trusted: boolean): void {
+		const filePath = trusted ? this.resolveStoragePath() : undefined;
+		if (filePath) {
+			this.currentStore ??= this.storeFactory(filePath);
+			this.refreshDurable();
+			const now = this.readNow();
+			if (
+				[...this.jobs.values()].some(
+					(job) =>
+						job.durable && (job.nextFireAt <= now || (job.autoExpireAt !== undefined && job.autoExpireAt <= now)),
+				)
+			) {
+				this.withLatestJobs(() => {
+					// Import the complete file before any delivery can change persisted state.
+					for (const job of [...this.jobs.values()]) {
+						if (!job.durable) continue;
+						if (job.autoExpireAt !== undefined && job.autoExpireAt <= now) {
+							if (job.nextFireAt <= now) {
+								if (this.isIdle()) this.fire(job, now);
+								else this.defer(job);
+							} else {
+								this.removeJob(job.id);
+								this.emit("cron_expired", { id: job.id, recurring: job.recurring });
+							}
+							continue;
+						}
+						if (job.nextFireAt > now) continue;
+						if (!job.recurring) {
+							this.pendingMissed.add(job.id);
+						} else {
+							try {
+								const expression = SimpleCronExpression.parse(job.cron);
+								job.nextFireAt = this.jitter(expression.next(now), now, job.id, true, expression);
+							} catch (error) {
+								// Keep the record, but do not let one bad schedule block project recovery.
+								this.reportFailure(
+									`delivery:${job.id}`,
+									`Unable to advance missed cron ${job.id}: ${error instanceof Error ? error.message : String(error)}`,
+								);
+								continue;
+							}
+						}
+						this.emit("cron_missed", { trigger_count: 1 });
+					}
+					this.deliverMissed();
+				});
+			}
+		}
+		this.loaded = true;
+		this.recoveryPending = false;
+		this.failures.delete("storage");
+	}
+
+	private drain(now: number): void {
+		this.deliverMissed();
 		for (const job of [...this.jobs.values()]) {
 			if (job.autoExpireAt !== undefined && now >= job.autoExpireAt && job.nextFireAt > now) {
-				this.jobs.delete(job.id);
-				this.deferred.delete(job.id);
-				this.persist();
+				this.removeJob(job.id);
 				this.emit("cron_expired", { id: job.id, recurring: job.recurring });
 				continue;
 			}
-			if (job.nextFireAt > now) continue;
+			if (job.nextFireAt > now || this.pendingMissed.has(job.id)) continue;
 			if (!this.isIdle()) {
-				if (!this.deferred.has(job.id)) {
-					this.deferred.add(job.id);
-					this.emit("cron_deferred", { id: job.id, defer_count: 1 });
-				}
+				this.defer(job);
 				continue;
 			}
 			this.fire(job, now);
 		}
 	}
 
-	onTurnEnd(): void {
-		if (!this.isIdle()) return;
-		this.tick();
-		if (this.pendingMissed.length > 0) {
-			const jobs = this.pendingMissed;
-			this.pendingMissed = [];
-			try {
-				this.sendMessage({ kind: "missed", jobs: jobs.map((job) => ({ ...job })) });
-			} catch (error) {
-				this.warn?.(
-					`Unable to deliver missed cron notice: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
+	private deliverMissed(): void {
+		if (this.pendingMissed.size === 0 || !this.isIdle()) return;
+		const jobs = [...this.pendingMissed].flatMap((id) => {
+			const job = this.jobs.get(id);
+			return job ? [{ ...job }] : [];
+		});
+		if (jobs.length === 0) return;
+		try {
+			this.sendMessage({ kind: "missed", jobs });
+		} catch (error) {
+			this.reportFailure(
+				"missed",
+				`Unable to deliver missed cron notice: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
 		}
-	}
-
-	stop(): void {
-		if (this.interval) this.stopInterval(this.interval);
-		this.interval = undefined;
-		this.jobs.clear();
-		this.deferred.clear();
-		this.pendingMissed = [];
-		this.currentStore = undefined;
-		this.currentCwd = undefined;
-		this.loaded = false;
-	}
-
-	private loadDurable(trusted: boolean): void {
-		this.loaded = true;
-		if (!trusted) return;
-		const filePath = this.resolveStoragePath();
-		if (!filePath) return;
-		this.currentStore = this.storeFactory(filePath);
-		const now = this.readNow();
-		let changed = false;
-		for (const loadedJob of this.currentStore.load()) {
-			if (loadedJob.autoExpireAt !== undefined && loadedJob.autoExpireAt <= now && loadedJob.nextFireAt <= now) {
-				this.jobs.set(loadedJob.id, loadedJob);
-				if (this.isIdle()) this.fire(loadedJob, now);
-				else {
-					this.deferred.add(loadedJob.id);
-					this.emit("cron_deferred", { id: loadedJob.id, defer_count: 1 });
-				}
-				changed = true;
-				continue;
-			}
-			if (loadedJob.autoExpireAt !== undefined && loadedJob.autoExpireAt <= now) {
-				this.emit("cron_expired", { id: loadedJob.id, recurring: loadedJob.recurring });
-				changed = true;
-				continue;
-			}
-			if (!loadedJob.recurring && loadedJob.nextFireAt <= now) {
-				this.pendingMissed.push(loadedJob);
-				this.emit("cron_missed", { trigger_count: 1 });
-				changed = true;
-				continue;
-			}
-			if (loadedJob.recurring && loadedJob.nextFireAt <= now) {
-				try {
-					loadedJob.lastFiredAt = now;
-					loadedJob.nextFireAt = this.jitter(SimpleCronExpression.parse(loadedJob.cron).next(now), now);
-					this.emit("cron_missed", { trigger_count: 1 });
-					changed = true;
-				} catch (error) {
-					this.warn?.(
-						`Unable to advance missed cron ${loadedJob.id}: ${error instanceof Error ? error.message : String(error)}`,
-					);
-					continue;
-				}
-			}
-			this.jobs.set(loadedJob.id, loadedJob);
-		}
-		if (changed) this.persist();
-		if (this.pendingMissed.length > 0 && this.isIdle()) {
-			const jobs = this.pendingMissed;
-			this.pendingMissed = [];
-			try {
-				this.sendMessage({ kind: "missed", jobs: jobs.map((job) => ({ ...job })) });
-			} catch (error) {
-				this.warn?.(
-					`Unable to deliver missed cron notice: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
+		for (const job of jobs) this.removeJob(job.id);
+		this.failures.delete("missed");
 	}
 
 	private fire(job: CronJob, now: number): void {
-		this.deferred.delete(job.id);
+		const expired = job.autoExpireAt !== undefined && now >= job.autoExpireAt;
+		let nextFireAt: number | undefined;
 		try {
+			if (job.recurring && !expired) {
+				const expression = SimpleCronExpression.parse(job.cron);
+				nextFireAt = this.jitter(expression.next(now), now, job.id, true, expression);
+			}
 			this.sendMessage({ kind: "fire", job: { ...job } });
 		} catch (error) {
-			this.warn?.(`Unable to deliver cron ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
-		}
-		if (!job.recurring) {
-			this.jobs.delete(job.id);
-			this.persist();
-			this.emit("cron_fired", { recurring: false });
-			return;
-		}
-		if (job.autoExpireAt !== undefined && now >= job.autoExpireAt) {
-			this.jobs.delete(job.id);
-			this.persist();
-			this.emit("cron_fired", { recurring: true });
-			this.emit("cron_expired", { id: job.id, recurring: true });
-			return;
-		}
-		try {
-			job.lastFiredAt = now;
-			job.nextFireAt = this.jitter(SimpleCronExpression.parse(job.cron).next(now), now);
-			this.persist();
-			this.emit("cron_fired", { recurring: true });
-		} catch (error) {
-			this.jobs.delete(job.id);
-			this.persist();
-			this.warn?.(
-				`Removing invalid recurring cron ${job.id}: ${error instanceof Error ? error.message : String(error)}`,
+			this.reportFailure(
+				`delivery:${job.id}`,
+				`Unable to deliver cron ${job.id}: ${error instanceof Error ? error.message : String(error)}`,
 			);
+			return;
 		}
+		this.failures.delete(`delivery:${job.id}`);
+		this.deferred.delete(job.id);
+		if (nextFireAt === undefined) this.removeJob(job.id);
+		else {
+			job.lastFiredAt = now;
+			job.nextFireAt = nextFireAt;
+		}
+		this.emit("cron_fired", { recurring: job.recurring });
+		if (job.recurring && expired) this.emit("cron_expired", { id: job.id, recurring: true });
 	}
 
-	private persist(): void {
-		if (!this.currentStore) return;
-		this.currentStore.save([...this.jobs.values()].filter((job) => job.durable));
+	private defer(job: CronJob): void {
+		if (this.deferred.has(job.id)) return;
+		this.deferred.add(job.id);
+		this.emit("cron_deferred", { id: job.id, defer_count: 1 });
+	}
+
+	private removeJob(id: string): void {
+		this.jobs.delete(id);
+		this.deferred.delete(id);
+		this.pendingMissed.delete(id);
+		this.failures.delete(`delivery:${id}`);
+	}
+
+	private refreshDurable(): void {
+		if (this.currentStore) this.syncDurable(this.currentStore.load());
+	}
+
+	private syncDurable(stored: readonly CronJob[]): void {
+		for (const [id, job] of this.jobs) if (job.durable) this.jobs.delete(id);
+		for (const job of stored) this.jobs.set(job.id, job);
+		for (const id of this.deferred) if (!this.jobs.has(id)) this.deferred.delete(id);
+		for (const id of this.pendingMissed) if (!this.jobs.has(id)) this.pendingMissed.delete(id);
+	}
+
+	private withLatestJobs<T>(mutate: () => T): T {
+		const previousJobs = new Map<string, CronJob>([...this.jobs].map(([id, job]) => [id, { ...job }]));
+		const previousDeferred = new Set(this.deferred);
+		const previousMissed = new Set(this.pendingMissed);
+		try {
+			if (!this.currentStore) return mutate();
+			let result!: T;
+			this.currentStore.update((stored) => {
+				this.syncDurable(stored);
+				result = mutate();
+				return [...this.jobs.values()].filter((job) => job.durable);
+			});
+			return result;
+		} catch (error) {
+			this.jobs.clear();
+			for (const [id, job] of previousJobs) this.jobs.set(id, job);
+			this.deferred.clear();
+			for (const id of previousDeferred) this.deferred.add(id);
+			this.pendingMissed.clear();
+			for (const id of previousMissed) this.pendingMissed.add(id);
+			throw error;
+		}
 	}
 
 	private resolveStoragePath(): string | undefined {
@@ -575,11 +690,28 @@ export class StepCronRuntime {
 		return randomUUID().replaceAll("-", "").slice(0, 16);
 	}
 
-	private jitter(timestamp: number, base: number): number {
+	private jitter(
+		timestamp: number,
+		base: number,
+		id: string,
+		recurring: boolean,
+		expression: SimpleCronExpression,
+	): number {
 		if (this.jitterRatio === 0) return timestamp;
-		const span = Math.max(1_000, timestamp - base) * this.jitterRatio;
-		const offset = (this.random() * 2 - 1) * span;
-		return Math.max(base + 1, Math.round(timestamp + offset));
+		const sample = this.random?.() ?? createHash("sha256").update(id).digest().readUInt32BE(0) / 0xffff_ffff;
+		const fraction = Number.isFinite(sample) ? Math.max(0, Math.min(1, sample)) : 0;
+		if (recurring) {
+			const interval = expression.next(timestamp) - timestamp;
+			return timestamp + Math.round(fraction * Math.min(30 * 60_000, interval * this.jitterRatio));
+		}
+		const minute = new Date(timestamp).getMinutes();
+		return minute === 0 || minute === 30 ? Math.max(base + 1, timestamp - Math.round(fraction * 90_000)) : timestamp;
+	}
+
+	private reportFailure(key: string, message: string): void {
+		if (this.failures.get(key) === message) return;
+		this.failures.set(key, message);
+		this.warn(message);
 	}
 
 	private readNow(): number {
@@ -632,7 +764,7 @@ function formatCronStatus(jobs: readonly CronJob[]): string {
 	return jobs
 		.map(
 			(job) =>
-				`${job.id} ${job.cron} next=${new Date(job.nextFireAt).toISOString()} ${job.recurring ? "recurring" : "one-shot"}${job.durable ? " durable" : " session"}`,
+				`${job.id} ${job.cron} next=${new Date(job.nextFireAt).toLocaleString()} ${job.recurring ? "recurring" : "one-shot"}${job.durable ? " durable" : " session"}\n  ${job.prompt}`,
 		)
 		.join("\n");
 }
@@ -646,16 +778,23 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			options.runtime ??
 			new StepCronRuntime({
 				telemetry: options.telemetry,
-				isIdle: () => currentContext?.isIdle() ?? true,
+				isIdle: () => Boolean(currentContext?.isIdle() && !currentContext.hasPendingMessages()),
+				warn: (message) => currentContext?.ui.notify(message, "warning"),
 				sendMessage: (delivery) => {
 					if (delivery.kind === "missed") {
-						const count = delivery.jobs?.length ?? 0;
+						const jobs = delivery.jobs ?? [];
+						const count = jobs.length;
 						pi.sendMessage(
 							{
 								customType: "step-cron",
-								content: `[cron] Missed ${count} one-shot job${count === 1 ? "" : "s"} while the session was offline.`,
+								content: [
+									`[cron] Missed ${count} one-shot job${count === 1 ? "" : "s"} while the session was offline.`,
+									...jobs.map(
+										(job) => `- ${job.id} (${new Date(job.nextFireAt).toLocaleString()}): ${job.prompt}`,
+									),
+								].join("\n"),
 								display: true,
-								details: { kind: "missed", count },
+								details: { kind: "missed", count, jobs },
 							},
 							{ deliverAs: "steer", triggerTurn: true },
 						);
@@ -687,6 +826,10 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			setContext(_event, ctx);
 			runtime.onTurnEnd();
 		});
+		pi.on("agent_settled", (_event, ctx) => {
+			setContext(_event, ctx);
+			runtime.onTurnEnd();
+		});
 		pi.on("session_shutdown", () => {
 			runtime.stop();
 			currentContext = undefined;
@@ -695,11 +838,11 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 		pi.registerTool({
 			name: "cron_create",
 			label: "Create cron job",
-			description: `Schedule a five-field local-time cron job. Durable jobs (durable:true) persist under .step-cli/cron and survive session restarts; session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
+			description: `Schedule a five-field local-time cron job (up to 50 jobs). Jobs fire only while StepCode is running and idle, after pending user input. Durable jobs (durable:true) persist under .step-cli/cron and survive session restarts; session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
 
 When NOT to use: cron_create is for calendar or expression-based triggers that repeat or must survive a restart. For fanning work out to many subagents on schedule, cron_create only injects a follow-up prompt on trigger; the subsequent turn is where you would call workflow (with its own opt-in). For a multi-turn objective that should persist without a fixed calendar, use create_goal instead.
 
-Scheduling: the runtime adds ~0–10% jitter to fire times to spread load. Prefer an off-minute over :00 or :30 when the fire time is not user-critical. Missed one-shot durable jobs are surfaced as a single batched message when the session returns; missed recurring jobs advance to the next matching minute and emit cron_missed telemetry.`,
+Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late, capped at half the interval. One-shot jobs at :00 or :30 may fire up to 90 seconds early; other one-shot minutes are exact. Delivery failures remain due and retry. Missed one-shot durable jobs are surfaced as a single batched message when the session returns; missed recurring jobs advance to the next matching minute and emit cron_missed telemetry.`,
 			promptSnippet: "Schedule recurring or one-shot calendar work",
 			parameters: CronCreateParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
@@ -743,16 +886,24 @@ Scheduling: the runtime adds ~0–10% jitter to fire times to spread load. Prefe
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const tokens = args.trim().split(/\s+/u).filter(Boolean);
-				if (tokens[0] === "delete" || tokens[0] === "remove") {
-					const id = tokens[1];
-					if (!id) {
-						ctx.ui.notify("Usage: /cron delete <id>", "warning");
+				try {
+					if (tokens[0] === "delete" || tokens[0] === "remove") {
+						const id = tokens[1];
+						if (!id || tokens.length !== 2) {
+							ctx.ui.notify("Usage: /cron delete <id>", "warning");
+							return;
+						}
+						ctx.ui.notify(runtime.delete(id) ? `Deleted cron job ${id}.` : `No cron job with id ${id}.`, "info");
 						return;
 					}
-					ctx.ui.notify(runtime.delete(id) ? `Deleted cron job ${id}.` : `No cron job with id ${id}.`, "info");
-					return;
+					if (tokens.length > 1 || (tokens[0] && tokens[0] !== "list" && tokens[0] !== "status")) {
+						ctx.ui.notify("Usage: /cron [list|status|delete <id>]", "warning");
+						return;
+					}
+					ctx.ui.notify(formatCronStatus(runtime.list()), "info");
+				} catch (error) {
+					ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
 				}
-				ctx.ui.notify(formatCronStatus(runtime.list()), "info");
 			},
 		});
 	};

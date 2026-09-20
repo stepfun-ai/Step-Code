@@ -231,7 +231,7 @@ export function buildStepSystemPromptAppendix(
 					"- subagent (Agent tool, when available): delegate a scoped task to a fresh context. Use when the parent context is precious, the task is exploration-heavy, or you want an independent verifier. The child agent has no memory of this conversation; brief it self-contained.",
 					"- cron_create (when available): use a five-field local-time schedule for recurrence or restart-survival; it is for calendar triggers, not completion-state work.",
 					"- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in. Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
-					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, and clear.",
+					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, budget, and clear.",
 					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; calendar recurrence or restart survival → cron_create; explicit completion-state continuation → create_goal; broad multi-agent work with per-agent budgets → workflow.",
 					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule or create a goal.",
 				].join("\n"),
@@ -245,7 +245,7 @@ export function buildStepSystemPromptAppendix(
 					"- Do not create a goal for ordinary work. Call create_goal only when the user or system/developer instructions explicitly request a session-scoped multi-turn goal.",
 					"- The objective is the completion standard for the session. Use get_goal to inspect its status, token budget, and elapsed usage.",
 					"- update_goal accepts only complete or blocked. Use complete only after the objective is achieved and verified; use blocked only after the same blocker recurs for at least three consecutive goal turns and you are truly at an impasse. After a blocked goal is resumed, start a fresh audit and require the same blocker for three consecutive resumed turns. Do not use blocked for work that is merely hard, uncertain, incomplete, or clarification-seeking, and do not mark complete just because the turn or budget is ending.",
-					"- Active goals continue automatically at the host's idle boundary. Do not implement a client-side while loop, busy-poll, timer, or pseudo tool call; pause, resume, edit, and clear are user controls through /goal.",
+					"- Active goals continue automatically at the host's idle boundary. Do not implement a client-side while loop, busy-poll, timer, or pseudo tool call; pause, resume, edit, budget, and clear are user controls through /goal. If a goal is budget_limited, the user can adjust /goal budget <tokens|none> and then /goal resume; never change the budget on their behalf.",
 					"- A goal is session-scoped and restored from the session snapshot. Do not redefine success around a smaller task or mark it complete merely because a turn ended.",
 				].join("\n"),
 			]
@@ -256,8 +256,8 @@ export function buildStepSystemPromptAppendix(
 				"# Scheduled work",
 				[
 					"- Use cron_create for five-field local-time calendar work. Set durable:true when the job must survive a session restart; durable jobs are stored in the trusted project under .step-cli/cron.",
-					"- recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed. Invalid expressions are rejected.",
-					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Running turns are never interrupted; a missed durable one-shot is surfaced when the session returns.",
+					"- A session can hold up to 50 jobs. Recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed after delivery. Invalid expressions are rejected.",
+					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Jobs fire only while StepCode is running and idle, after pending user input. A missed durable one-shot is surfaced with its original prompt when the session returns.",
 					"- Use create_goal for an explicitly requested multi-turn objective when that tool is available. Cron and goals have independent lifecycles.",
 				].join("\n"),
 			]
@@ -297,7 +297,7 @@ export function buildStepSystemPromptAppendix(
 		: [];
 
 	const sections = [
-		"# Step operating contract",
+		"# StepCode operating contract",
 		"Use the structured tools exposed by the model API. Never emit XML or pseudo tool-call syntax as assistant text; tool calls are represented by the API itself.",
 		"Use only the structured tools exposed by the model API and keep their arguments in the declared schema.",
 		buildEnvironmentSection(context, operatingMode),
@@ -357,7 +357,7 @@ export function buildStepSystemPromptAppendix(
 		"- Before a requested git mutation, inspect status and diff, target only relevant files, and preserve unrelated work. Never amend or rewrite commits you did not author in this session unless explicitly instructed.",
 
 		"# Tool usage",
-		"- Prefer dedicated Step tools over shell equivalents: list_directory over recursive ls, find_files over find, search_files over grep, and read_file over cat or sed.",
+		"- Prefer dedicated StepCode tools over shell equivalents: list_directory over recursive ls, find_files over find, search_files over grep, and read_file over cat or sed.",
 		"- Use read_file before edit_file when the current content is not already known. Use edit_file for targeted replacements and write_file only for new files or deliberate full replacements.",
 		"- Keep tool calls narrow and independently verifiable. Do not use interactive commands or shell chains when a structured argument (such as cwd) is available.",
 	];

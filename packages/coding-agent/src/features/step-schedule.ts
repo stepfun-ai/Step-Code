@@ -511,6 +511,35 @@ export class StepGoalRuntime {
 		return cloneGoal(this.goal) as StepGoalRecord;
 	}
 
+	/** User-only budget control. Recovering an exhausted goal requires an explicit resume. */
+	setTokenBudget(value: number | null): StepGoalRecord {
+		if (!this.goal) throw new Error("No goal is currently set.");
+		const budget = tokenBudget(value);
+		if (this.goal.status === "active") {
+			const accounted =
+				this.run?.participated && this.run.goalId === this.goal.id
+					? this.accountRunProgress(this.readNow(), true, false)
+					: this.accountIdleProgress(this.readNow());
+			if (!accounted) throw new Error("Unable to persist goal state");
+		}
+		const next: StepGoalRecord = { ...this.goal, updatedAt: timestamp(this.now) };
+		if (budget === undefined) delete next.tokenBudget;
+		else next.tokenBudget = budget;
+		if (next.status !== "complete" && budget !== undefined && next.tokensUsed >= budget) {
+			next.status = "budget_limited";
+		} else if (next.status === "budget_limited") {
+			next.status = "paused";
+		}
+		if (!this.persistSnapshot(next)) throw new Error("Unable to persist goal state");
+		this.goal = next;
+		if (next.status !== "active") {
+			this.continuationPending = false;
+			this.continuationQueued = false;
+			this.goalClockAt = undefined;
+		}
+		return { ...next };
+	}
+
 	clear(): boolean {
 		if (!this.goal) return false;
 		if (this.goal.status === "active") {
@@ -598,7 +627,11 @@ export class StepGoalRuntime {
 		const previousGoalClockAt = this.goalClockAt;
 		if (status === "active") {
 			if (this.goal.status === "complete" || this.goal.status === "budget_limited") {
-				throw new Error(`Cannot resume a ${this.goal.status} goal; edit or clear it first.`);
+				throw new Error(
+					this.goal.status === "budget_limited"
+						? "Cannot resume a budget_limited goal; use /goal budget <tokens|none> to adjust the limit first."
+						: "Cannot resume a complete goal; edit or clear it first.",
+				);
 			}
 			this.goal.status = "active";
 			this.continuationPending = true;
@@ -950,7 +983,8 @@ function envFlagEnabled(value: string | undefined): boolean {
 	return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "on";
 }
 
-const GOAL_COMMANDS_HINT = "Goal commands: /goal status · /goal pause · /goal resume · /goal clear";
+const GOAL_COMMANDS_HINT =
+	"Goal commands: /goal status · /goal pause · /goal resume · /goal budget <tokens|none> · /goal clear";
 
 /**
  * User-facing guidance when the runtime silently stops an active goal at a
@@ -962,18 +996,20 @@ const GOAL_STOP_HINTS: Partial<Record<StepGoalStatus, string>> = {
 	paused: "Goal paused (run interrupted). Run /goal resume to continue.",
 	blocked: "Goal marked blocked after a run error. Run /goal resume to retry, or /goal clear to drop it.",
 	usage_limited: "Goal stopped on a provider usage limit. Run /goal resume to retry.",
-	budget_limited: "Goal token budget exhausted. Run /goal edit to revise it, or /goal clear to drop it.",
+	budget_limited:
+		"Goal token budget exhausted. Run /goal budget <tokens|none> to adjust the limit, then /goal resume.",
 };
 
 function unfinishedGoalHint(status: StepGoalStatus): string {
 	if (status === "active") return "Run /goal status to inspect it, or /goal clear to end it.";
-	if (status === "budget_limited") return "Run /goal edit to revise it, or /goal clear to drop it.";
+	if (status === "budget_limited") return "Run /goal budget <tokens|none> to adjust the limit, then /goal resume.";
 	return "Run /goal resume to continue it, /goal edit to change it, or /goal clear to drop it.";
 }
 
 function formatGoalStatus(goal: StepGoalRecord | undefined, elapsedSeconds?: number): string {
 	if (!goal) return "No goal is currently set.";
-	const budget = goal.tokenBudget === undefined ? "unbounded" : `${goal.tokensUsed}/${goal.tokenBudget}`;
+	const budget =
+		goal.tokenBudget === undefined ? `${goal.tokensUsed} (unbounded)` : `${goal.tokensUsed}/${goal.tokenBudget}`;
 	return [
 		`Goal: ${goal.status} (iteration ${goal.iteration})`,
 		`Objective: ${goal.objective}`,
@@ -1155,13 +1191,17 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 		});
 
 		pi.registerCommand("goal", {
-			description: "Set, inspect, edit, pause, resume, or clear the session goal",
+			description: "Set, inspect, edit, pause, resume, budget, or clear the session goal",
 			handler: async (args: string, ctx: ExtensionCommandContext) => {
 				setContext(ctx);
 				const raw = args.trim();
 				const [command, ...rest] = raw.split(/\s+/u).filter(Boolean);
-				const subcommand = (command ?? "status").toLowerCase();
-				const telemetrySubcommand = ["status", "clear", "pause", "resume", "edit", "start"].includes(subcommand)
+				const subcommand = ["stop", "off", "reset", "none", "cancel"].includes(raw.toLowerCase())
+					? "clear"
+					: (command ?? "status").toLowerCase();
+				const telemetrySubcommand = ["status", "clear", "pause", "resume", "edit", "budget", "start"].includes(
+					subcommand,
+				)
 					? subcommand
 					: "start";
 				recordGoalCommand(options.telemetry, telemetrySubcommand);
@@ -1198,20 +1238,56 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 					if (subcommand === "pause" || subcommand === "resume") {
 						const interruptsRun = subcommand === "pause" && runtime.isContinuationRunActive();
 						runtime.setUserStatus(subcommand === "resume" ? "active" : "paused");
+						updateStatus(ctx);
 						if (interruptsRun) {
 							try {
 								ctx.abort();
 							} catch {
-								// Pause already holds; the in-flight turn then just runs out.
+								ctx.ui.notify(
+									"Goal paused, but the current run could not be interrupted. Press Escape to stop it.",
+									"warning",
+								);
+								return;
 							}
 						}
-						updateStatus(ctx);
 						ctx.ui.notify(
 							subcommand === "resume"
 								? "Goal resumed."
 								: interruptsRun
 									? "Goal paused; interrupted the in-flight goal turn. Run /goal resume to continue."
 									: "Goal paused. Run /goal resume to continue.",
+							"info",
+						);
+						return;
+					}
+					if (subcommand === "budget") {
+						const amount = rest[0]?.toLowerCase();
+						if (rest.length !== 1 || !amount || (amount !== "none" && !/^\d+$/u.test(amount))) {
+							ctx.ui.notify("Usage: /goal budget <positive integer|none>", "warning");
+							return;
+						}
+						const wasContinuation = runtime.isContinuationRunActive();
+						const goal = runtime.setTokenBudget(amount === "none" ? null : Number(amount));
+						updateStatus(ctx);
+						if (wasContinuation && goal.status === "budget_limited") {
+							try {
+								ctx.abort();
+							} catch {
+								ctx.ui.notify(
+									"Goal budget updated, but the current run could not be interrupted. Press Escape to stop it.",
+									"warning",
+								);
+								return;
+							}
+						}
+						const hint =
+							goal.status === "paused"
+								? " Run /goal resume to continue."
+								: goal.status === "budget_limited"
+									? " The limit is already exhausted; raise it before resuming."
+									: "";
+						ctx.ui.notify(
+							`Goal token budget: ${goal.tokenBudget ?? "unbounded"} (${goal.tokensUsed} used).${hint}`,
 							"info",
 						);
 						return;
@@ -1237,7 +1313,10 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 					}
 					const objective = subcommand === "start" ? rest.join(" ") : raw;
 					if (!objective) {
-						ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume]", "warning");
+						ctx.ui.notify(
+							"Usage: /goal [<objective>|status|clear|edit|pause|resume|budget <tokens|none>]",
+							"warning",
+						);
 						return;
 					}
 					const existing = runtime.get();

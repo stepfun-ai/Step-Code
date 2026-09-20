@@ -12,7 +12,11 @@ export class WorkflowBudgetExceeded extends Error {
 	readonly requestedTokens: number;
 
 	constructor(total: number, spentTokens: number, requestedTokens: number) {
-		super(`Workflow token budget exceeded (${spentTokens + requestedTokens} > ${total})`);
+		super(
+			requestedTokens === 0 && spentTokens === total
+				? `Workflow token budget exhausted (${spentTokens}/${total}); no budget remains for another agent call`
+				: `Workflow token budget exceeded (${spentTokens + requestedTokens} > ${total})`,
+		);
 		this.name = "WorkflowBudgetExceeded";
 		this.total = total;
 		this.spentTokens = spentTokens;
