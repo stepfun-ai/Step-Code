@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -51,5 +51,21 @@ describe("export input==output guard", () => {
 		expect(existsSync(outputPath)).toBe(true);
 		expect(readFileSync(outputPath, "utf8")).toContain("<!DOCTYPE html>");
 		expect(readFileSync(sessionFile, "utf8")).toBe(original);
+	});
+
+	// Regression: a hardlink to the session file has a distinct pathname (so realpath does
+	// not collapse it, and the canonical-path compare passes) but shares the session's inode.
+	// The export write (O_TRUNC) would truncate that shared inode and destroy the session, so
+	// the device+inode check must reject it.
+	test("refuses to overwrite a hardlink that shares the session file's inode", async () => {
+		const { sessionFile, original } = makeSession();
+		const hardlink = join(dirname(sessionFile), "out.html");
+		linkSync(sessionFile, hardlink);
+
+		await expect(exportFromFile(sessionFile, { outputPath: hardlink })).rejects.toThrow(
+			/Refusing to overwrite the input session file/,
+		);
+		expect(readFileSync(sessionFile, "utf8")).toBe(original);
+		expect(readFileSync(hardlink, "utf8")).toBe(original);
 	});
 });

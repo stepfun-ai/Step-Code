@@ -1,5 +1,5 @@
 import type { AgentState } from "@step-harness/agent-core";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
 import { getCurrentThemeName, getResolvedThemeColors, getThemeExportColors } from "../../theme/theme.ts";
@@ -261,13 +261,35 @@ function preRenderCustomTools(
 }
 
 /**
+ * Device+inode identity of an existing file, or undefined if it does not exist.
+ * Two hardlinks to one file share this identity even though their pathnames — and
+ * therefore their realpaths — differ, which the canonical-path compare below cannot see.
+ */
+function fileIdentity(path: string): string | undefined {
+	try {
+		const stats = statSync(path, { bigint: true });
+		return `${stats.dev}:${stats.ino}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Refuse to export a session on top of its own source file. The output path may be
  * relative (normalizePath keeps it as given) while the input path is absolute, so
  * canonicalize both before comparing — realpath collapses symlinks, and a not-yet-created
  * output falls back to its resolved path so distinct targets never match.
+ *
+ * realpath does NOT collapse hardlinks, though: a hardlink pointing at the session file has
+ * a distinct pathname (so the canonical-path compare passes it) but shares the session's
+ * inode, and the export write (O_TRUNC) would truncate that shared inode and destroy the
+ * session. So when both files already exist, also compare their device+inode identity.
  */
 function assertOutputIsNotInput(outputPath: string, resolvedInputPath: string): void {
-	if (canonicalizePath(resolvePath(outputPath)) === canonicalizePath(resolvedInputPath)) {
+	const resolvedOutputPath = resolvePath(outputPath);
+	const inputId = fileIdentity(resolvedInputPath);
+	const sameInode = inputId !== undefined && inputId === fileIdentity(resolvedOutputPath);
+	if (sameInode || canonicalizePath(resolvedOutputPath) === canonicalizePath(resolvedInputPath)) {
 		throw new Error(`Refusing to overwrite the input session file: ${resolvedInputPath}`);
 	}
 }
