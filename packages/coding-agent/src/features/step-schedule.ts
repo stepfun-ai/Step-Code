@@ -209,11 +209,15 @@ function parseSnapshot(value: unknown, sessionId: string): StepGoalRestoreResult
 	}
 }
 
+/**
+ * Latest goal status on the active branch, for UI surfaces (tip pool, footer)
+ * that read state without a runtime instance.
+ */
 export function getStepGoalStatus(
 	entries: readonly { type: string; customType?: string; data?: unknown }[],
 	sessionId: string,
 ): StepGoalStatus | undefined {
-	for (let index = entries.length - 1; index >= 0; index--) {
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
 		const entry = entries[index]!;
 		if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
 		const snapshot = parseSnapshot(entry.data, sessionId);
@@ -435,7 +439,7 @@ export class StepGoalRuntime {
 		const text = validateObjective(objective);
 		if (this.goal && this.goal.status !== "complete") {
 			throw new Error(
-				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. ${unfinishedGoalHint(this.goal.status)}`,
+				`An unfinished goal is already ${this.goal.status}: ${this.goal.id}. Use /goal resume to continue it, or /goal clear to end it.`,
 			);
 		}
 		const budget = tokenBudget(tokenBudgetValue);
@@ -967,9 +971,9 @@ const GOAL_COMMANDS_HINT = "Goal commands: /goal status · /goal pause · /goal 
 
 /**
  * User-facing guidance when the runtime silently stops an active goal at a
- * settle boundary (abort, error, usage limit, or budget exhaustion). Without
- * this the only signal is the footer flipping to "Goal: paused", which reads
- * as the goal being stuck.
+ * settle boundary (abort, error, usage limit, or budget exhaustion). The footer
+ * only carries "Goal: paused", so without this a stop to blocked, usage_limited,
+ * or budget_limited is silent and the goal just reads as stuck.
  */
 const GOAL_STOP_HINTS: Partial<Record<StepGoalStatus, string>> = {
 	paused: "Goal paused (run interrupted). Run /goal resume to continue.",
@@ -1035,8 +1039,10 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			runtime.bindHost(host);
 		};
 		const updateStatus = (ctx: ExtensionContext): void => {
-			const goal = runtime.get();
-			ctx.ui.setStatus("step-goal", goal?.status === "paused" ? "Goal: paused" : undefined);
+			// Only a paused goal earns a footer slot: active progress is visible
+			// in the stream and /goal status reports the rest. A forgotten pause
+			// is the one state worth nagging about persistently.
+			ctx.ui.setStatus("step-goal", runtime.get()?.status === "paused" ? "Goal: paused" : undefined);
 		};
 		const notifyAutoStop = (before: StepGoalStatus | undefined, ctx: ExtensionContext): void => {
 			if (before !== "active") return;
@@ -1119,7 +1125,7 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			if (episode === resumeHintShownFor) return;
 			resumeHintShownFor = episode;
 			ctx.ui.notify(
-				`Goal ${goal.id} is ${goal.status}; this message runs as a normal turn and does not resume it. Run /goal resume to continue the goal.`,
+				`Goal ${goal.id} is ${goal.status}; this message runs as a normal turn and does not resume it. Run /goal resume to continue it, or /goal clear to end it.`,
 				"warning",
 			);
 		});
@@ -1182,8 +1188,28 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 						return;
 					}
 					if (subcommand === "clear") {
-						ctx.ui.notify(runtime.clear() ? "Goal cleared." : "No goal is currently set.", "info");
+						if (!runtime.get()) {
+							ctx.ui.notify("No goal is currently set.", "info");
+							return;
+						}
+						if (!runtime.clear()) {
+							ctx.ui.notify("Unable to clear goal state.", "warning");
+							return;
+						}
 						updateStatus(ctx);
+						// Clear before aborting so settlement cannot resume or pause the deleted goal.
+						if (!ctx.isIdle()) {
+							try {
+								ctx.abort();
+							} catch {
+								ctx.ui.notify(
+									"Goal cleared, but the current run could not be interrupted. Press Escape to stop it.",
+									"warning",
+								);
+								return;
+							}
+						}
+						ctx.ui.notify("Goal cleared.", "info");
 						return;
 					}
 					if (subcommand === "pause" || subcommand === "resume") {

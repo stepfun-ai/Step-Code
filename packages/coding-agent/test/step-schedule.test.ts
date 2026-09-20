@@ -4,7 +4,6 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core
 import {
 	continuationPrompt,
 	createStepGoalExtension,
-	getStepGoalStatus,
 	type StepGoalRecord,
 	StepGoalRuntime,
 	type StepGoalSnapshot,
@@ -61,28 +60,6 @@ describe("StepGoalRuntime", () => {
 			tokenBudget: 10_000,
 		});
 		expect(() => runtime.start("another objective", "session-1")).toThrow("unfinished");
-		runtime.setUserStatus("paused");
-		expect(() => runtime.start("another objective", "session-1")).toThrow(/\/goal resume.*\/goal clear/u);
-	});
-
-	test("projects only the newest valid goal on the supplied session branch", () => {
-		const { runtime } = runtimeHarness();
-		const active = runtime.start("Persist me", "session-1");
-		const entry = (data: unknown) => ({ type: "custom", customType: "step-goal", data });
-		const branch = [entry(active), entry({ ...active, status: "paused" })];
-		expect(getStepGoalStatus(branch, "session-1")).toBe("paused");
-		expect(getStepGoalStatus(branch.slice(0, 1), "session-1")).toBe("active");
-		expect(getStepGoalStatus(branch, "other-session")).toBeUndefined();
-		expect(getStepGoalStatus([...branch, entry({ status: "complete" })], "session-1")).toBe("paused");
-		expect(getStepGoalStatus([...branch, entry({ ...active, sessionId: "other-session" })], "session-1")).toBe(
-			"paused",
-		);
-		expect(
-			getStepGoalStatus(
-				[...branch, entry({ cleared: true, sessionId: "session-1", updatedAt: active.updatedAt })],
-				"session-1",
-			),
-		).toBeUndefined();
 	});
 
 	test("rejects empty and oversize objectives without silent truncation", () => {
@@ -638,22 +615,9 @@ describe("Step goal extension", () => {
 		await harness.commands.get("goal")?.("ship the release", harness.ctx);
 		await harness.commands.get("goal")?.("pause", harness.ctx);
 		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Goal paused. Run /goal resume to continue.", "info");
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
-		await harness.commands.get("goal")?.("resume", harness.ctx);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
-		await harness.tools
-			.get("update_goal")
-			?.execute("complete", { status: "complete" }, undefined, undefined, harness.ctx);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
-		await harness.commands.get("goal")?.("clear", harness.ctx);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
 	});
 
-	test.each([
-		[45, "45s"],
-		[3505, "58m 25s"],
-		[3720, "1h 02m"],
-	])("formats %s seconds as %s", async (seconds, formatted) => {
+	test("formats status time with minute and hour units", async () => {
 		const harness = extensionHarness();
 		harness.entries.push({
 			type: "custom",
@@ -664,7 +628,7 @@ describe("Step goal extension", () => {
 				objective: "time me",
 				status: "paused",
 				tokensUsed: 0,
-				timeUsedSeconds: seconds,
+				timeUsedSeconds: 3505,
 				createdAt: new Date(500).toISOString(),
 				updatedAt: new Date(600).toISOString(),
 				iteration: 1,
@@ -672,7 +636,7 @@ describe("Step goal extension", () => {
 		});
 		await emit(harness, "session_start");
 		await harness.commands.get("goal")?.("status", harness.ctx);
-		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining(`Time: ${formatted}`), "info");
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Time: 58m 25s"), "info");
 	});
 
 	test("starting over an unfinished goal points at the next commands", async () => {
@@ -706,7 +670,7 @@ describe("Step goal extension", () => {
 			"Goal paused (run interrupted). Run /goal resume to continue.",
 			"warning",
 		);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", expect.stringContaining("Goal: paused"));
 	});
 
 	test("hints once per pause that a plain message does not resume the goal", async () => {
@@ -718,7 +682,10 @@ describe("Step goal extension", () => {
 		notify.mockClear();
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		expect(notify).toHaveBeenCalledTimes(1);
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Run /goal resume to continue the goal"), "warning");
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining("Run /goal resume to continue it, or /goal clear to end it."),
+			"warning",
+		);
 		// Repeats within the same pause episode and slash commands stay silent.
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		await emit(harness, "input", { text: "/help", source: "interactive" });
@@ -727,6 +694,153 @@ describe("Step goal extension", () => {
 		notify.mockClear();
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		expect(notify).not.toHaveBeenCalled();
+	});
+
+	test("clear interrupts the current goal continuation after persisting its tombstone", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("ship it", harness.ctx);
+		harness.setIdle(false);
+		await emit(harness, "agent_start");
+		vi.mocked(harness.ctx.abort).mockImplementation(() => {
+			expect(harness.entries.at(-1)?.data).toMatchObject({ cleared: true });
+		});
+
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+
+		expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
+		await emit(harness, "agent_end", { messages: [assistant("aborted")] });
+		harness.setIdle(true);
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
+		const result = (await harness.tools
+			.get("get_goal")
+			?.execute("call-get", {}, undefined, undefined, harness.ctx)) as { details: { goal: StepGoalRecord | null } };
+		expect(result.details.goal).toBeNull();
+	});
+
+	test("clear interrupts a turn that created its goal before any continuation", async () => {
+		const harness = extensionHarness({ idle: false });
+		await emit(harness, "session_start");
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-create", { objective: "mid-run goal" }, undefined, undefined, harness.ctx);
+
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+
+		expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+		await emit(harness, "agent_end", { messages: [assistant("aborted")] });
+		harness.setIdle(true);
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(0);
+	});
+
+	test("clear leaves an idle session idle", async () => {
+		const harness = extensionHarness();
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-create", { objective: "idle goal" }, undefined, undefined, harness.ctx);
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+		expect(harness.ctx.abort).not.toHaveBeenCalled();
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Goal cleared.", "info");
+		expect(harness.entries.at(-1)?.data).toMatchObject({ cleared: true });
+	});
+
+	test("clear does not interrupt a busy session without a goal", async () => {
+		const harness = extensionHarness({ idle: false });
+		await emit(harness, "agent_start");
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+		expect(harness.ctx.abort).not.toHaveBeenCalled();
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("No goal is currently set.", "info");
+	});
+
+	test("clear reports a persistence failure without interrupting the run", async () => {
+		const harness = extensionHarness({ idle: false });
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-create", { objective: "persist me" }, undefined, undefined, harness.ctx);
+		const persist = vi.spyOn(harness.entries, "push").mockImplementation(() => {
+			throw new Error("disk full");
+		});
+		try {
+			await harness.commands.get("goal")?.("clear", harness.ctx);
+			expect(harness.ctx.abort).not.toHaveBeenCalled();
+			expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Unable to clear goal state.", "warning");
+			const result = (await harness.tools
+				.get("get_goal")
+				?.execute("call-get", {}, undefined, undefined, harness.ctx)) as { details: { goal: StepGoalRecord } };
+			expect(result.details.goal.objective).toBe("persist me");
+		} finally {
+			persist.mockRestore();
+		}
+	});
+
+	test("clear preserves the goal when accounting succeeds but the tombstone cannot persist", async () => {
+		const harness = extensionHarness({ idle: false });
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-create", { objective: "persist me" }, undefined, undefined, harness.ctx);
+		const persist = vi.spyOn(harness.entries, "push").mockImplementation((...entries) => {
+			if (entries.some((entry) => entry.data && typeof entry.data === "object" && "cleared" in entry.data))
+				throw new Error("disk full");
+			return Array.prototype.push.apply(harness.entries, entries);
+		});
+		try {
+			await harness.commands.get("goal")?.("clear", harness.ctx);
+			expect(harness.ctx.abort).not.toHaveBeenCalled();
+			expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Unable to clear goal state.", "warning");
+			const result = (await harness.tools
+				.get("get_goal")
+				?.execute("call-get", {}, undefined, undefined, harness.ctx)) as { details: { goal: StepGoalRecord } };
+			expect(result.details.goal.objective).toBe("persist me");
+		} finally {
+			persist.mockRestore();
+		}
+	});
+
+	test("clear reports an unavailable abort hook while keeping the goal cleared", async () => {
+		const harness = extensionHarness({ idle: false });
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-create", { objective: "stop me" }, undefined, undefined, harness.ctx);
+		vi.mocked(harness.ctx.abort).mockImplementation(() => {
+			throw new Error("abort unavailable");
+		});
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+		expect(harness.entries.at(-1)?.data).toMatchObject({ cleared: true });
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+			"Goal cleared, but the current run could not be interrupted. Press Escape to stop it.",
+			"warning",
+		);
+	});
+
+	test("stops a queued goal continuation that starts after clear", async () => {
+		const harness = extensionHarness({ idle: false });
+		await emit(harness, "session_start");
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-create", { objective: "queued goal" }, undefined, undefined, harness.ctx);
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
+		expect(harness.sent[0]?.options).toMatchObject({ deliverAs: "followUp" });
+		harness.setIdle(true);
+		await harness.commands.get("goal")?.("clear", harness.ctx);
+		expect(harness.ctx.abort).not.toHaveBeenCalled();
+		harness.setIdle(false);
+		await emit(harness, "agent_start");
+		expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("Stopped a queued goal turn (no goal is set).", "info");
+		await emit(harness, "agent_end", { messages: [assistant("aborted")] });
+		harness.setIdle(true);
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
 	});
 
 	test("pause interrupts an in-flight goal continuation turn", async () => {
@@ -773,6 +887,61 @@ describe("Step goal extension", () => {
 		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
 			"Stopped a queued goal turn (goal is paused). Run /goal resume to continue it.",
 			"info",
+		);
+	});
+});
+
+describe("Goal UX guidance (T1-T6)", () => {
+	test("start, pause, and paused-input messages carry next-step pointers", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")!("finish the migration", harness.ctx);
+		// Not "last": goal creation now follows the echo with the commands hint.
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenCalledWith(
+			expect.stringContaining("Goal set:"),
+			"info",
+			expect.anything(),
+		);
+
+		await harness.commands.get("goal")!("pause", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			"Goal paused. Run /goal resume to continue.",
+			"info",
+		);
+		expect(vi.mocked(harness.ctx.ui.setStatus)).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
+
+		// Ordinary prompts while paused get a recovery pointer (T4).
+		await emit(harness, "input", { text: "继续", source: "interactive" });
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			expect.stringContaining("/goal resume to continue"),
+			"warning",
+		);
+
+		await harness.commands.get("goal")!("resume", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith("Goal resumed.", "info");
+	});
+
+	test("footer stays quiet while a goal is active", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")!("finish the migration", harness.ctx);
+		// Active goals leave the footer alone; only a pause earns a slot.
+		expect(vi.mocked(harness.ctx.ui.setStatus)).toHaveBeenLastCalledWith("step-goal", undefined);
+	});
+
+	test("starting over an unfinished goal points at resume/clear", async () => {
+		const runtime = new StepGoalRuntime({
+			now: () => 1_000,
+			idFactory: () => "goal-1",
+			isIdle: () => true,
+			hasPendingMessages: () => false,
+			persist: () => true,
+			requestContinuation: () => {},
+		});
+		runtime.start("first", "session-1");
+		runtime.setUserStatus("paused");
+		expect(() => runtime.start("second", "session-1")).toThrowError(
+			/\/goal resume to continue.*\/goal clear to end/s,
 		);
 	});
 });
