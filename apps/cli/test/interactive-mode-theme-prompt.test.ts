@@ -24,7 +24,7 @@ const maybeRunStepThemePrompt = (
 
 function createContext(overrides: Partial<ThemePromptContext> = {}): ThemePromptContext {
 	return {
-		options: { stepThemePrompt: async () => "step" },
+		options: { stepThemePrompt: async () => "step-blue" },
 		settingsManager: {
 			getThemeSetting: () => undefined,
 			setTheme: vi.fn(),
@@ -40,18 +40,18 @@ describe("InteractiveMode first-run theme prompt", () => {
 		const context = createContext();
 
 		expect(await maybeRunStepThemePrompt.call(context)).toBeUndefined();
-		expect(context.settingsManager.setTheme).toHaveBeenCalledWith("step");
+		expect(context.settingsManager.setTheme).toHaveBeenCalledWith("step-blue");
 		expect(context.settingsManager.flush).toHaveBeenCalledTimes(1);
 	});
 
 	// A dismissed screen answers with the product default, so the written theme
 	// is also the record that the question was put: nothing asks again.
 	it("persists the default the dismissed screen answered with", async () => {
-		const context = createContext({ options: { stepThemePrompt: async () => "step-light/step" } });
+		const context = createContext({ options: { stepThemePrompt: async () => "step-blue" } });
 
 		await maybeRunStepThemePrompt.call(context);
 
-		expect(context.settingsManager.setTheme).toHaveBeenCalledWith("step-light/step");
+		expect(context.settingsManager.setTheme).toHaveBeenCalledWith("step-blue");
 	});
 
 	it("writes nothing when there was no question to put", async () => {
@@ -82,7 +82,7 @@ describe("InteractiveMode first-run theme prompt", () => {
 		["an auth-only command", { options: { stepThemePrompt: vi.fn(), exitAfterStartupLogin: true } }],
 		["a product without the hook", { options: {} }],
 	] as const)("skips the prompt for %s", async (_label, overrides) => {
-		const stepThemePrompt = vi.fn(async () => "step");
+		const stepThemePrompt = vi.fn(async () => "step-blue");
 		const context = createContext(overrides as Partial<ThemePromptContext>);
 		if (context.options.stepThemePrompt) context.options.stepThemePrompt = stepThemePrompt;
 

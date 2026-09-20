@@ -23,7 +23,7 @@ interface QueueModeFixture {
 }
 
 function createQueueEditor(bindings: KeybindingsConfig = {}, fullscreen = false) {
-	initTheme("step");
+	initTheme("step-blue");
 	const keybindings = new KeybindingsManager(bindings);
 	setKeybindings(keybindings);
 	const terminal = new VirtualTerminal();

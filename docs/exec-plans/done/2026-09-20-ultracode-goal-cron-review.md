@@ -40,8 +40,8 @@ open one MR to `github-opensource`. Do not merge it or change unrelated `.tmp/`.
 - [x] Cron audited.
 - [x] Foreground workflow progress streamed and rendered during execution.
 - [x] Reproduced defects fixed and verified on the initial base.
-- [ ] Integrate newly fetched `604a0fd` and repeat affected verification.
-- [ ] Documentation and final findings recorded.
+- [x] Integrated newly fetched `604a0fd` and repeated affected verification.
+- [x] Documentation and final findings recorded; verified execution plan archived.
 
 ## Reviewed design and bounded fixes
 
@@ -99,3 +99,50 @@ branch, preserve its goal/task changes, update the new UI test to the current
 theme name, and rerun the affected tests and required code checks. Keep one MR
 targeting `github-opensource`. Roll back only the merge if integration fails;
 the task checkpoint preserves all scoped work without touching `.tmp/`.
+
+
+## Final verification and delivery
+
+The final implementation includes upstream `604a0fd89c0c3dfc9b4e58a6bac9dcbf79e7b582`
+and retains its goal-status projection, task-plan guidance, and `step-blue`
+default theme. The feature branch is
+`fix/ultracode-goal-cron-reliability-20260920`, with one MR targeting
+`github-opensource` as authorized. The task checkpoint is `aa674e3`.
+
+Verification ran with Node 22.19.0. A separate worktree at the same upstream
+commit received byte-identical copies of all 21 task files; this keeps other
+sessions' ignored nested worktrees out of the root Biome scan.
+
+- Required `npm run check`: passed with complete output; 1,100 files checked,
+  no fixes, and architecture/security, TypeScript, and browser smoke checks passed.
+- Affected coding-agent tests: 221 passed, 16 skipped across 10 files. The skips
+  require the unavailable native `isolated-vm` module.
+- Affected CLI tests: 35 passed across five files, including workflow tool-row
+  rendering, plan rows, task plans, and session working-state tracking.
+- CLI subprocess startup tests against current sources: seven passed across
+  four files.
+- Full non-E2E validation: exit 0. Coding-agent: 2,925 passed, 66 skipped;
+  CLI: 623 passed; providers: 469 passed, 124 skipped; agent-core: 465 passed,
+  one skipped; evals: 23 passed. All remaining invoked package and script tests
+  also passed.
+
+The installed package `dist` files were stale and caused startup import failures
+on the pristine baseline as well. Full validation therefore used the exact
+`test.sh` commands and credential-isolated `env -i` environment with two added
+source-resolution settings: `NODE_OPTIONS` loads a TSX adapter only when the
+subprocess entry is `apps/cli/src/main.ts`, and `TSX_TSCONFIG_PATH` points to the
+validation worktree's root configuration. Vitest and terminal dependencies do
+not receive the adapter hooks. No real provider credentials or model calls were
+used. Native VM isolation and packaged binaries were not validated.
+
+Local verification artifacts:
+
+- `/data/tmp/step-harness-feature-review-20260920/full-test-current-source.log`
+- `/data/tmp/step-harness-feature-review-20260920/final-validation-manifest.sha256`
+- `/tmp/step-harness-cli-source-loader.mjs`
+- `/tmp/step-harness-test-current-source.sh`
+
+The runtime contracts are recorded in `docs/orchestration-lifecycle.md` and
+`docs/goal-lifecycle.md`. Remaining design work is explicit: background workflow
+management, an independent goal evaluator, and `/loop`/`/effort ultracode` entry
+points. Live foreground subagent progress is implemented and verified here.

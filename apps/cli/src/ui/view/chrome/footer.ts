@@ -384,9 +384,6 @@ export class FooterComponent implements Component {
 		const left = segments.join(muted(" · "));
 		const usage = this.session.getContextUsage();
 
-		// Right-aligned readout: remaining context only. Context turns amber/red
-		// as the window fills so the need to compact is visible before it
-		// becomes urgent.
 		if (usage?.percent === null || usage?.percent === undefined) {
 			return [truncateToWidth(left, safeWidth, "")];
 		}
@@ -410,7 +407,7 @@ export class FooterComponent implements Component {
 		const trimmedGap = safeWidth - trimmedWidth - contextWidth;
 		return trimmedGap >= 1
 			? [`${trimmed}${" ".repeat(trimmedGap)}${right}`]
-			: [truncateToWidth(trimmed, safeWidth, "")];
+			: [truncateToWidth(right, safeWidth, "")];
 	}
 }
 

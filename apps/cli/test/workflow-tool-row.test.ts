@@ -12,7 +12,7 @@ import { ToolExecutionComponent } from "../src/ui/view/transcript/tool-execution
 const cleanups: Array<() => void> = [];
 
 beforeEach(() => {
-	initTheme("step");
+	initTheme("step-blue");
 	setKeybindings(new KeybindingsManager());
 });
 afterEach(() => {

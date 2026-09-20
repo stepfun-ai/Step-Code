@@ -35,9 +35,9 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 		"Use run_command for non-interactive tests, builds, formatters, and git commands. Keep scope minimal, use its cwd parameter for another directory, and treat truncated output as incomplete. For long-running processes such as dev servers, set run_in_background:true — it returns a pid and a log path; read the log to confirm readiness and kill the pid to stop.",
 	find_tools: "Use find_tools when you know the intent but do not know the available tool name.",
 	task_create:
-		"Use task_create to add a todo item to the session execution checklist; it records work rather than starting it.",
+		"Use task_create to add a todo item to the active execution plan; newPlan starts a separate checklist and archives the current one. It records work rather than starting it.",
 	task_update:
-		"Use task_update to update todo progress, details, or dependencies; it does not execute or schedule work.",
+		"Use task_update to update todo progress, details, or dependencies; resumePlanId alone explicitly restores a historical checklist. It does not execute or schedule work.",
 	task_get: "Use task_get to read a todo item's full details and recorded dependencies, including completed ones.",
 	task_list:
 		"Use task_list to recover todo progress or choose the next open item; blockedBy contains only unfinished prerequisites.",
@@ -214,6 +214,8 @@ export function buildStepSystemPromptAppendix(
 				[
 					"- Tasks are todo items in the session execution checklist: what needs doing and its progress. They do not represent plan approval. Use task_* for tracking, not to execute, delegate, or schedule work.",
 					"- For work with three or more distinct steps, record one task per step with task_create before starting; skip tasks for trivial or purely conversational work.",
+					"- For a different user request, set newPlan to a short title on its first task_create call. This starts a separate checklist and archives the previous one, even if it has unfinished tasks. Omit newPlan on subsequent steps. Do not mix unrelated requests into the active checklist.",
+					"- Do not start a new plan merely because a turn ended, a clarification arrived, or context was compacted. Continue the current plan across turns. When the user explicitly asks to resume an older plan, inspect task_list with includeHistory:true, then call task_update with resumePlanId alone before updating its tasks. Inspecting history never switches plans. If the intended older plan is ambiguous, ask rather than guessing.",
 					"- Mark a task in_progress with task_update before starting it, and completed immediately after finishing it; never batch completions.",
 					"- Keep only one task in_progress at a time. Use task_list to pick the next open, unblocked task and task_get to re-read its details.",
 					"- Only mark a task completed when it is fully done and validated. If blocked, keep it in_progress and create a new task describing the blocker; record dependencies with addBlocks/addBlockedBy.",

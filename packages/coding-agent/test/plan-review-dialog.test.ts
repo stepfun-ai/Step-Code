@@ -55,7 +55,7 @@ function type(component: PlanReviewComponent, text: string): void {
 
 describe("plan review dialog", () => {
 	beforeAll(() => {
-		initTheme("step");
+		initTheme("step-blue");
 		setKeybindings(new KeybindingsManager());
 	});
 

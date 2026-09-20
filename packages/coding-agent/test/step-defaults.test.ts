@@ -10,8 +10,8 @@ import {
 } from "../src/step/defaults.ts";
 
 describe("Step entrypoint defaults", () => {
-	test("uses the branded light/dark pair unless the environment overrides it", () => {
-		expect(getStepDefaultTheme({})).toBe("step-light/step");
+	test("uses one blue theme unless the environment overrides it", () => {
+		expect(getStepDefaultTheme({})).toBe("step-blue");
 		expect(getStepDefaultTheme({ STEP_CLI_DEFAULT_THEME: "custom-light/custom-dark" })).toBe(
 			"custom-light/custom-dark",
 		);

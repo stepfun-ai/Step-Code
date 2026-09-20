@@ -41,7 +41,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("keeps thinking and answer as separate Step bullets", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([
 				{ type: "thinking", thinking: "first thought" },
@@ -60,7 +60,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("collapses reasoning to three rows and expands through setExpanded", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const reasoning = Array.from({ length: 8 }, (_, index) => `thought ${index}`).join("\n");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([
@@ -83,7 +83,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("hides only complete fences and leaves an incomplete stream literal", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const complete = new StepAssistantMessageComponent(
 			assistantMessage([{ type: "text", text: "```ts\nconst value = 1;\n```" }]),
 			false,
@@ -103,7 +103,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("uses the same complete-fence presentation for user messages", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepUserMessageComponent("说明\n\n```ts\nconst value = 1;\n```", getMarkdownTheme());
 		const rawLines = component.render(80);
 		const lines = plain(rawLines);
@@ -118,7 +118,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("retains Pi OSC 133 markers while adding Step gutters", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const assistant = new StepAssistantMessageComponent(
 			assistantMessage([{ type: "text", text: "hello" }]),
 			false,
@@ -139,7 +139,7 @@ describe("Step message presentation", () => {
 		// test exercises the enabled path explicitly so it remains deterministic
 		// on CI runners as well as in a real terminal.
 		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([{ type: "text", text: "[open docs](https://example.com/docs)" }]),
 			false,
@@ -155,7 +155,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("preserves boundaries for alternating thinking and answer runs", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([
 				{ type: "thinking", thinking: "first reasoning" },
@@ -177,7 +177,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("updates output padding without dropping the first character", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const assistant = new StepAssistantMessageComponent(
 			assistantMessage([{ type: "text", text: "hello" }]),
 			false,
@@ -194,7 +194,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("reuses assistant rows until the message or its display state changes", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([
 				{ type: "thinking", thinking: "a thought" },
@@ -228,7 +228,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("drops the OSC 133 markers when a tool call joins an already-rendered message", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const answer = { type: "text", text: "the answer" } as const;
 		const component = new StepAssistantMessageComponent(assistantMessage([answer]), false, getMarkdownTheme());
 
@@ -245,7 +245,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("re-renders a code block when only the closing fence arrives", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const streamed = (text: string) => assistantMessage([{ type: "text", text }]);
 		const component = new StepAssistantMessageComponent(
 			streamed("```ts\nconst value = 1;"),
@@ -264,7 +264,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("re-renders the pi status row that no run source reflects", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const answered = assistantMessage([{ type: "text", text: "partial answer" }]);
 		const component = new StepAssistantMessageComponent(answered, false, getMarkdownTheme());
 
@@ -277,7 +277,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("reuses user rows until output padding changes", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepUserMessageComponent("hello", getMarkdownTheme(), 1);
 
 		const cached = component.render(40);
@@ -290,7 +290,7 @@ describe("Step message presentation", () => {
 	});
 
 	test("keeps every assistant row within the requested width", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const component = new StepAssistantMessageComponent(
 			assistantMessage([
 				{ type: "thinking", thinking: "想一想\n再想想" },
