@@ -38,6 +38,7 @@ import {
 } from "@step-harness/coding-agent";
 import type { RuntimeContext } from "./context.ts";
 import { handleEscape } from "./interrupt.ts";
+import { resolvePastedImages } from "./pasted-images.ts";
 
 /** Pure recognizer: is `text` a slash command provided by a loaded extension? */
 export function isExtensionCommand(extensionRunner: AgentSession["extensionRunner"], text: string): boolean {
@@ -63,16 +64,14 @@ export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 }
 
 /**
- * Format a resolved image path as a file reference for the input line. Quote it
- * only when it contains a space: the `@`-reference tokenizer treats an unquoted
- * `@` reference as whitespace-delimited (packages/tui editor `@(?:"[^"]*|[^\s]*)`),
- * so a spaced path must be `@"path"` to read as one reference, while a space-free
- * path stays `@path`. This mirrors the typed-`@` autocomplete rule
- * (autocomplete.ts `buildCompletionValue`), so a pasted reference and a typed one
- * look identical.
+ * Register a pasted image file and insert its `[Image #N]` placeholder at the
+ * cursor. The placeholder is what the user sees; the absolute path is remembered
+ * in ctx.pastedImages and resolved back to an attached image when the message is
+ * sent. A trailing space separates it from whatever the user types next.
  */
-function formatImageRef(absolutePath: string): string {
-	return absolutePath.includes(" ") ? `@"${absolutePath}"` : `@${absolutePath}`;
+function insertImagePlaceholder(ctx: RuntimeContext, absolutePath: string): void {
+	const n = ctx.pastedImages.register(absolutePath);
+	ctx.editor.insertTextAtCursor?.(`[Image #${n}] `);
 }
 
 export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: boolean }): Promise<void> {
@@ -82,7 +81,7 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
 		// the file. Prefer the real file path: reference the file itself.
 		const clipboardFile = await readClipboardImagePath();
 		if (clipboardFile && fs.existsSync(clipboardFile)) {
-			ctx.editor.insertTextAtCursor?.(formatImageRef(clipboardFile));
+			insertImagePlaceholder(ctx, clipboardFile);
 			ctx.redraw.requestRender();
 			return;
 		}
@@ -95,7 +94,7 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
 			const filePath = path.join(tmpDir, fileName);
 			fs.writeFileSync(filePath, Buffer.from(image.bytes));
 
-			ctx.editor.insertTextAtCursor?.(formatImageRef(filePath));
+			insertImagePlaceholder(ctx, filePath);
 			ctx.redraw.requestRender();
 			return;
 		}
@@ -119,16 +118,16 @@ export async function clipboardPaste(ctx: RuntimeContext, opts?: { imageOnly?: b
  * Handle a bracketed paste whose text is an image file reference — e.g. a file
  * copied in Finder/Explorer, which the terminal pastes as its (often bare) name.
  * Resolve it to an absolute path (a bare name via the clipboard's file URL) and
- * insert it as an `@` file reference so the model can read it; if it cannot be
- * resolved, insert the original text unchanged so nothing is lost.
+ * insert it as an `[Image #N]` placeholder (registering the path so it is attached
+ * on send); if it cannot be resolved, insert the original text unchanged so
+ * nothing is lost.
  *
  * Exported for unit testing the WSL Windows-path branch composition.
  */
 export async function insertPastedImagePath(ctx: RuntimeContext, pastedText: string): Promise<void> {
-	let value = pastedText;
+	let absolutePath: string | undefined;
 	try {
 		const cleaned = cleanPastedPath(pastedText);
-		let absolutePath: string | undefined;
 		if (path.isAbsolute(cleaned) && isImageFilePath(cleaned) && fs.existsSync(cleaned)) {
 			absolutePath = cleaned;
 		} else if (isWindowsPath(cleaned)) {
@@ -151,13 +150,14 @@ export async function insertPastedImagePath(ctx: RuntimeContext, pastedText: str
 				absolutePath = clipboardPath;
 			}
 		}
-		if (absolutePath) {
-			value = formatImageRef(absolutePath);
-		}
 	} catch {
 		// Fall back to the original pasted text below.
 	}
-	ctx.editor.insertTextAtCursor?.(value);
+	if (absolutePath) {
+		insertImagePlaceholder(ctx, absolutePath);
+	} else {
+		ctx.editor.insertTextAtCursor?.(pastedText);
+	}
 	ctx.redraw.requestRender();
 }
 
@@ -440,7 +440,10 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 				ctx.editor.setText("");
 				await ctx.session.prompt(text);
 			} else {
-				ctx.queueCompactionMessage(text, "steer");
+				const { text: message, images } = await resolvePastedImages(ctx.pastedImages, text, {
+					autoResizeImages: ctx.settingsManager.getImageAutoResize(),
+				});
+				ctx.queueCompactionMessage(message, "steer", images.length ? images : undefined);
 			}
 			return;
 		}
@@ -450,7 +453,10 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 		if (ctx.session.isStreaming) {
 			ctx.editor.addToHistory?.(text);
 			ctx.editor.setText("");
-			await ctx.session.prompt(text, { streamingBehavior: "steer" });
+			const { text: message, images } = await resolvePastedImages(ctx.pastedImages, text, {
+				autoResizeImages: ctx.settingsManager.getImageAutoResize(),
+			});
+			await ctx.session.prompt(message, { streamingBehavior: "steer", images: images.length ? images : undefined });
 			ctx.updatePendingMessagesDisplay();
 			ctx.redraw.requestRender();
 			return;
