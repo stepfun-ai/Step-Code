@@ -1,7 +1,9 @@
 /**
- * 工作状态行下方的一行小 tip（与 CC 的 spinner tips 同位同用途）。
- * 差异：CC 秒级轮换（社区抱怨没看清就滚走），我们一轮一条、下轮换下一条。
- * 按当前 goal 状态选择命令提示，不推断用户意图。
+ * The single rotating tip line under the working-status row (same slot and
+ * purpose as Claude Code's spinner tips). Unlike CC's second-level rotation,
+ * which users complain scrolls by unread, one tip serves a whole turn and the
+ * next turn takes the next one. Goal-command tips follow the current goal
+ * status without inferring user intent.
  */
 
 import { keyText, type StepGoalStatus } from "@step-harness/coding-agent";
@@ -33,8 +35,9 @@ export function buildStatusTips(goalStatus?: StepGoalStatus): string[] {
 }
 
 /**
- * 每轮取一条：固定从池头（/theme，用户拍板每次会话首条）开始，顺序推进。
- * 一轮内不换、相邻两轮不重复同一条（池长 ≥2 时）。
+ * One tip per turn: the pool always starts from its head (/theme — the agreed
+ * first tip of every session) and advances in order. A tip never changes
+ * mid-turn, and consecutive turns never repeat the same tip (pools of ≥2).
  */
 export class StatusTipRotator {
 	private pool: readonly string[];
