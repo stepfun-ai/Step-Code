@@ -49,3 +49,7 @@ collect.sh
 pixel-art/
 .playwright-mcp/
 *.pdf
+
+# 仓库根目录的临时截图/草稿
+/*.png
+/goal-*.txt
