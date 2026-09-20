@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentSession, ReadonlyFooterDataProvider } from "@step-harness/coding-agent";
-import { addUsageToTotals, areExperimentalFeaturesEnabled, createUsageTotals, theme } from "@step-harness/coding-agent";
+import { addUsageToTotals, createUsageTotals, theme } from "@step-harness/coding-agent";
 import { type Component, sliceByColumn, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
 
 /**
@@ -187,9 +187,6 @@ export class FooterComponent implements Component {
 			contextPercentStr = contextPercentDisplay;
 		}
 		statsParts.push(contextPercentStr);
-		if (areExperimentalFeaturesEnabled()) {
-			statsParts.push(`${theme.fg("dim", "•")} ${theme.bold(theme.fg("warning", "xp"))}`);
-		}
 
 		let statsLeft = statsParts.join(" ");
 

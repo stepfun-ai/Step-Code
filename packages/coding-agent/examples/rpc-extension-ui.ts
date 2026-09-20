@@ -28,6 +28,7 @@ import {
 	type TUI,
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
+import { resolveStepAgentDir } from "@step-harness/coding-agent";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -276,7 +277,7 @@ async function main() {
 	// -- TUI setup --
 
 	const terminal = new ProcessTerminal();
-	const tui: TUI = new TuiMainScreen(terminal);
+	const tui: TUI = new TuiMainScreen(terminal, undefined, resolveStepAgentDir());
 
 	const outputLog = new OutputLog();
 	const loadingIndicator = new LoadingIndicator();

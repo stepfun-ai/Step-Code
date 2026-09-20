@@ -193,9 +193,8 @@ export const CONFIG_DIR_NAME: string =
 // SDK metadata).
 export const VERSION: string = STEP_ENTRYPOINT ? STEP_CLI_VERSION.value : pkg.version || "0.0.0";
 
-// e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
-export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
-export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
+export const ENV_AGENT_DIR = "STEP_CODING_AGENT_DIR";
+export const ENV_SESSION_DIR = "STEP_CODING_AGENT_SESSION_DIR";
 
 export function expandTildePath(path: string): string {
 	return normalizePath(path);
@@ -207,8 +206,7 @@ export function expandTildePath(path: string): string {
 
 /** Get the agent config directory (for example, ~/.pi/agent/ or ~/.step-cli/agent/) */
 export function getAgentDir(): string {
-	const envDir =
-		(STEP_ENTRYPOINT ? process.env.STEP_CODING_AGENT_DIR?.trim() : undefined) || process.env[ENV_AGENT_DIR]?.trim();
+	const envDir = process.env[ENV_AGENT_DIR]?.trim();
 	if (envDir) {
 		return expandTildePath(envDir);
 	}

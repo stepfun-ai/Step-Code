@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -140,7 +140,7 @@ describe("TUI render scheduling", () => {
 });
 
 describe("TUI debug logging", () => {
-	it("writes redraw logs to the provided directory", async () => {
+	it("ignores the removed redraw logging environment flag", async () => {
 		const logDir = mkdtempSync(join(tmpdir(), "pi-tui-log-"));
 		try {
 			await withEnv({ PI_DEBUG_REDRAW: "1" }, async () => {
@@ -152,7 +152,7 @@ describe("TUI debug logging", () => {
 				tui.start();
 				await terminal.waitForRender();
 
-				assert.match(readFileSync(join(logDir, "pi-debug.log"), "utf-8"), /fullRender: first render/);
+				assert.equal(existsSync(join(logDir, "pi-debug.log")), false);
 				tui.stop();
 			});
 		} finally {
@@ -540,7 +540,7 @@ describe("TUI content shrinkage", () => {
 	it("clears empty rows when content shrinks significantly", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui: TUI = new TuiMainScreen(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
+		tui.setClearOnShrink(true);
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -572,7 +572,7 @@ describe("TUI content shrinkage", () => {
 	it("handles shrink to single line", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui: TUI = new TuiMainScreen(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
+		tui.setClearOnShrink(true);
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -595,7 +595,7 @@ describe("TUI content shrinkage", () => {
 	it("handles shrink to empty", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui: TUI = new TuiMainScreen(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
+		tui.setClearOnShrink(true);
 		const component = new TestComponent();
 		tui.addChild(component);
 

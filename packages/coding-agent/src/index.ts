@@ -79,7 +79,6 @@ export {
 	type EventBus,
 	type EventBusController,
 } from "./core/event-bus.ts";
-export { areExperimentalFeaturesEnabled } from "./core/experimental.ts";
 // Extension system
 export type {
 	AgentEndEvent,
@@ -203,7 +202,6 @@ export {
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";
 export type { ToolRenderContext } from "./core/extensions/types.ts";
-export { shouldRunFirstTimeSetup } from "./core/first-time-setup-gate.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { FooterDataProvider } from "./core/footer-data-provider.ts";
@@ -218,7 +216,7 @@ export { FooterDataProvider } from "./core/footer-data-provider.ts";
 // subpath (no new export subpath, so the entry-freeze gate stays green).
 //
 // printTimings / restoreStdout / stopThemeWatcher operate on module-global state
-// owned here (the timings buffer, the stdout takeover installed by prepareMain,
+// owned here (the stdout takeover installed by prepareMain,
 // and the theme file watcher). The shell MUST call these exported functions
 // rather than reimplement them, or it would act on empty/detached local state.
 // -----------------------------------------------------------------------------
@@ -368,7 +366,6 @@ export {
 } from "./core/skills.ts";
 export { BUILTIN_SLASH_COMMANDS } from "./core/slash-commands.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
-export { printTimings, time } from "./core/timings.ts";
 export {
 	type EditDiffResult,
 	generateDiffString,

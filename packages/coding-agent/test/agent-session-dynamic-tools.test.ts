@@ -26,11 +26,10 @@ describe("AgentSession dynamic tool registration", () => {
 		}
 	});
 
-	it("exposes session state before custom bash spawn hooks and supports opting out", async () => {
+	it("passes the shell environment to custom spawn hooks without injecting session metadata", async () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.create(tempDir, join(agentDir, "sessions"), { id: "bash-env-test" });
 		let sessionEnv: NodeJS.ProcessEnv | undefined;
-		let optedOutEnv: NodeJS.ProcessEnv | undefined;
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir,
@@ -45,17 +44,6 @@ describe("AgentSession dynamic tool registration", () => {
 							},
 						}),
 					);
-					pi.registerTool({
-						...createBashTool(tempDir, {
-							exposeSessionEnvironment: false,
-							spawnHook: (ctx) => {
-								optedOutEnv = ctx.env;
-								return ctx;
-							},
-						}),
-						name: "bash_without_session_env",
-						label: "bash without session env",
-					});
 				},
 			],
 		});
@@ -73,25 +61,14 @@ describe("AgentSession dynamic tool registration", () => {
 		});
 
 		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash")!;
-		expect(session.systemPrompt).toContain(
+		expect(session.systemPrompt).not.toContain(
 			"You can inspect PI_* environment variables for current model and session details.",
 		);
 		await bashTool.execute("bash-env", { command: "printf ok" });
-		expect(sessionEnv).toMatchObject({
-			PI_SESSION_ID: session.sessionId,
-			PI_SESSION_FILE: session.sessionFile,
-			PI_PROVIDER: model.provider,
-			PI_MODEL: model.id,
-			PI_REASONING_LEVEL: session.thinkingLevel,
-		});
-
-		const optedOutBashTool = session.agent.state.tools.find((tool) => tool.name === "bash_without_session_env")!;
-		await optedOutBashTool.execute("bash-no-env", { command: "printf ok" });
-		expect(optedOutEnv).not.toHaveProperty("PI_SESSION_ID");
-		expect(optedOutEnv).not.toHaveProperty("PI_SESSION_FILE");
-		expect(optedOutEnv).not.toHaveProperty("PI_PROVIDER");
-		expect(optedOutEnv).not.toHaveProperty("PI_MODEL");
-		expect(optedOutEnv).not.toHaveProperty("PI_REASONING_LEVEL");
+		expect(sessionEnv).toBeDefined();
+		for (const name of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) {
+			expect(sessionEnv?.[name]).toBe(process.env[name]);
+		}
 
 		session.dispose();
 	});

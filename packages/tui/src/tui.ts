@@ -219,12 +219,15 @@ type OverlayFocusRestorePolicy = "clear" | "preserve";
 /**
  * Incremental rendering can be turned off for debugging and for the render
  * equivalence test, which compares the byte stream against this unoptimized
- * path. Set PI_TUI_DISABLE_INCREMENTAL=1 to force full renders every frame.
+ * path. Configure this before constructing the component tree.
  */
-let incrementalRenderDisabled: boolean | undefined;
+let incrementalRenderDisabled = false;
+
+export function setIncrementalRenderDisabled(disabled: boolean): void {
+	incrementalRenderDisabled = disabled;
+}
 
 export function isIncrementalRenderDisabled(): boolean {
-	incrementalRenderDisabled ??= process.env.PI_TUI_DISABLE_INCREMENTAL === "1";
 	return incrementalRenderDisabled;
 }
 
@@ -444,8 +447,8 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
-	private showHardwareCursor = process.env.PI_HARDWARE_CURSOR === "1";
-	private clearOnShrink = process.env.PI_CLEAR_ON_SHRINK === "1";
+	private showHardwareCursor = false;
+	private clearOnShrink = false;
 	protected fullRedrawCount = 0;
 	protected stopped = false;
 	private pendingOsc11BackgroundReplies = 0;
@@ -466,7 +469,7 @@ export abstract class TuiBase extends Container implements TUI {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean, logDirectory?: string) {
 		super();
 		this.terminal = terminal;
-		this.logDirectory = logDirectory ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+		this.logDirectory = logDirectory ?? path.join(os.tmpdir(), "tui");
 		if (showHardwareCursor !== undefined) {
 			this.showHardwareCursor = showHardwareCursor;
 		}

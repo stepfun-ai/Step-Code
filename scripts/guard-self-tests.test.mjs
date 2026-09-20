@@ -10,6 +10,7 @@ import test from "node:test";
 // `node --test scripts/*.test.mjs` (wired into `pnpm run test:scripts`) so a
 // broken guard fails the build.
 const guardsWithSelfTest = [
+	"check-environment-prefix.mjs",
 	"check-layer-direction.mjs",
 	"check-ui-layer.mjs",
 	"check-workspace-registry.mjs",

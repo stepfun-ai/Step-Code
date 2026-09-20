@@ -25,14 +25,14 @@ describe("experimental strict built-in tools", () => {
 		else process.env.PI_EXPERIMENTAL = originalPiExperimental;
 	});
 
-	it("only enables strict-prefer sampling in experimental mode", () => {
+	it("ignores the removed experimental environment flag", () => {
 		delete process.env.PI_EXPERIMENTAL;
 		const normalTools = createBuiltInTools();
 		process.env.PI_EXPERIMENTAL = "1";
 		const experimentalTools = createBuiltInTools();
 
 		for (const [index, tool] of experimentalTools.entries()) {
-			expect(tool.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+			expect(tool.constrainedSampling).toBeUndefined();
 			expect(tool.parameters).toEqual(normalTools[index]?.parameters);
 			expect(normalTools[index]?.constrainedSampling).toBeUndefined();
 		}

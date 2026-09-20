@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 
 const LOCKFILE = "pnpm-lock.yaml";
 
-const allowValue = process.env.PI_ALLOW_LOCKFILE_CHANGE;
+const allowValue = process.env.STEP_ALLOW_LOCKFILE_CHANGE;
 const allowed = allowValue === "1" || allowValue === "true" || allowValue === "yes";
 
 function git(args) {
@@ -21,7 +21,7 @@ if (!stagedFiles.includes(LOCKFILE)) {
 }
 
 if (allowed) {
-	console.error(`${LOCKFILE} is staged; PI_ALLOW_LOCKFILE_CHANGE is set, allowing commit.`);
+	console.error(`${LOCKFILE} is staged; STEP_ALLOW_LOCKFILE_CHANGE is set, allowing commit.`);
 	process.exit(0);
 }
 
@@ -34,5 +34,5 @@ console.error("  - review any new lifecycle scripts in the dependency tree");
 console.error("  - regenerate the lockfile with `pnpm install --lockfile-only` if only metadata drifted");
 console.error("");
 console.error("If this lockfile change is intentional, commit with:");
-console.error("  PI_ALLOW_LOCKFILE_CHANGE=1 git commit ...");
+console.error("  STEP_ALLOW_LOCKFILE_CHANGE=1 git commit ...");
 process.exit(1);

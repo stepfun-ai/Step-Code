@@ -224,16 +224,16 @@ describe("detectCapabilities", () => {
 		});
 	});
 
-	it("applies environment overrides", () => {
+	it("ignores removed environment overrides", () => {
 		assert.deepStrictEqual(
 			withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => detectCapabilities()),
-			{ images: "kitty", trueColor: true, hyperlinks: true },
+			{ images: null, trueColor: process.platform === "win32", hyperlinks: false },
 		);
 		assert.deepStrictEqual(
 			withEnv({ TERM_PROGRAM: "iterm.app", PI_HYPERLINKS: "0", PI_IMAGE_PROTOCOL: "none", PI_TRUE_COLOR: "0" }, () =>
 				detectCapabilities(),
 			),
-			{ images: null, trueColor: false, hyperlinks: false },
+			{ images: "iterm2", trueColor: true, hyperlinks: true },
 		);
 	});
 
@@ -253,7 +253,7 @@ describe("detectCapabilities", () => {
 	});
 
 	it("applies and clears programmatic overrides", () => {
-		withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => {
+		withEnv({ TERM_PROGRAM: "kitty" }, () => {
 			setCapabilityOverrides({ images: null, trueColor: false, hyperlinks: false });
 			try {
 				assert.deepStrictEqual(getCapabilities(), { images: null, trueColor: false, hyperlinks: false });
@@ -264,21 +264,6 @@ describe("detectCapabilities", () => {
 				resetCapabilitiesCache();
 			}
 		});
-	});
-
-	it("bypasses the tmux probe when hyperlinks are overridden", () => {
-		let probed = false;
-		const caps = withEnv(
-			{ TMUX: "/tmp/tmux-1000/default,1234,0", PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty" },
-			() =>
-				detectCapabilities(() => {
-					probed = true;
-					return false;
-				}),
-		);
-		assert.strictEqual(probed, false);
-		assert.strictEqual(caps.hyperlinks, true);
-		assert.strictEqual(caps.images, "kitty");
 	});
 
 	it("enables hyperlinks under tmux when the client forwards them", () => {
