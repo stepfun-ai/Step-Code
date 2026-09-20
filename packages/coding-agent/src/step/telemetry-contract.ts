@@ -43,6 +43,20 @@ export interface StepTelemetryTrackOptions {
 	readonly context?: Pick<StepTelemetryContextPatch, "sessionId">;
 }
 
+export interface StepPermissionDecisionTelemetry {
+	readonly toolName: string;
+	readonly mode?: string;
+	readonly action?: string;
+	readonly risk?: string;
+	readonly hazardous?: boolean;
+}
+
+export interface StepPermissionApprovalTelemetry {
+	readonly toolName: string;
+	readonly decision: string;
+	readonly risk?: string;
+}
+
 /** Small injection seam for a host's existing telemetry client. */
 export interface StepTelemetryReporter {
 	readonly enabled?: boolean;
