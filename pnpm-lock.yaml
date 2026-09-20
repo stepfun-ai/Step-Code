@@ -269,43 +269,6 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
-  packages/evals:
-    devDependencies:
-      '@step-harness/coding-agent':
-        specifier: ^0.84.4
-        version: link:../coding-agent
-      '@step-harness/providers':
-        specifier: ^0.84.4
-        version: link:../providers
-      '@types/node':
-        specifier: 22.19.19
-        version: 22.19.19
-      shx:
-        specifier: 0.4.0
-        version: 0.4.0
-      typescript:
-        specifier: 5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: 4.1.9
-        version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
-      vitest-evals:
-        specifier: 0.15.0
-        version: 0.15.0(tinyrainbow@3.1.1)(vitest@4.1.9)(zod@4.6.1)
-
-  packages/extensions/realtime-voice:
-    dependencies:
-      '@step-harness/realtime':
-        specifier: workspace:*
-        version: link:../../realtime
-    devDependencies:
-      '@types/node':
-        specifier: 22.19.19
-        version: 22.19.19
-      vitest:
-        specifier: 4.1.9
-        version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
-
   packages/providers:
     dependencies:
       '@anthropic-ai/sdk':
@@ -340,15 +303,6 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
-  packages/realtime:
-    devDependencies:
-      '@types/node':
-        specifier: 22.19.19
-        version: 22.19.19
-      vitest:
-        specifier: 4.1.9
-        version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
-
   packages/telemetry:
     devDependencies:
       '@types/node':
@@ -373,22 +327,6 @@ importers:
       chalk:
         specifier: 5.6.2
         version: 5.6.2
-
-  packages/voice-agent:
-    dependencies:
-      '@step-harness/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@step-harness/realtime':
-        specifier: workspace:*
-        version: link:../realtime
-    devDependencies:
-      '@types/node':
-        specifier: 22.19.19
-        version: 22.19.19
-      vitest:
-        specifier: 4.1.9
-        version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
 packages:
 
@@ -945,12 +883,6 @@ packages:
   '@typescript/native-preview@7.0.0-dev.20260120.1':
     resolution: {integrity: sha512-nnEf37C9ue7OBRnF2zmV/OCBmV5Y7T/K4mCHa+nxgiXcF/1w8sA0cgdFl+gHQ0mysqUJ+Bu5btAMeWgpLyjrgg==}
     hasBin: true
-
-  '@vitest-evals/core@0.15.0':
-    resolution: {integrity: sha512-kqyg3ocVtZxr3rP9oh01oAycRgXNRasvTgLZ8MbFGBJ4BRd4tk7Bgww253HY7fw7ZFUp4UPYNmDp5AcHajm++w==}
-
-  '@vitest-evals/report-ui@0.15.0':
-    resolution: {integrity: sha512-icrutiRhZ2T1MrHo2RW09hcEwfi/tV/FgsGAE76Wd0C02tZyCleQRjt11RWhBJiYDPpsjjjTHGCHIO6tmtX5zQ==}
 
   '@vitest/coverage-v8@4.1.9':
     resolution: {integrity: sha512-G9/lgqibheLVBDRuya45EbsEXTYcWoSG+TLg7i2axuzx0Eq62eXn+aWXyaVdV5vKvFSWd6ywcX8hA7la9Pvu8g==}
@@ -2013,20 +1945,6 @@ packages:
       yaml:
         optional: true
 
-  vitest-evals@0.15.0:
-    resolution: {integrity: sha512-bOYALQdLXKYFRCV8aQ+yLeH7XkmYsTxUWQxLHzJdIEcIBx2v/kPgG3Zg6m231jMCphuoM6xH4YQB3+0pDP7LLw==}
-    hasBin: true
-    peerDependencies:
-      ai: '>=4 <7'
-      tinyrainbow: '>=2 <4'
-      vitest: '>=4 <5'
-      zod: '>=3 <5'
-    peerDependenciesMeta:
-      ai:
-        optional: true
-      zod:
-        optional: true
-
   vitest@4.1.9:
     resolution: {integrity: sha512-nE3/LEyc0z87uHYLZebqCUOaJr2hdtuPp7BQ4BosVFnfltxgAvMG08NyrSGlPpOUWvR27c5flSmYFTNr78L9GQ==}
     engines: {node: ^20.0.0 || ^22.0.0 || >=24.0.0}
@@ -2491,14 +2409,6 @@ snapshots:
       '@typescript/native-preview-linux-x64': 7.0.0-dev.20260120.1
       '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260120.1
       '@typescript/native-preview-win32-x64': 7.0.0-dev.20260120.1
-
-  '@vitest-evals/core@0.15.0':
-    dependencies:
-      zod: 4.6.1
-
-  '@vitest-evals/report-ui@0.15.0':
-    dependencies:
-      '@vitest-evals/core': 0.15.0
 
   '@vitest/coverage-v8@4.1.9(vitest@4.1.9)':
     dependencies:
@@ -3529,15 +3439,6 @@ snapshots:
       jiti: 2.7.0
       tsx: 4.22.1
       yaml: 2.9.0
-
-  vitest-evals@0.15.0(tinyrainbow@3.1.1)(vitest@4.1.9)(zod@4.6.1):
-    dependencies:
-      '@vitest-evals/core': 0.15.0
-      '@vitest-evals/report-ui': 0.15.0
-      tinyrainbow: 3.1.1
-      vitest: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
-    optionalDependencies:
-      zod: 4.6.1
 
   vitest@4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0)):
     dependencies:

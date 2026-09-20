@@ -46,8 +46,6 @@ Product:
   management and persistence wiring (`src/core/session-*`), extensions,
   interactive and one-shot modes, the built-in theme catalog
   (`src/modes/interactive/theme/`), and the StepCode integration (`src/step/`).
-- `packages/evals` (`@step-harness/evals`, depends on `ai`, `coding-agent`)
-  — evaluation harness.
 
 Pluggable backends:
 
