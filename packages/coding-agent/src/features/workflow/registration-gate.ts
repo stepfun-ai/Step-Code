@@ -10,11 +10,11 @@ export type WorkflowRegistrationDecision =
 	| { enabled: false; reason: "not-enabled" | "disabled-by-env" | "vm-unavailable" };
 
 /**
- * Startup warning for the one refusal that contradicts an explicit user "on":
- * every other reason honors an explicit or default "off" and stays silent.
+ * Startup warning for the one refusal that contradicts the default-on
+ * registration: every other reason honors an explicit "off" and stays silent.
  */
 export const WORKFLOW_VM_UNAVAILABLE_WARNING =
-	"Workflow tools are enabled (STEP_ENABLE_WORKFLOW) but unavailable this session: the isolated-vm native module failed to load. Rebuild or reinstall isolated-vm to restore the workflow tool, /workflows, and /ultraloop.";
+	"Workflow tools are unavailable this session: the isolated-vm native module failed to load. Rebuild or reinstall isolated-vm to restore the workflow tool, /workflows, and /ultraloop, or set STEP_DISABLE_WORKFLOW=1 to silence this warning.";
 
 /**
  * Shared registration gate for the workflow tool and any extension layered on
@@ -22,16 +22,21 @@ export const WORKFLOW_VM_UNAVAILABLE_WARNING =
  * duplicating the predicate so the two gates cannot drift. Kept in its own
  * leaf module so callers do not pull the full workflow runtime chain just to
  * check the gate. Returns the refusal reason so the workflow extension can
- * warn when an explicitly enabled feature degrades, instead of silently
+ * warn when the default-on registration degrades, instead of silently
  * registering nothing.
+ *
+ * Registration is on by default, matching Claude Code: a registered tool is an
+ * environment capability, and USAGE consent stays gated per turn/session by
+ * the ultraloop opt-in. An embedder's `enabled: false` or
+ * STEP_DISABLE_WORKFLOW=1 turns registration off; STEP_ENABLE_WORKFLOW is no
+ * longer read.
  */
 export function resolveWorkflowRegistration(
 	options: { enabled?: boolean; vmExecutor?: unknown } = {},
 	vmAvailable: boolean = isIsolatedVmAvailable(),
 ): WorkflowRegistrationDecision {
-	const enabled = options.enabled === true || envFlag(process.env.STEP_ENABLE_WORKFLOW);
-	if (!enabled) return { enabled: false, reason: "not-enabled" };
 	if (envFlag(process.env.STEP_DISABLE_WORKFLOW)) return { enabled: false, reason: "disabled-by-env" };
+	if (options.enabled === false) return { enabled: false, reason: "not-enabled" };
 	if (!vmAvailable && !options.vmExecutor) return { enabled: false, reason: "vm-unavailable" };
 	return { enabled: true };
 }

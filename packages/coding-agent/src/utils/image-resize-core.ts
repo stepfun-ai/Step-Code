@@ -20,9 +20,9 @@ export interface ResizedImage {
 }
 
 // 100MB of base64 payload. The Step backend accepts far larger inline images than
-// Anthropic's 5MB cap, so images within the pixel budget are sent without byte-driven
-// re-compression. Callers targeting a 5MB-capped dialect (e.g. anthropic) should pass a
-// smaller maxBytes explicitly.
+// Anthropic's 5MB cap, so within the pixel budget an image is sent without byte-driven
+// re-compression; the re-encode ladder below then only triggers on a pixel overage.
+// A run targeting a 5MB-capped dialect (e.g. anthropic) should pass a smaller maxBytes.
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 
 const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
@@ -49,19 +49,25 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
 
 /**
  * Resize an image to fit within the specified max dimensions and encoded file size.
- * Returns null if the image cannot be resized below maxBytes.
+ * Returns null only when the image cannot be decoded AND the container header
+ * cannot prove it fits both budgets; a decodable image always yields a result.
  *
  * Uses Photon (Rust/WASM) for image processing. When Photon is unavailable
- * (release-binary layout gaps, WASM load failures), fall back to a header-only
- * dimension read: if the raw image already fits both the pixel and base64 size
- * budgets, pass it through untouched; otherwise return null so the caller
- * surfaces a real "cannot resize" error instead of dropping a compliant image.
+ * (release-binary layout gaps, WASM load failures) or throws on this specific
+ * image (a container variant its decoder rejects, corrupt metadata), fall back
+ * to a header-only dimension read: if the raw image already fits both the pixel
+ * and base64 size budgets, pass it through untouched; otherwise return null so
+ * the caller surfaces a real "cannot resize" error instead of dropping a
+ * compliant image.
  *
- * Strategy for staying under maxBytes:
- * 1. First resize to maxWidth/maxHeight
- * 2. Try both PNG and JPEG formats, pick the smaller one
- * 3. If still too large, try JPEG with decreasing quality
- * 4. If still too large, progressively reduce dimensions until 1x1
+ * Strategy for staying under maxBytes (mirrors Claude Code's read pipeline):
+ * 1. Within the pixel and byte budgets: pass the original through untouched
+ * 2. Over bytes but within pixels: re-encode at the original dimensions
+ *    (PNG, then JPEG at descending quality) without resampling
+ * 3. Over pixels: resize to fit maxWidth/maxHeight, then the same ladder
+ * 4. Last resort, never fails: JPEG quality 20 at up-to-1000px width,
+ *    returned even if it still exceeds maxBytes, so a decodable image is
+ *    never dropped
  */
 export async function resizeImageInProcess(
 	inputBytes: Uint8Array,
@@ -87,7 +93,7 @@ export async function resizeImageInProcess(
 		const format = mimeType.split("/")[1] ?? "png";
 
 		// Check if already within all limits (dimensions AND encoded size)
-		if (originalWidth <= opts.maxWidth && originalHeight <= opts.maxHeight && inputBase64Size < opts.maxBytes) {
+		if (originalWidth <= opts.maxWidth && originalHeight <= opts.maxHeight && inputBase64Size <= opts.maxBytes) {
 			return {
 				data: Buffer.from(inputBytes).toString("base64"),
 				mimeType: mimeType || `image/${format}`,
@@ -99,70 +105,94 @@ export async function resizeImageInProcess(
 			};
 		}
 
-		// Calculate initial dimensions respecting max limits
-		let targetWidth = originalWidth;
-		let targetHeight = originalHeight;
-
-		if (targetWidth > opts.maxWidth) {
-			targetHeight = Math.round((targetHeight * opts.maxWidth) / targetWidth);
-			targetWidth = opts.maxWidth;
+		type PhotonImageHandle = NonNullable<typeof image>;
+		// Claude Code's encode ladder: PNG first, then JPEG at descending
+		// quality; the first candidate within the byte budget wins.
+		const jpegQualities = Array.from(new Set([opts.jpegQuality, 60, 40, 20]));
+		function encodeLadder(target: PhotonImageHandle): EncodedCandidate | null {
+			const png = encodeCandidate(target.get_bytes(), "image/png");
+			if (png.encodedSize <= opts.maxBytes) return png;
+			for (const quality of jpegQualities) {
+				const jpeg = encodeCandidate(target.get_bytes_jpeg(quality), "image/jpeg");
+				if (jpeg.encodedSize <= opts.maxBytes) return jpeg;
+			}
+			return null;
 		}
-		if (targetHeight > opts.maxHeight) {
-			targetWidth = Math.round((targetWidth * opts.maxHeight) / targetHeight);
-			targetHeight = opts.maxHeight;
-		}
 
-		function tryEncodings(width: number, height: number, jpegQualities: number[]): EncodedCandidate[] {
-			const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
-
-			try {
-				const candidates: EncodedCandidate[] = [encodeCandidate(resized.get_bytes(), "image/png")];
-				for (const quality of jpegQualities) {
-					candidates.push(encodeCandidate(resized.get_bytes_jpeg(quality), "image/jpeg"));
-				}
-				return candidates;
-			} finally {
-				resized.free();
+		// Over bytes but within the pixel budget: re-encode at the original
+		// dimensions without resampling.
+		const overDims = originalWidth > opts.maxWidth || originalHeight > opts.maxHeight;
+		if (!overDims) {
+			const reencoded = encodeLadder(image);
+			if (reencoded) {
+				return {
+					data: reencoded.data,
+					mimeType: reencoded.mimeType,
+					originalWidth,
+					originalHeight,
+					width: originalWidth,
+					height: originalHeight,
+					wasResized: false,
+				};
 			}
 		}
 
-		const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40]));
-		let currentWidth = targetWidth;
-		let currentHeight = targetHeight;
-
-		while (true) {
-			const candidates = tryEncodings(currentWidth, currentHeight, qualitySteps);
-			for (const candidate of candidates) {
-				if (candidate.encodedSize < opts.maxBytes) {
+		// Over the pixel budget: scale to fit, keeping the aspect ratio.
+		let fitWidth = originalWidth;
+		let fitHeight = originalHeight;
+		if (fitWidth > opts.maxWidth) {
+			fitHeight = Math.round((fitHeight * opts.maxWidth) / fitWidth);
+			fitWidth = opts.maxWidth;
+		}
+		if (fitHeight > opts.maxHeight) {
+			fitWidth = Math.round((fitWidth * opts.maxHeight) / fitHeight);
+			fitHeight = opts.maxHeight;
+		}
+		if (overDims) {
+			const resized = photon.resize(image, fitWidth, fitHeight, photon.SamplingFilter.Lanczos3);
+			try {
+				const candidate = encodeLadder(resized);
+				if (candidate) {
 					return {
 						data: candidate.data,
 						mimeType: candidate.mimeType,
 						originalWidth,
 						originalHeight,
-						width: currentWidth,
-						height: currentHeight,
+						width: fitWidth,
+						height: fitHeight,
 						wasResized: true,
 					};
 				}
+			} finally {
+				resized.free();
 			}
-
-			if (currentWidth === 1 && currentHeight === 1) {
-				break;
-			}
-
-			const nextWidth = currentWidth === 1 ? 1 : Math.max(1, Math.floor(currentWidth * 0.75));
-			const nextHeight = currentHeight === 1 ? 1 : Math.max(1, Math.floor(currentHeight * 0.75));
-			if (nextWidth === currentWidth && nextHeight === currentHeight) {
-				break;
-			}
-
-			currentWidth = nextWidth;
-			currentHeight = nextHeight;
 		}
 
-		return null;
+		// Last resort, mirrors Claude Code: JPEG quality 20 at up-to-1000px
+		// width, returned unconditionally so a decodable image is never
+		// dropped — even if the result still exceeds maxBytes.
+		const finalWidth = Math.min(fitWidth, 1000);
+		const finalHeight = Math.max(1, Math.round((fitHeight * finalWidth) / Math.max(fitWidth, 1)));
+		const lastResort = photon.resize(image, finalWidth, finalHeight, photon.SamplingFilter.Lanczos3);
+		try {
+			const candidate = encodeCandidate(lastResort.get_bytes_jpeg(20), "image/jpeg");
+			return {
+				data: candidate.data,
+				mimeType: candidate.mimeType,
+				originalWidth,
+				originalHeight,
+				width: finalWidth,
+				height: finalHeight,
+				wasResized: finalWidth !== originalWidth || finalHeight !== originalHeight,
+			};
+		} finally {
+			lastResort.free();
+		}
 	} catch {
-		return null;
+		// Photon loaded but failed on this image. A decodable in-budget image
+		// already returned above, so this only rescues images Photon cannot
+		// decode at all — and only when the header proves both budgets hold.
+		return passthroughIfWithinLimits(inputBytes, mimeType, inputBase64Size, opts);
 	} finally {
 		if (image) {
 			image.free();
@@ -171,12 +201,12 @@ export async function resizeImageInProcess(
 }
 
 /**
- * When Photon/WASM cannot be loaded, we still want a compliant image to reach
- * the model. Read raw pixel dimensions from the container header and pass the
- * original bytes through iff both the pixel budget and the base64 budget are
- * already satisfied. Anything oversized returns null so the caller reports a
- * real "cannot resize below the inline limit" error instead of silently
- * shipping an unbounded image.
+ * When Photon/WASM cannot be loaded — or loads but throws on this image — we
+ * still want a compliant image to reach the model. Read raw pixel dimensions
+ * from the container header and pass the original bytes through iff both the
+ * pixel budget and the base64 budget are already satisfied. Anything oversized
+ * returns null so the caller reports a real "cannot resize below the inline
+ * limit" error instead of silently shipping an unbounded image.
  */
 function passthroughIfWithinLimits(
 	inputBytes: Uint8Array,
@@ -187,7 +217,7 @@ function passthroughIfWithinLimits(
 	const dimensions = readImageDimensions(inputBytes);
 	if (!dimensions) return null;
 	if (dimensions.width > opts.maxWidth || dimensions.height > opts.maxHeight) return null;
-	if (inputBase64Size >= opts.maxBytes) return null;
+	if (inputBase64Size > opts.maxBytes) return null;
 
 	const format = mimeType.split("/")[1] ?? "png";
 	return {

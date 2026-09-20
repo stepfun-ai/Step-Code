@@ -73,23 +73,31 @@ async function execute(
 	return output.details!;
 }
 
-test("workflow extension is disabled by default and registers only when enabled", () => {
+test("workflow extension registers by default and honors both off switches", () => {
 	vi.stubEnv("STEP_ENABLE_WORKFLOW", "");
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
-	const disabled = harness();
+	const registered = harness();
 	createStepWorkflowExtension({
 		vmExecutor: async () => ({ value: null, meta: {} }),
-	})(disabled.api);
-	expect(disabled.tools.has("workflow")).toBe(false);
-	expect(disabled.commands.has("workflows")).toBe(false);
+	})(registered.api);
+	expect(registered.tools.has("workflow")).toBe(true);
+	expect(registered.commands.has("workflows")).toBe(true);
 
-	const enabled = harness();
+	const optedOut = harness();
 	createStepWorkflowExtension({
-		enabled: true,
+		enabled: false,
 		vmExecutor: async () => ({ value: null, meta: {} }),
-	})(enabled.api);
-	expect(enabled.tools.has("workflow")).toBe(true);
-	expect(enabled.commands.has("workflows")).toBe(true);
+	})(optedOut.api);
+	expect(optedOut.tools.has("workflow")).toBe(false);
+	expect(optedOut.commands.has("workflows")).toBe(false);
+
+	vi.stubEnv("STEP_DISABLE_WORKFLOW", "1");
+	const envOff = harness();
+	createStepWorkflowExtension({
+		vmExecutor: async () => ({ value: null, meta: {} }),
+	})(envOff.api);
+	expect(envOff.tools.has("workflow")).toBe(false);
+	expect(envOff.commands.has("workflows")).toBe(false);
 });
 
 test("child ACL hook blocks writes and emits redacted telemetry", async () => {
