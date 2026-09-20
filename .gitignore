@@ -43,3 +43,4 @@ plans/
 # Retired product namespace may be created while migrating older installs.
 .step-harness/
 collect.sh
+.playwright-mcp/
