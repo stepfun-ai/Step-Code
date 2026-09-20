@@ -174,7 +174,7 @@ import {
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./view/chrome/status-indicator.ts";
-import type { StatusTipRotator } from "./view/chrome/status-tips.ts";
+import type { GoalTipState, StatusTipRotator } from "./view/chrome/status-tips.ts";
 import { StepWelcomeComponent } from "./view/chrome/step-welcome.ts";
 import { ExtensionEditorComponent } from "./view/dialogs/extension-editor.ts";
 import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
@@ -544,6 +544,19 @@ export class InteractiveMode {
 	// read back here by showWorkingStatusIndicator().
 	statusTipRotator: StatusTipRotator | undefined = undefined;
 	currentStatusTip: string | undefined = undefined;
+
+	/** Latest persisted goal status for the state-aware tip pool. */
+	readGoalTipState(): GoalTipState {
+		const entries = this.sessionManager.getBranch();
+		for (let i = entries.length - 1; i >= 0; i -= 1) {
+			const entry = entries[i];
+			if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
+			const data = entry.data as { status?: string; cleared?: boolean } | undefined;
+			if (data?.cleared === true) return "none";
+			return data?.status === "active" || data?.status === "paused" ? data.status : "none";
+		}
+		return "none";
+	}
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
@@ -2570,14 +2583,14 @@ export class InteractiveMode {
 		removeExisting(this.extensionWidgetsAbove);
 		removeExisting(this.extensionWidgetsBelow);
 
-		if (content === undefined) {
-			this.renderWidgets();
-			return;
-		}
-
 		let component: Component & { dispose?(): void };
 
-		if (Array.isArray(content)) {
+		if (options?.component) {
+			component = options.component(this.ui, theme);
+		} else if (content === undefined) {
+			this.renderWidgets();
+			return;
+		} else if (Array.isArray(content)) {
 			// Wrap string array in a Container with Text components
 			const container = new Container();
 			for (const line of content.slice(0, InteractiveMode.MAX_WIDGET_LINES)) {
@@ -2590,6 +2603,11 @@ export class InteractiveMode {
 		} else {
 			// Factory function - create component
 			component = content(this.ui, theme);
+		}
+
+		// Widgets that support expansion follow the global ctrl+o toggle.
+		if (isExpandable(component)) {
+			component.setExpanded(this.toolOutputExpanded);
 		}
 
 		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;
@@ -4119,6 +4137,11 @@ export class InteractiveMode {
 				if (isExpandable(child)) {
 					child.setExpanded(expanded);
 				}
+			}
+		}
+		for (const widget of [...this.extensionWidgetsAbove.values(), ...this.extensionWidgetsBelow.values()]) {
+			if (isExpandable(widget)) {
+				widget.setExpanded(expanded);
 			}
 		}
 		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);

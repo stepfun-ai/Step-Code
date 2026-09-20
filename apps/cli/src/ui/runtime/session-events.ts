@@ -73,7 +73,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 		case "turn_start":
 			// Pick one tip per TURN (not per agent run): steering/follow-up
 			// turns fire turn_start only, without a new agent_start.
-			ctx.statusTipRotator ??= new StatusTipRotator(buildStatusTips());
+			ctx.statusTipRotator ??= new StatusTipRotator(() => buildStatusTips(ctx.readGoalTipState()));
 			ctx.currentStatusTip = ctx.settingsManager.getStatusTips() ? ctx.statusTipRotator.next() : undefined;
 			if (ctx.settingsManager.getShowTerminalProgress()) {
 				ctx.ui.terminal.setProgress(true);

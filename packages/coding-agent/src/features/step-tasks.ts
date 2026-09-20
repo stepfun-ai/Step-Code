@@ -12,8 +12,17 @@ import type { AgentToolResult } from "@step-harness/agent-core";
 import { Type } from "typebox";
 import type { EventBus } from "../core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
+import { isUserMessage } from "../core/messages.ts";
 import { parseImportBatch, STEP_TASKS_IMPORT_CHANNEL, type StepTaskImportItem } from "./step-tasks-import.ts";
-import { formatTaskLine, renderTaskCall, renderTaskResult, taskWidgetLines } from "./step-tasks-render.ts";
+import {
+	formatTaskLine,
+	renderTaskCall,
+	renderTaskResult,
+	singleLine,
+	TaskWidgetComponent,
+	taskWidgetLines,
+	widgetTaskLine,
+} from "./step-tasks-render.ts";
 
 export type StepTaskStatus = "pending" | "in_progress" | "completed" | "deleted";
 
@@ -118,6 +127,28 @@ function assertNoDependencyCycle(tasks: ReadonlyMap<string, StepTask>, links: [s
 	}
 }
 
+/** One-line summary of a user message for receipt recaps. */
+function singleLineOfUserPrompt(message: unknown): string | undefined {
+	const content = (message as { content?: unknown } | undefined)?.content;
+	const text =
+		typeof content === "string"
+			? content
+			: Array.isArray(content)
+				? content
+						.filter((part): part is { type: "text"; text: string } => {
+							const candidate = part as { type?: string; text?: unknown } | null;
+							return !!candidate && candidate.type === "text" && typeof candidate.text === "string";
+						})
+						.map((part) => part.text)
+						.join(" ")
+				: undefined;
+	if (!text) return undefined;
+	// Flatten to one line, then cap at 72 visible characters.
+	const flattened = singleLine(text);
+	if (!flattened) return undefined;
+	return flattened.length > 72 ? `${flattened.slice(0, 71)}…` : flattened;
+}
+
 /** Create Step's native task-tracking extension. */
 export function createStepTasksExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
@@ -125,6 +156,12 @@ export function createStepTasksExtension(): ExtensionFactory {
 		let nextId = 1;
 		/** Import batches buffered until the active-branch snapshot restore ran. */
 		const pendingImports: StepTaskImportItem[][] = [];
+		/** Most recent user prompt text, one line, for receipt recaps. */
+		let latestUserPrompt: string | undefined;
+		/** The prompt that started the current checklist; captured on first task_create. */
+		let checklistOrigin: string | undefined;
+		/** Latched once the checklist's receipt is in the transcript; reset by any task mutation. */
+		let receiptPosted = false;
 
 		const allocateId = (): string => {
 			while (tasks.has(String(nextId))) nextId += 1;
@@ -219,7 +256,20 @@ export function createStepTasksExtension(): ExtensionFactory {
 				blockedBy: openBlockers(task),
 			}));
 		const updateWidget = (ctx: ExtensionContext): void => {
-			if (ctx.hasUI) ctx.ui.setWidget("step-tasks", taskWidgetLines(sortedTasks()));
+			if (!ctx.hasUI) return;
+			const snapshot = sortedTasks();
+			const lines = taskWidgetLines(snapshot);
+			ctx.ui.setWidget(
+				"step-tasks",
+				lines,
+				// Lines remain the transport for RPC/stdio hosts; interactive mode
+				// renders the component, which follows the global ctrl+o expansion.
+				lines === undefined
+					? undefined
+					: {
+							component: (_tui, theme) => new TaskWidgetComponent(structuredClone(snapshot), theme),
+						},
+			);
 		};
 
 		pi.registerCommand("todos", {
@@ -243,6 +293,13 @@ export function createStepTasksExtension(): ExtensionFactory {
 			renderCall: (args, theme) => renderTaskCall("task_create", args.subject, theme),
 			renderResult: renderTaskResult,
 			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+				if (tasks.size === 0) {
+					checklistOrigin = latestUserPrompt;
+					// Consume the prompt so a checklist created later in the same
+					// or a continuation run cannot quote a stale origin.
+					latestUserPrompt = undefined;
+				}
+				receiptPosted = false;
 				const task = createTask({
 					subject: params.subject,
 					description: params.description,
@@ -266,6 +323,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 				renderTaskCall("task_update", `${args.taskId ?? ""}${args.status ? ` → ${args.status}` : ""}`, theme),
 			renderResult: renderTaskResult,
 			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+				receiptPosted = false;
 				const { taskId, status, subject, description, activeForm, owner, metadata, addBlocks, addBlockedBy } =
 					params;
 				const task = requireTask(taskId);
@@ -374,5 +432,57 @@ export function createStepTasksExtension(): ExtensionFactory {
 		};
 		pi.on("session_start", async (_event, ctx) => restoreTasks(ctx));
 		pi.on("session_tree", async (_event, ctx) => restoreTasks(ctx));
+		/** Archive a fully-completed checklist into the transcript exactly once. */
+		const postReceipt = (): void => {
+			if (receiptPosted) return;
+			const snapshot = sortedTasks();
+			if (snapshot.length === 0 || snapshot.some((task) => task.status !== "completed")) return;
+			receiptPosted = true;
+			pi.sendMessage(
+				{
+					customType: "step-tasks",
+					content: [
+						`**Tasks: ${snapshot.length}/${snapshot.length} completed**`,
+						...(checklistOrigin ? [`> ${checklistOrigin}`] : []),
+						...snapshot.map(widgetTaskLine),
+					].join("\n"),
+					display: true,
+					details: structuredClone(snapshot),
+				},
+				// Without this the receipt lands as a steering message while the
+				// run is still tearing down, continuing the loop and re-firing
+				// agent_end — one receipt per extra iteration.
+				{ triggerTurn: false },
+			);
+		};
+		// When a run finishes with every task completed, archive the checklist
+		// as a transcript receipt. The panel keeps mirroring it until the next
+		// user message retires it, so the history is durable even if the session
+		// never gets another prompt. (turn_start/turn_end fire per agent-loop
+		// iteration, so agent_end is the only reliable "this prompt's work is
+		// done" signal.)
+		pi.on("agent_end", async () => {
+			postReceipt();
+		});
+		pi.on("message_start", async (event, ctx) => {
+			if (!isUserMessage(event.message)) return;
+			latestUserPrompt = singleLineOfUserPrompt(event.message);
+			// A fully-completed checklist stays on screen after the turn ends —
+			// a receipt the user can review (ctrl+o) until they move on; the
+			// transcript copy was already archived at agent_end. The next user
+			// message retires the panel and the stored tasks so fresh work
+			// starts on a clean board. The id counter persists, so future tasks
+			// never reuse ids that earlier turns referenced.
+			const allDone = tasks.size > 0 && [...tasks.values()].every((task) => task.status === "completed");
+			if (!allDone) return;
+			// A queued user message can retire the checklist before this run's
+			// agent_end fires; make sure the receipt still lands.
+			postReceipt();
+			tasks.clear();
+			checklistOrigin = undefined;
+			receiptPosted = false;
+			persistTasks();
+			updateWidget(ctx);
+		});
 	};
 }

@@ -13,6 +13,7 @@ export {
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./chrome/status-indicator.ts";
+export type { GoalTipState } from "./chrome/status-tips.ts";
 export { buildStatusTips, StatusTipRotator } from "./chrome/status-tips.ts";
 export { StepWelcomeComponent } from "./chrome/step-welcome.ts";
 export { AssistantMessageComponent } from "./transcript/assistant-message.ts";

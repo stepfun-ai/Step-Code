@@ -606,10 +606,7 @@ describe("Step goal extension", () => {
 			expect.stringContaining("Goal commands: /goal status · /goal pause · /goal resume · /goal clear"),
 			"info",
 		);
-		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
-			"step-goal",
-			expect.stringMatching(/^Goal: active · \d+s$/u),
-		);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
 	});
 
 	test("pause explains how to resume", async () => {
@@ -685,7 +682,10 @@ describe("Step goal extension", () => {
 		notify.mockClear();
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		expect(notify).toHaveBeenCalledTimes(1);
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Run /goal resume to continue the goal"), "info");
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining("Run /goal resume to continue it, or /goal clear to end it."),
+			"warning",
+		);
 		// Repeats within the same pause episode and slash commands stay silent.
 		await emit(harness, "input", { text: "继续", source: "interactive" });
 		await emit(harness, "input", { text: "/help", source: "interactive" });
@@ -887,6 +887,61 @@ describe("Step goal extension", () => {
 		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
 			"Stopped a queued goal turn (goal is paused). Run /goal resume to continue it.",
 			"info",
+		);
+	});
+});
+
+describe("Goal UX guidance (T1-T6)", () => {
+	test("start, pause, and paused-input messages carry next-step pointers", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")!("finish the migration", harness.ctx);
+		// Not "last": goal creation now follows the echo with the commands hint.
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenCalledWith(
+			expect.stringContaining("Goal set:"),
+			"info",
+			expect.anything(),
+		);
+
+		await harness.commands.get("goal")!("pause", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			"Goal paused. Run /goal resume to continue.",
+			"info",
+		);
+		expect(vi.mocked(harness.ctx.ui.setStatus)).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
+
+		// Ordinary prompts while paused get a recovery pointer (T4).
+		await emit(harness, "input", { text: "继续", source: "interactive" });
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith(
+			expect.stringContaining("/goal resume to continue"),
+			"warning",
+		);
+
+		await harness.commands.get("goal")!("resume", harness.ctx);
+		expect(vi.mocked(harness.ctx.ui.notify)).toHaveBeenLastCalledWith("Goal resumed.", "info");
+	});
+
+	test("footer stays quiet while a goal is active", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")!("finish the migration", harness.ctx);
+		// Active goals leave the footer alone; only a pause earns a slot.
+		expect(vi.mocked(harness.ctx.ui.setStatus)).toHaveBeenLastCalledWith("step-goal", undefined);
+	});
+
+	test("starting over an unfinished goal points at resume/clear", async () => {
+		const runtime = new StepGoalRuntime({
+			now: () => 1_000,
+			idFactory: () => "goal-1",
+			isIdle: () => true,
+			hasPendingMessages: () => false,
+			persist: () => true,
+			requestContinuation: () => {},
+		});
+		runtime.start("first", "session-1");
+		runtime.setUserStatus("paused");
+		expect(() => runtime.start("second", "session-1")).toThrowError(
+			/\/goal resume to continue.*\/goal clear to end/s,
 		);
 	});
 });

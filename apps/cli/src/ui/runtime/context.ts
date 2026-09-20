@@ -36,6 +36,7 @@ import type { AssistantMessage, Usage } from "@step-harness/providers/compat";
 import type {
 	AssistantMessageComponent,
 	FooterComponent,
+	GoalTipState,
 	StatusIndicator,
 	StatusTipRotator,
 	StepToolSpinnerClock,
@@ -87,6 +88,8 @@ export interface RuntimeContext {
 	// read back by the host's showWorkingStatusIndicator().
 	statusTipRotator: StatusTipRotator | undefined;
 	currentStatusTip: string | undefined;
+	/** Latest persisted goal status for the state-aware tip pool. */
+	readGoalTipState(): GoalTipState;
 	readonly pendingTools: Map<string, ToolExecutionComponent>;
 	readonly stepSpinner: StepToolSpinnerClock | undefined;
 	readonly workingVisible: boolean;
