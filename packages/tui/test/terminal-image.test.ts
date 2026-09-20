@@ -44,9 +44,6 @@ const ENV_KEYS = [
 	"CMUX_WORKSPACE_ID",
 	"WARP_SESSION_ID",
 	"WARP_TERMINAL_SESSION_UUID",
-	"PI_HYPERLINKS",
-	"PI_IMAGE_PROTOCOL",
-	"PI_TRUE_COLOR",
 ] as const;
 
 function withEnv<T>(overrides: Record<string, string | undefined>, fn: () => T): T {
@@ -224,30 +221,20 @@ describe("detectCapabilities", () => {
 		});
 	});
 
-	it("ignores removed environment overrides", () => {
+	it("detects capabilities from the terminal identity", () => {
 		assert.deepStrictEqual(
-			withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => detectCapabilities()),
+			withEnv({}, () => detectCapabilities()),
 			{ images: null, trueColor: process.platform === "win32", hyperlinks: false },
 		);
 		assert.deepStrictEqual(
-			withEnv({ TERM_PROGRAM: "iterm.app", PI_HYPERLINKS: "0", PI_IMAGE_PROTOCOL: "none", PI_TRUE_COLOR: "0" }, () =>
-				detectCapabilities(),
-			),
+			withEnv({ TERM_PROGRAM: "iterm.app" }, () => detectCapabilities()),
 			{ images: "iterm2", trueColor: true, hyperlinks: true },
 		);
 	});
 
-	it("preserves auto-detection for auto environment overrides", () => {
+	it("detects all Ghostty capabilities", () => {
 		assert.deepStrictEqual(
-			withEnv(
-				{
-					TERM_PROGRAM: "ghostty",
-					PI_HYPERLINKS: "auto",
-					PI_IMAGE_PROTOCOL: "auto",
-					PI_TRUE_COLOR: "auto",
-				},
-				() => detectCapabilities(),
-			),
+			withEnv({ TERM_PROGRAM: "ghostty" }, () => detectCapabilities()),
 			{ images: "kitty", trueColor: true, hyperlinks: true },
 		);
 	});

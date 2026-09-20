@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -140,21 +140,19 @@ describe("TUI render scheduling", () => {
 });
 
 describe("TUI debug logging", () => {
-	it("ignores the removed redraw logging environment flag", async () => {
-		const logDir = mkdtempSync(join(tmpdir(), "pi-tui-log-"));
+	it("does not write log files during normal rendering", async () => {
+		const logDir = mkdtempSync(join(tmpdir(), "tui-log-"));
 		try {
-			await withEnv({ PI_DEBUG_REDRAW: "1" }, async () => {
-				const terminal = new VirtualTerminal(40, 10);
-				const tui: TUI = new TuiMainScreen(terminal, undefined, logDir);
-				const component = new TestComponent();
-				tui.addChild(component);
-				component.lines = ["test"];
-				tui.start();
-				await terminal.waitForRender();
+			const terminal = new VirtualTerminal(40, 10);
+			const tui: TUI = new TuiMainScreen(terminal, undefined, logDir);
+			const component = new TestComponent();
+			tui.addChild(component);
+			component.lines = ["test"];
+			tui.start();
+			await terminal.waitForRender();
 
-				assert.equal(existsSync(join(logDir, "pi-debug.log")), false);
-				tui.stop();
-			});
+			assert.deepEqual(readdirSync(logDir), []);
+			tui.stop();
 		} finally {
 			rmSync(logDir, { recursive: true, force: true });
 		}

@@ -61,13 +61,12 @@ describe("AgentSession dynamic tool registration", () => {
 		});
 
 		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash")!;
-		expect(session.systemPrompt).not.toContain(
-			"You can inspect PI_* environment variables for current model and session details.",
-		);
 		await bashTool.execute("bash-env", { command: "printf ok" });
 		expect(sessionEnv).toBeDefined();
-		for (const name of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) {
-			expect(sessionEnv?.[name]).toBe(process.env[name]);
+		const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+		expect(Object.keys(sessionEnv!).sort()).toEqual([...new Set([...Object.keys(process.env), pathKey])].sort());
+		for (const [name, value] of Object.entries(process.env)) {
+			if (name !== pathKey) expect(sessionEnv?.[name] === value).toBe(true);
 		}
 
 		session.dispose();

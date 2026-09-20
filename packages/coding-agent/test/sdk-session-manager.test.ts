@@ -94,10 +94,8 @@ describe("createAgentSession session manager defaults", () => {
 		session.dispose();
 	});
 
-	it("does not expose session metadata through the built-in bash environment", async () => {
-		for (const name of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) {
-			vi.stubEnv(name, undefined);
-		}
+	it("preserves caller environment values in the built-in bash tool", async () => {
+		vi.stubEnv("STEP_SHELL_TEST_VALUE", "shell-value");
 		const model = getModel("anthropic", "claude-sonnet-4-5");
 		expect(model).toBeTruthy();
 
@@ -108,21 +106,18 @@ describe("createAgentSession session manager defaults", () => {
 			thinkingLevel: "high",
 		});
 		expect(session.sessionFile).toBeTruthy();
-		expect(session.systemPrompt).not.toContain(
-			"You can inspect PI_* environment variables for current model and session details.",
-		);
 
 		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
 		expect(bashTool).toBeTruthy();
 		const result = await bashTool!.execute("test", {
-			command: `printf '%s|%s|%s|%s|%s' "$PI_SESSION_ID" "$PI_SESSION_FILE" "$PI_PROVIDER" "$PI_MODEL" "$PI_REASONING_LEVEL"`,
+			command: `printf '%s' "$STEP_SHELL_TEST_VALUE"`,
 		});
 		const output = result.content
 			.filter((item): item is { type: "text"; text: string } => item.type === "text")
 			.map((item) => item.text)
 			.join("");
 
-		expect(output).toBe("||||");
+		expect(output).toBe("shell-value");
 
 		session.dispose();
 	});

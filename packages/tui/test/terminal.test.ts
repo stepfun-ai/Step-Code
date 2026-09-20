@@ -9,11 +9,6 @@ import {
 } from "../src/terminal.ts";
 
 describe("resolveEscapeTimeoutMs", () => {
-	it("ignores the removed escape timeout override", () => {
-		assert.equal(resolveEscapeTimeoutMs({ PI_TUI_ESC_TIMEOUT: "80" }), 10);
-		assert.equal(resolveEscapeTimeoutMs({ PI_TUI_ESC_TIMEOUT: "80", SSH_TTY: "/dev/pts/1" }), 100);
-	});
-
 	it("defaults to 100ms over SSH", () => {
 		assert.equal(resolveEscapeTimeoutMs({ SSH_CONNECTION: "10.0.0.1 22" }), 100);
 		assert.equal(resolveEscapeTimeoutMs({ SSH_TTY: "/dev/pts/1" }), 100);

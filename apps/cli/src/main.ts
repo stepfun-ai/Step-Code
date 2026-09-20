@@ -689,7 +689,7 @@ function readCredentialUid(credential: unknown): string | undefined {
  *
  * Uses prep.appMode verbatim (never re-resolves it, so a piped-stdin launch that
  * prepareMain already flipped to "print" can never fall back into the TTY UI).
- * stopThemeWatcher / restoreStdout are pi's exported functions:
+ * stopThemeWatcher / restoreStdout are coding-agent's exported functions:
  * they act on coding-agent module-global state (theme watcher,
  * the stdout takeover prepareMain installed), so they must not be reimplemented.
  */

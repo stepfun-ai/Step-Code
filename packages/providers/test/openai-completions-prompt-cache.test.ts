@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { getModel } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
@@ -64,20 +64,9 @@ vi.mock("openai", () => {
 });
 
 describe("openai-completions prompt caching", () => {
-	const originalEnv = process.env.PI_CACHE_RETENTION;
-
 	beforeEach(() => {
 		mockState.lastParams = undefined;
 		mockState.lastClientOptions = undefined;
-		delete process.env.PI_CACHE_RETENTION;
-	});
-
-	afterEach(() => {
-		if (originalEnv === undefined) {
-			delete process.env.PI_CACHE_RETENTION;
-		} else {
-			process.env.PI_CACHE_RETENTION = originalEnv;
-		}
 	});
 
 	function createModel(overrides: Partial<Model<"openai-completions">> = {}): Model<"openai-completions"> {
@@ -151,8 +140,7 @@ describe("openai-completions prompt caching", () => {
 		expect(payload?.prompt_cache_retention).toBeUndefined();
 	});
 
-	it("ignores the removed cache retention environment flag", async () => {
-		process.env.PI_CACHE_RETENTION = "long";
+	it("defaults to short cache retention", async () => {
 		const { payload } = await captureRequest({ sessionId: "session-env" });
 
 		expect(payload?.prompt_cache_key).toBe("session-env");
