@@ -22,11 +22,11 @@ submission.
 
 StepCode is the Step product built on the Pi runtime. The product entrypoint,
 defaults, OAuth provider, harness facade, and TUI presentation are Step-owned;
-the `@earendil-works/pi-*` packages remain the vendored runtime implementation
-boundary so upstream-compatible imports continue to resolve.
+the `@step-harness/*` runtime packages under `packages/` provide the underlying
+agent, provider, and TUI implementation.
 
 * **[@step-harness/coding-agent](packages/coding-agent)**: Interactive coding agent CLI
-* **[@step-harness/agent-core](packages/agent)**: Agent runtime with tool calling and state management
+* **[@step-harness/agent-core](packages/agent-core)**: Agent runtime with tool calling and state management
 * **[@step-harness/providers](packages/providers)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
 
 To learn more about Step:
@@ -39,25 +39,23 @@ To learn more about Step:
 |---------|-------------|
 | **[@step-harness/telemetry](packages/telemetry)** | Vendor-neutral telemetry contracts, reference adapter, conformance tests, and typed schemas |
 | **[@step-harness/providers](packages/providers)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@step-harness/agent-core](packages/agent)** | Agent runtime with tool calling and state management |
+| **[@step-harness/agent-core](packages/agent-core)** | Agent runtime with tool calling and state management |
 | **[@step-harness/coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
 | **[@step-harness/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
 
-For Slack/chat automation and workflows see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
-
 ## Permissions & Containerization
 
-Pi does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
+StepCode does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
 
-If you need stronger boundaries, containerize or sandbox Pi. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
+If you need stronger boundaries, containerize or sandbox StepCode. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
 
-- **Gondolin extension**: keep `pi` and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
-- **Plain Docker**: run the whole `pi` process in a local container for simple isolation.
-- **OpenShell**: run the whole `pi` process in a policy-controlled sandbox.
+- **Gondolin extension**: keep StepCode and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
+- **Plain Docker**: run the whole StepCode process in a local container for simple isolation.
+- **OpenShell**: run the whole StepCode process in a policy-controlled sandbox.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).  Longer term plans for Pi can also be found in [RFCs](https://rfc.earendil.com/keyword/pi/).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).
 
 ## Development
 
@@ -67,7 +65,7 @@ pnpm run build         # Refresh model data, then build all packages
 pnpm run build:offline # Rebuild using existing model data without network access
 pnpm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (can be run from any directory)
+./step-test.sh       # Run StepCode from sources (can be run from any directory)
 pnpm step            # Run the StepCode entrypoint from sources
 ```
 
@@ -113,22 +111,6 @@ We treat pnpm dependency changes as reviewed code changes.
 - Internal build and smoke-test installs use `--ignore-scripts` where supported.
 - CI installs with `pnpm install --frozen-lockfile --ignore-scripts`, and a scheduled GitHub workflow runs `pnpm audit --prod`.
 - Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
-
-## Share your OSS coding agent sessions
-
-If you use Pi or other coding agents for open source work, please share your sessions.
-
-Public OSS session data helps improve coding agents with real-world tasks, tool use, failures, and fixes instead of toy benchmarks.
-
-For the full explanation, see [this post on X](https://x.com/badlogicgames/status/2037811643774652911).
-
-To publish sessions, use [`badlogic/pi-share-hf`](https://github.com/badlogic/pi-share-hf). Read its README.md for setup instructions. All you need is a Hugging Face account, the Hugging Face CLI, and `pi-share-hf`.
-
-You can also watch [this video](https://x.com/badlogicgames/status/2041151967695634619), where I show how I publish my `pi-mono` sessions.
-
-I regularly publish my own `pi-mono` work sessions here:
-
-- [badlogicgames/pi-mono on Hugging Face](https://huggingface.co/datasets/badlogicgames/pi-mono)
 
 ## License
 
