@@ -44,9 +44,6 @@ const ENV_KEYS = [
 	"CMUX_WORKSPACE_ID",
 	"WARP_SESSION_ID",
 	"WARP_TERMINAL_SESSION_UUID",
-	"PI_HYPERLINKS",
-	"PI_IMAGE_PROTOCOL",
-	"PI_TRUE_COLOR",
 ] as const;
 
 function withEnv<T>(overrides: Record<string, string | undefined>, fn: () => T): T {
@@ -224,36 +221,26 @@ describe("detectCapabilities", () => {
 		});
 	});
 
-	it("applies environment overrides", () => {
+	it("detects capabilities from the terminal identity", () => {
 		assert.deepStrictEqual(
-			withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => detectCapabilities()),
-			{ images: "kitty", trueColor: true, hyperlinks: true },
+			withEnv({}, () => detectCapabilities()),
+			{ images: null, trueColor: process.platform === "win32", hyperlinks: false },
 		);
 		assert.deepStrictEqual(
-			withEnv({ TERM_PROGRAM: "iterm.app", PI_HYPERLINKS: "0", PI_IMAGE_PROTOCOL: "none", PI_TRUE_COLOR: "0" }, () =>
-				detectCapabilities(),
-			),
-			{ images: null, trueColor: false, hyperlinks: false },
+			withEnv({ TERM_PROGRAM: "iterm.app" }, () => detectCapabilities()),
+			{ images: "iterm2", trueColor: true, hyperlinks: true },
 		);
 	});
 
-	it("preserves auto-detection for auto environment overrides", () => {
+	it("detects all Ghostty capabilities", () => {
 		assert.deepStrictEqual(
-			withEnv(
-				{
-					TERM_PROGRAM: "ghostty",
-					PI_HYPERLINKS: "auto",
-					PI_IMAGE_PROTOCOL: "auto",
-					PI_TRUE_COLOR: "auto",
-				},
-				() => detectCapabilities(),
-			),
+			withEnv({ TERM_PROGRAM: "ghostty" }, () => detectCapabilities()),
 			{ images: "kitty", trueColor: true, hyperlinks: true },
 		);
 	});
 
 	it("applies and clears programmatic overrides", () => {
-		withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => {
+		withEnv({ TERM_PROGRAM: "kitty" }, () => {
 			setCapabilityOverrides({ images: null, trueColor: false, hyperlinks: false });
 			try {
 				assert.deepStrictEqual(getCapabilities(), { images: null, trueColor: false, hyperlinks: false });
@@ -264,21 +251,6 @@ describe("detectCapabilities", () => {
 				resetCapabilitiesCache();
 			}
 		});
-	});
-
-	it("bypasses the tmux probe when hyperlinks are overridden", () => {
-		let probed = false;
-		const caps = withEnv(
-			{ TMUX: "/tmp/tmux-1000/default,1234,0", PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty" },
-			() =>
-				detectCapabilities(() => {
-					probed = true;
-					return false;
-				}),
-		);
-		assert.strictEqual(probed, false);
-		assert.strictEqual(caps.hyperlinks, true);
-		assert.strictEqual(caps.images, "kitty");
 	});
 
 	it("enables hyperlinks under tmux when the client forwards them", () => {

@@ -603,7 +603,9 @@ describe("Step goal extension", () => {
 		await emit(harness, "session_start");
 		await harness.commands.get("goal")?.("ship the release", harness.ctx);
 		expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
-			expect.stringContaining("Goal commands: /goal status · /goal pause · /goal resume · /goal clear"),
+			expect.stringContaining(
+				"Goal commands: /goal status · /goal pause · /goal resume · /goal budget <tokens|none> · /goal clear",
+			),
 			"info",
 		);
 		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", undefined);
@@ -943,5 +945,161 @@ describe("Goal UX guidance (T1-T6)", () => {
 		expect(() => runtime.start("second", "session-1")).toThrowError(
 			/\/goal resume to continue.*\/goal clear to end/s,
 		);
+	});
+});
+
+describe("Goal command reliability", () => {
+	test.each(["stop", "off", "reset", "none", "cancel"])(
+		"/goal %s clears and stops the current goal",
+		async (alias) => {
+			const harness = extensionHarness();
+			await harness.commands.get("goal")!("finish the audit", harness.ctx);
+			harness.setIdle(false);
+			await emit(harness, "agent_start");
+			await harness.commands.get("goal")!(alias, harness.ctx);
+			expect(harness.entries.at(-1)?.data).toMatchObject({ cleared: true });
+			expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+			await emit(harness, "agent_end", { messages: [assistant("aborted")] });
+			harness.setIdle(true);
+			await emit(harness, "agent_settled");
+			expect(harness.sent).toHaveLength(1);
+		},
+	);
+
+	test("clear aliases without a goal do not create a new goal", async () => {
+		const harness = extensionHarness();
+		await harness.commands.get("goal")!("off", harness.ctx);
+		expect(harness.entries).toEqual([]);
+		expect(harness.sent).toEqual([]);
+		expect(harness.ctx.ui.notify).toHaveBeenCalledWith("No goal is currently set.", "info");
+	});
+
+	test("an objective starting with a clear alias still starts a goal", async () => {
+		const harness = extensionHarness();
+		await harness.commands.get("goal")!("stop flaky tests from failing", harness.ctx);
+		expect(harness.entries.at(-1)?.data).toMatchObject({
+			objective: "stop flaky tests from failing",
+			status: "active",
+		});
+	});
+
+	test("pause reports a failed interruption while keeping the goal paused", async () => {
+		const harness = extensionHarness();
+		await harness.commands.get("goal")!("finish the audit", harness.ctx);
+		await emit(harness, "agent_start");
+		vi.mocked(harness.ctx.abort).mockImplementation(() => {
+			throw new Error("abort unavailable");
+		});
+		await harness.commands.get("goal")!("pause", harness.ctx);
+		expect(harness.entries.at(-1)?.data).toMatchObject({ status: "paused" });
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("step-goal", "Goal: paused");
+		expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+			"Goal paused, but the current run could not be interrupted. Press Escape to stop it.",
+			"warning",
+		);
+	});
+
+	test.each(["20", "none"])(
+		"/goal budget %s lets a budget-limited goal resume without losing progress",
+		async (amount) => {
+			const harness = extensionHarness();
+			await harness.tools
+				.get("create_goal")!
+				.execute("create", { objective: "finish the audit", token_budget: 10 }, undefined, undefined, harness.ctx);
+			await emit(harness, "agent_start");
+			await emit(harness, "agent_end", { messages: [assistant("stop", 10)] });
+			await emit(harness, "agent_settled");
+			expect(harness.entries.at(-1)?.data).toMatchObject({ status: "budget_limited" });
+
+			await harness.commands.get("goal")!(`budget ${amount}`, harness.ctx);
+			const updated = harness.entries.at(-1)?.data as StepGoalRecord;
+			expect(updated).toMatchObject({ status: "paused", tokensUsed: 10, iteration: 1 });
+			if (amount === "none") expect(updated).not.toHaveProperty("tokenBudget");
+			else expect(updated.tokenBudget).toBe(20);
+			expect(harness.sent).toEqual([]);
+			await harness.commands.get("goal")!("resume", harness.ctx);
+			expect(harness.sent).toHaveLength(1);
+			expect(harness.sent[0]?.message.content).toContain("Tokens used: 10");
+		},
+	);
+
+	test("a budget update that cannot persist leaves the previous limit authoritative", async () => {
+		const harness = extensionHarness();
+		await harness.tools
+			.get("create_goal")!
+			.execute("create", { objective: "persist budget", token_budget: 10 }, undefined, undefined, harness.ctx);
+		const persist = vi.spyOn(harness.entries, "push").mockImplementation(() => {
+			throw new Error("disk full");
+		});
+		try {
+			await harness.commands.get("goal")!("budget 20", harness.ctx);
+			expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith("Unable to persist goal state", "warning");
+			const current = await harness.tools.get("get_goal")!.execute("get", {}, undefined, undefined, harness.ctx);
+			expect(current.details).toMatchObject({ goal: { tokenBudget: 10 } });
+		} finally {
+			persist.mockRestore();
+		}
+	});
+
+	test("unbounded status still reports token spend", async () => {
+		const harness = extensionHarness();
+		await harness.tools
+			.get("create_goal")!
+			.execute("create", { objective: "track spend" }, undefined, undefined, harness.ctx);
+		await emit(harness, "agent_start");
+		await emit(harness, "agent_end", { messages: [assistant("stop", 123)] });
+		await emit(harness, "agent_settled");
+		await harness.commands.get("goal")!("status", harness.ctx);
+		expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+			expect.stringContaining("Tokens: 123 (unbounded)"),
+			"info",
+		);
+	});
+});
+
+describe("goal budget boundaries", () => {
+	test.each(["0", "-1", "1.5", "1e3", "9007199254740992", "20 extra"])(
+		"rejects budget %s without changing the goal",
+		async (amount) => {
+			const harness = extensionHarness();
+			await harness.tools
+				.get("create_goal")!
+				.execute(
+					"create",
+					{ objective: "keep the original budget", token_budget: 10 },
+					undefined,
+					undefined,
+					harness.ctx,
+				);
+			await harness.commands.get("goal")!(`budget ${amount}`, harness.ctx);
+			const current = await harness.tools.get("get_goal")!.execute("get", {}, undefined, undefined, harness.ctx);
+			expect(current.details).toMatchObject({ goal: { tokenBudget: 10, status: "active" } });
+			expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
+		},
+	);
+
+	test("lowering a budget accounts current usage and interrupts a goal continuation", async () => {
+		const harness = extensionHarness();
+		await harness.commands.get("goal")!("finish the audit", harness.ctx);
+		await emit(harness, "agent_start");
+		await emit(harness, "message_end", { message: assistant("toolUse", 10) });
+		await harness.commands.get("goal")!("budget 5", harness.ctx);
+		expect(harness.entries.at(-1)?.data).toMatchObject({ tokenBudget: 5, tokensUsed: 10, status: "budget_limited" });
+		expect(harness.ctx.abort).toHaveBeenCalledTimes(1);
+		await emit(harness, "agent_end", { messages: [assistant("aborted")] });
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
+	});
+
+	test("an insufficient replacement budget stays limited and a completed goal stays complete", () => {
+		const { runtime } = runtimeHarness({ idle: true });
+		runtime.start("finish within budget", "session-1", 10);
+		runtime.onAgentStart();
+		runtime.onAgentEnd([assistant("stop", 10)]);
+		runtime.onAgentSettled();
+		expect(runtime.setTokenBudget(5)).toMatchObject({ status: "budget_limited", tokensUsed: 10 });
+		expect(() => runtime.setUserStatus("active")).toThrow("/goal budget");
+		runtime.update("complete");
+		expect(runtime.setTokenBudget(null)).toMatchObject({ status: "complete", tokensUsed: 10 });
 	});
 });

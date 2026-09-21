@@ -173,8 +173,9 @@ try {
 	if (err.code !== "ENOENT") throw e;
 }
 
-// Step variables are product-entrypoint overrides. A normal `pi` invocation
-// must remain isolated even when a parent shell has stale STEP_* variables.
+// Step product overrides for the app display name, project config directory,
+// and version identity apply only to the Step entrypoint. STEP_CODING_AGENT_DIR
+// and STEP_CODING_AGENT_SESSION_DIR remain shared with ordinary `pi` invocations.
 const configuredProductName = STEP_ENTRYPOINT ? process.env.STEP_CLI_APP_NAME?.trim() : undefined;
 const piConfigName: string | undefined = configuredProductName || pkg.piConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@step-harness/coding-agent";
@@ -193,9 +194,8 @@ export const CONFIG_DIR_NAME: string =
 // SDK metadata).
 export const VERSION: string = STEP_ENTRYPOINT ? STEP_CLI_VERSION.value : pkg.version || "0.0.0";
 
-// e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
-export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
-export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
+export const ENV_AGENT_DIR = "STEP_CODING_AGENT_DIR";
+export const ENV_SESSION_DIR = "STEP_CODING_AGENT_SESSION_DIR";
 
 export function expandTildePath(path: string): string {
 	return normalizePath(path);
@@ -207,8 +207,7 @@ export function expandTildePath(path: string): string {
 
 /** Get the agent config directory (for example, ~/.pi/agent/ or ~/.step-cli/agent/) */
 export function getAgentDir(): string {
-	const envDir =
-		(STEP_ENTRYPOINT ? process.env.STEP_CODING_AGENT_DIR?.trim() : undefined) || process.env[ENV_AGENT_DIR]?.trim();
+	const envDir = process.env[ENV_AGENT_DIR]?.trim();
 	if (envDir) {
 		return expandTildePath(envDir);
 	}

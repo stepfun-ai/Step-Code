@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
@@ -28,21 +28,7 @@ function stopAfterPayload<TPayload>(capture: (payload: TPayload) => void): (payl
 	};
 }
 
-describe("Cache Retention (PI_CACHE_RETENTION)", () => {
-	const originalEnv = process.env.PI_CACHE_RETENTION;
-
-	beforeEach(() => {
-		delete process.env.PI_CACHE_RETENTION;
-	});
-
-	afterEach(() => {
-		if (originalEnv !== undefined) {
-			process.env.PI_CACHE_RETENTION = originalEnv;
-		} else {
-			delete process.env.PI_CACHE_RETENTION;
-		}
-	});
-
+describe("Cache retention request options", () => {
 	const context: Context = {
 		systemPrompt: "You are a helpful assistant.",
 		messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
@@ -50,7 +36,7 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 
 	describe("Anthropic Provider", () => {
 		it.skipIf(!process.env.ANTHROPIC_API_KEY)(
-			"should use default cache TTL (no ttl field) when PI_CACHE_RETENTION is not set",
+			"should use default cache TTL (no ttl field) when cacheRetention is not set",
 			async () => {
 				const model = getModel("anthropic", "claude-haiku-4-5");
 				let capturedPayload: any = null;
@@ -73,12 +59,12 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 			},
 		);
 
-		it.skipIf(!process.env.ANTHROPIC_API_KEY)("should use 1h cache TTL when PI_CACHE_RETENTION=long", async () => {
-			process.env.PI_CACHE_RETENTION = "long";
+		it.skipIf(!process.env.ANTHROPIC_API_KEY)("should use 1h cache TTL when cacheRetention is long", async () => {
 			const model = getModel("anthropic", "claude-haiku-4-5");
 			let capturedPayload: any = null;
 
 			const s = stream(model, context, {
+				cacheRetention: "long",
 				onPayload: stopAfterPayload((payload) => {
 					capturedPayload = payload;
 				}),
@@ -96,8 +82,6 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 		});
 
 		it("should add ttl for non-api.anthropic.com baseUrl by default", async () => {
-			process.env.PI_CACHE_RETENTION = "long";
-
 			// Create a model with a different baseUrl (simulating a proxy)
 			const baseModel = getModel("anthropic", "claude-haiku-4-5");
 			const proxyModel = {
@@ -116,6 +100,7 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 
 			try {
 				const s = streamAnthropic(proxyModel, context, {
+					cacheRetention: "long",
 					apiKey: "fake-key",
 					onPayload: stopAfterPayload((payload) => {
 						capturedPayload = payload;
@@ -240,7 +225,7 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 
 	describe("OpenAI Responses Provider", () => {
 		it.skipIf(!process.env.OPENAI_API_KEY)(
-			"should not set prompt_cache_retention when PI_CACHE_RETENTION is not set",
+			"should not set prompt_cache_retention when cacheRetention is not set",
 			async () => {
 				const model = getModel("openai", "gpt-4o-mini");
 				let capturedPayload: any = null;
@@ -262,13 +247,13 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 		);
 
 		it.skipIf(!process.env.OPENAI_API_KEY)(
-			"should set prompt_cache_retention to 24h when PI_CACHE_RETENTION=long",
+			"should set prompt_cache_retention to 24h when cacheRetention is long",
 			async () => {
-				process.env.PI_CACHE_RETENTION = "long";
 				const model = getModel("openai", "gpt-4o-mini");
 				let capturedPayload: any = null;
 
 				const s = stream(model, context, {
+					cacheRetention: "long",
 					onPayload: stopAfterPayload((payload) => {
 						capturedPayload = payload;
 					}),
@@ -285,8 +270,6 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 		);
 
 		it("should set prompt_cache_retention for non-api.openai.com baseUrl by default", async () => {
-			process.env.PI_CACHE_RETENTION = "long";
-
 			// Create a model with a different baseUrl (simulating a proxy)
 			const baseModel = getModel("openai", "gpt-4o-mini");
 			const proxyModel = {
@@ -298,6 +281,7 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 
 			try {
 				const s = streamOpenAIResponses(proxyModel, context, {
+					cacheRetention: "long",
 					apiKey: "fake-key",
 					onPayload: stopAfterPayload((payload) => {
 						capturedPayload = payload;

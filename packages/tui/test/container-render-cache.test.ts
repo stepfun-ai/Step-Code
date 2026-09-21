@@ -32,7 +32,7 @@ const rows = (lines: string[]): string[] => lines.map((line) => line.trim());
 
 describe(
 	"Container incremental render cache",
-	{ skip: isIncrementalRenderDisabled() ? "PI_TUI_DISABLE_INCREMENTAL=1" : false },
+	{ skip: isIncrementalRenderDisabled() ? "incremental rendering disabled" : false },
 	() => {
 		it("returns the same array while no child changed and reports a dirty start past the end", () => {
 			const container = new Container();

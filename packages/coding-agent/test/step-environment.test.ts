@@ -43,7 +43,7 @@ describe("Step early environment", () => {
 			STEP_PROVIDER: "custom-provider",
 			STEP_MODEL: "custom-model",
 			STEP_CLI_DEFAULT_THEME: "custom-theme",
-			PI_CODING_AGENT: "parent-value",
+			CUSTOM_PARENT_VALUE: "parent-value",
 		};
 
 		applyStepEnvironment(env);
@@ -54,14 +54,11 @@ describe("Step early environment", () => {
 		expect(env.STEP_CLI_DEFAULT_PROVIDER).toBe("custom-provider");
 		expect(env.STEP_CLI_DEFAULT_MODEL).toBe("custom-model");
 		expect(env.STEP_CODING_AGENT_DIR).toMatch(/\.step-cli[\\/]agent$/u);
-		// pi-tui still has a historical fallback that reads this alias directly;
-		// the Step bootstrap mirrors the resolved root for that wrapped surface.
-		expect(env.PI_CODING_AGENT_DIR).toBe(env.STEP_CODING_AGENT_DIR);
 		// No session override is injected: Pi's SessionManager derives the
 		// default from the resolved agent directory.
 		expect(env.STEP_CODING_AGENT_SESSION_DIR).toBeUndefined();
 		expect(env.STEP_CLI_DISABLE_PI_SERVICES).toBe("1");
-		expect(env.PI_CODING_AGENT).toBe("true");
+		expect(env.CUSTOM_PARENT_VALUE).toBe("parent-value");
 		expect(env.AI_AGENT).toBe("step");
 
 		env.STEP_CLI_APP_NAME = "custom-app";

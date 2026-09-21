@@ -22,7 +22,6 @@ import type {
 	Message,
 	Model,
 	OpenAICompletionsCompat,
-	ProviderEnv,
 	ProviderHeaders,
 	SimpleStreamOptions,
 	StopReason,
@@ -42,7 +41,6 @@ import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
-import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import {
@@ -293,16 +291,6 @@ type ChatCompletionToolWithCacheControl = OpenAI.Chat.Completions.ChatCompletion
 	cache_control?: OpenAICompatCacheControl;
 };
 
-function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
-	if (cacheRetention) {
-		return cacheRetention;
-	}
-	if (getProviderEnvValue("PI_CACHE_RETENTION", env) === "long") {
-		return "long";
-	}
-	return "short";
-}
-
 export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptions> = (
 	model: Model<"openai-completions">,
 	context: Context,
@@ -345,7 +333,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				context.tools,
 				compat.supportsOpenAIGrammarTools,
 			);
-			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
+			const cacheRetention = options?.cacheRetention ?? "short";
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 			const client = createClient(model, context, apiKey, options?.headers, options?.fetch, cacheSessionId, compat);
 			let params = buildParams(model, context, options, compat, cacheRetention, grammarToolInputProperties);
@@ -795,7 +783,7 @@ function buildParams(
 	context: Context,
 	options?: OpenAICompletionsOptions,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
-	cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env),
+	cacheRetention: CacheRetention = options?.cacheRetention ?? "short",
 	grammarToolInputProperties: ReadonlyMap<string, string> = createGrammarToolInputProperties(
 		context.tools,
 		compat.supportsOpenAIGrammarTools,

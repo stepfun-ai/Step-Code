@@ -1196,11 +1196,7 @@ export class SettingsManager {
 	}
 
 	getClearOnShrink(): boolean {
-		// Settings takes precedence, then env var, then default false
-		if (this.settings.terminal?.clearOnShrink !== undefined) {
-			return this.settings.terminal.clearOnShrink;
-		}
-		return process.env.PI_CLEAR_ON_SHRINK === "1";
+		return this.settings.terminal?.clearOnShrink ?? false;
 	}
 
 	setClearOnShrink(enabled: boolean): void {
@@ -1330,7 +1326,7 @@ export class SettingsManager {
 	}
 
 	getShowHardwareCursor(): boolean {
-		return this.settings.showHardwareCursor ?? process.env.PI_HARDWARE_CURSOR === "1";
+		return this.settings.showHardwareCursor ?? false;
 	}
 
 	setShowHardwareCursor(enabled: boolean): void {

@@ -70,7 +70,6 @@ function isCommandAvailable(command) {
 // The real dev runtime: tsx runs apps/cli/src/main.ts, resolving "#*" at runtime.
 // Isolate the Step storage namespace so the smoke never touches a real home.
 const entryEnv = {
-	PI_OFFLINE: "1",
 	STEP_CODING_AGENT_DIR: join(workingDirectory, "agent"),
 };
 

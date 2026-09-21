@@ -106,7 +106,7 @@ We treat pnpm dependency changes as reviewed code changes.
 
 - Direct external dependencies are pinned to exact versions. Internal workspace packages remain version-ranged.
 - `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during resolution, and `link-workspace-packages=true` / `prefer-workspace-packages=true` so range-specified internal packages link to local workspace source under pnpm.
-- `pnpm-lock.yaml` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
+- `pnpm-lock.yaml` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `STEP_ALLOW_LOCKFILE_CHANGE=1` is set.
 - `pnpm run check` verifies pinned direct deps and native TypeScript import compatibility. `pnpm install --frozen-lockfile` guards lockfile drift.
 - Release artifacts are standalone Step binaries and platform installers; this repository does not publish npm packages.
 - `pnpm run release:local` is retained for internal runtime smoke tests and dependency validation, not for distribution.
