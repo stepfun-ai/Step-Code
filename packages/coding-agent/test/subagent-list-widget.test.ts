@@ -1,3 +1,4 @@
+import { visibleWidth } from "@step-harness/pi-tui";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import {
@@ -39,7 +40,9 @@ function details(results: StepSubagentResultRecord[]): StepSubagentDetails {
 	};
 }
 
-const visibleWidthOf = (line: string): number => line.replace(/\u001b\[[0-9;]*m/gu, "").length;
+// The TUI's own column measure: String#length would repeat the very bug these
+// assertions exist to catch, since CJK glyphs occupy two columns each.
+const visibleWidthOf = (line: string): number => visibleWidth(line);
 
 test("header counts running, completed, and failed lanes", () => {
 	const widget = new SubagentListWidget(
@@ -109,6 +112,56 @@ test("a settled lane freezes its elapsed at updatedAt", () => {
 		plainTheme,
 	);
 	expect(widget.render(120)[1]).toMatch(/60s$/u);
+});
+
+// Regression: fitLine measured with String#length, so a CJK title (2 columns
+// per glyph) overflowed its cell, pushed the row past the viewport, and lost the
+// metric column to the row's own final clamp — visible as rows whose elapsed and
+// token counts simply vanished.
+test("wide glyphs are measured in display columns, so the metric column survives", () => {
+	const widget = new SubagentListWidget(
+		details([
+			record({
+				status: "completed",
+				startedAt: Date.now() - 259_000,
+				usage: { input: 0, output: 5100, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 2 },
+				activeText: "已获取全部所需数据，多个来源交叉验证一致。以下是查询结果，品种为黄金现货。",
+			}),
+			record({ activeText: "plain ascii activity text that is also comfortably longer than the cell" }),
+		]),
+		plainTheme,
+	);
+	for (const width of [80, 100, 120]) {
+		const rows = widget.render(width).slice(1);
+		for (const row of rows) {
+			expect(visibleWidthOf(row), `width ${width}: ${JSON.stringify(row)}`).toBe(width);
+		}
+		// Both rows must still end in their metric, not in a clipped title.
+		expect(rows[0]).toMatch(/259s · ↓5\.1k$/u);
+	}
+});
+
+test("the metric column is a fixed width, so rows align regardless of value length", () => {
+	const now = Date.now();
+	const widget = new SubagentListWidget(
+		details([
+			record({ startedAt: now - 7_000 }),
+			record({
+				startedAt: now - 259_000,
+				usage: { input: 0, output: 180_000, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 9 },
+			}),
+		]),
+		plainTheme,
+	);
+	const rows = widget.render(100).slice(1);
+	expect(rows.map((row) => visibleWidthOf(row))).toEqual([100, 100]);
+	// A bare "7s" and a full "259s · ↓180.0k" occupy the same cell, so the short
+	// one is padded rather than the column shrinking to fit it.
+	// Both metrics are right-aligned inside the same 16-column cell: "7s" is two
+	// columns so it carries 14 of padding, "259s · ↓180.0k" is fourteen and
+	// carries two. A cell sized to its contents would give both zero.
+	expect(rows[0].endsWith(`${" ".repeat(14)}7s`)).toBe(true);
+	expect(rows[1].endsWith(`${" ".repeat(2)}259s · ↓180.0k`)).toBe(true);
 });
 
 test("no row exceeds the viewport width, down to a narrow terminal", () => {

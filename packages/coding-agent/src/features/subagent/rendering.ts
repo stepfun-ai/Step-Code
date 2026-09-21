@@ -23,6 +23,14 @@ import type { BackgroundAgentLane } from "./lane-lifecycle.ts";
 const COLLAPSED_OUTPUT_LINES = 8;
 /** Rows the live widget will show before collapsing the rest into a counter. */
 const WIDGET_MAX_ROWS = 8;
+/**
+ * Fixed width for the trailing "<elapsed> · <tokens>" column.
+ *
+ * Sizing it to the widest value actually present made the column jump between
+ * renders and between rows, so it is pinned instead: 6 columns of elapsed, the
+ * 3-column separator, and 7 for "↓999.9k".
+ */
+const WIDGET_METRIC_WIDTH = 16;
 
 function formatUsage(usage: StepSubagentUsage, model?: string): string {
 	const parts: string[] = [];
@@ -135,7 +143,12 @@ function recordActivity(record: StepSubagentResultRecord): { text: string; bias:
 }
 
 /**
- * Flatten to one line and fit it to `width`.
+ * Flatten to one line and fit it to `width` **display columns**.
+ *
+ * Measured with visibleWidth rather than String#length: CJK glyphs occupy two
+ * columns each, so a length-based fit let a Chinese title overflow its cell,
+ * push the row past the viewport, and lose the metric column to the row's own
+ * final clamp. Iterating code points also keeps surrogate pairs intact.
  *
  * Deliberately not `truncateText`, which appends a "[output truncated]" marker
  * on its own line — fine for a tool body, fatal for a single widget row.
@@ -143,9 +156,30 @@ function recordActivity(record: StepSubagentResultRecord): { text: string; bias:
 function fitLine(value: string, width: number, bias: "head" | "tail"): string {
 	const flat = value.replace(/\s+/gu, " ").trim();
 	if (width <= 0) return "";
-	if (flat.length <= width) return flat;
+	if (visibleWidth(flat) <= width) return flat;
 	if (width === 1) return "\u2026";
-	return bias === "head" ? `${flat.slice(0, width - 1)}\u2026` : `\u2026${flat.slice(flat.length - width + 1)}`;
+	// Walked by hand rather than via truncateToWidth: that helper wraps its
+	// ellipsis in ANSI resets, which would clear the row's color mid-title on
+	// text that carries no escapes of its own.
+	const characters = Array.from(flat);
+	const kept: string[] = [];
+	let used = 0;
+	if (bias === "head") {
+		for (const character of characters) {
+			const next = visibleWidth(character);
+			if (used + next > width - 1) break;
+			used += next;
+			kept.push(character);
+		}
+		return `${kept.join("")}\u2026`;
+	}
+	for (let index = characters.length - 1; index >= 0; index -= 1) {
+		const next = visibleWidth(characters[index]);
+		if (used + next > width - 1) break;
+		used += next;
+		kept.push(characters[index]);
+	}
+	return `\u2026${kept.reverse().join("")}`;
 }
 
 /**
@@ -192,13 +226,13 @@ export class SubagentListWidget implements Component {
 			const tokens = record.usage.output;
 			return `${formatElapsed(record)}${tokens > 0 ? ` \u00b7 \u2193${formatTokenCount(tokens)}` : ""}`;
 		});
-		const metricWidth = Math.max(0, ...metrics.map((metric) => metric.length));
+		const metricWidth = WIDGET_METRIC_WIDTH;
 		const names = shown.map((record) => record.agent);
-		const nameWidth = Math.max(0, ...names.map((name) => name.length));
+		const nameWidth = Math.max(0, ...names.map((name) => visibleWidth(name)));
 
 		for (const [index, record] of shown.entries()) {
 			const metric = metrics[index];
-			const name = names[index].padEnd(nameWidth);
+			const name = names[index] + " ".repeat(Math.max(0, nameWidth - visibleWidth(names[index])));
 			// 3 leading spaces + icon + space + name + space ... metric + 1 trailing.
 			const fixed = 3 + 1 + 1 + nameWidth + 1 + metricWidth + 1;
 			// Never widen past the viewport: a terminal too narrow for a title drops
