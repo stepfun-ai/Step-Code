@@ -751,6 +751,26 @@ export {
 	type StepTelemetryEventPayloads,
 	type StepTelemetryKnownEventName,
 } from "./step/telemetry-events.ts";
+export {
+	createStepSystemMetricsCollector,
+	createStepTelemetryRuntime,
+	installStepTelemetryCrashHandlers,
+	readTelemetryEndpoint,
+	redactTelemetryString,
+	resolveStepTelemetrySettings,
+	resolveTelemetrySettings,
+	type StepResolvedTelemetrySettings,
+	type StepSystemMetricsCollector,
+	type StepSystemMetricsCollectorOptions,
+	type StepTelemetryContext,
+	type StepTelemetryCrashHandlers,
+	type StepTelemetryDisabledReason,
+	type StepTelemetryRecord,
+	type StepTelemetryRuntime,
+	type StepTelemetryRuntimeOptions,
+	trackStepTelemetryCrash,
+	trackStepTelemetryError,
+} from "./step/telemetry-runtime.ts";
 export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from "./step/theme-prompt.ts";
 export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";

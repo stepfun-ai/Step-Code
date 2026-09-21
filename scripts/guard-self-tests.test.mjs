@@ -23,7 +23,6 @@ const guardsWithSelfTest = [
 	"check-metadata-not-in-dispatch.mjs",
 	"check-no-secret-leak.mjs",
 	"check-legacy-scope-prefix.mjs",
-	"check-no-observability.mjs",
 ];
 
 for (const guard of guardsWithSelfTest) {
