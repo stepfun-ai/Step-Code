@@ -9,17 +9,17 @@
 
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { AgentToolResult, ThinkingLevel } from "@step-harness/agent-core";
+import type { AgentToolResult, AgentToolUpdateCallback, ThinkingLevel } from "@step-harness/agent-core";
 import { Text } from "@step-harness/pi-tui";
 import { type Message, StringEnum, type Usage } from "@step-harness/providers";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
-import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
+import type { ExtensionAPI, ExtensionContext, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
-import type { StepAgentConfig, StepAgentScope } from "./step-subagent-agents.ts";
+import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
 import { executeSubagent } from "./subagent/execute.ts";
-import { allocateStepWorktree, cloneUsage, isRecordValue } from "./subagent/helpers.ts";
+import { allocateStepWorktree, cloneUsage, isRecordValue, SUBAGENT_SESSION_ID_PREFIX } from "./subagent/helpers.ts";
 import {
 	type BackgroundAgentLane,
 	controlResult,
@@ -27,7 +27,7 @@ import {
 	getLiveSubagentSession,
 	laneMatches,
 } from "./subagent/lane-lifecycle.ts";
-import { laneWidgetLines, renderSubagentResult } from "./subagent/rendering.ts";
+import { laneWidgetLines, renderSubagentResult, SubagentListWidget } from "./subagent/rendering.ts";
 import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
 
 // Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
@@ -56,9 +56,12 @@ export {
 	cloneUsage,
 	currentStepInvocation,
 	emptyUsage,
+	isChildAgentSessionId,
 	isRecordValue,
 	normalizeChildTools,
+	SUBAGENT_SESSION_ID_PREFIX,
 	sanitizeLabel,
+	WORKFLOW_SESSION_ID_PREFIX,
 } from "./subagent/helpers.ts";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -116,6 +119,11 @@ export interface StepSubagentRunInput {
 	sessionId?: string;
 	/** Keep the rpc child alive after the turn settles so replies reuse it. */
 	keepAlive?: boolean;
+	/**
+	 * Abandon the turn after this many ms with no output from the child.
+	 * Defaults to `resolveSubagentTurnIdleTimeoutMs()`; `0` disables the watchdog.
+	 */
+	turnIdleTimeoutMs?: number;
 	/** Workflow-owned path ACL passed to the child-side tool_call hook. */
 	workflowAcl?: {
 		baseCwd: string;
@@ -389,7 +397,7 @@ function stringifyLiveValue(value: unknown): string | undefined {
 const spawnedSubagentSessions = new Set<string>();
 
 export async function runStepSubagentProcess(input: StepSubagentRunInput): Promise<StepSubagentRunResult> {
-	const sessionId = input.sessionId?.trim() || `subagent-${randomUUID()}`;
+	const sessionId = input.sessionId?.trim() || `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`;
 	const live = getLiveSubagentSession(sessionId);
 	if (live) return live.runTurn(input);
 	if (spawnedSubagentSessions.has(sessionId)) input.onChildRespawn?.();
@@ -422,6 +430,56 @@ const AgentSendSchema = Type.Object({
 		}),
 	),
 });
+
+/**
+ * Show a live lane list under the editor for the duration of a blocking
+ * subagent call.
+ *
+ * Background lanes already have their own `aboveEditor` widget; the blocking
+ * path had none, so a parallel run's only surface was the transcript tool row,
+ * which the generic collapsed shell truncates. One component instance is reused
+ * across updates: `setExtensionWidget` disposes the component it replaces, so
+ * the instance deliberately has no `dispose` and the factory returns it again.
+ */
+async function withSubagentListWidget(
+	toolCallId: string,
+	ctx: ExtensionContext,
+	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+	run: (
+		update: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+	) => Promise<AgentToolResult<StepSubagentDetails>>,
+): Promise<AgentToolResult<StepSubagentDetails>> {
+	if (!ctx.hasUI) return run(onUpdate);
+	const key = `step-subagent-list:${toolCallId}`;
+	let widget: SubagentListWidget | undefined;
+	const update: AgentToolUpdateCallback<StepSubagentDetails> = (result) => {
+		onUpdate?.(result);
+		const details = result.details;
+		if (!details) return;
+		try {
+			widget?.setDetails(details);
+			ctx.ui.setWidget(
+				key,
+				(_tui, theme) => {
+					widget ??= new SubagentListWidget(details, theme);
+					return widget;
+				},
+				{ placement: "belowEditor" },
+			);
+		} catch {
+			// A host may tear its UI down mid-run; the list stays best-effort.
+		}
+	};
+	try {
+		return await run(update);
+	} finally {
+		try {
+			ctx.ui.setWidget(key, undefined);
+		} catch {
+			// Never let widget cleanup mask the tool result.
+		}
+	}
+}
 
 /** Construct the hidden inline extension used by the Step launcher. */
 export function createStepSubagentExtension(options: StepSubagentExtensionOptions = {}): ExtensionFactory {
@@ -472,12 +530,12 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			description: [
 				"Delegate tasks to specialized subagents with isolated context.",
 				"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-				'Built-in agent names are exactly "general", "explore", "review", and "planner"; descriptions are not names.',
+				formatBuiltinAgentGuidance(),
 				`Default agent scope is "user" (from ${path.join(resolved.agentDir, "agents")}).`,
 				`To enable project-local agents in ${resolved.configDirName}/agents, set agentScope: "both" (or "project").`,
 			].join(" "),
 			parameters: StepSubagentParamsSchema,
-			execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
+			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 				// Background lanes remain available to embedded Step callers through
 				// the internal extension API, while ordinary model calls follow Pi's
 				// blocking single/parallel/chain contract.
@@ -510,7 +568,9 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 						`Started background agent ${lane.id}${lane.alias ? ` (${lane.alias})` : ""}. ${monitorHint}`,
 					);
 				}
-				return executeSubagent(params as SubagentParams, signal, onUpdate, ctx, resolved);
+				return withSubagentListWidget(toolCallId, ctx, onUpdate, (update) =>
+					executeSubagent(params as SubagentParams, signal, update, ctx, resolved),
+				);
 			},
 			renderCall: (params, theme) => {
 				if (params.chain && params.chain.length > 0) {

@@ -195,18 +195,26 @@ When closing issues via commit:
 
 - Include `fixes #<number>` or `closes #<number>` in the message so merging auto-closes the issue. For multiple issues, repeat the keyword per issue (`closes #1, closes #2`); a shared keyword (`closes #1, #2`) only closes the first.
 
-## Testing pi Interactive Mode with tmux
+## Testing Step Interactive Mode with tmux
+
+`./step-test.sh` runs the CLI from source, so it reflects the working tree
+without a build (`--no-env` additionally strips provider credentials). Use the
+installed `step` instead when you need to verify a built artifact.
 
 Run the TUI in a controlled terminal (from the repo root):
 
 ```bash
-tmux new-session -d -s pi-test -x 80 -y 24
-tmux send-keys -t pi-test "./pi-test.sh" Enter
-sleep 3 && tmux capture-pane -t pi-test -p     # capture after startup
-tmux send-keys -t pi-test "your prompt here" Enter
-tmux send-keys -t pi-test Escape               # special keys (also C-o for ctrl+o, etc.)
-tmux kill-session -t pi-test
+tmux new-session -d -s step-test -x 120 -y 32
+tmux send-keys -t step-test "./step-test.sh" Enter
+sleep 3 && tmux capture-pane -t step-test -p     # capture after startup
+tmux send-keys -t step-test "your prompt here" Enter
+tmux send-keys -t step-test Escape               # special keys (also C-o for ctrl+o, etc.)
+tmux kill-session -t step-test
 ```
+
+A first run in a new directory asks whether the folder is trusted; answer it
+before sending a prompt. Widths below ~100 columns truncate tool rows, so prefer
+a wide session when checking layout.
 
 ## Changelog
 
@@ -244,9 +252,14 @@ Attribution:
    ```
    Verify the binary starts, reports the tag-derived version, loads native TUI resources, and completes a smoke prompt with the intended Step provider. Failures are release blockers unless the user explicitly accepts the risk.
 
-3. **Public-source boundary**: the public repository only builds local artifacts. Internal tagging, binary publication, object-store upload, and release announcement jobs are intentionally kept outside this source tree.
+3. **Run the Step release script**:
+   ```bash
+   STEP_CLI_RELEASE_PUSH=0 npm run release:step -- --dry-run
+   npm run release:step -- <x.y.z>
+   ```
+   The Step release command creates a `vX.Y.Z` tag. GitLab CI then builds six platform archives, uploads the installers and manifests to TOS, and creates the GitLab release. No npm package is published.
 
-4. **If an internal binary publication fails**: inspect the private release pipeline and rerun that job after fixing the issue. Do not recreate an existing tag.
+4. **If binary CI publication fails**: inspect the failed build, checksum, upload, or release job and rerun that job after fixing the issue. Do not recreate an existing tag.
 
 ## Execution Protocol
 

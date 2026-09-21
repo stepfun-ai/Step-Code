@@ -484,6 +484,11 @@ export {
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
 } from "./features/step-schedule.ts";
+export {
+	isChildAgentSessionId,
+	SUBAGENT_SESSION_ID_PREFIX,
+	WORKFLOW_SESSION_ID_PREFIX,
+} from "./features/step-subagent.ts";
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.
@@ -721,7 +726,13 @@ export {
 export { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 export {
 	classifyStepEndpoint,
+	createStepLifecycleTelemetry,
+	createStepModelRequestObserver,
+	type StepLifecycleTelemetry,
+	type StepLifecycleTelemetryHandlers,
+	type StepLifecycleTelemetryOptions,
 	type StepModelRequestEventName,
+	type StepModelRequestObserverOptions,
 	type StepPermissionApprovalTelemetry,
 	type StepPermissionDecisionTelemetry,
 	type StepTelemetryContextPatch,

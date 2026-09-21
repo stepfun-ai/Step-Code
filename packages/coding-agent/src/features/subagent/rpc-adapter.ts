@@ -118,6 +118,67 @@ const RPC_UI_DIALOG_METHODS: ReadonlySet<string> = new Set(["select", "confirm",
 const CHILD_EXIT_SIGTERM_MS = 5_000;
 const CHILD_EXIT_SIGKILL_MS = 10_000;
 const ABORT_SETTLE_GRACE_MS = 5_000;
+/**
+ * Backstop for a child that stays alive but stops talking. A turn otherwise
+ * settles only on `agent_settled`, a failed prompt ack, or child exit, so a
+ * wedged child strands its parent forever — and `executeSubagent` waits on
+ * every lane, so one wedged lane blocks the whole tool.
+ *
+ * Measured against child output, not wall clock: the child forwards
+ * `message_update` deltas over rpc, so a live generation keeps resetting this.
+ * The default is deliberately generous because a long `run_command` is silent
+ * while it runs and the bash tool's timeout is agent-supplied and effectively
+ * unbounded.
+ */
+const SUBAGENT_TURN_IDLE_TIMEOUT_MS = 30 * 60_000;
+
+/** Resolve the turn idle budget; `0` (or a bad value) disables the watchdog. */
+export function resolveSubagentTurnIdleTimeoutMs(
+	raw: string | undefined = process.env.STEP_SUBAGENT_TURN_IDLE_TIMEOUT_MS,
+): number {
+	if (raw === undefined || raw.trim() === "") return SUBAGENT_TURN_IDLE_TIMEOUT_MS;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed < 0) return SUBAGENT_TURN_IDLE_TIMEOUT_MS;
+	return Math.floor(parsed);
+}
+
+/**
+ * Environment for one rpc child.
+ *
+ * All four kill switches are unconditional: a process we spawned is, by
+ * definition, already inside somebody's fan-out, so it must neither fan out
+ * again nor hold scheduling authority of its own.
+ *
+ * `CHILD_MARKER` and `STEP_DISABLE_WORKFLOW` close the fan-out edges. Gating
+ * `STEP_DISABLE_WORKFLOW` on `workflowAcl` (a permission payload, not a depth
+ * marker) used to leave `subagent -> workflow` open, because the subagent runner
+ * passes no ACL and its children were therefore misread as top-level: they
+ * inherited an enabled workflow env and each fanned out another wave of agents.
+ *
+ * `STEP_DISABLE_CRON` and `STEP_DISABLE_GOAL` close the scheduling edge. A child
+ * runs in the parent's cwd and inherits its project trust, so a cron extension
+ * there attaches to the same `.step-cli/cron/tasks.json`: a durable job that
+ * comes due while the child sits idle is steered into the CHILD's session and
+ * consumed under the shared lock, so the parent never sees it fire. A goal in a
+ * child is the same escape in time rather than space: it keeps requesting
+ * continuations after the parent has settled the turn and stopped reading.
+ *
+ * `WORKFLOW_ACL_ENV` stays conditional and is explicitly set to `undefined` when
+ * there is no ACL: Node's `spawn` drops `undefined` values, which clears a value
+ * inherited from `process.env` instead of leaking the parent's ACL to the child.
+ */
+export function buildSubagentChildEnv(input: StepSubagentRunInput): NodeJS.ProcessEnv {
+	return {
+		...process.env,
+		[CHILD_MARKER]: "1",
+		STEP_DISABLE_WORKFLOW: "1",
+		STEP_DISABLE_CRON: "1",
+		STEP_DISABLE_GOAL: "1",
+		...(input.workflowAcl
+			? { [WORKFLOW_ACL_ENV]: JSON.stringify(input.workflowAcl) }
+			: { [WORKFLOW_ACL_ENV]: undefined }),
+	};
+}
 
 /** Spawn a long-running `--mode rpc --session-id` child for one subagent session. */
 export async function createSubagentRpcSession(
@@ -140,14 +201,7 @@ export async function createSubagentRpcSession(
 	const invocation = currentStepInvocation(args);
 	const child = spawn(invocation.command, invocation.args, {
 		cwd: input.cwd,
-		env: {
-			...process.env,
-			[CHILD_MARKER]: "1",
-			...(input.workflowAcl ? { STEP_DISABLE_WORKFLOW: "1" } : {}),
-			...(input.workflowAcl
-				? { [WORKFLOW_ACL_ENV]: JSON.stringify(input.workflowAcl) }
-				: { [WORKFLOW_ACL_ENV]: undefined }),
-		},
+		env: buildSubagentChildEnv(input),
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
@@ -160,6 +214,38 @@ export async function createSubagentRpcSession(
 	let childExited = false;
 	const pendingCommandAcks = new Map<string, string>();
 	const exitTimers: Array<ReturnType<typeof setTimeout>> = [];
+	const turnIdleTimeoutMs = input.turnIdleTimeoutMs ?? resolveSubagentTurnIdleTimeoutMs();
+	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const clearIdleWatchdog = (): void => {
+		if (!idleTimer) return;
+		clearTimeout(idleTimer);
+		idleTimer = undefined;
+	};
+
+	/** (Re)start the idle budget for the in-flight turn. No-op when disabled. */
+	const armIdleWatchdog = (): void => {
+		clearIdleWatchdog();
+		if (turnIdleTimeoutMs <= 0 || !turn) return;
+		const active = turn;
+		idleTimer = setTimeout(() => {
+			if (turn !== active) return;
+			settleTurn((current) => {
+				current.exitCode = 1;
+				current.stopReason = "error";
+				current.errorMessage = `Subagent produced no output for ${Math.round(turnIdleTimeoutMs / 1000)}s; the turn was abandoned`;
+				// The child is unresponsive, so end it even for a keep-alive lane
+				// rather than leaving it to be reused for the next reply.
+				closeStdin();
+			});
+		}, turnIdleTimeoutMs);
+		idleTimer.unref?.();
+	};
+
+	/** Any byte from the child counts as progress and resets the idle budget. */
+	const noteChildActivity = (): void => {
+		if (turn) armIdleWatchdog();
+	};
 
 	const appendStderr = (text: string): void => {
 		if (turn) {
@@ -215,6 +301,7 @@ export async function createSubagentRpcSession(
 		const active = turn;
 		if (!active) return;
 		turn = undefined;
+		clearIdleWatchdog();
 		active.cleanup?.();
 		finalize(active.current, active.aborted);
 		active.current.updatedAt = Date.now();
@@ -273,6 +360,7 @@ export async function createSubagentRpcSession(
 	};
 
 	child.stdout?.on("data", (chunk: Buffer | string) => {
+		noteChildActivity();
 		stdoutBuffer += chunk.toString();
 		if (Buffer.byteLength(stdoutBuffer, "utf8") > MAX_JSON_LINE_BYTES * 2) {
 			processError = "Subagent emitted an oversized JSON event";
@@ -283,11 +371,15 @@ export async function createSubagentRpcSession(
 		stdoutBuffer = lines.pop() ?? "";
 		for (const line of lines) handleLine(line.trimEnd());
 	});
-	child.stderr?.on("data", (chunk: Buffer | string) => appendStderr(chunk.toString()));
+	child.stderr?.on("data", (chunk: Buffer | string) => {
+		noteChildActivity();
+		appendStderr(chunk.toString());
+	});
 	child.once("error", (error) => {
 		processError = error.message;
 		childExited = true;
 		dropFromRegistry();
+		clearIdleWatchdog();
 		for (const timer of exitTimers) clearTimeout(timer);
 		settleTurn((current) => {
 			current.exitCode = 1;
@@ -299,6 +391,7 @@ export async function createSubagentRpcSession(
 	child.once("close", (code) => {
 		childExited = true;
 		dropFromRegistry();
+		clearIdleWatchdog();
 		for (const timer of exitTimers) clearTimeout(timer);
 		if (stdoutBuffer.trim()) handleLine(stdoutBuffer.trim());
 		stdoutBuffer = "";
@@ -384,7 +477,9 @@ export async function createSubagentRpcSession(
 					result.stopReason = "error";
 					result.errorMessage = "Failed to write the task to the subagent's stdin";
 				});
+				return;
 			}
+			armIdleWatchdog();
 		});
 	};
 

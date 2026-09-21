@@ -6,6 +6,7 @@ import type { SessionInfo, SessionListProgress } from "@step-harness/coding-agen
 import {
 	canonicalizePath as _canonicalizePath,
 	DynamicBorder,
+	isChildAgentSessionId,
 	KeybindingsManager,
 	keyHint,
 	keyText,
@@ -945,9 +946,15 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		};
 
 		try {
-			const sessions = await (scope === "current"
-				? this.currentSessionsLoader(onProgress)
-				: this.allSessionsLoader(onProgress));
+			// A subagent or workflow child runs in the parent's cwd, so its transcript
+			// is written to the same session directory. Those sessions belong to a tool
+			// call, not to the user, and one fan-out can add a dozen of them; hide them
+			// here so the picker only offers sessions the user actually started.
+			// Resolution by explicit id (`--session-id subagent-...`) is unaffected, so
+			// a respawned child still reattaches to its own transcript.
+			const sessions = (
+				await (scope === "current" ? this.currentSessionsLoader(onProgress) : this.allSessionsLoader(onProgress))
+			).filter((session) => !isChildAgentSessionId(session.id));
 
 			if (scope === "current") {
 				this.currentSessions = sessions;

@@ -58,6 +58,45 @@ Workflows require the native `isolated-vm` runtime. Registration is disabled whe
 it cannot load. Unit tests can inject a VM executor to check the host contract;
 those tests do not validate native isolation.
 
+## Child fan-out and turn settlement
+
+Fan-out is one level deep. Every rpc child spawned for a subagent or a workflow
+agent carries `STEP_CLI_SUBAGENT_CHILD=1` and `STEP_DISABLE_WORKFLOW=1`, so it
+registers neither the `subagent` tool nor the `workflow` tool and cannot start
+another wave.
+
+The same child carries `STEP_DISABLE_CRON=1` and `STEP_DISABLE_GOAL=1`, so it
+registers no scheduling tools either. A child runs in the parent's cwd and
+inherits its project trust, so a cron extension there would attach to the same
+`.step-cli/cron/tasks.json`: a durable job coming due while the child sat idle
+was steered into the child's session and consumed under the shared lock, and the
+parent never saw it fire. A goal in a child is the same escape in time rather
+than space, since it keeps requesting continuations after the parent has settled
+the turn and stopped reading.
+
+All four markers are unconditional: a process the harness spawned is by
+definition already inside somebody's fan-out, so it neither fans out again nor
+holds scheduling authority of its own. `buildSubagentChildEnv` owns this
+contract.
+
+The workflow path ACL (`WORKFLOW_ACL_ENV`) stays separate from that decision. It
+is forwarded only when the caller supplies one, and is explicitly cleared
+otherwise so a child never inherits the parent's ACL. Deriving the fan-out gate
+from the ACL instead previously left `subagent -> workflow` open, because the
+subagent runner passes no ACL: its children read as top-level and each started a
+further wave of workflow agents, multiplying concurrent provider streams well past
+the account limit and producing cascading rate-limit failures.
+
+A turn settles on `agent_settled`, a failed prompt ack, or child exit. Because a
+child that stays alive without emitting any of those would strand its parent
+indefinitely, and `executeSubagent` awaits every lane, each turn also carries an
+idle watchdog. The budget is measured against child output rather than wall clock:
+any stdout or stderr byte resets it, and the child forwards `message_update`
+deltas, so a live generation continuously defers it. Tripping the watchdog settles
+the turn as failed and ends the child even for a keep-alive lane. The default is
+30 minutes, deliberately generous because a long `run_command` is silent while it
+runs; `STEP_SUBAGENT_TURN_IDLE_TIMEOUT_MS` overrides it and `0` disables it.
+
 ## Cron scheduling and delivery
 
 `cron_create` accepts numeric five-field local-time cron expressions. Fields

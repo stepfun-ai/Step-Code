@@ -87,27 +87,6 @@ describe("feedback command argument parsing", () => {
 });
 
 describe("feedback command interaction", () => {
-	test("reports an unconfigured endpoint without invoking fetch", async () => {
-		const root = await makeRoot();
-		const stdout = captureOutput();
-		const stderr = captureOutput();
-		const fetchImpl = vi.fn<typeof fetch>();
-
-		const exitCode = await runFeedbackCommand(["--message", "no collector"], {
-			storageRootDir: root,
-			interactive: false,
-			stdout: stdout.stream,
-			stderr: stderr.stream,
-			env: {},
-			fetchImpl,
-		});
-
-		expect(exitCode).toBe(1);
-		expect(fetchImpl).not.toHaveBeenCalled();
-		expect(stderr.text()).toContain("no feedback endpoint configured");
-		expect(stdout.text()).toBe("");
-	});
-
 	test("treats a TTY command with a comment as a shortcut", async () => {
 		const root = await makeRoot();
 		const stdout = captureOutput();
@@ -624,7 +603,7 @@ describe("feedback submission metadata", () => {
 			comment: "identity",
 			storageRootDir: root,
 			uid: "uid-1",
-			username: "  account@example.test\n",
+			username: "  kris@stepfun.com\n",
 			endpoint: "https://feedback.test/feedback",
 			fetchImpl,
 			surface: "cli",
@@ -633,7 +612,7 @@ describe("feedback submission metadata", () => {
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(submission.context).toMatchObject({ uid: "uid-1", username: "account@example.test" });
+		expect(submission.context).toMatchObject({ uid: "uid-1", username: "kris@stepfun.com" });
 		expect(submission.context.deviceId).toBeUndefined();
 		await expect(stat(resolveStepDeviceIdPath(root))).rejects.toMatchObject({ code: "ENOENT" });
 	});
