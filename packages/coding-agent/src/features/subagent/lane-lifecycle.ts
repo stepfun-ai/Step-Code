@@ -10,6 +10,7 @@ import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { StepSubagentDetails, StepSubagentRpcSession, SubagentParams } from "../step-subagent.ts";
+import { SUBAGENT_SESSION_ID_PREFIX } from "./helpers.ts";
 import {
 	type BackgroundLaneSubscribeLevel,
 	maybeNotifyLaneProgress,
@@ -252,7 +253,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			runGeneration: 0,
 			subscribe: (params.subscribe ?? "final") as BackgroundLaneSubscribeLevel,
 			lastProgressNotifyAt: now,
-			sessionId: `subagent-${randomUUID()}`,
+			sessionId: `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`,
 		} satisfies BackgroundAgentLane;
 		lanes.set(id, lane);
 		return lane;
