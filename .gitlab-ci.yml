@@ -4,8 +4,8 @@ variables:
   # pnpm-lock.yaml with `pnpm install --frozen-lockfile`.
   RELEASE_BUILDER_IMAGE: "hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:c6538968b0f1d223b02016bf1689c35a6b26d6945fb273629ce66d1f3e36a7fc"
   RELEASE_BUNDLE_VERSION: "v0.3.1"
-  STEP_RELEASE_BASE_URL: "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli"
-  STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcli"
+  STEP_RELEASE_BASE_URL: "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcode"
+  STEP_RELEASE_PROD_BASE_URL: "https://static-openapi.stepfun.com/stepcode"
   # Internal mirror for the rg/fd search-tool binaries: this project's own GitLab
   # generic package registry. scripts/copy-search-tools.mjs fetches from here
   # (authenticating with the runner's CI_JOB_TOKEN) so the release archive bundles
@@ -216,7 +216,7 @@ release_bundle_upload:
       cat > dist/release/publish.env <<EOF
       STEP_RELEASE_VERSION=$version
       STEP_RELEASE_TAG=${CI_COMMIT_TAG:-v$version}
-      STEP_RELEASE_NAME=step-cli ${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_NAME=stepcode ${CI_COMMIT_TAG:-v$version}
       STEP_RELEASE_INSTALL_URL=$base/install.sh
       STEP_RELEASE_INSTALL_PS1_URL=$base/install.ps1
       STEP_RELEASE_LATEST_URL=$base/latest.json
@@ -274,13 +274,13 @@ publish_release:
       when: manual
     - when: never
   script:
-    - echo "Publishing Step CLI release $STEP_RELEASE_TAG"
+    - echo "Publishing StepCode release $STEP_RELEASE_TAG"
   release:
     tag_name: "$STEP_RELEASE_TAG"
     ref: "$CI_COMMIT_SHA"
     name: "$STEP_RELEASE_NAME"
     description: |
-      Step CLI release artifacts uploaded to the public object store.
+      StepCode release artifacts uploaded to the public object store.
 
       Install:
       - $STEP_RELEASE_INSTALL_URL
