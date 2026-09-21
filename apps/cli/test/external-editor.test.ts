@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ExternalEditorResult, editInExternalEditor } from "../src/ui/external-editor.ts";
 
 const editorFixturePath = fileURLToPath(new URL("./fixtures/fake-external-editor.mjs", import.meta.url));
@@ -18,7 +18,7 @@ async function runExternalEditor(fixtureFlag?: "--fail" | "--empty"): Promise<{
 	result: ExternalEditorResult;
 	capture: EditorCapture;
 }> {
-	const testDirectory = mkdtempSync(join(tmpdir(), "pi-external-editor-test-"));
+	const testDirectory = mkdtempSync(join(tmpdir(), "step-external-editor-test-"));
 	const capturePath = join(testDirectory, "capture.json");
 	try {
 		const result = await editInExternalEditor({
@@ -33,13 +33,17 @@ async function runExternalEditor(fixtureFlag?: "--fail" | "--empty"): Promise<{
 }
 
 describe("editInExternalEditor", () => {
+	afterEach(() => vi.restoreAllMocks());
+
 	it("edits a prompt inside a private temporary directory", async () => {
+		const stdout = vi.spyOn(process.stdout, "write");
 		const { result, capture } = await runExternalEditor();
 		const directory = dirname(capture.filePath);
 
 		expect(result).toEqual({ status: "complete", content: "edited" });
 		expect(dirname(directory)).toBe(tmpdir());
-		expect(basename(directory)).toMatch(/^pi-editor-.+$/);
+		expect(basename(directory)).toMatch(/^step-editor-.+$/);
+		expect(stdout).toHaveBeenCalledWith(expect.stringContaining("step will resume when the editor exits."));
 		expect(basename(capture.filePath)).toBe("prompt.md");
 		expect(capture.entries).toEqual(["prompt.md"]);
 		expect(capture.content).toBe("original");

@@ -1,10 +1,10 @@
 import {
-	APP_NAME,
 	CONFIG_DIR_NAME,
 	DefaultPackageManager,
 	detectTerminalBackgroundFromEnv,
 	detectTerminalThemeForAuto,
 	getAgentDir,
+	IS_STEP_ENTRYPOINT,
 	initTheme,
 	KeybindingsManager,
 	loadThemeFromPath,
@@ -26,7 +26,7 @@ import { FirstTimeSetupComponent, type FirstTimeSetupResult } from "./view/dialo
 /** Product entrypoints keep the startup selector in the same visual language
  * as their interactive surface; keyboard handling remains in the shared
  * ExtensionSelector/Input components. */
-const STARTUP_PRESENTATION: "native" | "step" = APP_NAME === "step" ? "step" : "native";
+const STARTUP_PRESENTATION: "native" | "step" = IS_STEP_ENTRYPOINT ? "step" : "native";
 
 export interface StartupTuiPathOptions {
 	agentDir?: string;
@@ -75,7 +75,7 @@ export async function createStartupTui(
 	paths: StartupTuiPathOptions = {},
 ): Promise<TUI> {
 	const resolvedPaths: Required<StartupTuiPathOptions> = {
-		agentDir: paths.agentDir ?? (APP_NAME === "step" ? resolveStepAgentDir() : getAgentDir()),
+		agentDir: paths.agentDir ?? (IS_STEP_ENTRYPOINT ? resolveStepAgentDir() : getAgentDir()),
 		configDirName: paths.configDirName?.trim() || CONFIG_DIR_NAME,
 	};
 	// Theme helpers have a product-level custom-theme directory context in

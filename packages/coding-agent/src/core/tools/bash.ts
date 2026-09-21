@@ -491,7 +491,7 @@ const bashToolConfig: ShellToolConfig = {
 	prompt: "$",
 	promptSnippet: bashToolSystemPromptContribution.snippet,
 	promptGuidelines: bashToolSystemPromptContribution.guidelines,
-	tempFilePrefix: "pi-bash",
+	tempFilePrefix: "step-bash",
 };
 
 export function createBashToolDefinition(

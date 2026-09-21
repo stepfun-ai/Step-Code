@@ -513,7 +513,7 @@ If output was truncated, includes `fullOutputPath`:
     "exitCode": 0,
     "cancelled": false,
     "truncated": true,
-    "fullOutputPath": "/tmp/pi-bash-abc123.log"
+    "fullOutputPath": "/tmp/step-bash-abc123.log"
   }
 }
 ```
@@ -1332,7 +1332,7 @@ Set the terminal window/tab title. Fire-and-forget.
   "type": "extension_ui_request",
   "id": "uuid-8",
   "method": "setTitle",
-  "title": "pi - my project"
+  "title": "step - my project"
 }
 ```
 
