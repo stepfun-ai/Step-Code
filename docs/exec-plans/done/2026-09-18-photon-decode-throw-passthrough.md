@@ -63,4 +63,3 @@ Bun ELF,minified JS 可 grep)做了逐函数还原,ground truth:
 为四段(透传/原尺寸重编码/fit-resize/无条件 q20 兜底);`return null` 仅剩
 "解码失败且 header 无法证明预算内"。测试:`maxBytes:1` 用例翻转为永不丢图、
 字节超限用例锚死尺寸不变;全部 image 测试 48/48。
-

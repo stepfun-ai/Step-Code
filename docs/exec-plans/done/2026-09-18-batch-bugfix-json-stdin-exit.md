@@ -63,4 +63,3 @@ No commit. On a branch other than `main`, so no CHANGELOG entry.
   whitespace-only → absent); reshaped the assembly test to use stdin without a
   trailing newline so it actually fails on the old `join("")`.
 - Each new guard was verified to fail against the pre-fix code, then restored.
-
