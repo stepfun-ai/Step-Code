@@ -624,7 +624,7 @@ describe("feedback submission metadata", () => {
 			comment: "identity",
 			storageRootDir: root,
 			uid: "uid-1",
-			username: "  account@example.test\n",
+			username: "  kris@stepfun.com\n",
 			endpoint: "https://feedback.test/feedback",
 			fetchImpl,
 			surface: "cli",
@@ -633,7 +633,7 @@ describe("feedback submission metadata", () => {
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(submission.context).toMatchObject({ uid: "uid-1", username: "account@example.test" });
+		expect(submission.context).toMatchObject({ uid: "uid-1", username: "kris@stepfun.com" });
 		expect(submission.context.deviceId).toBeUndefined();
 		await expect(stat(resolveStepDeviceIdPath(root))).rejects.toMatchObject({ code: "ENOENT" });
 	});

@@ -3,7 +3,7 @@
 </p>
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://github.com/stepfun-ai/step-harness"><img alt="GitHub" src="https://img.shields.io/badge/source-open%20source-222?style=flat-square" /></a>
+  <a href="https://gitlab.basemind.com/aiagent/step-harness"><img alt="GitLab" src="https://img.shields.io/badge/distribution-standalone%20binaries-222?style=flat-square" /></a>
 </p>
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).

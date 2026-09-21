@@ -21,4 +21,5 @@ export {
 	type StepTelemetryEventPayloads,
 	type StepTelemetryKnownEventName,
 } from "./telemetry-events.ts";
+export * from "./telemetry-runtime.ts";
 export * from "./tool-profile.ts";
