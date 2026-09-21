@@ -40,11 +40,11 @@ const TRACE_HEADER_ENV_NAMES = [
  * Providers whose model endpoint IS the ObservableServer cloud-trace detour.
  * Used only by the cloud-trace URL allowlist below (telemetry's
  * `routed_via_cloud_trace` and trusted-prefix resolution) — NOT by the
- * attribution-header gate, which keys on the provider id (see the
- * `sendAttribution` computation in features/step.ts). The native Step provider
- * is absent here because its `/step_plan/v1` is a direct model endpoint, not
- * the cloud-trace collector, so its requests must not be marked
- * `routed_via_cloud_trace`.
+ * attribution-header gate, which keys on the request URL allowlist and the
+ * host-provided high-sensitivity field list (see {@link applyStepTraceHeaders}).
+ * The native Step provider is absent here because its `/step_plan/v1` is a
+ * direct model endpoint, not the cloud-trace collector, so its requests must
+ * not be marked `routed_via_cloud_trace`.
  */
 const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 
@@ -52,10 +52,12 @@ const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
  * Add Step attribution headers in place.
  *
  * `x-step-client` is sent on every request. The high-sensitivity fields
- * (session/workspace/goal/...) are sent only when `options.sendAttribution` is
- * set — the caller passes true only for Step-owned providers, so the local cwd
- * and session id never egress to a third-party model endpoint. Values are
- * size-bounded and header-safe via {@link encodeStepTraceHeaderValue}.
+ * (session/workspace/goal/...) are sent only when the request URL matches
+ * `options.allowedBaseUrls` AND the field appears in
+ * `options.highSensitivityFields`; an omitted or empty field list sends none of
+ * them (fail closed), so the local cwd and session id never egress to a
+ * third-party model endpoint. Values are size-bounded and header-safe via
+ * {@link encodeStepTraceHeaderValue}.
  */
 export function applyStepTraceHeaders(
 	headers: Record<string, string | null>,
@@ -71,10 +73,12 @@ export function applyStepTraceHeaders(
 	if (!traceAllowed) return;
 
 	const fields = options.highSensitivityFields;
-	if (fields && fields.length === 0) return;
-	const allowed = fields ? new Set(fields) : undefined;
+	// Fail closed: a policy that omits the field list (undefined) must not leak
+	// every high-sensitivity header — treat it the same as an empty allowance.
+	if (!fields || fields.length === 0) return;
+	const allowed = new Set(fields);
 	const setIfAllowed = (field: string, value: string | undefined): void => {
-		if (!allowed || allowed.has(field)) setHeader(headers, `x-step-${field}`, value);
+		if (allowed.has(field)) setHeader(headers, `x-step-${field}`, value);
 	};
 	setIfAllowed("session-id", trace.sessionId);
 	setIfAllowed("goal-id", trace.goalId);
