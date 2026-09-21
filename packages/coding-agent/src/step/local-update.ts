@@ -10,7 +10,7 @@ import { spawnProcess, waitForChildProcess } from "../utils/child-process.ts";
 import { STEPCODE_VERSION, type StepCodeVersion } from "./version.ts";
 
 /** Public release bucket used by the Step installer when no override is set. */
-export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcli";
+export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcode";
 
 const UPDATE_CHECK_TIMEOUT_MS = 1_500;
 const UPDATE_INSTALL_TIMEOUT_MS = 120_000;
@@ -108,7 +108,7 @@ export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): 
 	}
 	let tempRoot: string | undefined;
 	try {
-		tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-cli-update-"));
+		tempRoot = await mkdtemp(path.join(os.tmpdir(), "stepcode-update-"));
 		const archivePath = path.join(tempRoot, artifact.fileName);
 		const archiveResponse = await fetchWithTimeout(artifact.url, input.fetchImpl ?? fetch);
 		if (!archiveResponse.ok) throw new Error(`archive download failed (HTTP ${archiveResponse.status})`);
@@ -352,7 +352,7 @@ export function buildStepUpdateUserAgent(version: string, env: NodeJS.ProcessEnv
 	const clean = (value: string, fallback: string): string =>
 		value.replace(USER_AGENT_UNSAFE, "").slice(0, 32) || fallback;
 	const channel = env.STEPCODE_BUILD_CHANNEL ?? "unknown";
-	return `step-cli/${clean(version, "unknown")} (${clean(channel, "unknown")}; ${clean(process.platform, "unknown")}; ${clean(process.arch, "unknown")})`;
+	return `stepcode/${clean(version, "unknown")} (${clean(channel, "unknown")}; ${clean(process.platform, "unknown")}; ${clean(process.arch, "unknown")})`;
 }
 
 export function resolveStepExecutablePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -362,7 +362,7 @@ export function resolveStepExecutablePath(env: NodeJS.ProcessEnv = process.env):
 	for (const candidate of candidates) {
 		if (!candidate) continue;
 		const name = path.basename(candidate).toLowerCase();
-		if (name === "step" || name === "step.exe" || name === "step-cli" || name === "step-cli.exe") {
+		if (name === "step" || name === "step.exe") {
 			return path.resolve(candidate);
 		}
 	}
@@ -403,7 +403,7 @@ export function resolveStepUpdateInstallerSpec(platform: NodeJS.Platform = proce
 }
 
 async function installLatestStepRelease(input: StepUpdateInstallInput): Promise<StepUpdateInstallResult> {
-	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-cli-update-"));
+	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stepcode-update-"));
 	const installer = resolveStepUpdateInstallerSpec();
 	const scriptPath = path.join(tempRoot, installer.scriptName);
 	try {

@@ -495,7 +495,7 @@ function readLegacyProvider(
 	limits: StepCodeTokenLimits,
 ): StepCodeProviderRegistration[] {
 	const agentModels = asObject(root.agentModels);
-	const legacy = asObject(agentModels?.stepcli) ?? asObject(agentModels?.codex) ?? root;
+	const legacy = asObject(agentModels?.stepcode) ?? asObject(agentModels?.codex) ?? root;
 	const model = readString(legacy.model) ?? readString(root.model);
 	if (!model) return [];
 	const api = normalizeApi(
@@ -672,7 +672,7 @@ function findActiveModel(
 
 function readLegacyDefaultModel(root: JsonObject): string | undefined {
 	const agentModels = asObject(root.agentModels);
-	const stepCli = asObject(agentModels?.stepcli);
+	const stepCli = asObject(agentModels?.stepcode);
 	const codex = asObject(agentModels?.codex);
 	const modelObject = asObject(root.model);
 	return (

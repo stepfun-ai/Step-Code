@@ -29,7 +29,7 @@ export async function invokeRemoteMcpTool(input: RemoteMcpToolInvocation): Promi
 	const transport = new StreamableHTTPClientTransport(new URL(input.serverUrl), {
 		requestInit: input.headers ? { headers: input.headers } : undefined,
 	});
-	const client = new Client({ name: "step-cli", version: STEPCODE_VERSION.value }, { capabilities: {} });
+	const client = new Client({ name: "stepcode", version: STEPCODE_VERSION.value }, { capabilities: {} });
 
 	try {
 		await client.connect(transport, { timeout: timeoutMs, signal });

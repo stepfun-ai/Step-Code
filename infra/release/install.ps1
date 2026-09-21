@@ -130,7 +130,7 @@ function Get-TargetId {
 function Get-Manifest {
   param([Parameter(Mandatory = $true)][string]$ManifestUrl)
   try {
-    return Invoke-RestMethod -Uri $ManifestUrl -Headers @{ 'User-Agent' = 'step-cli-installer' } -UseBasicParsing
+    return Invoke-RestMethod -Uri $ManifestUrl -Headers @{ 'User-Agent' = 'stepcode-installer' } -UseBasicParsing
   } catch {
     Stop-WithError "failed to fetch release manifest $ManifestUrl ($($_.Exception.Message))"
   }
@@ -168,7 +168,7 @@ function Invoke-Download {
     [Parameter(Mandatory = $true)][string]$Destination
   )
   try {
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers @{ 'User-Agent' = 'step-cli-installer' } -UseBasicParsing
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers @{ 'User-Agent' = 'stepcode-installer' } -UseBasicParsing
   } catch {
     Stop-WithError "failed to download $Url ($($_.Exception.Message))"
   }
@@ -348,7 +348,7 @@ function Install-ManagedTool {
 
   try {
     $metadataUrl = "https://api.github.com/repos/$Repository/releases/latest"
-    $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers @{ 'User-Agent' = 'step-cli-installer'; Accept = 'application/vnd.github+json' } -UseBasicParsing
+    $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers @{ 'User-Agent' = 'stepcode-installer'; Accept = 'application/vnd.github+json' } -UseBasicParsing
     $tag = [string](Get-ObjectProperty -Object $metadata -Name 'tag_name')
     if (-not $tag) {
       throw "GitHub release metadata did not contain tag_name"
@@ -460,7 +460,7 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
 function Write-Result {
   param([Parameter(Mandatory = $true)][string]$ResolvedVersion)
   $binaryPath = Join-Path $InstallDir 'step.exe'
-  Write-Host "  installed step-cli $ResolvedVersion to $binaryPath" -ForegroundColor Green
+  Write-Host "  installed stepcode $ResolvedVersion to $binaryPath" -ForegroundColor Green
 
   # Persist $InstallDir / $AgentDir\bin as resolved (these already carry any
   # custom STEP_INSTALL_DIR / STEP_CODING_AGENT_DIR values), not hardcoded
@@ -542,7 +542,7 @@ if ($BaseUrl -eq $unconfiguredBaseUrl) {
   Stop-WithError 'release base URL was not configured in this installer'
 }
 
-$workDir = Join-Path ([IO.Path]::GetTempPath()) ("step-cli-install-" + [Guid]::NewGuid().ToString('N'))
+$workDir = Join-Path ([IO.Path]::GetTempPath()) ("stepcode-install-" + [Guid]::NewGuid().ToString('N'))
 try {
   New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 

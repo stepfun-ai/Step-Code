@@ -8,7 +8,7 @@ AGENT_DIR="${STEP_CODING_AGENT_DIR:-${HOME}/.stepcode/agent}"
 WORK_DIR=""
 TARGET_ID=""
 
-die() { printf 'step-cli installer: %s\n' "$*" >&2; exit 1; }
+die() { printf 'stepcode installer: %s\n' "$*" >&2; exit 1; }
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 download() {
 	if has_cmd curl; then curl -fsSL "$1" -o "$2"; return; fi
@@ -269,7 +269,7 @@ main() {
 	unconfigured_base_url='__STEP_RELEASE''_BASE_URL__'
 	[[ "$BASE_URL" == "$unconfigured_base_url" ]] && die 'release base URL was not configured in this installer'
 	detect_target
-	WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/step-cli-install.XXXXXX")"
+	WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stepcode-install.XXXXXX")"
 	trap 'rm -rf "$WORK_DIR"' EXIT
 	local manifest="${WORK_DIR}/manifest.json" archive="${WORK_DIR}/release.archive" extract="${WORK_DIR}/extract" binary expected resolved
 	if [[ "$VERSION" == latest ]]; then

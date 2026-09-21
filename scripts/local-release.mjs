@@ -220,7 +220,7 @@ const options = parseArgs();
 const repoRoot = process.cwd();
 const rootPackageJson = readPackageJson(repoRoot);
 
-if (rootPackageJson.name !== "step-cli") {
+if (rootPackageJson.name !== "stepcode") {
 	throw new Error("Run this script from the repository root");
 }
 

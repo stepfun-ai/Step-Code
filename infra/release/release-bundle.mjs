@@ -82,7 +82,7 @@ async function main() {
 		return;
 	}
 	const version = normalizeReleaseVersion(args.get("version") ?? process.env.CI_COMMIT_TAG ?? process.env.RELEASE_BUNDLE_VERSION);
-	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://release.example.test/stepcli").replace(/\/+$/u, "");
+	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://release.example.test/stepcode").replace(/\/+$/u, "");
 	const dryRun = args.has("dry-run");
 	const releaseDir = path.join(repoRoot, "dist", "release");
 	if (dryRun) {
@@ -92,7 +92,7 @@ async function main() {
 
 	await rm(releaseDir, { recursive: true, force: true });
 	await mkdir(releaseDir, { recursive: true });
-	const buildDir = await mkdtemp(path.join(os.tmpdir(), "step-cli-release-build-"));
+	const buildDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-release-build-"));
 	try {
 		await run("bash", ["scripts/build-binaries.sh", "--product", "step", "--offline-model-data", "--out", buildDir], {
 			env: {
