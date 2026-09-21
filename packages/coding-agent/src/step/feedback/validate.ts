@@ -1,4 +1,5 @@
 import { redactSecretString } from "../secret-redaction.ts";
+import { redactDiagnosticPii } from "./redact-diagnostics.ts";
 import {
 	FEEDBACK_CATEGORIES,
 	FEEDBACK_CATEGORY_CLI_SPELLINGS,
@@ -225,7 +226,7 @@ function sanitizeAndBoundFeedbackDiagnostics(input: {
 	}
 	return boundLines({
 		lines,
-		normalize: (line) => line.replace(/(?:[A-Za-z]:\\|\/Users\/|\/home\/)[^\s]+/gu, "<path>"),
+		normalize: redactDiagnosticPii,
 		truncated: input.truncated,
 		...(input.source === "input_trace" ? { prioritize: isTraceNote } : {}),
 	});

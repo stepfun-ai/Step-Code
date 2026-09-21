@@ -10,7 +10,7 @@ const forbidden = [
 	/stepcliobserserver/iu,
 	/\/api\/v1\/events/iu,
 	/createStepTelemetryRuntime/iu,
-	/\bx-step-(session|goal|attempt|harness|span|workspace|provider|model-id)\b/iu,
+	/\bx-step-(session|goal|attempt|harness|span|workspace|provider|model)\b/iu,
 	/\b(?:gitlab\.basemind\.com|stepfun-inc\.(?:net|com)|projects\/10933)\b/iu,
 	/BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/iu,
 	/[\w.+-]+@(?:stepfun\.com|basemind)/iu,
@@ -19,7 +19,6 @@ const allowedFiles = new Set([
 	"packages/coding-agent/src/step/telemetry-contract.ts",
 	"packages/coding-agent/src/step/storage-root.ts",
 	"packages/coding-agent/src/step/device-id.ts",
-	"packages/coding-agent/src/step/feedback/endpoints.ts",
 ]);
 
 function normalize(path) {
@@ -67,7 +66,9 @@ function runSelfTest() {
 	expect("collector host is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "https://stepcliobserserver.invalid").length > 0);
 	expect("sensitive header is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "x-step-session-id").length > 0);
 	expect("low sensitivity client is allowed", analyzeFile("packages/coding-agent/src/step/foo.ts", "x-step-client").length === 0);
-	expect("feedback endpoint source is allowlisted", analyzeFile("packages/coding-agent/src/step/feedback/endpoints.ts", "stepcliobserserver").length === 0);
+	expect("high-sensitivity model header is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "x-step-model").length > 0);
+	expect("collector base is no longer allowlisted in endpoints", analyzeFile("packages/coding-agent/src/step/feedback/endpoints.ts", "https://x/stepcliobserserver").length > 0);
+	expect("feedback path suffix alone is allowed", analyzeFile("packages/coding-agent/src/step/feedback/endpoints.ts", "const suffix = '/api/v1/feedback';").length === 0);
 	if (failures.length) {
 		console.error("no-observability self-test FAILED:");
 		for (const failure of failures) console.error(`  ${failure}`);
