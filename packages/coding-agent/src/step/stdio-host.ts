@@ -371,7 +371,7 @@ export class StepStdioHost {
 				this.#sessionRename(frame);
 				return;
 			case "session.tag":
-				this.#respond(frame, { ok: false, supported: false, reason: "Pi has labels, not session tags." });
+				this.#respond(frame, { ok: false, supported: false, reason: "Step has labels, not session tags." });
 				return;
 			case "session.compact":
 				await this.#sessionCompact(frame);
@@ -440,7 +440,7 @@ export class StepStdioHost {
 			this.#respondError(
 				frame,
 				"SANDBOX_UNAVAILABLE",
-				new Error("sandbox.enabled was requested but the Pi runtime has no sandbox adapter"),
+				new Error("sandbox.enabled was requested but the Step runtime has no sandbox adapter"),
 			);
 			return;
 		}
@@ -1427,13 +1427,13 @@ function collectOptionWarnings(options: StepQueryOptions): string[] {
 		if (options[key] !== undefined) warnings.push(`${key} accepted but inert: ${reason}.`);
 	}
 	if (options.systemPrompt !== undefined) {
-		warnings.push("systemPrompt overrides are not supported; the Pi session system prompt remains active.");
+		warnings.push("systemPrompt overrides are not supported; the Step session system prompt remains active.");
 	}
 	if (options.appendSystemPrompt !== undefined) {
-		warnings.push("appendSystemPrompt is not supported for an already-created Pi session.");
+		warnings.push("appendSystemPrompt is not supported for an already-created Step session.");
 	}
 	if (options.maxTurns !== undefined) {
-		warnings.push("maxTurns is not enforced by this adapter; Pi's configured agent loop limit remains active.");
+		warnings.push("maxTurns is not enforced by this adapter; Step's configured agent loop limit remains active.");
 	}
 	if (options.permissionMode === "bypassPermissions") {
 		warnings.push(
@@ -1449,11 +1449,11 @@ function collectOptionWarnings(options: StepQueryOptions): string[] {
 			...new Set(options.hooks.map((hook) => hook.event).filter((event) => !supported.has(event))),
 		];
 		if (unsupportedHooks.length > 0)
-			warnings.push(`hook events ${unsupportedHooks.join(", ")} have no Pi lifecycle counterpart.`);
+			warnings.push(`hook events ${unsupportedHooks.join(", ")} have no Step lifecycle counterpart.`);
 	}
 	if (options.sandbox) {
 		const inert = Object.keys(options.sandbox).filter((key) => key !== "enabled");
-		if (inert.length > 0) warnings.push(`sandbox.${inert.join(", sandbox.")} is not configured by the Pi host.`);
+		if (inert.length > 0) warnings.push(`sandbox.${inert.join(", sandbox.")} is not configured by the Step host.`);
 	}
 	return warnings;
 }

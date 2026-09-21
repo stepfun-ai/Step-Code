@@ -1,7 +1,7 @@
-# Pi evals
+# Step evals
 
-Pi evals are behavioral, model-backed checks for Pi workflows. They adapt a real `AgentSession` to `vitest-evals`, run
-it in isolated temporary project and agent directories, and attach native Pi session artifacts.
+Step evals are behavioral, model-backed checks for Step workflows. They adapt a real `AgentSession` to `vitest-evals`, run
+it in isolated temporary project and agent directories, and attach native Step session artifacts.
 Use them to measure end-to-end behavior and compare prompts, tools, skills, models, or other harness configurations.
 
 ## Running evals
@@ -19,7 +19,7 @@ STEP_PROVIDER=openai STEP_MODEL=gpt-5.6-sol npm run eval
 ```
 
 CLI values take precedence and become defaults for harnesses that do not select a model explicitly. Provider and model must be supplied together. The runner also allows no default when every executed harness configures its own model.
-Authentication comes from Pi's normal `ModelRuntime`, including Pi subscription credentials and provider API-key
+Authentication comes from Step's normal `ModelRuntime`, including configured subscription credentials and provider API-key
 environment variables.
 
 Additional arguments are forwarded to Vitest:
@@ -30,23 +30,23 @@ npm run eval -- -t "creates, reloads, and uses"
 ```
 
 Each invocation prints an ignored `.eval/` artifact directory. `runs.jsonl` indexes completed harness runs and their
-native Pi session JSONL attachments under `sessions/`. These files may contain prompts, responses, source code, and tool
+native Step session JSONL attachments under `sessions/`. These files may contain prompts, responses, source code, and tool
 output.
 
 ## Writing evals
 
 Follow [`vitest-evals`](https://github.com/getsentry/vitest-evals) for general suite, judge, assertion, and normalized
-trace guidance. Pi-specific evals use `createPiCodingAgentHarness(...)` from `src/pi-harness.ts`, with one harness bound
+trace guidance. Step-specific evals use `createStepCodingAgentHarness(...)` from `src/step-harness.ts`, with one harness bound
 to each `describeEval(...)` suite:
 
 ```ts
 import { expect } from "vitest";
 import { describeEval } from "vitest-evals";
-import { createPiCodingAgentHarness } from "./pi-harness.ts";
+import { createStepCodingAgentHarness } from "./step-harness.ts";
 
-const harness = createPiCodingAgentHarness({ noTools: "all" });
+const harness = createStepCodingAgentHarness({ noTools: "all" });
 
-describeEval("Pi smoke", { harness }, (it) => {
+describeEval("Step smoke", { harness }, (it) => {
 	it("answers a factual question", async ({ run }) => {
 		const result = await run("What is the capital of France? Reply with only the city name.");
 		expect(result.output).toBe("Paris");
@@ -54,31 +54,31 @@ describeEval("Pi smoke", { harness }, (it) => {
 });
 ```
 
-### Configuring the Pi harness
+### Configuring the Step harness
 
-`createPiCodingAgentHarness(...)` accepts:
+`createStepCodingAgentHarness(...)` accepts:
 
 - `name`: stable harness identity used by reports and comparisons.
 - `model`: optional `{ provider, id }` selection. It overrides the runner's default model.
-- `noTools`: Pi's tool-disable configuration.
+- `noTools`: Step's tool-disable configuration.
 - `transformSystemPrompt`: transforms the complete default prompt before the eval starts.
 - `output`: transforms the final response and `AgentSession` into a JSON-safe domain result.
 
 An explicitly selected model makes model-comparison harnesses independent of the runner default:
 
 ```ts
-const harness = createPiCodingAgentHarness({
+const harness = createStepCodingAgentHarness({
 	name: "claude-opus-4-6",
 	model: { provider: "anthropic", id: "claude-opus-4-6" },
 });
 ```
 
 A run accepts either one prompt or a sequence of prompt and reload steps. Reload steps are useful when the preceding
-prompt creates or changes Pi resources:
+prompt creates or changes Step resources:
 
 ```ts
 const result = await run([
-	{ type: "prompt", content: "Create a Pi extension." },
+	{ type: "prompt", content: "Create a Step extension." },
 	{ type: "reload" },
 	{ type: "prompt", content: "Use the extension." },
 ]);
@@ -86,10 +86,10 @@ const result = await run([
 
 ### Transforming harness output
 
-Use `output` to expose scenario-specific, JSON-safe behavior without adding that behavior to the generic Pi adapter:
+Use `output` to expose scenario-specific, JSON-safe behavior without adding that behavior to the generic Step adapter:
 
 ```ts
-const harness = createPiCodingAgentHarness({
+const harness = createStepCodingAgentHarness({
 	output: ({ response, session }) => ({
 		response,
 		activeTools: session.getActiveToolNames(),
@@ -104,7 +104,7 @@ Assert application behavior on `result.output`. Assert model and tool traces on 
 ### Writing comparative eval sets
 
 Use `evalHarnessTable(...)` with Vitest's native `describe.for(...)` to run the same inputs against multiple harnesses.
-Harnesses may differ by prompt, tools, skills, model, or any other Pi configuration:
+Harnesses may differ by prompt, tools, skills, model, or any other Step configuration:
 
 ```ts
 import { describe } from "vitest";
@@ -137,7 +137,7 @@ Comparative suites should record correctness with deterministic or model-backed 
 This keeps a low score as an observation instead of making the Vitest invocation fail. Use hard assertions only for
 suite invariants and infrastructure contracts. `expect.soft(...)` still fails the test and is not a scoring mechanism.
 
-The Pi harness snapshots native session JSONL before deleting its temporary workspace. An eval-only `afterEach` hook
+The Step harness snapshots native session JSONL before deleting its temporary workspace. An eval-only `afterEach` hook
 registers that snapshot against the explicit Vitest test task before reporters run.
 
 Harness names must be stable and unique within an eval set. The grouping key combines repetition with a non-empty string

@@ -12,10 +12,10 @@ import type { HarnessRun } from "vitest-evals/harness";
 
 export const STEP_SESSION_SNAPSHOT_ARTIFACT = "stepSessionJsonl";
 
-const evalSessionArtifactKey = Symbol("pi-evals-session-artifact");
-const evalSourceArtifactKey = Symbol("pi-evals-source-artifact");
+const evalSessionArtifactKey = Symbol("step-evals-session-artifact");
+const evalSourceArtifactKey = Symbol("step-evals-source-artifact");
 
-interface PiSessionAttachment extends TestAttachment {
+interface StepSessionAttachment extends TestAttachment {
 	name: "session.jsonl";
 	contentType: "application/jsonl";
 	body: string;
@@ -29,10 +29,10 @@ export interface SourceAttachment extends TestAttachment {
 	bodyEncoding: "utf-8";
 }
 
-interface PiSessionArtifact extends TestArtifactBase {
+interface StepSessionArtifact extends TestArtifactBase {
 	type: "@step-harness/evals:session";
 	runId: string;
-	attachments: [PiSessionAttachment] | [];
+	attachments: [StepSessionAttachment] | [];
 }
 
 interface SourceArtifact extends TestArtifactBase {
@@ -43,7 +43,7 @@ interface SourceArtifact extends TestArtifactBase {
 
 declare module "vitest" {
 	interface TestArtifactRegistry {
-		[evalSessionArtifactKey]: PiSessionArtifact;
+		[evalSessionArtifactKey]: StepSessionArtifact;
 		[evalSourceArtifactKey]: SourceArtifact;
 	}
 }
@@ -56,7 +56,7 @@ export async function recordEvalSessionArtifact(
 	const session = run.artifacts?.[STEP_SESSION_SNAPSHOT_ARTIFACT];
 	if (session === undefined) return;
 	if (typeof runId !== "string" || typeof session !== "string") {
-		throw new TypeError("Pi eval session artifact metadata is invalid.");
+		throw new TypeError("Step eval session artifact metadata is invalid.");
 	}
 	await recordArtifact(task, {
 		type: "@step-harness/evals:session",

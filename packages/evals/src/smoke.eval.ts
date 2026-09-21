@@ -1,10 +1,10 @@
 import { expect } from "vitest";
 import { describeEval } from "vitest-evals";
-import { createPiCodingAgentHarness } from "./pi-harness.ts";
+import { createStepCodingAgentHarness } from "./step-harness.ts";
 
-const piCodingAgentHarness = createPiCodingAgentHarness({ noTools: "all" });
+const stepCodingAgentHarness = createStepCodingAgentHarness({ noTools: "all" });
 
-describeEval("Pi Coding Agent smoke", { harness: piCodingAgentHarness }, (it) => {
+describeEval("Step Coding Agent smoke", { harness: stepCodingAgentHarness }, (it) => {
 	it("runs a basic prompt end to end", async ({ run }) => {
 		const result = await run("What's the capital of France? Respond with only the city name.");
 

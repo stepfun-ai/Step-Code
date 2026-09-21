@@ -45,7 +45,7 @@ describe("package commands", () => {
 	}
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `step-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		projectDir = join(tempDir, "project");
 		packageDir = join(tempDir, "local-package");
@@ -352,7 +352,7 @@ describe("package commands", () => {
 
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stdout).toContain("Usage:");
-			expect(stdout).toContain("pi install <source> [-l]");
+			expect(stdout).toContain("step install <source> [-l]");
 			expect(errorSpy).not.toHaveBeenCalled();
 			expect(process.exitCode).toBeUndefined();
 		} finally {
@@ -440,7 +440,7 @@ describe("package commands", () => {
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain('Unknown option --unknown for "install".');
-			expect(stderr).toContain('Use "pi --help" or "pi install <source> [-l] [--approve|--no-approve]".');
+			expect(stderr).toContain('Use "step --help" or "step install <source> [-l] [--approve|--no-approve]".');
 			expect(process.exitCode).toBe(1);
 		} finally {
 			errorSpy.mockRestore();
@@ -455,7 +455,7 @@ describe("package commands", () => {
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain("Missing install source.");
-			expect(stderr).toContain("Usage: pi install <source> [-l]");
+			expect(stderr).toContain("Usage: step install <source> [-l]");
 			expect(stderr).not.toContain("at ");
 			expect(process.exitCode).toBe(1);
 		} finally {
@@ -492,6 +492,8 @@ describe("package commands", () => {
 			["bare update", ["update"]],
 			["--self", ["update", "--self"]],
 			["positional self", ["update", "self"]],
+			["product name", ["update", "step"]],
+			["legacy alias", ["update", "pi"]],
 		])("reports self-update is unsupported for %s and exits 1", async (_label, argv) => {
 			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 			const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

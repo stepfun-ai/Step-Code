@@ -19,8 +19,8 @@ export const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEP_CLI_ENTRYP
 if (STEP_ENTRYPOINT) applyStepEnvironment();
 /**
  * Whether this process was launched through the Step entrypoint. Decided once,
- * next to APP_NAME, so anything that branches on the product agrees with the
- * name being printed.
+ * independently of the display name so branding cannot enable entrypoint-only
+ * commands or change storage defaults.
  */
 export const IS_STEP_ENTRYPOINT: boolean = STEP_ENTRYPOINT;
 
@@ -177,10 +177,10 @@ try {
 // and version identity apply only to the Step entrypoint. STEP_CODING_AGENT_DIR
 // and STEP_CODING_AGENT_SESSION_DIR remain shared with ordinary `pi` invocations.
 const configuredProductName = STEP_ENTRYPOINT ? process.env.STEP_CLI_APP_NAME?.trim() : undefined;
-const piConfigName: string | undefined = configuredProductName || pkg.piConfig?.name;
+const configuredAppName: string | undefined = configuredProductName || pkg.piConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@step-harness/coding-agent";
-export const APP_NAME: string = piConfigName || "pi";
-export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
+export const APP_NAME: string = configuredAppName || "step";
+export const APP_TITLE: string = APP_NAME;
 // Rebranded distributions can select their project resource directory without
 // changing the package metadata used by the upstream `pi` entrypoint. Step
 // Step CLI uses `.step-cli`; the launcher also imports files left by older

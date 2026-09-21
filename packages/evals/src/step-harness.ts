@@ -25,28 +25,28 @@ import {
 } from "vitest-evals/harness";
 import { STEP_SESSION_SNAPSHOT_ARTIFACT } from "./vitest-evals/artifacts.ts";
 
-export type PiCodingAgentInput = string | Array<{ type: "prompt"; content: string } | { type: "reload" }>;
+export type StepCodingAgentInput = string | Array<{ type: "prompt"; content: string } | { type: "reload" }>;
 
-type PiCodingAgentModelSelection = {
+type StepCodingAgentModelSelection = {
 	provider: string;
 	id: string;
 };
 
-type PiCodingAgentHarnessOptions = {
+type StepCodingAgentHarnessOptions = {
 	name?: string;
-	model?: PiCodingAgentModelSelection;
+	model?: StepCodingAgentModelSelection;
 	noTools?: CreateAgentSessionOptions["noTools"];
 	transformSystemPrompt?: (defaultPrompt: string) => string;
 };
 
-type PiCodingAgentHarnessWithOutput<TOutput extends JsonValue> = PiCodingAgentHarnessOptions & {
+type StepCodingAgentHarnessWithOutput<TOutput extends JsonValue> = StepCodingAgentHarnessOptions & {
 	output: (args: { response: string; session: AgentSession }) => TOutput | Promise<TOutput>;
 };
 
 export function resolveModelSelection(
-	explicitModel: PiCodingAgentModelSelection | undefined,
+	explicitModel: StepCodingAgentModelSelection | undefined,
 	environment: { STEP_PROVIDER?: string; STEP_MODEL?: string } = process.env,
-): PiCodingAgentModelSelection {
+): StepCodingAgentModelSelection {
 	const provider = (explicitModel?.provider ?? environment.STEP_PROVIDER)?.trim();
 	const id = (explicitModel?.id ?? environment.STEP_MODEL)?.trim();
 	if (!provider || !id) {
@@ -106,11 +106,11 @@ async function promptAgent(session: AgentSession, input: string, signal: AbortSi
 	return output;
 }
 
-async function runPiCodingAgent<TOutput extends JsonValue>(
-	input: PiCodingAgentInput,
+async function runStepCodingAgent<TOutput extends JsonValue>(
+	input: StepCodingAgentInput,
 	signal: AbortSignal | undefined,
 	setArtifact: HarnessContext["setArtifact"],
-	options: PiCodingAgentHarnessOptions | PiCodingAgentHarnessWithOutput<TOutput>,
+	options: StepCodingAgentHarnessOptions | StepCodingAgentHarnessWithOutput<TOutput>,
 ): Promise<SimpleHarnessResult<string | TOutput>> {
 	const startedAt = performance.now();
 	signal?.throwIfAborted();
@@ -119,7 +119,7 @@ async function runPiCodingAgent<TOutput extends JsonValue>(
 	const model = modelRuntime.getModel(selection.provider, selection.id);
 	if (!model) throw new Error(`Eval model not found: ${selection.provider}/${selection.id}`);
 
-	const root = await mkdtemp(join(tmpdir(), "pi-eval-"));
+	const root = await mkdtemp(join(tmpdir(), "step-eval-"));
 	const cwd = join(root, "workspace");
 	const agentDir = join(root, "agent");
 	let transformedSystemPrompt: string | undefined;
@@ -175,7 +175,7 @@ async function runPiCodingAgent<TOutput extends JsonValue>(
 					await evalSession.reload();
 				}
 			}
-			if (response === undefined) throw new Error("Pi eval input must include at least one prompt step.");
+			if (response === undefined) throw new Error("Step eval input must include at least one prompt step.");
 			const output = "output" in options ? await options.output({ response, session: evalSession }) : response;
 			const stats = evalSession.getSessionStats();
 			const hasPricing = [model.cost, ...(model.cost.tiers ?? [])].some(
@@ -243,15 +243,17 @@ async function runPiCodingAgent<TOutput extends JsonValue>(
 	};
 }
 
-export function createPiCodingAgentHarness<TOutput extends JsonValue>(
-	options: PiCodingAgentHarnessWithOutput<TOutput>,
-): Harness<PiCodingAgentInput, TOutput>;
-export function createPiCodingAgentHarness(options?: PiCodingAgentHarnessOptions): Harness<PiCodingAgentInput, string>;
-export function createPiCodingAgentHarness<TOutput extends JsonValue>(
-	options: PiCodingAgentHarnessOptions | PiCodingAgentHarnessWithOutput<TOutput> = {},
+export function createStepCodingAgentHarness<TOutput extends JsonValue>(
+	options: StepCodingAgentHarnessWithOutput<TOutput>,
+): Harness<StepCodingAgentInput, TOutput>;
+export function createStepCodingAgentHarness(
+	options?: StepCodingAgentHarnessOptions,
+): Harness<StepCodingAgentInput, string>;
+export function createStepCodingAgentHarness<TOutput extends JsonValue>(
+	options: StepCodingAgentHarnessOptions | StepCodingAgentHarnessWithOutput<TOutput> = {},
 ) {
-	return createHarness<PiCodingAgentInput, string | TOutput>({
-		name: options.name ?? "pi-coding-agent",
-		run: ({ input, signal, setArtifact }) => runPiCodingAgent(input, signal, setArtifact, options),
+	return createHarness<StepCodingAgentInput, string | TOutput>({
+		name: options.name ?? "step-coding-agent",
+		run: ({ input, signal, setArtifact }) => runStepCodingAgent(input, signal, setArtifact, options),
 	});
 }

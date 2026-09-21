@@ -38,6 +38,12 @@ how to extend the built-in rules.
 is supplied. These names are fixed; the application display name does not select
 another environment namespace.
 
+The shared runtime defaults to the `step` display name. `STEP_CLI_APP_NAME`
+can override the name when launched through the Step entrypoint; it does not
+select commands, providers, or storage paths. Step keeps using `.step-cli`,
+while shared runtime callers retain their existing storage defaults. Extension
+manifest keys and package import aliases remain compatible with existing plugins.
+
 The CLI sets `AI_AGENT=step`. Shell tools inherit the shell environment and any
 explicit spawn-hook changes, without injecting session, model, or reasoning
 metadata. Extensions can read that metadata from their context instead.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveModelSelection } from "../src/pi-harness.ts";
+import { resolveModelSelection } from "../src/step-harness.ts";
 
 describe("resolveModelSelection", () => {
 	it("prefers an explicit harness model over environment defaults", () => {

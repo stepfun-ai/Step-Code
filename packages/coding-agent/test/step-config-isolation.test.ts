@@ -1,47 +1,40 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
-
-const originalArgv1 = process.argv[1];
-const stepEnvNames = [
-	"STEP_CLI_APP_NAME",
-	"STEP_CLI_CONFIG_DIR",
-	"STEP_CODING_AGENT_DIR",
-	"STEP_CODING_AGENT_SESSION_DIR",
-] as const;
-const originalStepEnv = Object.fromEntries(stepEnvNames.map((name) => [name, process.env[name]]));
-
-afterEach(() => {
-	if (originalArgv1 === undefined) delete process.argv[1];
-	else process.argv[1] = originalArgv1;
-	for (const name of stepEnvNames) {
-		const value = originalStepEnv[name];
-		if (value === undefined) delete process.env[name];
-		else process.env[name] = value;
-	}
-	vi.resetModules();
-});
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import { runCliBrandingProbe } from "./cli-branding-probe.ts";
 
 describe("coding-agent config distribution isolation", () => {
-	test("ordinary pi ignores stale Step app and config directory variables", async () => {
-		process.argv[1] = "/tmp/cli.js";
-		process.env.STEP_CLI_APP_NAME = "stale-step";
-		process.env.STEP_CLI_CONFIG_DIR = ".stale-step";
+	test("keeps generic storage and provider defaults with the step display name", () => {
+		const result = runCliBrandingProbe({ STEP_CLI_APP_NAME: "stale-step", STEP_CLI_CONFIG_DIR: ".stale-step" });
 
-		vi.resetModules();
-		const config = await import("../src/config.ts");
-
-		expect(config.APP_NAME).toBe("pi");
-		expect(config.CONFIG_DIR_NAME).toBe(".pi");
+		expect(result.appName).toBe("step");
+		expect(result.appTitle).toBe("step");
+		expect(result.isStepEntrypoint).toBe(false);
+		expect(result.isStepStorageContext).toBe(false);
+		expect(result.configDirName).toBe(".pi");
+		expect(result.agentDir).toBe(join(homedir(), ".pi", "agent"));
+		expect(result.sessionsDir).toBe(join(homedir(), ".pi", "agent", "sessions"));
+		expect(result.defaultProvider).toBeNull();
+		expect(result.defaultModel).toBeNull();
+		expect(result.aiAgent).toBeNull();
 	});
 
-	test("Step entrypoint accepts distribution overrides", async () => {
-		process.argv[1] = "/tmp/step";
-		process.env.STEP_CLI_APP_NAME = "step-custom";
-		process.env.STEP_CLI_CONFIG_DIR = ".step-custom";
+	test("Step entrypoint accepts distribution overrides and applies product defaults", () => {
+		const result = runCliBrandingProbe({
+			STEP_CLI_ENTRYPOINT: "1",
+			STEP_CLI_APP_NAME: "custom-assistant",
+			STEP_CLI_CONFIG_DIR: ".custom-assistant",
+		});
 
-		vi.resetModules();
-		const config = await import("../src/config.ts");
-
-		expect(config.APP_NAME).toBe("step-custom");
-		expect(config.CONFIG_DIR_NAME).toBe(".step-custom");
+		expect(result.appName).toBe("custom-assistant");
+		expect(result.appTitle).toBe("custom-assistant");
+		expect(result.isStepEntrypoint).toBe(true);
+		expect(result.isStepStorageContext).toBe(true);
+		expect(result.configDirName).toBe(".custom-assistant");
+		expect(result.agentDir).toBe(join(homedir(), ".custom-assistant", "agent"));
+		expect(result.sessionsDir).toBe(join(homedir(), ".custom-assistant", "agent", "sessions"));
+		expect(result.defaultProvider).toBe("step");
+		expect(result.defaultModel).toBe("step-3.7-flash");
+		expect(result.aiAgent).toBe("step");
 	});
 });

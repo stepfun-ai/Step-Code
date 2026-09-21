@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import chalk from "chalk";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import { APP_NAME, CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
+import { APP_NAME, CONFIG_DIR_NAME, getAgentDir, IS_STEP_ENTRYPOINT } from "./config.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { DefaultPackageManager } from "./core/package-manager.ts";
@@ -20,8 +20,6 @@ type UpdateTarget =
 	| { type: "extensions"; source?: string }
 	| { type: "models" }
 	| { type: "self-unsupported" };
-
-const SELF_UPDATE_NAME = APP_NAME === "pi" ? "pi" : APP_NAME;
 
 /** Resolve the active product root for command surfaces that can be embedded. */
 function resolveCommandAgentDir(agentDir?: string): string {
@@ -68,11 +66,10 @@ const CONFIG_COMMAND_USAGE = `${APP_NAME} config [-l] [--approve|--no-approve]`;
 
 function printConfigCommandHelp(): void {
 	// path/show/init exist only in the Step app shell (see isStepConfigCommand); a generic
-	// `pi config <sub>` is not intercepted, so list them only for the Step build.
-	const subcommands =
-		APP_NAME === "step"
-			? `\n\n${chalk.bold("Subcommands:")}\n${STEP_CONFIG_SUBCOMMANDS.map((sub) => `  ${sub.name.padEnd(6)} ${sub.summary}`).join("\n")}`
-			: "";
+	// shared-runtime invocation is not intercepted, so gate on the entrypoint.
+	const subcommands = IS_STEP_ENTRYPOINT
+		? `\n\n${chalk.bold("Subcommands:")}\n${STEP_CONFIG_SUBCOMMANDS.map((sub) => `  ${sub.name.padEnd(6)} ${sub.summary}`).join("\n")}`
+		: "";
 	console.log(`${chalk.bold("Usage:")}
   ${CONFIG_COMMAND_USAGE}
 
@@ -312,7 +309,7 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 			}
 			updateTarget = { type: "extensions", source: extensionFlagSource };
 		} else if (source) {
-			const sourceIsSelf = source === "self" || source === "pi" || source === SELF_UPDATE_NAME;
+			const sourceIsSelf = source === "self" || source === "pi" || source === APP_NAME;
 			if (sourceIsSelf) {
 				updateTarget = extensionsFlag ? { type: "all" } : { type: "self-unsupported" };
 			} else {
