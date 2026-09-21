@@ -2,7 +2,7 @@
 
 export const STEP_DEFAULT_PROVIDER = "step";
 export const STEP_DEFAULT_MODEL = "step-3.7-flash";
-export const STEP_DEFAULT_THEME = "step-light/step";
+export const STEP_DEFAULT_THEME = "step-blue";
 
 /**
  * Model ids owned by the Step provider.  Keep this list here (instead of
@@ -206,7 +206,7 @@ export function getStepDefaultModel(env: Record<string, string | undefined> = pr
 	return env.STEP_MODEL?.trim() || env.STEP_CLI_DEFAULT_MODEL?.trim() || STEP_DEFAULT_MODEL;
 }
 
-/** Resolve the light/dark theme pair used by the Step entrypoint. */
+/** Resolve the default theme setting used by the Step entrypoint. */
 export function getStepDefaultTheme(env: Record<string, string | undefined> = process.env): string {
 	return env.STEP_CLI_DEFAULT_THEME?.trim() || STEP_DEFAULT_THEME;
 }

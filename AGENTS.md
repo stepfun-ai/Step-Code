@@ -140,7 +140,7 @@ Pluggable backends:
 - When updating `undici`, you MUST read its changelog/release notes for the target version and evaluate whether any changes may affect functionality before applying the update.
 - Hydrate/update locally with `pnpm install --ignore-scripts`; clean/CI-style with `pnpm install --frozen-lockfile --ignore-scripts`. Don't run lifecycle scripts unless the user asks.
 - If dep metadata changes, refresh `pnpm-lock.yaml` with `pnpm install --lockfile-only --ignore-scripts`.
-- Pre-commit blocks lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
+- Pre-commit blocks lockfile commits unless `STEP_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
 
 ## Git
 

@@ -31,11 +31,11 @@ import type {
 	SessionEntry,
 } from "@step-harness/coding-agent";
 import type { Container, EditorComponent, MarkdownTheme, TUI, TuiAltScreen, TuiMainScreen } from "@step-harness/pi-tui";
+import type { ImageContent } from "@step-harness/providers";
 import type { AssistantMessage, Usage } from "@step-harness/providers/compat";
 import type {
 	AssistantMessageComponent,
 	FooterComponent,
-	GoalTipState,
 	StatusIndicator,
 	StatusTipRotator,
 	StepToolSpinnerClock,
@@ -43,6 +43,10 @@ import type {
 	ToolExecutionComponent,
 	WorkingOutputTracker,
 } from "../view/index.ts";
+import type { PastedImageRegistry } from "./pasted-images.ts";
+
+/** Which goal state the tip pool should teach for. */
+export type GoalTipState = "active" | "paused" | "none";
 
 import type { Redraw } from "./redraw.ts";
 
@@ -69,6 +73,9 @@ export interface RuntimeContext {
 	// --- input pump (owned by the host / composition root) ---
 	onInputCallback?: (text: string) => void;
 	pendingUserInputs: string[];
+	// Pasted-image placeholder registry: paste inserts `[Image #N]` and records the
+	// file path here; a message resolves its placeholders to attachments on send.
+	readonly pastedImages: PastedImageRegistry;
 
 	// --- session-events surface (STEP 4): view handles + continuity state + host behaviors ---
 	readonly footer: FooterComponent;
@@ -169,7 +176,7 @@ export interface RuntimeContext {
 	handleStepLogoutCommand(): Promise<void>;
 	handleThinkingCommand(searchTerm?: string): void;
 	isExtensionCommand(text: string): boolean;
-	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void;
+	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
 	showModelSelector(initialSearchInput?: string): void;
 	addCommandInputToChat(text: string): void;
 	getUnknownSlashCommandName(text: string): string | undefined;

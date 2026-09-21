@@ -36,10 +36,13 @@ export class WorkflowProgressStore {
 				.length,
 			totalAgents: Math.max(this.state.totalAgents, nextAgents.length),
 		};
-		const serialized = `${JSON.stringify(this.state, null, 2)}\n`;
+		// Each caller observes its own immutable transition, even when later
+		// updates arrive while this snapshot is waiting for its disk write.
+		const snapshot = this.current();
+		const serialized = `${JSON.stringify(snapshot, null, 2)}\n`;
 		this.writeQueue = this.writeQueue.then(() => writeWorkflowFileAtomic(this.path, serialized));
 		await this.writeQueue;
-		return this.current();
+		return snapshot;
 	}
 
 	async flush(): Promise<void> {

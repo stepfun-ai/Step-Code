@@ -22,7 +22,7 @@ export class Spacer implements Component {
 
 	render(_width: number): string[] {
 		// A stable array lets the parent container skip the whole transcript above it.
-		// Gated like every other cache here so PI_TUI_DISABLE_INCREMENTAL=1 produces the
+		// Gated like every other cache here so disabling incremental rendering produces the
 		// cache-free baseline the render equivalence test compares against.
 		const cache = this.cache;
 		if (!isIncrementalRenderDisabled() && cache !== undefined && cache.lines === this.lines) {

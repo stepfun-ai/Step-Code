@@ -89,8 +89,10 @@ export interface WorkflowMeta {
 export interface WorkflowProgressAgent {
 	id: string;
 	label: string;
+	/** Bounded summary of the assigned prompt, independent of an optional short label. */
+	task?: string;
 	phase?: string;
-	status: "queued" | "running" | "completed" | "failed" | "cached";
+	status: "queued" | "running" | "completed" | "failed" | "aborted" | "cached";
 	startedAt?: number;
 	finishedAt?: number;
 	usageTokens?: number;

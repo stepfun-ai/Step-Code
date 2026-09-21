@@ -54,6 +54,8 @@ step-harness/
 
 命名例外值得记住：`packages/tui` 的包名是 `@step-harness/pi-tui`（保留 pi- 词根），其余 `packages/*` 的包名与目录同名。
 
+RENDERER 层的输入/渲染/布局/差分输出链路细节见 [TUI 渲染管线](tui-rendering-pipeline.md)。
+
 ### 2.1 两条正交轴
 
 结构真正正交的是前两条轴——**宿主（Host）× 产品/交互（Product/Interaction）**；后面的引擎、契约、扩展是被这两条轴共同消费的底座。

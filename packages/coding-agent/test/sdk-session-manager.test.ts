@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@step-harness/providers/compat";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
@@ -20,6 +20,7 @@ describe("createAgentSession session manager defaults", () => {
 	});
 
 	afterEach(() => {
+		vi.unstubAllEnvs();
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -93,7 +94,8 @@ describe("createAgentSession session manager defaults", () => {
 		session.dispose();
 	});
 
-	it("exposes current session state to the built-in bash tool", async () => {
+	it("preserves caller environment values in the built-in bash tool", async () => {
+		vi.stubEnv("STEP_SHELL_TEST_VALUE", "shell-value");
 		const model = getModel("anthropic", "claude-sonnet-4-5");
 		expect(model).toBeTruthy();
 
@@ -104,27 +106,18 @@ describe("createAgentSession session manager defaults", () => {
 			thinkingLevel: "high",
 		});
 		expect(session.sessionFile).toBeTruthy();
-		expect(session.systemPrompt).toContain(
-			"You can inspect PI_* environment variables for current model and session details.",
-		);
 
 		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
 		expect(bashTool).toBeTruthy();
 		const result = await bashTool!.execute("test", {
-			command: `printf '%s\\n' "$PI_SESSION_ID" "$PI_SESSION_FILE" "$PI_PROVIDER" "$PI_MODEL" "$PI_REASONING_LEVEL"`,
+			command: `printf '%s' "$STEP_SHELL_TEST_VALUE"`,
 		});
 		const output = result.content
 			.filter((item): item is { type: "text"; text: string } => item.type === "text")
 			.map((item) => item.text)
 			.join("");
 
-		expect(output.trim().split("\n")).toEqual([
-			session.sessionId,
-			session.sessionFile,
-			model!.provider,
-			model!.id,
-			session.thinkingLevel,
-		]);
+		expect(output).toBe("shell-value");
 
 		session.dispose();
 	});

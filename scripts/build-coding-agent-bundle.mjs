@@ -88,7 +88,7 @@ function commonBuildOptions() {
 		absWorkingDir: repoRoot,
 		banner,
 		bundle: true,
-		define: { PI_BUNDLED_NODE: "true", ...stepBuildDefines },
+		define: { STEP_BUNDLED_NODE: "true", ...stepBuildDefines },
 		external: ["@silvia-odwyer/photon-node"],
 		format: "esm",
 		legalComments: "none",

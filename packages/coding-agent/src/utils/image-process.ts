@@ -1,5 +1,8 @@
+import { readFile } from "node:fs/promises";
+import type { ImageContent } from "@step-harness/providers";
 import { convertImageBytesToPng } from "./image-convert.ts";
 import { formatDimensionNote, type ImageResizeOptions, resizeImage } from "./image-resize.ts";
+import { detectSupportedImageMimeTypeFromFile } from "./mime.ts";
 
 export interface ProcessImageOptions {
 	/** Whether to resize images to inline provider limits. Default: true */
@@ -116,4 +119,25 @@ export async function processImage(
 		mimeType: normalized.mimeType,
 		hints,
 	};
+}
+
+/**
+ * Read an image file from disk and turn it into an inline `ImageContent`
+ * attachment, or null when the file is not a supported image or cannot be
+ * processed (e.g. too large to resize below the inline limit). Mirrors the image
+ * branch of `processFileArguments` (cli/file-processor.ts) so a pasted image and
+ * an `@file` CLI image are attached the same way.
+ */
+export async function imageFileToContent(
+	absolutePath: string,
+	options?: ProcessImageOptions,
+): Promise<ImageContent | null> {
+	const mimeType = await detectSupportedImageMimeTypeFromFile(absolutePath);
+	if (!mimeType) return null;
+
+	const bytes = await readFile(absolutePath);
+	const processed = await processImage(bytes, mimeType, options);
+	if (!processed.ok) return null;
+
+	return { type: "image", mimeType: processed.mimeType, data: processed.data };
 }

@@ -51,9 +51,7 @@ function createPromptTool(name: string, promptSnippet?: string, promptGuidelines
 
 const defaultPromptTools = [
 	createPromptTool("read", "Read file contents", ["Use read to examine files instead of cat or sed."]),
-	createPromptTool("bash", "Execute bash commands (ls, grep, find, etc.)", [
-		"You can inspect PI_* environment variables for current model and session details.",
-	]),
+	createPromptTool("bash", "Execute bash commands (ls, grep, find, etc.)", ["Use bash for shell commands."]),
 	createPromptTool("edit", "Edit files", ["Edit carefully."]),
 	createPromptTool("write", "Create or overwrite files", ["Use write only for new files or complete rewrites."]),
 ];
@@ -96,10 +94,8 @@ describe("coding-agent Harness construction", () => {
 		expect(prompt).toContain("- read: Read file contents");
 		expect(prompt).toContain("- bash: Execute bash commands (ls, grep, find, etc.)");
 		expect(prompt).toContain("Use read to examine files instead of cat or sed.");
-		expect(prompt).toContain("You can inspect PI_* environment variables for current model and session details.");
-		expect(prompt.indexOf("Use read to examine files")).toBeLessThan(
-			prompt.indexOf("You can inspect PI_* environment variables"),
-		);
+		expect(prompt).toContain("Use bash for shell commands.");
+		expect(prompt.indexOf("Use read to examine files")).toBeLessThan(prompt.indexOf("Use bash for shell commands"));
 	});
 
 	test("preserves caller-supplied tools and activation", async () => {
@@ -130,85 +126,21 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
-	test("sets the optional session file in the default bash tool environment", async () => {
-		const session = new Session(new InMemorySessionStorage({ id: "session-file-harness", createdAt: 1 }));
-		const env = new CapturingExecutionEnv({
-			cwd: process.cwd(),
-			shellEnv: { PI_SESSION_FILE: "/stale/parent.jsonl", PI_CODING_AGENT: "true" },
-		});
+	test("does not inject session metadata into the default shell environment", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "shell-session", createdAt: 1 }));
+		const env = new CapturingExecutionEnv({ cwd: process.cwd(), shellEnv: { CUSTOM_VALUE: "preserved" } });
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
 			model: getModel("anthropic", "claude-haiku-4-5"),
-			thinkingLevel: "high",
 			env,
-			sessionFile: "/sessions/current.jsonl",
 		});
 		try {
 			const bash = (await created.harness.getTools()).find((tool) => tool.name === "bash");
 			if (!bash) throw new Error("Expected the default bash tool");
-
-			const result = await bash.execute("bash-call", {
-				command: `printf '%s' "$PI_SESSION_ID|$PI_SESSION_FILE|$PI_PROVIDER|$PI_MODEL|$PI_REASONING_LEVEL|$PI_CODING_AGENT"`,
-			});
-
-			expect(env.executionOverrides).toEqual({
-				PI_SESSION_ID: "session-file-harness",
-				PI_SESSION_FILE: "/sessions/current.jsonl",
-				PI_PROVIDER: "anthropic",
-				PI_MODEL: "claude-haiku-4-5",
-				PI_REASONING_LEVEL: "high",
-			});
-			expect(result.content).toEqual([
-				{
-					type: "text",
-					text: "session-file-harness|/sessions/current.jsonl|anthropic|claude-haiku-4-5|high|true",
-				},
-			]);
-		} finally {
-			await created.harness.close();
-			await env.cleanup();
-		}
-	});
-
-	test("keeps bash PI model variables synchronized with Harness state", async () => {
-		const session = new Session(new InMemorySessionStorage({ id: "dynamic-bash-session", createdAt: 1 }));
-		const env = new CapturingExecutionEnv({
-			cwd: process.cwd(),
-			shellEnv: { PI_SESSION_FILE: "/stale/parent.jsonl", PI_CODING_AGENT: "true" },
-		});
-		const created = await createCodingAgentHarness({
-			session,
-			models: createModels(),
-			model: getModel("anthropic", "claude-haiku-4-5"),
-			thinkingLevel: "high",
-			env,
-		});
-		try {
-			await created.harness.setModel(getModel("anthropic", "claude-sonnet-4-5"));
-			await created.harness.setThinkingLevel("low");
-			const bash = (await created.harness.getTools()).find((tool) => tool.name === "bash");
-			if (!bash) throw new Error("Expected the default bash tool");
-
-			const result = await bash.execute("bash-call", {
-				command: `printf '%s:%s' "\${PI_SESSION_FILE+x}" "$PI_SESSION_ID|$PI_PROVIDER|$PI_MODEL|$PI_REASONING_LEVEL|$PI_CODING_AGENT"`,
-			});
-
-			expect(env.executionOverrides).toEqual({
-				PI_SESSION_ID: "dynamic-bash-session",
-				PI_SESSION_FILE: "",
-				PI_PROVIDER: "anthropic",
-				PI_MODEL: "claude-sonnet-4-5",
-				PI_REASONING_LEVEL: "low",
-			});
-			expect(Object.hasOwn(env.executionOverrides ?? {}, "PI_SESSION_FILE")).toBe(true);
-			expect(env.executionOverrides?.PI_SESSION_FILE).toBe("");
-			expect(result.content).toEqual([
-				{
-					type: "text",
-					text: "x:dynamic-bash-session|anthropic|claude-sonnet-4-5|low|true",
-				},
-			]);
+			const result = await bash.execute("bash-call", { command: "printf '%s' \"$CUSTOM_VALUE\"" });
+			expect(env.executionOverrides ?? {}).toEqual({});
+			expect(result.content).toEqual([{ type: "text", text: "preserved" }]);
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
@@ -287,11 +219,7 @@ describe("coding-agent Harness construction", () => {
 	});
 
 	test.each([
-		[
-			"bash",
-			"Execute bash commands (ls, grep, find, etc.)",
-			"You can inspect PI_* environment variables for current model and session details.",
-		],
+		["bash", "Execute bash commands (ls, grep, find, etc.)", "Use bash for shell commands."],
 		["read", "Read file contents", "Use read to examine files instead of cat or sed."],
 		[
 			"edit",
@@ -342,7 +270,7 @@ describe("coding-agent Harness construction", () => {
 		expect(prompt).toContain("- write: Create or overwrite files");
 		expect(prompt).toContain("- read: Read file contents");
 		expect(prompt).not.toContain("- bash:");
-		expect(prompt).not.toContain("You can inspect PI_* environment variables");
+		expect(prompt).not.toContain("Use bash for shell commands");
 		expect(prompt).toContain('<project_instructions path="/workspace/AGENTS.md">');
 		expect(prompt).toContain("<name>review</name>");
 		expect(prompt.indexOf("Use write only for new files or complete rewrites.")).toBeLessThan(

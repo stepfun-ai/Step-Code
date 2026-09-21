@@ -143,7 +143,7 @@ import {
 	TuiMainScreen,
 	visibleWidth,
 } from "@step-harness/pi-tui";
-import type { AuthEvent, AuthPrompt } from "@step-harness/providers";
+import type { AuthEvent, AuthPrompt, ImageContent } from "@step-harness/providers";
 import type { AssistantMessage, Message, Model, Usage } from "@step-harness/providers/compat";
 import chalk from "chalk";
 import { spawn } from "child_process";
@@ -161,6 +161,7 @@ import {
 	wireSubmitHandler,
 } from "./runtime/input-dispatch.ts";
 import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
+import { PastedImageRegistry, resolvePastedImages } from "./runtime/pasted-images.ts";
 import { createRedraw, type Redraw } from "./runtime/redraw.ts";
 import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
 import { FooterComponent, formatTokens } from "./view/chrome/footer.ts";
@@ -173,8 +174,9 @@ import {
 	WorkingOutputTracker,
 	WorkingStatusIndicator,
 } from "./view/chrome/status-indicator.ts";
-import type { GoalTipState, StatusTipRotator } from "./view/chrome/status-tips.ts";
+import type { StatusTipRotator } from "./view/chrome/status-tips.ts";
 import { StepWelcomeComponent } from "./view/chrome/step-welcome.ts";
+import { paintStepWordmarkBorder } from "./view/chrome/step-wordmark.ts";
 import { ExtensionEditorComponent } from "./view/dialogs/extension-editor.ts";
 import { ExtensionInputComponent } from "./view/dialogs/extension-input.ts";
 import { ExtensionSelectorComponent } from "./view/dialogs/extension-selector.ts";
@@ -272,6 +274,7 @@ class ExpandableText extends Text implements Expandable {
 type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
+	images?: ImageContent[];
 };
 
 type CompactionCostNotice = {
@@ -523,6 +526,7 @@ export class InteractiveMode {
 	isInitialized = false;
 	onInputCallback?: (text: string) => void;
 	pendingUserInputs: string[] = [];
+	readonly pastedImages = new PastedImageRegistry();
 	activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -541,19 +545,6 @@ export class InteractiveMode {
 	// read back here by showWorkingStatusIndicator().
 	statusTipRotator: StatusTipRotator | undefined = undefined;
 	currentStatusTip: string | undefined = undefined;
-
-	/** Latest persisted goal status for the state-aware tip pool. */
-	readGoalTipState(): GoalTipState {
-		const entries = this.sessionManager.getBranch();
-		for (let i = entries.length - 1; i >= 0; i -= 1) {
-			const entry = entries[i];
-			if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
-			const data = entry.data as { status?: string; cleared?: boolean } | undefined;
-			if (data?.cleared === true) return "none";
-			return data?.status === "active" || data?.status === "paused" ? data.status : "none";
-		}
-		return "none";
-	}
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
@@ -567,6 +558,9 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	// Alignment of the currently-tracked status row, so showStatus never merges a
+	// message onto a tracked Text of a different alignment (e.g. the centered
+	// clipboard-image hint onto a left-aligned status).
 	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
@@ -637,6 +631,9 @@ export class InteractiveMode {
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
 	}>();
+
+	// Clipboard-image hint: when the terminal regains focus (e.g. after a
+	// screenshot) and the clipboard holds an image, hint the paste key once.
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -732,7 +729,10 @@ export class InteractiveMode {
 					workspaceRoot: this.sessionManager.getCwd(),
 					sessionId: this.sessionManager.getSessionId(),
 				}),
-				{ requestRender: () => this.redraw.requestRender() },
+				{
+					requestRender: () => this.redraw.requestRender(),
+					requestForceRender: () => this.redraw.forceRender(),
+				},
 			);
 			this.stepWelcome.setFirstMessageHint(!this.hasConversationMessages(this.sessionManager.buildContextEntries()));
 			this.documentContainer.addChild(this.stepWelcome);
@@ -1442,7 +1442,12 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.session.prompt(userInput);
+				// Turn [Image #N] placeholders into attachments (and reset the registry
+				// for the next message); see resolvePastedImages.
+				const { text, images } = await resolvePastedImages(this.pastedImages, userInput, {
+					autoResizeImages: this.settingsManager.getImageAutoResize(),
+				});
+				await this.session.prompt(text, { images: images.length ? images : undefined });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -2575,14 +2580,14 @@ export class InteractiveMode {
 		removeExisting(this.extensionWidgetsAbove);
 		removeExisting(this.extensionWidgetsBelow);
 
-		let component: Component & { dispose?(): void };
-
-		if (options?.component) {
-			component = options.component(this.ui, theme);
-		} else if (content === undefined) {
+		if (content === undefined) {
 			this.renderWidgets();
 			return;
-		} else if (Array.isArray(content)) {
+		}
+
+		let component: Component & { dispose?(): void };
+
+		if (Array.isArray(content)) {
 			// Wrap string array in a Container with Text components
 			const container = new Container();
 			for (const line of content.slice(0, InteractiveMode.MAX_WIDGET_LINES)) {
@@ -2595,11 +2600,6 @@ export class InteractiveMode {
 		} else {
 			// Factory function - create component
 			component = content(this.ui, theme);
-		}
-
-		// Widgets that support expansion follow the global ctrl+o toggle.
-		if (isExpandable(component)) {
-			component.setExpanded(this.toolOutputExpanded);
 		}
 
 		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;
@@ -3794,6 +3794,19 @@ export class InteractiveMode {
 		);
 	}
 
+	/** Latest goal status for the tip pool (RuntimeContext member). */
+	readGoalTipState(): "active" | "paused" | "none" {
+		const entries = this.sessionManager.getBranch();
+		for (let i = entries.length - 1; i >= 0; i -= 1) {
+			const entry = entries[i];
+			if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
+			const data = entry.data as { status?: string; cleared?: boolean } | undefined;
+			if (data?.cleared === true) return "none";
+			return data?.status === "active" || data?.status === "paused" ? data.status : "none";
+		}
+		return "none";
+	}
+
 	async getUserInput(): Promise<string> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
@@ -3837,6 +3850,9 @@ export class InteractiveMode {
 	async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+
+		// Turn off focus reporting we enabled for the clipboard-image hint, so the
+		// terminal does not keep sending \x1b[I / \x1b[O to the parent shell.
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -3909,6 +3925,10 @@ export class InteractiveMode {
 		} catch {}
 		try {
 			killTrackedDetachedChildren();
+		} catch {}
+		try {
+			// isShuttingDown is set above, so shutdown()'s teardown never runs here;
+			// restore focus reporting ourselves or the escapes leak to the shell.
 		} catch {}
 		try {
 			this.ui.stop();
@@ -3998,7 +4018,7 @@ export class InteractiveMode {
 		});
 
 		try {
-			// Stop the TUI (restore terminal to normal mode)
+			if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -4021,7 +4041,10 @@ export class InteractiveMode {
 				this.editor.setText("");
 				await this.session.prompt(text);
 			} else {
-				this.queueCompactionMessage(text, "followUp");
+				const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
+					autoResizeImages: this.settingsManager.getImageAutoResize(),
+				});
+				this.queueCompactionMessage(message, "followUp", images.length ? images : undefined);
 			}
 			return;
 		}
@@ -4031,7 +4054,13 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
+				autoResizeImages: this.settingsManager.getImageAutoResize(),
+			});
+			await this.session.prompt(message, {
+				streamingBehavior: "followUp",
+				images: images.length ? images : undefined,
+			});
 			this.updatePendingMessagesDisplay();
 			this.redraw.requestRender();
 		}
@@ -4059,8 +4088,8 @@ export class InteractiveMode {
 			// Step's composer keeps a fixed brand frame for thinking/model state,
 			// but bash mode is visible before submitting: `!` switches the frame
 			// to the error tone and `!!` (excluded from context) dims it.
-			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : "borderAccent";
-			this.editor.borderColor = (str: string) => theme.fg(colorKey, str);
+			const colorKey = this.isBashExcluded ? "dim" : this.isBashMode ? "error" : undefined;
+			this.editor.borderColor = colorKey ? (str: string) => theme.fg(colorKey, str) : paintStepWordmarkBorder;
 			this.redraw.requestRender();
 			return;
 		}
@@ -4150,6 +4179,7 @@ export class InteractiveMode {
 	async handleOpenExternalEditor(): Promise<void> {
 		const editorCmd = this.settingsManager.getExternalEditorCommand();
 		const content = this.editor.getExpandedText?.() ?? this.editor.getText();
+		if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 		this.ui.stop();
 		try {
 			const result = await editInExternalEditor({
@@ -4304,8 +4334,8 @@ export class InteractiveMode {
 		return allQueued.length;
 	}
 
-	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.compactionQueuedMessages.push({ text, mode });
+	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		this.compactionQueuedMessages.push({ text, mode, images });
 		this.editor.addToHistory?.(text);
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
@@ -4363,9 +4393,9 @@ export class InteractiveMode {
 					if (this.isExtensionCommand(message.text)) {
 						await this.session.prompt(message.text);
 					} else if (message.mode === "followUp") {
-						await this.session.followUp(message.text);
+						await this.session.followUp(message.text, message.images);
 					} else {
-						await this.session.steer(message.text);
+						await this.session.steer(message.text, message.images);
 					}
 				}
 				this.updatePendingMessagesDisplay();
@@ -4393,7 +4423,10 @@ export class InteractiveMode {
 
 			// Start a prompt when idle, or queue it into a run still finishing compaction.
 			const promptPromise = this.session
-				.prompt(firstPrompt.text, { streamingBehavior: firstPrompt.mode })
+				.prompt(firstPrompt.text, {
+					streamingBehavior: firstPrompt.mode,
+					images: firstPrompt.images?.length ? firstPrompt.images : undefined,
+				})
 				.catch((error) => {
 					restoreQueue(error);
 				});
@@ -4403,9 +4436,9 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(message.text)) {
 					await this.session.prompt(message.text);
 				} else if (message.mode === "followUp") {
-					await this.session.followUp(message.text);
+					await this.session.followUp(message.text, message.images);
 				} else {
-					await this.session.steer(message.text);
+					await this.session.steer(message.text, message.images);
 				}
 			}
 			this.updatePendingMessagesDisplay();
@@ -6695,6 +6728,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 		this.withExtensionDialogsBlocked(() => {
 			this.stepWelcome?.dispose();
 			this.stepSpinner?.dispose();
+			if (this.defaultEditor instanceof StepEditor) this.defaultEditor.dispose();
 			this.clearStatusIndicator();
 			this.hideExtensionSelector();
 			this.hideExtensionInput();

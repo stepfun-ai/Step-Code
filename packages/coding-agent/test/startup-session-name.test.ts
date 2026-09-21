@@ -65,15 +65,11 @@ function readSessionInfoNames(sessionFile: string): string[] {
 
 async function runCli(args: string[], dirs: CliDirs): Promise<CliResult> {
 	let stderr = "";
-	const child = spawn(process.execPath, [cliPath, ...args], {
+	const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), cliPath, ...args], {
 		cwd: dirs.projectDir,
 		env: {
 			...process.env,
 			[ENV_AGENT_DIR]: dirs.agentDir,
-			// The @step-harness/cli entry resolves the Step storage namespace, so
-			// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
-			// from this test process's APP_NAME, which may differ from the child's).
-			STEP_CODING_AGENT_DIR: dirs.agentDir,
 			TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 		},
 		stdio: ["ignore", "ignore", "pipe"],

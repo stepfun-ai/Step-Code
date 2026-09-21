@@ -47,7 +47,6 @@ import {
 	normalizeStepSessionSelectorArgs,
 	parseStepUpdateCommand,
 	prepareMain,
-	printTimings,
 	readFeedbackUsername,
 	readGlobalStepConfig,
 	readOrCreateStepDeviceId,
@@ -72,7 +71,6 @@ import {
 	setStderrDevLogStorageRootDirectory,
 	stopThemeWatcher,
 	syncStepLoginProfileEndpoint,
-	time,
 	trackStepTelemetryError,
 	translateStepCommandArgs,
 	updateGlobalMcpConfig,
@@ -91,7 +89,6 @@ import { selectConfig, selectSession, showFirstTimeSetup, showStartupInput, show
  * these defaults only isolate Step's persisted state from a user's pi install.
  */
 process.title = "step";
-process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = "step";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 ensureStepGlobalConfig(process.env);
@@ -264,10 +261,10 @@ const stepMainOptions: MainOptions = {
 	},
 	modelRequestObserver,
 	systemPromptProduct: {
-		name: "Step",
-		role: "Step, an interactive terminal coding agent developed by StepFun",
+		name: "StepCode",
+		role: "an interactive terminal coding agent developed by StepFun",
 		introduction:
-			"You are step-cli, an interactive terminal coding agent developed by StepFun. You help with software engineering tasks in the current workspace: reading and changing code, running commands, and answering questions about the codebase. Optimize for correctness first, concision second, speed third.",
+			"You are StepCode, an interactive terminal coding agent developed by StepFun. You help with software engineering tasks in the current workspace: reading and changing code, running commands, and answering questions about the codebase. Optimize for correctness first, concision second, speed third.",
 		includeDocumentation: false,
 		promptAppendix: buildStepSystemPromptAppendix,
 	},
@@ -692,14 +689,13 @@ function readCredentialUid(credential: unknown): string | undefined {
  *
  * Uses prep.appMode verbatim (never re-resolves it, so a piped-stdin launch that
  * prepareMain already flipped to "print" can never fall back into the TTY UI).
- * printTimings / stopThemeWatcher / restoreStdout are pi's exported functions:
- * they act on coding-agent module-global state (timings buffer, theme watcher,
+ * stopThemeWatcher / restoreStdout are coding-agent's exported functions:
+ * they act on coding-agent module-global state (theme watcher,
  * the stdout takeover prepareMain installed), so they must not be reimplemented.
  */
 async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispatch" }>): Promise<void> {
 	switch (prep.appMode) {
 		case "rpc": {
-			printTimings();
 			await runRpcMode(prep.runtimeHost);
 			break;
 		}
@@ -722,30 +718,11 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 				...stepMainOptions.interactiveModeOptions,
 				sessionRoot: prep.sessionRoot,
 			});
-			if (prep.startupBenchmark) {
-				await interactiveMode.init();
-				time("interactiveMode.init");
-				// Give the TUI's stdin handler a brief chance to consume terminal query replies
-				// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-				await new Promise((resolve) => setTimeout(resolve, 150));
-				interactiveMode.stop();
-				stopThemeWatcher();
-				printTimings();
-				if (process.stdout.writableLength > 0) {
-					await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
-				}
-				if (process.stderr.writableLength > 0) {
-					await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
-				}
-				break;
-			}
-			printTimings();
 			await interactiveMode.run();
 			break;
 		}
 		default: {
 			// print / json headless channels.
-			printTimings();
 			const exitCode = await runPrintMode(prep.runtimeHost, {
 				mode: toPrintOutputMode(prep.appMode),
 				messages: prep.parsed.messages,

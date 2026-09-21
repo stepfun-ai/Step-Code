@@ -122,13 +122,6 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 		env.STEP_CODING_AGENT_DIR?.trim() ||
 		join(resolveStepHomeDir(env), configDir, "agent");
 	env.STEP_CODING_AGENT_DIR = agentDir;
-	// A few Pi infrastructure surfaces (notably pi-tui's fallback log path)
-	// still read the historical PI_CODING_AGENT_DIR variable directly instead
-	// of going through coding-agent/config.ts. Mirror the resolved Step root for
-	// those surfaces so an embedded Step host cannot silently create ~/.pi
-	// state. This is scoped to the Step environment object; ordinary Pi launches
-	// never call this function and retain their native default.
-	env.PI_CODING_AGENT_DIR = agentDir;
 	// Keep an explicit session override available. When neither is supplied, leave it
 	// unset so the
 	// caller can use Pi's native `agentDir/sessions/<cwd>` default. The
@@ -146,9 +139,12 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 	if (!env.STEP_CLI_DEFAULT_MODEL?.trim()) {
 		env.STEP_CLI_DEFAULT_MODEL = env.STEP_MODEL?.trim() || STEP_DEFAULT_MODEL;
 	}
+	// Downstream attribution marker sent as `x-step-client`. Keep it overridable
+	// so an embedding host can identify itself, but default shipped Step CLI
+	// requests to `step-cli`.
+	if (!env.STEP_CLIENT?.trim()) env.STEP_CLIENT = "step-cli";
 	// Step should not contact Pi's release/install services unless explicitly
 	// opted in by setting STEP_CLI_DISABLE_PI_SERVICES to a false value.
 	if (!env.STEP_CLI_DISABLE_PI_SERVICES?.trim()) env.STEP_CLI_DISABLE_PI_SERVICES = "1";
-	env.PI_CODING_AGENT = "true";
 	env.AI_AGENT = "step";
 }

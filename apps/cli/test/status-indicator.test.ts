@@ -82,7 +82,7 @@ describe("status indicators", () => {
 	});
 
 	it("renders Claude-style elapsed time, estimated output tokens, and thinking phase for Step", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		vi.setSystemTime(6500);
 		const tracker = new WorkingOutputTracker();
@@ -99,7 +99,7 @@ describe("status indicators", () => {
 	});
 
 	it("shows a static approval state without running tokens, elapsed time, or tips", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const tui = { requestRender } as unknown as TUI;
@@ -123,7 +123,7 @@ describe("status indicators", () => {
 	});
 
 	it("preserves working preferences changed while approval pauses both timers", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const tui = { requestRender } as unknown as TUI;
@@ -155,7 +155,7 @@ describe("status indicators", () => {
 	});
 
 	it("does not restart a disposed working indicator on late approval cleanup", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		vi.useFakeTimers();
 		const tui = { requestRender: vi.fn() } as unknown as TUI;
 		const indicator = new WorkingStatusIndicator(tui, "Work", undefined, "step", new WorkingOutputTracker());
@@ -234,7 +234,7 @@ describe("status indicators", () => {
 	});
 
 	it("keeps native working status unchanged and Step status within the available width", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const tracker = new WorkingOutputTracker();
 		tracker.reset(0);
 		const partial = assistantMessage([{ type: "text", text: "x".repeat(400) }]);
