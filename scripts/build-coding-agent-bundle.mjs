@@ -16,7 +16,6 @@ const codingAgentDir = join(repoRoot, "packages", "coding-agent");
 const appEntryDir = join(repoRoot, "apps", "cli");
 const appEntryDistDir = join(appEntryDir, "dist");
 const aiDir = join(repoRoot, "packages", "providers");
-const aiDistDir = join(aiDir, "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
 const bundleDir = join(codingAgentDistDir, "bundle");
 const stepBuildDefines = readStepBuildDefines();
@@ -185,7 +184,6 @@ for (const entry of [
 	join(appEntryDistDir, "main.js"),
 	join(codingAgentDistDir, "index.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-	join(aiDistDir, "auth", "oauth", "anthropic.js"),
 ]) {
 	if (!existsSync(entry)) {
 		throw new Error(`Bundle input is missing: ${relative(repoRoot, entry)}. Build the workspace packages first.`);
@@ -207,27 +205,20 @@ const mainResult = await build({
 	splitting: true,
 });
 
-const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "packages/providers/dist/auth/oauth/load.js");
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/utils/image-resize.js");
 
-// These implementations are reached through variable-specifier imports or a
-// worker URL, so the main bundle cannot follow them. Emit one self-contained
-// file per implementation beside the code that resolves it.
+// The image-resize worker is reached through a worker URL, so the main bundle
+// cannot follow it. Emit a self-contained worker file beside the code that
+// resolves it (the image-resize implementation).
 const lazyResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
 	entryPoints: {
-		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
 		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
 	},
-	outdir: dirname(oauthLoaderOutput),
+	outdir: dirname(imageResizeOutput),
 	splitting: false,
 });
-
-const imageResizeWorkerOutput = resolve(dirname(oauthLoaderOutput), "image-resize-worker.js");
-if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
-	throw new Error("Image resize implementation and worker were emitted into different directories");
-}
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
 chmodSync(join(bundleDir, "step.js"), 0o755);
