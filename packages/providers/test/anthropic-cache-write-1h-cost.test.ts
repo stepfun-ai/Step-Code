@@ -1,8 +1,8 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
-import { getModel } from "../src/compat.ts";
 import type { Context } from "../src/types.ts";
+import { anthropicModel } from "./helpers/step-fixtures.ts";
 
 function createSseResponse(events: Array<{ event: string; data: string }>): Response {
 	const body = events.map(({ event, data }) => `event: ${event}\ndata: ${data}\n`).join("\n");
@@ -61,7 +61,7 @@ const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 
 
 describe("Anthropic 1h cache write cost", () => {
 	it("prices the 1h portion at 2x input and the rest at the 5m rate", async () => {
-		const model = getModel("anthropic", "claude-opus-4-8");
+		const model = anthropicModel();
 		const response = createSseResponse(
 			eventsWithCacheCreation({ ephemeral_5m_input_tokens: 600_000, ephemeral_1h_input_tokens: 400_000 }),
 		);
@@ -74,7 +74,7 @@ describe("Anthropic 1h cache write cost", () => {
 	});
 
 	it("falls back to the 5m rate when no breakdown is reported", async () => {
-		const model = getModel("anthropic", "claude-opus-4-8");
+		const model = anthropicModel();
 		const response = createSseResponse(eventsWithCacheCreation(undefined));
 		const result = await streamAnthropic(model, context, { client: createFakeAnthropicClient(response) }).result();
 

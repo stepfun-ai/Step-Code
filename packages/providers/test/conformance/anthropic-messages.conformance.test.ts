@@ -11,9 +11,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AnthropicOptions } from "../../src/api/anthropic-messages.ts";
-import { getModel } from "../../src/compat.ts";
 import type { Context, Model } from "../../src/types.ts";
 import { anthropicEventSse, collectEventTypes, resolveAdapter, sseResponse } from "./harness.ts";
+import { anthropicModel } from "../helpers/step-fixtures.ts";
 
 interface CapturedParams {
 	model: string;
@@ -72,7 +72,7 @@ const successSseBody = anthropicEventSse([
 
 const successSse = () => sseResponse(successSseBody);
 
-const model: Model<"anthropic-messages"> = getModel("anthropic", "claude-haiku-4-5");
+const model: Model<"anthropic-messages"> = anthropicModel();
 
 const context: Context = {
 	systemPrompt: "You are a helpful assistant.",

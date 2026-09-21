@@ -225,7 +225,7 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 		const template = [
 			"# StepCode configuration",
 			'defaultProvider = "step"',
-			'defaultModel = "step-3.7-flash"',
+			'defaultModel = "step-5-preview"',
 			"",
 		].join("\n");
 		await writeFile(target, template, { encoding: "utf8", mode: 0o600 });

@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@step-harness/providers/compat";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { stepModel } from "./utilities.ts";
 
 describe("createAgentSession session manager defaults", () => {
 	let tempDir: string;
@@ -27,7 +27,7 @@ describe("createAgentSession session manager defaults", () => {
 	});
 
 	it("uses agentDir for the default persisted session path", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = stepModel();
 		expect(model).toBeTruthy();
 
 		const { session } = await createAgentSession({
@@ -48,7 +48,7 @@ describe("createAgentSession session manager defaults", () => {
 	});
 
 	it("keeps an explicit sessionManager override", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = stepModel();
 		expect(model).toBeTruthy();
 
 		const sessionManager = SessionManager.inMemory(cwd);
@@ -66,7 +66,7 @@ describe("createAgentSession session manager defaults", () => {
 	});
 
 	it("derives cwd from an explicit sessionManager when cwd is omitted", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = stepModel();
 		expect(model).toBeTruthy();
 
 		const sessionCwd = join(tempDir, "session-project");
@@ -96,7 +96,7 @@ describe("createAgentSession session manager defaults", () => {
 
 	it("preserves caller environment values in the built-in bash tool", async () => {
 		vi.stubEnv("STEP_SHELL_TEST_VALUE", "shell-value");
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = stepModel();
 		expect(model).toBeTruthy();
 
 		const { session } = await createAgentSession({

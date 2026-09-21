@@ -2,8 +2,8 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
-import { getModel } from "../src/compat.ts";
 import type { Context, ToolCall } from "../src/types.ts";
+import { anthropicModel } from "./helpers/step-fixtures.ts";
 
 function createSseResponse(events: Array<{ event: string; data: string }>): Response {
 	const body = events.map(({ event, data }) => `event: ${event}\ndata: ${data}\n`).join("\n");
@@ -80,7 +80,7 @@ function createFakeAnthropicClient(response: Response): Anthropic {
 
 describe("Anthropic raw SSE parsing", () => {
 	it("repairs malformed SSE JSON and malformed streamed tool JSON", async () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "Use the edit tool.", timestamp: Date.now() }],
 			tools: [
@@ -167,7 +167,7 @@ describe("Anthropic raw SSE parsing", () => {
 	});
 
 	it("preserves content from content_block_start events", async () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
 		};
@@ -265,7 +265,7 @@ describe("Anthropic raw SSE parsing", () => {
 	});
 
 	it("preserves refusal stop details from message_delta", async () => {
-		const model = getModel("anthropic", "claude-fable-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "blocked request", timestamp: Date.now() }],
 		};
@@ -324,7 +324,7 @@ describe("Anthropic raw SSE parsing", () => {
 	});
 
 	it("preserves sensitive stop reasons with a descriptive error message", async () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "blocked request", timestamp: Date.now() }],
 		};
@@ -374,7 +374,7 @@ describe("Anthropic raw SSE parsing", () => {
 	});
 
 	it("treats message_delta without usage as a no-op for usage accumulation", async () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
 		};
@@ -402,7 +402,7 @@ describe("Anthropic raw SSE parsing", () => {
 	});
 
 	it("ignores unknown SSE events after message_stop", async () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
 		};

@@ -6,7 +6,6 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	EventStream,
-	getModel,
 	type Model,
 } from "@step-harness/providers/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +16,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
-import { createTestResourceLoader } from "./utilities.ts";
+import { createTestResourceLoader, stepModel } from "./utilities.ts";
 
 const rpcIo = vi.hoisted(() => ({
 	outputLines: [] as string[],
@@ -60,9 +59,9 @@ function createAssistantMessage(text: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "claude-sonnet-4-5",
+		api: "openai-completions",
+		provider: "step",
+		model: "step-5-preview",
 		usage: {
 			input: 0,
 			output: 0,
@@ -102,7 +101,7 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 	const tempDir = join(tmpdir(), `pi-rpc-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
 
-	const model = options.model ?? getModel("anthropic", "claude-sonnet-4-5");
+	const model = options.model ?? stepModel();
 	if (!model) {
 		throw new Error("Test model not found");
 	}
@@ -131,7 +130,7 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 	const modelRegistry = await createInMemoryModelRegistry(authStorage);
 	if (options.withAuth) {
-		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
 	}
 
 	const session = new AgentSession({

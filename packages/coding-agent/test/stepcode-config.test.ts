@@ -326,7 +326,9 @@ describe("StepCode config anthropic-messages thinking contract", () => {
 	});
 
 	test("preserves a declared thinking level map", async () => {
-		const models = await loadAnthropicModels([{ id: "step-5-preview", thinkingLevelMap: { off: "none", medium: "medium" } }]);
+		const models = await loadAnthropicModels([
+			{ id: "step-5-preview", thinkingLevelMap: { off: "none", medium: "medium" } },
+		]);
 		expect(models["step-5-preview"]).toMatchObject({ thinkingLevelMap: { off: "none", medium: "medium" } });
 	});
 
@@ -339,7 +341,10 @@ describe("StepCode config anthropic-messages thinking contract", () => {
 
 	test("keeps sibling compat keys", async () => {
 		const models = await loadAnthropicModels([
-			{ id: "step-5-preview", compat: { forceAdaptiveThinking: true, allowEmptySignature: true, supportsTemperature: false } },
+			{
+				id: "step-5-preview",
+				compat: { forceAdaptiveThinking: true, allowEmptySignature: true, supportsTemperature: false },
+			},
 		]);
 		expect(models["step-5-preview"]?.compat).toEqual({
 			forceAdaptiveThinking: true,

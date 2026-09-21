@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
-import { getModel, stream } from "../src/compat.ts";
+import { stream } from "../src/compat.ts";
 import type { Context, Model } from "../src/types.ts";
+import { anthropicModel, responsesModel } from "./helpers/step-fixtures.ts";
 
 class PayloadCaptured extends Error {
 	constructor() {
@@ -38,7 +39,7 @@ describe("Cache retention request options", () => {
 		it.skipIf(!process.env.ANTHROPIC_API_KEY)(
 			"should use default cache TTL (no ttl field) when cacheRetention is not set",
 			async () => {
-				const model = getModel("anthropic", "claude-haiku-4-5");
+				const model = anthropicModel();
 				let capturedPayload: any = null;
 
 				const s = stream(model, context, {
@@ -60,7 +61,7 @@ describe("Cache retention request options", () => {
 		);
 
 		it.skipIf(!process.env.ANTHROPIC_API_KEY)("should use 1h cache TTL when cacheRetention is long", async () => {
-			const model = getModel("anthropic", "claude-haiku-4-5");
+			const model = anthropicModel();
 			let capturedPayload: any = null;
 
 			const s = stream(model, context, {
@@ -83,7 +84,7 @@ describe("Cache retention request options", () => {
 
 		it("should add ttl for non-api.anthropic.com baseUrl by default", async () => {
 			// Create a model with a different baseUrl (simulating a proxy)
-			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			const baseModel = anthropicModel();
 			const proxyModel = {
 				...baseModel,
 				baseUrl: "https://my-proxy.example.com/v1",
@@ -120,7 +121,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should omit ttl when supportsLongCacheRetention is false", async () => {
-			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			const baseModel = anthropicModel();
 			const proxyModel = {
 				...baseModel,
 				baseUrl: "https://my-proxy.example.com/v1",
@@ -149,7 +150,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should omit cache_control when cacheRetention is none", async () => {
-			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			const baseModel = anthropicModel();
 			let capturedPayload: any = null;
 
 			try {
@@ -173,7 +174,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should add cache_control to string user messages", async () => {
-			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			const baseModel = anthropicModel();
 			let capturedPayload: any = null;
 
 			try {
@@ -199,7 +200,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should set 1h cache TTL when cacheRetention is long", async () => {
-			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			const baseModel = anthropicModel();
 			let capturedPayload: any = null;
 
 			try {
@@ -227,7 +228,7 @@ describe("Cache retention request options", () => {
 		it.skipIf(!process.env.OPENAI_API_KEY)(
 			"should not set prompt_cache_retention when cacheRetention is not set",
 			async () => {
-				const model = getModel("openai", "gpt-4o-mini");
+				const model = responsesModel();
 				let capturedPayload: any = null;
 
 				const s = stream(model, context, {
@@ -249,7 +250,7 @@ describe("Cache retention request options", () => {
 		it.skipIf(!process.env.OPENAI_API_KEY)(
 			"should set prompt_cache_retention to 24h when cacheRetention is long",
 			async () => {
-				const model = getModel("openai", "gpt-4o-mini");
+				const model = responsesModel();
 				let capturedPayload: any = null;
 
 				const s = stream(model, context, {
@@ -271,7 +272,7 @@ describe("Cache retention request options", () => {
 
 		it("should set prompt_cache_retention for non-api.openai.com baseUrl by default", async () => {
 			// Create a model with a different baseUrl (simulating a proxy)
-			const baseModel = getModel("openai", "gpt-4o-mini");
+			const baseModel = responsesModel();
 			const proxyModel = {
 				...baseModel,
 				baseUrl: "https://my-proxy.example.com/v1",
@@ -302,7 +303,7 @@ describe("Cache retention request options", () => {
 
 		it("should omit prompt_cache_retention when supportsLongCacheRetention is false", async () => {
 			const model = {
-				...getModel("openai", "gpt-4o-mini"),
+				...responsesModel(),
 				compat: { supportsLongCacheRetention: false },
 			};
 			let capturedPayload: any = null;
@@ -329,7 +330,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should omit prompt_cache_key and disable implicit writes when cacheRetention is none", async () => {
-			const model = getModel("openai", "gpt-5.6-sol");
+			const model = responsesModel();
 			let capturedPayload: OpenAIResponsesCachePayload | undefined;
 
 			try {
@@ -356,7 +357,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should omit prompt_cache_options for models that reject it", async () => {
-			const model = getModel("openai", "gpt-4o-mini");
+			const model = responsesModel();
 			let capturedPayload: OpenAIResponsesCachePayload | undefined;
 
 			try {
@@ -382,7 +383,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should set prompt_cache_retention when cacheRetention is long", async () => {
-			const model = getModel("openai", "gpt-4o-mini");
+			const model = responsesModel();
 			let capturedPayload: any = null;
 
 			try {

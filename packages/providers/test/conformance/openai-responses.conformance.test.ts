@@ -9,9 +9,9 @@
 
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getModel } from "../../src/compat.ts";
 import type { Context, Model } from "../../src/types.ts";
 import { collectEventTypes, jsonErrorResponse, openAiDataSse, resolveAdapter, sseResponse } from "./harness.ts";
+import { responsesModel } from "../helpers/step-fixtures.ts";
 
 interface ResponsesPayload {
 	model: string;
@@ -21,7 +21,7 @@ interface ResponsesPayload {
 	tools?: Array<{ type?: string; name?: string }>;
 }
 
-const model: Model<"openai-responses"> = getModel("openai", "gpt-5.4");
+const model: Model<"openai-responses"> = responsesModel();
 
 const context: Context = {
 	systemPrompt: "You are a helpful assistant.",

@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
-import { getModel } from "../src/compat.ts";
 import type { AssistantMessageEvent, Context, Model } from "../src/types.ts";
+import { anthropicModel } from "./helpers/step-fixtures.ts";
 
 // Feedback: in `--mode json` the `message_start` event already carried streamed
 // content (e.g. thinking="The") that then repeated in the following
@@ -55,7 +55,7 @@ function findStart(events: AssistantMessageEvent[]): Extract<AssistantMessageEve
 
 describe("provider start event content snapshot", () => {
 	it("anthropic: start event content stays empty after thinking deltas mutate the message", async () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = anthropicModel();
 		const context: Context = {
 			messages: [{ role: "user", content: "OK", timestamp: 1 }],
 		};

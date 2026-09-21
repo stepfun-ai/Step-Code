@@ -7,14 +7,14 @@ import {
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
 } from "@step-harness/providers";
-import { getModel, streamSimple } from "@step-harness/providers/compat";
+import { streamSimple } from "@step-harness/providers/compat";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
-import { createTestResourceLoader } from "./utilities.ts";
+import { createTestResourceLoader, stepModel } from "./utilities.ts";
 
 describe("AgentSession auto-compaction queue resume", () => {
 	let session: AgentSession;
@@ -26,7 +26,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		tempDir = join(tmpdir(), `pi-auto-compaction-queue-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
 
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = stepModel();
 		const agent = new Agent({
 			streamFn: streamSimple,
 			initialState: {
