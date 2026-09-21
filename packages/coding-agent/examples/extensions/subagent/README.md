@@ -131,7 +131,7 @@ Agents are markdown files with YAML frontmatter:
 name: my-agent
 description: What this agent does
 tools: read, grep, find, ls
-model: claude-haiku-4-5
+model: step-5-preview
 ---
 
 System prompt for the agent goes here.

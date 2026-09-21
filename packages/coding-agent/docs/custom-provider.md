@@ -9,10 +9,9 @@ Extensions can register custom model providers via `pi.registerProvider()`. This
 
 ## Example Extensions
 
-See these complete provider examples:
-
-- [`examples/extensions/custom-provider-anthropic/`](../examples/extensions/custom-provider-anthropic/)
-- [`examples/extensions/custom-provider-gitlab-duo/`](../examples/extensions/custom-provider-gitlab-duo/)
+The repository does not bundle third-party provider or OAuth implementations. Use the
+minimal registration example below as a starting point and review any external
+adapter's license and credential handling before loading it.
 
 ## Table of Contents
 
