@@ -1,11 +1,11 @@
 # Environment Variables
 
 Step reads the variables below. Configuration shared across launches belongs in
-`~/.step-cli/config.toml` or the project `.step-cli/config.toml`.
+`~/.stepcode/config.toml` or the project `.stepcode/config.toml`.
 
 | Variable | Description |
 |----------|-------------|
-| `STEP_CODING_AGENT_DIR` | Override the agent directory; default is `~/.step-cli/agent` |
+| `STEP_CODING_AGENT_DIR` | Override the agent directory; default is `~/.stepcode/agent` |
 | `STEP_CODING_AGENT_SESSION_DIR` | Override session storage; `--session-dir` takes precedence |
 | `STEP_API_KEY` | StepFun API credential |
 | `STEP_BASE_URL` | Override the StepFun API endpoint |

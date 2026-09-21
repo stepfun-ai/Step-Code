@@ -1,6 +1,6 @@
 /**
  * Reads MCP server declarations out of other agent CLIs' config files so they
- * can be migrated into `~/.step-cli/config.toml`.
+ * can be migrated into `~/.stepcode/config.toml`.
  *
  * Unlike the equivalent in the previous CLI, which re-read the foreign files on
  * every launch, this is a one-time translation: the user reviews a list, picks
@@ -170,7 +170,7 @@ export interface ApplyStepMcpImportResult {
 }
 
 /**
- * Writes the chosen candidates into `~/.step-cli/config.toml`.
+ * Writes the chosen candidates into `~/.stepcode/config.toml`.
  *
  * Selection is by `targetName` because that is what the prompt shows and what
  * the file will contain. Nothing outside `mcp_servers` is touched, and no

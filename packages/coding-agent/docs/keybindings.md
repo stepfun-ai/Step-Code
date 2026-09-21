@@ -1,6 +1,6 @@
 # Keybindings
 
-All keyboard shortcuts can be customized via `~/.step-cli/agent/keybindings.json`. Each action can be bound to one or more keys.
+All keyboard shortcuts can be customized via `~/.stepcode/agent/keybindings.json`. Each action can be bound to one or more keys.
 
 The config file uses the same namespaced keybinding ids that step uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
 
@@ -192,7 +192,7 @@ Used inside the scoped models selector (opened via `/scoped-models`).
 
 ## Custom Configuration
 
-Create `~/.step-cli/agent/keybindings.json`:
+Create `~/.stepcode/agent/keybindings.json`:
 
 ```json
 {

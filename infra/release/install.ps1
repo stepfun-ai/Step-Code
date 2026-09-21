@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Install or update Step CLI on Windows.
+  Install or update StepCode on Windows.
 
 .DESCRIPTION
   This is the Windows counterpart to infra/release/install.sh.  Release
@@ -14,12 +14,12 @@
 
 .PARAMETER InstallDir
   Directory containing step.exe. Defaults to STEP_INSTALL_DIR or
-  %USERPROFILE%\.step-cli\bin.
+  %USERPROFILE%\.stepcode\bin.
 
 .PARAMETER AgentDir
   Step agent data directory. Managed fd/rg binaries are placed in its bin
   subdirectory. Defaults to STEP_CODING_AGENT_DIR or
-  %USERPROFILE%\.step-cli\agent.
+  %USERPROFILE%\.stepcode\agent.
 #>
 [CmdletBinding()]
 param(
@@ -52,14 +52,14 @@ if (-not $InstallDir) {
   $InstallDir = if ($env:STEP_INSTALL_DIR) {
     $env:STEP_INSTALL_DIR
   } else {
-    Join-Path $HomeDir '.step-cli\bin'
+    Join-Path $HomeDir '.stepcode\bin'
   }
 }
 if (-not $AgentDir) {
   $AgentDir = if ($env:STEP_CODING_AGENT_DIR) {
     $env:STEP_CODING_AGENT_DIR
 	} else {
-    Join-Path $HomeDir '.step-cli\agent'
+    Join-Path $HomeDir '.stepcode\agent'
   }
 }
 
@@ -130,7 +130,7 @@ function Get-TargetId {
 function Get-Manifest {
   param([Parameter(Mandatory = $true)][string]$ManifestUrl)
   try {
-    return Invoke-RestMethod -Uri $ManifestUrl -Headers @{ 'User-Agent' = 'step-cli-installer' } -UseBasicParsing
+    return Invoke-RestMethod -Uri $ManifestUrl -Headers @{ 'User-Agent' = 'stepcode-installer' } -UseBasicParsing
   } catch {
     Stop-WithError "failed to fetch release manifest $ManifestUrl ($($_.Exception.Message))"
   }
@@ -168,7 +168,7 @@ function Invoke-Download {
     [Parameter(Mandatory = $true)][string]$Destination
   )
   try {
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers @{ 'User-Agent' = 'step-cli-installer' } -UseBasicParsing
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers @{ 'User-Agent' = 'stepcode-installer' } -UseBasicParsing
   } catch {
     Stop-WithError "failed to download $Url ($($_.Exception.Message))"
   }
@@ -348,7 +348,7 @@ function Install-ManagedTool {
 
   try {
     $metadataUrl = "https://api.github.com/repos/$Repository/releases/latest"
-    $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers @{ 'User-Agent' = 'step-cli-installer'; Accept = 'application/vnd.github+json' } -UseBasicParsing
+    $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers @{ 'User-Agent' = 'stepcode-installer'; Accept = 'application/vnd.github+json' } -UseBasicParsing
     $tag = [string](Get-ObjectProperty -Object $metadata -Name 'tag_name')
     if (-not $tag) {
       throw "GitHub release metadata did not contain tag_name"
@@ -402,7 +402,7 @@ function Get-MissingPathEntries {
   # value; $Candidates are the (already expanded) directories we want on PATH.
   #
   # Idempotency depends on comparing *expanded* paths: a literal candidate such
-  # as C:\Users\me\.step-cli\bin must match an existing %USERPROFILE%\.step-cli\bin
+  # as C:\Users\me\.stepcode\bin must match an existing %USERPROFILE%\.stepcode\bin
   # entry, otherwise every run double-appends. So each existing entry is run
   # through [Environment]::ExpandEnvironmentVariables() FOR COMPARISON ONLY --
   # the caller writes the original un-expanded strings back untouched. On top of
@@ -440,9 +440,9 @@ function Send-EnvironmentChangeBroadcast {
     # Unique type name (namespaced) so a repeated Add-Type in the same session
     # -- e.g. self-update re-running the installer -- does not throw; guard on
     # the type already being loaded before defining it again.
-    $typeName = 'StepCliInstaller.NativeEnvironmentBroadcast'
+    $typeName = 'StepCodeInstaller.NativeEnvironmentBroadcast'
     if (-not ([System.Management.Automation.PSTypeName]$typeName).Type) {
-      Add-Type -Namespace 'StepCliInstaller' -Name 'NativeEnvironmentBroadcast' -MemberDefinition @'
+      Add-Type -Namespace 'StepCodeInstaller' -Name 'NativeEnvironmentBroadcast' -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
 public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);
 '@
@@ -451,7 +451,7 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
     $WM_SETTINGCHANGE = 0x001A
     $SMTO_ABORTIFHUNG = 0x0002
     $result = [UIntPtr]::Zero
-    [void][StepCliInstaller.NativeEnvironmentBroadcast]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [IntPtr]::Zero, 'Environment', $SMTO_ABORTIFHUNG, 5000, [ref]$result)
+    [void][StepCodeInstaller.NativeEnvironmentBroadcast]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [IntPtr]::Zero, 'Environment', $SMTO_ABORTIFHUNG, 5000, [ref]$result)
   } catch {
     # Ignore: notifying other processes is a convenience, not a requirement.
   }
@@ -460,7 +460,7 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
 function Write-Result {
   param([Parameter(Mandatory = $true)][string]$ResolvedVersion)
   $binaryPath = Join-Path $InstallDir 'step.exe'
-  Write-Host "  installed step-cli $ResolvedVersion to $binaryPath" -ForegroundColor Green
+  Write-Host "  installed stepcode $ResolvedVersion to $binaryPath" -ForegroundColor Green
 
   # Persist $InstallDir / $AgentDir\bin as resolved (these already carry any
   # custom STEP_INSTALL_DIR / STEP_CODING_AGENT_DIR values), not hardcoded
@@ -542,7 +542,7 @@ if ($BaseUrl -eq $unconfiguredBaseUrl) {
   Stop-WithError 'release base URL was not configured in this installer'
 }
 
-$workDir = Join-Path ([IO.Path]::GetTempPath()) ("step-cli-install-" + [Guid]::NewGuid().ToString('N'))
+$workDir = Join-Path ([IO.Path]::GetTempPath()) ("stepcode-install-" + [Guid]::NewGuid().ToString('N'))
 try {
   New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 

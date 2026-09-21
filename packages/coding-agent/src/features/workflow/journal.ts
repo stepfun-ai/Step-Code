@@ -19,7 +19,7 @@ export interface WorkflowRunPaths {
 }
 
 export function resolveWorkflowRoot(cwd: string): string {
-	return path.join(path.resolve(cwd), ".step-cli", "workflows");
+	return path.join(path.resolve(cwd), ".stepcode", "workflows");
 }
 
 export function createWorkflowRunPaths(cwd: string, runId: string): WorkflowRunPaths {

@@ -2,7 +2,7 @@
 
 // @step-harness/cli — process entry.
 //
-// Merges the former coding-agent/src/step-cli.ts startup segment with the
+// Merges the former coding-agent startup segment with the
 // argv → mode → dispatch → exit-code flow. The Step entry signal is set as the
 // very first side effect (before the coding-agent barrel is evaluated) so
 // config.ts resolves the Step storage namespace regardless of launcher name.
@@ -13,7 +13,7 @@ import {
 	applyStepCodeConfigDefaults,
 	buildStepSystemPromptAppendix,
 	configureHttpDispatcher,
-	createStepCli,
+	createStepCode,
 	createStepCodeProviderInlineExtension,
 	createStepProviderConfig,
 	createStepSessionManagerFactory,
@@ -58,10 +58,10 @@ import {
 	runStepMcpImportPrompt,
 	runStepThemePrompt,
 	runStepUpdateCommand,
-	STEP_CLI_VERSION,
 	STEP_DEFAULT_MODEL,
 	STEP_DEFAULT_PROVIDER,
 	STEP_PROVIDER_ID,
+	STEPCODE_VERSION,
 	type StepSettingsManager,
 	setStderrDevLogStorageRootDirectory,
 	stopThemeWatcher,
@@ -113,7 +113,7 @@ const stepPermissionArgs = parseArgs(normalizeStepSessionSelectorArgs(process.ar
 // needed by the legacy Step analytics query system. The runtime is disabled in
 // test processes and can be opted out through the same Step environment flags.
 const telemetryReporter = observability.createReporter({
-	version: STEP_CLI_VERSION.value,
+	version: STEPCODE_VERSION.value,
 	config: stepPersistedDefaults.telemetry,
 });
 const telemetryCrashHandlers = observability.installCrashHandlers?.(telemetryReporter);
@@ -203,7 +203,7 @@ const stepMainOptions: MainOptions = {
 	defaultTheme: getStepDefaultTheme(),
 	defaultProvider: stepCodeConfig?.defaultProvider ?? stepPersistedDefaults.provider ?? STEP_DEFAULT_PROVIDER,
 	defaultModel: stepCodeConfig?.defaultModel ?? stepPersistedDefaults.model ?? STEP_DEFAULT_MODEL,
-	runtimeHostFactory: createStepCli,
+	runtimeHostFactory: createStepCode,
 	stdioModeFactory: sdkStdio ? createSdkStdioMode({ writeFrame: rawStdoutWrite }) : undefined,
 	interactiveModeOptions: {
 		showChangelog: false,
@@ -238,7 +238,7 @@ const stepMainOptions: MainOptions = {
 			// but must never be interrupted by a binary update prompt.
 			if (process.argv[2] === "login" || process.argv[2] === "logout") return true;
 			const outcome = await maybeUpdateStep({
-				version: STEP_CLI_VERSION,
+				version: STEPCODE_VERSION,
 				storageRootDir: resolveStepStorageRoot(),
 				updateCheckEnabled: stepPermissionArgs.updateCheck,
 				ui,
@@ -308,7 +308,7 @@ try {
 	await telemetryIdentityReady;
 	if (!isTopLevelLogout && !(isTopLevelLogin && topLevelAuthHelp)) {
 		// Normalize only an old product-shaped credential file that is already
-		// inside the canonical Step CLI path. This is the credential store, not
+		// inside the canonical StepCode path. This is the credential store, not
 		// settings: Step reads no configuration from a legacy layout.
 		await migrateLegacyStepCredential({
 			nativePath: getStepAuthPath(),
@@ -442,7 +442,7 @@ try {
 					const message = error instanceof Error ? error.message : String(error);
 					if (message.includes("403") && name.toLowerCase().includes("figma")) {
 						throw new Error(
-							"Step does not support figma mcp. You can use https://github.com/GLips/Figma-Context-MCP in Step CLI as an alternative to the official Figma MCP.",
+							"Step does not support figma mcp. You can use https://github.com/GLips/Figma-Context-MCP in StepCode as an alternative to the official Figma MCP.",
 						);
 					}
 					throw error;
@@ -664,7 +664,7 @@ async function initializeTelemetryIdentity(): Promise<void> {
 		if (result.deviceId) telemetryReporter.setContext?.({ deviceId: result.deviceId });
 		if (result.created) {
 			trackStepTelemetry(telemetryReporter, "first_launch", {
-				channel: process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
+				channel: process.env.STEPCODE_BUILD_CHANNEL?.trim() || "dev",
 			});
 		}
 	} catch {

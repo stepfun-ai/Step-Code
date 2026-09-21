@@ -31,7 +31,7 @@ describe("normalizeStepSessionSelectorArgs", () => {
 		expect(normalizeStepSessionSelectorArgs(["--session-file", "session", "-p", "hi"])).toEqual(["-p", "hi"]);
 	});
 
-	test("uses the basename without extension, matching step-cli deriveSessionTarget", () => {
+	test("uses the basename without extension, matching stepcode deriveSessionTarget", () => {
 		expect(normalizeStepSessionSelectorArgs(["--session-file", "/tmp/my-run.json"])).toEqual([
 			"--session-id",
 			"my-run",

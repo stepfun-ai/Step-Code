@@ -8,7 +8,7 @@
  * learns to read.
  *
  * It lives in `config.toml` rather than a file of its own. One flag does not
- * justify another entry in `~/.step-cli/`, and the unified config is already the
+ * justify another entry in `~/.stepcode/`, and the unified config is already the
  * file that answers "what does Step think about MCP here". An earlier build kept
  * it in `mcp-import.json`; that file is read once, folded in, and deleted.
  *

@@ -390,7 +390,7 @@ Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) t
 The `step` binary is a thin product entrypoint over the same pi coding-agent
 runtime and native TUI. It selects the `step` provider and model by default,
 uses the built-in `step-blue` theme (one blue palette, no light/dark variants), and stores sessions
-under `~/.step-cli/`.
+under `~/.stepcode/`.
 
 ```bash
 STEP_API_KEY=... step
@@ -669,7 +669,7 @@ pi --thinking high "Solve this complex problem"
 | Variable | Description |
 |----------|-------------|
 | `AI_AGENT` | Set to `step` by the CLI and RPC entry points so generic tooling can attribute child processes to Step |
-| `STEP_CODING_AGENT_DIR` | Override config directory (default: `~/.step-cli/agent`) |
+| `STEP_CODING_AGENT_DIR` | Override config directory (default: `~/.stepcode/agent`) |
 | `STEP_CODING_AGENT_SESSION_DIR` | Override session storage directory (overridden by `--session-dir`) |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
 

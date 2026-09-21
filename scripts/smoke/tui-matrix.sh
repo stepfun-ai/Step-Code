@@ -16,7 +16,7 @@ tc() { # tc <名称> <pty-drive 参数...> -- <step 命令...>
   else echo "FAIL $name"; sed 's/^/    /' /tmp/tui-$name.log | head -4; fail=$((fail+1)); fi; }
 
 # 1) 启动渲染
-tc startup     --wait "$W" --expect "Ask Step to do anything" --expect "step-3.7-flash" --expect "Step CLI" \
+tc startup     --wait "$W" --expect "Ask Step to do anything" --expect "step-3.7-flash" \
                --keys 'C-c|C-c' -- "${ENTRY[@]}"
 # 2) 输入回显
 tc input-echo  --wait "$W" --expect "hello world" --reject "Error" \

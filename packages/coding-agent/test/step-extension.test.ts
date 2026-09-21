@@ -427,8 +427,8 @@ describe("Step extension", () => {
 		// provider requests; only the low-sensitivity client marker is universal.
 		expect(headers).toEqual({ "x-step-client": "cli" });
 
-		const originalOrigin = process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
-		process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
+		const originalOrigin = process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
+		process.env.STEPCODE_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
 		try {
 			const otherHeaders: Record<string, string | null> = {};
 			await handler({ type: "before_provider_headers", headers: otherHeaders }, {
@@ -448,8 +448,8 @@ describe("Step extension", () => {
 				"x-step-model": "step-proxy",
 			});
 		} finally {
-			if (originalOrigin === undefined) delete process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
-			else process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = originalOrigin;
+			if (originalOrigin === undefined) delete process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
+			else process.env.STEPCODE_CLOUD_TRACE_ORIGIN = originalOrigin;
 		}
 	});
 });

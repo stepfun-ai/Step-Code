@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** Build and optionally publish the versioned Step CLI binary bundle. */
+/** Build and optionally publish the versioned StepCode binary bundle. */
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -82,7 +82,7 @@ async function main() {
 		return;
 	}
 	const version = normalizeReleaseVersion(args.get("version") ?? process.env.CI_COMMIT_TAG ?? process.env.RELEASE_BUNDLE_VERSION);
-	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://release.example.test/stepcli").replace(/\/+$/u, "");
+	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://release.example.test/stepcode").replace(/\/+$/u, "");
 	const dryRun = args.has("dry-run");
 	const releaseDir = path.join(repoRoot, "dist", "release");
 	if (dryRun) {
@@ -92,13 +92,13 @@ async function main() {
 
 	await rm(releaseDir, { recursive: true, force: true });
 	await mkdir(releaseDir, { recursive: true });
-	const buildDir = await mkdtemp(path.join(os.tmpdir(), "step-cli-release-build-"));
+	const buildDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-release-build-"));
 	try {
 		await run("bash", ["scripts/build-binaries.sh", "--product", "step", "--offline-model-data", "--out", buildDir], {
 			env: {
-				STEP_CLI_BUILD_VERSION: version,
-				STEP_CLI_BUILD_CHANNEL: "release",
-				STEP_CLI_BUILD_COMMIT: process.env.CI_COMMIT_SHORT_SHA ?? "",
+				STEPCODE_BUILD_VERSION: version,
+				STEPCODE_BUILD_CHANNEL: "release",
+				STEPCODE_BUILD_COMMIT: process.env.CI_COMMIT_SHORT_SHA ?? "",
 			},
 		});
 		const versionDir = path.join(releaseDir, version);
@@ -126,7 +126,7 @@ async function main() {
 			});
 		}
 
-		process.stdout.write(`Step CLI ${version} bundle ready at ${releaseDir}\n`);
+		process.stdout.write(`StepCode ${version} bundle ready at ${releaseDir}\n`);
 	} finally {
 		await rm(buildDir, { recursive: true, force: true });
 	}

@@ -42,7 +42,7 @@ export function ensureStepConfigFile(path: string): string {
 	if (!existsSync(path)) {
 		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 		try {
-			writeFileSync(path, "# Step CLI configuration\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+			writeFileSync(path, "# StepCode configuration\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
 		} catch (error) {
 			if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
 		}

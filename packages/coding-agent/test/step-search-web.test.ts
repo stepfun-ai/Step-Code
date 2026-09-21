@@ -26,8 +26,7 @@ describe("Step search_web tool", () => {
 		);
 		expect(
 			resolveSearchWebServerUrl(undefined, {
-				STEP_CLI_SEARCH_WEB_MCP_URL: "https://first.example.com",
-				STEPCLI_SEARCH_WEB_MCP_URL: "https://second.example.com",
+				STEPCODE_SEARCH_WEB_MCP_URL: "https://first.example.com",
 			}),
 		).toBe("https://first.example.com/v1/mcp/web_search/mcp");
 		expect(resolveSearchWebServerUrl(undefined, {}, "step_plan")).toBe(
@@ -53,13 +52,13 @@ describe("Step search_web tool", () => {
 			expect(
 				resolveSearchWebApiKey({
 					apiKey: "explicit-key",
-					env: { STEP_CLI_SEARCH_API_KEY: "search-key" },
+					env: { STEPCODE_SEARCH_API_KEY: "search-key" },
 					authPath,
 				}),
 			).toBe("explicit-key");
 			expect(
 				resolveSearchWebApiKey({
-					env: { STEP_CLI_SEARCH_API_KEY: "search-key", STEP_API_KEY: "model-key" },
+					env: { STEPCODE_SEARCH_API_KEY: "search-key", STEP_API_KEY: "model-key" },
 					authPath,
 				}),
 			).toBe("search-key");

@@ -66,10 +66,7 @@ export function resolveSearchWebServerUrl(
 				? SEARCH_WEB_MAINLAND_URL
 				: SEARCH_WEB_DEFAULT_URL;
 	const value =
-		normalizeOptionalText(configured) ??
-		normalizeOptionalText(env.STEP_CLI_SEARCH_WEB_MCP_URL) ??
-		normalizeOptionalText(env.STEPCLI_SEARCH_WEB_MCP_URL) ??
-		profileDefault;
+		normalizeOptionalText(configured) ?? normalizeOptionalText(env.STEPCODE_SEARCH_WEB_MCP_URL) ?? profileDefault;
 
 	let parsed: URL;
 	try {
@@ -93,14 +90,12 @@ export function resolveSearchWebApiKey(options: SearchWebToolOptions = {}): stri
 	// to the login profile and never follows that base URL, so honouring it here would
 	// send a gateway key to api.stepfun.com and fail authentication. An explicit
 	// `step --api-key` still arrives through `options.apiKey` above.
-	for (const value of [env.STEP_CLI_SEARCH_API_KEY, env.STEPCLI_SEARCH_API_KEY]) {
-		const key = normalizeCredential(value);
-		if (key) return key;
-	}
+	const envKey = normalizeCredential(env.STEPCODE_SEARCH_API_KEY);
+	if (envKey) return envKey;
 
 	const authPath =
 		normalizeOptionalText(options.authPath) ??
-		normalizeOptionalText(env.STEP_CLI_AUTH_PATH) ??
+		normalizeOptionalText(env.STEPCODE_AUTH_PATH) ??
 		join(resolveStepAgentDir(env), "auth.json");
 	return readCredentialToken(readStoredCredential(STEP_PROVIDER_ID, authPath));
 }
@@ -136,7 +131,7 @@ export function createSearchWebTool(
 			if (!query) throw new Error("search_web query must not be empty");
 			if (!apiKey) {
 				throw new Error(
-					"search_web requires a credential; run `/login` or `step login`, pass --api-key, or set STEP_CLI_SEARCH_API_KEY",
+					"search_web requires a credential; run `/login` or `step login`, pass --api-key, or set STEPCODE_SEARCH_API_KEY",
 				);
 			}
 
@@ -159,7 +154,7 @@ export function createSearchWebTool(
 function resolveSearchWebAuthPath(options: SearchWebToolOptions, env: Record<string, string | undefined>): string {
 	return (
 		normalizeOptionalText(options.authPath) ??
-		normalizeOptionalText(env.STEP_CLI_AUTH_PATH) ??
+		normalizeOptionalText(env.STEPCODE_AUTH_PATH) ??
 		join(resolveStepAgentDir(env), "auth.json")
 	);
 }

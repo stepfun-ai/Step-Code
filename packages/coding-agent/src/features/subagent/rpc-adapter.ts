@@ -124,7 +124,7 @@ export async function createSubagentRpcSession(
 	input: StepSubagentRunInput,
 	sessionId: string,
 ): Promise<StepSubagentRpcSession> {
-	const tempDir = await mkdtemp(path.join(os.tmpdir(), "step-cli-subagent-"));
+	const tempDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-subagent-"));
 	const args = ["--mode", "rpc", "--session-id", sessionId];
 	const model = input.agent.model ?? input.model;
 	if (model) args.push("--model", model);

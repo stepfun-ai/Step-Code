@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>Step CLI</strong>
+  <strong>StepCode</strong>
 </p>
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
@@ -8,11 +8,11 @@
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-# Step CLI
+# StepCode
 
 ## Feedback privacy
 
-Feedback submission is disabled until `STEP_CLI_FEEDBACK_ENDPOINT` is supplied
+Feedback submission is disabled until `STEPCODE_FEEDBACK_ENDPOINT` is supplied
 by the host or release configuration. When submitted, the consent preview lists
 the identity fields included in the report: `deviceId`, `uid`, `username`,
 `channel`, `version`, `platform`, and `commit` (fields not available are shown
@@ -20,7 +20,7 @@ as unset). The fields are used to correlate a report with its client build and
 account context; session bundles and diagnostics are shown separately before
 submission.
 
-Step CLI is the Step product built on the Pi runtime. The product entrypoint,
+StepCode is the Step product built on the Pi runtime. The product entrypoint,
 defaults, OAuth provider, harness facade, and TUI presentation are Step-owned;
 the `@earendil-works/pi-*` packages remain the vendored runtime implementation
 boundary so upstream-compatible imports continue to resolve.
@@ -68,7 +68,7 @@ pnpm run build:offline # Rebuild using existing model data without network acces
 pnpm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
-pnpm step            # Run the Step CLI entrypoint from sources
+pnpm step            # Run the StepCode entrypoint from sources
 ```
 
 Standalone Step binaries can update themselves from release manifests supplied

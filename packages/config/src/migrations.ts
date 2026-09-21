@@ -32,9 +32,9 @@ export type KeybindingsMigrator = (config: Record<string, unknown>) => Keybindin
 
 /** Inputs for the full startup migration run. */
 export interface RunMigrationsOptions {
-	/** Resolved global agent directory (for example `~/.step-cli/agent`). */
+	/** Resolved global agent directory (for example `~/.stepcode/agent`). */
 	agentDir: string;
-	/** Project config directory name (for example `.step-cli`). */
+	/** Project config directory name (for example `.stepcode`). */
 	configDirName: string;
 	/** Product keybindings migrator, injected to avoid a reverse dependency. */
 	migrateKeybindings: KeybindingsMigrator;

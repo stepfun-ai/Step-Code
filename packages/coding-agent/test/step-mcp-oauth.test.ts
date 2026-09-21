@@ -121,7 +121,7 @@ describe("MCP OAuth credential storage", () => {
 
 	function makeEnv(): { env: NodeJS.ProcessEnv; configRoot: string } {
 		const root = join(process.cwd(), `test-step-mcp-oauth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-		const configRoot = join(root, ".step-cli");
+		const configRoot = join(root, ".stepcode");
 		mkdirSync(configRoot, { recursive: true });
 		roots.push(root);
 		return { env: { HOME: root, STEP_CODING_AGENT_DIR: join(configRoot, "agent") }, configRoot };

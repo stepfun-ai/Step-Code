@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { type CallToolResult, CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
-import { STEP_CLI_VERSION } from "./version.ts";
+import { STEPCODE_VERSION } from "./version.ts";
 
 export const DEFAULT_MCP_TIMEOUT_MS = 30_000;
 
@@ -29,7 +29,7 @@ export async function invokeRemoteMcpTool(input: RemoteMcpToolInvocation): Promi
 	const transport = new StreamableHTTPClientTransport(new URL(input.serverUrl), {
 		requestInit: input.headers ? { headers: input.headers } : undefined,
 	});
-	const client = new Client({ name: "step-cli", version: STEP_CLI_VERSION.value }, { capabilities: {} });
+	const client = new Client({ name: "stepcode", version: STEPCODE_VERSION.value }, { capabilities: {} });
 
 	try {
 		await client.connect(transport, { timeout: timeoutMs, signal });

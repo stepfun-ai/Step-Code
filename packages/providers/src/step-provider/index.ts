@@ -60,7 +60,7 @@ export const STEP_PROVIDER_ID = "step";
 /** Environment variables understood by the Step provider extension. */
 export const STEP_PROVIDER_ENV = {
 	apiBaseUrl: "STEP_BASE_URL",
-	authBaseUrl: "STEP_CLI_DEVCENTER_AUTH_CN_URL",
+	authBaseUrl: "STEPCODE_DEVCENTER_AUTH_CN_URL",
 	tokenUrl: "STEP_OAUTH_TOKEN_URL",
 	apiKey: "STEP_API_KEY",
 	callbackHost: "STEP_OAUTH_CALLBACK_HOST",
@@ -154,12 +154,12 @@ const API_BASE_URL_ENV_NAMES = [
 	"STEP_API_URL",
 	STEP_PROVIDER_ENV.apiBaseUrl,
 	// Kept for compatibility with the endpoint override used by the legacy
-	// Step CLI. It may contain the full `/v1/messages` URL.
+	// StepCode. It may contain the full `/v1/messages` URL.
 	"STEPFUN_MESSAGES_ENDPOINT",
 	// Set by the shared Step login flow after reading the stored profile. It is
 	// intentionally below explicit user overrides so manual endpoint settings win.
 	"STEP_LOGIN_PROFILE_API_URL",
-	"STEP_CLI_STEP_PLAN_API_URL",
+	"STEPCODE_STEP_PLAN_API_URL",
 ] as const;
 const AUTH_BASE_URL_ENV_NAMES = [
 	"STEP_PROVIDER_AUTH_URL",

@@ -18,7 +18,7 @@ import {
 } from "./permissions.ts";
 import type { StepSettings, StepSettingsManager, StepSettingsPaths } from "./settings-manager.ts";
 
-export const STEPCODE_CONFIG_ENV_NAMES = ["STEPCLI_CONFIG_PATH", "STEP_CLI_CONFIG_PATH"] as const;
+export const STEPCODE_CONFIG_ENV_NAME = "STEPCODE_CONFIG_PATH";
 
 const DEFAULT_PROVIDER_ID = "stepcode";
 const DEFAULT_API_KEY_ENV = "STEP_API_KEY";
@@ -53,8 +53,7 @@ export async function loadStepCodeConfig(
 	env: Record<string, string | undefined> = process.env,
 	cwd = process.cwd(),
 ): Promise<StepCodeConfig | undefined> {
-	const configuredPath =
-		readString(env[STEPCODE_CONFIG_ENV_NAMES[0]]) ?? readString(env[STEPCODE_CONFIG_ENV_NAMES[1]]);
+	const configuredPath = readString(env[STEPCODE_CONFIG_ENV_NAME]);
 	if (!configuredPath) return undefined;
 
 	const path = resolve(cwd, configuredPath);
@@ -277,7 +276,7 @@ class StepCodeSettingsAuthority {
 
 	async reload(): Promise<void> {
 		await this.manager.reload();
-		const config = await loadStepCodeConfig({ ...process.env, STEPCLI_CONFIG_PATH: this.path });
+		const config = await loadStepCodeConfig({ ...process.env, STEPCODE_CONFIG_PATH: this.path });
 		this.defaultProvider = config?.defaultProvider;
 		this.defaultModel = config?.defaultModel;
 		this.settings = readStepCodeSettings(readConfigRoot(this.path));
@@ -496,7 +495,7 @@ function readLegacyProvider(
 	limits: StepCodeTokenLimits,
 ): StepCodeProviderRegistration[] {
 	const agentModels = asObject(root.agentModels);
-	const legacy = asObject(agentModels?.stepcli) ?? asObject(agentModels?.codex) ?? root;
+	const legacy = asObject(agentModels?.stepcode) ?? asObject(agentModels?.codex) ?? root;
 	const model = readString(legacy.model) ?? readString(root.model);
 	if (!model) return [];
 	const api = normalizeApi(
@@ -673,11 +672,14 @@ function findActiveModel(
 
 function readLegacyDefaultModel(root: JsonObject): string | undefined {
 	const agentModels = asObject(root.agentModels);
-	const stepCli = asObject(agentModels?.stepcli);
+	const stepCode = asObject(agentModels?.stepcode);
 	const codex = asObject(agentModels?.codex);
 	const modelObject = asObject(root.model);
 	return (
-		readString(stepCli?.model) ?? readString(codex?.model) ?? readString(root.model) ?? readString(modelObject?.model)
+		readString(stepCode?.model) ??
+		readString(codex?.model) ??
+		readString(root.model) ??
+		readString(modelObject?.model)
 	);
 }
 

@@ -1,5 +1,5 @@
 {
-	"name": "step-cli",
+	"name": "stepcode",
 	"private": true,
 	"type": "module",
 	"workspaces": [

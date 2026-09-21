@@ -24,8 +24,8 @@ Use the [example extension](../examples/extensions/gondolin) when you want `step
 Setup:
 
 ```bash
-cp -R packages/coding-agent/examples/extensions/gondolin ~/.step-cli/agent/extensions/gondolin
-cd ~/.step-cli/agent/extensions/gondolin
+cp -R packages/coding-agent/examples/extensions/gondolin ~/.stepcode/agent/extensions/gondolin
+cd ~/.stepcode/agent/extensions/gondolin
 npm install --ignore-scripts
 ```
 
@@ -33,7 +33,7 @@ Run from the project you want mounted:
 
 ```bash
 cd /path/to/project
-step -e ~/.step-cli/agent/extensions/gondolin
+step -e ~/.stepcode/agent/extensions/gondolin
 ```
 
 The extension mounts the host cwd at `/workspace` in the VM and overrides `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`.
@@ -68,13 +68,13 @@ docker build -t step-sandbox -f Dockerfile.step .
 docker run --rm -it \
   -e ANTHROPIC_API_KEY \
   -v "$PWD:/workspace" \
-  -v step-agent-home:/root/.step-cli/agent \
+  -v step-agent-home:/root/.stepcode/agent \
   step-sandbox
 ```
 
 The `-v "$PWD:/workspace"` mounts your current directory into the container at /workspace such that reads and writes in `/workspace` inside Docker directly affect your host files, like in the Gondolin example.
 
-Use a named volume for `/root/.step-cli/agent` if you want container-local settings and sessions. Mounting your host `~/.step-cli/agent` exposes host auth and session files to the container.
+Use a named volume for `/root/.stepcode/agent` if you want container-local settings and sessions. Mounting your host `~/.stepcode/agent` exposes host auth and session files to the container.
 
 ## OpenShell
 

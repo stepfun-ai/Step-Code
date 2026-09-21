@@ -225,7 +225,7 @@ export class StepWelcomeComponent implements Component {
 	}
 
 	/**
-	 * The ride-in strip: the bird pedals toward the right while the STEP CLI
+	 * The ride-in strip: the bird pedals toward the right while the STEP CODE
 	 * block letters follow with a transparent gap.
 	 * Settles to bird-right / word-left once the ride window elapses.
 	 */

@@ -35,7 +35,7 @@ function createStepProviderConfigFromResolved(resolved: ResolvedStepProviderOpti
 		apiKey: `$${resolved.apiKeyEnv}`,
 		api: "openai-completions",
 		// The built-in catalog is an offline/pre-login baseline; keep custom models
-		// migrated from the legacy Step CLI layout (and later user additions).
+		// migrated from the legacy StepCode layout (and later user additions).
 		mergeModelsJson: true,
 		// models.json is user-owned and can outlive the provider defaults. Normalize
 		// the final composed list as a last line of defense for embedded hosts that

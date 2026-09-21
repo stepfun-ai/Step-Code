@@ -1,6 +1,6 @@
 # Open-source repository status
 
-This branch is the public source view of Step CLI. It contains the product
+This branch is the public source view of StepCode. It contains the product
 source, public tests, local build tooling, and the workflows needed to validate
 contributions. It intentionally does not contain private repository automation
 or release publication credentials.

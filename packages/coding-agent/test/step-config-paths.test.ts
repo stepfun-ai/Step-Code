@@ -42,14 +42,14 @@ describe("Step config path resolution", () => {
 		roots.push(root);
 		const cwd = join(root, "workspace");
 		const agentDir = join(root, "agent");
-		const harnessDir = join(cwd, ".step-cli");
+		const harnessDir = join(cwd, ".stepcode");
 		const piDir = join(cwd, ".pi");
 		await mkdir(harnessDir, { recursive: true });
 		await mkdir(piDir, { recursive: true });
 		await writeFile(join(harnessDir, "settings.json"), JSON.stringify({ defaultModel: "harness" }));
 		await writeFile(join(piDir, "settings.json"), JSON.stringify({ defaultModel: "pi" }));
 
-		const harness = SettingsManager.create(cwd, agentDir, { configDirName: ".step-cli" });
+		const harness = SettingsManager.create(cwd, agentDir, { configDirName: ".stepcode" });
 		const pi = SettingsManager.create(cwd, agentDir, { configDirName: ".pi" });
 
 		expect(harness.getDefaultModel()).toBe("harness");
@@ -68,7 +68,7 @@ describe("Step config path resolution", () => {
 		roots.push(root);
 		const cwd = join(root, "workspace");
 		const agentDir = join(root, "agent");
-		const harnessSkillDir = join(cwd, ".step-cli", "skills", "harness-skill");
+		const harnessSkillDir = join(cwd, ".stepcode", "skills", "harness-skill");
 		const piSkillDir = join(cwd, ".pi", "skills", "pi-skill");
 		await mkdir(harnessSkillDir, { recursive: true });
 		await mkdir(piSkillDir, { recursive: true });
@@ -78,11 +78,11 @@ describe("Step config path resolution", () => {
 		);
 		await writeFile(join(piSkillDir, "SKILL.md"), "---\nname: pi-skill\ndescription: Pi skill\n---\nPi content\n");
 
-		const settingsManager = SettingsManager.create(cwd, agentDir, { configDirName: ".step-cli" });
+		const settingsManager = SettingsManager.create(cwd, agentDir, { configDirName: ".stepcode" });
 		const loader = new DefaultResourceLoader({
 			cwd,
 			agentDir,
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			settingsManager,
 		});
 		await loader.reload();
@@ -97,15 +97,15 @@ describe("Step config path resolution", () => {
 		roots.push(root);
 		const cwd = join(root, "workspace");
 		const agentDir = join(root, "agent");
-		const projectExtension = join(cwd, ".step-cli", "extensions", "local.ts");
-		await mkdir(join(cwd, ".step-cli", "extensions"), { recursive: true });
+		const projectExtension = join(cwd, ".stepcode", "extensions", "local.ts");
+		await mkdir(join(cwd, ".stepcode", "extensions"), { recursive: true });
 		await writeFile(projectExtension, "export default function () {}\n");
 
-		const settingsManager = SettingsManager.create(cwd, agentDir, { configDirName: ".step-cli" });
+		const settingsManager = SettingsManager.create(cwd, agentDir, { configDirName: ".stepcode" });
 		const packageManager = new DefaultPackageManager({
 			cwd,
 			agentDir,
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			settingsManager,
 		});
 
@@ -138,7 +138,7 @@ describe("Step config path resolution", () => {
 		manager.setDefaultModel("injected-model");
 		await manager.flush();
 
-		// The global config is the file the decorator reports, not ~/.step-cli.
+		// The global config is the file the decorator reports, not ~/.stepcode.
 		const globalPath = manager.getStepSettingsPaths().global;
 		expect(globalPath).toBe(join(root, "config.toml"));
 		expect(await readFile(globalPath, "utf8")).toContain("injected-model");

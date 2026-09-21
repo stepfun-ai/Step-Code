@@ -1,8 +1,8 @@
 /**
  * Step-only credential compatibility helpers.
  *
- * Pi stores credentials under `<agentDir>/auth.json`. Step CLI stores its
- * provider credential at the top-level `~/.step-cli/auth.json`; credentials written by the retired
+ * Pi stores credentials under `<agentDir>/auth.json`. StepCode stores its
+ * provider credential at the top-level `~/.stepcode/auth.json`; credentials written by the retired
  * namespace remain migration fallbacks.
  */
 
@@ -14,9 +14,9 @@ import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
 import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } from "./environment.ts";
 
-/** Current Pi-shaped credential path under the Step CLI agent directory. */
+/** Current Pi-shaped credential path under the StepCode agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
-	return env.STEP_CLI_AUTH_PATH?.trim() || join(resolveStepConfigRoot(env), "auth.json");
+	return env.STEPCODE_AUTH_PATH?.trim() || join(resolveStepConfigRoot(env), "auth.json");
 }
 
 /** Old product-owned credential path, used only as a migration fallback. */
@@ -27,12 +27,12 @@ export function getLegacyStepAuthPath(env: Record<string, string | undefined> = 
 
 /** All historical locations used before this layout. */
 export function getLegacyStepAuthPaths(env: Record<string, string | undefined> = process.env): string[] {
-	const explicit = env.STEP_CLI_LEGACY_AUTH_PATH?.trim();
+	const explicit = env.STEPCODE_LEGACY_AUTH_PATH?.trim();
 	if (explicit) return [explicit];
 	const home = resolveStepHomeDir(env);
-	const canonicalRoot = join(home, ".step-cli");
+	const canonicalRoot = join(home, ".stepcode");
 	const retiredRoot = join(home, LEGACY_RENAMED_CONFIG_DIR);
-	// Keep the canonical root-level file first: this is the old pre-Pi Step CLI
+	// Keep the canonical root-level file first: this is the old pre-Pi StepCode
 	// credential shape that needs in-place normalization. The remaining paths
 	// cover Pi-shaped files created by the previous release.
 	return [
@@ -44,7 +44,7 @@ export function getLegacyStepAuthPaths(env: Record<string, string | undefined> =
 }
 
 export interface StepAuthPathOptions {
-	/** Target auth path. Defaults to Step CLI's Pi-shaped agent auth file. */
+	/** Target auth path. Defaults to StepCode's Pi-shaped agent auth file. */
 	nativePath?: string;
 	/** Fallback auth path. Defaults to the active coding-agent path. */
 	legacyPath?: string;

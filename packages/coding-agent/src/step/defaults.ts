@@ -149,16 +149,16 @@ function hasExplicitEnvironmentSelection(env: Record<string, string | undefined>
 	// different value is an explicit user override; the fallback itself remains
 	// deferred to SettingsManager/runtime selection.
 	return (
-		(Boolean(normalizeDefault(env.STEP_CLI_DEFAULT_PROVIDER)) &&
-			normalizeDefault(env.STEP_CLI_DEFAULT_PROVIDER) !== STEP_DEFAULT_PROVIDER) ||
-		(Boolean(normalizeDefault(env.STEP_CLI_DEFAULT_MODEL)) &&
-			normalizeDefault(env.STEP_CLI_DEFAULT_MODEL) !== STEP_DEFAULT_MODEL)
+		(Boolean(normalizeDefault(env.STEPCODE_DEFAULT_PROVIDER)) &&
+			normalizeDefault(env.STEPCODE_DEFAULT_PROVIDER) !== STEP_DEFAULT_PROVIDER) ||
+		(Boolean(normalizeDefault(env.STEPCODE_DEFAULT_MODEL)) &&
+			normalizeDefault(env.STEPCODE_DEFAULT_MODEL) !== STEP_DEFAULT_MODEL)
 	);
 }
 
 function hasExplicitProviderEnvironment(env: Record<string, string | undefined>): boolean {
 	if (normalizeDefault(env.STEP_PROVIDER ?? env.STEP_MODEL_PROVIDER)) return true;
-	const legacy = normalizeDefault(env.STEP_CLI_DEFAULT_PROVIDER);
+	const legacy = normalizeDefault(env.STEPCODE_DEFAULT_PROVIDER);
 	return Boolean(legacy && legacy !== STEP_DEFAULT_PROVIDER);
 }
 
@@ -196,19 +196,19 @@ export function getStepDefaultProvider(env: Record<string, string | undefined> =
 	return (
 		env.STEP_PROVIDER?.trim() ||
 		env.STEP_MODEL_PROVIDER?.trim() ||
-		env.STEP_CLI_DEFAULT_PROVIDER?.trim() ||
+		env.STEPCODE_DEFAULT_PROVIDER?.trim() ||
 		STEP_DEFAULT_PROVIDER
 	);
 }
 
 /** Resolve the model used by the Step entrypoint and its help text. */
 export function getStepDefaultModel(env: Record<string, string | undefined> = process.env): string {
-	return env.STEP_MODEL?.trim() || env.STEP_CLI_DEFAULT_MODEL?.trim() || STEP_DEFAULT_MODEL;
+	return env.STEP_MODEL?.trim() || env.STEPCODE_DEFAULT_MODEL?.trim() || STEP_DEFAULT_MODEL;
 }
 
 /** Resolve the default theme setting used by the Step entrypoint. */
 export function getStepDefaultTheme(env: Record<string, string | undefined> = process.env): string {
-	return env.STEP_CLI_DEFAULT_THEME?.trim() || STEP_DEFAULT_THEME;
+	return env.STEPCODE_DEFAULT_THEME?.trim() || STEP_DEFAULT_THEME;
 }
 
 function normalizeDefault(value: string | undefined): string | undefined {
@@ -218,7 +218,7 @@ function normalizeDefault(value: string | undefined): string | undefined {
 
 /**
  * Resolve a provider default according to `explicit env > persisted > Step
- * fallback`. `applyStepEnvironment()` seeds `STEP_CLI_DEFAULT_PROVIDER` with
+ * fallback`. `applyStepEnvironment()` seeds `STEPCODE_DEFAULT_PROVIDER` with
  * the Step fallback for compatibility; when a persisted value is supplied,
  * that seeded value is treated as implicit rather than as a user override.
  */
@@ -228,7 +228,7 @@ function resolveProviderDefault(
 ): string {
 	const explicit = normalizeDefault(env.STEP_PROVIDER ?? env.STEP_MODEL_PROVIDER);
 	if (explicit) return explicit;
-	const legacy = normalizeDefault(env.STEP_CLI_DEFAULT_PROVIDER);
+	const legacy = normalizeDefault(env.STEPCODE_DEFAULT_PROVIDER);
 	if (legacy && !(legacy === STEP_DEFAULT_PROVIDER && persistedProvider)) return legacy;
 	return persistedProvider ?? STEP_DEFAULT_PROVIDER;
 }
@@ -237,7 +237,7 @@ function resolveProviderDefault(
 function resolveModelDefault(env: Record<string, string | undefined>, persistedModel: string | undefined): string {
 	const explicit = normalizeDefault(env.STEP_MODEL);
 	if (explicit) return explicit;
-	const legacy = normalizeDefault(env.STEP_CLI_DEFAULT_MODEL);
+	const legacy = normalizeDefault(env.STEPCODE_DEFAULT_MODEL);
 	if (legacy && !(legacy === STEP_DEFAULT_MODEL && persistedModel)) return legacy;
 	return persistedModel ?? STEP_DEFAULT_MODEL;
 }
@@ -261,13 +261,13 @@ function shouldInjectModel(
 
 function isExplicitModelEnv(env: Record<string, string | undefined>, persistedModel: string | undefined): boolean {
 	if (normalizeDefault(env.STEP_MODEL)) return true;
-	const legacy = normalizeDefault(env.STEP_CLI_DEFAULT_MODEL);
+	const legacy = normalizeDefault(env.STEPCODE_DEFAULT_MODEL);
 	return Boolean(legacy && !(legacy === STEP_DEFAULT_MODEL && persistedModel));
 }
 
 /** Whether the Step launcher should disable Pi's optional background services. */
 export function isStepServicesDisabled(env: Record<string, string | undefined> = process.env): boolean {
-	const value = env.STEP_CLI_DISABLE_PI_SERVICES?.trim().toLowerCase();
+	const value = env.STEPCODE_DISABLE_PI_SERVICES?.trim().toLowerCase();
 	return value !== undefined && !FALSE_ENV_VALUES.has(value);
 }
 

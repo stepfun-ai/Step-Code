@@ -121,7 +121,7 @@ describe("feedback command interaction", () => {
 			prompt: { question },
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 			fetchImpl,
 		});
 
@@ -152,7 +152,7 @@ describe("feedback command interaction", () => {
 			prompt: { question },
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 			fetchImpl,
 		});
 
@@ -179,7 +179,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -215,7 +215,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -266,7 +266,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -304,7 +304,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -342,8 +342,8 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: agentDir,
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
-				STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
 			},
 			fetchImpl,
 		});
@@ -384,7 +384,7 @@ describe("feedback command interaction", () => {
 			interactive: false,
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 			fetchImpl,
 		});
 
@@ -412,8 +412,8 @@ describe("feedback command interaction", () => {
 			stdout: stdout.stream,
 			stderr: stderr.stream,
 			env: {
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
-				STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
 			},
 			fetchImpl,
 		});
@@ -449,7 +449,7 @@ describe("feedback command interaction", () => {
 				interactive: false,
 				stdout: stdout.stream,
 				stderr: stderr.stream,
-				env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+				env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 				fetchImpl,
 			});
 
@@ -505,7 +505,7 @@ describe("feedback command interaction", () => {
 			interactive: false,
 			stdout: initialStdout.stream,
 			stderr: initialStderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: endpoint },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: endpoint },
 			fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 413 })),
 		});
 
@@ -516,7 +516,7 @@ describe("feedback command interaction", () => {
 			interactive: false,
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: endpoint },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: endpoint },
 			fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 404 })),
 		});
 
@@ -549,8 +549,8 @@ describe("feedback command interaction", () => {
 			stdout: stdout.stream,
 			stderr: stderr.stream,
 			env: {
-				STEP_CLI_FEEDBACK_ENDPOINT: endpoint,
-				STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT: bundleEndpoint,
+				STEPCODE_FEEDBACK_ENDPOINT: endpoint,
+				STEPCODE_FEEDBACK_BUNDLE_ENDPOINT: bundleEndpoint,
 			},
 			fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status })),
 		});

@@ -7,16 +7,16 @@ import process from "node:process";
 import lockfile from "proper-lockfile";
 import type { ExtensionUIContext } from "../core/extensions/types.ts";
 import { spawnProcess, waitForChildProcess } from "../utils/child-process.ts";
-import { STEP_CLI_VERSION, type StepCliVersion } from "./version.ts";
+import { STEPCODE_VERSION, type StepCodeVersion } from "./version.ts";
 
 /** Public release bucket used by the Step installer when no override is set. */
-export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcli";
+export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcode";
 
 const UPDATE_CHECK_TIMEOUT_MS = 1_500;
 const UPDATE_INSTALL_TIMEOUT_MS = 120_000;
 const UPDATE_STATE_FILE = "tui-update-state.json";
-const DISABLE_UPDATE_ENV_NAMES = ["STEP_CLI_DISABLE_UPDATE_CHECK", "STEP_CLI_DISABLE_TUI_UPDATE_CHECK"] as const;
-const FORCE_UPDATE_ENV_NAMES = ["STEP_CLI_ENABLE_UPDATE_CHECK", "STEP_CLI_ENABLE_TUI_UPDATE_CHECK"] as const;
+const DISABLE_UPDATE_ENV_NAMES = ["STEPCODE_DISABLE_UPDATE_CHECK", "STEPCODE_DISABLE_TUI_UPDATE_CHECK"] as const;
+const FORCE_UPDATE_ENV_NAMES = ["STEPCODE_ENABLE_UPDATE_CHECK", "STEPCODE_ENABLE_TUI_UPDATE_CHECK"] as const;
 const USER_AGENT_UNSAFE = /[^A-Za-z0-9._+-]/g;
 
 interface ReleaseManifest {
@@ -54,9 +54,9 @@ export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): 
 		process.stderr.write("Re-run the Step installer or update the package/source that provides this command.\n");
 		return 1;
 	}
-	const currentVersion = normalizeStepStableVersion(STEP_CLI_VERSION.value);
+	const currentVersion = normalizeStepStableVersion(STEPCODE_VERSION.value);
 	if (!currentVersion) {
-		process.stderr.write(`Cannot determine the current Step version (${STEP_CLI_VERSION.value}).\n`);
+		process.stderr.write(`Cannot determine the current Step version (${STEPCODE_VERSION.value}).\n`);
 		return 1;
 	}
 	const releaseBaseUrl = resolveStepReleaseBaseUrl(env);
@@ -108,7 +108,7 @@ export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): 
 	}
 	let tempRoot: string | undefined;
 	try {
-		tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-cli-update-"));
+		tempRoot = await mkdtemp(path.join(os.tmpdir(), "stepcode-update-"));
 		const archivePath = path.join(tempRoot, artifact.fileName);
 		const archiveResponse = await fetchWithTimeout(artifact.url, input.fetchImpl ?? fetch);
 		if (!archiveResponse.ok) throw new Error(`archive download failed (HTTP ${archiveResponse.status})`);
@@ -155,7 +155,7 @@ export type StepUpdateOutcome =
 export type StepUpdateChoice = "update-now" | "skip" | "skip-until-next-version";
 
 export interface StepUpdateInput {
-	version: StepCliVersion;
+	version: StepCodeVersion;
 	storageRootDir: string;
 	updateCheckEnabled?: boolean;
 	executablePath?: string;
@@ -198,7 +198,7 @@ export interface StepUpdateRelaunchInput {
 export function resolveStepReleaseBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 	return (
 		env.STEP_RELEASE_BASE_URL?.trim() ||
-		env.STEP_CLI_RELEASE_BASE_URL?.trim() ||
+		env.STEPCODE_RELEASE_BASE_URL?.trim() ||
 		DEFAULT_STEP_RELEASE_BASE_URL
 	).replace(/\/+$/u, "");
 }
@@ -351,18 +351,18 @@ async function fetchLatestStepVersion(manifestUrl: string, userAgent: string): P
 export function buildStepUpdateUserAgent(version: string, env: NodeJS.ProcessEnv = process.env): string {
 	const clean = (value: string, fallback: string): string =>
 		value.replace(USER_AGENT_UNSAFE, "").slice(0, 32) || fallback;
-	const channel = env.STEP_CLI_BUILD_CHANNEL ?? "unknown";
-	return `step-cli/${clean(version, "unknown")} (${clean(channel, "unknown")}; ${clean(process.platform, "unknown")}; ${clean(process.arch, "unknown")})`;
+	const channel = env.STEPCODE_BUILD_CHANNEL ?? "unknown";
+	return `stepcode/${clean(version, "unknown")} (${clean(channel, "unknown")}; ${clean(process.platform, "unknown")}; ${clean(process.arch, "unknown")})`;
 }
 
 export function resolveStepExecutablePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
-	const override = env.STEP_CLI_BINARY_PATH?.trim();
+	const override = env.STEPCODE_BINARY_PATH?.trim();
 	if (override) return path.resolve(override);
 	const candidates = [process.execPath, process.argv[1]];
 	for (const candidate of candidates) {
 		if (!candidate) continue;
 		const name = path.basename(candidate).toLowerCase();
-		if (name === "step" || name === "step.exe" || name === "step-cli" || name === "step-cli.exe") {
+		if (name === "step" || name === "step.exe") {
 			return path.resolve(candidate);
 		}
 	}
@@ -403,7 +403,7 @@ export function resolveStepUpdateInstallerSpec(platform: NodeJS.Platform = proce
 }
 
 async function installLatestStepRelease(input: StepUpdateInstallInput): Promise<StepUpdateInstallResult> {
-	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "step-cli-update-"));
+	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stepcode-update-"));
 	const installer = resolveStepUpdateInstallerSpec();
 	const scriptPath = path.join(tempRoot, installer.scriptName);
 	try {

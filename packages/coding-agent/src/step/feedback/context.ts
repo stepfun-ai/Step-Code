@@ -1,6 +1,6 @@
 import { normalizeStepDeviceId, normalizeStepUid, normalizeStepWireSessionId } from "../build-identity.ts";
 import { readStepDeviceId } from "../device-id.ts";
-import { resolveStepCliVersion } from "../version.ts";
+import { resolveStepCodeVersion } from "../version.ts";
 import { readFeedbackBuildEnv } from "./build-env.ts";
 import type { FeedbackContext } from "./types.ts";
 
@@ -9,7 +9,7 @@ const PLAUSIBLE_USERNAME = /^[\w.@:-]+$/u;
 
 /** Read the launcher username within the feedback context boundary. */
 export function readFeedbackUsername(env: NodeJS.ProcessEnv = process.env, explicit?: string): string | undefined {
-	const value = explicit ?? env.STEP_CLI_USER;
+	const value = explicit ?? env.STEPCODE_USER;
 	if (typeof value !== "string") return undefined;
 	const raw = value.trim();
 	return raw && raw.length <= MAX_USERNAME_LENGTH && PLAUSIBLE_USERNAME.test(raw) ? raw : undefined;
@@ -30,7 +30,7 @@ export async function resolveFeedbackContext(input: {
 	const uid = normalizeStepUid(input.uid);
 	return {
 		channel,
-		version: resolveStepCliVersion(env).value,
+		version: resolveStepCodeVersion(env).value,
 		platform: process.platform,
 		...(commit ? { commit } : {}),
 		...(sessionId ? { sessionId } : {}),

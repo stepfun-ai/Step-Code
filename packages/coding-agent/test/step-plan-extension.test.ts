@@ -266,7 +266,7 @@ test("run_command is not gated in plan mode; non-plan-file mutations still are",
 		),
 	).resolves.toMatchObject({ block: true });
 
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	await expect(
 		harness.emit(
 			{ type: "tool_call", toolName: "write_file", toolCallId: "t3", input: { path: planPath, content: "# plan" } },
@@ -476,7 +476,7 @@ test("plan telemetry carries the source dim across enter, update, and exit", asy
 
 	// Agent flow: enter, write the plan file, approved exit.
 	await runTool(harness, "enter_plan_mode", {}, context);
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	await harness.emit(
 		{ type: "tool_call", toolName: "write_file", toolCallId: "t1", input: { path: planPath, content: "# plan" } },
 		context,
@@ -507,7 +507,7 @@ test("rpc-mode exit_plan_mode auto-approves without the UI select", async () => 
 	const context = harness.ctx({ mode: "rpc" });
 
 	await runTool(harness, "enter_plan_mode", {}, context);
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	writeFileSync(planPath, "# The plan\n1. Do the thing\n");
 
@@ -543,7 +543,7 @@ test("tui-mode exit_plan_mode still gates through the review dialog", async () =
 	const context = harness.ctx();
 
 	await runTool(harness, "enter_plan_mode", {}, context);
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	writeFileSync(planPath, "# The plan\n");
 
@@ -562,7 +562,7 @@ test("tui-mode exit_plan_mode still gates through the review dialog", async () =
 
 test("only a dismissed review ends the turn; approval and notes let the agent keep going", async () => {
 	const cwd = makeWorkspace();
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	const cases = [
 		{ keys: [REVIEW_KEYS.enter], terminate: false, outcome: "approved" },
 		{
@@ -621,7 +621,7 @@ test.each(["/plan", "--plan", "enter_plan_mode"])(
 		else if (entry === "--plan") await harness.emit({ type: "session_start", reason: "startup" }, context);
 		else await runTool(harness, "enter_plan_mode", {}, context);
 
-		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 		const source = entry === "enter_plan_mode" ? "agent" : "user";
 		expect(lastPlanEntry(harness)).toMatchObject({
 			enabled: true,
@@ -817,7 +817,7 @@ test.each(["session_start", "session_tree"] as const)(
 		).resolves.toBeUndefined();
 		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
 		expect(lastPlanEntry(harness)).toMatchObject({
-			planFilePath: path.join(cwd, ".step-cli", "plans", "session-sess-1.md"),
+			planFilePath: path.join(cwd, ".stepcode", "plans", "session-sess-1.md"),
 			planSource: "agent",
 			toolsBeforePlanMode: originalTools,
 		});
@@ -928,7 +928,7 @@ for (const type of ["session_start", "session_tree"] as const) {
 				details: [{ id: "1", subject: "Legacy task" }],
 			});
 			if (enabled) {
-				const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+				const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 				mkdirSync(path.dirname(planPath), { recursive: true });
 				writeFileSync(planPath, "A readable proposal.");
 				await runTool(harness, "exit_plan_mode", {}, harness.ctx());
@@ -969,7 +969,7 @@ test("switching to a fresh session clears the preceding plan path and source", a
 	expect(lastPlanEntry(harness)).toMatchObject({
 		enabled: true,
 		planSource: "user",
-		planFilePath: path.join(cwd, ".step-cli", "plans", "session-sess-2.md"),
+		planFilePath: path.join(cwd, ".stepcode", "plans", "session-sess-2.md"),
 	});
 });
 
@@ -1025,7 +1025,7 @@ for (const mode of ["tui", "print", "rpc"] as const) {
 			createStepPlanExtension({ telemetry })(harness.api);
 			const context = harness.ctx({ mode, hasUI: mode !== "print" });
 			await runTool(harness, "enter_plan_mode", {}, context);
-			const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+			const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 			mkdirSync(path.dirname(planPath), { recursive: true });
 			if (invalid === "directory") mkdirSync(planPath);
 			else if (invalid !== "missing") writeFileSync(planPath, invalid === "whitespace" ? " \n\t " : "");
@@ -1067,7 +1067,7 @@ test.each([
 	harness.api.setActiveTools(originalTools);
 	createStepPlanExtension({ telemetry })(harness.api);
 	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	const proposal = "Change the parser, add focused regression coverage, then verify the result.";
 	writeFileSync(planPath, proposal);
@@ -1099,7 +1099,7 @@ test.each(["Cover the migration edge case.", "  padded note  "])(
 		});
 		createStepPlanExtension()(harness.api);
 		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
-		const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 		mkdirSync(path.dirname(planPath), { recursive: true });
 		writeFileSync(planPath, "Draft proposal.");
 
@@ -1124,7 +1124,7 @@ test("the review dialog shows the whole plan, however long", async () => {
 	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
 	createStepPlanExtension()(harness.api);
 	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	const proposal = [
 		"# Heading",
@@ -1157,7 +1157,7 @@ test("a valid headless proposal exits with external approval and the whole plan"
 	createStepPlanExtension({ telemetry })(harness.api);
 	const context = harness.ctx({ mode: "print", hasUI: false });
 	await runTool(harness, "enter_plan_mode", {}, context);
-	const planPath = path.join(cwd, ".step-cli", "plans", "session-sess-1.md");
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	writeFileSync(planPath, `${"p".repeat(2000)}tail of the plan`);
 

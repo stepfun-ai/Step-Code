@@ -38,7 +38,7 @@ export interface StepPlanModeController {
 
 /** Absolute path of the per-session plan file under the project workspace. */
 export function getPlanFilePath(sessionId: string, projectCwd?: string): string {
-	return path.join(projectCwd ?? process.cwd(), ".step-cli", "plans", `session-${sessionId}.md`);
+	return path.join(projectCwd ?? process.cwd(), ".stepcode", "plans", `session-${sessionId}.md`);
 }
 
 /**

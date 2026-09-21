@@ -12,7 +12,7 @@ const shPath = fileURLToPath(new URL("../infra/release/install.sh", import.meta.
 
 // A base URL that is obviously not the placeholder. Kept off any real host so an
 // accidental network attempt during the execution tests below fails fast.
-const BASE_URL = "https://releases.example.test/step-cli";
+const BASE_URL = "https://releases.example.test/stepcode";
 
 // Assembled from two literals so this test file cannot itself be rewritten by the
 // same token replacement it is guarding against.
@@ -238,12 +238,12 @@ test("install.ps1 persists the resolved $InstallDir/$AgentDir, honoring STEP_INS
 	);
 });
 
-test("install.sh persists PATH via a guarded, env-var-honoring # step-cli block (static)", async () => {
+test("install.sh persists PATH via a guarded, env-var-honoring # stepcode block (static)", async () => {
 	const rendered = renderInstallTemplate(await readFile(shPath, "utf8"), BASE_URL);
-	assert.ok(rendered.includes("# step-cli"), "must use the # step-cli marker block");
-	assert.ok(rendered.includes("# step-cli end"), "marker block must be terminated");
+	assert.ok(rendered.includes("# stepcode"), "must use the # stepcode marker block");
+	assert.ok(rendered.includes("# stepcode end"), "marker block must be terminated");
 	assert.ok(
-		rendered.includes("grep -qxF '# step-cli'"),
+		rendered.includes("grep -qxF '# stepcode'"),
 		"must grep for the marker before rewriting the block (idempotent)",
 	);
 	assert.ok(
@@ -287,9 +287,9 @@ function CountAndJoin($pathValue, $cands) {
   $arr = @($r)
   return ('' + $arr.Count + '#' + ($arr -join '|'))
 }
-$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.step-cli\bin')
+$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.stepcode\bin')
 $out = [ordered]@{
-  a = (CountAndJoin '%USERPROFILE%\.step-cli\bin' @($var))
+  a = (CountAndJoin '%USERPROFILE%\.stepcode\bin' @($var))
   b = (CountAndJoin $null @('C:\x\bin','C:\y\bin'))
   c = (CountAndJoin 'C:\FOO\BIN\' @('c:\foo\bin'))
   d = (CountAndJoin 'C:\other;C:\keep\bin' @('C:\keep\bin','C:\new\bin'))
@@ -332,7 +332,7 @@ test(
 		// 'System.Object[]' that results if the helper's return value is nested.
 		const harness = String.raw`
 $currentPath = 'C:\Windows;C:\Windows\System32'
-$candidates = @('C:\Users\me\.step-cli\bin', 'C:\Users\me\.step-cli\agent\bin')
+$candidates = @('C:\Users\me\.stepcode\bin', 'C:\Users\me\.stepcode\agent\bin')
 $missing = @(Get-MissingPathEntries -PathValue $currentPath -Candidates $candidates)
 $trimmed = $currentPath.TrimEnd(';')
 $newPath = if ($trimmed) { $trimmed + ';' + ($missing -join ';') } else { $missing -join ';' }
@@ -355,7 +355,7 @@ $newPath
 			);
 			assert.equal(
 				newPath,
-				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.step-cli\\bin;C:\\Users\\me\\.step-cli\\agent\\bin",
+				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.stepcode\\bin;C:\\Users\\me\\.stepcode\\agent\\bin",
 				"fresh-install PATH must append both literal dirs",
 			);
 		} finally {
@@ -377,16 +377,16 @@ test(
 		const rcUnterm = join(dir, "rc-unterm").replace(/\\/g, "/");
 		const scriptPath = join(dir, "helper-test.sh");
 		try {
-			// A well-formed "# step-cli ... # step-cli end" block (and the blank line
+			// A well-formed "# stepcode ... # stepcode end" block (and the blank line
 			// above it) must be removed while surrounding lines survive; a LONE start
 			// marker with no end must be preserved verbatim rather than truncating the
 			// rest of the rc to EOF (the reviewed data-loss guard).
 			const harness = String.raw`
 set -euo pipefail
 ${match[0]}
-printf 'keep1\n\n# step-cli\nexport PATH=x\n# step-cli end\nkeep2\n' > "$1"
+printf 'keep1\n\n# stepcode\nexport PATH=x\n# stepcode end\nkeep2\n' > "$1"
 strip_step_block "$1"
-printf '# step-cli\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
+printf '# stepcode\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
 strip_step_block "$2"
 printf 'WELL:%s\n' "$(tr '\n' '|' < "$1")"
 printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
@@ -402,7 +402,7 @@ printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
 			assert.match(
 				result.stdout,
 				/UNTERM_KEEP:1/,
-				"an unterminated # step-cli marker must not truncate user content below it",
+				"an unterminated # stepcode marker must not truncate user content below it",
 			);
 		} finally {
 			await rm(dir, { recursive: true, force: true });

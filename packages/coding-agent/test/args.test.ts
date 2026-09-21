@@ -506,7 +506,7 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual(["explain this"]);
 		});
 
-		// User feedback: `stepcli -p --mode json "@empty.md 这个文件有什么"` treated the whole
+		// User feedback: `stepcode -p --mode json "@empty.md 这个文件有什么"` treated the whole
 		// quoted arg as one filename. A single @-arg containing whitespace must split into a
 		// file token plus trailing message text.
 		test("splits an @-arg containing whitespace into a file token and a message", () => {

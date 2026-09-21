@@ -11,11 +11,11 @@ describe("redactDiagnosticPii", () => {
 	});
 
 	test("redacts posix absolute paths including CJK home directories", () => {
-		expect(redactDiagnosticPii("failed at /Users/张三/项目/step-cli")).toContain("<redacted:path>");
+		expect(redactDiagnosticPii("failed at /Users/张三/项目/stepcode")).toContain("<redacted:path>");
 	});
 
 	test("redacts windows absolute paths", () => {
-		expect(redactDiagnosticPii("C:\\Users\\张三\\项目\\step-cli")).toContain("<redacted:path>");
+		expect(redactDiagnosticPii("C:\\Users\\张三\\项目\\stepcode")).toContain("<redacted:path>");
 	});
 
 	test("keeps the node_modules tail after collapsing the user prefix", () => {

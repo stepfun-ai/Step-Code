@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentSession, AgentSessionEvent, AgentSessionEventListener } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
-import { createStepCli } from "../src/step-cli-runtime.ts";
+import { createStepCode } from "../src/stepcode-runtime.ts";
 
 interface SessionStub {
 	session: AgentSession;
@@ -35,7 +35,7 @@ function createSessionStub(sessionId: string): SessionStub {
 	};
 }
 
-describe("Step CLI", () => {
+describe("StepCode", () => {
 	test("rebinds event subscriptions when pi replaces the session", async () => {
 		const first = createSessionStub("session-1");
 		const second = createSessionStub("session-2");
@@ -56,7 +56,7 @@ describe("Step CLI", () => {
 		} as unknown as AgentSessionRuntime;
 
 		const events: AgentSessionEvent[] = [];
-		const cli = createStepCli(runtime);
+		const cli = createStepCode(runtime);
 		cli.subscribe((event) => events.push(event));
 		const externalSessionChange = vi.fn();
 		cli.onSessionChange(externalSessionChange);
@@ -130,7 +130,7 @@ describe("Step CLI", () => {
 			dispose: vi.fn(async () => {}),
 		} as unknown as AgentSessionRuntime;
 
-		const cli = createStepCli(runtime);
+		const cli = createStepCode(runtime);
 		const rebind = vi.fn(async () => {});
 		const invalidate = vi.fn();
 		cli.setRebindSession(rebind);
@@ -164,7 +164,7 @@ describe("Step CLI", () => {
 			onSessionChange: vi.fn(() => () => {}),
 			dispose: vi.fn(() => pendingDispose),
 		} as unknown as AgentSessionRuntime;
-		const cli = createStepCli(runtime);
+		const cli = createStepCode(runtime);
 
 		const first = cli.dispose();
 		const second = cli.dispose();

@@ -47,7 +47,7 @@ describe("resolveProjectTrusted", () => {
 		const trusted = await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: new ProjectTrustStore(agentDir),
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			alwaysAsk: true,
 			projectTrustContext: context(asked, "Yes, continue"),
 		});
@@ -64,7 +64,7 @@ describe("resolveProjectTrusted", () => {
 		await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: store,
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			alwaysAsk: true,
 			projectTrustContext: context(first, "Yes, continue"),
 		});
@@ -73,7 +73,7 @@ describe("resolveProjectTrusted", () => {
 		const trusted = await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: new ProjectTrustStore(agentDir),
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			alwaysAsk: true,
 			projectTrustContext: context(second, undefined),
 		});
@@ -87,7 +87,7 @@ describe("resolveProjectTrusted", () => {
 		const trusted = await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: new ProjectTrustStore(agentDir),
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			alwaysAsk: true,
 			defaultProjectTrust: "always",
 			projectTrustContext: context(asked, undefined),
@@ -104,7 +104,7 @@ describe("resolveProjectTrusted", () => {
 		const trusted = await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: new ProjectTrustStore(agentDir),
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			alwaysAsk: true,
 			projectTrustContext: { ...context(asked, undefined), hasUI: false },
 		});
@@ -118,7 +118,7 @@ describe("resolveProjectTrusted", () => {
 		await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: new ProjectTrustStore(agentDir),
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			alwaysAsk: true,
 			projectTrustContext: {
 				cwd: bare,
@@ -148,7 +148,7 @@ describe("resolveProjectTrusted", () => {
 				resolveProjectTrusted({
 					cwd: bare,
 					trustStore: new ProjectTrustStore(agentDir),
-					configDirName: ".step-cli",
+					configDirName: ".stepcode",
 					alwaysAsk: true,
 					projectTrustContext: context(asked, answer),
 				}),
@@ -163,7 +163,7 @@ describe("resolveProjectTrusted", () => {
 			resolveProjectTrusted({
 				cwd: bare,
 				trustStore: store,
-				configDirName: ".step-cli",
+				configDirName: ".stepcode",
 				alwaysAsk: true,
 				projectTrustContext: context([], "No, quit"),
 			}),
@@ -180,7 +180,7 @@ describe("resolveProjectTrusted", () => {
 		const trusted = await resolveProjectTrusted({
 			cwd: bare,
 			trustStore: new ProjectTrustStore(agentDir),
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			projectTrustContext: context(asked, undefined),
 		});
 

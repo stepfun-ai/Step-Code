@@ -113,7 +113,7 @@ export interface StepPermissionState {
 	 * permissive, so a run without a UI must not inherit it.
 	 */
 	defaulted?: boolean;
-	/** Per-tool policy overrides supplied by the Step CLI or an embedding host. */
+	/** Per-tool policy overrides supplied by the StepCode or an embedding host. */
 	toolOverrides?: Readonly<Record<string, StepToolPermissionMode>>;
 }
 

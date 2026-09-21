@@ -1,6 +1,6 @@
 # Providers
 
-Step supports subscription-based providers via OAuth and API key providers via environment variables or auth file. Built-in catalogs ship with step; configured providers may refresh newer catalogs and cache them in `~/.step-cli/agent/models-store.json` for offline use.
+Step supports subscription-based providers via OAuth and API key providers via environment variables or auth file. Built-in catalogs ship with step; configured providers may refresh newer catalogs and cache them in `~/.stepcode/agent/models-store.json` for offline use.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ Use `/login` in interactive mode, then select a provider:
 - xAI (Grok/X subscription)
 - OpenRouter (OAuth-minted API key billed from OpenRouter credits)
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.step-cli/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
+Use `/logout` to clear credentials. Tokens are stored in `~/.stepcode/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
 
 ### OpenAI Codex
 
@@ -102,7 +102,7 @@ Reference for environment variables and `auth.json` keys: [`const envMap`](https
 
 #### Auth File
 
-Store credentials in `~/.step-cli/agent/auth.json`:
+Store credentials in `~/.stepcode/agent/auth.json`:
 
 ```json
 {

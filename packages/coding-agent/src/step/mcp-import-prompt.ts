@@ -35,7 +35,7 @@ export interface StepMcpImportPromptOutcome {
  * Debug switch: show the screen on every launch instead of once per source.
  *
  * It also suppresses the reviewed-source write, so a debug run leaves
- * `~/.step-cli/mcp-import.json` untouched and the shipped behaviour — ask once —
+ * `~/.stepcode/mcp-import.json` untouched and the shipped behaviour — ask once —
  * returns the moment the variable is unset.
  */
 export const STEP_MCP_IMPORT_ALWAYS_ENV = "STEP_MCP_IMPORT_ALWAYS";

@@ -577,13 +577,12 @@ export {
 	applyStepEnvironment,
 	getStepSessionDirOverride,
 	LEGACY_RENAMED_CONFIG_DIR,
-	LEGACY_STEP_CONFIG_DIR,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepConfigRoot,
 	resolveStepHomeDir,
 	resolveStepSessionDir,
-	STEP_CLI_CONFIG_DIR,
+	STEPCODE_CONFIG_DIR,
 	type StepEnvironmentOptions,
 } from "./step/environment.ts";
 export { runFeedbackCommand } from "./step/feedback/command.ts";
@@ -749,18 +748,18 @@ export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from 
 export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {
-	resolveStepCliVersion,
-	STEP_CLI_BUILD_VERSION_ENV,
-	STEP_CLI_VERSION,
-	STEP_CLI_VERSION_OVERRIDE_ENV,
-	type StepCliVersion,
+	resolveStepCodeVersion,
+	STEPCODE_BUILD_VERSION_ENV,
+	STEPCODE_VERSION,
+	STEPCODE_VERSION_OVERRIDE_ENV,
+	type StepCodeVersion,
 } from "./step/version.ts";
 // Step product facade. It delegates lifecycle and input handling to pi.
 export {
-	createStepCli,
-	type StepCli,
-	type StepCliSession,
-} from "./step-cli-runtime.ts";
+	createStepCode,
+	type StepCode,
+	type StepCodeSession,
+} from "./stepcode-runtime.ts";
 // Theme utilities for custom tools and extensions
 export {
 	detectTerminalBackgroundFromEnv,

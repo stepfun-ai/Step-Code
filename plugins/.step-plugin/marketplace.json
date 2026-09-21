@@ -1,6 +1,6 @@
 {
   "name": "builtin",
-  "description": "Plugins that ship inside the Step CLI binary. Updated with the CLI itself, not fetched.",
+  "description": "Plugins that ship inside the StepCode binary. Updated with the CLI itself, not fetched.",
   "plugins": [
     {
       "name": "playwright",

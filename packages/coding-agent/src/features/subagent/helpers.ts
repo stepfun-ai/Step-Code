@@ -74,7 +74,7 @@ export async function allocateStepWorktree(baseCwd: string, label: string): Prom
 	const repositoryRoot = await runGit(baseCwd, ["rev-parse", "--show-toplevel"]);
 	if (!repositoryRoot) throw new Error("The child working directory is not a Git repository");
 
-	const parent = await mkdtemp(path.join(os.tmpdir(), "step-cli-worktree-"));
+	const parent = await mkdtemp(path.join(os.tmpdir(), "stepcode-worktree-"));
 	const worktreePath = path.join(parent, "workspace");
 	const branch = `step-agent/${sanitizeLabel(label)}-${randomUUID().slice(0, 8)}`;
 	try {

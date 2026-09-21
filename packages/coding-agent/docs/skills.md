@@ -24,17 +24,17 @@ Step implements the [Agent Skills standard](https://agentskills.io/specification
 Step loads skills from:
 
 - Global:
-  - `~/.step-cli/agent/skills/`
+  - `~/.stepcode/agent/skills/`
   - `~/.agents/skills/`
 - Project (only after the project is trusted):
-  - `.step-cli/skills/`
+  - `.stepcode/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Packages: `skills/` directories or `pi.skills` entries in `package.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
 
 Discovery rules:
-- In `~/.step-cli/agent/skills/` and `.step-cli/skills/`, direct root `.md` files are discovered as individual skills when they have valid skill frontmatter with a non-empty `description`
+- In `~/.stepcode/agent/skills/` and `.stepcode/skills/`, direct root `.md` files are discovered as individual skills when they have valid skill frontmatter with a non-empty `description`
 - In all skill locations, directories containing `SKILL.md` are discovered recursively
 - In `~/.agents/skills/` and project `.agents/skills/`, root `.md` files are ignored, but nested `.md` files in grouping folders are discovered when they declare skill frontmatter
 - Root Markdown files other than `SKILL.md` that do not look like skills are ignored silently
@@ -54,7 +54,7 @@ To use skills from Claude Code or OpenAI Codex, add their directories to setting
 }
 ```
 
-For project-level Claude Code skills, add to `.step-cli/settings.json`:
+For project-level Claude Code skills, add to `.stepcode/settings.json`:
 
 ```json
 {

@@ -4,7 +4,7 @@ Step saves conversations as sessions so you can continue work, branch from earli
 
 ## Session Storage
 
-Sessions auto-save to `~/.step-cli/agent/sessions/`, organized by working directory. Each session is a JSONL file with a tree structure.
+Sessions auto-save to `~/.stepcode/agent/sessions/`, organized by working directory. Each session is a JSONL file with a tree structure.
 
 ```bash
 step -c                  # Continue most recent session

@@ -216,7 +216,7 @@ describe("feedback validation and settings", () => {
 
 	test("honors environment opt-out before persisted settings", () => {
 		expect(resolveFeedbackSettings({ env: {}, settings: {} })).toEqual({ enabled: true });
-		expect(resolveFeedbackSettings({ env: { STEP_CLI_DISABLE_FEEDBACK: "true" }, settings: {} })).toEqual({
+		expect(resolveFeedbackSettings({ env: { STEPCODE_DISABLE_FEEDBACK: "true" }, settings: {} })).toEqual({
 			enabled: false,
 			reason: "env-opt-out",
 		});
