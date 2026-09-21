@@ -107,10 +107,23 @@ export function currentStepInvocation(args: string[]): {
 	const script = process.argv[1];
 	const virtualScript = script?.startsWith("/$bunfs/") || script?.includes("$bunfs");
 	if (script && !virtualScript && existsSync(script) && /\.(?:[cm]?js|[cm]?ts)$/iu.test(script)) {
-		// `pnpm step` and the Node distribution both expose the Step script as
-		// argv[1]. Reusing it preserves the Step provider, storage namespace, and
-		// all product-level defaults for the child.
-		return { command: process.execPath, args: [script, ...args] };
+		// Source launches need tsx's preflight and ESM loader as well as argv[1].
+		// Forward only preload/loader options: debugger ports and parent-only
+		// execution modes must not be copied to every subagent.
+		const loaderArgs: string[] = [];
+		for (let index = 0; index < process.execArgv.length; index += 1) {
+			const arg = process.execArgv[index];
+			if (/^(?:--require|--import|--loader|--experimental-loader|-r)$/u.test(arg)) {
+				const value = process.execArgv[index + 1];
+				if (value !== undefined) {
+					loaderArgs.push(arg, value);
+					index += 1;
+				}
+			} else if (/^(?:--require|--import|--loader|--experimental-loader)=/u.test(arg) || /^-r.+/u.test(arg)) {
+				loaderArgs.push(arg);
+			}
+		}
+		return { command: process.execPath, args: [...loaderArgs, script, ...args] };
 	}
 
 	const executable = path.basename(process.execPath).toLowerCase();
