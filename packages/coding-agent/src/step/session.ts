@@ -46,7 +46,7 @@ export interface StepSessionManagerOptions {
 }
 
 export interface StepSessionQueryOptions {
-	/** Global Step agent directory. Defaults to the Step CLI directory. */
+	/** Global Step agent directory. Defaults to the StepCode directory. */
 	agentDir?: string;
 	/** Explicit session directory. When omitted, Pi's per-cwd directory is used. */
 	sessionDir?: string;
@@ -163,7 +163,7 @@ function isPathInside(root: string, target: string): boolean {
 /**
  * Explicitly selected legacy Pi session paths are read through the Step
  * namespace.  We keep arbitrary external paths working as Pi does, but never
- * let a Step resume operation append to a Pi or legacy Step CLI session file.
+ * let a Step resume operation append to a Pi or legacy StepCode session file.
  */
 function isLegacyPiSessionPath(sessionPath: string): boolean {
 	const resolvedPath = resolvePath(sessionPath);

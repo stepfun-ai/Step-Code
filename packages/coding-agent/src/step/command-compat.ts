@@ -35,7 +35,7 @@ const STEP_DEFAULT_SESSION_FILE = "session";
  * Normalize the session selector emitted by older StepCode launchers.
  *
  * StepCode passes a local session selector as `--session-file`, while Pi's
- * runtime accepts a project session id via `--session-id`. The Step CLI uses
+ * runtime accepts a project session id via `--session-id`. The StepCode uses
  * the basename (without its extension) as that id; its default `session`
  * selector deliberately means "create a fresh session".
  */
@@ -223,7 +223,7 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 		}
 		await mkdir(join(target, ".."), { recursive: true, mode: 0o700 });
 		const template = [
-			"# Step CLI configuration",
+			"# StepCode configuration",
 			'defaultProvider = "step"',
 			'defaultModel = "step-3.7-flash"',
 			"",

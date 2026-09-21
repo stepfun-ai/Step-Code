@@ -129,7 +129,7 @@ export function resolveStepTraceAllowlist(
  *
  * The compatibility helper above intentionally keeps its historical
  * model-endpoint behaviour for extension hosts.  The live transport follows
- * the old Step CLI more strictly: only explicit prefixes and the
+ * the old StepCode more strictly: only explicit prefixes and the
  * provider-specific ObservableServer origin are trusted.  In particular, a
  * user supplied model URL is never promoted to a trace destination merely
  * because the model uses the `step` provider id.

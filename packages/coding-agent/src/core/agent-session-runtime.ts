@@ -44,7 +44,7 @@ export type CreateAgentSessionRuntimeFactory = (options: {
 /**
  * Runtime host contract consumed by the mode layer.
  *
- * Keeping this contract structural lets a product facade (such as Step CLI)
+ * Keeping this contract structural lets a product facade (such as StepCode)
  * sit in front of pi without forking InteractiveMode, print mode, or RPC mode.
  * AgentSessionRuntime remains the implementation and lifecycle authority.
  */
@@ -168,7 +168,7 @@ export class AgentSessionRuntime implements AgentSessionRuntimeHost {
 	/**
 	 * Subscribe to session replacement without taking ownership of the runtime.
 	 *
-	 * Hosts such as Step CLI use this to move their event subscription to
+	 * Hosts such as StepCode use this to move their event subscription to
 	 * the replacement session created by `/new`, `/resume`, or `/fork`. The
 	 * listener is intentionally synchronous: the runtime's existing rebind hook
 	 * remains the place for asynchronous UI teardown and setup.

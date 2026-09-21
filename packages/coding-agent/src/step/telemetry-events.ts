@@ -395,7 +395,7 @@ export interface StepTelemetryEventMeta<Payload extends StepTelemetryEventPayloa
 }
 
 /**
- * Product telemetry metadata, kept in lockstep with the former Step CLI
+ * Product telemetry metadata, kept in lockstep with the former StepCode
  * registry.  Descriptions are deliberately about dimensions and outcomes;
  * they must never invite producers to add prompts, paths, or other user data.
  */

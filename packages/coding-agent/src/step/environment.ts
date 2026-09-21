@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from "./defaults.ts";
 
-/** Canonical project directory for Step CLI state and resources. */
+/** Canonical project directory for StepCode state and resources. */
 export const STEPCODE_CONFIG_DIR = ".stepcode";
 
 /** Directory used by releases before the product rename. */
@@ -109,7 +109,7 @@ export function isStepStorageContext(env: Record<string, string | undefined> = p
 export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, options: StepEnvironmentOptions = {}): void {
 	if (!env.STEPCODE_APP_NAME?.trim()) env.STEPCODE_APP_NAME = "step";
 	const configDir = options.configDir?.trim() || env.STEPCODE_CONFIG_DIR?.trim() || STEPCODE_CONFIG_DIR;
-	// Keep the canonical Step CLI variable populated. Blank values must not
+	// Keep the canonical StepCode variable populated. Blank values must not
 	// leak through to config.ts, where they would otherwise expose Pi's `.pi`
 	// package fallback.
 	env.STEPCODE_CONFIG_DIR = configDir;
@@ -137,7 +137,7 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 		env.STEPCODE_DEFAULT_MODEL = env.STEP_MODEL?.trim() || STEP_DEFAULT_MODEL;
 	}
 	// Downstream attribution marker sent as `x-step-client`. Keep it overridable
-	// so an embedding host can identify itself, but default shipped Step CLI
+	// so an embedding host can identify itself, but default shipped StepCode
 	// requests to `stepcode`.
 	if (!env.STEP_CLIENT?.trim()) env.STEP_CLIENT = "stepcode";
 	// Step should not contact Pi's release/install services unless explicitly

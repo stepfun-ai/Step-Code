@@ -212,7 +212,7 @@ tmux kill-session -t pi-test
 
 Locations:
 
-- `CHANGELOG.md` — Step CLI product, runtime integration, release, and user-facing changes.
+- `CHANGELOG.md` — StepCode product, runtime integration, release, and user-facing changes.
 - `packages/*/CHANGELOG.md` — package-specific runtime and API changes.
 
 Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
@@ -238,9 +238,9 @@ Attribution:
 2. **Local binary smoke test**: build the standalone Step bundle and smoke test the current-platform binary outside the repo:
    ```bash
    node infra/release/release-bundle.mjs --dry-run --version v0.3.1
-   ./scripts/build-binaries.sh --product step --offline-model-data --platform linux-x64 --out /tmp/step-cli-release
-   /tmp/step-cli-release/step --help
-   /tmp/step-cli-release/step --version
+   ./scripts/build-binaries.sh --product step --offline-model-data --platform linux-x64 --out /tmp/stepcode-release
+   /tmp/stepcode-release/step --help
+   /tmp/stepcode-release/step --version
    ```
    Verify the binary starts, reports the tag-derived version, loads native TUI resources, and completes a smoke prompt with the intended Step provider. Failures are release blockers unless the user explicitly accepts the risk.
 
@@ -253,7 +253,7 @@ Attribution:
 For any non-trivial change — a new subsystem, a multi-file refactor, or risky / hard-to-reverse work — plan before you edit:
 
 1. First search `docs/exec-plans/active/` for a related plan and read it.
-2. Before writing code or running side-effecting commands, write a short Markdown exec-plan to `docs/exec-plans/active/<YYYY-MM-DD>-<kebab-name>.md`. The filename must start with the plan creation date in ISO format (`YYYY-MM-DD`), followed by a lowercase kebab-case name; for example, `2026-04-01-step-cli-context-pipeline-and-memory.md`. Do not create undated exec-plan filenames. Cover: **Step** (what you will do), **Tool** (command or edit), **Expectation** (the result that means it worked), **Rollback** (how to undo if it fails).
+2. Before writing code or running side-effecting commands, write a short Markdown exec-plan to `docs/exec-plans/active/<YYYY-MM-DD>-<kebab-name>.md`. The filename must start with the plan creation date in ISO format (`YYYY-MM-DD`), followed by a lowercase kebab-case name; for example, `2026-04-01-stepcode-context-pipeline-and-memory.md`. Do not create undated exec-plan filenames. Cover: **Step** (what you will do), **Tool** (command or edit), **Expectation** (the result that means it worked), **Rollback** (how to undo if it fails).
 3. For operations with side effects (deleting, publishing, releasing, migrating), request explicit confirmation at the end of the plan before proceeding.
 4. Prefer the scripts under `scripts/` over ad-hoc command lines.
 

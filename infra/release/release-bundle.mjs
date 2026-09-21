@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** Build and optionally publish the versioned Step CLI binary bundle. */
+/** Build and optionally publish the versioned StepCode binary bundle. */
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -126,7 +126,7 @@ async function main() {
 			});
 		}
 
-		process.stdout.write(`Step CLI ${version} bundle ready at ${releaseDir}\n`);
+		process.stdout.write(`StepCode ${version} bundle ready at ${releaseDir}\n`);
 	} finally {
 		await rm(buildDir, { recursive: true, force: true });
 	}

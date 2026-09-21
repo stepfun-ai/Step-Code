@@ -183,7 +183,7 @@ export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 // Rebranded distributions can select their project resource directory without
 // changing the package metadata used by the upstream `pi` entrypoint. Step
-// Step CLI uses `.stepcode`; the launcher also imports files left by older
+// StepCode uses `.stepcode`; the launcher also imports files left by older
 // releases before Pi's managers read the directory.
 const configuredStepConfigDir = STEP_ENTRYPOINT ? process.env.STEPCODE_CONFIG_DIR?.trim() : undefined;
 export const CONFIG_DIR_NAME: string =

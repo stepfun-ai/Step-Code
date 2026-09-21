@@ -1,5 +1,5 @@
 /**
- * Step CLI plugin marketplace facade.
+ * StepCode plugin marketplace facade.
  *
  * Pi's package manager can install executable extensions, but Step's built-in
  * marketplace has a deliberately smaller contract: marketplace packages are
@@ -41,7 +41,7 @@ export const BUILTIN_MARKETPLACE_FILES: Readonly<Record<string, string>> = {
 	".step-plugin/marketplace.json": JSON.stringify(
 		{
 			name: BUILTIN_MARKETPLACE_NAME,
-			description: "Plugins that ship inside the Step CLI binary. Updated with the CLI itself, not fetched.",
+			description: "Plugins that ship inside the StepCode binary. Updated with the CLI itself, not fetched.",
 			plugins: [
 				{
 					name: "playwright",
@@ -155,7 +155,7 @@ export interface MarketplaceOperationResult {
 	warnings: string[];
 }
 
-/** Compatibility name used by the original Step CLI marketplace facade. */
+/** Compatibility name used by the original StepCode marketplace facade. */
 export type AcquireMarketplaceResult = MarketplaceOperationResult;
 
 export interface StepPluginCommandOptions {
@@ -165,7 +165,7 @@ export interface StepPluginCommandOptions {
 	telemetry?: StepTelemetryReporter;
 }
 
-/** Legacy aliases retained for callers migrating from step-cli. */
+/** Legacy aliases retained for callers migrating from stepcode. */
 export function defaultUserPluginsDir(env: NodeJS.ProcessEnv = process.env): string {
 	return defaultStepPluginsDir(env);
 }
@@ -526,7 +526,7 @@ export async function installMarketplacePlugin(
 	}
 	if (entry.declaration.lspServers !== undefined) {
 		warnings.push(
-			`Marketplace entry '${entry.name}' declares lspServers, which Step CLI does not host; that contribution was not installed.`,
+			`Marketplace entry '${entry.name}' declares lspServers, which StepCode does not host; that contribution was not installed.`,
 		);
 	}
 	if (entry.marketplace === BUILTIN_MARKETPLACE_NAME && ownManifest.manifest?.provision) {
@@ -871,7 +871,7 @@ export async function updateMarketplaceSource(input: {
 }): Promise<MarketplaceOperationResult> {
 	const name = input.name.trim();
 	if (!isSafeName(name) || name === BUILTIN_MARKETPLACE_NAME)
-		return { warnings: [`Marketplace '${name}' is built into Step CLI and cannot be updated separately.`] };
+		return { warnings: [`Marketplace '${name}' is built into StepCode and cannot be updated separately.`] };
 	const root = input.marketplacesDir ?? defaultStepMarketplacesDir();
 	const target = path.resolve(root, name);
 	if (!(await pathExists(target))) return { warnings: [`No marketplace named '${name}' is configured.`] };
@@ -980,7 +980,7 @@ async function openInstalledPluginDetails(
 		if (selected === "Back") await openInstalledPlugins(ctx, options, say);
 		return;
 	}
-	if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${plugin.name}' from Step CLI?`))) {
+	if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${plugin.name}' from StepCode?`))) {
 		say("Uninstall cancelled.");
 		return;
 	}
@@ -1088,7 +1088,7 @@ async function openMarketplaceSourceDetails(
 	say: PluginNotice,
 ): Promise<void> {
 	if (source.kind === "builtin") {
-		say(`${source.name} ships with Step CLI and cannot be updated or removed.`);
+		say(`${source.name} ships with StepCode and cannot be updated or removed.`);
 		return;
 	}
 	const details = `${source.origin ?? source.path}\nKind: ${source.kind}`;
@@ -1121,7 +1121,7 @@ async function openMarketplaceSourceDetails(
 /** Register `/plugin` on the Step command surface. */
 export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginCommandOptions = {}): void {
 	pi.registerCommand("plugin", {
-		description: "Browse and manage Step CLI plugins",
+		description: "Browse and manage StepCode plugins",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.trim().split(/\s+/u).filter(Boolean);
 			const actions = ["list", "browse", "install", "remove", "uninstall", "marketplace"];
@@ -1205,7 +1205,7 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 							say(`Usage: /plugin ${command} <name>`, "warning");
 							return;
 						}
-						if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${name}' from Step CLI?`))) {
+						if (ctx.hasUI && !(await ctx.ui.confirm("Uninstall plugin", `Remove '${name}' from StepCode?`))) {
 							say("Uninstall cancelled.");
 							return;
 						}

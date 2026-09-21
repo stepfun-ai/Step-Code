@@ -1,4 +1,4 @@
-# Step CLI 统一配置与 MCP 支持 — 技术文档
+# StepCode 统一配置与 MCP 支持 — 技术文档
 
 本文对应分支 `feat/unified-step-config-mcp` 的整体改动:把原先分散在
 `settings.json` / `step-settings.json` 的配置统一到 `config.toml`,把凭据与模型
@@ -233,7 +233,7 @@ if (ctx.mode !== "tui") await startup;         // 仅 TUI 分离
 | 本分支 | 3094 / 2571 / 3668 / 2741 ms |
 
 两者在同一区间,**本次改动没有引入启动回归**。剩下的 2~3 秒是
-`pnpm step`(= `tsx --tsconfig tsconfig.json .../step-cli.ts`)开发态每次启动都要
+`pnpm step`(= `tsx --tsconfig tsconfig.json .../stepcode.ts`)开发态每次启动都要
 转译整个 TS 源码图的固有成本,`main` 上同样存在,与 MCP 无关。若要消除,需要单独
 做一个预打包的 `step:fast` 入口,不在本次范围内。
 
@@ -268,7 +268,7 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 官方 Figma MCP 对 Step 返回 403,现在会给出明确指引:
 
 > Step does not support figma mcp. You can use https://github.com/GLips/Figma-Context-MCP
-> in Step CLI as an alternative to the official Figma MCP.
+> in StepCode as an alternative to the official Figma MCP.
 
 ### 4.5 构建产物污染测试
 
@@ -329,7 +329,7 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 ### `config.toml` 示例
 
 ```toml
-# Step CLI configuration
+# StepCode configuration
 
 theme = "step-dark"
 defaultProvider = "step"

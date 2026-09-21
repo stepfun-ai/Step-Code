@@ -25,7 +25,7 @@ export interface CreateStepAgentSessionOptions
 	extends Omit<CreateAgentSessionOptions, "agentDir" | "cwd" | "settingsManager"> {
 	/** Workspace root used for project-local Step settings. */
 	cwd?: string;
-	/** Step agent directory. Defaults to the Step CLI global directory. */
+	/** Step agent directory. Defaults to the StepCode global directory. */
 	agentDir?: string;
 	/** Optional explicit session root; defaults to Pi's per-cwd Step layout. */
 	sessionDir?: string;
@@ -39,7 +39,7 @@ export interface CreateStepAgentSessionServicesOptions
 	extends Omit<CreateAgentSessionServicesOptions, "agentDir" | "cwd" | "settingsManager"> {
 	/** Workspace root used for project-local Step settings. */
 	cwd: string;
-	/** Step agent directory. Defaults to the Step CLI global directory. */
+	/** Step agent directory. Defaults to the StepCode global directory. */
 	agentDir?: string;
 	/** An existing Pi manager to decorate instead of creating one. */
 	settingsManager?: SettingsManager;

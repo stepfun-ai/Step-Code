@@ -316,7 +316,7 @@ main() {
 	for dir in native theme assets export-html docs examples; do copy_runtime_dir "$archive_root" "$dir"; done
 	install_managed_tools "$archive_root"
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
-	printf 'installed Step CLI %s to %s\n' "$VERSION" "$destination"
+	printf 'installed StepCode %s to %s\n' "$VERSION" "$destination"
 	configure_shell_path
 }
 

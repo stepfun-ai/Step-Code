@@ -14,7 +14,7 @@ Step extension; it does not create a second event loop or a second TUI.
 - `AgentSessionRuntime` remains the session and agent-loop authority.
 - `extensions/step-provider` supplies the Step model catalog and browser OAuth
   flow through pi's provider API.
-- `step-cli.ts` is a forwarding facade for hosts that need a Step-named
+- `stepcode.ts` is a forwarding facade for hosts that need a Step-named
   boundary; it delegates prompt, queue, model, event, and disposal operations
   directly to pi. Event subscriptions follow the active session when pi handles
   `/new`, `/resume`, or `/fork`.
@@ -338,7 +338,7 @@ separation, not model-specific restrictions on which task tools are available.
 
 ## Compatibility matrix
 
-The following is the current audit against the previous Step CLI. “Native”
+The following is the current audit against the previous StepCode. “Native”
 means the behavior is supplied by Pi and is intentionally not duplicated in
 the Step layer; “adapter” means a small wrapper in `src/step/` or the Step
 extension. Entries marked “separate product” require a gateway or external
@@ -347,11 +347,11 @@ service and are not silently faked by this fork.
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
-| Step CLI OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
+| StepCode OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
-| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `step-cli.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
+| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `stepcode.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
 | Legacy top-level `models`, `serve`, `goal`, and related gateway commands | Previous command dispatcher | separate product; Pi package commands remain unchanged |

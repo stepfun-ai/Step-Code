@@ -472,7 +472,7 @@ export function createPiHarnessEventBridge(
 		},
 		async input(messageOrCommand: string | PiHarnessInputCommand, inputOptions?: PiHarnessInputOptions) {
 			if (closed) {
-				throw new Error("Step CLI event bridge is closed");
+				throw new Error("StepCode event bridge is closed");
 			}
 			if (typeof messageOrCommand === "string") {
 				await session.prompt(messageOrCommand, {

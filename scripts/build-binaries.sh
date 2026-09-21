@@ -285,7 +285,7 @@ for platform in "${PLATFORMS[@]}"; do
         ' "$OUTPUT_DIR/$platform/package.json"
     fi
     cp README.md "$OUTPUT_DIR/$platform/"
-    # Step CLI keeps changelogs per package; older Pi source archives also
+    # StepCode keeps changelogs per package; older Pi source archives also
     # carried a repository-level CHANGELOG.md. Preserve it when present without
     # making the standalone Step build depend on a file this repository does not
     # have.

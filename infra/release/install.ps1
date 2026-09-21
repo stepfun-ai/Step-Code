@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Install or update Step CLI on Windows.
+  Install or update StepCode on Windows.
 
 .DESCRIPTION
   This is the Windows counterpart to infra/release/install.sh.  Release

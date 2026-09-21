@@ -2,7 +2,7 @@
 
 // @step-harness/cli — process entry.
 //
-// Merges the former coding-agent/src/step-cli.ts startup segment with the
+// Merges the former coding-agent startup segment with the
 // argv → mode → dispatch → exit-code flow. The Step entry signal is set as the
 // very first side effect (before the coding-agent barrel is evaluated) so
 // config.ts resolves the Step storage namespace regardless of launcher name.
@@ -308,7 +308,7 @@ try {
 	await telemetryIdentityReady;
 	if (!isTopLevelLogout && !(isTopLevelLogin && topLevelAuthHelp)) {
 		// Normalize only an old product-shaped credential file that is already
-		// inside the canonical Step CLI path. This is the credential store, not
+		// inside the canonical StepCode path. This is the credential store, not
 		// settings: Step reads no configuration from a legacy layout.
 		await migrateLegacyStepCredential({
 			nativePath: getStepAuthPath(),
@@ -442,7 +442,7 @@ try {
 					const message = error instanceof Error ? error.message : String(error);
 					if (message.includes("403") && name.toLowerCase().includes("figma")) {
 						throw new Error(
-							"Step does not support figma mcp. You can use https://github.com/GLips/Figma-Context-MCP in Step CLI as an alternative to the official Figma MCP.",
+							"Step does not support figma mcp. You can use https://github.com/GLips/Figma-Context-MCP in StepCode as an alternative to the official Figma MCP.",
 						);
 					}
 					throw error;
