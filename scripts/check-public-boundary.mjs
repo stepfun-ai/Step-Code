@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const guardPath = "scripts/check-public-boundary.mjs";
+const publicGuardPaths = new Set([guardPath, "scripts/check-public-history.mjs"]);
 
 const FORBIDDEN_PATHS = [
 	/^\.gitlab-ci\.yml$/u,
@@ -56,7 +57,7 @@ function trackedFiles() {
 
 export function analyzeTrackedFile(repoPath, text) {
 	const normalizedPath = normalize(repoPath);
-	if (normalizedPath === guardPath) return [];
+	if (publicGuardPaths.has(normalizedPath)) return [];
 	const violations = [];
 	for (const pattern of FORBIDDEN_PATHS) {
 		if (pattern.test(normalizedPath)) {
@@ -100,7 +101,9 @@ function runSelfTest() {
 	};
 
 	expectClean("README.md", "Public builds create local artifacts only.");
-	expectClean(guardPath, "gitlab.basemind.com CI_PROJECT_ID");
+	for (const exemptPath of publicGuardPaths) {
+		expectClean(exemptPath, "gitlab.basemind.com CI_PROJECT_ID");
+	}
 	expectViolation(".gitlab-ci.yml", "stages: [.pre]");
 	expectViolation("docs/improvement-plan.md", "internal planning notes");
 	expectViolation("docs/public.md", "https://gitlab.basemind.com/aiagent/step-harness");
