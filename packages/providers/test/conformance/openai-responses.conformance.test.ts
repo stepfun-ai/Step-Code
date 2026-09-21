@@ -10,8 +10,8 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "../../src/types.ts";
-import { collectEventTypes, jsonErrorResponse, openAiDataSse, resolveAdapter, sseResponse } from "./harness.ts";
 import { responsesModel } from "../helpers/step-fixtures.ts";
+import { collectEventTypes, jsonErrorResponse, openAiDataSse, resolveAdapter, sseResponse } from "./harness.ts";
 
 interface ResponsesPayload {
 	model: string;
@@ -101,7 +101,7 @@ describe("openai-responses conformance", () => {
 
 		expect(payload).toBeDefined();
 		// Responses protocol shape: model + `input` array (not `messages`) + stream/store flags.
-		expect(payload?.model).toBe("gpt-5.4");
+		expect(payload?.model).toBe("step-5-preview");
 		expect(payload?.stream).toBe(true);
 		expect(payload?.store).toBe(false);
 		expect(Array.isArray(payload?.input)).toBe(true);

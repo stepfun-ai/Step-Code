@@ -12,8 +12,8 @@ import { Type } from "typebox";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AnthropicOptions } from "../../src/api/anthropic-messages.ts";
 import type { Context, Model } from "../../src/types.ts";
-import { anthropicEventSse, collectEventTypes, resolveAdapter, sseResponse } from "./harness.ts";
 import { anthropicModel } from "../helpers/step-fixtures.ts";
+import { anthropicEventSse, collectEventTypes, resolveAdapter, sseResponse } from "./harness.ts";
 
 interface CapturedParams {
 	model: string;
@@ -103,7 +103,7 @@ describe("anthropic-messages conformance", () => {
 
 		expect(captured).toBeDefined();
 		// Protocol shape: model + streaming flag + max_tokens.
-		expect(captured?.model).toBe("claude-haiku-4-5");
+		expect(captured?.model).toBe("step-5-preview");
 		expect(captured?.stream).toBe(true);
 		expect(typeof captured?.max_tokens).toBe("number");
 		// system is a typed text-block array carrying the system prompt.

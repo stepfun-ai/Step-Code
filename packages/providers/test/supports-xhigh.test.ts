@@ -1,69 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { getModel, getSupportedThinkingLevels } from "../src/compat.ts";
+import { getSupportedThinkingLevels } from "../src/compat.ts";
+import { anthropicModel, responsesModel } from "./helpers/step-fixtures.ts";
 
+// The generated catalog is empty in the Step-only build, so these exercise the
+// getSupportedThinkingLevels logic directly with explicit thinkingLevelMap inputs
+// rather than asserting specific vendor catalog models.
 describe("getSupportedThinkingLevels", () => {
-	it("includes max but not xhigh for Anthropic Opus 4.6 on anthropic-messages API", () => {
-		const model = getModel("anthropic", "claude-opus-4-6");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toContain("max");
-		expect(getSupportedThinkingLevels(model!)).not.toContain("xhigh");
+	it("returns only off for a non-reasoning model", () => {
+		expect(getSupportedThinkingLevels(anthropicModel({ reasoning: false }))).toEqual(["off"]);
 	});
 
-	it("includes xhigh and max for Anthropic Opus 4.8 on anthropic-messages API", () => {
-		const model = getModel("anthropic", "claude-opus-4-8");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
-		expect(getSupportedThinkingLevels(model!)).toContain("max");
+	it("includes max but not xhigh when only max is mapped", () => {
+		const levels = getSupportedThinkingLevels(anthropicModel({ thinkingLevelMap: { max: "max" } }));
+		expect(levels).toContain("max");
+		expect(levels).not.toContain("xhigh");
 	});
 
-	it("includes xhigh and max for Anthropic Opus 5 on anthropic-messages API", () => {
-		const model = getModel("anthropic", "claude-opus-5");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
-		expect(getSupportedThinkingLevels(model!)).toContain("max");
+	it("includes xhigh and max when both are mapped", () => {
+		const levels = getSupportedThinkingLevels(anthropicModel({ thinkingLevelMap: { xhigh: "xhigh", max: "max" } }));
+		expect(levels).toContain("xhigh");
+		expect(levels).toContain("max");
 	});
 
-	it("includes max but not xhigh for Anthropic Sonnet 4.6 on anthropic-messages API", () => {
-		const model = getModel("anthropic", "claude-sonnet-4-6");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toContain("max");
-		expect(getSupportedThinkingLevels(model!)).not.toContain("xhigh");
+	it("excludes a level explicitly mapped to null", () => {
+		const levels = getSupportedThinkingLevels(
+			anthropicModel({ thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" } }),
+		);
+		expect(levels).not.toContain("off");
+		expect(levels).toContain("xhigh");
 	});
 
-	it("includes xhigh and max for Anthropic Sonnet 5 on anthropic-messages API", () => {
-		const model = getModel("anthropic", "claude-sonnet-5");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
-		expect(getSupportedThinkingLevels(model!)).toContain("max");
+	it("includes the full extended set for a fully-mapped model", () => {
+		const levels = getSupportedThinkingLevels(responsesModel({ thinkingLevelMap: { xhigh: "xhigh", max: "max" } }));
+		expect(levels).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 	});
 
-	it("includes xhigh and max but not off for Anthropic Claude Fable 5 on anthropic-messages API", () => {
-		const model = getModel("anthropic", "claude-fable-5");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
-		expect(getSupportedThinkingLevels(model!)).toContain("max");
-		expect(getSupportedThinkingLevels(model!)).not.toContain("off");
-	});
-
-	it("does not include xhigh or max for Claude Sonnet 4.5", () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).not.toContain("xhigh");
-		expect(getSupportedThinkingLevels(model!)).not.toContain("max");
-	});
-
-	it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const)(
-		"includes xhigh and max for OpenAI %s models",
-		(modelId) => {
-			const model = getModel("openai", modelId);
-			expect(model).toBeDefined();
-			expect(getSupportedThinkingLevels(model!)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
-		},
-	);
-
-	it("includes only medium/high/xhigh for OpenAI GPT-5.5 Pro", () => {
-		const model = getModel("openai", "gpt-5.5-pro");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toEqual(["medium", "high", "xhigh"]);
+	it("excludes xhigh and max when neither is mapped", () => {
+		const levels = getSupportedThinkingLevels(anthropicModel({ thinkingLevelMap: {} }));
+		expect(levels).not.toContain("xhigh");
+		expect(levels).not.toContain("max");
 	});
 });

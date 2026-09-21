@@ -1,5 +1,4 @@
 import { createModels, type Usage } from "@step-harness/providers";
-import { stepModel } from "../step-model.ts";
 import { describe, expect, it } from "vitest";
 import {
 	AgentHarness,
@@ -15,6 +14,7 @@ import {
 	Session,
 } from "../../src/harness/session/index.ts";
 import type { AgentMessage } from "../../src/types.ts";
+import { stepModel } from "../step-model.ts";
 
 function createSession(id = "session"): Session {
 	return new Session(new InMemorySessionStorage({ id, createdAt: 1 }));

@@ -1,11 +1,6 @@
-import {
-	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
-} from "@step-harness/providers/compat";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream } from "@step-harness/providers/compat";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { stepModel } from "./step-model.ts";
 import {
 	Agent,
 	type AgentEvent,
@@ -14,6 +9,7 @@ import {
 	type StreamFn,
 	setDefaultStreamFn,
 } from "../src/index.ts";
+import { stepModel } from "./step-model.ts";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {

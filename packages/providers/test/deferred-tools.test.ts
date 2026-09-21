@@ -265,11 +265,7 @@ describe("deferred tools", () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["read"]);
 		const assistant = context.messages[1] as AssistantMessage;
 		assistant.content = [{ type: "toolCall", id: "call_1", name: "Read", arguments: {} }];
-		const payload = await capturePayload<AnthropicPayload>(
-			anthropicModel(),
-			context,
-			"sk-ant-oat-fake",
-		);
+		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context, "sk-ant-oat-fake");
 
 		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "Read"]);
 		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
@@ -279,11 +275,7 @@ describe("deferred tools", () => {
 
 	it("matches OAuth-canonicalized markers to active tools", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["Read"]);
-		const payload = await capturePayload<AnthropicPayload>(
-			anthropicModel(),
-			context,
-			"sk-ant-oat-fake",
-		);
+		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context, "sk-ant-oat-fake");
 
 		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "Read", defer_loading: true }]);
 		const content = findAnthropicToolResult(payload).content;
@@ -298,11 +290,7 @@ describe("deferred tools", () => {
 			messages: [makeUserMessage(1)],
 			tools: [makeTool("read"), { ...makeTool("Read"), description: "Canonical definition" }],
 		};
-		const payload = await capturePayload<AnthropicPayload>(
-			anthropicModel(),
-			context,
-			"sk-ant-oat-fake",
-		);
+		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context, "sk-ant-oat-fake");
 
 		expect(payload.tools).toMatchObject([{ name: "Read", description: "Canonical definition" }]);
 	});

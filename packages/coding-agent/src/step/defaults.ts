@@ -11,7 +11,13 @@ export const STEP_DEFAULT_THEME = "step-blue";
  * routed back to Step when an older config left a different provider as the
  * persisted default.
  */
-const STEP_MODEL_IDS = new Set(["step-5-preview", "step-3.7-flash", "step-3.5-flash-2603", "step-3.5-flash", "step-router-v1"]);
+const STEP_MODEL_IDS = new Set([
+	"step-5-preview",
+	"step-3.7-flash",
+	"step-3.5-flash-2603",
+	"step-3.5-flash",
+	"step-router-v1",
+]);
 
 /**
  * Defaults already persisted by Pi (or projected from the legacy Step
