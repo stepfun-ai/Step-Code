@@ -2,69 +2,60 @@
 
 ## Architecture
 
-`step-harness` is a pnpm monorepo. The `pi` coding agent (shipped in this
-repository as StepCode) is assembled from layered packages under `packages/`.
-Dependencies flow one direction only: a lower layer must never import a higher
-one.
+`step-harness` is a pnpm monorepo. StepCode is assembled from layered packages
+under `packages/` and `apps/`, built on the Pi runtime. Dependencies flow one
+direction only: a lower layer must never import a higher one.
 
 ### Package layers
 
 Foundation (no internal dependencies):
 
-- `packages/protocol` (`@earendil-works/pi-protocol`) — transport-neutral CBOR
-  protocol for remote sessions: request/response schemas, event envelopes, and
-  shared DTOs. Pure contracts, no business behavior.
 - `packages/telemetry` (`@step-harness/telemetry`) — vendor-neutral
   telemetry contracts and typed schema utilities.
 - `packages/tui` (`@step-harness/pi-tui`) — terminal UI library with
   differential rendering. A standalone presentation toolkit; it must not import
   agent, session, or product code.
+- `packages/contracts` (`@step-harness/contracts`) — host-to-agent contracts:
+  in-process facade types and wire framing for the step-agent SDK. Pure
+  contracts, no business behavior.
+- `packages/config` (`@step-harness/config`) — product-neutral configuration
+  format, loading, and one-time startup migrations.
 
 Core runtime:
 
 - `packages/providers` (`@step-harness/providers`, depends on `telemetry`) — unified LLM
   API: provider adapters, model discovery, and provider configuration. All
   provider- and model-specific code lives here.
-- `packages/agent` (`@step-harness/agent-core`, depends on `ai`,
+- `packages/agent-core` (`@step-harness/agent-core`, depends on `providers`,
   `telemetry`) — the general-purpose agent: the agent loop (`agent-loop.ts`),
   the harness (context assembly and compaction under `harness/`), transport
   abstraction, session state, and attachments. Product-neutral — it knows
   nothing about coding tools or the TUI.
 
-Transport pair:
-
-- `packages/client` (`@earendil-works/pi-client`, depends on `protocol`) —
-  transport-neutral client for driving a remote session over framed CBOR bytes.
-- `packages/server` (`@earendil-works/pi-server`, depends on `ai`, `protocol`) —
-  experimental server-side session host.
-
 Product:
 
 - `packages/coding-agent` (`@step-harness/coding-agent`, depends on
-  `agent-core`, `ai`, `client`, `protocol`, `tui`) — the coding-agent CLI and
-  top-level product entrypoint. Owns the read/bash/edit/write tools, session
-  management and persistence wiring (`src/core/session-*`), extensions,
-  interactive and one-shot modes, the built-in theme catalog
-  (`src/modes/interactive/theme/`), and the StepCode integration (`src/step/`).
-
-Pluggable backends:
-
-- `packages/session-backends/*` (e.g. `sqlite-node`) — concrete session
-  persistence backends that implement the `pi-agent-core` session contract.
+  `agent-core`, `config`, `providers`, `pi-tui`) — the coding agent library.
+  Owns the read/bash/edit/write tools, session management and persistence wiring
+  (`src/core/session-*`), extensions, interactive and one-shot modes, the
+  built-in theme catalog (`src/modes/interactive/theme/`), and the StepCode
+  integration (`src/step/`).
+- `apps/cli` (`@step-harness/cli`, depends on `agent-core`, `coding-agent`,
+  `config`, `providers`, `pi-tui`) — the top-level product entrypoint that
+  assembles the CLI and compiles the standalone `step` binary.
 
 ### Ownership rules
 
-- **Agent loop:** one implementation, in `packages/agent` (`agent-loop.ts`).
+- **Agent loop:** one implementation, in `packages/agent-core` (`agent-loop.ts`).
   `packages/coding-agent` composes the coding product on top of it; it must not
   fork or reimplement the loop.
 - **Session authority:** the session model and its persistence contract belong
-  to `packages/agent`; concrete stores live in `packages/session-backends/*`;
-  `packages/coding-agent` wires session management (`src/core/session-manager.ts`)
-  for the CLI. Clients (`packages/client`, TUI) hold only projections, connection
-  state, and local input state.
+  to `packages/agent-core`; `packages/coding-agent` wires session management
+  (`src/core/session-manager.ts`) for the CLI. Clients (`packages/contracts`, TUI)
+  hold only projections, connection state, and local input state.
 - **Provider / model contract:** provider adapters, model discovery, and model
-  types live in `packages/providers`; cross-process DTOs and event shapes live in
-  `packages/protocol`. Keep provider SDKs out of `agent`, the `coding-agent`
+  types live in `packages/providers`; in-process facade types and event shapes live in
+  `packages/contracts`. Keep provider SDKs out of `agent-core`, the `coding-agent`
   runtime, and `tui`.
 - **Tool contract:** tool schemas, registration, permission decisions, and
   execution belong to `packages/coding-agent`. Provider adapters do not
@@ -76,19 +67,19 @@ Pluggable backends:
 
 ### Boundary constraints
 
-- Respect the layering: `protocol` / `telemetry` / `tui` import no other
-  internal package; `ai` depends only on `telemetry`; `agent` depends only on
-  `ai` and `telemetry`; only `coding-agent` (and `evals`) may reach the product
-  layer.
+- Respect the layering: `telemetry` / `tui` / `contracts` / `config` import no
+  other internal package; `providers` depends only on `telemetry`; `agent-core`
+  depends only on `providers` and `telemetry`; only `coding-agent` and `apps/cli`
+  may reach the product layer.
 - Do not duplicate prompt, context, or message assembly in a client — those
-  semantics belong to `packages/agent` (harness) and `packages/protocol`.
+  semantics belong to `packages/agent-core` (harness) and `packages/contracts`.
 - Do not put durable session, transcript, or checkpoint state in `packages/tui`
   components.
 - New external integrations go behind an adapter boundary — a provider in
-  `packages/providers`, a session backend in `packages/session-backends/*`. Do not
-  import a third-party SDK from generic runtime or TUI code.
-- Validate cross-process event shapes at the `packages/protocol` boundary; a
-  renderer must not depend on server internals.
+  `packages/providers`, or a dedicated adapter package. Do not import a
+  third-party SDK from generic runtime or TUI code.
+- Validate host-to-agent event shapes at the `packages/contracts` boundary; a
+  renderer must not depend on host internals.
 - When a change affects agent-loop behavior, session semantics, tool
   boundaries, provider contracts, or theme contracts, update the matching
   document under `docs/` in the same change.
@@ -145,7 +136,7 @@ Pluggable backends:
 Create all new work branches from `github-opensource`. Target only
 `github-opensource` when opening or merging change requests.
 
-Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
+Multiple StepCode sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
 
 Committing:
 
@@ -216,34 +207,11 @@ A first run in a new directory asks whether the folder is trusted; answer it
 before sending a prompt. Widths below ~100 columns truncate tool rows, so prefer
 a wide session when checking layout.
 
-## Changelog
-
-Locations:
-
-- `CHANGELOG.md` — StepCode product, runtime integration, release, and user-facing changes.
-- `packages/*/CHANGELOG.md` — package-specific runtime and API changes.
-
-Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
-
-Rules:
-
-- All new entries go under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
-- Released version sections (e.g. `## [0.12.2]`) are immutable; never modify them.
-- Every Step product or release change must update the root `CHANGELOG.md`; update the affected package changelog as well when package behavior or API changes.
-- Do not create changelog entries when working on a branch other than `main` or pull request
-
-Attribution:
-
-- Internal (from issues): `Fixed foo bar ([#123](https://github.com/earendil-works/pi-mono/issues/123))`
-- External contributions: `Added feature X ([#456](https://github.com/earendil-works/pi-mono/pull/456) by [@username](https://github.com/username))`
-
 ## Releasing
 
-**Step binary versioning**: Step releases use the product tag `vMAJOR.MINOR.PATCH`. The vendored Pi package versions may remain independent because packages are not published by this project.
+**Step binary versioning**: Step releases use the product tag `vMAJOR.MINOR.PATCH`. The package versions may remain independent because packages are not published by this project.
 
-1. **Update CHANGELOGs**: review the root `CHANGELOG.md` and affected package changelogs on the latest commit on `main`. Add the release entries under `[Unreleased]` before releasing.
-
-2. **Local binary smoke test**: build the standalone Step bundle and smoke test the current-platform binary outside the repo:
+1. **Local binary smoke test**: build the standalone Step bundle and smoke test the current-platform binary outside the repo:
    ```bash
    node infra/release/release-bundle.mjs --dry-run --version v0.3.1
    ./scripts/build-binaries.sh --product step --offline-model-data --platform linux-x64 --out /tmp/stepcode-release
@@ -252,9 +220,9 @@ Attribution:
    ```
    Verify the binary starts, reports the tag-derived version, loads native TUI resources, and completes a smoke prompt with the intended Step provider. Failures are release blockers unless the user explicitly accepts the risk.
 
-3. **Public-source boundary**: the public repository only builds local artifacts. Internal tagging, binary publication, object-store upload, and release announcement jobs are intentionally kept outside this source tree.
+2. **Public-source boundary**: the public repository only builds local artifacts. Internal tagging, binary publication, object-store upload, and release announcement jobs are intentionally kept outside this source tree.
 
-4. **If an internal binary publication fails**: inspect the private release pipeline and rerun that job after fixing the issue. Do not recreate an existing tag.
+3. **If an internal binary publication fails**: inspect the private release pipeline and rerun that job after fixing the issue. Do not recreate an existing tag.
 
 ## Execution Protocol
 
