@@ -47,18 +47,19 @@ const TRACE_HEADER_ENV_NAMES = [
 const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 
 /**
- * Step's first-party host. Requests to `https://api.stepfun.com/...` always
- * carry `x-step-session-id`, regardless of the host trace policy — the session
- * id is first-party attribution there, not third-party egress.
+ * Step's first-party hosts (domestic `.com` + oversea `.ai`). Requests to
+ * `https://api.stepfun.com/...` or `https://api.stepfun.ai/...` always carry
+ * `x-step-session-id`, regardless of the host trace policy — the session id is
+ * first-party attribution there, not third-party egress.
  */
-export const STEP_FIRST_PARTY_TRACE_HOST = "api.stepfun.com";
+export const STEP_FIRST_PARTY_TRACE_HOSTS: readonly string[] = ["api.stepfun.com", "api.stepfun.ai"];
 
-/** Whether a request URL targets Step's first-party host over https. */
+/** Whether a request URL targets a Step first-party host over https. */
 export function isStepFirstPartyTraceUrl(requestUrl: string | undefined): boolean {
 	if (!requestUrl) return false;
 	try {
 		const url = new URL(requestUrl);
-		return url.protocol === "https:" && url.hostname === STEP_FIRST_PARTY_TRACE_HOST;
+		return url.protocol === "https:" && STEP_FIRST_PARTY_TRACE_HOSTS.includes(url.hostname);
 	} catch {
 		return false;
 	}
@@ -68,14 +69,15 @@ export function isStepFirstPartyTraceUrl(requestUrl: string | undefined): boolea
  * Add Step attribution headers in place.
  *
  * `x-step-client` is sent on every request (default/fallback `stepcode`).
- * Requests to Step's first-party host (`https://api.stepfun.com/...`) always
- * carry `x-step-session-id` too — the session id is first-party attribution
- * there, not third-party egress. Every OTHER high-sensitivity field
- * (workspace/goal/...) — and the session id on any non-first-party host — is
- * sent only when the request URL matches `options.allowedBaseUrls` AND the field
- * appears in `options.highSensitivityFields`; an omitted or empty field list
- * sends none of them (fail closed), so the local cwd never egresses to a
- * third-party model endpoint. Values are size-bounded and header-safe via
+ * Requests to a Step first-party host (`https://api.stepfun.com/...` or
+ * `https://api.stepfun.ai/...`) always carry `x-step-session-id` too — the
+ * session id is first-party attribution there, not third-party egress. Every
+ * OTHER high-sensitivity field (workspace/goal/...) — and the session id on any
+ * non-first-party host — is sent only when the request URL matches
+ * `options.allowedBaseUrls` AND the field appears in
+ * `options.highSensitivityFields`; an omitted or empty field list sends none of
+ * them (fail closed), so the local cwd never egresses to a third-party model
+ * endpoint. Values are size-bounded and header-safe via
  * {@link encodeStepTraceHeaderValue}.
  */
 export function applyStepTraceHeaders(
