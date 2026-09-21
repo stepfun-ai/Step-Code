@@ -1,5 +1,4 @@
 import { createModels, type Usage } from "@step-harness/providers";
-import { getModel } from "@step-harness/providers/compat";
 import { describe, expect, it } from "vitest";
 import {
 	AgentHarness,
@@ -15,6 +14,7 @@ import {
 	Session,
 } from "../../src/harness/session/index.ts";
 import type { AgentMessage } from "../../src/types.ts";
+import { stepModel } from "../step-model.ts";
 
 function createSession(id = "session"): Session {
 	return new Session(new InMemorySessionStorage({ id, createdAt: 1 }));
@@ -24,7 +24,7 @@ function createHarness(session = createSession()): Promise<AgentHarness> {
 	return AgentHarness.create({
 		session,
 		models: createModels(),
-		model: getModel("anthropic", "claude-haiku-4-5"),
+		model: stepModel(),
 	}).then(({ harness }) => harness);
 }
 
@@ -59,7 +59,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const { harness, suspended } = await AgentHarness.create({
 			session,
 			models: createModels(),
-			model: getModel("anthropic", "claude-haiku-4-5"),
+			model: stepModel(),
 		});
 
 		expect(suspended).toEqual([]);
@@ -76,14 +76,14 @@ describe("AgentHarness v2 scaffold", () => {
 			AgentHarness.create({
 				session: recorded,
 				models: createModels(),
-				model: getModel("anthropic", "claude-haiku-4-5"),
+				model: stepModel(),
 			}),
 		).rejects.toMatchObject({ name: "HarnessNotImplemented", operation: "create.restore" });
 	});
 
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
 		const harness = await createHarness();
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = stepModel();
 		await harness.setModel(model);
 		expect(await harness.getModel()).toBe(model);
 

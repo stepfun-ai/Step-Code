@@ -12,20 +12,31 @@ npm install @step-harness/agent-core
 
 ```typescript
 import { Agent } from "@step-harness/agent-core";
-import { createModels } from "@step-harness/providers";
-import { anthropicProvider } from "@step-harness/providers/providers/anthropic";
+import { streamSimple } from "@step-harness/providers/compat";
+import type { Model } from "@step-harness/providers";
 
-const models = createModels();
-models.setProvider(anthropicProvider());
-const model = models.getModel("anthropic", "claude-sonnet-4-6");
-if (!model) throw new Error("Model not found");
+// No built-in catalog ships. Construct a Model pointing at any
+// OpenAI-compatible endpoint (Step shown here); the API key is supplied
+// via env or stream options as before.
+const model: Model<"openai-completions"> = {
+  id: "step-2",
+  name: "Step 2",
+  api: "openai-completions",
+  provider: "step",
+  baseUrl: "https://api.stepfun.com/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 8192,
+};
 
 const agent = new Agent({
   initialState: {
     systemPrompt: "You are a helpful assistant.",
     model,
   },
-  streamFn: models.streamSimple.bind(models),
+  streamFn: streamSimple,
 });
 
 agent.subscribe((event) => {
@@ -286,7 +297,7 @@ await agent.continue();
 
 ```typescript
 agent.state.systemPrompt = "New prompt";
-agent.state.model = getModel("openai", "gpt-4o");
+agent.state.model = model; // a Model literal (see Quick Start)
 agent.state.thinkingLevel = "medium";
 agent.state.tools = [myTool];
 agent.toolExecution = "sequential";
@@ -481,8 +492,10 @@ const context: AgentContext = {
   tools: [],
 };
 
+declare const model: Model<"openai-completions">; // a Model literal (see Quick Start)
+
 const config: AgentLoopConfig = {
-  model: getModel("openai", "gpt-4o"),
+  model,
   convertToLlm: (msgs) => msgs.filter(m => ["user", "assistant", "toolResult"].includes(m.role)),
   toolExecution: "parallel",  // overridden by per-tool executionMode if set
   beforeToolCall: async ({ toolCall, args, context }) => undefined,

@@ -11,7 +11,6 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	EventStream,
-	getModel,
 	type ImageContent,
 	type TextContent,
 } from "@step-harness/providers/compat";
@@ -22,7 +21,7 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { BuildSystemPromptOptions } from "../src/core/system-prompt.ts";
-import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
+import { createTestExtensionsResult, createTestResourceLoader, stepModel } from "./utilities.ts";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -108,7 +107,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	async function createSession() {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = stepModel();
 		let abortSignal: AbortSignal | undefined;
 
 		// Use a stream function that responds to abort
@@ -209,7 +208,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	it("should queue extension-origin steering messages while streaming", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = stepModel();
 		let abortSignal: AbortSignal | undefined;
 		let sawSteeringMessage = false;
 		let lastInputSource: string | undefined;
@@ -320,7 +319,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 	it("should allow prompt() after previous completes", async () => {
 		// Create session with a stream that completes immediately
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = stepModel();
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
@@ -364,7 +363,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	it("should wait for queued agent events before emitting tool_call", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = stepModel();
 		const tool = {
 			name: "dummy",
 			description: "Dummy tool",
@@ -510,7 +509,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	it("should persist message_end events in order with slow extension handlers", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = stepModel();
 		const tool = {
 			name: "dummy",
 			description: "Dummy tool",

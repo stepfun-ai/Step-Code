@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { getModel, streamSimple } from "../src/compat.ts";
+import { streamSimple } from "../src/compat.ts";
 import type { Context, Model, SimpleStreamOptions } from "../src/types.ts";
+import { anthropicModel } from "./helpers/step-fixtures.ts";
 
 interface AnthropicTemperaturePayload {
 	temperature?: number;
@@ -65,38 +66,17 @@ async function capturePayload(
 }
 
 describe("Anthropic temperature compatibility", () => {
-	it("omits temperature for Claude Opus 4.7", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-7"), { temperature: 0 });
-
-		expect(payload.temperature).toBeUndefined();
-	});
-
-	it("omits temperature for Claude Opus 4.8", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-8"), { temperature: 0 });
-
-		expect(payload.temperature).toBeUndefined();
-	});
-
-	it("omits default temperature for Claude Opus 4.7", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-7"), { temperature: 1 });
-
-		expect(payload.temperature).toBeUndefined();
-	});
-
-	it("keeps temperature for Claude Opus 4.6", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-6"), { temperature: 0 });
+	it("forwards temperature when the model does not disable it", async () => {
+		// Bare model: compat.supportsTemperature defaults to true.
+		const payload = await capturePayload(anthropicModel(), { temperature: 0 });
 
 		expect(payload.temperature).toBe(0);
 	});
 
-	it("keeps temperature for Claude Sonnet 4.6", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-sonnet-4-6"), { temperature: 0 });
-
-		expect(payload.temperature).toBe(0);
-	});
-
-	it("omits temperature for custom models with supportsTemperature disabled", async () => {
-		const payload = await capturePayload(makeCustomModel({ supportsTemperature: false }), { temperature: 0 });
+	it("omits temperature when compat.supportsTemperature is false", async () => {
+		// The adapter drops temperature regardless of the requested value once the
+		// model declares supportsTemperature:false (real metadata for e.g. Opus 4.7/4.8).
+		const payload = await capturePayload(makeCustomModel({ supportsTemperature: false }), { temperature: 1 });
 
 		expect(payload.temperature).toBeUndefined();
 	});

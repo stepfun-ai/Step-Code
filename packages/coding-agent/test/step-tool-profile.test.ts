@@ -1,12 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@step-harness/providers/compat";
 import { describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createStepToolProfile, stepToolNames } from "../src/step/tool-profile.ts";
+import { stepModel } from "./utilities.ts";
 
 function text(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -138,7 +138,7 @@ describe("Step tool profile", () => {
 			const session = (
 				await createAgentSession({
 					cwd: root,
-					model: getModel("anthropic", "claude-sonnet-4-5")!,
+					model: stepModel(),
 					settingsManager: SettingsManager.inMemory(),
 					sessionManager: SessionManager.inMemory(root),
 					customTools: createStepToolProfile(root),
