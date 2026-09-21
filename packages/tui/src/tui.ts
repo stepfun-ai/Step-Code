@@ -2,6 +2,7 @@
  * Minimal TUI implementation with differential rendering
  */
 
+import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -455,7 +456,7 @@ export abstract class TuiBase extends Container implements TUI {
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
 	private terminalColorSchemeNotificationsEnabled = false;
-	protected readonly logDirectory: string;
+	private resolvedLogDirectory: string | undefined;
 
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
@@ -469,10 +470,17 @@ export abstract class TuiBase extends Container implements TUI {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean, logDirectory?: string) {
 		super();
 		this.terminal = terminal;
-		this.logDirectory = logDirectory ?? path.join(os.tmpdir(), "tui");
+		this.resolvedLogDirectory = logDirectory;
 		if (showHardwareCursor !== undefined) {
 			this.showHardwareCursor = showHardwareCursor;
 		}
+	}
+
+	protected get logDirectory(): string {
+		// Allocate atomically with private permissions only when logging is needed.
+		// A fixed shared temporary path could contain another user's symlinks.
+		this.resolvedLogDirectory ??= mkdtempSync(path.join(os.tmpdir(), "tui-"));
+		return this.resolvedLogDirectory;
 	}
 
 	protected abstract doRender(): void;

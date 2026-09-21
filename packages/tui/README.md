@@ -848,3 +848,5 @@ npx tsx test/chat-simple.ts
 ### Debug logging
 
 To capture terminal output, wrap the terminal implementation and record calls to `write(data)`.
+
+When `TuiMainScreen` throws an error for a rendered line wider than the terminal, it writes a crash log and includes the log path in the error message. By default, the first crash lazily creates a unique private directory under the system temporary directory, with permissions `0700` on POSIX. Calling `stop()` keeps the directory and log for inspection. An explicit `logDirectory` passed as the third constructor argument is still honored: `new TuiMainScreen(terminal, false, logDirectory)`.

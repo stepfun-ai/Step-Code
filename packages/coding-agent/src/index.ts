@@ -215,7 +215,7 @@ export { FooterDataProvider } from "./core/footer-data-provider.ts";
 // behaviour, not shell), and are re-exported through the single "." export
 // subpath (no new export subpath, so the entry-freeze gate stays green).
 //
-// printTimings / restoreStdout / stopThemeWatcher operate on module-global state
+// restoreStdout / stopThemeWatcher operate on module-global state
 // owned here (the stdout takeover installed by prepareMain,
 // and the theme file watcher). The shell MUST call these exported functions
 // rather than reimplement them, or it would act on empty/detached local state.
