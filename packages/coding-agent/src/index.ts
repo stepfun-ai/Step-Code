@@ -722,13 +722,7 @@ export {
 export { buildStepSystemPromptAppendix } from "./step/system-prompt.ts";
 export {
 	classifyStepEndpoint,
-	createStepLifecycleTelemetry,
-	createStepModelRequestObserver,
-	type StepLifecycleTelemetry,
-	type StepLifecycleTelemetryHandlers,
-	type StepLifecycleTelemetryOptions,
 	type StepModelRequestEventName,
-	type StepModelRequestObserverOptions,
 	type StepPermissionApprovalTelemetry,
 	type StepPermissionDecisionTelemetry,
 	type StepTelemetryContextPatch,
@@ -736,7 +730,14 @@ export {
 	type StepTelemetryPrimitive,
 	type StepTelemetryProperties,
 	type StepTelemetryReporter,
+	trackStepTelemetry,
 } from "./step/telemetry.ts";
+export {
+	NOOP_OBSERVABILITY_PROVIDER,
+	type StepObservabilityConfig,
+	type StepObservabilityProvider,
+	type TraceHeaderPolicy,
+} from "./step/telemetry-contract.ts";
 export {
 	isKnownStepTelemetryEvent,
 	STEP_TELEMETRY_EVENT_NAMES,
@@ -744,26 +745,6 @@ export {
 	type StepTelemetryEventPayloads,
 	type StepTelemetryKnownEventName,
 } from "./step/telemetry-events.ts";
-export {
-	createStepSystemMetricsCollector,
-	createStepTelemetryRuntime,
-	installStepTelemetryCrashHandlers,
-	readTelemetryEndpoint,
-	redactTelemetryString,
-	resolveStepTelemetrySettings,
-	resolveTelemetrySettings,
-	type StepResolvedTelemetrySettings,
-	type StepSystemMetricsCollector,
-	type StepSystemMetricsCollectorOptions,
-	type StepTelemetryContext,
-	type StepTelemetryCrashHandlers,
-	type StepTelemetryDisabledReason,
-	type StepTelemetryRecord,
-	type StepTelemetryRuntime,
-	type StepTelemetryRuntimeOptions,
-	trackStepTelemetryCrash,
-	trackStepTelemetryError,
-} from "./step/telemetry-runtime.ts";
 export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from "./step/theme-prompt.ts";
 export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";

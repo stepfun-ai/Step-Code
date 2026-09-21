@@ -2,7 +2,6 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "../core/extensions/types.ts";
 import { getAvailableThemes } from "../theme/theme.ts";
-import { resolveStepStorageRoot } from "./device-id.ts";
 import { buildFeedbackSessionBundle } from "./feedback/bundle.ts";
 import {
 	type FeedbackSubmitResult,
@@ -25,6 +24,7 @@ import {
 import { normalizeFeedbackCategory } from "./feedback/validate.ts";
 import { formatStepMcpStatuses } from "./mcp.ts";
 import { registerStepPluginCommand } from "./plugins.ts";
+import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
 /**

@@ -14,12 +14,14 @@ import {
 	createStepGoalExtension,
 	type InlineExtension,
 	type StepExtensionOptions,
-	type StepTelemetryRuntime,
+	type StepTelemetryReporter,
+	type TraceHeaderPolicy,
 } from "@step-harness/coding-agent";
 
 export interface StepExtensionFactoryDeps {
 	/** Shared telemetry runtime handed to every Step extension. */
-	telemetry: StepTelemetryRuntime;
+	telemetry: StepTelemetryReporter;
+	traceHeaderPolicy: TraceHeaderPolicy;
 	/** Accessor for the live Step settings manager (policy restore/persist). */
 	stepSettings: StepExtensionOptions["stepSettings"];
 	/** Account identity resolved lazily when `/feedback` is invoked. */
@@ -43,6 +45,7 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 			stepSettings: deps.stepSettings,
 			feedbackIdentity: deps.feedbackIdentity,
 			permission: deps.permission,
+			traceHeaderPolicy: deps.traceHeaderPolicy,
 		}),
 		createStepCapabilitiesExtensionInline({ telemetry: deps.telemetry }),
 		createStepCronExtension({ telemetry: deps.telemetry }),

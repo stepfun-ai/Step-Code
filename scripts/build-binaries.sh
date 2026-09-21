@@ -320,11 +320,6 @@ for platform in "${PLATFORMS[@]}"; do
         cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir/"
     fi
 
-    # Pre-fetch the ripgrep/fd search binaries for this target into tools/ so the
-    # archive ships them and the installer copies (not downloads) them into the
-    # runtime tools dir. Set STEP_SKIP_BUNDLED_TOOLS=1 for offline builds; the
-    # installer/runtime GitHub download then remains the only source.
-    node ../../scripts/copy-search-tools.mjs --target "$platform" --out "$OUTPUT_DIR/$platform"
 done
 
 # Create archives
