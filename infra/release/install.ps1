@@ -14,12 +14,12 @@
 
 .PARAMETER InstallDir
   Directory containing step.exe. Defaults to STEP_INSTALL_DIR or
-  %USERPROFILE%\.step-cli\bin.
+  %USERPROFILE%\.stepcode\bin.
 
 .PARAMETER AgentDir
   Step agent data directory. Managed fd/rg binaries are placed in its bin
   subdirectory. Defaults to STEP_CODING_AGENT_DIR or
-  %USERPROFILE%\.step-cli\agent.
+  %USERPROFILE%\.stepcode\agent.
 #>
 [CmdletBinding()]
 param(
@@ -52,14 +52,14 @@ if (-not $InstallDir) {
   $InstallDir = if ($env:STEP_INSTALL_DIR) {
     $env:STEP_INSTALL_DIR
   } else {
-    Join-Path $HomeDir '.step-cli\bin'
+    Join-Path $HomeDir '.stepcode\bin'
   }
 }
 if (-not $AgentDir) {
   $AgentDir = if ($env:STEP_CODING_AGENT_DIR) {
     $env:STEP_CODING_AGENT_DIR
 	} else {
-    Join-Path $HomeDir '.step-cli\agent'
+    Join-Path $HomeDir '.stepcode\agent'
   }
 }
 
@@ -402,7 +402,7 @@ function Get-MissingPathEntries {
   # value; $Candidates are the (already expanded) directories we want on PATH.
   #
   # Idempotency depends on comparing *expanded* paths: a literal candidate such
-  # as C:\Users\me\.step-cli\bin must match an existing %USERPROFILE%\.step-cli\bin
+  # as C:\Users\me\.stepcode\bin must match an existing %USERPROFILE%\.stepcode\bin
   # entry, otherwise every run double-appends. So each existing entry is run
   # through [Environment]::ExpandEnvironmentVariables() FOR COMPARISON ONLY --
   # the caller writes the original un-expanded strings back untouched. On top of

@@ -3,8 +3,8 @@ set -euo pipefail
 
 BASE_URL="${STEP_RELEASE_BASE_URL:-__STEP_RELEASE_BASE_URL__}"
 VERSION="${STEP_VERSION:-latest}"
-INSTALL_DIR="${STEP_INSTALL_DIR:-${HOME}/.step-cli/bin}"
-AGENT_DIR="${STEP_CODING_AGENT_DIR:-${HOME}/.step-cli/agent}"
+INSTALL_DIR="${STEP_INSTALL_DIR:-${HOME}/.stepcode/bin}"
+AGENT_DIR="${STEP_CODING_AGENT_DIR:-${HOME}/.stepcode/agent}"
 WORK_DIR=""
 TARGET_ID=""
 
@@ -151,10 +151,10 @@ profile_targets() {
 }
 
 strip_step_block() {
-	# Remove a previously written, WELL-FORMED "# step-cli ... # step-cli end"
+	# Remove a previously written, WELL-FORMED "# stepcode ... # stepcode end"
 	# block (and any blank lines directly above it) so reinstalls stay idempotent.
 	# A lone start marker with no matching end (a hand-edited rc, an interrupted
-	# prior write, or an unrelated "# step-cli" comment) is emitted verbatim
+	# prior write, or an unrelated "# stepcode" comment) is emitted verbatim
 	# rather than truncating everything below it to EOF. Returns non-zero (leaving
 	# the file untouched) if the rewrite could not be produced, so the caller can
 	# avoid appending a duplicate block on top of one it failed to remove.
@@ -164,10 +164,10 @@ strip_step_block() {
 		{
 			if (inblock) {
 				block = block $0 "\n"
-				if ($0 == "# step-cli end") { inblock = 0; block = ""; blank = "" }
+				if ($0 == "# stepcode end") { inblock = 0; block = ""; blank = "" }
 				next
 			}
-			if ($0 == "# step-cli") { inblock = 1; block = $0 "\n"; next }
+			if ($0 == "# stepcode") { inblock = 1; block = $0 "\n"; next }
 			if ($0 ~ /^[[:space:]]*$/) { blank = blank $0 "\n"; next }
 			if (blank != "") { printf "%s", blank; blank = "" }
 			print
@@ -214,9 +214,9 @@ configure_shell_path() {
 			# it manages PATH with fish_add_path in config.fish.
 			local fishcfg="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
 			if mkdir -p "$(dirname "$fishcfg")" 2>/dev/null; then
-				if [[ -f "$fishcfg" ]] && grep -qxF '# step-cli' "$fishcfg" 2>/dev/null && ! strip_step_block "$fishcfg"; then
-					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$fishcfg" >&2
-				elif printf '\n# step-cli\nfish_add_path "%s" "%s/bin"\n# step-cli end\n' "$INSTALL_DIR" "$AGENT_DIR" >>"$fishcfg"; then
+				if [[ -f "$fishcfg" ]] && grep -qxF '# stepcode' "$fishcfg" 2>/dev/null && ! strip_step_block "$fishcfg"; then
+					printf 'warning: could not update the existing stepcode block in %s; left it unchanged\n' "$fishcfg" >&2
+				elif printf '\n# stepcode\nfish_add_path "%s" "%s/bin"\n# stepcode end\n' "$INSTALL_DIR" "$AGENT_DIR" >>"$fishcfg"; then
 					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$fishcfg"
 					updated=1
 				fi
@@ -234,11 +234,11 @@ configure_shell_path() {
 			while IFS= read -r rc; do
 				[[ -n "$rc" ]] || continue
 				mkdir -p "$(dirname "$rc")" 2>/dev/null || continue
-				if [[ -f "$rc" ]] && grep -qxF '# step-cli' "$rc" 2>/dev/null && ! strip_step_block "$rc"; then
-					printf 'warning: could not update the existing step-cli block in %s; left it unchanged\n' "$rc" >&2
+				if [[ -f "$rc" ]] && grep -qxF '# stepcode' "$rc" 2>/dev/null && ! strip_step_block "$rc"; then
+					printf 'warning: could not update the existing stepcode block in %s; left it unchanged\n' "$rc" >&2
 					continue
 				fi
-				if printf '\n# step-cli\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:%s/bin:$PATH" ;;\nesac\n# step-cli end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >>"$rc"; then
+				if printf '\n# stepcode\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:%s/bin:$PATH" ;;\nesac\n# stepcode end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >>"$rc"; then
 					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$rc"
 					updated=1
 				fi

@@ -8,8 +8,8 @@ Prompt templates are Markdown snippets that expand into full prompts. Type `/nam
 
 Step loads prompt templates from:
 
-- Global: `~/.step-cli/agent/prompts/*.md`
-- Project: `.step-cli/prompts/*.md` (only after the project is trusted)
+- Global: `~/.stepcode/agent/prompts/*.md`
+- Project: `.stepcode/prompts/*.md` (only after the project is trusted)
 - Packages: `prompts/` directories or `pi.prompts` entries in `package.json`
 - Settings: `prompts` array with files or directories
 - CLI: `--prompt-template <path>` (repeatable)

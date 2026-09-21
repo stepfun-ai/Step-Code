@@ -163,9 +163,9 @@ export interface StepSubagentDetails {
 }
 
 export interface StepSubagentExtensionOptions {
-	/** Global Step agent root. Defaults to `~/.step-cli/agent`. */
+	/** Global Step agent root. Defaults to `~/.stepcode/agent`. */
 	agentDir?: string;
-	/** Project resource directory. Defaults to `.step-cli`. */
+	/** Project resource directory. Defaults to `.stepcode`. */
 	configDirName?: string;
 	/** Include the built-in general/explore/review/planner roles. */
 	includeBuiltinAgents?: boolean;

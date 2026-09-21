@@ -40,7 +40,7 @@ step update --extension npm:@foo/bar
 
 These commands manage step packages and `step update` can update the step CLI installation. For experimental installer-managed installations, `step update` installs the exact checked version into a staged, lockfile-backed release and activates it only after verification, leaving the current release intact if the update fails. Managed installations do not support `--force`; rerun the installer to repair one. To uninstall step itself, see [Quickstart](quickstart.md#uninstall).
 
-By default, `install` and `remove` write to user settings (`~/.step-cli/agent/settings.json`). Use `-l` to write to project settings (`.step-cli/settings.json`) instead. Project settings can be shared with your team, and step installs any missing packages automatically on startup after the project is trusted.
+By default, `install` and `remove` write to user settings (`~/.stepcode/agent/settings.json`). Use `-l` to write to project settings (`.stepcode/settings.json`) instead. Project settings can be shared with your team, and step installs any missing packages automatically on startup after the project is trusted.
 
 To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:
 
@@ -61,8 +61,8 @@ npm:pkg
 ```
 
 - Versioned specs are pinned and skipped by package updates (`step update --extensions`, `step update --all`).
-- User installs go under `~/.step-cli/agent/npm/`.
-- Project installs go under `.step-cli/npm/`.
+- User installs go under `~/.stepcode/agent/npm/`.
+- Project installs go under `.stepcode/npm/`.
 - Set `npmCommand` in `settings.json` to pin npm package lookup and install operations to a specific wrapper command such as `mise` or `asdf`.
 
 Example:
@@ -89,7 +89,7 @@ ssh://git@github.com/user/repo@v1
 - For non-interactive runs (for example CI), you can set `GIT_TERMINAL_PROMPT=0` to disable credential prompts and set `GIT_SSH_COMMAND` (for example `ssh -o BatchMode=yes -o ConnectTimeout=5`) to fail fast.
 - Refs are pinned tags or commits. `step update --extensions` and `step update --all` do not move them to newer refs, but they do reconcile an existing clone to the configured ref.
 - Use `step install git:host/user/repo@new-ref` to update settings and move an existing package to a new pinned ref.
-- Cloned to `~/.step-cli/agent/git/<host>/<path>` (global) or `.step-cli/git/<host>/<path>` (project).
+- Cloned to `~/.stepcode/agent/git/<host>/<path>` (global) or `.stepcode/git/<host>/<path>` (project).
 - When reconciliation changes the checkout, step resets and cleans the clone, then runs `npm install` if `package.json` exists.
 
 **SSH examples:**
@@ -217,7 +217,7 @@ Filter what a package loads using the object form in settings:
 
 ## Enable and Disable Resources
 
-Use `step config` to enable or disable extensions, skills, prompt templates, and themes from installed packages and local directories. `step config` starts in global settings (`~/.step-cli/agent/settings.json`); press Tab to switch between global and project-local modes. Use `step config -l` to start in project overrides (`.step-cli/settings.json`) with inherited global resources dimmed.
+Use `step config` to enable or disable extensions, skills, prompt templates, and themes from installed packages and local directories. `step config` starts in global settings (`~/.stepcode/agent/settings.json`); press Tab to switch between global and project-local modes. Use `step config -l` to start in project overrides (`.stepcode/settings.json`) with inherited global resources dimmed.
 
 ## Scope and Deduplication
 

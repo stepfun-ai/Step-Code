@@ -46,7 +46,7 @@ describe("SimpleCronExpression", () => {
 describe("CronFileStore", () => {
 	test("round-trips versioned JSONL records and skips malformed rows", () => {
 		const directory = makeDirectory();
-		const filePath = path.join(directory, ".step-cli", "cron", "tasks.json");
+		const filePath = path.join(directory, ".stepcode", "cron", "tasks.json");
 		mkdirSync(path.dirname(filePath), { recursive: true });
 		const warnings: string[] = [];
 		const store = new CronFileStore(filePath, { warn: (message) => warnings.push(message) });
@@ -113,7 +113,7 @@ describe("StepCronRuntime", () => {
 
 	test("loads durable jobs and surfaces a missed one-shot after restart", () => {
 		const directory = makeDirectory();
-		const filePath = path.join(directory, ".step-cli", "cron", "tasks.json");
+		const filePath = path.join(directory, ".stepcode", "cron", "tasks.json");
 		let now = Date.UTC(2026, 0, 1, 12, 0);
 		const first = new StepCronRuntime({ now: () => now, storagePath: filePath, jitterRatio: 0 });
 		const created = first.create("* * * * *", "missed", false, true).job;
@@ -602,7 +602,7 @@ test("missed notices and /cron status include the original prompts", async () =>
 	const harness = createHarness();
 	const first = new StepCronRuntime({
 		now: () => Date.now() - 120_000,
-		storagePath: path.join(harness.ctx.cwd, ".step-cli", "cron", "tasks.json"),
+		storagePath: path.join(harness.ctx.cwd, ".stepcode", "cron", "tasks.json"),
 		jitterRatio: 0,
 	});
 	const missed = first.create("* * * * *", "check the failed deployment", false, true).job;

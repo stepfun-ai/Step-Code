@@ -209,7 +209,7 @@ test.each(["single", "parallel"])(
 	async (mode) => {
 		const cwd = await mkdtemp(join(tmpdir(), "step-agent-alias-"));
 		try {
-			const projectAgentsDir = join(cwd, ".step-cli", "agents");
+			const projectAgentsDir = join(cwd, ".stepcode", "agents");
 			await mkdir(projectAgentsDir, { recursive: true });
 			await writeFile(
 				join(projectAgentsDir, "general.md"),
@@ -221,7 +221,7 @@ test.each(["single", "parallel"])(
 			createStepSubagentExtension({
 				includeBuiltinAgents: true,
 				agentDir: join(cwd, "user"),
-				configDirName: ".step-cli",
+				configDirName: ".stepcode",
 				runner: async () => {
 					runs++;
 					return textResult("unexpected run");

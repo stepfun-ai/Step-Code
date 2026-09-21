@@ -139,7 +139,7 @@ export interface StepConfigCommandIo {
  *
  * Settings live in `config.toml`; `models.json` and `auth.json` stay JSON but
  * hold model definitions and credentials rather than settings. Everything sits
- * below `.step-cli`; secrets are never printed.
+ * below `.stepcode`; secrets are never printed.
  */
 export async function runStepConfigCommand(argv: readonly string[], io: StepConfigCommandIo = {}): Promise<void> {
 	const stdout = io.stdout ?? process.stdout;

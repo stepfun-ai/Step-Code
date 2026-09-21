@@ -128,7 +128,7 @@ nativeWorkflowTest("saved nested workflow executes once and a second nesting lev
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
 	const homeRoot = await workspace("step-workflow-home-");
-	const saved = path.join(cwd, ".step-cli", "workflows", "saved");
+	const saved = path.join(cwd, ".stepcode", "workflows", "saved");
 	await mkdir(saved, { recursive: true });
 	await writeFile(path.join(saved, "child.js"), "return { answer: args.value + 1 };\n");
 	await writeFile(path.join(saved, "grandchild.js"), "return 'too deep';\n");
@@ -154,7 +154,7 @@ nativeWorkflowTest("saved workflow lookup prefers the project and /workflows rep
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
 	const homeRoot = await workspace("step-workflow-home-");
-	const projectSaved = path.join(cwd, ".step-cli", "workflows", "saved");
+	const projectSaved = path.join(cwd, ".stepcode", "workflows", "saved");
 	const globalSaved = path.join(homeRoot, "workflows", "saved");
 	await mkdir(projectSaved, { recursive: true });
 	await mkdir(globalSaved, { recursive: true });
@@ -180,7 +180,7 @@ test("workflow script resolution rejects ambiguous, oversized, and escaping sour
 	const homeRoot = await workspace("step-workflow-home-");
 	await writeFile(path.join(outside, "outside.js"), "return 'outside';\n");
 	await symlink(path.join(outside, "outside.js"), path.join(cwd, "escape.js"));
-	const saved = path.join(cwd, ".step-cli", "workflows", "saved");
+	const saved = path.join(cwd, ".stepcode", "workflows", "saved");
 	await mkdir(saved, { recursive: true });
 	await symlink(path.join(outside, "outside.js"), path.join(saved, "escape.js"));
 
@@ -234,7 +234,7 @@ test("the workflow result exposes the persisted script path for iteration", asyn
 		cwd,
 		testHarness.notifications,
 	);
-	expect(result.scriptPath).toBe(path.join(cwd, ".step-cli", "workflows", "runs", result.runId, "script.js"));
+	expect(result.scriptPath).toBe(path.join(cwd, ".stepcode", "workflows", "runs", result.runId, "script.js"));
 });
 
 test("workflow rejects a missing resume run instead of silently starting over", async () => {
@@ -259,7 +259,7 @@ test("workflow rejects a missing resume run instead of silently starting over", 
 test("workflow rejects a run directory without a journal", async () => {
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
-	const runDir = path.join(cwd, ".step-cli", "workflows", "runs", "wf_empty");
+	const runDir = path.join(cwd, ".stepcode", "workflows", "runs", "wf_empty");
 	await mkdir(runDir, { recursive: true });
 	const testHarness = harness();
 	createStepWorkflowExtension({
@@ -281,7 +281,7 @@ test("workflow rejects a resume directory that escapes the project", async () =>
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
 	const outside = await workspace("step-workflow-resume-outside-");
-	const runsRoot = path.join(cwd, ".step-cli", "workflows", "runs");
+	const runsRoot = path.join(cwd, ".stepcode", "workflows", "runs");
 	await mkdir(runsRoot, { recursive: true });
 	await symlink(outside, path.join(runsRoot, "escape"));
 	const testHarness = harness();
@@ -304,7 +304,7 @@ test("workflow rejects a symlinked project workflow root", async () => {
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
 	const outside = await workspace("step-workflow-saved-outside-");
-	const workflowRoot = path.join(cwd, ".step-cli", "workflows");
+	const workflowRoot = path.join(cwd, ".stepcode", "workflows");
 	await mkdir(path.dirname(workflowRoot), { recursive: true });
 	await symlink(outside, workflowRoot);
 	const testHarness = harness();

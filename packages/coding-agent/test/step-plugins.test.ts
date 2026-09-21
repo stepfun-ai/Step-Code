@@ -33,8 +33,8 @@ afterEach(async () => {
 describe("Step plugin marketplace facade", () => {
 	test("uses the Step namespace for default storage", () => {
 		const env = { HOME: "/tmp/step-plugin-home" } as NodeJS.ProcessEnv;
-		expect(defaultStepPluginsDir(env)).toBe("/tmp/step-plugin-home/.step-cli/plugins");
-		expect(defaultStepMarketplacesDir(env)).toBe("/tmp/step-plugin-home/.step-cli/marketplaces");
+		expect(defaultStepPluginsDir(env)).toBe("/tmp/step-plugin-home/.stepcode/plugins");
+		expect(defaultStepMarketplacesDir(env)).toBe("/tmp/step-plugin-home/.stepcode/marketplaces");
 	});
 
 	test("aggregates remote marketplace entries into one diagnostic", async () => {
@@ -63,7 +63,7 @@ describe("Step plugin marketplace facade", () => {
 	test("materializes built-ins under the supplied Step marketplace root", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-plugins-builtin-"));
 		roots.push(root);
-		const marketplacesDir = join(root, ".step-cli", "marketplaces");
+		const marketplacesDir = join(root, ".stepcode", "marketplaces");
 
 		const result = await ensureBuiltinMarketplace({ marketplacesDir });
 		expect(result.warnings).toEqual([]);
@@ -79,7 +79,7 @@ describe("Step plugin marketplace facade", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-plugins-install-"));
 		roots.push(root);
 		const marketplacesDir = join(root, "marketplaces");
-		const pluginsDir = join(root, ".step-cli", "plugins");
+		const pluginsDir = join(root, ".stepcode", "plugins");
 		await ensureBuiltinMarketplace({ marketplacesDir });
 		const available = await listMarketplacePlugins([marketplacesDir]);
 		const entry = available.entries.find((candidate) => candidate.name === "playwright");

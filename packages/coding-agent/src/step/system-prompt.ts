@@ -257,7 +257,7 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Scheduled work",
 				[
-					"- Use cron_create for five-field local-time calendar work. Set durable:true when the job must survive a session restart; durable jobs are stored in the trusted project under .step-cli/cron.",
+					"- Use cron_create for five-field local-time calendar work. Set durable:true when the job must survive a session restart; durable jobs are stored in the trusted project under .stepcode/cron.",
 					"- A session can hold up to 50 jobs. Recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed after delivery. Invalid expressions are rejected.",
 					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Jobs fire only while StepCode is running and idle, after pending user input. A missed durable one-shot is surfaced with its original prompt when the session returns.",
 					"- Use create_goal for an explicitly requested multi-turn objective when that tool is available. Cron and goals have independent lifecycles.",

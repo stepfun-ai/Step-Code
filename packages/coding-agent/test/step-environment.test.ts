@@ -49,11 +49,11 @@ describe("Step early environment", () => {
 		applyStepEnvironment(env);
 
 		expect(env.STEPCODE_APP_NAME).toBe("step");
-		expect(env.STEPCODE_CONFIG_DIR).toBe(".step-cli");
+		expect(env.STEPCODE_CONFIG_DIR).toBe(".stepcode");
 		expect(env.STEPCODE_DEFAULT_THEME).toBe("custom-theme");
 		expect(env.STEPCODE_DEFAULT_PROVIDER).toBe("custom-provider");
 		expect(env.STEPCODE_DEFAULT_MODEL).toBe("custom-model");
-		expect(env.STEP_CODING_AGENT_DIR).toMatch(/\.step-cli[\\/]agent$/u);
+		expect(env.STEP_CODING_AGENT_DIR).toMatch(/\.stepcode[\\/]agent$/u);
 		// No session override is injected: Pi's SessionManager derives the
 		// default from the resolved agent directory.
 		expect(env.STEP_CODING_AGENT_SESSION_DIR).toBeUndefined();

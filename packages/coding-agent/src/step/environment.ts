@@ -3,13 +3,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from "./defaults.ts";
 
 /** Canonical project directory for Step CLI state and resources. */
-export const STEPCODE_CONFIG_DIR = ".step-cli";
+export const STEPCODE_CONFIG_DIR = ".stepcode";
 
 /** Directory used by releases before the product rename. */
 export const LEGACY_RENAMED_CONFIG_DIR = ".step-harness";
-
-/** Historical Step CLI directory. Its legacy files are converted in place. */
-export const LEGACY_STEP_CONFIG_DIR = STEPCODE_CONFIG_DIR;
 
 /**
  * Optional path overrides for hosts that embed the Step facade instead of

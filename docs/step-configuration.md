@@ -1,7 +1,7 @@
 # Step configuration files
 
-Step creates the global `~/.step-cli/config.toml` when it first runs.
-The project file `<cwd>/.step-cli/config.toml` is optional: a missing file
+Step creates the global `~/.stepcode/config.toml` when it first runs.
+The project file `<cwd>/.stepcode/config.toml` is optional: a missing file
 contributes no project settings and does not produce a startup warning.
 Reading or reloading settings does not create the project file or directory.
 

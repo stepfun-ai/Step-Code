@@ -111,7 +111,7 @@ export async function listWorkflowRuns(cwd: string): Promise<WorkflowRunSummary[
 }
 
 export async function listSavedWorkflows(cwd: string, homeRoot?: string): Promise<string[]> {
-	const projectSaved = path.join(path.resolve(cwd), ".step-cli", "workflows", "saved");
+	const projectSaved = path.join(path.resolve(cwd), ".stepcode", "workflows", "saved");
 	const candidates = [
 		...(isWorkflowPathInside(cwd, projectSaved) ? [projectSaved] : []),
 		...(homeRoot ? [path.join(path.resolve(homeRoot), "workflows", "saved")] : []),

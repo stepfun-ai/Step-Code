@@ -577,7 +577,6 @@ export {
 	applyStepEnvironment,
 	getStepSessionDirOverride,
 	LEGACY_RENAMED_CONFIG_DIR,
-	LEGACY_STEP_CONFIG_DIR,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepConfigRoot,

@@ -337,23 +337,23 @@ const { session } = await createAgentSession({
   cwd: process.cwd(), // default
   
   // Global config directory
-  agentDir: "~/.step-cli/agent", // default (expands ~)
+  agentDir: "~/.stepcode/agent", // default (expands ~)
 });
 ```
 
 `cwd` is used by `DefaultResourceLoader` for:
-- Project extensions (`.step-cli/extensions/`)
+- Project extensions (`.stepcode/extensions/`)
 - Project skills:
-  - `.step-cli/skills/`
+  - `.stepcode/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
-- Project prompts (`.step-cli/prompts/`)
+- Project prompts (`.stepcode/prompts/`)
 - Context files (`AGENTS.md` walking up from cwd)
 - Session directory naming
 
 `agentDir` is used by `DefaultResourceLoader` for:
 - Global extensions (`extensions/`)
 - Global skills:
-  - `skills/` under `agentDir` (for example `~/.step-cli/agent/skills/`)
+  - `skills/` under `agentDir` (for example `~/.stepcode/agent/skills/`)
   - `~/.agents/skills/`
 - Global prompts (`prompts/`)
 - Global context file (`AGENTS.md`)
@@ -409,7 +409,7 @@ If no model is provided:
 2. Uses default from settings
 3. Falls back to first available model
 
-Remote catalogs are persisted locally so later runtimes can restore them without a network request. The default file is `~/.step-cli/agent/models-store.json`; set `modelsStorePath` to choose another location, or inject `modelsStore` to control persistence. Network refreshes are throttled to once per provider every four hours unless forced. To force an immediate refresh, call `await modelRuntime.refresh({ allowNetwork: true, force: true, signal })`.
+Remote catalogs are persisted locally so later runtimes can restore them without a network request. The default file is `~/.stepcode/agent/models-store.json`; set `modelsStorePath` to choose another location, or inject `modelsStore` to control persistence. Network refreshes are throttled to once per provider every four hours unless forced. To force an immediate refresh, call `await modelRuntime.refresh({ allowNetwork: true, force: true, signal })`.
 
 To match CLI model parsing, use the exported resolver helpers:
 
@@ -451,7 +451,7 @@ Authentication resolution priority (handled by `ModelRuntime`):
 import { InMemoryCredentialStore } from "@step-harness/providers";
 import { createAgentSession, ModelRuntime } from "@step-harness/coding-agent";
 
-// Default: uses ~/.step-cli/agent/auth.json and ~/.step-cli/agent/models.json
+// Default: uses ~/.stepcode/agent/auth.json and ~/.stepcode/agent/models.json
 const modelRuntime = await ModelRuntime.create();
 
 // Provider-owned auth methods and current status
@@ -612,7 +612,7 @@ If you pass `tools`, include each custom or extension tool name you want enabled
 
 ### Extensions
 
-Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.step-cli/agent/extensions/`, `.step-cli/extensions/`, and settings.json extension sources.
+Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.stepcode/agent/extensions/`, `.stepcode/extensions/`, and settings.json extension sources.
 
 ```typescript
 import { createAgentSession, DefaultResourceLoader } from "@step-harness/coding-agent";
@@ -891,8 +891,8 @@ const { session } = await createAgentSession({
 **Project-specific settings:**
 
 Settings load from two locations and merge:
-1. Global: `~/.step-cli/agent/settings.json`
-2. Project: `<cwd>/.step-cli/settings.json`
+1. Global: `~/.stepcode/agent/settings.json`
+2. Project: `<cwd>/.stepcode/settings.json`
 
 Project overrides global. Nested objects merge keys. Setters modify global settings by default.
 

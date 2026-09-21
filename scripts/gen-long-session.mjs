@@ -17,7 +17,7 @@ const turns = Number(process.argv[2] || 900);
 const cwd = "C:\\Users\\admin\\Desktop\\code\\cli-all\\step-harness";
 // Encoded cwd dir name: path separators -> '-', wrapped in '--...--' (see memory).
 const encoded = "--C--Users-admin-Desktop-code-cli-all-step-harness--";
-const sessionsDir = path.join(homedir(), ".step-cli", "agent", "sessions", encoded);
+const sessionsDir = path.join(homedir(), ".stepcode", "agent", "sessions", encoded);
 mkdirSync(sessionsDir, { recursive: true });
 
 const sessionId = randomUUID();

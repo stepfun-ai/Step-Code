@@ -43,8 +43,8 @@ Step extension; it does not create a second event loop or a second TUI.
 
 The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
 `STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, Pi's
-native layout is `~/.step-cli/agent/sessions/<encoded-cwd>`. Project-local
-resources use `.step-cli/`. When no explicit theme has been saved, the
+native layout is `~/.stepcode/agent/sessions/<encoded-cwd>`. Project-local
+resources use `.stepcode/`. When no explicit theme has been saved, the
 built-in `step-blue` palette is used for either terminal appearance, without
 separate blue variants. `step-violet-light/step-violet` remains available for
 automatic violet light/dark switching. Non-interactive
@@ -68,7 +68,7 @@ The built-in Step provider uses pi's `anthropic-messages` adapter. Pi appends
 accepts the older `.../v1` and `.../v1/messages` spellings; the provider
 normalizes them before registering the model so the version segment is never
 sent twice. Startup also repairs the same stale spellings in an existing
-`.step-cli/agent/models.json`, including model-level overrides. If an older
+`.stepcode/agent/models.json`, including model-level overrides. If an older
 legacy Step projection recorded a built-in Step id as an OpenAI-compatible
 model, startup restores its `anthropic-messages` API and Step endpoint as well.
 Upgrading from an earlier Step build therefore does not require signing
@@ -117,7 +117,7 @@ Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
 binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
 operations to the active Step agent root. Runtime replacement flows (`/new`,
 `/resume`, `/fork`, and `/import`) use that same bound factory, so a later
-operation cannot fall back to Pi's default `~/.step-cli/agent/sessions` directory.
+operation cannot fall back to Pi's default `~/.stepcode/agent/sessions` directory.
 Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
@@ -134,8 +134,8 @@ does not pass these options and keeps its upstream defaults.
 Step also injects a settings decorator through `settingsManagerFactory`. The
 decorator delegates Pi's complete `SettingsManager` API, including global and
 project merging, trust, reload, and flush. Product-only permission policy is
-kept in the unified `config.toml` files at `~/.step-cli/config.toml` and
-`<cwd>/.step-cli/config.toml`, with the same global-then-project precedence and
+kept in the unified `config.toml` files at `~/.stepcode/config.toml` and
+`<cwd>/.stepcode/config.toml`, with the same global-then-project precedence and
 file locking. This keeps fields such as `permissionPreset` and `autoResume` out
 of Pi's native `settings.json` schema while leaving ordinary Pi startup
 unchanged.
@@ -348,7 +348,7 @@ service and are not silently faked by this fork.
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
 | Step CLI OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
-| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
+| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
 | Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `step-cli.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |

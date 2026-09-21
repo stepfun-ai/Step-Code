@@ -382,7 +382,7 @@ interface OAuthLoginCallbacks {
 
 ### OAuthCredentials
 
-Credentials are persisted in `~/.step-cli/agent/auth.json`:
+Credentials are persisted in `~/.stepcode/agent/auth.json`:
 
 ```typescript
 interface OAuthCredentials {

@@ -30,7 +30,7 @@ yarn global remove @step-harness/coding-agent
 bun uninstall -g @step-harness/coding-agent
 ```
 
-Uninstalling step leaves settings, credentials, sessions, and installed step packages in `~/.step-cli/agent/`.
+Uninstalling step leaves settings, credentials, sessions, and installed step packages in `~/.stepcode/agent/`.
 
 Then start step in the project directory you want it to work on:
 
@@ -62,7 +62,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 step
 ```
 
-You can also run `/login` and select an API-key provider to store the key in `~/.step-cli/agent/auth.json`.
+You can also run `/login` and select an API-key provider to store the key in `~/.stepcode/agent/auth.json`.
 
 See [Providers](providers.md) for all supported providers, environment variables, and cloud-provider setup.
 
@@ -97,7 +97,7 @@ Step loads context files at startup. Add an `AGENTS.md` file to tell it how to w
 
 Step loads:
 
-- `~/.step-cli/agent/AGENTS.md` for global instructions
+- `~/.stepcode/agent/AGENTS.md` for global instructions
 - `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
 
 If a directory contains `AGENTS.override.md`, Step loads it instead of `AGENTS.md` or `CLAUDE.md` from that directory.

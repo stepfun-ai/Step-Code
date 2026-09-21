@@ -745,7 +745,7 @@ export class StepCronRuntime {
 	private resolveStoragePath(): string | undefined {
 		if (this.storagePath) return path.resolve(this.storagePath);
 		if (!this.currentCwd) return undefined;
-		return path.join(this.currentCwd, ".step-cli", "cron", "tasks.json");
+		return path.join(this.currentCwd, ".stepcode", "cron", "tasks.json");
 	}
 
 	private uniqueId(): string {
@@ -808,7 +808,7 @@ export const CronCreateParams = Type.Object({
 	cron: Type.String({ description: "Five-field local-time cron expression" }),
 	prompt: Type.String({ description: "Prompt injected when the job fires" }),
 	recurring: Type.Optional(Type.Boolean({ description: "Repeat until the seven-day expiry (default true)" })),
-	durable: Type.Optional(Type.Boolean({ description: "Persist under .step-cli/cron (default false)" })),
+	durable: Type.Optional(Type.Boolean({ description: "Persist under .stepcode/cron (default false)" })),
 });
 
 export const CronDeleteParams = Type.Object({ id: Type.String({ description: "Cron job id" }) });
@@ -906,7 +906,7 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 		pi.registerTool({
 			name: "cron_create",
 			label: "Create cron job",
-			description: `Schedule a five-field local-time cron job (up to 50 jobs). Jobs fire only while StepCode is running and idle, after pending user input. Durable jobs (durable:true) persist under .step-cli/cron and survive session restarts; session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
+			description: `Schedule a five-field local-time cron job (up to 50 jobs). Jobs fire only while StepCode is running and idle, after pending user input. Durable jobs (durable:true) persist under .stepcode/cron and survive session restarts; session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
 
 When NOT to use: cron_create is for calendar or expression-based triggers that repeat or must survive a restart. For fanning work out to many subagents on schedule, cron_create only injects a follow-up prompt on trigger; the subsequent turn is where you would call workflow (with its own opt-in). For a multi-turn objective that should persist without a fixed calendar, use create_goal instead.
 

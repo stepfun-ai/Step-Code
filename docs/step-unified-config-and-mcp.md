@@ -15,15 +15,15 @@
 
 | 来源 | 内容 |
 | --- | --- |
-| `~/.step-cli/agent/settings.json` | Pi 原生设置(主题、默认 provider/model、thinking、compaction…) |
-| `~/.step-cli/agent/step-settings.json` | Step 产品设置(permissionPreset、approvalMode、autoResume、feedbackEnabled…) |
+| `~/.stepcode/agent/settings.json` | Pi 原生设置(主题、默认 provider/model、thinking、compaction…) |
+| `~/.stepcode/agent/step-settings.json` | Step 产品设置(permissionPreset、approvalMode、autoResume、feedbackEnabled…) |
 | 无 | MCP 没有配置位置 |
 
 改动后统一为一份 TOML:
 
 ```
-~/.step-cli/config.toml            # 全局
-<cwd>/.step-cli/config.toml        # 项目级(可选)
+~/.stepcode/config.toml            # 全局
+<cwd>/.stepcode/config.toml        # 项目级(可选)
 ```
 
 三类内容并存于同一文档:Pi 原生设置在根表,Step 产品设置在根表,MCP 在
@@ -33,7 +33,7 @@
 
 - **单一真相**:`createStepSettingsManager` 把 Pi 的 `SettingsManager` 与 Step
   装饰器指向同一份路径。任何在 CLI 内改的设置(`/theme`、权限预设、审批模式等)
-  都写回 `~/.step-cli/config.toml`,`step` 二进制**不再创建** `settings.json`。
+  都写回 `~/.stepcode/config.toml`,`step` 二进制**不再创建** `settings.json`。
 - **项目文件可选**:缺失即"无项目级设置",不报警告、不自动创建;只有显式保存
   项目设置时才会建文件。
 - **TOML 不支持 null**:写入前用 `stripNullValues` 剥离,避免序列化失败。
@@ -41,7 +41,7 @@
 
 ### 1.2 目录布局调整
 
-`auth.json` 与 `models.json` 从 `~/.step-cli/agent/` 上提到 `~/.step-cli/`,与
+`auth.json` 与 `models.json` 从 `~/.stepcode/agent/` 上提到 `~/.stepcode/`,与
 `config.toml` 平级。新增 `resolveStepConfigRoot()` 作为这一层的唯一解析入口。
 
 ### 1.3 MCP 服务发现 / 连接 / 工具注册
@@ -68,7 +68,7 @@
 ### 1.6 MCP OAuth 登录
 
 `step mcp login <name>` 走完整 OAuth 流程:动态客户端注册 → PKCE → 本地
-`127.0.0.1` 回调监听 → 换取 token → 落盘 `~/.step-cli/.credentials.json`
+`127.0.0.1` 回调监听 → 换取 token → 落盘 `~/.stepcode/.credentials.json`
 (0600,先写临时文件再 rename)。运行期使用非交互 provider,未登录时抛出
 `MCP server 'X' requires login; run step mcp login X`。
 
@@ -287,10 +287,10 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 
 ---
 
-## 5. `~/.step-cli` 目录说明
+## 5. `~/.stepcode` 目录说明
 
 ```
-~/.step-cli/
+~/.stepcode/
 ├── config.toml                       # ★ 统一配置:Pi 原生设置 + Step 产品设置 + [mcp_servers]
 ├── auth.json                         # ★ Step provider 凭据(0600),由 step login 写入
 ├── models.json                       # ★ 模型目录/覆盖(从 agent/ 上提)
@@ -324,7 +324,7 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 带 ★ 的是本次改动后的主要落点;带 ▲ 的是历史文件,老安装里会残留,可以安全忽略,
 其中的设置需要手工搬到 `config.toml`。
 
-项目级配置在 `<项目>/.step-cli/config.toml`,可选,受项目信任门控。
+项目级配置在 `<项目>/.stepcode/config.toml`,可选,受项目信任门控。
 
 ### `config.toml` 示例
 

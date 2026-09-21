@@ -192,7 +192,7 @@ export class StepMcpImportView extends Container implements Component, Focusable
 			theme.fg("accent", theme.bold("Import MCP servers from your other agent CLIs")),
 			"",
 			"Step found MCP servers configured in your Codex and Claude Code. Confirm whether to migrate them to Step.",
-			`If you confirm, they will be copied into ${muted("~/.step-cli/config.toml")}.`,
+			`If you confirm, they will be copied into ${muted("~/.stepcode/config.toml")}.`,
 			"",
 		];
 

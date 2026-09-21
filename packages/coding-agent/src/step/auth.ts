@@ -2,7 +2,7 @@
  * Step-only credential compatibility helpers.
  *
  * Pi stores credentials under `<agentDir>/auth.json`. Step CLI stores its
- * provider credential at the top-level `~/.step-cli/auth.json`; credentials written by the retired
+ * provider credential at the top-level `~/.stepcode/auth.json`; credentials written by the retired
  * namespace remain migration fallbacks.
  */
 
@@ -30,7 +30,7 @@ export function getLegacyStepAuthPaths(env: Record<string, string | undefined> =
 	const explicit = env.STEPCODE_LEGACY_AUTH_PATH?.trim();
 	if (explicit) return [explicit];
 	const home = resolveStepHomeDir(env);
-	const canonicalRoot = join(home, ".step-cli");
+	const canonicalRoot = join(home, ".stepcode");
 	const retiredRoot = join(home, LEGACY_RENAMED_CONFIG_DIR);
 	// Keep the canonical root-level file first: this is the old pre-Pi Step CLI
 	// credential shape that needs in-place normalization. The remaining paths

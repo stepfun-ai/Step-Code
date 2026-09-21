@@ -3,7 +3,7 @@
 StepCode uses `workflow` for a bounded orchestration run, `/goal` for an explicit
 session objective, and `cron_create` for calendar triggers. The CLI system prompt
 identifies the product as **StepCode**. The executable and existing storage
-namespace remain `step` and `.step-cli`.
+namespace remain `step` and `.stepcode`.
 
 ## Ultracode and workflows
 
@@ -95,7 +95,7 @@ One-shot jobs are removed after successful handoff to the host.
 ## Durable project jobs
 
 Session jobs live in memory. `durable:true` requires project trust and stores
-versioned JSONL records in `.step-cli/cron/tasks.json`. Persistence carries a job
+versioned JSONL records in `.stepcode/cron/tasks.json`. Persistence carries a job
 across restarts; **the CLI must be running for tasks to fire**.
 
 Each mutation rereads the latest durable records under the file lock. The lock
@@ -104,7 +104,7 @@ runtimes using the same project store preserve each other's creates and deletes,
 and do not normally hand off the same due occurrence twice. List operations
 refresh the durable view from disk.
 
-The store is attached only once `.step-cli/cron/tasks.json` exists; `cron_create`
+The store is attached only once `.stepcode/cron/tasks.json` exists; `cron_create`
 with `durable:true` creates it. A session that schedules no durable work therefore
 performs no cron storage I/O, and the file is not created just because the project
 is trusted. Firing precision comes from the in-memory view, so the one-second tick

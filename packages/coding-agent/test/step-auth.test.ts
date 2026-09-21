@@ -59,7 +59,7 @@ describe("Step credential compatibility", () => {
 			HOME: "/tmp/step-home",
 			PI_CODING_AGENT_DIR: "/tmp/pi-agent",
 		};
-		expect(getStepAuthPath(env)).toBe("/tmp/step-home/.step-cli/auth.json");
+		expect(getStepAuthPath(env)).toBe("/tmp/step-home/.stepcode/auth.json");
 	});
 
 	test("migrates a pi-shaped credential into the canonical Step path", async () => {
@@ -146,15 +146,15 @@ describe("Step credential compatibility", () => {
 	test("migrates an explicitly supplied legacy home credential", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "step-auth-"));
 		temporaryDirectories.push(directory);
-		const legacyPath = join(directory, ".step-cli", "auth.json");
-		await mkdir(join(directory, ".step-cli"), { recursive: true });
+		const legacyPath = join(directory, ".stepcode", "auth.json");
+		await mkdir(join(directory, ".stepcode"), { recursive: true });
 		await writeFile(legacyPath, JSON.stringify({ apiKey: "legacy-home-key" }));
 
 		// The launcher only reads this path during the one-time migration. Keeping
 		// the helper independently testable lets embedded hosts explicitly invoke
 		// the same migration without making the normal runtime depend on it.
 		expect(getLegacyStepAuthPath({ STEPCODE_LEGACY_AUTH_PATH: legacyPath })).toBe(legacyPath);
-		const nativePath = join(directory, ".step-cli", "agent", "auth.json");
+		const nativePath = join(directory, ".stepcode", "agent", "auth.json");
 		const result = await migrateLegacyStepCredential({ nativePath, legacyPath });
 
 		expect(result).toMatchObject({ migrated: true, nativePath, legacyPath });

@@ -34,7 +34,7 @@ const stepSessionManagerMetadata = new WeakMap<object, StepSessionManagerMetadat
 const stepSessionManagerWrappers = new WeakMap<SessionManager, SessionManager>();
 
 export interface StepSessionManagerOptions {
-	/** Global Step agent directory. Defaults to `~/.step-cli/agent`. */
+	/** Global Step agent directory. Defaults to `~/.stepcode/agent`. */
 	agentDir?: string;
 	/**
 	 * Explicit session directory. When omitted, Pi's per-cwd encoded directory

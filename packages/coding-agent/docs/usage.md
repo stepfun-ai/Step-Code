@@ -75,7 +75,7 @@ Configure delivery in [Settings](settings.md) with `steeringMode` and `followUpM
 
 ## Sessions
 
-Sessions are saved automatically to `~/.step-cli/agent/sessions/`, organized by working directory.
+Sessions are saved automatically to `~/.stepcode/agent/sessions/`, organized by working directory.
 
 ```bash
 step -c                  # Continue most recent session
@@ -100,7 +100,7 @@ See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
 Step loads `AGENTS.md` or `CLAUDE.md` at startup from:
 
-- `~/.step-cli/agent/AGENTS.md` for global instructions
+- `~/.stepcode/agent/AGENTS.md` for global instructions
 - parent directories, walking up from the current working directory
 - the current directory
 
@@ -112,24 +112,24 @@ Use context files for project conventions, commands, safety rules, and preferenc
 
 Replace the default system prompt with:
 
-- `.step-cli/SYSTEM.md` for a project
-- `~/.step-cli/agent/SYSTEM.md` globally
+- `.stepcode/SYSTEM.md` for a project
+- `~/.stepcode/agent/SYSTEM.md` globally
 
 Append to the default prompt without replacing it with `APPEND_SYSTEM.md` in either location.
 
 ### Project Trust
 
-On interactive startup, step asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.step-cli/agent/trust.json`. Trusting a project allows step to load `.step-cli/settings.json` and `.step-cli` resources, install missing project packages, and execute project extensions.
+On interactive startup, step asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.stepcode/agent/trust.json`. Trusting a project allows step to load `.stepcode/settings.json` and `.stepcode` resources, install missing project packages, and execute project extensions.
 
 Before the trust decision, step loads only context files, user/global extensions, and CLI `-e` extensions so they can handle the `project_trust` event. Project-local extensions, project package-managed extensions, and project settings are loaded only after the project is trusted. This split also applies when switching to a session from a different cwd whose trust has not been resolved in the current process.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
-If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.step-cli/agent/settings.json`, or change it with `/settings`.
+If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.stepcode/agent/settings.json`, or change it with `/settings`.
 
 `step config` and package commands use the same project trust flow, except `step update` never prompts. Pass `--approve` to trust project-local settings for one command or `--no-approve` to ignore them.
 
-Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.step-cli/agent/trust.json` only; the current session is not reloaded, so restart step for changes to take effect.
+Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.stepcode/agent/trust.json` only; the current session is not reloaded, so restart step for changes to take effect.
 
 
 ## Exporting and Sharing Sessions

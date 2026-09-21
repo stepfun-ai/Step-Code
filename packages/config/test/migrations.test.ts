@@ -87,7 +87,7 @@ describe("runMigrations", () => {
 
 		const result = runMigrations(cwd, {
 			agentDir,
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			migrateKeybindings: (config) => ({ config, migrated: false }),
 		});
 
@@ -103,7 +103,7 @@ describe("runMigrations", () => {
 
 		runMigrations(agentDir, {
 			agentDir,
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			migrateKeybindings: (config) => {
 				called = true;
 				return { config: { ...config, migrated: true }, migrated: true };
@@ -124,6 +124,6 @@ describe("showDeprecationWarnings", () => {
 
 function makeCwdWithHooks(): string {
 	const cwd = mkdtempSync(join(tmpdir(), "step-config-mig-cwd-"));
-	mkdirSync(join(cwd, ".step-cli", "hooks"), { recursive: true });
+	mkdirSync(join(cwd, ".stepcode", "hooks"), { recursive: true });
 	return cwd;
 }

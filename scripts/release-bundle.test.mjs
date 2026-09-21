@@ -287,9 +287,9 @@ function CountAndJoin($pathValue, $cands) {
   $arr = @($r)
   return ('' + $arr.Count + '#' + ($arr -join '|'))
 }
-$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.step-cli\bin')
+$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.stepcode\bin')
 $out = [ordered]@{
-  a = (CountAndJoin '%USERPROFILE%\.step-cli\bin' @($var))
+  a = (CountAndJoin '%USERPROFILE%\.stepcode\bin' @($var))
   b = (CountAndJoin $null @('C:\x\bin','C:\y\bin'))
   c = (CountAndJoin 'C:\FOO\BIN\' @('c:\foo\bin'))
   d = (CountAndJoin 'C:\other;C:\keep\bin' @('C:\keep\bin','C:\new\bin'))
@@ -332,7 +332,7 @@ test(
 		// 'System.Object[]' that results if the helper's return value is nested.
 		const harness = String.raw`
 $currentPath = 'C:\Windows;C:\Windows\System32'
-$candidates = @('C:\Users\me\.step-cli\bin', 'C:\Users\me\.step-cli\agent\bin')
+$candidates = @('C:\Users\me\.stepcode\bin', 'C:\Users\me\.stepcode\agent\bin')
 $missing = @(Get-MissingPathEntries -PathValue $currentPath -Candidates $candidates)
 $trimmed = $currentPath.TrimEnd(';')
 $newPath = if ($trimmed) { $trimmed + ';' + ($missing -join ';') } else { $missing -join ';' }
@@ -355,7 +355,7 @@ $newPath
 			);
 			assert.equal(
 				newPath,
-				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.step-cli\\bin;C:\\Users\\me\\.step-cli\\agent\\bin",
+				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.stepcode\\bin;C:\\Users\\me\\.stepcode\\agent\\bin",
 				"fresh-install PATH must append both literal dirs",
 			);
 		} finally {

@@ -3,7 +3,7 @@
  *
  * Pi's package manager can install executable extensions, but Step's built-in
  * marketplace has a deliberately smaller contract: marketplace packages are
- * declarative manifests copied into `.step-cli/plugins`. MCP processes are
+ * declarative manifests copied into `.stepcode/plugins`. MCP processes are
  * started by the Step runtime after installation; this module owns discovery
  * and provisioning only.
  */
@@ -32,7 +32,7 @@ export const MARKETPLACE_MANIFEST_RELATIVE_PATH = MARKETPLACE_MANIFEST_CANDIDATE
 export const BUILTIN_MARKETPLACE_NAME = "builtin";
 const STEPPAGE_INSTALLER_URL = "https://dl.stepfun.com/steppage-mcp/p/install.sh";
 
-const BUILTIN_FINGERPRINT_FILE = ".step-cli-builtin-fingerprint";
+const BUILTIN_FINGERPRINT_FILE = ".stepcode-builtin-fingerprint";
 const SAFE_NAME = /^[a-z0-9][a-z0-9._-]*$/iu;
 const MAX_MANIFEST_BYTES = 512 * 1024;
 

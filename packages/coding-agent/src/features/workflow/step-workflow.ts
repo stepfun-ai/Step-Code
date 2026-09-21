@@ -93,7 +93,7 @@ export async function resolveWorkflowScript(
 		name = path.basename(sourcePath, path.extname(sourcePath));
 	} else {
 		name = normalizeSavedName(request.name ?? "");
-		const projectRoot = path.join(path.resolve(cwd), ".step-cli", "workflows", "saved");
+		const projectRoot = path.join(path.resolve(cwd), ".stepcode", "workflows", "saved");
 		const globalRoot = path.join(path.resolve(homeRoot), "workflows", "saved");
 		const projectPath = path.join(projectRoot, `${name}.js`);
 		const globalPath = path.join(globalRoot, `${name}.js`);
@@ -153,7 +153,7 @@ export function createStepWorkflowExtension(options: StepWorkflowExtensionOption
 			renderShell: "self",
 			renderCall: renderWorkflowCall,
 			renderResult: renderWorkflowResult,
-			description: `Run an isolated JavaScript workflow that coordinates many agents through phase(), parallel(), pipeline(), agent(), and the HoH iterate() loop. Scripts run in a sandboxed VM (no process, require, network, wall clock, or randomness); every agent call is journaled under .step-cli/workflows/runs so runs can resume. Provide exactly one of script (inline), scriptPath, or name (saved workflow); /workflows lists saved workflows and recent runs.
+			description: `Run an isolated JavaScript workflow that coordinates many agents through phase(), parallel(), pipeline(), agent(), and the HoH iterate() loop. Scripts run in a sandboxed VM (no process, require, network, wall clock, or randomness); every agent call is journaled under .stepcode/workflows/runs so runs can resume. Provide exactly one of script (inline), scriptPath, or name (saved workflow); /workflows lists saved workflows and recent runs.
 
 OPT-IN REQUIRED. Use this tool only when the user has opted in via one of: the keyword "ultraloop" (or Claude Code's spelling "ultracode") in the current message; an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop turned on for the session (a system-reminder confirms it — see the Ultraloop section below); a saved workflow invoked by name; or a skill that instructs it. The harness attaches a customType:"ultraloop-opt-in" system-reminder to the opting turn — per-turn signals produce a "the user included ..." reminder, session-standing mode produces an "Ultraloop is on for the session ..." reminder that repeats every turn until /ultraloop off. Saved-workflow or skill invocations are valid opt-in even without a reminder. Never infer opt-in from task shape — a large or parallel-looking task is not consent, per-turn opt-in from an earlier turn does not carry forward, and this tool being registered (STEP_ENABLE_WORKFLOW) is an environment capability, not consent. Without any signal, prefer targeted tools: a single subagent (Agent tool), search_files, or read_file; for calendar-based deferral prefer cron_create; for a multi-turn objective prefer create_goal.
 
@@ -183,7 +183,7 @@ Mechanics:
 - agent(prompt, {schema}) forces structured JSON output and retries schema mismatches up to 3 attempts, feeding validation errors back; failed attempts still consume budget.
 - Give agent() a short descriptive label; the live tool row shows running/queued counts, assigned tasks, phases, and terminal states while the workflow executes.
 - Budgets fail closed once spend crosses the limit; budget.total is null when unlimited, so guard adaptive waves with budget.total && budget.remaining() > estimate. A "+500k"-style token target in the user's current message becomes the run's default budget; an explicit budget parameter overrides it.
-- Resume: resumeFromRunId with the same script and args is a 100% cache hit on the unchanged prefix; after the first callHash mismatch, everything after it re-runs live. The tool result includes runId and the persisted scriptPath (.step-cli/workflows/runs/<runId>/script.js) — edit that file and re-invoke with scriptPath to iterate without resending the source.
+- Resume: resumeFromRunId with the same script and args is a 100% cache hit on the unchanged prefix; after the first callHash mismatch, everything after it re-runs live. The tool result includes runId and the persisted scriptPath (.stepcode/workflows/runs/<runId>/script.js) — edit that file and re-invoke with scriptPath to iterate without resending the source.
 - Determinism: Date, new Date(), and Math.random() throw inside the VM. Pass timestamps via args; vary prompts by index, not randomness.
 - iterate({spec, ...}) runs a read-only Planner → single-writer Developer → independent read-only QA loop with schema-guarded evidence and stops on coverage target, stagnation, max iterations, empty objective, or budget. Use it for spec-driven build loops; hand-roll agent() with readOnly/writable mounts when roles or stop conditions differ.
 - args takes real JSON values, not JSON-encoded strings, and is exposed as the script's args global.
