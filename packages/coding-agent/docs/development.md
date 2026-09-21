@@ -1,11 +1,11 @@
 # Development
 
-See [AGENTS.md](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/AGENTS.md) for additional guidelines.
+See [AGENTS.md](https://github.com/stepfun-ai/step-harness/blob/main/AGENTS.md) for additional guidelines.
 
 ## Setup
 
 ```bash
-git clone https://gitlab.basemind.com/aiagent/step-harness
+git clone https://github.com/stepfun-ai/step-harness
 cd step-harness
 npm install
 npm run build
@@ -48,7 +48,7 @@ Never use `__dirname` directly for package assets.
 
 ## Debug Command
 
-`/debug` (hidden) writes to `~/.step-cli/agent/step-debug.log`:
+`/debug` (hidden) writes to `~/.stepcode/agent/step-debug.log`:
 - Rendered TUI lines with ANSI codes
 - Last messages sent to the LLM
 

@@ -169,18 +169,18 @@ function createContext(cwd: string, model?: Model<string>): ExtensionContext {
 	} as unknown as ExtensionContext;
 }
 
-test("Step agent discovery uses .step-cli project paths and project precedence", async () => {
+test("Step agent discovery uses .stepcode project paths and project precedence", async () => {
 	const root = await mkdtemp(path.join(tmpdir(), "step-agent-discovery-"));
 	try {
 		const agentDir = path.join(root, "global-agent");
-		const projectAgents = path.join(root, ".step-cli", "agents");
+		const projectAgents = path.join(root, ".stepcode", "agents");
 		await mkdir(path.join(agentDir, "agents"), { recursive: true });
 		await mkdir(projectAgents, { recursive: true });
 		await writeFile(path.join(agentDir, "review.md"), agentFile("review", "global review"));
 		await writeFile(path.join(projectAgents, "review.md"), agentFile("review", "project review"));
 		const result = await discoverStepAgents(root, {
 			agentDir,
-			configDirName: ".step-cli",
+			configDirName: ".stepcode",
 			scope: "both",
 			includeBuiltin: false,
 		});

@@ -87,6 +87,27 @@ describe("feedback command argument parsing", () => {
 });
 
 describe("feedback command interaction", () => {
+	test("reports an unconfigured endpoint without invoking fetch", async () => {
+		const root = await makeRoot();
+		const stdout = captureOutput();
+		const stderr = captureOutput();
+		const fetchImpl = vi.fn<typeof fetch>();
+
+		const exitCode = await runFeedbackCommand(["--message", "no collector"], {
+			storageRootDir: root,
+			interactive: false,
+			stdout: stdout.stream,
+			stderr: stderr.stream,
+			env: {},
+			fetchImpl,
+		});
+
+		expect(exitCode).toBe(1);
+		expect(fetchImpl).not.toHaveBeenCalled();
+		expect(stderr.text()).toContain("no feedback endpoint configured");
+		expect(stdout.text()).toBe("");
+	});
+
 	test("treats a TTY command with a comment as a shortcut", async () => {
 		const root = await makeRoot();
 		const stdout = captureOutput();
@@ -100,7 +121,7 @@ describe("feedback command interaction", () => {
 			prompt: { question },
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 			fetchImpl,
 		});
 
@@ -131,7 +152,7 @@ describe("feedback command interaction", () => {
 			prompt: { question },
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 			fetchImpl,
 		});
 
@@ -158,7 +179,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -194,7 +215,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -245,7 +266,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -283,7 +304,7 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: join(root, "agent"),
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
 			},
 			fetchImpl,
 		});
@@ -321,8 +342,8 @@ describe("feedback command interaction", () => {
 			stderr: stderr.stream,
 			env: {
 				STEP_CODING_AGENT_DIR: agentDir,
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
-				STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
 			},
 			fetchImpl,
 		});
@@ -363,7 +384,7 @@ describe("feedback command interaction", () => {
 			interactive: false,
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 			fetchImpl,
 		});
 
@@ -391,8 +412,8 @@ describe("feedback command interaction", () => {
 			stdout: stdout.stream,
 			stderr: stderr.stream,
 			env: {
-				STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
-				STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
+				STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback",
+				STEPCODE_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle",
 			},
 			fetchImpl,
 		});
@@ -428,7 +449,7 @@ describe("feedback command interaction", () => {
 				interactive: false,
 				stdout: stdout.stream,
 				stderr: stderr.stream,
-				env: { STEP_CLI_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
+				env: { STEPCODE_FEEDBACK_ENDPOINT: "https://feedback.test/feedback" },
 				fetchImpl,
 			});
 
@@ -484,7 +505,7 @@ describe("feedback command interaction", () => {
 			interactive: false,
 			stdout: initialStdout.stream,
 			stderr: initialStderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: endpoint },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: endpoint },
 			fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 413 })),
 		});
 
@@ -495,7 +516,7 @@ describe("feedback command interaction", () => {
 			interactive: false,
 			stdout: stdout.stream,
 			stderr: stderr.stream,
-			env: { STEP_CLI_FEEDBACK_ENDPOINT: endpoint },
+			env: { STEPCODE_FEEDBACK_ENDPOINT: endpoint },
 			fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 404 })),
 		});
 
@@ -528,8 +549,8 @@ describe("feedback command interaction", () => {
 			stdout: stdout.stream,
 			stderr: stderr.stream,
 			env: {
-				STEP_CLI_FEEDBACK_ENDPOINT: endpoint,
-				STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT: bundleEndpoint,
+				STEPCODE_FEEDBACK_ENDPOINT: endpoint,
+				STEPCODE_FEEDBACK_BUNDLE_ENDPOINT: bundleEndpoint,
 			},
 			fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status })),
 		});
@@ -603,7 +624,7 @@ describe("feedback submission metadata", () => {
 			comment: "identity",
 			storageRootDir: root,
 			uid: "uid-1",
-			username: "  kris@stepfun.com\n",
+			username: "  account@example.test\n",
 			endpoint: "https://feedback.test/feedback",
 			fetchImpl,
 			surface: "cli",
@@ -612,7 +633,7 @@ describe("feedback submission metadata", () => {
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(submission.context).toMatchObject({ uid: "uid-1", username: "kris@stepfun.com" });
+		expect(submission.context).toMatchObject({ uid: "uid-1", username: "account@example.test" });
 		expect(submission.context.deviceId).toBeUndefined();
 		await expect(stat(resolveStepDeviceIdPath(root))).rejects.toMatchObject({ code: "ENOENT" });
 	});

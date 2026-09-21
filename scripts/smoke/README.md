@@ -10,7 +10,7 @@ npm install                 # node_modules/dist 随 HEAD 漂移;跑前先装(实
 export STEP_PROVIDER=step STEP_MODEL=step-3.7-flash   # 固定走 Step,避开默认 anthropic 404
 ```
 
-认证:已 `step login`(OAuth,凭据在 `~/.step-cli/agent/auth.json`)即可;或走 key 链路 `export STEP_API_KEY=<key>`。
+认证:已 `step login`(OAuth,凭据在 `~/.stepcode/agent/auth.json`)即可;或走 key 链路 `export STEP_API_KEY=<key>`。
 `step auth check --provider step --json` 因内置静态凭据恒报 `authType:"oauth"`,但真实打模型仍需 OAuth 或 `STEP_API_KEY`。
 
 ## 脚本

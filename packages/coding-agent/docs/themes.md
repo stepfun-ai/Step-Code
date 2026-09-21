@@ -19,8 +19,8 @@ Themes are JSON files that define colors for the TUI.
 Step loads themes from:
 
 - Built-in: `dark`, `light`, `sage`, `step-blue`, `step-violet`, `step-violet-light`
-- Global: `~/.step-cli/agent/themes/*.json`
-- Project: `.step-cli/themes/*.json` (only after the project is trusted)
+- Global: `~/.stepcode/agent/themes/*.json`
+- Project: `.stepcode/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
@@ -81,15 +81,15 @@ and saves it normally.
 1. Create a theme file:
 
 ```bash
-mkdir -p ~/.step-cli/agent/themes
-vim ~/.step-cli/agent/themes/my-theme.json
+mkdir -p ~/.stepcode/agent/themes
+vim ~/.stepcode/agent/themes/my-theme.json
 ```
 
 2. Define the theme with all required colors (see [Color Tokens](#color-tokens)):
 
 ```json
 {
-  "$schema": "https://gitlab.basemind.com/aiagent/step-harness/-/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://github.com/stepfun-ai/step-harness/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -163,7 +163,7 @@ vim ~/.step-cli/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://gitlab.basemind.com/aiagent/step-harness/-/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://github.com/stepfun-ai/step-harness/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",

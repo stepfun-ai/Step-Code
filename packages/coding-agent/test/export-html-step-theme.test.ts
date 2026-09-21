@@ -65,7 +65,7 @@ describe("Step HTML export theme", () => {
 	test("resolves the Step product default theme for non-interactive CLI export", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "step-theme-export-"));
 		tempDirs.push(tempDir);
-		const session = SessionManager.create(tempDir, tempDir, { id: "step-cli-export-theme" });
+		const session = SessionManager.create(tempDir, tempDir, { id: "stepcode-export-theme" });
 		session.appendMessage({ role: "user", content: "# Heading", timestamp: 1 });
 		session.appendMessage(assistantMsg("ok"));
 		const sessionFile = session.getSessionFile();

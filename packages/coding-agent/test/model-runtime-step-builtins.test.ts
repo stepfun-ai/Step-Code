@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 /**
- * The Step CLI is StepFun-only: when running under the Step entrypoint, the
+ * The StepCode is StepFun-only: when running under the Step entrypoint, the
  * runtime must NOT seed the default anthropic/openai builtin providers (their
  * claude and gpt catalogs would otherwise leak into the model selector). The
  * `includeDefaultBuiltins` option is the deterministic seam for that behavior;
@@ -31,7 +31,7 @@ describe("ModelRuntime default builtins gating", () => {
 		return new Set(runtime.getProviders().map((provider) => provider.id));
 	}
 
-	it("omits anthropic/openai when includeDefaultBuiltins is false (Step CLI)", async () => {
+	it("omits anthropic/openai when includeDefaultBuiltins is false (StepCode)", async () => {
 		const ids = await providerIds(false);
 		expect(ids.has("anthropic")).toBe(false);
 		expect(ids.has("openai")).toBe(false);

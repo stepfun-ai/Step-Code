@@ -65,7 +65,7 @@ const MAX_PARALLEL_TASKS = 8;
 const DEFAULT_CONCURRENCY = 4;
 export const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
-export const CHILD_MARKER = "STEP_CLI_SUBAGENT_CHILD";
+export const CHILD_MARKER = "STEPCODE_SUBAGENT_CHILD";
 
 export interface StepSubagentUsage {
 	input: number;
@@ -163,9 +163,9 @@ export interface StepSubagentDetails {
 }
 
 export interface StepSubagentExtensionOptions {
-	/** Global Step agent root. Defaults to `~/.step-cli/agent`. */
+	/** Global Step agent root. Defaults to `~/.stepcode/agent`. */
 	agentDir?: string;
-	/** Project resource directory. Defaults to `.step-cli`. */
+	/** Project resource directory. Defaults to `.stepcode`. */
 	configDirName?: string;
 	/** Include the built-in general/explore/review/planner roles. */
 	includeBuiltinAgents?: boolean;

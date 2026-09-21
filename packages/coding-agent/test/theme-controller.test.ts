@@ -67,7 +67,7 @@ describe("InteractiveThemeController", () => {
 	});
 
 	it("uses the injected default theme without reading product environment variables", () => {
-		vi.stubEnv("STEP_CLI_DEFAULT_THEME", "light");
+		vi.stubEnv("STEPCODE_DEFAULT_THEME", "light");
 		const { ui } = createUi();
 		const manager = SettingsManager.inMemory({});
 		const controller = createController(ui, () => manager, undefined, "step-violet");

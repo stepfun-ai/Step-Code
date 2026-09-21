@@ -100,8 +100,8 @@ describe("Step trace headers", () => {
 	it("combines the model endpoint with configured trace prefixes", () => {
 		expect(
 			resolveStepTraceHeaderBaseUrls("https://model.example/v1", {
-				STEP_CLI_CLOUD_TRACE_ENDPOINT: "https://collector.example/v1, https://model.example/v1/",
-				STEP_CLI_CLOUD_TRACE_ORIGIN: "https://origin.example",
+				STEPCODE_CLOUD_TRACE_ENDPOINT: "https://collector.example/v1, https://model.example/v1/",
+				STEPCODE_CLOUD_TRACE_ORIGIN: "https://origin.example",
 			}),
 		).toEqual(["https://model.example/v1", "https://collector.example/v1", "https://origin.example"]);
 	});
@@ -114,7 +114,7 @@ describe("Step trace headers", () => {
 		expect(isStepTraceRequestAllowed("openai", "https://mp.example/v1/chat", {})).toBe(false);
 		expect(
 			isStepTraceRequestAllowed("openai", "https://trace.example/v1/chat", {
-				STEP_CLI_CLOUD_TRACE_ORIGIN: "https://trace.example/v1",
+				STEPCODE_CLOUD_TRACE_ORIGIN: "https://trace.example/v1",
 			}),
 		).toBe(true);
 	});

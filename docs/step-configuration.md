@@ -1,7 +1,7 @@
 # Step configuration files
 
-Step creates the global `~/.step-cli/config.toml` when it first runs.
-The project file `<cwd>/.step-cli/config.toml` is optional: a missing file
+Step creates the global `~/.stepcode/config.toml` when it first runs.
+The project file `<cwd>/.stepcode/config.toml` is optional: a missing file
 contributes no project settings and does not produce a startup warning.
 Reading or reloading settings does not create the project file or directory.
 
@@ -37,6 +37,12 @@ how to extend the built-in rules.
 `STEP_CODING_AGENT_SESSION_DIR` selects session storage unless `--session-dir`
 is supplied. These names are fixed; the application display name does not select
 another environment namespace.
+
+The shared runtime defaults to the `step` display name. `STEPCODE_APP_NAME`
+can override the name when launched through the Step entrypoint; it does not
+select commands, providers, or storage paths. Step keeps using `.stepcode`,
+while shared runtime callers retain their existing storage defaults. Extension
+manifest keys and package import aliases remain compatible with existing plugins.
 
 The CLI sets `AI_AGENT=step`. Shell tools inherit the shell environment and any
 explicit spawn-hook changes, without injecting session, model, or reasoning

@@ -49,7 +49,7 @@ export function createStoredMcpOAuthProvider(
 	return {
 		redirectUrl: undefined,
 		clientMetadata: {
-			client_name: "Step CLI",
+			client_name: "StepCode",
 			redirect_uris: [],
 			grant_types: ["authorization_code", "refresh_token"],
 			response_types: ["code"],
@@ -234,7 +234,7 @@ export function buildOAuthClientMetadata(
 ): OAuthClientMetadata {
 	const scope = oauthConfig.scopes?.filter((entry) => entry.trim()).join(" ") || undefined;
 	return {
-		client_name: "Step CLI",
+		client_name: "StepCode",
 		redirect_uris: [redirectUrl],
 		grant_types: ["authorization_code", "refresh_token"],
 		response_types: ["code"],

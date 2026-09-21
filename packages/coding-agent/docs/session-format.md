@@ -5,14 +5,14 @@ Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with
 ## File Location
 
 ```
-~/.step-cli/agent/sessions/--<path>--/<timestamp>_<uuid>.jsonl
+~/.stepcode/agent/sessions/--<path>--/<timestamp>_<uuid>.jsonl
 ```
 
 Where `<path>` is the working directory with `/` replaced by `-`.
 
 ## Deleting Sessions
 
-Sessions can be removed by deleting their `.jsonl` files under `~/.step-cli/agent/sessions/`.
+Sessions can be removed by deleting their `.jsonl` files under `~/.stepcode/agent/sessions/`.
 
 Step also supports deleting sessions interactively from `/resume` (select a session and press `Ctrl+D`, then confirm). When available, step uses the `trash` CLI to avoid permanent deletion.
 
@@ -28,11 +28,11 @@ Existing sessions are automatically migrated to the current version (v3) when lo
 
 ## Source Files
 
-Source on GitHub ([step-harness](https://gitlab.basemind.com/aiagent/step-harness)):
-- [`packages/coding-agent/src/core/session-manager.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/session-manager.ts) - Session entry types and SessionManager
-- [`packages/coding-agent/src/core/messages.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/messages.ts) - Extended message types (BashExecutionMessage, CustomMessage, etc.)
-- [`packages/providers/src/types.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
-- [`packages/agent/src/types.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/agent/src/types.ts) - AgentMessage union type
+Source on GitHub ([step-harness](https://github.com/stepfun-ai/step-harness)):
+- [`packages/coding-agent/src/core/session-manager.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/session-manager.ts) - Session entry types and SessionManager
+- [`packages/coding-agent/src/core/messages.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/messages.ts) - Extended message types (BashExecutionMessage, CustomMessage, etc.)
+- [`packages/providers/src/types.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
+- [`packages/agent/src/types.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/agent/src/types.ts) - AgentMessage union type
 
 For TypeScript definitions in your project, inspect `node_modules/@step-harness/coding-agent/dist/` and `node_modules/@step-harness/providers/dist/`.
 

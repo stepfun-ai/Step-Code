@@ -3,7 +3,7 @@
  *
  * Pi's example keeps this discovery helper next to the extension. Step uses
  * the same frontmatter shape, but resolves the product-owned directories
- * through the Step namespace (`.step-cli`) instead of Pi's `.pi` paths.
+ * through the Step namespace (`.stepcode`) instead of Pi's `.pi` paths.
  */
 
 import type { Dirent } from "node:fs";
@@ -33,9 +33,9 @@ export interface StepAgentDiscoveryResult {
 }
 
 export interface StepAgentDiscoveryOptions {
-	/** Global Step agent root (`~/.step-cli/agent` by default). */
+	/** Global Step agent root (`~/.stepcode/agent` by default). */
 	agentDir?: string;
-	/** Project resource directory (`.step-cli` by default). */
+	/** Project resource directory (`.stepcode` by default). */
 	configDirName?: string;
 	/** Resource scopes to include. Defaults to both global and project files. */
 	scope?: StepAgentScope;

@@ -39,7 +39,7 @@ out.html
 packages/coding-agent/binaries/
 todo.md
 plans/
-.step-cli/
+.stepcode/
 # Retired product namespace may be created while migrating older installs.
 .step-harness/
 collect.sh

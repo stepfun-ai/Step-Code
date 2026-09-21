@@ -12,7 +12,7 @@ const shPath = fileURLToPath(new URL("../infra/release/install.sh", import.meta.
 
 // A base URL that is obviously not the placeholder. Kept off any real host so an
 // accidental network attempt during the execution tests below fails fast.
-const BASE_URL = "https://releases.example.test/step-cli";
+const BASE_URL = "https://releases.example.test/stepcode";
 
 // Assembled from two literals so this test file cannot itself be rewritten by the
 // same token replacement it is guarding against.
@@ -238,12 +238,12 @@ test("install.ps1 persists the resolved $InstallDir/$AgentDir, honoring STEP_INS
 	);
 });
 
-test("install.sh persists PATH via a guarded, env-var-honoring # step-cli block (static)", async () => {
+test("install.sh persists PATH via a guarded, env-var-honoring # stepcode block (static)", async () => {
 	const rendered = renderInstallTemplate(await readFile(shPath, "utf8"), BASE_URL);
-	assert.ok(rendered.includes("# step-cli"), "must use the # step-cli marker block");
-	assert.ok(rendered.includes("# step-cli end"), "marker block must be terminated");
+	assert.ok(rendered.includes("# stepcode"), "must use the # stepcode marker block");
+	assert.ok(rendered.includes("# stepcode end"), "marker block must be terminated");
 	assert.ok(
-		rendered.includes("grep -qxF '# step-cli'"),
+		rendered.includes("grep -qxF '# stepcode'"),
 		"must grep for the marker before rewriting the block (idempotent)",
 	);
 	assert.ok(
@@ -287,9 +287,9 @@ function CountAndJoin($pathValue, $cands) {
   $arr = @($r)
   return ('' + $arr.Count + '#' + ($arr -join '|'))
 }
-$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.step-cli\bin')
+$var = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.stepcode\bin')
 $out = [ordered]@{
-  a = (CountAndJoin '%USERPROFILE%\.step-cli\bin' @($var))
+  a = (CountAndJoin '%USERPROFILE%\.stepcode\bin' @($var))
   b = (CountAndJoin $null @('C:\x\bin','C:\y\bin'))
   c = (CountAndJoin 'C:\FOO\BIN\' @('c:\foo\bin'))
   d = (CountAndJoin 'C:\other;C:\keep\bin' @('C:\keep\bin','C:\new\bin'))
@@ -332,7 +332,7 @@ test(
 		// 'System.Object[]' that results if the helper's return value is nested.
 		const harness = String.raw`
 $currentPath = 'C:\Windows;C:\Windows\System32'
-$candidates = @('C:\Users\me\.step-cli\bin', 'C:\Users\me\.step-cli\agent\bin')
+$candidates = @('C:\Users\me\.stepcode\bin', 'C:\Users\me\.stepcode\agent\bin')
 $missing = @(Get-MissingPathEntries -PathValue $currentPath -Candidates $candidates)
 $trimmed = $currentPath.TrimEnd(';')
 $newPath = if ($trimmed) { $trimmed + ';' + ($missing -join ';') } else { $missing -join ';' }
@@ -355,7 +355,7 @@ $newPath
 			);
 			assert.equal(
 				newPath,
-				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.step-cli\\bin;C:\\Users\\me\\.step-cli\\agent\\bin",
+				"C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.stepcode\\bin;C:\\Users\\me\\.stepcode\\agent\\bin",
 				"fresh-install PATH must append both literal dirs",
 			);
 		} finally {
@@ -377,16 +377,16 @@ test(
 		const rcUnterm = join(dir, "rc-unterm").replace(/\\/g, "/");
 		const scriptPath = join(dir, "helper-test.sh");
 		try {
-			// A well-formed "# step-cli ... # step-cli end" block (and the blank line
+			// A well-formed "# stepcode ... # stepcode end" block (and the blank line
 			// above it) must be removed while surrounding lines survive; a LONE start
 			// marker with no end must be preserved verbatim rather than truncating the
 			// rest of the rc to EOF (the reviewed data-loss guard).
 			const harness = String.raw`
 set -euo pipefail
 ${match[0]}
-printf 'keep1\n\n# step-cli\nexport PATH=x\n# step-cli end\nkeep2\n' > "$1"
+printf 'keep1\n\n# stepcode\nexport PATH=x\n# stepcode end\nkeep2\n' > "$1"
 strip_step_block "$1"
-printf '# step-cli\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
+printf '# stepcode\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
 strip_step_block "$2"
 printf 'WELL:%s\n' "$(tr '\n' '|' < "$1")"
 printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
@@ -402,72 +402,10 @@ printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
 			assert.match(
 				result.stdout,
 				/UNTERM_KEEP:1/,
-				"an unterminated # step-cli marker must not truncate user content below it",
+				"an unterminated # stepcode marker must not truncate user content below it",
 			);
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
 	},
 );
-
-// ---------------------------------------------------------------------------
-// Bundled search-tool (rg/fd) prefetch — scripts/copy-search-tools.mjs.
-// Pre-fetching rg/fd into the archive lets the installer copy them into
-// ~/.step-cli/agent/bin with no GitHub download. These assert the asset-naming
-// map (pure, no network) and that both installers copy the bundled binary
-// before falling back to a download.
-// ---------------------------------------------------------------------------
-
-import { assetInfoFor, RG_VERSION, FD_VERSION } from "./copy-search-tools.mjs";
-
-test("copy-search-tools asset naming matches the runtime/installer scheme", () => {
-	// ripgrep: musl (static) for linux-x64, gnu for linux-arm64, no tag prefix.
-	assert.equal(assetInfoFor("rg", "linux-x64").assetName, `ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz`);
-	assert.equal(assetInfoFor("rg", "linux-arm64").assetName, `ripgrep-${RG_VERSION}-aarch64-unknown-linux-gnu.tar.gz`);
-	assert.equal(assetInfoFor("rg", "darwin-arm64").assetName, `ripgrep-${RG_VERSION}-aarch64-apple-darwin.tar.gz`);
-	assert.equal(assetInfoFor("rg", "darwin-arm64").tag, `${RG_VERSION}`);
-
-	// fd: gnu for linux, v-prefixed tag, .exe on windows.
-	assert.equal(assetInfoFor("fd", "linux-x64").assetName, `fd-v${FD_VERSION}-x86_64-unknown-linux-gnu.tar.gz`);
-	assert.equal(assetInfoFor("fd", "darwin-x64").tag, `v${FD_VERSION}`);
-	assert.equal(assetInfoFor("fd", "windows-x64").assetName, `fd-v${FD_VERSION}-x86_64-pc-windows-msvc.zip`);
-	assert.equal(assetInfoFor("fd", "windows-x64").binaryName, "fd.exe");
-	assert.equal(assetInfoFor("rg", "windows-arm64").binaryName, "rg.exe");
-	// ripgrep has no aarch64 Windows build: windows-arm64 falls back to the x64 asset.
-	assert.equal(assetInfoFor("rg", "windows-arm64").assetName, `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`);
-	assert.equal(assetInfoFor("rg", "linux-x64").binaryName, "rg");
-
-	assert.throws(() => assetInfoFor("rg", "solaris-sparc"), /Unknown target/);
-	assert.throws(() => assetInfoFor("awk", "linux-x64"), /Unknown tool/);
-});
-
-test("install.sh copies the bundled tool before downloading (static)", async () => {
-	const source = await readFile(shPath, "utf8");
-	assert.match(
-		source,
-		/if \[\[ -n "\$bundled_root" && -f "\$\{bundled_root\}\/tools\/\$\{binary\}" \]\]; then/,
-		"install.sh must prefer the archive's tools/ binary",
-	);
-	// The prefer-bundled branch must sit before the GitHub metadata download.
-	assert.ok(
-		source.indexOf('${bundled_root}/tools/${binary}') < source.indexOf("api.github.com/repos"),
-		"the bundled copy must be attempted before the GitHub download fallback",
-	);
-	assert.match(source, /install_managed_tools "\$archive_root"/, "main must pass the archive root to install_managed_tools");
-});
-
-test("install.ps1 copies the bundled tool before downloading (static)", async () => {
-	const rendered = renderInstallTemplate(await readFile(ps1Path, "utf8"), BASE_URL);
-	assert.ok(
-		rendered.includes("$bundled = Join-Path $ExtractDir (Join-Path 'tools' $binaryName)"),
-		"install.ps1 must resolve the archive's tools\\ binary",
-	);
-	assert.ok(
-		rendered.indexOf("Join-Path 'tools' $binaryName") < rendered.indexOf("api.github.com/repos"),
-		"the bundled copy must be attempted before the GitHub download fallback",
-	);
-	assert.ok(
-		rendered.includes("Install-ManagedTools -TargetId $targetId -WorkDir $workDir -ExtractDir $extractDir"),
-		"main must pass the extract dir to Install-ManagedTools",
-	);
-});

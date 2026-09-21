@@ -19,7 +19,7 @@ describe("Step Pi storage wrapper", () => {
 		const root = await mkdtemp(join(tmpdir(), "step-pi-open-wrapper-"));
 		roots.push(root);
 		const cwd = join(root, "workspace");
-		const agentDir = join(root, ".step-cli", "agent");
+		const agentDir = join(root, ".stepcode", "agent");
 		const sourceDir = join(root, ".pi", "agent", "sessions", "legacy");
 		const sourcePath = join(sourceDir, "legacy.jsonl");
 		await mkdir(cwd, { recursive: true });
@@ -49,7 +49,7 @@ describe("Step Pi storage wrapper", () => {
 	test("uses the Step agent root for embedded tool lookups without an explicit argument", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-pi-tool-wrapper-"));
 		roots.push(root);
-		const agentDir = join(root, ".step-cli", "agent");
+		const agentDir = join(root, ".stepcode", "agent");
 		const binaryPath = join(agentDir, "bin", process.platform === "win32" ? "rg.exe" : "rg");
 		await mkdir(join(agentDir, "bin"), { recursive: true });
 		await writeFile(binaryPath, "placeholder");

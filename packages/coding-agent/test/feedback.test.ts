@@ -10,7 +10,7 @@ import { buildFeedbackSessionBundle, describeFeedbackBundle } from "../src/step/
 import { formatFeedbackSubmittedMessage, parseFeedbackArgs, runFeedbackCommand } from "../src/step/feedback/command.ts";
 import { deliverFeedback, retryPendingFeedback } from "../src/step/feedback/delivery.ts";
 import { readFeedbackDiagnostics } from "../src/step/feedback/diagnostics.ts";
-import { isBuiltInFeedbackEndpoint, resolveFeedbackEndpoint } from "../src/step/feedback/endpoints.ts";
+import { resolveFeedbackEndpoint } from "../src/step/feedback/endpoints.ts";
 import {
 	listPendingFeedback,
 	resolveFeedbackPendingPath,
@@ -216,7 +216,7 @@ describe("feedback validation and settings", () => {
 
 	test("honors environment opt-out before persisted settings", () => {
 		expect(resolveFeedbackSettings({ env: {}, settings: {} })).toEqual({ enabled: true });
-		expect(resolveFeedbackSettings({ env: { STEP_CLI_DISABLE_FEEDBACK: "true" }, settings: {} })).toEqual({
+		expect(resolveFeedbackSettings({ env: { STEPCODE_DISABLE_FEEDBACK: "true" }, settings: {} })).toEqual({
 			enabled: false,
 			reason: "env-opt-out",
 		});
@@ -226,73 +226,17 @@ describe("feedback validation and settings", () => {
 		});
 	});
 
-	test("uses channel defaults and accepts explicit endpoints", () => {
-		expect(resolveFeedbackEndpoint({})).toBe(
-			"https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback",
-		);
-		expect(resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" })).toBe(
-			"https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback",
-		);
-		expect(resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" }, true)).toBe(
-			"https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback/bundle",
-		);
-		expect(resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" })).toBe(
-			"https://api.stepfun.com/stepcliobserserver/api/v1/feedback",
-		);
-		expect(resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" }, true)).toBe(
-			"https://api.stepfun.com/stepcliobserserver/api/v1/feedback/bundle",
-		);
+	test("requires explicit endpoints and accepts environment aliases", () => {
+		expect(resolveFeedbackEndpoint({})).toBeUndefined();
 		expect(resolveFeedbackEndpoint({ STEP_HARNESS_FEEDBACK_ENDPOINT: " https://feedback.test " })).toBe(
 			"https://feedback.test",
 		);
-	});
-
-	test("does not classify neighboring collector paths as built-in routes", () => {
-		const bodyEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" });
-		const bundleEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" }, true);
-		if (!bodyEndpoint || !bundleEndpoint) throw new Error("expected the built-in feedback endpoints");
-
-		expect(isBuiltInFeedbackEndpoint(`${bodyEndpoint}/other`)).toBe(false);
-		expect(isBuiltInFeedbackEndpoint(`${bodyEndpoint}-other`)).toBe(false);
-		expect(isBuiltInFeedbackEndpoint(bundleEndpoint)).toBe(false);
-		expect(isBuiltInFeedbackEndpoint(`${bundleEndpoint}/other`, true)).toBe(false);
-		expect(isBuiltInFeedbackEndpoint(`${bundleEndpoint}-other`, true)).toBe(false);
-		expect(isBuiltInFeedbackEndpoint(bodyEndpoint, true)).toBe(false);
-	});
-
-	test("matches one-pass encoded collector paths without broadening built-in routes", () => {
-		const bodyEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" });
-		const bundleEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" }, true);
-		if (!bodyEndpoint || !bundleEndpoint) throw new Error("expected the built-in feedback endpoints");
-
-		const encodedBodyEndpoint = bodyEndpoint.replace(/\/feedback$/u, "/%66eedback");
-		const encodedBundleEndpoint = bundleEndpoint.replace(/\/feedback\/bundle$/u, "/%66eedback/%62undle");
-		expect(isBuiltInFeedbackEndpoint(encodedBodyEndpoint)).toBe(true);
-		expect(isBuiltInFeedbackEndpoint(encodedBundleEndpoint, true)).toBe(true);
-
-		expect(isBuiltInFeedbackEndpoint(bodyEndpoint.replace(/\/feedback$/u, "/%2566eedback"))).toBe(false);
-		expect(isBuiltInFeedbackEndpoint(bodyEndpoint.replace(/\/feedback$/u, "/%66eedback-other"))).toBe(false);
-		const differentOrigin = new URL(encodedBodyEndpoint);
-		differentOrigin.hostname = "feedback.test";
-		expect(isBuiltInFeedbackEndpoint(differentOrigin.href)).toBe(false);
-	});
-
-	test("treats a trailing DNS root dot as the same collector authority", () => {
-		const bodyEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" });
-		const bundleEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" }, true);
-		if (!bodyEndpoint || !bundleEndpoint) throw new Error("expected the built-in feedback endpoints");
-
-		const dottedBody = new URL(bodyEndpoint);
-		dottedBody.hostname = `${dottedBody.hostname}.`;
-		const dottedBundle = new URL(bundleEndpoint);
-		dottedBundle.hostname = `${dottedBundle.hostname}.`;
-		expect(isBuiltInFeedbackEndpoint(dottedBody.href)).toBe(true);
-		expect(isBuiltInFeedbackEndpoint(dottedBundle.href, true)).toBe(true);
-
-		dottedBody.port = "444";
-		expect(isBuiltInFeedbackEndpoint(dottedBody.href)).toBe(false);
-		dottedBundle.protocol = "http:";
-		expect(isBuiltInFeedbackEndpoint(dottedBundle.href, true)).toBe(false);
+		expect(
+			resolveFeedbackEndpoint({ STEP_HARNESS_FEEDBACK_BUNDLE_ENDPOINT: "https://feedback.test/bundle" }, true),
+		).toBe("https://feedback.test/bundle");
+		expect(resolveFeedbackEndpoint({ STEP_HARNESS_FEEDBACK_ENDPOINT: " https://feedback.test " })).toBe(
+			"https://feedback.test",
+		);
 	});
 });
 
@@ -330,68 +274,6 @@ describe("feedback submission and delivery", () => {
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.init?.headers).toEqual({ "content-type": "application/json" });
 	});
-
-	test.each([
-		["exact path", ""],
-		["trailing slash", "/"],
-		["query", "?source=test"],
-		["fragment", "#test"],
-	] as const)("refuses a built-in body collector URL with %s during a test run", async (_variant, suffix) => {
-		const root = await makeRoot();
-		const builtInEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" });
-		if (!builtInEndpoint) throw new Error("expected the built-in feedback endpoint");
-		const { fetchImpl, calls } = queuedFetch([response(204)]);
-		const previousNodeEnv = process.env.NODE_ENV;
-		process.env.NODE_ENV = "test";
-		try {
-			await expect(
-				deliverFeedback({
-					endpoint: `${builtInEndpoint}${suffix}`,
-					submission: submission(),
-					storageRootDir: root,
-					fetchImpl,
-				}),
-			).rejects.toThrow("a test would have posted to the real collector");
-		} finally {
-			if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-			else process.env.NODE_ENV = previousNodeEnv;
-		}
-		expect(calls).toHaveLength(0);
-	});
-
-	test.each([
-		["exact path", ""],
-		["trailing slash", "/"],
-		["query", "?source=test"],
-		["fragment", "#test"],
-	] as const)(
-		"refuses a built-in bundle collector URL with %s after delivering the body during a test run",
-		async (_variant, suffix) => {
-			const root = await makeRoot();
-			const builtInBundleEndpoint = resolveFeedbackEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "dev" }, true);
-			if (!builtInBundleEndpoint) throw new Error("expected the built-in feedback bundle endpoint");
-			const endpoint = "https://feedback.test/feedback";
-			const { fetchImpl, calls } = queuedFetch([response(204), response(204)]);
-			const previousNodeEnv = process.env.NODE_ENV;
-			process.env.NODE_ENV = "test";
-			try {
-				await expect(
-					deliverFeedback({
-						endpoint,
-						submission: submission(),
-						storageRootDir: root,
-						bundle: { endpoint: `${builtInBundleEndpoint}${suffix}`, data: Buffer.from("archive") },
-						fetchImpl,
-					}),
-				).rejects.toThrow("a test would have posted to the real collector");
-			} finally {
-				if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-				else process.env.NODE_ENV = previousNodeEnv;
-			}
-			expect(calls).toHaveLength(1);
-			expect(calls[0]?.url).toBe(endpoint);
-		},
-	);
 
 	test.each([
 		[404, "unsupported-endpoint"],

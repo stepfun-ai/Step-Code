@@ -1,10 +1,10 @@
 import {
-	APP_NAME,
 	CONFIG_DIR_NAME,
 	DefaultPackageManager,
 	detectTerminalBackgroundFromEnv,
 	detectTerminalThemeForAuto,
 	getAgentDir,
+	IS_STEP_ENTRYPOINT,
 	initTheme,
 	KeybindingsManager,
 	loadThemeFromPath,
@@ -26,7 +26,7 @@ import { FirstTimeSetupComponent, type FirstTimeSetupResult } from "./view/dialo
 /** Product entrypoints keep the startup selector in the same visual language
  * as their interactive surface; keyboard handling remains in the shared
  * ExtensionSelector/Input components. */
-const STARTUP_PRESENTATION: "native" | "step" = APP_NAME === "step" ? "step" : "native";
+const STARTUP_PRESENTATION: "native" | "step" = IS_STEP_ENTRYPOINT ? "step" : "native";
 
 export interface StartupTuiPathOptions {
 	agentDir?: string;
@@ -75,7 +75,7 @@ export async function createStartupTui(
 	paths: StartupTuiPathOptions = {},
 ): Promise<TUI> {
 	const resolvedPaths: Required<StartupTuiPathOptions> = {
-		agentDir: paths.agentDir ?? (APP_NAME === "step" ? resolveStepAgentDir() : getAgentDir()),
+		agentDir: paths.agentDir ?? (IS_STEP_ENTRYPOINT ? resolveStepAgentDir() : getAgentDir()),
 		configDirName: paths.configDirName?.trim() || CONFIG_DIR_NAME,
 	};
 	// Theme helpers have a product-level custom-theme directory context in
@@ -86,7 +86,7 @@ export async function createStartupTui(
 	setRegisteredThemes(await loadStartupThemes(settingsManager, resolvedPaths));
 	const terminalTheme = detectTerminalBackgroundFromEnv().theme;
 	initTheme(
-		resolveThemeSetting(settingsManager.getThemeSetting() ?? process.env.STEP_CLI_DEFAULT_THEME, terminalTheme) ??
+		resolveThemeSetting(settingsManager.getThemeSetting() ?? process.env.STEPCODE_DEFAULT_THEME, terminalTheme) ??
 			terminalTheme,
 	);
 	setKeybindings(KeybindingsManager.create(resolvedPaths.agentDir));
@@ -105,7 +105,7 @@ export function startStartupTui(ui: TUI, settingsManager: SettingsManager): void
 }
 
 async function applyDetectedStartupTheme(ui: TUI, settingsManager: SettingsManager): Promise<void> {
-	const themeSetting = settingsManager.getThemeSetting() ?? process.env.STEP_CLI_DEFAULT_THEME?.trim();
+	const themeSetting = settingsManager.getThemeSetting() ?? process.env.STEPCODE_DEFAULT_THEME?.trim();
 	if (themeSetting && !parseAutoThemeSetting(themeSetting)) return;
 
 	const terminalTheme = await detectTerminalThemeForAuto({ ui, timeoutMs: 100 });

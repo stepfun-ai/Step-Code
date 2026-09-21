@@ -81,7 +81,7 @@ cancel_wakeup({ id })
   不会中断当前 turn。
 - `cancel_wakeup` 和 timer fire 都是幂等的；session shutdown/reload/new/fork
   清理全部 timer 与 deferred 项。
-- Loop 不读取或写入 `.step-cli/cron`，也不调用 Cron runtime。
+- Loop 不读取或写入 `.stepcode/cron`，也不调用 Cron runtime。
 
 ### 实现边界
 
@@ -129,7 +129,7 @@ cron_delete({ id })
 - `cron` 为五字段表达式（分钟、小时、月日、月份、周日），按本地时区解释；拒绝
   秒字段和无法解析的表达式。
 - `recurring` 默认 `true`；false 的 job 触发一次后删除。
-- `durable` 默认 `false`；true 的 job 存储在项目 `.step-cli/cron/tasks.json`。
+- `durable` 默认 `false`；true 的 job 存储在项目 `.stepcode/cron/tasks.json`。
 - recurring job 最长存活七天，最后一次触发后发出 expiry 事件并删除。
 - 每 30 秒扫描一次；允许小幅随机抖动以避免多个进程同时撞在整点，但 replay 模式
   关闭抖动。
@@ -305,7 +305,7 @@ prompt, options, result}`。resume 只重放 hash 完全匹配的连续前缀，
 项目产物布局：
 
 ```text
-.step-cli/workflows/
+.stepcode/workflows/
   saved/                 # 用户维护的脚本
   runs/<runId>/
     script.js
@@ -360,7 +360,7 @@ telemetry 和 evidence 在进程内串行 append；读取时容忍被杀进程�
 | Loop 工具名 | `schedule_wakeup` / `list_wakeups` / `cancel_wakeup` | 与 Claude Code 语料一致，表达 session continuation |
 | Loop 时钟 | 标准 timer + 注入 clock | 零运行时依赖，测试可控 |
 | Cron 表达式 | 五字段、项目本地时区 | 足够覆盖 agent 场景，避免秒级复杂度 |
-| Cron durable 位置 | `.step-cli/cron/tasks.json` | 项目边界清晰、可备份、可迁移 |
+| Cron durable 位置 | `.stepcode/cron/tasks.json` | 项目边界清晰、可备份、可迁移 |
 | Workflow DSL | JavaScript | 能表达控制流且接近 Claude Code Workflow 心智 |
 | Workflow 隔离 | `isolated-vm` 或等效强隔离 | 禁止把 `node:vm` 当安全边界 |
 | schema 校验 | TypeBox JSON Schema engine | VM 只传 JSON，错误可解释且不重复实现 validator |

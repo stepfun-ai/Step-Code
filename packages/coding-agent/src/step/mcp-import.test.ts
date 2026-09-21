@@ -345,10 +345,10 @@ describe("describeStepMcpImportOutcome", () => {
 			result: {
 				imported: ["docs", "shared-codex"],
 				skipped: [{ name: "broken", reason: "neither command nor url" }],
-				configPath: "/home/u/.step-cli/config.toml",
+				configPath: "/home/u/.stepcode/config.toml",
 			},
 		});
-		expect(notice).toContain("Imported 2 MCP servers into /home/u/.step-cli/config.toml");
+		expect(notice).toContain("Imported 2 MCP servers into /home/u/.stepcode/config.toml");
 		expect(notice).toContain("docs, shared-codex");
 		// The prompt runs before MCP discovery, so nothing asks for a restart.
 		expect(notice).not.toContain("Restart");

@@ -4,7 +4,7 @@
 
 Extensions are TypeScript modules that extend step's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
 
-> **Placement for /reload:** Put extensions in `~/.step-cli/agent/extensions/` (global) or `.step-cli/extensions/` (project-local) for auto-discovery. Use `step -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
+> **Placement for /reload:** Put extensions in `~/.stepcode/agent/extensions/` (global) or `.stepcode/extensions/` (project-local) for auto-discovery. Use `step -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
 
 **Key capabilities:**
 - **Custom tools** - Register tools the LLM can call via `pi.registerTool()`
@@ -55,7 +55,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 
 ## Quick Start
 
-Create `~/.step-cli/agent/extensions/my-extension.ts`:
+Create `~/.stepcode/agent/extensions/my-extension.ts`:
 
 ```typescript
 import type { ExtensionAPI } from "@step-harness/coding-agent";
@@ -110,14 +110,14 @@ step -e ./my-extension.ts
 
 > **Security:** Extensions run with your full system permissions and can execute arbitrary code. Only install from sources you trust.
 
-Extensions are auto-discovered from trusted locations. Project-local `.step-cli/extensions` entries load only after the project is trusted.
+Extensions are auto-discovered from trusted locations. Project-local `.stepcode/extensions` entries load only after the project is trusted.
 
 | Location | Scope |
 |----------|-------|
-| `~/.step-cli/agent/extensions/*.ts` | Global (all projects) |
-| `~/.step-cli/agent/extensions/*/index.ts` | Global (subdirectory) |
-| `.step-cli/extensions/*.ts` | Project-local |
-| `.step-cli/extensions/*/index.ts` | Project-local (subdirectory) |
+| `~/.stepcode/agent/extensions/*.ts` | Global (all projects) |
+| `~/.stepcode/agent/extensions/*/index.ts` | Global (subdirectory) |
+| `.stepcode/extensions/*.ts` | Project-local |
+| `.stepcode/extensions/*/index.ts` | Project-local (subdirectory) |
 
 Additional paths via `settings.json`:
 
@@ -228,14 +228,14 @@ Defer background resource startup until `session_start` or the command/tool/even
 **Single file** - simplest, for small extensions:
 
 ```
-~/.step-cli/agent/extensions/
+~/.stepcode/agent/extensions/
 └── my-extension.ts
 ```
 
 **Directory with index.ts** - for multi-file extensions:
 
 ```
-~/.step-cli/agent/extensions/
+~/.stepcode/agent/extensions/
 └── my-extension/
     ├── index.ts        # Entry point (exports default function)
     ├── tools.ts        # Helper module
@@ -245,7 +245,7 @@ Defer background resource startup until `session_start` or the command/tool/even
 **Package with dependencies** - for extensions that need npm packages:
 
 ```
-~/.step-cli/agent/extensions/
+~/.stepcode/agent/extensions/
 └── my-extension/
     ├── package.json    # Declares dependencies and entry points
     ├── package-lock.json
@@ -352,7 +352,7 @@ exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM)
 
 #### project_trust
 
-Fired before step decides whether to trust a project with dynamic configs (`.step-cli` or `.agents/skills`). It runs during startup and when session replacement (for example `/resume`) enters a cwd whose trust has not been resolved in the current process. Only user/global extensions and CLI `-e` extensions participate; project-local extensions are not loaded until after trust is resolved.
+Fired before step decides whether to trust a project with dynamic configs (`.stepcode` or `.agents/skills`). It runs during startup and when session replacement (for example `/resume`) enters a cwd whose trust has not been resolved in the current process. Only user/global extensions and CLI `-e` extensions participate; project-local extensions are not loaded until after trust is resolved.
 
 ```typescript
 pi.on("project_trust", async (event, ctx) => {
@@ -977,7 +977,7 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 
 Current working directory.
 
-Use `CONFIG_DIR_NAME` instead of hardcoding `.step-cli` when constructing project-local config paths. Rebranded distributions can use a different config directory name.
+Use `CONFIG_DIR_NAME` instead of hardcoding `.stepcode` when constructing project-local config paths. Rebranded distributions can use a different config directory name.
 
 ```typescript
 import { CONFIG_DIR_NAME, type ExtensionAPI } from "@step-harness/coding-agent";
@@ -2099,14 +2099,14 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
-- [read.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
-- [bash.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
-- [powershell.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/powershell.ts) - `PowerShellToolDetails`
-- [edit.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/edit.ts)
-- [write.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/write.ts)
-- [grep.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
-- [find.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
-- [ls.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
+- [read.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
+- [bash.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
+- [powershell.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/powershell.ts) - `PowerShellToolDetails`
+- [edit.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/edit.ts)
+- [write.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/write.ts)
+- [grep.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
+- [find.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
+- [ls.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
 
 ### Remote Execution
 
@@ -2231,7 +2231,7 @@ export default function (pi: ExtensionAPI) {
 
 ### Custom Rendering
 
-Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
+Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
 
 By default, tool output is wrapped in a `Box` that handles padding and background. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 

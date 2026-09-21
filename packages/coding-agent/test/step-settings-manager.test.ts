@@ -259,7 +259,7 @@ describe("Step settings manager decorator", () => {
 	it("treats missing project TOML as empty on load, reload and trust changes", async () => {
 		const fixture = makeRoot();
 		fixture.paths.global = join(fixture.root, "config.toml");
-		fixture.paths.project = join(fixture.projectDir, ".step-cli", "config.toml");
+		fixture.paths.project = join(fixture.projectDir, ".stepcode", "config.toml");
 		writeFileSync(fixture.paths.global, 'permissionPreset = "ask"\n');
 		const { manager } = makeManager(fixture);
 
@@ -271,7 +271,7 @@ describe("Step settings manager decorator", () => {
 		expect(manager.getStepProjectSettings()).toEqual({});
 		expect(manager.drainErrors()).toEqual([]);
 		expect(existsSync(fixture.paths.project)).toBe(false);
-		expect(existsSync(join(fixture.projectDir, ".step-cli"))).toBe(false);
+		expect(existsSync(join(fixture.projectDir, ".stepcode"))).toBe(false);
 
 		manager.setProjectStepSettings({ permissionPreset: "read-only" });
 		expect(manager.drainErrors()).toEqual([]);
@@ -306,7 +306,7 @@ describe("Step settings manager decorator", () => {
 
 		expect(manager.getStepSettingsPaths()).toEqual({
 			global: resolve(fixture.agentDir, "..", "config.toml"),
-			project: join(fixture.projectDir, ".step-cli", "config.toml"),
+			project: join(fixture.projectDir, ".stepcode", "config.toml"),
 		});
 	});
 
@@ -316,7 +316,7 @@ describe("Step settings manager decorator", () => {
 		writeFileSync(
 			path,
 			[
-				"# Step CLI configuration",
+				"# StepCode configuration",
 				"# hand written note",
 				"",
 				'defaultModel = "keep"',
@@ -334,7 +334,7 @@ describe("Step settings manager decorator", () => {
 		});
 
 		const written = readFileSync(path, "utf8");
-		expect(written.startsWith("# Step CLI configuration\n# hand written note\n")).toBe(true);
+		expect(written.startsWith("# StepCode configuration\n# hand written note\n")).toBe(true);
 		expect(readStepConfig(path)).toEqual({ defaultModel: "next", mcp_servers: { demo: { command: "demo" } } });
 	});
 
@@ -352,7 +352,7 @@ describe("Step global defaults", () => {
 
 	function makeConfigRoot(): { env: NodeJS.ProcessEnv; configRoot: string } {
 		const root = join(process.cwd(), `test-step-defaults-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-		const configRoot = join(root, ".step-cli");
+		const configRoot = join(root, ".stepcode");
 		mkdirSync(configRoot, { recursive: true });
 		roots.push(root);
 		return { env: { HOME: root, STEP_CODING_AGENT_DIR: join(configRoot, "agent") }, configRoot };

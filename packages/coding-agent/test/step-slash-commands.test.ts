@@ -225,7 +225,7 @@ describe("Step Pi slash command adapters", () => {
 	});
 
 	test("does not open feedback UI when feedback is disabled", async () => {
-		vi.stubEnv("STEP_CLI_DISABLE_FEEDBACK", "1");
+		vi.stubEnv("STEPCODE_DISABLE_FEEDBACK", "1");
 		const { commands } = registerCommands();
 		const notify = vi.fn();
 		const select = vi.fn();
@@ -271,7 +271,7 @@ describe("Step Pi slash command adapters", () => {
 	});
 
 	test("reports that feedback needs the interactive UI", async () => {
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const { commands } = registerCommands();
 		const notify = vi.fn();
 
@@ -286,8 +286,8 @@ describe("Step Pi slash command adapters", () => {
 	test("submits a shortcut comment without opening guided confirmation or attachments", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -316,14 +316,14 @@ describe("Step Pi slash command adapters", () => {
 	test("reads the current feedback identity when each shortcut is submitted", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const feedbackIdentity = vi
 			.fn()
-			.mockReturnValueOnce({ uid: "uid-before", username: "before@stepfun.com" })
-			.mockReturnValueOnce({ uid: "uid-current", username: "kris@stepfun.com" });
+			.mockReturnValueOnce({ uid: "uid-before", username: "before@example.test" })
+			.mockReturnValueOnce({ uid: "uid-current", username: "account@example.test" });
 		const { commands } = registerCommands({ feedbackIdentity });
 
 		const context = {
@@ -341,16 +341,16 @@ describe("Step Pi slash command adapters", () => {
 		const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(firstBody.context).toMatchObject({ uid: "uid-before", username: "before@stepfun.com" });
+		expect(firstBody.context).toMatchObject({ uid: "uid-before", username: "before@example.test" });
 		expect(secondBody.context).toMatchObject({
 			sessionId: "session-1",
 			uid: "uid-current",
-			username: "kris@stepfun.com",
+			username: "account@example.test",
 		});
 	});
 
 	test("cancels immediately when comment input is dismissed with Esc", async () => {
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const fetchMock = vi.fn<typeof fetch>();
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -378,8 +378,8 @@ describe("Step Pi slash command adapters", () => {
 		const diagnosticsDir = join(root, "diagnostics");
 		await mkdir(diagnosticsDir, { recursive: true });
 		await writeFile(join(diagnosticsDir, "input-trace-1.jsonl"), '{"src":"note","text":"failed"}\n');
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		vi.stubGlobal("fetch", vi.fn<typeof fetch>());
 		const { commands } = registerCommands();
 		const select = vi
@@ -412,8 +412,8 @@ describe("Step Pi slash command adapters", () => {
 			join(diagnosticsDir, "input-trace-line\nbreak-\x1b[2JOWNED.jsonl"),
 			'{"src":"note","text":"failed"}\n',
 		);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		vi.stubGlobal("fetch", vi.fn<typeof fetch>());
 		const { commands } = registerCommands();
 		const select = vi
@@ -454,9 +454,9 @@ describe("Step Pi slash command adapters", () => {
 		const secret = "ghp_ABCDEFGHIJKLMNOPQRST0123456789";
 		await mkdir(join(root, "logs"), { recursive: true });
 		await writeFile(devLogPath, `before\nError: renderer failed token=${secret}\nafter\n`);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -532,9 +532,9 @@ describe("Step Pi slash command adapters", () => {
 		temporaryRoots.push(root);
 		const sessionFile = join(root, "20260831_filename-session.jsonl");
 		await writeFile(sessionFile, '{"type":"session","id":"header-session"}\n');
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -571,9 +571,9 @@ describe("Step Pi slash command adapters", () => {
 		await writeFile(sessionFile, '{"type":"session"}\n');
 		await mkdir(join(root, "logs"), { recursive: true });
 		await writeFile(resolveStderrDevLogPath(root), "Error: renderer failed\n");
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -608,9 +608,9 @@ describe("Step Pi slash command adapters", () => {
 	test("explains when no matching session archive can be attached", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 })));
 		const { commands } = registerCommands();
 		const select = vi.fn().mockResolvedValue("bug: Crash, error, hang, or broken behavior.");
@@ -641,8 +641,8 @@ describe("Step Pi slash command adapters", () => {
 	test("does not deliver or track a submission cancelled at final confirmation", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const fetchMock = vi.fn<typeof fetch>();
 		vi.stubGlobal("fetch", fetchMock);
 		const track = vi.fn();
@@ -671,8 +671,8 @@ describe("Step Pi slash command adapters", () => {
 	test("uses the focused TUI consent overlay and cancels without delivery", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const fetchMock = vi.fn<typeof fetch>();
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -709,9 +709,9 @@ describe("Step Pi slash command adapters", () => {
 		temporaryRoots.push(root);
 		const sessionFile = join(root, "20260831_session-1.jsonl");
 		await writeFile(sessionFile, '{"type":"session"}\n');
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
@@ -752,9 +752,9 @@ describe("Step Pi slash command adapters", () => {
 		temporaryRoots.push(root);
 		const sessionFile = join(root, "20260831_session-1.jsonl");
 		await writeFile(sessionFile, '{"type":"session"}\n');
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 413 })));
 		const { commands } = registerCommands();
 		const select = vi
@@ -792,9 +792,9 @@ describe("Step Pi slash command adapters", () => {
 		temporaryRoots.push(root);
 		const sessionFile = join(root, "20260831_session-1.jsonl");
 		await writeFile(sessionFile, '{"type":"session"}\n');
-		vi.stubEnv("STEP_CLI_STORAGE_ROOT_DIR", root);
-		vi.stubEnv("STEP_CLI_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
-		vi.stubEnv("STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		const fetchMock = vi
 			.fn<typeof fetch>()
 			.mockResolvedValueOnce(new Response(null, { status: 204 }))

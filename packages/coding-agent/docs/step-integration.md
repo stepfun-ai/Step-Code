@@ -14,7 +14,7 @@ Step extension; it does not create a second event loop or a second TUI.
 - `AgentSessionRuntime` remains the session and agent-loop authority.
 - `extensions/step-provider` supplies the Step model catalog and browser OAuth
   flow through pi's provider API.
-- `step-cli.ts` is a forwarding facade for hosts that need a Step-named
+- `stepcode.ts` is a forwarding facade for hosts that need a Step-named
   boundary; it delegates prompt, queue, model, event, and disposal operations
   directly to pi. Event subscriptions follow the active session when pi handles
   `/new`, `/resume`, or `/fork`.
@@ -43,8 +43,8 @@ Step extension; it does not create a second event loop or a second TUI.
 
 The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
 `STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, Pi's
-native layout is `~/.step-cli/agent/sessions/<encoded-cwd>`. Project-local
-resources use `.step-cli/`. When no explicit theme has been saved, the
+native layout is `~/.stepcode/agent/sessions/<encoded-cwd>`. Project-local
+resources use `.stepcode/`. When no explicit theme has been saved, the
 built-in `step-blue` palette is used for either terminal appearance, without
 separate blue variants. `step-violet-light/step-violet` remains available for
 automatic violet light/dark switching. Non-interactive
@@ -68,7 +68,7 @@ The built-in Step provider uses pi's `anthropic-messages` adapter. Pi appends
 accepts the older `.../v1` and `.../v1/messages` spellings; the provider
 normalizes them before registering the model so the version segment is never
 sent twice. Startup also repairs the same stale spellings in an existing
-`.step-cli/agent/models.json`, including model-level overrides. If an older
+`.stepcode/agent/models.json`, including model-level overrides. If an older
 legacy Step projection recorded a built-in Step id as an OpenAI-compatible
 model, startup restores its `anthropic-messages` API and Step endpoint as well.
 Upgrading from an earlier Step build therefore does not require signing
@@ -80,10 +80,10 @@ that override them:
 
 | Profile | Credential | Model base URL | Login page | Overrides |
 | --- | --- | --- | --- | --- |
-| `step_plan` | browser | `https://api.stepfun.com/step_plan` | `https://platform.stepfun.com` | `STEP_CLI_STEP_PLAN_API_URL`, `STEP_CLI_DEVCENTER_AUTH_CN_URL` |
-| `step_plan_oversea` | browser | `https://api.stepfun.ai/step_plan` | `https://platform.stepfun.ai` | `STEP_CLI_STEP_PLAN_API_OVERSEA_URL`, `STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL` |
-| `platform_cn` | API key | `https://api.stepfun.com/v1` | `https://platform.stepfun.com/interface-key` | `STEP_CLI_PLATFORM_API_URL`, `STEP_CLI_PLATFORM_AUTH_URL` |
-| `platform_oversea` | API key | `https://api.stepfun.ai/v1` | `https://platform.stepfun.ai/interface-key` | `STEP_CLI_PLATFORM_API_OVERSEA_URL`, `STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL` |
+| `step_plan` | browser | `https://api.stepfun.com/step_plan` | `https://platform.stepfun.com` | `STEPCODE_STEP_PLAN_API_URL`, `STEPCODE_DEVCENTER_AUTH_CN_URL` |
+| `step_plan_oversea` | browser | `https://api.stepfun.ai/step_plan` | `https://platform.stepfun.ai` | `STEPCODE_STEP_PLAN_API_OVERSEA_URL`, `STEPCODE_DEVCENTER_AUTH_OVERSEA_URL` |
+| `platform_cn` | API key | `https://api.stepfun.com/v1` | `https://platform.stepfun.com/interface-key` | `STEPCODE_PLATFORM_API_URL`, `STEPCODE_PLATFORM_AUTH_URL` |
+| `platform_oversea` | API key | `https://api.stepfun.ai/v1` | `https://platform.stepfun.ai/interface-key` | `STEPCODE_PLATFORM_API_OVERSEA_URL`, `STEPCODE_DEVCENTER_AUTH_OVERSEA_URL` |
 
 The chosen profile is stored in `auth.json` next to the credential, and it is
 the single source of the region afterwards: login writes the profile base URL to
@@ -96,14 +96,14 @@ profile.
 
 The Step tool profile also registers `search_web`, backed by the remote
 `stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
-resolved from an explicit `step --api-key`, then `STEP_CLI_SEARCH_API_KEY`,
-`STEPCLI_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
+resolved from an explicit `step --api-key`, then `STEPCODE_SEARCH_API_KEY`,
+`STEPCODE_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
 	only as a Bearer header. The `step_plan_oversea` and `platform_oversea`
 	login profiles use `https://api.stepfun.ai/v1/mcp/web_search/mcp`;
 	`step_plan` and `platform_cn` use
 	`https://api.stepfun.com/v1/mcp/web_search/mcp`. An unrecognized profile
 	falls back to that same mainland endpoint.
-	`STEP_CLI_SEARCH_WEB_MCP_URL` and `STEPCLI_SEARCH_WEB_MCP_URL` override this
+	`STEPCODE_SEARCH_WEB_MCP_URL` and `STEPCODE_SEARCH_WEB_MCP_URL` override this
 	profile-based selection. This adapter does not add a separate search
 	credential store or `integrations.search` settings surface. The
 	`STEP_API_KEY` environment variable is deliberately excluded from that
@@ -117,7 +117,7 @@ Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
 binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
 operations to the active Step agent root. Runtime replacement flows (`/new`,
 `/resume`, `/fork`, and `/import`) use that same bound factory, so a later
-operation cannot fall back to Pi's default `~/.step-cli/agent/sessions` directory.
+operation cannot fall back to Pi's default `~/.stepcode/agent/sessions` directory.
 Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
@@ -134,8 +134,8 @@ does not pass these options and keeps its upstream defaults.
 Step also injects a settings decorator through `settingsManagerFactory`. The
 decorator delegates Pi's complete `SettingsManager` API, including global and
 project merging, trust, reload, and flush. Product-only permission policy is
-kept in the unified `config.toml` files at `~/.step-cli/config.toml` and
-`<cwd>/.step-cli/config.toml`, with the same global-then-project precedence and
+kept in the unified `config.toml` files at `~/.stepcode/config.toml` and
+`<cwd>/.stepcode/config.toml`, with the same global-then-project precedence and
 file locking. This keeps fields such as `permissionPreset` and `autoResume` out
 of Pi's native `settings.json` schema while leaving ordinary Pi startup
 unchanged.
@@ -338,7 +338,7 @@ separation, not model-specific restrictions on which task tools are available.
 
 ## Compatibility matrix
 
-The following is the current audit against the previous Step CLI. “Native”
+The following is the current audit against the previous StepCode. “Native”
 means the behavior is supplied by Pi and is intentionally not duplicated in
 the Step layer; “adapter” means a small wrapper in `src/step/` or the Step
 extension. Entries marked “separate product” require a gateway or external
@@ -347,11 +347,11 @@ service and are not silently faked by this fork.
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
-| Step CLI OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
-| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.step-cli` |
+| StepCode OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
+| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
-| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `step-cli.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
+| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `stepcode.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
 | Legacy top-level `models`, `serve`, `goal`, and related gateway commands | Previous command dispatcher | separate product; Pi package commands remain unchanged |

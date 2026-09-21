@@ -4,7 +4,7 @@
 
 import type { ThinkingLevel } from "@step-harness/agent-core";
 import chalk from "chalk";
-import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
+import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, IS_STEP_ENTRYPOINT } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import type { TuiMode } from "../core/settings-manager.ts";
 import { getStepDefaultProvider } from "../step/defaults.ts";
@@ -507,29 +507,26 @@ export function parseArgs(args: string[]): Args {
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
-	const defaultProvider = APP_NAME === "step" ? getStepDefaultProvider() : "google";
-	const stepEnvironmentText =
-		APP_NAME === "step"
-			? [
-					"  STEP_PROVIDER                    Default provider for the step entrypoint",
-					"  STEP_MODEL                       Default model for the step entrypoint",
-					"  STEP_API_KEY                     API key for the Step provider",
-					"  STEP_BASE_URL                    Step provider API base URL",
-					"  STEP_CLI_DEFAULT_THEME           Default interactive theme for step",
-					"  STEP_CLI_DISABLE_PI_SERVICES     Disable Pi update/catalog services (enabled by step)",
-					"  STEP_APPROVAL_MODE               Default tool approval mode (confirm|auto|strict)",
-					"  STEP_NON_INTERACTIVE_APPROVAL    Fallback when no approval UI is available (allow|deny)",
-					"  STEP_AUTOPILOT                   Enable bounded model-error auto-resume",
-				].join("\n")
-			: "";
-	const stepPermissionOptionsText =
-		APP_NAME === "step"
-			? "\n  --approval-mode <mode>           Tool approval mode: confirm, auto, or strict\n  --non-interactive-approval <mode> Fallback without a UI: allow or deny\n  --tool-override <tool=mode>       Per-tool override (repeatable; mode: allow, confirm, deny)"
-			: "";
-	const stepAuthCommandsText =
-		APP_NAME === "step"
-			? `\n  ${APP_NAME} login                       Sign in with the Step account (OAuth)\n  ${APP_NAME} logout                      Remove the stored Step credential`
-			: "";
+	const defaultProvider = IS_STEP_ENTRYPOINT ? getStepDefaultProvider() : "google";
+	const stepEnvironmentText = IS_STEP_ENTRYPOINT
+		? [
+				"  STEP_PROVIDER                    Default provider for the step entrypoint",
+				"  STEP_MODEL                       Default model for the step entrypoint",
+				"  STEP_API_KEY                     API key for the Step provider",
+				"  STEP_BASE_URL                    Step provider API base URL",
+				"  STEPCODE_DEFAULT_THEME           Default interactive theme for step",
+				"  STEPCODE_DISABLE_PI_SERVICES     Disable upstream update/catalog services (enabled by step)",
+				"  STEP_APPROVAL_MODE               Default tool approval mode (confirm|auto|strict)",
+				"  STEP_NON_INTERACTIVE_APPROVAL    Fallback when no approval UI is available (allow|deny)",
+				"  STEP_AUTOPILOT                   Enable bounded model-error auto-resume",
+			].join("\n")
+		: "";
+	const stepPermissionOptionsText = IS_STEP_ENTRYPOINT
+		? "\n  --approval-mode <mode>           Tool approval mode: confirm, auto, or strict\n  --non-interactive-approval <mode> Fallback without a UI: allow or deny\n  --tool-override <tool=mode>       Per-tool override (repeatable; mode: allow, confirm, deny)"
+		: "";
+	const stepAuthCommandsText = IS_STEP_ENTRYPOINT
+		? `\n  ${APP_NAME} login                       Sign in with the Step account (OAuth)\n  ${APP_NAME} logout                      Remove the stored Step credential`
+		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags

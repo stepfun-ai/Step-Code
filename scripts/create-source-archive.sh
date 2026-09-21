@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the deterministic source archive uploaded with GitHub releases.
+# Create the deterministic source archive consumed by the release environment.
 #
 # Usage:
 #   npm run hydrate:model-data
@@ -126,7 +126,7 @@ required_paths=(
     "packages/providers/src/image-models.generated.ts"
     "packages/providers/src/providers/data/.manifest.json"
     "packages/coding-agent/package.json"
-    "apps/cli/src/bun/step-cli.ts"
+    "apps/cli/src/bun/stepcode.ts"
     "apps/cli/src/main.ts"
     "packages/coding-agent/src/step/stdio-host.ts"
     "packages/coding-agent/src/utils/image-resize-worker.ts"

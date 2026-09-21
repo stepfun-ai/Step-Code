@@ -4,7 +4,7 @@
  * This intentionally targets credentials rather than general PII: a feedback
  * comment or a session transcript still needs its ordinary words, URLs, and
  * paths to be useful, while credential-shaped values must not survive the exit
- * boundary. It is the harness counterpart of step-cli's
+ * boundary. It is the harness counterpart of stepcode's
  * `packages/utils/src/secret-redaction.ts`; the feedback bundle relies on it
  * because pi's session store writes raw JSON with no write-time redaction.
  *

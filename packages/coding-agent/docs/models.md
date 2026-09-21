@@ -1,6 +1,6 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.step-cli/agent/models.json`.
+Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.stepcode/agent/models.json`.
 
 ## Table of Contents
 
@@ -393,7 +393,7 @@ By default step sends per-tool `eager_input_streaming: true`. If a proxy or Anth
 
 Some Anthropic models require adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) instead of the legacy budget-based thinking payload. Built-in models set this automatically. For custom providers or aliases that route to those models, set `forceAdaptiveThinking` to `true`.
 
-A model injected through `STEPCLI_CONFIG_PATH` inherits `forceAdaptiveThinking` and the model's `thinkingLevelMap` from the built-in catalog when its wire model id matches a catalog entry and the wire dialect is `anthropic-messages`; an alias the catalog does not know is left untouched. To opt such an alias in, state the flag in the injected config:
+A model injected through `STEPCODE_CONFIG_PATH` inherits `forceAdaptiveThinking` and the model's `thinkingLevelMap` from the built-in catalog when its wire model id matches a catalog entry and the wire dialect is `anthropic-messages`; an alias the catalog does not know is left untouched. To opt such an alias in, state the flag in the injected config:
 
 ```json
 {
@@ -445,7 +445,7 @@ Built-in Anthropic models enable `supportsStrictTools` in their model metadata. 
 | `supportsLongCacheRetention` | Whether the provider accepts Anthropic long cache retention (`cache_control.ttl: "1h"`) when cache retention is `long`. Default: `true`. |
 | `sendSessionAffinityHeaders` | Whether to send `x-session-affinity` from the session id when caching is enabled. Default: auto-detected for known providers. |
 | `supportsCacheControlOnTools` | Whether the provider accepts Anthropic-style `cache_control` markers on tool definitions. Default: `true`. |
-| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Built-in adaptive models set this automatically. A model injected through `STEPCLI_CONFIG_PATH` inherits it when its wire model id matches a built-in catalog entry. Default: `false`. |
+| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Built-in adaptive models set this automatically. A model injected through `STEPCODE_CONFIG_PATH` inherits it when its wire model id matches a built-in catalog entry. Default: `false`. |
 | `allowEmptySignature` | Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: `false`. |
 | `supportsStrictTools` | Whether the provider accepts strict JSON-schema tool definitions. Default: `false`; built-in Anthropic models enable it in generated metadata. |
 

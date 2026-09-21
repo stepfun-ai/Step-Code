@@ -4,22 +4,22 @@ Step uses JSON settings files with project settings overriding global settings.
 
 | Location | Scope |
 |----------|-------|
-| `~/.step-cli/agent/settings.json` | Global (all projects) |
-| `.step-cli/settings.json` | Project (current directory) |
+| `~/.stepcode/agent/settings.json` | Global (all projects) |
+| `.stepcode/settings.json` | Project (current directory) |
 
 Edit directly or use `/settings` for common options. To save startup model defaults interactively, use `/model` and press Ctrl+S on the desired model. To save the startup thinking level, use `/thinking` and press Ctrl+S.
 
 ## Project Trust
 
-On interactive startup, step asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.step-cli/agent/trust.json`. Trusting a project allows step to load `.step-cli/settings.json` and `.step-cli` resources, install missing project packages, and execute project extensions.
+On interactive startup, step asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.stepcode/agent/trust.json`. Trusting a project allows step to load `.stepcode/settings.json` and `.stepcode` resources, install missing project packages, and execute project extensions.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
-If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.step-cli/agent/settings.json`, or change it with `/settings`.
+If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.stepcode/agent/settings.json`, or change it with `/settings`.
 
 `step config` and package commands use the same project trust flow, except `step update` never prompts. Pass `--approve` to trust project-local settings for one command or `--no-approve` to ignore them.
 
-Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.step-cli/agent/trust.json` only; the current session is not reloaded, so restart step for changes to take effect.
+Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.stepcode/agent/trust.json` only; the current session is not reloaded, so restart step for changes to take effect.
 
 ## All Settings
 
@@ -210,7 +210,7 @@ Windows paths in JSON must use forward slashes or escaped backslashes:
 }
 ```
 
-`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.step-cli/agent/npm/`; project-scoped npm packages install under `.step-cli/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
+`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.stepcode/agent/npm/`; project-scoped npm packages install under `.stepcode/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
 
 ### Tools
 
@@ -243,7 +243,7 @@ An empty array starts with no built-in tools while preserving extension and SDK 
 | `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths, plus `~`. |
 
 ```json
-{ "sessionDir": ".step-cli/sessions" }
+{ "sessionDir": ".stepcode/sessions" }
 ```
 
 When multiple sources specify a session directory, precedence is `--session-dir`, `STEP_CODING_AGENT_SESSION_DIR`, then `sessionDir` in settings.json.
@@ -271,7 +271,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 These settings define where to load extensions, skills, prompts, and themes from.
 
-Paths in `~/.step-cli/agent/settings.json` resolve relative to `~/.step-cli/agent`. Paths in `.step-cli/settings.json` resolve relative to `.step-cli`. Absolute paths and `~` are supported.
+Paths in `~/.stepcode/agent/settings.json` resolve relative to `~/.stepcode/agent`. Paths in `.stepcode/settings.json` resolve relative to `.stepcode`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -340,16 +340,16 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.step-cli/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.stepcode/settings.json`) override global settings. Nested objects are merged:
 
 ```json
-// ~/.step-cli/agent/settings.json (global)
+// ~/.stepcode/agent/settings.json (global)
 {
   "theme": "dark",
   "compaction": { "enabled": true, "reserveTokens": 16384 }
 }
 
-// .step-cli/settings.json (project)
+// .stepcode/settings.json (project)
 {
   "compaction": { "reserveTokens": 8192 }
 }

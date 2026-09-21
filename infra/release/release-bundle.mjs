@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** Build and optionally publish the versioned Step CLI binary bundle. */
+/** Build and optionally publish the versioned StepCode binary bundle. */
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -75,53 +75,14 @@ async function sha256(filePath) {
 	return digest.digest("hex");
 }
 
-function objectKey(...parts) {
-	return parts.map((part) => String(part).replace(/^\/+|\/+$/gu, "")).filter(Boolean).join("/");
-}
-
-function contentType(fileName) {
-	if (fileName.endsWith(".json")) return "application/json; charset=utf-8";
-	if (fileName.endsWith(".sh")) return "text/x-shellscript; charset=utf-8";
-	if (fileName.endsWith(".ps1")) return "text/plain; charset=utf-8";
-	if (fileName.endsWith(".zip")) return "application/zip";
-	if (fileName.endsWith(".tar.gz")) return "application/gzip";
-	return "application/octet-stream";
-}
-
-async function uploadFiles(files, config) {
-	const { TosClient } = await import("@volcengine/tos-sdk");
-	const client = new TosClient({
-		endpoint: config.endpoint,
-		region: config.region,
-		accessKeyId: config.accessKeyId,
-		accessKeySecret: config.accessKeySecret,
-	});
-	for (const file of files) {
-		const key = objectKey(config.prefix, file.remoteKey);
-		process.stdout.write(`[upload] ${file.localPath} -> tos://${config.bucket}/${key}\n`);
-		await client.putObjectFromFile({
-			bucket: config.bucket,
-			key,
-			filePath: file.localPath,
-			contentType: contentType(file.localPath),
-		});
-	}
-}
-
-function requiredEnv(name) {
-	const value = process.env[name]?.trim();
-	if (!value) throw new Error(`${name} is required for release upload`);
-	return value;
-}
-
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
 	if (args.has("help")) {
-		process.stdout.write("Usage: node infra/release/release-bundle.mjs --version <vX.Y.Z> --base-url <url> [--upload] [--dry-run]\n");
+		process.stdout.write("Usage: node infra/release/release-bundle.mjs --version <vX.Y.Z> --base-url <url> [--dry-run]\n");
 		return;
 	}
 	const version = normalizeReleaseVersion(args.get("version") ?? process.env.CI_COMMIT_TAG ?? process.env.RELEASE_BUNDLE_VERSION);
-	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://capy-public-dev.tos-cn-shanghai.volces.com/stepcli").replace(/\/+$/u, "");
+	const baseUrl = String(args.get("base-url") ?? process.env.STEP_RELEASE_BASE_URL ?? "https://release.example.test/stepcode").replace(/\/+$/u, "");
 	const dryRun = args.has("dry-run");
 	const releaseDir = path.join(repoRoot, "dist", "release");
 	if (dryRun) {
@@ -131,13 +92,13 @@ async function main() {
 
 	await rm(releaseDir, { recursive: true, force: true });
 	await mkdir(releaseDir, { recursive: true });
-	const buildDir = await mkdtemp(path.join(os.tmpdir(), "step-cli-release-build-"));
+	const buildDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-release-build-"));
 	try {
 		await run("bash", ["scripts/build-binaries.sh", "--product", "step", "--offline-model-data", "--out", buildDir], {
 			env: {
-				STEP_CLI_BUILD_VERSION: version,
-				STEP_CLI_BUILD_CHANNEL: "release",
-				STEP_CLI_BUILD_COMMIT: process.env.CI_COMMIT_SHORT_SHA ?? "",
+				STEPCODE_BUILD_VERSION: version,
+				STEPCODE_BUILD_CHANNEL: "release",
+				STEPCODE_BUILD_COMMIT: process.env.CI_COMMIT_SHORT_SHA ?? "",
 			},
 		});
 		const versionDir = path.join(releaseDir, version);
@@ -165,26 +126,7 @@ async function main() {
 			});
 		}
 
-		if (args.has("upload")) {
-			const config = {
-				endpoint: requiredEnv("STEP_TOS_ENDPOINT"),
-				region: requiredEnv("STEP_TOS_REGION"),
-				bucket: requiredEnv("STEP_TOS_BUCKET"),
-				accessKeyId: requiredEnv("STEP_TOS_ACCESS_KEY"),
-				accessKeySecret: requiredEnv("STEP_TOS_SECRET_KEY"),
-				prefix: process.env.STEP_TOS_PREFIX ?? "stepcli",
-			};
-			const files = [
-				...artifacts.map((artifact) => ({ localPath: path.join(versionDir, artifact.fileName), remoteKey: objectKey(version, artifact.fileName) })),
-				{ localPath: checksumsPath, remoteKey: objectKey(version, "SHA256SUMS") },
-				{ localPath: manifestPath, remoteKey: objectKey(version, "manifest.json") },
-				{ localPath: latestPath, remoteKey: "latest.json" },
-				{ localPath: path.join(releaseDir, "install.sh"), remoteKey: "install.sh" },
-				{ localPath: path.join(releaseDir, "install.ps1"), remoteKey: "install.ps1" },
-			];
-			await uploadFiles(files, config);
-		}
-		process.stdout.write(`Step CLI ${version} bundle ready at ${releaseDir}\n`);
+		process.stdout.write(`StepCode ${version} bundle ready at ${releaseDir}\n`);
 	} finally {
 		await rm(buildDir, { recursive: true, force: true });
 	}

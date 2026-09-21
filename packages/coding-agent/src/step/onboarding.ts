@@ -43,8 +43,8 @@ const PROFILE_DEFINITIONS: Record<
 		baseUrl: "https://api.stepfun.com/step_plan",
 		authBaseUrl: "https://platform.stepfun.com",
 		keyPageUrl: "https://platform.stepfun.com/interface-key",
-		baseUrlEnv: ["STEP_CLI_STEP_PLAN_API_URL"],
-		authBaseUrlEnv: ["STEP_CLI_DEVCENTER_AUTH_CN_URL"],
+		baseUrlEnv: ["STEPCODE_STEP_PLAN_API_URL"],
+		authBaseUrlEnv: ["STEPCODE_DEVCENTER_AUTH_CN_URL"],
 	},
 	step_plan_oversea: {
 		title: "Step Plan Oversea (https://platform.stepfun.ai/step-plan)",
@@ -53,8 +53,8 @@ const PROFILE_DEFINITIONS: Record<
 		baseUrl: "https://api.stepfun.ai/step_plan",
 		authBaseUrl: "https://platform.stepfun.ai",
 		keyPageUrl: "https://platform.stepfun.ai/interface-key",
-		baseUrlEnv: ["STEP_CLI_STEP_PLAN_API_OVERSEA_URL"],
-		authBaseUrlEnv: ["STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL"],
+		baseUrlEnv: ["STEPCODE_STEP_PLAN_API_OVERSEA_URL"],
+		authBaseUrlEnv: ["STEPCODE_DEVCENTER_AUTH_OVERSEA_URL"],
 	},
 	platform_cn: {
 		title: "Step Platform (API key · https://platform.stepfun.com/interface-key)",
@@ -63,8 +63,8 @@ const PROFILE_DEFINITIONS: Record<
 		baseUrl: "https://api.stepfun.com/v1",
 		authBaseUrl: "https://platform.stepfun.com",
 		keyPageUrl: "https://platform.stepfun.com/interface-key",
-		baseUrlEnv: ["STEP_CLI_PLATFORM_API_URL"],
-		authBaseUrlEnv: ["STEP_CLI_PLATFORM_AUTH_URL"],
+		baseUrlEnv: ["STEPCODE_PLATFORM_API_URL"],
+		authBaseUrlEnv: ["STEPCODE_PLATFORM_AUTH_URL"],
 	},
 	platform_oversea: {
 		title: "Step Platform Oversea(API key · https://platform.stepfun.ai/interface-key)",
@@ -73,8 +73,8 @@ const PROFILE_DEFINITIONS: Record<
 		baseUrl: "https://api.stepfun.ai/v1",
 		authBaseUrl: "https://platform.stepfun.ai",
 		keyPageUrl: "https://platform.stepfun.ai/interface-key",
-		baseUrlEnv: ["STEP_CLI_PLATFORM_API_OVERSEA_URL"],
-		authBaseUrlEnv: ["STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL"],
+		baseUrlEnv: ["STEPCODE_PLATFORM_API_OVERSEA_URL"],
+		authBaseUrlEnv: ["STEPCODE_DEVCENTER_AUTH_OVERSEA_URL"],
 	},
 };
 

@@ -42,9 +42,9 @@ ARCHIVE_PREFIX="step"
 # Step's product identity is independent from the upstream Pi package version.
 # Release CI supplies these values from the tag; local/source builds use the
 # stable Step fallback and a dev channel.
-STEP_BUILD_VERSION="${STEP_CLI_BUILD_VERSION:-0.3.1}"
-STEP_BUILD_CHANNEL="${STEP_CLI_BUILD_CHANNEL:-dev}"
-STEP_BUILD_COMMIT="${STEP_CLI_BUILD_COMMIT:-}"
+STEP_BUILD_VERSION="${STEPCODE_BUILD_VERSION:-0.3.1}"
+STEP_BUILD_CHANNEL="${STEPCODE_BUILD_CHANNEL:-dev}"
+STEP_BUILD_COMMIT="${STEPCODE_BUILD_COMMIT:-}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -116,10 +116,10 @@ fi
 # Keep the envelope dimension bounded and consistent with the old short-SHA
 # build metadata even when CI passes a full commit hash.
 STEP_BUILD_COMMIT="${STEP_BUILD_COMMIT:0:12}"
-export STEP_CLI_BUILD_VERSION="$STEP_BUILD_VERSION"
-export STEP_CLI_BUILD_CHANNEL="$STEP_BUILD_CHANNEL"
+export STEPCODE_BUILD_VERSION="$STEP_BUILD_VERSION"
+export STEPCODE_BUILD_CHANNEL="$STEP_BUILD_CHANNEL"
 if [[ -n "$STEP_BUILD_COMMIT" ]]; then
-    export STEP_CLI_BUILD_COMMIT="$STEP_BUILD_COMMIT"
+    export STEPCODE_BUILD_COMMIT="$STEP_BUILD_COMMIT"
 fi
 
 # Validate platform if specified
@@ -259,9 +259,9 @@ for platform in "${PLATFORMS[@]}"; do
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
     # standalone binary before step starts (see #7684).
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
+        bun build --compile --no-compile-autoload-bunfig '--env=STEPCODE_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/stepcode.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
     else
-        bun build --compile --no-compile-autoload-bunfig '--env=STEP_CLI_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/step-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
+        bun build --compile --no-compile-autoload-bunfig '--env=STEPCODE_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/stepcode.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
     fi
 done
 
@@ -278,14 +278,14 @@ for platform in "${PLATFORMS[@]}"; do
         node -e '
             const fs = require("fs");
             const file = process.argv[1];
-            const version = process.env.STEP_CLI_BUILD_VERSION;
+            const version = process.env.STEPCODE_BUILD_VERSION;
             const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
             manifest.version = version;
             fs.writeFileSync(file, `${JSON.stringify(manifest, null, "\t")}\n`);
         ' "$OUTPUT_DIR/$platform/package.json"
     fi
     cp README.md "$OUTPUT_DIR/$platform/"
-    # Step CLI keeps changelogs per package; older Pi source archives also
+    # StepCode keeps changelogs per package; older Pi source archives also
     # carried a repository-level CHANGELOG.md. Preserve it when present without
     # making the standalone Step build depend on a file this repository does not
     # have.
@@ -320,11 +320,6 @@ for platform in "${PLATFORMS[@]}"; do
         cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir/"
     fi
 
-    # Pre-fetch the ripgrep/fd search binaries for this target into tools/ so the
-    # archive ships them and the installer copies (not downloads) them into the
-    # runtime tools dir. Set STEP_SKIP_BUNDLED_TOOLS=1 for offline builds; the
-    # installer/runtime GitHub download then remains the only source.
-    node ../../scripts/copy-search-tools.mjs --target "$platform" --out "$OUTPUT_DIR/$platform"
 done
 
 # Create archives

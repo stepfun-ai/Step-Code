@@ -20,7 +20,7 @@ function printUsage() {
 
 Builds and packs internal workspace packages, then installs the tarballs into an
 isolated directory outside the repository for local runtime smoke testing. This
-is a development check only; Step CLI releases standalone binaries.
+is a development check only; StepCode releases standalone binaries.
 
 Options:
   --out <dir>          Output directory. Defaults to a new directory under ${tmpdir()}
@@ -220,7 +220,7 @@ const options = parseArgs();
 const repoRoot = process.cwd();
 const rootPackageJson = readPackageJson(repoRoot);
 
-if (rootPackageJson.name !== "step-cli") {
+if (rootPackageJson.name !== "stepcode") {
 	throw new Error("Run this script from the repository root");
 }
 
