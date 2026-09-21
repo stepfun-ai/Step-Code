@@ -153,7 +153,7 @@ describe("createUltraloopOptInExtension", () => {
 		createUltraloopOptInExtension({ enabled: true })(enabled.api);
 		expect(enabled.handlers.has("before_agent_start")).toBe(true);
 		expect(enabled.handlers.has("tool_call")).toBe(true);
-		expect(enabled.handlers.has("agent_end")).toBe(true);
+		expect(enabled.handlers.has("agent_settled")).toBe(true);
 		expect(enabled.handlers.has("session_start")).toBe(true);
 		expect(enabled.commands.has("ultraloop")).toBe(true);
 
@@ -228,14 +228,14 @@ describe("createUltraloopOptInExtension", () => {
 		expect(h.entries).toEqual([]);
 	});
 
-	test("agent_end resets the per-turn flag", () => {
+	test("agent_settled resets the per-turn flag", () => {
 		const h = harness();
 		install(h);
 		h.handlers.get("before_agent_start")?.({
 			type: "before_agent_start",
 			prompt: "ultraloop: audit",
 		} as never);
-		h.handlers.get("agent_end")?.({ type: "agent_end", messages: [] } as never);
+		h.handlers.get("agent_settled")?.({ type: "agent_settled" } as never);
 		h.handlers.get("tool_call")?.({
 			type: "tool_call",
 			toolName: "workflow",
@@ -363,7 +363,7 @@ describe("createUltraloopOptInExtension", () => {
 		} as never);
 		expect(turnState.budgetTotal).toBe(500_000);
 
-		h.handlers.get("agent_end")?.({ type: "agent_end", messages: [] } as never);
+		h.handlers.get("agent_settled")?.({ type: "agent_settled" } as never);
 		expect(turnState.budgetTotal).toBeUndefined();
 
 		h.handlers.get("before_agent_start")?.({
@@ -377,4 +377,18 @@ describe("createUltraloopOptInExtension", () => {
 		h.handlers.get("session_start")?.({ type: "session_start" } as never);
 		expect(turnState.budgetTotal).toBeUndefined();
 	});
+});
+
+test("internal attempt endings retain workflow consent and the turn budget until settlement", () => {
+	const h = harness();
+	const turnState: UltraloopTurnState = {};
+	createUltraloopOptInExtension({ enabled: true, vmExecutor: () => {}, turnState })(h.api);
+	h.handlers.get("before_agent_start")?.({ prompt: "ultracode +500k audit" } as never);
+	h.handlers.get("agent_end")?.({ type: "agent_end", messages: [] } as never);
+	h.handlers.get("agent_start")?.({ type: "agent_start" } as never);
+	h.handlers.get("tool_call")?.({ toolName: "workflow", toolCallId: "after-compaction" } as never);
+	expect(h.entries).toEqual([]);
+	expect(turnState.budgetTotal).toBe(500_000);
+	h.handlers.get("agent_settled")?.({ type: "agent_settled" } as never);
+	expect(turnState.budgetTotal).toBeUndefined();
 });

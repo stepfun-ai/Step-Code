@@ -6,8 +6,9 @@
  *   1) per-turn signal: the keyword "ultraloop" (or Claude Code's spelling
  *      "ultracode") or an explicit trigger phrase in the current message.
  *      Attaches a customType:"ultraloop-opt-in" system-reminder to exactly
- *      that turn; the flag resets on agent_end. A "+500k"-style token target
- *      in the same message becomes the turn's default workflow budget.
+ *      that turn; the flag resets on agent_settled after retries and compaction.
+ *      A "+500k"-style token target in the same message becomes the turn's
+ *      default workflow budget.
  *
  *   2) session-standing mode: the user turns on ultraloop for the whole
  *      session via /ultraloop on. A session-scoped system-reminder is
@@ -155,8 +156,9 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 			pi.appendEntry("ultraloop-opt-in", { offConsentCall: true, toolCallId: event.toolCallId });
 		});
 
-		// Per-turn opt-in and token target never outlive their turn; session-standing mode persists.
-		pi.on("agent_end", () => {
+		// Internal agent_end events also fire before retries and compaction recovery.
+		// Clear only when the product run settles; the next prompt also replaces this state.
+		pi.on("agent_settled", () => {
 			optedInThisTurn = false;
 			setTurnBudget(undefined);
 		});
