@@ -35,7 +35,6 @@ const STEP_UPDATE_TARGETS = [
 	"node_modules",
 	"package.json",
 	"README.md",
-	"CHANGELOG.md",
 	"photon_rs_bg.wasm",
 ] as const;
 

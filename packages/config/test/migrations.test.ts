@@ -10,16 +10,27 @@ import {
 } from "../src/index.ts";
 
 let tempDir: string | undefined;
+const tempCwds: string[] = [];
 
 function makeAgentDir(): string {
 	tempDir = mkdtempSync(join(tmpdir(), "step-config-mig-"));
 	return tempDir;
 }
 
+/** Create a project cwd temp dir tracked for afterEach cleanup (survives assertion failures). */
+function makeCwd(): string {
+	const cwd = mkdtempSync(join(tmpdir(), "step-config-mig-cwd-"));
+	tempCwds.push(cwd);
+	return cwd;
+}
+
 afterEach(() => {
 	if (tempDir) {
 		rmSync(tempDir, { recursive: true, force: true });
 		tempDir = undefined;
+	}
+	for (const cwd of tempCwds.splice(0)) {
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
@@ -93,7 +104,80 @@ describe("runMigrations", () => {
 
 		expect(result.migratedAuthProviders).toEqual(["step"]);
 		expect(result.deprecationWarnings.some((w) => w.includes("hooks/"))).toBe(true);
-		rmSync(cwd, { recursive: true, force: true });
+	});
+
+	it("stops warning about a leftover hooks/ once the scope has an extensions/ directory", () => {
+		const agentDir = makeAgentDir();
+		const cwd = makeCwd();
+		// Migrated scope: extensions/ present, a stale hooks/ left behind must not nag.
+		mkdirSync(join(cwd, ".stepcode", "hooks"), { recursive: true });
+		mkdirSync(join(cwd, ".stepcode", "extensions"), { recursive: true });
+
+		const result = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+
+		expect(result.deprecationWarnings.some((w) => w.includes("hooks/"))).toBe(false);
+	});
+
+	it("warns about a custom tools/ that has not migrated to extensions/", () => {
+		// Positive control for the custom-tools path: without extensions/, the
+		// warning must actually fire, so the suppression test below cannot pass green
+		// on a broken customTools filter.
+		const agentDir = makeAgentDir();
+		const cwd = makeCwd();
+		mkdirSync(join(cwd, ".stepcode", "tools"), { recursive: true });
+		writeFileSync(join(cwd, ".stepcode", "tools", "my-tool.js"), "export default {};");
+
+		const result = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+
+		expect(result.deprecationWarnings.some((w) => w.includes("tools/"))).toBe(true);
+	});
+
+	it("also silences the custom-tools warning once extensions/ exists", () => {
+		const agentDir = makeAgentDir();
+		const cwd = makeCwd();
+		mkdirSync(join(cwd, ".stepcode", "tools"), { recursive: true });
+		writeFileSync(join(cwd, ".stepcode", "tools", "my-tool.js"), "export default {};");
+		mkdirSync(join(cwd, ".stepcode", "extensions"), { recursive: true });
+
+		const result = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+
+		expect(result.deprecationWarnings.some((w) => w.includes("tools/"))).toBe(false);
+	});
+
+	it("applies the extensions/ guard per scope: the global agent dir warns and then goes silent", () => {
+		// Global scope is a distinct call site (checkDeprecatedExtensionDirs(agentDir)).
+		// Positive: a global hooks/ with no extensions/ warns.
+		const agentDir = makeAgentDir();
+		const cwd = makeCwd();
+		mkdirSync(join(agentDir, "hooks"), { recursive: true });
+
+		const before = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+		expect(before.deprecationWarnings.some((w) => w.includes("hooks/"))).toBe(true);
+
+		// Suppression: once the global agent dir has extensions/, the leftover hooks/ is silent.
+		mkdirSync(join(agentDir, "extensions"), { recursive: true });
+		const after = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+		expect(after.deprecationWarnings.some((w) => w.includes("hooks/"))).toBe(false);
 	});
 
 	it("invokes the injected keybindings migrator and persists a migrated config", () => {
@@ -123,7 +207,7 @@ describe("showDeprecationWarnings", () => {
 });
 
 function makeCwdWithHooks(): string {
-	const cwd = mkdtempSync(join(tmpdir(), "step-config-mig-cwd-"));
+	const cwd = makeCwd();
 	mkdirSync(join(cwd, ".stepcode", "hooks"), { recursive: true });
 	return cwd;
 }

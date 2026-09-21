@@ -4,7 +4,7 @@
  * Replace everything - no discovery, explicit configuration.
  */
 
-import { getModel } from "@earendil-works/pi-ai/compat";
+import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
 	createExtensionRuntime,
@@ -18,12 +18,23 @@ const modelRuntime = await ModelRuntime.create({
 	authPath: "/tmp/my-agent/auth.json",
 	modelsPath: "/tmp/my-agent/models.json",
 });
-if (process.env.MY_ANTHROPIC_KEY) {
-	await modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_ANTHROPIC_KEY);
+if (process.env.MY_STEP_KEY) {
+	await modelRuntime.setRuntimeApiKey("step", process.env.MY_STEP_KEY);
 }
 
-const model = getModel("anthropic", "claude-sonnet-4-5");
-if (!model) throw new Error("Model not found");
+// Full control: build the Model explicitly instead of reading a catalog.
+const model: Model<"openai-completions"> = {
+	id: "step-5-preview",
+	name: "Step 5 Preview",
+	api: "openai-completions",
+	provider: "step",
+	baseUrl: "https://api.stepfun.com/v1",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128_000,
+	maxTokens: 8192,
+};
 
 // In-memory settings with overrides
 const settingsManager = SettingsManager.inMemory({

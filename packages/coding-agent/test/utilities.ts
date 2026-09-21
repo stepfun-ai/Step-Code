@@ -7,8 +7,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Agent } from "@step-harness/agent-core";
-import type { OAuthCredentials } from "@step-harness/providers";
-import { getModel, streamSimple } from "@step-harness/providers/compat";
+import type { Model, OAuthCredentials } from "@step-harness/providers";
+import { streamSimple } from "@step-harness/providers/compat";
 import { builtinProviders } from "@step-harness/providers/providers/all";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -130,14 +130,35 @@ export function userMsg(text: string) {
 }
 
 /**
+ * Step-only test model fixture. The generated catalog is empty, so tests build
+ * the Model here (openai-completions is the protocol the Step provider uses).
+ */
+export function stepModel(overrides: Partial<Model<"openai-completions">> = {}): Model<"openai-completions"> {
+	const model: Model<"openai-completions"> = {
+		id: "step-5-preview",
+		name: "Step 5 Preview",
+		api: "openai-completions",
+		provider: "step",
+		baseUrl: "https://api.stepfun.com/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 8192,
+		...overrides,
+	};
+	return model;
+}
+
+/**
  * Create a minimal assistant message for testing.
  */
 export function assistantMsg(text: string) {
 	return {
 		role: "assistant" as const,
 		content: [{ type: "text" as const, text }],
-		api: "anthropic-messages" as const,
-		provider: "anthropic",
+		api: "openai-completions" as const,
+		provider: "step",
 		model: "test",
 		usage: {
 			input: 1,
@@ -240,7 +261,7 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 	const tempDir = join(tmpdir(), `pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
 
-	const model = getModel("anthropic", "claude-sonnet-4-5")!;
+	const model = stepModel();
 	const agent = new Agent({
 		getApiKey: () => API_KEY,
 		initialState: {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
-import { getModel } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
+import { stepModel } from "./helpers/step-fixtures.ts";
 
 interface FakeOpenAIClientOptions {
 	apiKey: string;
@@ -70,10 +70,13 @@ describe("openai-completions prompt caching", () => {
 	});
 
 	function createModel(overrides: Partial<Model<"openai-completions">> = {}): Model<"openai-completions"> {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
+		const { compat: _compat, ...baseModel } = stepModel();
 		return {
 			...(baseModel as Omit<Model<"openai-completions">, "api">),
 			api: "openai-completions",
+			// Default to a direct-OpenAI endpoint; the adapter keys prompt_cache_key on
+			// the api.openai.com host. Proxy/OpenRouter cases override baseUrl below.
+			baseUrl: "https://api.openai.com/v1",
 			...overrides,
 		};
 	}

@@ -2772,9 +2772,10 @@ async function generateModels() {
 
 	// Group by provider and deduplicate by model ID
 	// StepFun-only build: only the anthropic + openai builtin providers survive.
-	// All other providers (and the now-removed dialects they carried) are dropped
-	// here so the emitted catalog, shards and manifest contain exactly these two.
-	const BUILTIN_PROVIDER_IDS = new Set(["anthropic", "openai"]);
+	// Step-only build: no built-in providers ship a static catalog. Models come only
+	// from the Step endpoint's /v1/models at runtime, so the emitted catalog, shards
+	// and manifest are empty. (Custom providers are configured via models.json.)
+	const BUILTIN_PROVIDER_IDS = new Set<string>([]);
 	const providers: Record<string, Record<string, Model<any>>> = {};
 	for (const model of allModels) {
 		if (!BUILTIN_PROVIDER_IDS.has(model.provider)) continue;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { getModel, streamSimple } from "../src/compat.ts";
+import { streamSimple } from "../src/compat.ts";
 import type { Context, Model, SimpleStreamOptions } from "../src/types.ts";
+import { anthropicModel } from "./helpers/step-fixtures.ts";
 
 interface AnthropicThinkingPayload {
 	thinking?: { type: string; budget_tokens?: number; display?: string };
@@ -83,7 +84,13 @@ describe("Anthropic forceAdaptiveThinking compat override", () => {
 	});
 
 	it("uses adaptive thinking with native xhigh effort for Claude Fable 5", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-fable-5"), { reasoning: "xhigh" });
+		const payload = await capturePayload(
+			anthropicModel({
+				compat: { forceAdaptiveThinking: true },
+				thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+			}),
+			{ reasoning: "xhigh" },
+		);
 
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(payload.output_config).toEqual({ effort: "xhigh" });
@@ -91,7 +98,7 @@ describe("Anthropic forceAdaptiveThinking compat override", () => {
 
 	it("allows built-in adaptive models to opt out with compat.forceAdaptiveThinking false", async () => {
 		const model: Model<"anthropic-messages"> = {
-			...getModel("anthropic", "claude-opus-4-8"),
+			...anthropicModel(),
 			compat: { forceAdaptiveThinking: false },
 		};
 		const payload = await capturePayload(model, { reasoning: "medium" });

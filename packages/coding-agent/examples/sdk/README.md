@@ -32,14 +32,14 @@ npx tsx examples/sdk/01-minimal.ts
 ## Quick Reference
 
 ```typescript
-import { getModel } from "@earendil-works/pi-ai";
+import { getModel } from "@step-harness/providers";
 import {
   createAgentSession,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+} from "@step-harness/coding-agent";
 
 const modelRuntime = await ModelRuntime.create();
 

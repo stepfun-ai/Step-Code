@@ -1,9 +1,4 @@
-import {
-	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
-	getModel,
-} from "@step-harness/providers/compat";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream } from "@step-harness/providers/compat";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,6 +9,7 @@ import {
 	type StreamFn,
 	setDefaultStreamFn,
 } from "../src/index.ts";
+import { stepModel } from "./step-model.ts";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -124,7 +120,7 @@ describe("Agent", () => {
 	});
 
 	it("should create an agent instance with custom initial state", () => {
-		const customModel = getModel("openai", "gpt-4o-mini");
+		const customModel = stepModel();
 		const agent = new Agent({
 			streamFn: unusedStreamFunction,
 			initialState: {
@@ -452,7 +448,7 @@ describe("Agent", () => {
 		expect(agent.state.systemPrompt).toBe("Custom prompt");
 
 		// Test setModel
-		const newModel = getModel("anthropic", "claude-haiku-4-5");
+		const newModel = stepModel();
 		agent.state.model = newModel;
 		expect(agent.state.model).toBe(newModel);
 

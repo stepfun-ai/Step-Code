@@ -82,11 +82,11 @@ describe("lazy provider module loading", () => {
 		const result = runProbe(`
 			const compat = await import(${JSON.stringify(compatEntryUrl)});
 			const model = {
-				id: "claude-sonnet-4-6",
-				name: "Claude Sonnet 4",
+				id: "step-5-preview",
+				name: "Step 5 Preview",
 				api: "anthropic-messages",
-				provider: "anthropic",
-				baseUrl: "https://api.anthropic.com",
+				provider: "step",
+				baseUrl: "https://api.stepfun.com/v1",
 				reasoning: true,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -103,7 +103,18 @@ describe("lazy provider module loading", () => {
 	it("loads only the Anthropic SDK when dispatching through streamSimple", () => {
 		const result = runProbe(`
 			const compat = await import(${JSON.stringify(compatEntryUrl)});
-			const model = compat.getModel("anthropic", "claude-sonnet-4-6");
+			const model = {
+				id: "step-5-preview",
+				name: "Step 5 Preview",
+				api: "anthropic-messages",
+				provider: "step",
+				baseUrl: "https://api.stepfun.com/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 200000,
+				maxTokens: 8192,
+			};
 			const context = { messages: [{ role: "user", content: "hi" }] };
 			await compat.streamSimple(model, context).result();
 		`);
