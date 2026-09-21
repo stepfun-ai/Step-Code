@@ -749,18 +749,18 @@ export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from 
 export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {
-	resolveStepCliVersion,
+	resolveStepCodeVersion,
 	STEPCODE_BUILD_VERSION_ENV,
 	STEPCODE_VERSION,
 	STEPCODE_VERSION_OVERRIDE_ENV,
-	type StepCliVersion,
+	type StepCodeVersion,
 } from "./step/version.ts";
 // Step product facade. It delegates lifecycle and input handling to pi.
 export {
-	createStepCli,
-	type StepCli,
-	type StepCliSession,
-} from "./step-cli-runtime.ts";
+	createStepCode,
+	type StepCode,
+	type StepCodeSession,
+} from "./stepcode-runtime.ts";
 // Theme utilities for custom tools and extensions
 export {
 	detectTerminalBackgroundFromEnv,

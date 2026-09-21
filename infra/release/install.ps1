@@ -440,9 +440,9 @@ function Send-EnvironmentChangeBroadcast {
     # Unique type name (namespaced) so a repeated Add-Type in the same session
     # -- e.g. self-update re-running the installer -- does not throw; guard on
     # the type already being loaded before defining it again.
-    $typeName = 'StepCliInstaller.NativeEnvironmentBroadcast'
+    $typeName = 'StepCodeInstaller.NativeEnvironmentBroadcast'
     if (-not ([System.Management.Automation.PSTypeName]$typeName).Type) {
-      Add-Type -Namespace 'StepCliInstaller' -Name 'NativeEnvironmentBroadcast' -MemberDefinition @'
+      Add-Type -Namespace 'StepCodeInstaller' -Name 'NativeEnvironmentBroadcast' -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
 public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);
 '@
@@ -451,7 +451,7 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
     $WM_SETTINGCHANGE = 0x001A
     $SMTO_ABORTIFHUNG = 0x0002
     $result = [UIntPtr]::Zero
-    [void][StepCliInstaller.NativeEnvironmentBroadcast]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [IntPtr]::Zero, 'Environment', $SMTO_ABORTIFHUNG, 5000, [ref]$result)
+    [void][StepCodeInstaller.NativeEnvironmentBroadcast]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [IntPtr]::Zero, 'Environment', $SMTO_ABORTIFHUNG, 5000, [ref]$result)
   } catch {
     # Ignore: notifying other processes is a convenience, not a requirement.
   }

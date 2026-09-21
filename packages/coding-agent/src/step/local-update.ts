@@ -7,7 +7,7 @@ import process from "node:process";
 import lockfile from "proper-lockfile";
 import type { ExtensionUIContext } from "../core/extensions/types.ts";
 import { spawnProcess, waitForChildProcess } from "../utils/child-process.ts";
-import { STEPCODE_VERSION, type StepCliVersion } from "./version.ts";
+import { STEPCODE_VERSION, type StepCodeVersion } from "./version.ts";
 
 /** Public release bucket used by the Step installer when no override is set. */
 export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcli";
@@ -155,7 +155,7 @@ export type StepUpdateOutcome =
 export type StepUpdateChoice = "update-now" | "skip" | "skip-until-next-version";
 
 export interface StepUpdateInput {
-	version: StepCliVersion;
+	version: StepCodeVersion;
 	storageRootDir: string;
 	updateCheckEnabled?: boolean;
 	executablePath?: string;

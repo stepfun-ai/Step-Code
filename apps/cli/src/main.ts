@@ -13,7 +13,7 @@ import {
 	applyStepCodeConfigDefaults,
 	buildStepSystemPromptAppendix,
 	configureHttpDispatcher,
-	createStepCli,
+	createStepCode,
 	createStepCodeProviderInlineExtension,
 	createStepProviderConfig,
 	createStepSessionManagerFactory,
@@ -203,7 +203,7 @@ const stepMainOptions: MainOptions = {
 	defaultTheme: getStepDefaultTheme(),
 	defaultProvider: stepCodeConfig?.defaultProvider ?? stepPersistedDefaults.provider ?? STEP_DEFAULT_PROVIDER,
 	defaultModel: stepCodeConfig?.defaultModel ?? stepPersistedDefaults.model ?? STEP_DEFAULT_MODEL,
-	runtimeHostFactory: createStepCli,
+	runtimeHostFactory: createStepCode,
 	stdioModeFactory: sdkStdio ? createSdkStdioMode({ writeFrame: rawStdoutWrite }) : undefined,
 	interactiveModeOptions: {
 		showChangelog: false,

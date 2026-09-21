@@ -19,7 +19,7 @@ export const STEPCODE_BUILD_VERSION_ENV = "STEPCODE_BUILD_VERSION";
 // only substitutes this form.
 const INLINED_BUILD_VERSION = process.env.STEPCODE_BUILD_VERSION;
 
-export interface StepCliVersion {
+export interface StepCodeVersion {
 	readonly value: string;
 	readonly source: "override" | "embedded" | "fallback";
 }
@@ -28,11 +28,11 @@ export interface StepCliVersion {
  * Resolve a Step version from an injected environment without reading files.
  *
  * The static values are deliberately used only for the real process
- * environment. This keeps `resolveStepCliVersion({})` deterministic in
+ * environment. This keeps `resolveStepCodeVersion({})` deterministic in
  * tests and in embedders while still allowing Bun's `--env` compile-time
  * substitution to survive its empty runtime environment.
  */
-export function resolveStepCliVersion(env?: Record<string, string | undefined>): StepCliVersion {
+export function resolveStepCodeVersion(env?: Record<string, string | undefined>): StepCodeVersion {
 	const runtimeEnv = env ?? process.env;
 	const useEmbeddedValues = env === undefined || runtimeEnv === process.env;
 	const override = normalizeVersion(runtimeEnv[STEPCODE_VERSION_OVERRIDE_ENV]);
@@ -44,7 +44,7 @@ export function resolveStepCliVersion(env?: Record<string, string | undefined>):
 	return { value: STEPCODE_FALLBACK_VERSION, source: "fallback" };
 }
 
-export const STEPCODE_VERSION = resolveStepCliVersion();
+export const STEPCODE_VERSION = resolveStepCodeVersion();
 
 /** Strip the tag prefix so all public surfaces use one canonical value. */
 function normalizeVersion(value: string | undefined): string | undefined {

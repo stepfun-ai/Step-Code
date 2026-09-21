@@ -26,15 +26,15 @@ describe("Step early environment", () => {
 	});
 
 	test("recognizes source, bundled, and binary launchers", () => {
-		expect(isStepEntrypoint(["node", "/tmp/step-cli.ts"])).toBe(true);
+		expect(isStepEntrypoint(["node", "/tmp/stepcode.ts"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/tmp/step.js"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/tmp/step-bin"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/tmp/step-helper.js"])).toBe(false);
 		expect(isStepEntrypoint(["node", "/tmp/step"])).toBe(true);
 		expect(isStepEntrypoint(["/tmp/step", "--help"])).toBe(true);
-		expect(isStepEntrypoint(["/tmp/step-cli", "--help"])).toBe(true);
+		expect(isStepEntrypoint(["/tmp/stepcode", "--help"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/tmp/cli.js"])).toBe(false);
-		expect(isStepEntrypoint(["node", "/repo/node_modules/.bin/tsx", "/repo/src/step-cli.ts"])).toBe(true);
+		expect(isStepEntrypoint(["node", "/repo/node_modules/.bin/tsx", "/repo/src/stepcode.ts"])).toBe(true);
 		expect(isStepEntrypoint(["node", "/repo/node_modules/.bin/tsx", "step"])).toBe(false);
 	});
 

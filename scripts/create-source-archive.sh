@@ -126,7 +126,7 @@ required_paths=(
     "packages/providers/src/image-models.generated.ts"
     "packages/providers/src/providers/data/.manifest.json"
     "packages/coding-agent/package.json"
-    "apps/cli/src/bun/step-cli.ts"
+    "apps/cli/src/bun/stepcode.ts"
     "apps/cli/src/main.ts"
     "packages/coding-agent/src/step/stdio-host.ts"
     "packages/coding-agent/src/utils/image-resize-worker.ts"

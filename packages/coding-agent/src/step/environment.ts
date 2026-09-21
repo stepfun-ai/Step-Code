@@ -80,7 +80,7 @@ export function isStepEntrypoint(argv: readonly string[] = process.argv): boolea
 	if (
 		candidates.some((candidate) => {
 			const entry = basename(candidate ?? "").toLowerCase();
-			return /^(?:step|step-cli|step-bin)(?:\.(?:[cm]?js|ts|exe))?$/u.test(entry);
+			return /^(?:step|stepcode|step-bin)(?:\.(?:[cm]?js|ts|exe))?$/u.test(entry);
 		})
 	)
 		return true;
@@ -89,7 +89,7 @@ export function isStepEntrypoint(argv: readonly string[] = process.argv): boolea
 	// filename so a normal pi prompt containing the word "step" cannot opt into
 	// the product's storage namespace by accident.
 	const script = argv[2] ?? "";
-	return /(?:^|[\\/])step(?:-cli)?\.(?:[cm]?js|ts)$/iu.test(script);
+	return /(?:^|[\\/])(?:step|stepcode)\.(?:[cm]?js|ts)$/iu.test(script);
 }
 
 /**

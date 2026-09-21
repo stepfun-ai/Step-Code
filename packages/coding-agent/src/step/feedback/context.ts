@@ -1,6 +1,6 @@
 import { normalizeStepDeviceId, normalizeStepUid, normalizeStepWireSessionId } from "../build-identity.ts";
 import { readStepDeviceId } from "../device-id.ts";
-import { resolveStepCliVersion } from "../version.ts";
+import { resolveStepCodeVersion } from "../version.ts";
 import { readFeedbackBuildEnv } from "./build-env.ts";
 import type { FeedbackContext } from "./types.ts";
 
@@ -30,7 +30,7 @@ export async function resolveFeedbackContext(input: {
 	const uid = normalizeStepUid(input.uid);
 	return {
 		channel,
-		version: resolveStepCliVersion(env).value,
+		version: resolveStepCodeVersion(env).value,
 		platform: process.platform,
 		...(commit ? { commit } : {}),
 		...(sessionId ? { sessionId } : {}),

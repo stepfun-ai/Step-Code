@@ -12,7 +12,7 @@ import type { SessionManager } from "./core/session-manager.ts";
  * It intentionally contains no scheduling or state machine of its own. Input,
  * queueing, persistence, compaction, and lifecycle remain owned by pi.
  */
-export interface StepCli extends AgentSessionRuntimeHost {
+export interface StepCode extends AgentSessionRuntimeHost {
 	readonly runtime: AgentSessionRuntime;
 	readonly session: AgentSession;
 	readonly sessionId: string;
@@ -57,7 +57,7 @@ export interface StepCli extends AgentSessionRuntimeHost {
 	dispose(): Promise<void>;
 }
 
-export function createStepCli(runtime: AgentSessionRuntime): StepCli {
+export function createStepCode(runtime: AgentSessionRuntime): StepCode {
 	type Subscription = {
 		listener: AgentSessionEventListener;
 		unsubscribe: () => void;
@@ -221,4 +221,4 @@ export function createStepCli(runtime: AgentSessionRuntime): StepCli {
 	};
 }
 
-export type StepCliSession = AgentSession;
+export type StepCodeSession = AgentSession;
