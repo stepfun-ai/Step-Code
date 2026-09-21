@@ -13,6 +13,7 @@ interface ShellCase {
 	stdout: string;
 	calls: string[];
 	analysisIncomplete?: true;
+	allowedStderr?: readonly string[];
 }
 
 const removal = "rm -rf ./build";
@@ -369,12 +370,20 @@ const cases: ShellCase[] = [
 		stdout: removalOutput,
 		calls: [removal],
 	},
-	...["args+=(safe)", "args[0]=(safe)"].map((assignment) => ({
-		name: `${assignment} remains an assignment prefix before an executable command`,
-		command: `${assignment} ${removal}`,
+	{
+		name: "array append remains an assignment prefix before an executable command",
+		command: `args+=(safe) ${removal}`,
 		stdout: removalOutput,
 		calls: [removal],
-	})),
+	},
+	{
+		name: "an indexed compound assignment diagnostic does not prevent the following command",
+		command: `args[0]=(safe) ${removal}`,
+		stdout: removalOutput,
+		calls: [removal],
+		// Bash 5 diagnoses this invalid identifier; Bash 3 does not. Both execute the command.
+		allowedStderr: ["", "/bin/bash: line 1: `args[0]': not a valid identifier\n"],
+	},
 	{
 		name: "ANSI quoted array elements do not hide the closing array boundary",
 		analysisIncomplete: true,
@@ -489,7 +498,13 @@ describe.skipIf(process.platform === "win32")("command policy agrees with harmle
 	beforeEach(() => writeFileSync(callLog, ""));
 	afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
-	const checkShellCase = async ({ command, stdout, calls, analysisIncomplete }: ShellCase): Promise<void> => {
+	const checkShellCase = async ({
+		command,
+		stdout,
+		calls,
+		analysisIncomplete,
+		allowedStderr,
+	}: ShellCase): Promise<void> => {
 		const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", command], {
 			cwd: directory,
 			env: { PATH: directory, COMMAND_LOG: callLog, LC_ALL: "C" },
@@ -498,7 +513,7 @@ describe.skipIf(process.platform === "win32")("command policy agrees with harmle
 		});
 		expect(result.error).toBeUndefined();
 		expect(result.status, result.stderr).toBe(0);
-		expect(result.stderr).toBe("");
+		expect(allowedStderr ?? [""]).toContain(result.stderr);
 		expect(result.stdout).toBe(stdout);
 		expect(readFileSync(callLog, "utf8")).toBe(calls.map((call) => `${call}\n`).join(""));
 
