@@ -21,6 +21,10 @@ const DEFAULT_READ_TIMEOUT_MS = 3000;
 const DEFAULT_POWERSHELL_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 
+function appleScriptString(value: string): string {
+	return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
 export function isWaylandSession(env: NodeJS.ProcessEnv = process.env): boolean {
 	return Boolean(env.WAYLAND_DISPLAY) || env.XDG_SESSION_TYPE === "wayland";
 }
@@ -240,17 +244,66 @@ function readClipboardImageViaXclip(): ClipboardImage | null {
 }
 
 async function readClipboardImageViaNativeClipboard(): Promise<ClipboardImage | null> {
-	if (!clipboard || !clipboard.hasImage()) {
+	try {
+		if (!clipboard || !clipboard.hasImage()) {
+			return null;
+		}
+
+		const imageData = await clipboard.getImageBinary();
+		if (!imageData || imageData.length === 0) {
+			return null;
+		}
+
+		const bytes = imageData instanceof Uint8Array ? imageData : Uint8Array.from(imageData);
+		return { bytes, mimeType: "image/png" };
+	} catch {
+		// Some macOS pasteboard images expose only a TIFF representation that the
+		// native decoder cannot convert (for example palette screenshots). Let the
+		// AppleScript fallback read the pasteboard's own PNG coercion instead.
 		return null;
 	}
+}
 
-	const imageData = await clipboard.getImageBinary();
-	if (!imageData || imageData.length === 0) {
+/**
+ * Read a macOS image through NSPasteboard's AppleScript coercion. The native
+ * clipboard addon converts TIFF through its image decoder, which rejects some
+ * valid palette screenshots. macOS itself can coerce those representations to
+ * PNG without losing the image, so use a short-lived file as the async bridge.
+ */
+async function readClipboardImageViaAppleScript(): Promise<ClipboardImage | null> {
+	const tmpFile = join(tmpdir(), `step-clipboard-${randomUUID()}.png`);
+	const outputFile = appleScriptString(tmpFile);
+	const script = [
+		`set outputFile to POSIX file ${outputFile}`,
+		"set fileHandle to open for access outputFile with write permission",
+		"try",
+		"set eof fileHandle to 0",
+		"write (the clipboard as «class PNGf») to fileHandle",
+		"close access fileHandle",
+		"on error",
+		"try",
+		"close access fileHandle",
+		"end try",
+		"end try",
+	].join("\n");
+
+	try {
+		await execFileAsync("osascript", ["-e", script], {
+			maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
+			timeout: DEFAULT_READ_TIMEOUT_MS,
+			encoding: "utf8",
+		});
+		const bytes = readFileSync(tmpFile);
+		return bytes.length > 0 ? { bytes: new Uint8Array(bytes), mimeType: "image/png" } : null;
+	} catch {
 		return null;
+	} finally {
+		try {
+			unlinkSync(tmpFile);
+		} catch {
+			// Ignore cleanup errors.
+		}
 	}
-
-	const bytes = imageData instanceof Uint8Array ? imageData : Uint8Array.from(imageData);
-	return { bytes, mimeType: "image/png" };
 }
 
 export async function readClipboardImage(options?: {
@@ -281,6 +334,8 @@ export async function readClipboardImage(options?: {
 		if (!image && !wayland) {
 			image = (await readClipboardImageViaNativeClipboard()) ?? readClipboardImageViaXclip();
 		}
+	} else if (platform === "darwin") {
+		image = (await readClipboardImageViaNativeClipboard()) ?? (await readClipboardImageViaAppleScript());
 	} else {
 		image = await readClipboardImageViaNativeClipboard();
 	}
