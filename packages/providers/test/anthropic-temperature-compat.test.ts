@@ -67,19 +67,25 @@ async function capturePayload(
 
 describe("Anthropic temperature compatibility", () => {
 	it("omits temperature for Claude Opus 4.7", async () => {
-		const payload = await capturePayload(anthropicModel(), { temperature: 0 });
+		const payload = await capturePayload(anthropicModel({ compat: { supportsTemperature: false } }), {
+			temperature: 0,
+		});
 
 		expect(payload.temperature).toBeUndefined();
 	});
 
 	it("omits temperature for Claude Opus 4.8", async () => {
-		const payload = await capturePayload(anthropicModel(), { temperature: 0 });
+		const payload = await capturePayload(anthropicModel({ compat: { supportsTemperature: false } }), {
+			temperature: 0,
+		});
 
 		expect(payload.temperature).toBeUndefined();
 	});
 
 	it("omits default temperature for Claude Opus 4.7", async () => {
-		const payload = await capturePayload(anthropicModel(), { temperature: 1 });
+		const payload = await capturePayload(anthropicModel({ compat: { supportsTemperature: false } }), {
+			temperature: 1,
+		});
 
 		expect(payload.temperature).toBeUndefined();
 	});

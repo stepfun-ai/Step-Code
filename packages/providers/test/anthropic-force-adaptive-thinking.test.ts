@@ -84,7 +84,13 @@ describe("Anthropic forceAdaptiveThinking compat override", () => {
 	});
 
 	it("uses adaptive thinking with native xhigh effort for Claude Fable 5", async () => {
-		const payload = await capturePayload(anthropicModel(), { reasoning: "xhigh" });
+		const payload = await capturePayload(
+			anthropicModel({
+				compat: { forceAdaptiveThinking: true },
+				thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+			}),
+			{ reasoning: "xhigh" },
+		);
 
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(payload.output_config).toEqual({ effort: "xhigh" });

@@ -330,7 +330,7 @@ describe("Cache retention request options", () => {
 		});
 
 		it("should omit prompt_cache_key and disable implicit writes when cacheRetention is none", async () => {
-			const model = responsesModel();
+			const model = responsesModel({ compat: { supportsExplicitPromptCacheMode: true } });
 			let capturedPayload: OpenAIResponsesCachePayload | undefined;
 
 			try {

@@ -61,7 +61,7 @@ const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 
 
 describe("Anthropic 1h cache write cost", () => {
 	it("prices the 1h portion at 2x input and the rest at the 5m rate", async () => {
-		const model = anthropicModel();
+		const model = anthropicModel({ cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 } });
 		const response = createSseResponse(
 			eventsWithCacheCreation({ ephemeral_5m_input_tokens: 600_000, ephemeral_1h_input_tokens: 400_000 }),
 		);
@@ -74,7 +74,7 @@ describe("Anthropic 1h cache write cost", () => {
 	});
 
 	it("falls back to the 5m rate when no breakdown is reported", async () => {
-		const model = anthropicModel();
+		const model = anthropicModel({ cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 } });
 		const response = createSseResponse(eventsWithCacheCreation(undefined));
 		const result = await streamAnthropic(model, context, { client: createFakeAnthropicClient(response) }).result();
 

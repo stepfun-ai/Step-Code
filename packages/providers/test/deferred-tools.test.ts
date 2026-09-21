@@ -188,7 +188,10 @@ function _makeCodexToken(): string {
 describe("deferred tools", () => {
 	it("loads an Anthropic tool at its tool-result marker", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("late_tool")]);
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context);
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+		);
 
 		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "late_tool", defer_loading: true }]);
 		expect(findAnthropicToolResult(payload).content).toEqual([{ type: "tool_reference", tool_name: "late_tool" }]);
@@ -212,7 +215,10 @@ describe("deferred tools", () => {
 			content: [{ type: "text", text: "second result" }],
 		});
 
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context);
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true }, input: ["text", "image"] }),
+			context,
+		);
 
 		expect(findAnthropicToolResultContent(payload)).toMatchObject([
 			{
@@ -236,7 +242,10 @@ describe("deferred tools", () => {
 		assistant.provider = "openai";
 		assistant.model = "gpt-5.4";
 
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context);
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+		);
 
 		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "late_tool", defer_loading: true }]);
 		expect(findAnthropicToolResult(payload).content).toEqual([{ type: "tool_reference", tool_name: "late_tool" }]);
@@ -244,7 +253,10 @@ describe("deferred tools", () => {
 
 	it("does not resurrect a marked tool missing from Context.tools", async () => {
 		const context = makeContext([makeTool("base_tool")]);
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context);
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+		);
 
 		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool"]);
 		const content = findAnthropicToolResult(payload).content;
@@ -255,7 +267,10 @@ describe("deferred tools", () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("late_tool")]);
 		const assistant = context.messages[1] as AssistantMessage;
 		assistant.content = [{ type: "toolCall", id: "call_1", name: "late_tool", arguments: {} }];
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context);
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+		);
 
 		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "late_tool"]);
 		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
@@ -265,7 +280,11 @@ describe("deferred tools", () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["read"]);
 		const assistant = context.messages[1] as AssistantMessage;
 		assistant.content = [{ type: "toolCall", id: "call_1", name: "Read", arguments: {} }];
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context, "sk-ant-oat-fake");
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+			"sk-ant-oat-fake",
+		);
 
 		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "Read"]);
 		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
@@ -275,7 +294,11 @@ describe("deferred tools", () => {
 
 	it("matches OAuth-canonicalized markers to active tools", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["Read"]);
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context, "sk-ant-oat-fake");
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+			"sk-ant-oat-fake",
+		);
 
 		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "Read", defer_loading: true }]);
 		const content = findAnthropicToolResult(payload).content;
@@ -311,7 +334,10 @@ describe("deferred tools", () => {
 
 	it("keeps one immediate Anthropic tool when every current tool is marked", async () => {
 		const context = makeContext([makeTool("late_tool")]);
-		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context);
+		const payload = await capturePayload<AnthropicPayload>(
+			anthropicModel({ compat: { supportsToolReferences: true } }),
+			context,
+		);
 
 		expect(payload.tools).toMatchObject([{ name: "late_tool" }]);
 		expect(payload.tools?.[0]?.defer_loading).toBeUndefined();
@@ -393,7 +419,10 @@ describe("deferred tools", () => {
 
 	it("loads an OpenAI Responses tool through additional_tools", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("late_tool")]);
-		const payload = await capturePayload<OpenAIPayload>(responsesModel(), context);
+		const payload = await capturePayload<OpenAIPayload>(
+			responsesModel({ compat: { supportsAdditionalTools: true } }),
+			context,
+		);
 		const additionalTools = payload.input?.find(
 			(item): item is OpenAIAdditionalTools => item.type === "additional_tools",
 		);
@@ -421,7 +450,10 @@ describe("deferred tools", () => {
 			toolName: "late_tool",
 		});
 
-		const payload = await capturePayload<OpenAIPayload>(responsesModel(), context);
+		const payload = await capturePayload<OpenAIPayload>(
+			responsesModel({ compat: { supportsAdditionalTools: true } }),
+			context,
+		);
 		const additionalToolIndexes = (payload.input ?? []).flatMap((item, index) =>
 			item.type === "additional_tools" ? [index] : [],
 		);

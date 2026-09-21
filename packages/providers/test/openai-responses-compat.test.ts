@@ -167,7 +167,9 @@ describe("openai-responses provider defaults", () => {
 	it.each(["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "gpt-5.5-pro"] as const)(
 		"omits reasoning effort for OpenAI %s when off is unsupported",
 		async (modelId) => {
-			const model = responsesModel({ id: modelId });
+			// These models cannot disable reasoning (thinkingLevelMap.off === null), so the
+			// adapter omits the reasoning field entirely when no effort is requested.
+			const model = responsesModel({ id: modelId, thinkingLevelMap: { off: null } });
 			let capturedPayload: unknown;
 
 			vi.spyOn(globalThis, "fetch").mockResolvedValue(

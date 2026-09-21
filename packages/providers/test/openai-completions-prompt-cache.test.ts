@@ -74,6 +74,9 @@ describe("openai-completions prompt caching", () => {
 		return {
 			...(baseModel as Omit<Model<"openai-completions">, "api">),
 			api: "openai-completions",
+			// Default to a direct-OpenAI endpoint; the adapter keys prompt_cache_key on
+			// the api.openai.com host. Proxy/OpenRouter cases override baseUrl below.
+			baseUrl: "https://api.openai.com/v1",
 			...overrides,
 		};
 	}

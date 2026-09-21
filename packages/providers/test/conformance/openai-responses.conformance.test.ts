@@ -111,7 +111,7 @@ describe("openai-responses conformance", () => {
 		expect(payload?.tools?.[0]?.name).toBe("ping");
 		// The captured payload is what got serialized onto the wire.
 		expect(rawBody).toBeDefined();
-		expect(JSON.parse(rawBody as string).model).toBe("gpt-5.4");
+		expect(JSON.parse(rawBody as string).model).toBe("step-5-preview");
 	});
 
 	it("stream events: canned Responses SSE -> stable canonical event order", async () => {

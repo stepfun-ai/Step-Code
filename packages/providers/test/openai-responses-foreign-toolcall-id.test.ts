@@ -18,7 +18,9 @@ const usage: Usage = {
 
 describe("OpenAI Responses foreign tool call ID normalization", () => {
 	it("hashes foreign Copilot tool item IDs into a bounded Codex-safe fc_<hash> shape", () => {
-		const model = responsesModel();
+		// The target is an OpenAI-family model (in allowedToolCallProviders), so the
+		// adapter hashes the foreign Copilot item id into a Codex-safe fc_<hash>.
+		const model = responsesModel({ provider: "openai" });
 		const assistant: AssistantMessage = {
 			role: "assistant",
 			content: [
