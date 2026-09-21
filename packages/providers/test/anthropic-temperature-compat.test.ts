@@ -66,44 +66,17 @@ async function capturePayload(
 }
 
 describe("Anthropic temperature compatibility", () => {
-	it("omits temperature for Claude Opus 4.7", async () => {
-		const payload = await capturePayload(anthropicModel({ compat: { supportsTemperature: false } }), {
-			temperature: 0,
-		});
-
-		expect(payload.temperature).toBeUndefined();
-	});
-
-	it("omits temperature for Claude Opus 4.8", async () => {
-		const payload = await capturePayload(anthropicModel({ compat: { supportsTemperature: false } }), {
-			temperature: 0,
-		});
-
-		expect(payload.temperature).toBeUndefined();
-	});
-
-	it("omits default temperature for Claude Opus 4.7", async () => {
-		const payload = await capturePayload(anthropicModel({ compat: { supportsTemperature: false } }), {
-			temperature: 1,
-		});
-
-		expect(payload.temperature).toBeUndefined();
-	});
-
-	it("keeps temperature for Claude Opus 4.6", async () => {
+	it("forwards temperature when the model does not disable it", async () => {
+		// Bare model: compat.supportsTemperature defaults to true.
 		const payload = await capturePayload(anthropicModel(), { temperature: 0 });
 
 		expect(payload.temperature).toBe(0);
 	});
 
-	it("keeps temperature for Claude Sonnet 4.6", async () => {
-		const payload = await capturePayload(anthropicModel(), { temperature: 0 });
-
-		expect(payload.temperature).toBe(0);
-	});
-
-	it("omits temperature for custom models with supportsTemperature disabled", async () => {
-		const payload = await capturePayload(makeCustomModel({ supportsTemperature: false }), { temperature: 0 });
+	it("omits temperature when compat.supportsTemperature is false", async () => {
+		// The adapter drops temperature regardless of the requested value once the
+		// model declares supportsTemperature:false (real metadata for e.g. Opus 4.7/4.8).
+		const payload = await capturePayload(makeCustomModel({ supportsTemperature: false }), { temperature: 1 });
 
 		expect(payload.temperature).toBeUndefined();
 	});
