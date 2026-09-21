@@ -104,6 +104,15 @@ runtimes using the same project store preserve each other's creates and deletes,
 and do not normally hand off the same due occurrence twice. List operations
 refresh the durable view from disk.
 
+The store is attached only once `.step-cli/cron/tasks.json` exists; `cron_create`
+with `durable:true` creates it. A session that schedules no durable work therefore
+performs no cron storage I/O, and the file is not created just because the project
+is trusted. Firing precision comes from the in-memory view, so the one-second tick
+does not reread the shared file: another runtime's edits are picked up at most 30
+seconds later, and `/cron list` and every mutation still read it immediately. A
+tick takes the storage lock only when a delivery or a removal can actually happen;
+while the host is busy, due jobs are marked deferred in memory.
+
 The runtime loads the whole file before any startup delivery. A missed durable
 one-shot stays on disk until its batched notice, including the task ID and full
 prompt, is accepted. Missed recurring jobs advance to the next occurrence.

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -442,6 +442,94 @@ describe("cron reliability", () => {
 			expect(job.nextFireAt).toBeLessThanOrEqual(nominal);
 			expect(job.nextFireAt).toBeGreaterThanOrEqual(nominal - 90_000);
 		}
+	});
+
+	test("a session without durable jobs never attaches storage or reads it per tick", () => {
+		const directory = makeDirectory();
+		const stores: CronFileStore[] = [];
+		const runtime = new StepCronRuntime({
+			storagePath: path.join(directory, "tasks.json"),
+			jitterRatio: 0,
+			storeFactory: (filePath) => {
+				const store = new CronFileStore(filePath);
+				stores.push(store);
+				return store;
+			},
+		});
+		runtime.start(directory, true);
+		runtime.create("* * * * *", "session only", true);
+		for (let index = 0; index < 120; index++) runtime.tick();
+		expect(stores).toEqual([]);
+		expect(existsSync(path.join(directory, "tasks.json"))).toBe(false);
+		runtime.stop();
+	});
+
+	test("a durable session re-reads the shared store on a bounded cadence", () => {
+		const directory = makeDirectory();
+		const storagePath = path.join(directory, "tasks.json");
+		let now = Date.UTC(2026, 0, 1, 12, 0);
+		const owner = new StepCronRuntime({ now: () => now, storagePath, jitterRatio: 0 });
+		owner.create("0 3 * * *", "nightly report", true, true);
+		const store = new CronFileStore(storagePath);
+		const load = vi.spyOn(store, "load");
+		const reader = new StepCronRuntime({ now: () => now, storagePath, jitterRatio: 0, storeFactory: () => store });
+		reader.start(directory, true);
+		expect(reader.list()).toHaveLength(1);
+		const afterStart = load.mock.calls.length;
+		for (let index = 0; index < 20; index++) {
+			now += 1_000;
+			reader.tick();
+		}
+		expect(load.mock.calls.length).toBe(afterStart);
+		now += 30_000;
+		reader.tick();
+		expect(load.mock.calls.length).toBe(afterStart + 1);
+		reader.stop();
+	});
+
+	test("a durable job another runtime created later is still picked up", () => {
+		const directory = makeDirectory();
+		const storagePath = path.join(directory, "tasks.json");
+		let now = Date.UTC(2026, 0, 1, 12, 0);
+		const sendMessage = vi.fn();
+		const reader = new StepCronRuntime({ now: () => now, storagePath, jitterRatio: 0, sendMessage });
+		reader.start(directory, true);
+		const writer = new StepCronRuntime({ now: () => now, storagePath, jitterRatio: 0 });
+		const job = writer.create("* * * * *", "added by another session", false, true).job;
+		// Past the bounded cross-process refresh cadence.
+		now = job.nextFireAt + 30_000;
+		reader.tick();
+		expect(sendMessage).toHaveBeenCalledWith({ kind: "fire", job });
+		reader.stop();
+	});
+
+	test("a busy host defers due jobs without touching the shared store", () => {
+		const directory = makeDirectory();
+		const storagePath = path.join(directory, "tasks.json");
+		let now = Date.UTC(2026, 0, 1, 12, 0);
+		const owner = new StepCronRuntime({ now: () => now, storagePath, jitterRatio: 0 });
+		const job = owner.create("* * * * *", "waits for the user", false, true).job;
+		const store = new CronFileStore(storagePath);
+		const update = vi.spyOn(store, "update");
+		const sendMessage = vi.fn();
+		let idle = false;
+		const busy = new StepCronRuntime({
+			now: () => now,
+			storagePath,
+			jitterRatio: 0,
+			storeFactory: () => store,
+			isIdle: () => idle,
+			sendMessage,
+		});
+		busy.start(directory, true);
+		now = job.nextFireAt;
+		for (let index = 0; index < 20; index++) busy.tick();
+		expect(update).not.toHaveBeenCalled();
+		expect(sendMessage).not.toHaveBeenCalled();
+		idle = true;
+		busy.tick();
+		expect(sendMessage).toHaveBeenCalledWith({ kind: "fire", job });
+		busy.stop();
 	});
 
 	test("enforces a fifty-job limit without losing existing schedules", () => {

@@ -24,6 +24,8 @@ import type {
 import type { StepTelemetryProperties, StepTelemetryReporter } from "../step/telemetry.ts";
 
 const TICK_INTERVAL_MS = 1_000;
+/** Cross-process pickup cadence; firing precision comes from the in-memory view. */
+const DURABLE_REFRESH_INTERVAL_MS = 30_000;
 const MAX_JOBS = 50;
 const AUTO_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_SEARCH_MINUTES = 366 * 24 * 60;
@@ -377,6 +379,8 @@ export class StepCronRuntime {
 	private currentCwd: string | undefined;
 	private loaded = false;
 	private recoveryPending = false;
+	private trusted = false;
+	private durableRefreshAt = Number.NEGATIVE_INFINITY;
 
 	constructor(options: StepCronRuntimeOptions = {}) {
 		this.now = options.now ?? Date.now;
@@ -395,6 +399,7 @@ export class StepCronRuntime {
 
 	start(cwd: string, trusted: boolean): void {
 		this.currentCwd = path.resolve(cwd);
+		this.trusted = trusted;
 		if (!this.loaded) {
 			this.recoveryPending = trusted;
 			try {
@@ -451,7 +456,7 @@ export class StepCronRuntime {
 	}
 
 	list(): CronJob[] {
-		this.refreshDurable();
+		this.refreshDurableNow();
 		return [...this.jobs.values()]
 			.sort((left, right) => left.nextFireAt - right.nextFireAt || left.id.localeCompare(right.id))
 			.map((job) => ({ ...job }));
@@ -473,15 +478,10 @@ export class StepCronRuntime {
 				this.loadDurable(true);
 				return;
 			}
-			this.refreshDurable();
 			const now = this.readNow();
-			if (
-				[...this.jobs.values()].some(
-					(job) => job.nextFireAt <= now || (job.autoExpireAt !== undefined && job.autoExpireAt <= now),
-				)
-			) {
-				this.withLatestJobs(() => this.drain(now));
-			}
+			this.refreshDurableOnTick(now);
+			if (this.needsLockedDrain(now)) this.withLatestJobs(() => this.drain(now));
+			else this.deferDue(now);
 			this.failures.delete("storage");
 		} catch (error) {
 			// A busy lock or failed write must not kill the timer or consume a job.
@@ -507,12 +507,13 @@ export class StepCronRuntime {
 		this.currentCwd = undefined;
 		this.loaded = false;
 		this.recoveryPending = false;
+		this.trusted = false;
+		this.durableRefreshAt = Number.NEGATIVE_INFINITY;
 	}
 
 	private loadDurable(trusted: boolean): void {
 		const filePath = trusted ? this.resolveStoragePath() : undefined;
-		if (filePath) {
-			this.currentStore ??= this.storeFactory(filePath);
+		if (filePath && this.attachStore(filePath)) {
 			this.refreshDurable();
 			const now = this.readNow();
 			if (
@@ -557,6 +558,7 @@ export class StepCronRuntime {
 				});
 			}
 		}
+		this.durableRefreshAt = this.readNow();
 		this.loaded = true;
 		this.recoveryPending = false;
 		this.failures.delete("storage");
@@ -565,18 +567,48 @@ export class StepCronRuntime {
 	private drain(now: number): void {
 		this.deliverMissed();
 		for (const job of [...this.jobs.values()]) {
-			if (job.autoExpireAt !== undefined && now >= job.autoExpireAt && job.nextFireAt > now) {
+			if (this.isExpiredBeforeDelivery(job, now)) {
 				this.removeJob(job.id);
 				this.emit("cron_expired", { id: job.id, recurring: job.recurring });
 				continue;
 			}
-			if (job.nextFireAt > now || this.pendingMissed.has(job.id)) continue;
+			if (!this.isDue(job, now)) continue;
 			if (!this.isIdle()) {
 				this.defer(job);
 				continue;
 			}
 			this.fire(job, now);
 		}
+	}
+
+	/** Due, and not already held back for the batched missed-job notice. */
+	private isDue(job: CronJob, now: number): boolean {
+		return job.nextFireAt <= now && !this.pendingMissed.has(job.id);
+	}
+
+	/** Reached its expiry before the next occurrence, so it leaves without a final delivery. */
+	private isExpiredBeforeDelivery(job: CronJob, now: number): boolean {
+		return job.autoExpireAt !== undefined && now >= job.autoExpireAt && job.nextFireAt > now;
+	}
+
+	/**
+	 * Only take the storage lock when `drain` can actually deliver or remove
+	 * something. A busy host otherwise re-read and re-locked the shared file on
+	 * every one-second tick just to re-mark the same jobs deferred.
+	 */
+	private needsLockedDrain(now: number): boolean {
+		const idle = this.isIdle();
+		if (idle && this.pendingMissed.size > 0) return true;
+		for (const job of this.jobs.values()) {
+			if (this.isExpiredBeforeDelivery(job, now)) return true;
+			if (idle && this.isDue(job, now)) return true;
+		}
+		return false;
+	}
+
+	/** `drain`'s busy-host branch, which is in-memory bookkeeping only. */
+	private deferDue(now: number): void {
+		for (const job of this.jobs.values()) if (this.isDue(job, now)) this.defer(job);
 	}
 
 	private deliverMissed(): void {
@@ -637,6 +669,42 @@ export class StepCronRuntime {
 		this.deferred.delete(id);
 		this.pendingMissed.delete(id);
 		this.failures.delete(`delivery:${id}`);
+	}
+
+	/**
+	 * Adopt an existing project store. Creating one belongs to `create`, so a
+	 * session that never schedules durable work performs no storage I/O.
+	 */
+	private attachStore(filePath: string): boolean {
+		if (this.currentStore) return true;
+		try {
+			statSync(filePath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+			throw error;
+		}
+		this.currentStore = this.storeFactory(filePath);
+		return true;
+	}
+
+	/** Attach the shared store if it exists by now, then adopt its records. */
+	private refreshDurableNow(): void {
+		if (!this.currentStore) {
+			const filePath = this.trusted ? this.resolveStoragePath() : undefined;
+			if (!filePath || !this.attachStore(filePath)) return;
+		}
+		this.refreshDurable();
+	}
+
+	/**
+	 * Another runtime's edits do not need the one-second firing cadence: this
+	 * runtime's own jobs are already in memory, and `withLatestJobs` re-reads the
+	 * file under the lock before any mutation.
+	 */
+	private refreshDurableOnTick(now: number): void {
+		if (now - this.durableRefreshAt < DURABLE_REFRESH_INTERVAL_MS) return;
+		this.durableRefreshAt = now;
+		this.refreshDurableNow();
 	}
 
 	private refreshDurable(): void {
