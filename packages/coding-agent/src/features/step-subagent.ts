@@ -19,7 +19,7 @@ import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.t
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
 import { executeSubagent } from "./subagent/execute.ts";
-import { allocateStepWorktree, cloneUsage, isRecordValue } from "./subagent/helpers.ts";
+import { allocateStepWorktree, cloneUsage, isRecordValue, SUBAGENT_SESSION_ID_PREFIX } from "./subagent/helpers.ts";
 import {
 	type BackgroundAgentLane,
 	controlResult,
@@ -56,9 +56,12 @@ export {
 	cloneUsage,
 	currentStepInvocation,
 	emptyUsage,
+	isChildAgentSessionId,
 	isRecordValue,
 	normalizeChildTools,
+	SUBAGENT_SESSION_ID_PREFIX,
 	sanitizeLabel,
+	WORKFLOW_SESSION_ID_PREFIX,
 } from "./subagent/helpers.ts";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -394,7 +397,7 @@ function stringifyLiveValue(value: unknown): string | undefined {
 const spawnedSubagentSessions = new Set<string>();
 
 export async function runStepSubagentProcess(input: StepSubagentRunInput): Promise<StepSubagentRunResult> {
-	const sessionId = input.sessionId?.trim() || `subagent-${randomUUID()}`;
+	const sessionId = input.sessionId?.trim() || `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`;
 	const live = getLiveSubagentSession(sessionId);
 	if (live) return live.runTurn(input);
 	if (spawnedSubagentSessions.has(sessionId)) input.onChildRespawn?.();
