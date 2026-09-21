@@ -10,8 +10,7 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Providers and Models](#providers-and-models)
-  - [Provider Factories](#provider-factories)
-  - [All Built-in Providers](#all-built-in-providers)
+  - [Registering Providers](#registering-providers)
   - [Querying Models](#querying-models)
   - [Static Catalog Reads](#static-catalog-reads)
   - [Dynamic Providers](#dynamic-providers)
@@ -46,7 +45,6 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - [Browser Usage](#browser-usage)
 - [Bundling and Tree Shaking](#bundling-and-tree-shaking)
 - [OAuth Providers](#oauth-providers)
-  - [Vertex AI](#vertex-ai)
   - [Programmatic OAuth](#programmatic-oauth)
 - [Migrating from the Old Global API](#migrating-from-the-old-global-api)
 - [Development](#development)
@@ -86,17 +84,36 @@ TypeBox exports are re-exported from `@step-harness/providers`: `Type`, `Static`
 
 ## Quick Start
 
-You build a `Models` collection of providers and stream through it. The quickest start registers every built-in provider; apps that care about bundle size register individual providers instead (see [Provider Factories](#provider-factories) and [Bundling and Tree Shaking](#bundling-and-tree-shaking)).
+You build a `Models` collection of providers and stream through it. This build ships no built-in provider catalog, so you register a provider you declare yourself (see [createProvider()](#createprovider)) against any OpenAI/Anthropic-compatible endpoint.
 
 ```typescript
-import { Type, type Context, type Tool } from '@step-harness/providers';
-import { builtinModels } from '@step-harness/providers/providers/all';
+import { Type, type Context, type Model, type Tool, createModels, createProvider, envApiKeyAuth } from '@step-harness/providers';
+import { openAICompletionsApi } from '@step-harness/providers/api/openai-completions.lazy';
 
-// A Models collection with every built-in provider registered
-const models = builtinModels();
+// Declare a model against any OpenAI-compatible endpoint (Step shown here).
+const model: Model<'openai-completions'> = {
+  id: 'step-2',
+  name: 'Step 2',
+  api: 'openai-completions',
+  provider: 'step',
+  baseUrl: 'https://api.stepfun.com/v1',
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128000,
+  maxTokens: 8192,
+};
 
-// Sync lookup against the collection
-const model = models.getModel('openai', 'gpt-4o-mini')!;
+// Register it on a collection; auth resolves STEP_API_KEY from the environment.
+const models = createModels();
+models.setProvider(createProvider({
+  id: 'step',
+  name: 'Step',
+  baseUrl: 'https://api.stepfun.com/v1',
+  auth: { apiKey: envApiKeyAuth('Step API key', ['STEP_API_KEY']) },
+  models: [model],
+  api: openAICompletionsApi(),
+}));
 
 // Define tools with TypeBox schemas for type safety and validation
 const tools: Tool[] = [{
@@ -115,7 +132,7 @@ const context: Context = {
 };
 
 // Option 1: Streaming with all event types.
-// Auth resolves through the provider (OPENAI_API_KEY from the environment here).
+// Auth resolves through the provider (STEP_API_KEY from the environment here).
 const s = models.stream(model, context);
 
 for await (const event of s) {
@@ -212,7 +229,7 @@ for (const block of response.content) {
 }
 ```
 
-Snippets in the rest of this README assume a `models` collection set up like this (with the relevant providers registered).
+Snippets in the rest of this README assume a `models` collection set up like this. Since no catalog ships built-in, the specific provider and model ids in later examples (e.g. `getModel('anthropic', 'claude-sonnet-4-6')`) are illustrative — they resolve only if you have registered a provider under that id with `createProvider()`.
 
 ## Providers and Models
 
@@ -220,49 +237,30 @@ A **provider** is the runtime unit: it owns its model catalog, its auth (API key
 
 Providers internally share **API implementations** (the wire protocols): Anthropic models use `anthropic-messages`, OpenAI uses `openai-responses`, while xAI, Groq, Cerebras, OpenRouter, and most others share `openai-completions`. Mixed-API providers (GitHub Copilot, OpenCode Zen) dispatch per model.
 
-### Provider Factories
+### Registering Providers
 
-For apps that only need specific providers, there is one factory per built-in provider, each a subpath import that pulls only that provider's catalog:
+This build ships no built-in provider factories. Register providers you declare with [`createProvider()`](#createprovider) — a local inference server, a proxy, or any OpenAI/Anthropic-compatible endpoint — then add them to a collection:
 
 ```typescript
-import { anthropicProvider } from '@step-harness/providers/providers/anthropic';
-import { openaiProvider } from '@step-harness/providers/providers/openai';
-import { openrouterProvider } from '@step-harness/providers/providers/openrouter';
-import { amazonBedrockProvider } from '@step-harness/providers/providers/amazon-bedrock';
-// ...one module per provider in the Supported Providers list
-
 const models = createModels();
-models.setProvider(anthropicProvider());
-models.setProvider(openrouterProvider());
+models.setProvider(createProvider({ /* id, baseUrl, auth, models, api */ }));
 ```
 
-Provider factories import their model catalog and a lazy API wrapper. They do not import other providers. With bundler code splitting, SDK implementations (`@anthropic-ai/sdk`, `openai`, `@google/genai`, etc.) stay in lazy chunks loaded on the first request to a model of that API.
-
-### All Built-in Providers
-
-For apps that want everything (as in Quick Start):
-
-```typescript
-import { builtinModels } from '@step-harness/providers/providers/all';
-
-const models = builtinModels(); // a Models collection with every built-in provider registered
-```
-
-This imports all catalogs and every built-in provider factory. It is the heavy, explicit entrypoint. `builtinModels()` accepts the same options as `createModels()` (`credentials`, `authContext`); `builtinProviders()` returns the provider array if you want to register them on your own collection.
+See [Custom Providers](#custom-providers) for the full `createProvider()` reference, and [Bundling and Tree Shaking](#bundling-and-tree-shaking) for keeping only the wire-protocol implementations you use. With bundler code splitting, SDK implementations (`@anthropic-ai/sdk`, `openai`) stay in lazy chunks loaded on the first request to a model of that API.
 
 ### Querying Models
 
 Reads are synchronous and return the last-known lists:
 
 ```typescript
-const providers = models.getProviders();           // registered Provider objects
-const provider = models.getProvider('anthropic');  // one provider
+const providers = models.getProviders();       // registered Provider objects
+const provider = models.getProvider('step');    // one provider
 
-const all = models.getModels();                    // every model across providers
-const anthropicModels = models.getModels('anthropic');
-const model = models.getModel('anthropic', 'claude-sonnet-4-5');
+const all = models.getModels();                 // every model across providers
+const stepModels = models.getModels('step');
+const model = models.getModel('step', 'step-2');
 
-for (const m of anthropicModels) {
+for (const m of stepModels) {
   console.log(`${m.id}: ${m.name}`);
   console.log(`  API: ${m.api}`);
   console.log(`  Context: ${m.contextWindow} tokens`);
@@ -276,7 +274,8 @@ Dynamically listed models are typed `Model<Api>`. Narrow with the `hasApi()` gua
 ```typescript
 import { hasApi } from '@step-harness/providers';
 
-const m = models.getModel('anthropic', 'claude-sonnet-4-5');
+// A model from a custom Anthropic-compatible provider you registered.
+const m = models.getModel('my-anthropic', 'claude-sonnet-4-6');
 if (m && hasApi(m, 'anthropic-messages')) {
   // m: Model<'anthropic-messages'> — stream options fully typed
   models.stream(m, context, { thinkingEnabled: true, thinkingBudgetTokens: 2048 });
@@ -285,15 +284,7 @@ if (m && hasApi(m, 'anthropic-messages')) {
 
 ### Static Catalog Reads
 
-For tooling that wants the generated built-in catalog with full literal typing (provider and model IDs auto-complete), independent of any collection:
-
-```typescript
-import { getBuiltinModel, getBuiltinModels, getBuiltinProviders } from '@step-harness/providers/providers/all';
-
-const model = getBuiltinModel('openai', 'gpt-4o-mini'); // typed Model<'openai-responses'>
-const providers = getBuiltinProviders();
-const anthropic = getBuiltinModels('anthropic');
-```
+This build ships no generated built-in catalog, so `getBuiltinModel()` / `getBuiltinModels()` / `getBuiltinProviders()` from `@step-harness/providers/providers/all` resolve against an empty set. Read models from a collection after registering providers (see [Querying Models](#querying-models)).
 
 ### Dynamic Providers
 
@@ -374,8 +365,6 @@ Stored credentials (API keys entered interactively, OAuth tokens) live in a `Cre
 import { createModels, type CredentialStore } from '@step-harness/providers';
 
 const models = createModels({ credentials: myFileBackedStore });
-// builtinModels() takes the same options:
-// const models = builtinModels({ credentials: myFileBackedStore });
 ```
 
 The contract is small: `read(providerId)`, `list()` for non-secret `{ providerId, type }` metadata, `modify(providerId, fn)` (the only write path — a serialized read-modify-write), and `delete(providerId)`. Each operation accepts optional cancellation options. Enumeration must not resolve secrets or execute configured key commands. OAuth token refresh runs inside `modify`, so concurrent requests and processes cannot double-refresh a rotated token. A stored credential *owns* its provider: environment variables are only consulted when nothing is stored, and a failed refresh never silently falls back to an env key.
@@ -395,7 +384,7 @@ const credential = {
 
 ### Environment Variables
 
-Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` explicitly):
+A provider registered under one of these ids (with `envApiKeyAuth`) resolves the matching env var (Node.js; in browsers pass `apiKey` explicitly):
 
 | Provider | Environment Variable(s) |
 |----------|------------------------|
@@ -703,7 +692,6 @@ Many models support thinking/reasoning capabilities where they can show their in
 // Many models across providers support thinking/reasoning
 const model = models.getModel('anthropic', 'claude-sonnet-4-5')!;
 // or models.getModel('openai', 'gpt-5-mini');
-// or models.getModel('google', 'gemini-2.5-flash');
 // or models.getModel('xai', 'grok-4.6');
 
 // Check if model supports reasoning
@@ -752,17 +740,6 @@ if (hasApi(anthropicModel, 'anthropic-messages')) {
   await models.complete(anthropicModel, context, {
     thinkingEnabled: true,
     thinkingBudgetTokens: 8192  // Optional token limit
-  });
-}
-
-// Google Gemini Thinking
-const googleModel = models.getModel('google', 'gemini-2.5-flash')!;
-if (hasApi(googleModel, 'google-generative-ai')) {
-  await models.complete(googleModel, context, {
-    thinking: {
-      enabled: true,
-      budgetTokens: 8192  // -1 for dynamic, 0 to disable
-    }
   });
 }
 ```
@@ -1064,12 +1041,6 @@ Built-in API implementations live under `./api/<api-id>`:
 | `anthropic-messages` | `AnthropicOptions` |
 | `openai-completions` | `OpenAICompletionsOptions` |
 | `openai-responses` | `OpenAIResponsesOptions` |
-| `openai-codex-responses` | `OpenAICodexResponsesOptions` |
-| `azure-openai-responses` | `AzureOpenAIResponsesOptions` |
-| `google-generative-ai` | `GoogleOptions` |
-| `google-vertex` | `GoogleVertexOptions` |
-| `mistral-conversations` | `MistralOptions` |
-| `bedrock-converse-stream` | `BedrockOptions` |
 
 Importing an implementation module loads its SDK. The `./api/<id>.lazy` wrappers (used by the provider factories) defer that load to the first request when the runtime or bundler supports dynamic import chunking. Legacy raw API subpaths from older releases (`./anthropic`, `./google`, `./mistral`, `./openai-completions`, ...) were removed; use `@step-harness/providers/api/<api-id>`.
 
@@ -1216,32 +1187,35 @@ When messages from one provider are sent to a different provider, the library au
 - **Tool calls and regular text** are preserved unchanged
 
 ```typescript
-import { createModels, type Context } from '@step-harness/providers';
-import { anthropicProvider } from '@step-harness/providers/providers/anthropic';
-import { openaiProvider } from '@step-harness/providers/providers/openai';
-import { googleProvider } from '@step-harness/providers/providers/google';
+import { createModels, createProvider, envApiKeyAuth, type Context, type Model } from '@step-harness/providers';
+import { anthropicMessagesApi } from '@step-harness/providers/api/anthropic-messages.lazy';
+import { openAIResponsesApi } from '@step-harness/providers/api/openai-responses.lazy';
+
+// Two custom providers on different wire protocols.
+const claude: Model<'anthropic-messages'> = {
+  id: 'claude', name: 'Claude', api: 'anthropic-messages', provider: 'my-anthropic',
+  baseUrl: 'https://api.anthropic.com', reasoning: true, input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 32000,
+};
+const gpt5: Model<'openai-responses'> = {
+  id: 'gpt-5-mini', name: 'GPT-5 mini', api: 'openai-responses', provider: 'my-openai',
+  baseUrl: 'https://api.openai.com/v1', reasoning: true, input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 400000, maxTokens: 128000,
+};
 
 const models = createModels();
-models.setProvider(anthropicProvider());
-models.setProvider(openaiProvider());
-models.setProvider(googleProvider());
+models.setProvider(createProvider({ id: 'my-anthropic', auth: { apiKey: envApiKeyAuth('Anthropic key', ['ANTHROPIC_API_KEY']) }, models: [claude], api: anthropicMessagesApi() }));
+models.setProvider(createProvider({ id: 'my-openai', auth: { apiKey: envApiKeyAuth('OpenAI key', ['OPENAI_API_KEY']) }, models: [gpt5], api: openAIResponsesApi() }));
 
 const context: Context = { messages: [] };
 
 // Start with Claude
-const claude = models.getModel('anthropic', 'claude-sonnet-4-5')!;
 context.messages.push({ role: 'user', content: 'What is 25 * 18?', timestamp: Date.now() });
 context.messages.push(await models.completeSimple(claude, context, { reasoning: 'medium' }));
 
-// Switch to GPT-5 - it will see Claude's thinking as <thinking> tagged text
-const gpt5 = models.getModel('openai', 'gpt-5-mini')!;
+// Switch to GPT-5 — it will see Claude's thinking as <thinking> tagged text
 context.messages.push({ role: 'user', content: 'Is that calculation correct?', timestamp: Date.now() });
 context.messages.push(await models.complete(gpt5, context));
-
-// Switch to Gemini
-const gemini = models.getModel('google', 'gemini-2.5-flash')!;
-context.messages.push({ role: 'user', content: 'What was the original question?', timestamp: Date.now() });
-const geminiResponse = await models.complete(gemini, context);
 ```
 
 All providers can handle messages from other providers — text, tool calls and results (including images), thinking blocks (transformed to tagged text), and aborted messages with partial content. This enables flexible workflows: start with a fast model, switch to a more capable one for complex reasoning, or maintain continuity across provider outages.
@@ -1283,16 +1257,24 @@ Models are plain serializable data too — no functions or implementations attac
 
 ## Browser Usage
 
-The library supports browser environments. The core entrypoint and provider factories are side-effect free and bundle cleanly. Environment variables are not available in browsers, so pass API keys explicitly — or inject a `CredentialStore` (e.g. localStorage-backed) and let provider auth resolve from stored credentials:
+The library supports browser environments. The core entrypoint and providers you build with `createProvider()` are side-effect free and bundle cleanly. Environment variables are not available in browsers, so pass API keys explicitly — or inject a `CredentialStore` (e.g. localStorage-backed) and let provider auth resolve from stored credentials:
 
 ```typescript
-import { createModels } from '@step-harness/providers';
-import { anthropicProvider } from '@step-harness/providers/providers/anthropic';
+import { createModels, createProvider, type Model } from '@step-harness/providers';
+import { openAICompletionsApi } from '@step-harness/providers/api/openai-completions.lazy';
 
+const model: Model<'openai-completions'> = {
+  id: 'step-2', name: 'Step 2', api: 'openai-completions', provider: 'step',
+  baseUrl: 'https://api.stepfun.com/v1', reasoning: false, input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192,
+};
 const models = createModels();
-models.setProvider(anthropicProvider());
+models.setProvider(createProvider({
+  id: 'step', baseUrl: model.baseUrl,
+  auth: { apiKey: { name: 'Step', resolve: async () => ({ auth: {} }) } },
+  models: [model], api: openAICompletionsApi(),
+}));
 
-const model = models.getModel('anthropic', 'claude-3-5-haiku-20241022')!;
 const response = await models.complete(model, {
   messages: [{ role: 'user', content: 'Hello!', timestamp: Date.now() }]
 }, {
@@ -1304,32 +1286,35 @@ const response = await models.complete(model, {
 
 Browser compatibility notes:
 
-- Amazon Bedrock (`bedrock-converse-stream`) is not supported in browser environments. It can still appear in model lists; calls fail at runtime.
 - OAuth login flows are Node-only. They are lazy-loaded behind bundler-opaque imports, so registering an OAuth-capable provider does not pull Node-only code into a browser bundle — only actually logging in would.
-- Use a server-side proxy or backend service if you need Bedrock or OAuth-based auth from a web app.
+- Use a server-side proxy or backend service if you need OAuth-based auth from a web app.
 
 ## Bundling and Tree Shaking
 
-For small bundles, import only the providers you need:
+For small bundles, register only the providers you need and import only the wire-protocol implementations they use:
 
 ```typescript
-import { createModels } from '@step-harness/providers';
-import { openaiProvider } from '@step-harness/providers/providers/openai';
+import { createModels, createProvider, envApiKeyAuth } from '@step-harness/providers';
+import { openAICompletionsApi } from '@step-harness/providers/api/openai-completions.lazy';
 
 const models = createModels();
-models.setProvider(openaiProvider());
+models.setProvider(createProvider({
+  id: 'my-openai',
+  auth: { apiKey: envApiKeyAuth('OpenAI key', ['OPENAI_API_KEY']) },
+  models: [/* your Model<'openai-completions'> list */],
+  api: openAICompletionsApi(),
+}));
 ```
 
 Rules:
 
 - `@step-harness/providers` is the core entrypoint and does not import built-in catalogs, provider factories, or SDK implementations.
-- `@step-harness/providers/providers/<provider>` imports that provider's catalog and lazy API wrapper only.
-- `@step-harness/providers/providers/all` imports every built-in provider factory and all catalogs. Use it only when you want the full built-in set.
+- This build has no per-provider factory subpaths and no built-in catalog; `@step-harness/providers/providers/all` re-exports only the (now empty) `builtinModels()` / `builtinProviders()` / `getBuiltin*` helpers and imports no catalogs or SDKs.
 - With code splitting, provider SDKs stay in lazy chunks and load on first request.
-- Without code splitting, bundlers fold reachable lazy API implementations into the single bundle. A single-provider bundle then includes that provider's SDK; `providers/all` includes all statically visible SDKs. Bedrock is the exception: its AWS SDK implementation is loaded through a bundler-opaque Node-only import.
+- A bundle pulls in the SDK of each wire-protocol implementation you import (`@step-harness/providers/api/openai-completions.lazy` → `openai`, `@step-harness/providers/api/anthropic-messages.lazy` → `@anthropic-ai/sdk`). Without code splitting these fold into the single bundle.
 - Importing `@step-harness/providers/api/<api-id>` directly loads that API implementation and its SDK immediately.
 
-Avoid `@step-harness/providers/compat` in new bundled apps; it preserves the old global API and imports the full built-in catalog surface.
+Avoid `@step-harness/providers/compat` in new bundled apps; it preserves the old global API.
 
 For single-file Node ESM bundles, some SDK dependencies may still use dynamic CommonJS `require()` internally. If you see errors such as `Dynamic require of "child_process" is not supported`, add a Node `require` shim to the bundle. With esbuild:
 
@@ -1341,40 +1326,16 @@ esbuild app.js --bundle --platform=node --format=esm \
 
 This is only for Node bundles; it is not a browser or Cloudflare Workers workaround.
 
-Bedrock is Node-only. Add it like any other provider:
-
-```typescript
-import { createModels } from '@step-harness/providers';
-import { amazonBedrockProvider } from '@step-harness/providers/providers/amazon-bedrock';
-
-const models = createModels();
-models.setProvider(amazonBedrockProvider());
-```
-
-In normal Node package usage and code-split bundles, Bedrock loads its AWS SDK implementation lazily. For a standalone single-file bundle that must include Bedrock support, register the implementation module explicitly:
-
-```typescript
-import { setBedrockProviderModule } from '@step-harness/providers/api/bedrock-converse-stream.lazy';
-import { bedrockProviderModule } from '@step-harness/providers/bedrock-provider';
-
-setBedrockProviderModule(bedrockProviderModule);
-```
-
-That explicit override bundles the AWS SDK. Without it, Bedrock's opaque runtime import expects the package's Bedrock implementation file to be available at runtime.
-
 ### Provider-Scoped Environment Overrides
 
-Pass `env` in stream options to scope provider configuration to a request. Values in `env` are used before process environment variables for provider auth and configuration such as Cloudflare account IDs, Azure OpenAI settings, Vertex project/location, Bedrock settings, `HTTP_PROXY`/`HTTPS_PROXY`.
+Pass `env` in stream options to scope provider configuration to a request. Values in `env` are used before process environment variables for provider auth and configuration such as API keys, gateway/account settings, and `HTTP_PROXY`/`HTTPS_PROXY`.
 
 ```typescript
-const models = builtinModels();
-const model = models.getModel('cloudflare-ai-gateway', 'workers-ai/@cf/moonshotai/kimi-k2.6')!;
-
+// `models` and `model` from Quick Start.
 const response = await models.complete(model, context, {
   env: {
-    CLOUDFLARE_API_KEY: '...',
-    CLOUDFLARE_ACCOUNT_ID: 'account-id',
-    CLOUDFLARE_GATEWAY_ID: 'gateway-id'
+    STEP_API_KEY: '...',
+    HTTPS_PROXY: 'http://proxy.internal:8080',
   }
 });
 ```
@@ -1383,24 +1344,16 @@ Use this when one process needs different provider settings per request, or when
 
 ## OAuth Providers
 
-Several providers support OAuth authentication instead of static API keys:
+No OAuth provider ships built-in. A provider you register with `createProvider()` may carry an `OAuthAuth` on `provider.auth.oauth` with three operations: `login(interaction)` uses the provider-neutral `AuthInteraction.prompt()`/`notify()` protocol and returns a credential, `refresh(credential, signal)` refreshes expiring credentials when applicable, and `toAuth(credential)` derives request auth. Login interactions and refresh calls always carry a concrete abort signal. Refresh is automatic: `models.getAuth(providerId)` and request paths refresh expired tokens under a credential-store lock, so concurrent requests and processes cannot double-refresh.
 
-- **Anthropic** (Claude Pro/Max subscription)
-- **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x Codex models)
-- **GitHub Copilot** (Copilot subscription)
-- **OpenRouter** (OAuth PKCE that mints a user-controlled API key)
-
-Each of these providers carries an `OAuthAuth` on `provider.auth.oauth` with three operations: `login(interaction)` uses the provider-neutral `AuthInteraction.prompt()`/`notify()` protocol and returns a credential, `refresh(credential, signal)` refreshes expiring credentials when applicable, and `toAuth(credential)` derives request auth (GitHub Copilot's per-account base URL comes from here). Provider login interactions and refresh calls always carry a concrete abort signal. Refresh is automatic: `models.getAuth(providerId)` and request paths refresh expired tokens under a credential-store lock, so concurrent requests and processes cannot double-refresh. OpenRouter's OAuth flow instead returns a permanent API key, so its refresh operation is a no-op.
+`Models` drives the flow and persists the credential:
 
 ```typescript
-import { createModels } from '@step-harness/providers';
-import { anthropicProvider } from '@step-harness/providers/providers/anthropic';
-
 const models = createModels({ credentials: myStore }); // persistent CredentialStore
-models.setProvider(anthropicProvider());
+models.setProvider(myOAuthProvider); // a createProvider() provider whose auth.oauth is set
 
 // Login: Models drives the flow and persists the credential
-await models.login('anthropic', 'oauth', {
+await models.login('my-provider', 'oauth', {
   prompt: async (p) => {
     // p.type: 'text' | 'secret' | 'select' | 'manual_code'
     // manual_code prompts race a local callback server; p.signal aborts them when the server wins
@@ -1419,46 +1372,16 @@ await models.login('anthropic', 'oauth', {
 });
 
 // From here on, requests resolve and refresh the token automatically
-const model = models.getModel('anthropic', 'claude-sonnet-4-5')!;
+const model = models.getModel('my-provider', 'my-model')!;
 await models.complete(model, context);
 
 // Logout
-await models.logout('anthropic');
+await models.logout('my-provider');
 ```
-
-### Vertex AI
-
-Vertex AI models support either a Google Cloud API key or Application Default Credentials (ADC). Its provider-owned API-key login flow can configure either method:
-
-- **API key**: Set `GOOGLE_CLOUD_API_KEY` or pass `apiKey` in the call options.
-- **Local development (ADC)**: Run `gcloud auth application-default login`
-- **CI/Production (ADC)**: Set `GOOGLE_APPLICATION_CREDENTIALS` to point to a service account JSON key file
-
-When using ADC, also set `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`. You can also pass `project`/`location` in the call options. When using `GOOGLE_CLOUD_API_KEY`, `project` and `location` are not required.
-
-```bash
-# Local (uses your user credentials)
-gcloud auth application-default login
-export GOOGLE_CLOUD_PROJECT="my-project"
-export GOOGLE_CLOUD_LOCATION="us-central1"
-
-# CI/Production (service account key file)
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-```
-
-Official docs: [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)
 
 ### Programmatic OAuth
 
-Built-in login and refresh flows are private provider implementations. Use provider-owned `OAuthAuth`, which composes with `CredentialStore` and gets locked auto-refresh through `Models`. The `@step-harness/providers/oauth` entry point retains only type declarations required by coding-agent extension OAuth compatibility.
-
-Provider notes:
-
-**OpenAI Codex**: Requires a ChatGPT Plus or Pro subscription. Provides access to GPT-5.x Codex models with extended context windows and reasoning capabilities. The library automatically handles session-based prompt caching when `sessionId` is provided in stream options unless `cacheRetention` is `"none"`. You can set `transport` in stream options to `"sse"`, `"websocket"`, or `"auto"` for Codex Responses transport selection. When using WebSocket with a `sessionId` and cache retention enabled, connections are reused per session and expire after 5 minutes of inactivity.
-
-**Azure OpenAI (Responses)**: Uses the Responses API only. Set `AZURE_OPENAI_API_KEY` and either `AZURE_OPENAI_BASE_URL` or `AZURE_OPENAI_RESOURCE_NAME`. `AZURE_OPENAI_BASE_URL` supports both `https://<resource>.openai.azure.com` and `https://<resource>.cognitiveservices.azure.com`; root endpoints are normalized to `.../openai/v1` automatically. Use `AZURE_OPENAI_API_VERSION` (defaults to `v1`) to override the API version if needed. Deployment names are treated as model IDs by default, override with `azureDeploymentName` or `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` using comma-separated `model-id=deployment` pairs (for example `gpt-4o-mini=my-deployment,gpt-4o=prod`). Legacy deployment-based URLs are intentionally unsupported.
-
-**GitHub Copilot**: If you get "The requested model is not supported" error, enable the model manually in VS Code: open Copilot Chat, click the model selector, select the model (warning icon), and click "Enable".
+The `@step-harness/providers/oauth` entry point retains only the type declarations required by coding-agent extension OAuth compatibility; it no longer ships any built-in login flow. Provide login/refresh through a custom provider's `OAuthAuth`, which composes with `CredentialStore` and gets locked auto-refresh through `Models`.
 
 ## Migrating from the Old Global API
 
@@ -1472,12 +1395,12 @@ import { getModel, complete } from '@step-harness/providers';
 import { getModel, complete } from '@step-harness/providers/compat';
 ```
 
-Compat is a strict superset of the root entrypoint, so a file can switch its import path wholesale. It will be removed in a future release; migrate to `createModels()` + provider factories:
+Compat is a strict superset of the root entrypoint, so a file can switch its import path wholesale. It will be removed in a future release; migrate to `createModels()` + `createProvider()`:
 
 | Old | New |
 |-----|-----|
-| `getModel('openai', 'gpt-4o-mini')` | `models.getModel('openai', 'gpt-4o-mini')` or `getBuiltinModel()` from `providers/all` |
-| `getModels('anthropic')` / `getProviders()` | `models.getModels('anthropic')` / `models.getProviders()` or `getBuiltin*` |
+| `getModel('openai', 'gpt-4o-mini')` | `models.getModel('openai', 'gpt-4o-mini')` (against a registered provider) |
+| `getModels('anthropic')` / `getProviders()` | `models.getModels('anthropic')` / `models.getProviders()` |
 | `stream(model, ctx, opts)` (env-key injection) | `models.stream(model, ctx, opts)` (provider auth resolution) |
 | `registerApiProvider({ api, stream, streamSimple })` | `createProvider({ id, auth, models, api })` + `models.setProvider()` |
 | `getEnvApiKey('openai')` | `await models.getAuth(model.provider)` |
@@ -1487,6 +1410,8 @@ Compat is a strict superset of the root entrypoint, so a file can switch its imp
 ## Development
 
 ### Adding a New Provider
+
+> The Step-only build ships no built-in providers; the supported way to add one is [`createProvider()`](#createprovider) / a `~/.pi/agent/models.json` entry, no package changes required. The internal checklist below is retained for reference on how a built-in catalog provider would be wired if the built-in surface is reintroduced.
 
 Adding a new LLM provider requires changes across multiple files. The layered layout: API implementations live in `src/api/`, provider factories in `src/providers/`, stable generated catalog wrappers live in `src/providers/<id>.models.ts`, and `src/models.generated.ts` registers them. This checklist covers all necessary steps:
 
