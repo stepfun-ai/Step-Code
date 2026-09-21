@@ -88,7 +88,7 @@ function commonBuildOptions() {
 		absWorkingDir: repoRoot,
 		banner,
 		bundle: true,
-		define: { PI_BUNDLED_NODE: "true", ...stepBuildDefines },
+		define: { STEP_BUNDLED_NODE: "true", ...stepBuildDefines },
 		external: ["@silvia-odwyer/photon-node"],
 		format: "esm",
 		legalComments: "none",
@@ -123,10 +123,14 @@ function readStepBuildDefines() {
 	const version = process.env.STEP_CLI_BUILD_VERSION;
 	const channel = process.env.STEP_CLI_BUILD_CHANNEL;
 	const commit = process.env.STEP_CLI_BUILD_COMMIT;
+	const feedbackEndpoint = process.env.STEP_CLI_FEEDBACK_ENDPOINT;
+	const feedbackBundleEndpoint = process.env.STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT;
 	const aliases = [
 		["STEP_CLI_BUILD_VERSION", version],
 		["STEP_CLI_BUILD_CHANNEL", channel],
 		["STEP_CLI_BUILD_COMMIT", commit],
+		["STEP_CLI_FEEDBACK_ENDPOINT", feedbackEndpoint],
+		["STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", feedbackBundleEndpoint],
 	];
 	for (const [name, value] of aliases) {
 		if (typeof value === "string" && value.trim()) {

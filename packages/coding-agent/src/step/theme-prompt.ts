@@ -31,6 +31,7 @@ import {
 	setThemeStorageDir,
 	theme,
 } from "../theme/theme.ts";
+import { getStepDefaultTheme } from "./defaults.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { createStandaloneStepHost, type StepLoginHost } from "./login-flow.ts";
 import { StepThemePromptView } from "./theme-prompt-view.ts";
@@ -43,15 +44,8 @@ export interface StepThemeOption {
 }
 
 /**
- * Build the offered list: the auto pair first, then its two halves by name,
- * then every other registered theme.
- *
- * The product default leads because it is the only option that keeps following
- * the terminal after the choice is made; the explicit light and dark entries
- * follow it because "my terminal is dark and I want it to stay dark" is the
- * next most common answer. Themes that are not part of the default pair are
- * listed after them rather than hidden: a user with a custom theme installed
- * would otherwise have to open `/theme` immediately.
+ * List the product default first, followed by the other registered themes.
+ * An automatic default also exposes its dark and light halves explicitly.
  */
 export function buildStepThemeOptions(availableThemes: readonly string[], defaultSetting: string): StepThemeOption[] {
 	const available = availableThemes.filter((name) => name.trim().length > 0);
@@ -68,6 +62,9 @@ export function buildStepThemeOptions(availableThemes: readonly string[], defaul
 		options.push({ setting: pair.darkTheme, label: "Dark mode", description: pair.darkTheme });
 		options.push({ setting: pair.lightTheme, label: "Light mode", description: pair.lightTheme });
 		claimed.add(pair.darkTheme).add(pair.lightTheme);
+	} else if (!pair && available.includes(defaultSetting)) {
+		options.push({ setting: defaultSetting, label: `${defaultSetting} (default)` });
+		claimed.add(defaultSetting);
 	}
 
 	for (const name of available) {
@@ -82,7 +79,7 @@ export interface RunStepThemePromptOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	/** Screen host; a standalone full-screen renderer by default. */
 	readonly createHost?: () => StepLoginHost;
-	/** Product default theme setting, for example `step-light/step`. */
+	/** Product default theme setting, for example `step-blue`. */
 	readonly themeName?: string;
 }
 
@@ -100,7 +97,7 @@ export async function runStepThemePrompt(options: RunStepThemePromptOptions = {}
 	// Bind the product theme directory before the catalog is read, or a user's
 	// own themes are missing from a list that claims to be all of them.
 	setThemeStorageDir(resolveStepAgentDir(env));
-	const defaultSetting = options.themeName?.trim() || "dark";
+	const defaultSetting = options.themeName?.trim() || getStepDefaultTheme(env);
 	const terminalTheme = detectTerminalBackgroundFromEnv({ env }).theme;
 	// This runs before main() initializes the product theme; only initialize when
 	// this is the first renderer in the process.
@@ -116,6 +113,7 @@ export async function runStepThemePrompt(options: RunStepThemePromptOptions = {}
 		const themeName = resolveThemeSetting(setting, terminalTheme);
 		if (themeName) setTheme(themeName);
 	};
+	applySetting(themeOptions.find((option) => option.setting === defaultSetting)?.setting ?? themeOptions[0].setting);
 
 	const host = options.createHost?.() ?? createStandaloneStepHost();
 	let settle: ((setting: string | undefined) => void) | undefined;

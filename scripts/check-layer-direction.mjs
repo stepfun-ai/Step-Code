@@ -199,7 +199,7 @@ function runSelfTest() {
 	expectViolation("packages/coding-agent/src/x.ts", "@step-harness/cli");
 	expectViolation("packages/tui/src/x.ts", "@step-harness/cli/runtime");
 	// rule 4 — extension importing an app
-	expectViolation("packages/extensions/realtime-voice/src/x.ts", "@step-harness/cli");
+	expectViolation("packages/extensions/example/src/x.ts", "@step-harness/cli");
 
 	if (failures.length > 0) {
 		console.error("layer-direction self-test FAILED:");

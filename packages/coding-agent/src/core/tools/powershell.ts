@@ -17,7 +17,7 @@ const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encodin
 
 export const powershellToolSystemPromptContribution = {
 	snippet: "Execute PowerShell commands",
-	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
+	guidelines: [],
 } as const;
 
 export type PowerShellOperations = BashOperations;
@@ -26,8 +26,7 @@ export type PowerShellSpawnHook = BashSpawnHook;
 export type PowerShellToolDetails = BashToolDetails;
 export type PowerShellToolInput = BashToolInput;
 
-export interface PowerShellToolOptions
-	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook"> {}
+export interface PowerShellToolOptions extends Pick<BashToolOptions, "operations" | "spawnHook"> {}
 
 export function createLocalPowerShellOperations(): PowerShellOperations {
 	const operations = createLocalShellOperations("PowerShell", getPowerShellConfig);

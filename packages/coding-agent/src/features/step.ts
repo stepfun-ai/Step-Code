@@ -21,8 +21,9 @@ import {
 } from "../step/permissions.ts";
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
-import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
-import { applyStepTraceHeaders, resolveStepTraceRuntimeAllowlist } from "../step/trace-headers.ts";
+import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
+import { applyStepTraceHeaders } from "../step/trace-headers.ts";
 import {
 	fetchStepModelEfforts,
 	registerStepProvider,
@@ -36,11 +37,15 @@ export interface StepExtensionOptions {
 	/** Initial Step policy, normally populated from CLI/runtime options. */
 	permission?: StepPermissionControllerOptions;
 	/** Optional Step settings decorator used to restore and persist policy. */
-	stepSettings?: () => Pick<StepSettingsManager, "getStepSettings" | "setEffectiveStepSettings"> | undefined;
+	stepSettings?: () =>
+		| (Pick<StepSettingsManager, "getStepSettings" | "setEffectiveStepSettings"> &
+				Partial<Pick<StepSettingsManager, "getShellPath" | "getShellCommandPrefix">>)
+		| undefined;
 	/** Optional process/host reporter for Step lifecycle projections. */
 	telemetry?: StepTelemetryReporter;
 	/** Current account identity, resolved when `/feedback` is invoked. */
 	feedbackIdentity?: () => FeedbackIdentity;
+	traceHeaderPolicy?: TraceHeaderPolicy;
 }
 
 /**
@@ -118,17 +123,6 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			recordStepSlashCommand(options.telemetry, token, builtInSlashCommands.has(name));
 		});
 		let permissions = new StepPermissionController(resolvePermissionOptions(options));
-		const lifecycle = options.telemetry
-			? createStepLifecycleTelemetry(options.telemetry, {
-					// `agent_mode` is a runtime mode dimension, not the product name.
-					// Step starts in Pi's normal mode; the plan extension can supply an
-					// explicit mode when a host selects it before session_start.
-					agentMode: "normal",
-				})
-			: undefined;
-		// Pi remains the sole source of lifecycle events. The adapter only projects
-		// them to Step's reporter and never participates in execution decisions.
-		lifecycle?.register(pi);
 		let notify: ((message: string, type?: "info" | "warning" | "error") => void) | undefined;
 		let autoResumeAllowed = false;
 		let nativeRetryPreference: boolean | undefined;
@@ -246,37 +240,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		});
 
 		pi.on("tool_call", async (event, ctx) => {
-			// Same policy handleToolCall will apply, so the recorded decision matches
-			// the outcome even when a run without a UI downgrades the mode.
-			const decision = permissions.decide(event.toolName, event.input, ctx.hasUI);
-			lifecycle?.recordPermissionDecision({
-				toolName: event.toolName,
-				action: decision.action,
-				risk: decision.hazardous ? "high" : decision.action === "allow" ? "low" : "normal",
-				hazardous: decision.hazardous,
-			});
-
-			try {
-				const result = await permissions.handleToolCall(event, ctx);
-				if (decision.action === "confirm") {
-					lifecycle?.recordPermissionApproval({
-						toolName: event.toolName,
-						decision: result?.block ? "deny" : "allow",
-						risk: decision.hazardous ? "high" : "normal",
-					});
-				}
-				if (result?.block) lifecycle?.markToolBlocked(event.toolCallId);
-				return result;
-			} catch (error) {
-				if (decision.action === "confirm") {
-					lifecycle?.recordPermissionApproval({
-						toolName: event.toolName,
-						decision: "error",
-						risk: decision.hazardous ? "high" : "normal",
-					});
-				}
-				throw error;
-			}
+			return await permissions.handleToolCall(event, ctx);
 		});
 
 		pi.on("before_agent_start", (event) => {
@@ -300,10 +264,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		pi.on("before_provider_headers", (event, ctx) => {
 			const model = ctx.model;
 			if (!model) return;
-			// The low-sensitivity client marker belongs on every model request. High-
-			// sensitivity trace fields are gated by the configured URL allowlist below;
-			// Step/legacy MP providers additionally trust their resolved product URL so
-			// their cloud-trace requests keep the server-side observer context.
+			// x-step-client marks every request. The session/workspace/provider
+			// attribution follows only Step-owned providers (native step + product
+			// proxies), keyed by provider id, so it never egresses to a distinct
+			// third-party provider. Caveat: overriding STEP_BASE_URL under the
+			// "step" id points that provider at another host and attribution follows.
 			applyStepTraceHeaders(
 				event.headers,
 				{
@@ -319,7 +284,8 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				{
 					clientType: process.env.STEP_CLIENT,
 					requestUrl: model.baseUrl,
-					allowedBaseUrls: resolveStepTraceRuntimeAllowlist(model.provider),
+					allowedBaseUrls: options.traceHeaderPolicy?.allowedBaseUrls ?? [],
+					highSensitivityFields: options.traceHeaderPolicy?.highSensitivityFields,
 				},
 			);
 		});
@@ -393,7 +359,18 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
  * Pi's resolver, so only inject it when no policy override is present.
  */
 function resolvePermissionOptions(options: StepExtensionOptions): StepPermissionControllerOptions | undefined {
-	const explicit = options.permission;
+	const explicit: StepPermissionControllerOptions = {
+		...options.permission,
+		shellContext:
+			options.permission?.shellContext ??
+			(() => {
+				const settings = options.stepSettings?.();
+				return {
+					shellPath: settings?.getShellPath?.(),
+					commandPrefix: settings?.getShellCommandPrefix?.(),
+				};
+			}),
+	};
 	const persisted = options.stepSettings?.()?.getStepSettings();
 	if (!persisted) return explicit;
 	const env = explicit?.env ?? process.env;

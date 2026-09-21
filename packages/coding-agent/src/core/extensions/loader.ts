@@ -31,7 +31,6 @@ import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
-import { time } from "../timings.ts";
 import type {
 	EntryRenderer,
 	Extension,
@@ -88,8 +87,8 @@ const require = createRequire(import.meta.url);
 const isNodeSeaBinary =
 	("sea" in process.features && process.features.sea === true) ||
 	process.getBuiltinModule("node:sea")?.isSea() === true;
-declare const PI_BUNDLED_NODE: boolean;
-const isBundledNode = typeof PI_BUNDLED_NODE !== "undefined" && PI_BUNDLED_NODE;
+declare const STEP_BUNDLED_NODE: boolean;
+const isBundledNode = typeof STEP_BUNDLED_NODE !== "undefined" && STEP_BUNDLED_NODE;
 const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
 
 /**
@@ -588,7 +587,6 @@ async function initializeExtension(
 		load.discard();
 		throw error;
 	}
-	time(`${extensionPath} factory`, "extensions");
 	return extension;
 }
 
@@ -603,7 +601,6 @@ async function loadExtension(
 
 	try {
 		const factory = await loadExtensionModule(resolvedPath, cacheToken);
-		time(`${extensionPath} module import`, "extensions");
 		if (!factory) {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}

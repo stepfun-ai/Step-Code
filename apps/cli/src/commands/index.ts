@@ -3,7 +3,7 @@
  *
  * Backs both subcommands and in-UI slash commands from one definition. The 30+
  * pure-UI slash commands (/compact, /thinking, /copy, /export, ...) are not
- * commands and do not belong here; `voice` joins as a fifth command in step 6.
+ * commands and do not belong here.
  */
 
 export { authCommand } from "#commands/auth";

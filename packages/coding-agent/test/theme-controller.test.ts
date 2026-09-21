@@ -70,10 +70,10 @@ describe("InteractiveThemeController", () => {
 		vi.stubEnv("STEP_CLI_DEFAULT_THEME", "light");
 		const { ui } = createUi();
 		const manager = SettingsManager.inMemory({});
-		const controller = createController(ui, () => manager, undefined, "step");
+		const controller = createController(ui, () => manager, undefined, "step-violet");
 
-		expect(theme.name).toBe("step");
-		expect(controller.getThemeSelection()).toBe("step");
+		expect(theme.name).toBe("step-violet");
+		expect(controller.getThemeSelection()).toBe("step-violet");
 	});
 
 	it("resolves a theme pair and follows terminal appearance changes", async () => {

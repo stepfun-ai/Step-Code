@@ -9,11 +9,11 @@
  * selector). Commands must not import the shell or any extension implementation;
  * capabilities (mic factory, provider registry, ...) are reached lazily through
  * `ctx.activate(key)` so a capability is only constructed when a command needs
- * it (e.g. `/voice` never initialises the microphone at startup).
+ * it never constructs an unused capability at startup.
  */
 
 /** Capabilities a command may lazily activate through the host. */
-export type CapabilityKey = "auth" | "models" | "session" | "config" | "voice";
+export type CapabilityKey = "auth" | "models" | "session" | "config";
 
 /** Host surface handed to every command. */
 export interface CommandContext {

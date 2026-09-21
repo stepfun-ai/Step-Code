@@ -20,87 +20,33 @@ import type {
 	ModelRequestObserver,
 	ModelRequestStarted,
 } from "../core/model-request-observer.ts";
+import { classifyStepEndpoint } from "./telemetry-contract.ts";
+
+export {
+	classifyStepEndpoint,
+	NOOP_OBSERVABILITY_PROVIDER,
+	type StepModelRequestEventName,
+	type StepObservabilityConfig,
+	type StepObservabilityProvider,
+	type StepTelemetryContextPatch,
+	type StepTelemetryEventName,
+	type StepTelemetryKnownEventName,
+	type StepTelemetryPrimitive,
+	type StepTelemetryProperties,
+	type StepTelemetryPropertiesFor,
+	type StepTelemetryReporter,
+	type StepTelemetryTrackOptions,
+	type TraceHeaderPolicy,
+	trackStepTelemetry,
+} from "./telemetry-contract.ts";
+
 import type {
-	StepTelemetryPrimitive as RegistryTelemetryPrimitive,
-	StepTelemetryEventPayloads,
-	StepTelemetryKnownEventName,
-} from "./telemetry-events.ts";
-import { isStepTraceRequestAllowedForRuntime } from "./trace-headers.ts";
-
-/** Event understood by the legacy Step analytics collector for model calls. */
-export type StepModelRequestEventName = Extract<StepTelemetryKnownEventName, "model_request_completed">;
-
-/** All events that are part of the reviewed Step telemetry contract. */
-export type StepTelemetryEventName = StepTelemetryKnownEventName;
-
-export type StepTelemetryPrimitive = RegistryTelemetryPrimitive;
-export type StepTelemetryProperties = Readonly<Record<string, StepTelemetryPrimitive>>;
-
-/**
- * Known-event payloads are partial at the producer boundary.  This keeps
- * adapters useful while a request is being assembled, while still rejecting a
- * misspelled field on a known event.  The runtime fills only the fields a
- * producer actually knows; the wire contract remains flat and allowlisted.
- */
-export type StepTelemetryPropertiesFor<K extends StepTelemetryEventName> = Readonly<
-	Partial<StepTelemetryEventPayloads[K]>
->;
-
-export type { StepTelemetryKnownEventName } from "./telemetry-events.ts";
-
-/** Ambient identity updates stamped onto subsequent telemetry envelopes. */
-export interface StepTelemetryContextPatch {
-	readonly sessionId?: string;
-	/** Ambient build channel; accepted for parity with the legacy client. */
-	readonly channel?: string;
-	/** Product version stamped on the envelope. */
-	readonly version?: string;
-	/** Runtime platform stamped on the envelope. */
-	readonly platform?: string;
-	readonly deviceId?: string;
-	readonly uid?: string;
-	readonly username?: string;
-	readonly commit?: string;
-}
-
-/** Per-record context override. Session identity is snapshotted at track time. */
-export interface StepTelemetryTrackOptions {
-	/** Explicit session id for this record; falls back to the foreground session. */
-	readonly sessionId?: string;
-	/** Compatibility shape for embedders that already pass a context object. */
-	readonly context?: Pick<StepTelemetryContextPatch, "sessionId">;
-}
-
-/** Small injection seam for the host's existing telemetry client. */
-export interface StepTelemetryReporter {
-	/** Runtime-compatible reporter surface. Use `trackStepTelemetry` for static payload checking. */
-	track(
-		event: StepTelemetryEventName,
-		properties: StepTelemetryProperties,
-		options?: StepTelemetryTrackOptions,
-	): void | Promise<void>;
-	/**
-	 * Compatibility escape hatch for a host that emits an event not yet in the
-	 * reviewed registry. New Step producers should add the event first.
-	 */
-	setContext?(patch: StepTelemetryContextPatch): void;
-}
-
-/** Statically typed producer helper for the reviewed event registry. */
-export function trackStepTelemetry<K extends StepTelemetryEventName>(
-	reporter: StepTelemetryReporter,
-	event: K,
-	properties: StepTelemetryPropertiesFor<K>,
-	options?: StepTelemetryTrackOptions,
-): void {
-	try {
-		void Promise.resolve(reporter.track(event, properties as StepTelemetryProperties, options)).catch(
-			() => undefined,
-		);
-	} catch {
-		// Telemetry must never affect the caller's work.
-	}
-}
+	StepTelemetryEventName,
+	StepTelemetryProperties,
+	StepTelemetryPropertiesFor,
+	StepTelemetryReporter,
+	StepTelemetryTrackOptions,
+} from "./telemetry-contract.ts";
 
 /** Values used by the permission events shared with the legacy Step collector. */
 export interface StepPermissionDecisionTelemetry {
@@ -532,7 +478,7 @@ export function createStepModelRequestObserver(
 		((request) =>
 			options.observerBaseUrls && options.observerBaseUrls.length > 0
 				? matchesBaseUrl(request.baseUrl, options.observerBaseUrls)
-				: isStepTraceRequestAllowedForRuntime(request.provider, request.baseUrl));
+				: false);
 
 	return {
 		onRequestCompleted(request) {
@@ -610,70 +556,6 @@ function hasValidRequestTrace(request: ModelRequestCompleted): boolean {
 	// example a catalog/auth probe), matching the legacy `if (!request.trace)`
 	// guard in the transport.
 	return !!request.sessionId?.trim().length;
-}
-
-/** Default endpoint classifier aligned with the old Step telemetry vocabulary. */
-export function classifyStepEndpoint(
-	baseUrl: string,
-	env: Record<string, string | undefined> = process.env,
-): "platform" | "custom" | "local" {
-	let hostname: string;
-	try {
-		hostname = new URL(baseUrl).hostname.toLowerCase();
-	} catch {
-		return "custom";
-	}
-
-	if (
-		hostname === "localhost" ||
-		hostname === "127.0.0.1" ||
-		hostname === "::1" ||
-		hostname === "[::1]" ||
-		hostname.endsWith(".localhost")
-	) {
-		return "local";
-	}
-
-	return isStepPlatformHost(hostname, env) ? "platform" : "custom";
-}
-
-const PLATFORM_ENDPOINT_ENV_NAMES = [
-	"STEP_BASE_URL",
-	"STEP_MODELS_PROXY_BASE_URL",
-	"STEPCLI_MODELS_PROXY_BASE_URL",
-	"STEPFUN_MESSAGES_ENDPOINT",
-	"STEP_CLI_CLOUD_TRACE_ENDPOINT",
-	"STEPCLI_CLOUD_TRACE_ENDPOINT",
-	"STEP_CLI_CLOUD_TRACE_ORIGIN",
-	"STEPCLI_CLOUD_TRACE_ORIGIN",
-] as const;
-const STEP_PLATFORM_HOSTS = new Set([
-	"models-proxy.stepfun-inc.com",
-	"api.stepfun.com",
-	"test-openapi-stepcliobserserver.c.stepfun-inc.net",
-]);
-
-function isStepPlatformHost(hostname: string, env: Record<string, string | undefined>): boolean {
-	// Keep this set in lockstep with the legacy MODEL_PLATFORM_ENDPOINTS
-	// registry. Matching arbitrary subdomains would classify a user's
-	// `evil.stepfun.com` endpoint as platform traffic.
-	if (STEP_PLATFORM_HOSTS.has(hostname)) {
-		return true;
-	}
-
-	// The legacy endpoint registry treated an explicitly configured model/trace
-	// host as platform-owned even when it was an internal staging hostname. Do
-	// the same here without emitting the host itself in telemetry.
-	for (const name of PLATFORM_ENDPOINT_ENV_NAMES) {
-		for (const candidate of (env[name] ?? "").split(",")) {
-			try {
-				if (new URL(candidate.trim()).hostname.toLowerCase() === hostname) return true;
-			} catch {
-				// Ignore malformed overrides; they cannot identify a platform host.
-			}
-		}
-	}
-	return false;
 }
 
 function matchesBaseUrl(url: string, baseUrls: readonly string[] | undefined): boolean {

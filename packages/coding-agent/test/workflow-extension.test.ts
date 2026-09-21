@@ -10,7 +10,7 @@ import {
 	resolveWorkflowScript,
 	type WorkflowRequest,
 } from "../src/features/workflow/step-workflow.ts";
-import type { WorkflowRunResult } from "../src/features/workflow/types.ts";
+import type { WorkflowAgentRunResult, WorkflowProgress, WorkflowRunResult } from "../src/features/workflow/types.ts";
 import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
@@ -316,4 +316,200 @@ test("workflow rejects a symlinked project workflow root", async () => {
 	await expect(
 		execute(testHarness.tools.get("workflow")!, { script: "return null" }, cwd, testHarness.notifications),
 	).rejects.toThrow("Workflow run root must stay inside");
+});
+
+test("workflow never starts agents after its tool signal was already aborted", async () => {
+	const cwd = await workspace();
+	const testHarness = harness();
+	const runner = vi.fn(async () => ({ text: "unexpected", status: "completed" as const }));
+	createStepWorkflowExtension({
+		enabled: true,
+		runner,
+		vmExecutor: async (_script, _args, host) => ({ value: await host.agent("work", {}), meta: {} }),
+	})(testHarness.api);
+	const controller = new AbortController();
+	controller.abort();
+
+	await expect(
+		testHarness.tools
+			.get("workflow")!
+			.execute(
+				"cancelled-workflow",
+				{ script: "return agent('work')" },
+				controller.signal,
+				undefined,
+				context(cwd, testHarness.notifications),
+			),
+	).rejects.toThrow(/aborted/iu);
+	expect(runner).not.toHaveBeenCalled();
+});
+
+test("workflow streams task counts and transitions while agents are still running", async () => {
+	const cwd = await workspace();
+	const testHarness = harness();
+	const updates: AgentToolResult<WorkflowProgress>[] = [];
+	const pending = new Map<string, (result: WorkflowAgentRunResult) => void>();
+	createStepWorkflowExtension({
+		enabled: true,
+		maxConcurrency: 2,
+		runner: ({ prompt }) => new Promise((resolve) => pending.set(prompt, resolve)),
+		vmExecutor: async (_script, _args, host) => {
+			host.phase("Review");
+			host.log("Checking three subsystems");
+			const value = await Promise.all([
+				host.agent("Inspect authentication", { label: "Security" }),
+				host.agent("Review rendering\n\tand redraws", {}),
+				host.agent("Check scheduler", { label: "Scheduling" }),
+			]);
+			return { value, meta: {} };
+		},
+	})(testHarness.api);
+	const execution = testHarness.tools
+		.get("workflow")!
+		.execute(
+			"live-workflow",
+			{ script: "three tasks" },
+			undefined,
+			(update) => updates.push(update as AgentToolResult<WorkflowProgress>),
+			context(cwd, testHarness.notifications),
+		);
+	let settled = false;
+	void execution.then(() => {
+		settled = true;
+	});
+	try {
+		await vi.waitFor(() => expect(pending.size).toBe(2));
+		expect(settled).toBe(false);
+		const live = updates.at(-1)?.details;
+		expect(live).toMatchObject({
+			status: "running",
+			currentPhase: "Review",
+			message: "Checking three subsystems",
+			totalAgents: 3,
+			completedAgents: 0,
+		});
+		expect(live?.agents).toMatchObject([
+			{ label: "Security", task: "Inspect authentication", status: "running" },
+			{ label: "Review rendering and redraws", status: "running" },
+			{ label: "Scheduling", status: "queued" },
+		]);
+		const firstSnapshot = live;
+		pending.get("Inspect authentication")!({ value: "safe", usage: { input: 2, output: 1 } });
+		await vi.waitFor(() => expect(pending.size).toBe(3));
+		expect(settled).toBe(false);
+		expect(updates.at(-1)?.details).toMatchObject({ completedAgents: 1, spentTokens: 3 });
+		expect(updates.at(-1)?.details?.agents.map((agent) => agent.status)).toEqual(["completed", "running", "running"]);
+		expect(firstSnapshot?.completedAgents).toBe(0);
+		expect(firstSnapshot?.agents[0]?.status).toBe("running");
+	} finally {
+		// Always drain the injected runners, even when the live assertions fail.
+		for (const resolve of pending.values()) resolve({ value: "done" });
+		await vi.waitFor(() => expect(pending.size).toBe(3));
+		pending.get("Check scheduler")!({ value: "done" });
+		await execution;
+	}
+	expect(updates.at(-1)?.details).toMatchObject({ status: "completed", completedAgents: 3, totalAgents: 3 });
+	const finalResult = await execution;
+	expect(finalResult.details).toMatchObject({ status: "completed", agentCalls: 3 });
+	expect(finalResult.details).not.toHaveProperty("agents");
+});
+
+test("workflow streams cancellation for both running and queued agents", async () => {
+	const cwd = await workspace();
+	const testHarness = harness();
+	const controller = new AbortController();
+	const updates: WorkflowProgress[] = [];
+	let started = false;
+	createStepWorkflowExtension({
+		enabled: true,
+		maxConcurrency: 1,
+		runner: ({ signal }) =>
+			new Promise((_resolve, reject) => {
+				started = true;
+				signal!.addEventListener("abort", () => reject(new Error("cancelled by user")), { once: true });
+			}),
+		vmExecutor: async (_script, _args, host) => {
+			await Promise.allSettled([host.agent("Running task", {}), host.agent("Queued task", {})]);
+			return { value: null, meta: {} };
+		},
+	})(testHarness.api);
+	const execution = testHarness.tools
+		.get("workflow")!
+		.execute(
+			"cancel-live-workflow",
+			{ script: "cancel tasks" },
+			controller.signal,
+			(update) => updates.push(update.details as WorkflowProgress),
+			context(cwd, testHarness.notifications),
+		);
+	const rejected = expect(execution).rejects.toThrow(/aborted/iu);
+	try {
+		await vi.waitFor(() => expect(started).toBe(true));
+		expect(updates.at(-1)?.agents.map((agent) => agent.status)).toEqual(["running", "queued"]);
+	} finally {
+		controller.abort();
+		await rejected;
+	}
+	expect(updates.at(-1)).toMatchObject({ status: "aborted", totalAgents: 2 });
+	expect(updates.at(-1)?.agents.map((agent) => agent.status)).toEqual(["aborted", "aborted"]);
+});
+
+test("workflow streams budget failures for tasks that never acquire a runnable slot", async () => {
+	const cwd = await workspace();
+	const testHarness = harness();
+	const updates: WorkflowProgress[] = [];
+	const runner = vi.fn(async () => ({ value: "done", usage: { input: 1 } }));
+	createStepWorkflowExtension({
+		enabled: true,
+		maxConcurrency: 1,
+		budgetTotal: 1,
+		runner,
+		vmExecutor: async (_script, _args, host) => {
+			await Promise.allSettled([host.agent("First task", {}), host.agent("Unaffordable task", {})]);
+			return { value: null, meta: {} };
+		},
+	})(testHarness.api);
+	await expect(
+		testHarness.tools
+			.get("workflow")!
+			.execute(
+				"budget-live-workflow",
+				{ script: "budget tasks" },
+				undefined,
+				(update) => updates.push(update.details as WorkflowProgress),
+				context(cwd, testHarness.notifications),
+			),
+	).rejects.toThrow(/budget exhausted/iu);
+	expect(runner).toHaveBeenCalledTimes(1);
+	expect(updates.at(-1)).toMatchObject({ status: "budget_exceeded", completedAgents: 1, totalAgents: 2 });
+	expect(updates.at(-1)?.agents).toMatchObject([
+		{ label: "First task", status: "completed" },
+		{ label: "Unaffordable task", status: "failed" },
+	]);
+	expect(updates.at(-1)?.agents[1]?.startedAt).toBeUndefined();
+});
+
+test("workflow replay reports cached tasks without launching agents or charging tokens again", async () => {
+	const cwd = await workspace();
+	const testHarness = harness();
+	const updates: WorkflowProgress[] = [];
+	const runner = vi.fn(async () => ({ value: "reviewed", usage: { input: 5 } }));
+	createStepWorkflowExtension({
+		enabled: true,
+		runner,
+		vmExecutor: async (_script, _args, host) => ({ value: await host.agent("Review authentication", {}), meta: {} }),
+	})(testHarness.api);
+	const tool = testHarness.tools.get("workflow")!;
+	const original = await execute(tool, { script: "review" }, cwd, testHarness.notifications);
+	const replay = await tool.execute(
+		"replay-workflow",
+		{ script: "review", resumeFromRunId: original.runId },
+		undefined,
+		(update) => updates.push(update.details as WorkflowProgress),
+		context(cwd, testHarness.notifications),
+	);
+	expect(runner).toHaveBeenCalledTimes(1);
+	expect(updates.at(-1)).toMatchObject({ status: "completed", completedAgents: 1, totalAgents: 1, spentTokens: 0 });
+	expect(updates.at(-1)?.agents).toMatchObject([{ label: "Review authentication", status: "cached" }]);
+	expect(replay.details).toMatchObject({ status: "completed", cacheHits: 1, spentTokens: 0, value: "reviewed" });
 });

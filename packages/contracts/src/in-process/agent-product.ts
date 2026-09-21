@@ -1,8 +1,7 @@
 // The agent-product facade: how a host discovers a product's capabilities and
 // opens sessions. Mirrors §2.3 of the architecture redesign. coding-agent
-// implements AgentProduct; voice-agent implements a separate VoiceInteraction
-// (see step 6) and only receives an AgentSessionHandle. These types are
-// self-contained so the contracts package stays dependency-free.
+// implements AgentProduct. These types are self-contained so the contracts
+// package stays dependency-free.
 
 import type { AgentSessionHandle } from "./session-handle.ts";
 
@@ -10,7 +9,7 @@ import type { AgentSessionHandle } from "./session-handle.ts";
 export type AgentProductId = "coding";
 
 /** The surfaces a session can be driven through. */
-export type InteractionSurface = "text" | "voice";
+export type InteractionSurface = "text";
 
 /** Options a host passes when opening a session. */
 export interface CreateAgentSessionOptions {

@@ -4,7 +4,7 @@
  * Both presentations of the interactive tree - the default native one and the Step
  * skin - are driven through the same operations against the real TuiMainScreen
  * render loop. The parent test runs this file twice, once with
- * PI_TUI_DISABLE_INCREMENTAL=1, and requires the recorded write() sequences to match
+ * --disable-incremental, and requires the recorded write() sequences to match
  * exactly.
  *
  * Every step is recorded under its own id, so repeated labels no longer collapse
@@ -21,6 +21,7 @@ import {
 	Editor,
 	isIncrementalRenderDisabled,
 	Loader,
+	setIncrementalRenderDisabled,
 	Spacer,
 	Text,
 	type Terminal,
@@ -65,7 +66,7 @@ export type Diagnostics = {
 	dirtyStartViolations: string[];
 	/**
 	 * Whether the caches added by the incremental change hand back a stable array.
-	 * Must be false in the baseline arm: PI_TUI_DISABLE_INCREMENTAL=1 has to produce a
+	 * Must be false in the baseline arm: --disable-incremental has to produce a
 	 * genuinely cache-free run, otherwise the two arms are not comparable.
 	 */
 	spacerCacheStable: boolean;
@@ -700,6 +701,7 @@ export async function runScenarios(): Promise<{ recording: Recording; diagnostic
 }
 
 if (process.argv.includes("--child")) {
+	setIncrementalRenderDisabled(process.argv.includes("--disable-incremental"));
 	const { recording, diagnostics } = await runScenarios();
 	// Transcript components keep Loader spinner intervals alive; exit once flushed.
 	process.stdout.write(

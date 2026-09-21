@@ -221,6 +221,8 @@ interface EditorSnapshot {
 
 interface LayoutLine {
 	text: string;
+	line: number;
+	startIndex: number;
 	hasCursor: boolean;
 	cursorPos?: number;
 }
@@ -479,6 +481,10 @@ export class Editor implements Component, Focusable {
 		// No cached state to invalidate currently
 	}
 
+	protected styleText(text: string, _line: number, _startIndex: number): string {
+		return text;
+	}
+
 	render(width: number): string[] {
 		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
 		const paddingX = Math.min(this.paddingX, maxPadding);
@@ -556,18 +562,28 @@ export class Editor implements Component, Focusable {
 					const firstGrapheme = afterGraphemes[0]?.segment || "";
 					const restAfter = after.slice(firstGrapheme.length);
 					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
-					displayText = before + marker + cursor + restAfter;
+					displayText =
+						this.styleText(before, layoutLine.line, layoutLine.startIndex) +
+						marker +
+						cursor +
+						this.styleText(
+							restAfter,
+							layoutLine.line,
+							layoutLine.startIndex + layoutLine.cursorPos + firstGrapheme.length,
+						);
 					// lineVisibleWidth stays the same - we're replacing, not adding
 				} else {
 					// Cursor is at the end - add highlighted space
 					const cursor = "\x1b[7m \x1b[0m";
-					displayText = before + marker + cursor;
+					displayText = this.styleText(before, layoutLine.line, layoutLine.startIndex) + marker + cursor;
 					lineVisibleWidth = lineVisibleWidth + 1;
 					// If cursor overflows content width into the padding, flag it
 					if (lineVisibleWidth > contentWidth && paddingX > 0) {
 						cursorInPadding = true;
 					}
 				}
+			} else {
+				displayText = this.styleText(displayText, layoutLine.line, layoutLine.startIndex);
 			}
 
 			// Calculate padding based on actual visible width
@@ -909,6 +925,8 @@ export class Editor implements Component, Focusable {
 			// Empty editor
 			layoutLines.push({
 				text: "",
+				line: 0,
+				startIndex: 0,
 				hasCursor: true,
 				cursorPos: 0,
 			});
@@ -926,12 +944,16 @@ export class Editor implements Component, Focusable {
 				if (isCurrentLine) {
 					layoutLines.push({
 						text: line,
+						line: i,
+						startIndex: 0,
 						hasCursor: true,
 						cursorPos: this.state.cursorCol,
 					});
 				} else {
 					layoutLines.push({
 						text: line,
+						line: i,
+						startIndex: 0,
 						hasCursor: false,
 					});
 				}
@@ -974,12 +996,16 @@ export class Editor implements Component, Focusable {
 					if (hasCursorInChunk) {
 						layoutLines.push({
 							text: chunk.text,
+							line: i,
+							startIndex: chunk.startIndex,
 							hasCursor: true,
 							cursorPos: adjustedCursorPos,
 						});
 					} else {
 						layoutLines.push({
 							text: chunk.text,
+							line: i,
+							startIndex: chunk.startIndex,
 							hasCursor: false,
 						});
 					}

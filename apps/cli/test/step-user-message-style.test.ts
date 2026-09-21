@@ -17,7 +17,7 @@ describe("Step user message presentation", () => {
 	});
 
 	test("uses the Codex-style neutral full-width prompt bar", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const width = 40;
 		const component = new StepUserMessageComponent("继续", getMarkdownTheme());
 		const rows = component.render(width);
@@ -37,8 +37,8 @@ describe("Step user message presentation", () => {
 		["xterm-256", false],
 	] as const)("uses active-theme Markdown and syntax colors in %s mode", (_mode, trueColor) => {
 		setCapabilities({ images: null, trueColor, hyperlinks: false });
-		initTheme("step");
-		const activeTheme = getThemeByName("step");
+		initTheme("step-blue");
+		const activeTheme = getThemeByName("step-blue");
 		expect(activeTheme).toBeDefined();
 		const component = new StepUserMessageComponent(
 			[
@@ -68,8 +68,8 @@ describe("Step user message presentation", () => {
 	});
 
 	test.each([
-		["step", "dark", "dark"],
-		["step-light", "step", "step"],
+		["step-blue", "dark", "dark"],
+		["step-violet-light", "step-blue", "step-blue"],
 	] as const)("updates existing user message colors after switching from %s to %s", (initial, next, expected) => {
 		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
 		initTheme(initial);
@@ -83,5 +83,23 @@ describe("Step user message presentation", () => {
 
 		const headingRow = component.render(80).find((row) => stripTerminalSequences(row).includes("Heading"));
 		expect(headingRow).toContain(expectedTheme!.getFgAnsi("mdHeading"));
+	});
+
+	test.each([true, false])("preserves prompt backgrounds around inline code with trueColor=%s", (trueColor) => {
+		setCapabilities({ images: null, trueColor, hyperlinks: false });
+		for (const name of ["dark", "light", "sage", "step-blue", "step-violet", "step-violet-light"]) {
+			initTheme(name);
+			const component = new StepUserMessageComponent("before `src/入口.ts` after", getMarkdownTheme());
+			for (const width of [24, 80]) {
+				const rows = component.render(width);
+				const backgrounds = rows.join("\n").match(/\x1b\[48;[0-9;]+m/g) ?? [];
+				expect(backgrounds.length).toBeGreaterThan(0);
+				expect(new Set(backgrounds)).toEqual(new Set([theme.getBgAnsi("userMessageBg")]));
+				expect(rows.filter((row) => stripTerminalSequences(row).trim()).every((row) => visibleWidth(row) === width)).toBe(true);
+				if (width === 80) {
+					expect(rows.map(stripTerminalSequences).join("\n")).toContain("before src/入口.ts after");
+				}
+			}
+		}
 	});
 });

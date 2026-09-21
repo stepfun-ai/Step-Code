@@ -23,7 +23,6 @@ const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
  */
 class BoundedTerminalWriter {
 	private buffer = "";
-	private writtenChars = 0;
 	private readonly write: (data: string) => void;
 
 	constructor(write: (data: string) => void) {
@@ -66,16 +65,11 @@ class BoundedTerminalWriter {
 		}
 	}
 
-	/** Write the current chunk, if any, and retain only its character count for debug output. */
+	/** Write the current chunk, if any. */
 	flush(): void {
 		if (!this.buffer) return;
 		this.write(this.buffer);
-		this.writtenChars += this.buffer.length;
 		this.buffer = "";
-	}
-
-	get length(): number {
-		return this.writtenChars + this.buffer.length;
 	}
 }
 
@@ -427,25 +421,14 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			this.previousHeight = height;
 		};
 
-		const debugRedraw = process.env.PI_DEBUG_REDRAW === "1";
-		const logRedraw = (reason: string): void => {
-			if (!debugRedraw) return;
-			const logPath = path.join(this.logDirectory, "pi-debug.log");
-			const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.previousLines.length}, new=${newLines.length}, height=${height})\n`;
-			fs.mkdirSync(path.dirname(logPath), { recursive: true });
-			fs.appendFileSync(logPath, msg);
-		};
-
 		// First render - just output everything without clearing (assumes clean screen)
 		if (this.previousLines.length === 0 && !widthChanged && !heightChanged) {
-			logRedraw("first render");
 			fullRender(false);
 			return;
 		}
 
 		// Width changes always need a full re-render because wrapping changes.
 		if (widthChanged) {
-			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
 			fullRender(true);
 			return;
 		}
@@ -454,16 +437,14 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// but Termux changes height when the software keyboard shows or hides.
 		// In that environment, a full redraw causes the entire history to replay on every toggle.
 		if (heightChanged && !isTermuxSession()) {
-			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
 			fullRender(true);
 			return;
 		}
 
 		// Content shrunk below the working area and no overlays - re-render to clear empty rows
 		// (overlays need the padding, so only do this when no overlays are active)
-		// Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
+		// Configurable via setClearOnShrink()
 		if (this.getClearOnShrink() && newLines.length < this.maxLinesRendered && !this.hasOverlayEntries) {
-			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
 			fullRender(true);
 			return;
 		}
@@ -515,7 +496,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 				// Move to end of new content (clamp to 0 for empty content)
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
-					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
 					fullRender(true);
 					return;
 				}
@@ -526,7 +506,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 				// Clear extra lines without scrolling
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {
-					logRedraw(`extraLines > height (${extraLines} > ${height})`);
 					fullRender(true);
 					return;
 				}
@@ -571,7 +550,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			// its middle without corrupting it.
 			const straddlingImage = kittyScanEnabled && this.hasImageLineInRange(firstChanged, prevViewportTop, newLines);
 			if (documentLengthChanged || straddlingImage) {
-				logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
 				fullRender(true);
 				return;
 			}
@@ -629,9 +607,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			if (imageReservedRows > 1) {
 				const imageStartScreenRow = i - viewportTop;
 				if (imageStartScreenRow < 0 || imageStartScreenRow + imageReservedRows > height) {
-					logRedraw(
-						`kitty image pre-clear would scroll (${imageStartScreenRow} + ${imageReservedRows} > ${height})`,
-					);
 					fullRender(true);
 					return;
 				}
@@ -650,7 +625,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			output.append("\x1b[2K"); // Clear current line
 			if (!isImage && visibleWidth(line) > width) {
 				// Log all lines to crash file for debugging
-				const crashLogPath = path.join(this.logDirectory, "pi-crash.log");
+				const crashLogPath = path.join(this.logDirectory, "tui-crash.log");
 				const crashData = [
 					`Crash at ${new Date().toISOString()}`,
 					`Terminal width: ${width}`,
@@ -699,35 +674,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		}
 
 		output.append("\x1b[?2026l"); // End synchronized output
-
-		if (process.env.PI_TUI_DEBUG === "1") {
-			const debugDir = "/tmp/tui";
-			fs.mkdirSync(debugDir, { recursive: true });
-			const debugPath = path.join(debugDir, `render-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
-			const debugData = [
-				`firstChanged: ${firstChanged}`,
-				`viewportTop: ${viewportTop}`,
-				`cursorRow: ${this.cursorRow}`,
-				`height: ${height}`,
-				`lineDiff: ${lineDiff}`,
-				`hardwareCursorRow: ${hardwareCursorRow}`,
-				`renderEnd: ${renderEnd}`,
-				`finalCursorRow: ${finalCursorRow}`,
-				`cursorPos: ${JSON.stringify(cursorPos)}`,
-				`newLines.length: ${newLines.length}`,
-				`previousLines.length: ${this.previousLines.length}`,
-				"",
-				"=== newLines ===",
-				JSON.stringify(newLines, null, 2),
-				"",
-				"=== previousLines ===",
-				JSON.stringify(this.previousLines, null, 2),
-				"",
-				"=== buffer ===",
-				`[${output.length} chars written in bounded chunks]`,
-			].join("\n");
-			fs.writeFileSync(debugPath, debugData);
-		}
 
 		output.flush();
 

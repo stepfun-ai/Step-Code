@@ -44,6 +44,7 @@ import type {
 	WorkflowAgentRunner,
 	WorkflowAgentRunResult,
 	WorkflowProgress,
+	WorkflowProgressAgent,
 	WorkflowRunResult,
 	WorkflowUsage,
 } from "./types.ts";
@@ -62,6 +63,8 @@ export interface WorkflowRuntimeOptions {
 	name: string;
 	journal: WorkflowJournal;
 	progress?: WorkflowProgressStore;
+	/** Live snapshots for tool updates; persistence remains owned by the progress store. */
+	onProgress?: (progress: WorkflowProgress) => void;
 	runner?: WorkflowAgentRunner;
 	telemetry?: StepTelemetryReporter;
 	budgetTotal?: number | null;
@@ -102,6 +105,7 @@ export class WorkflowRuntime {
 	readonly semaphore: WorkflowSemaphore;
 	private readonly journal: WorkflowJournal;
 	private readonly progress: WorkflowProgressStore;
+	private readonly onProgress?: WorkflowRuntimeOptions["onProgress"];
 	private readonly runner: WorkflowAgentRunner;
 	private readonly telemetry?: StepTelemetryReporter;
 	private readonly context?: ExtensionContext;
@@ -118,12 +122,15 @@ export class WorkflowRuntime {
 	private startedAt = 0;
 	private activeWriterId: string | undefined;
 	private previousCoverage = 0;
+	/** Budget errors remain terminal even if the script catches an agent rejection. */
+	private budgetError: WorkflowBudgetExceeded | undefined;
 
 	constructor(options: WorkflowRuntimeOptions) {
 		this.runId = options.runId;
 		this.cwd = path.resolve(options.cwd);
 		this.name = options.name.trim() || "workflow";
 		this.journal = options.journal;
+		this.onProgress = options.onProgress;
 		this.budget = new WorkflowBudget(options.budgetTotal);
 		this.semaphore = new WorkflowSemaphore(clampWorkflowConcurrency(options.maxConcurrency));
 		this.maxAgents = clampWorkflowAgentLimit(options.maxAgents);
@@ -155,9 +162,12 @@ export class WorkflowRuntime {
 
 	async runScript(script: string, args: unknown, vmOptions: WorkflowVmOptions = {}): Promise<WorkflowRunResult> {
 		await this.journal.initialize(script);
-		await this.progress.update({ status: "running", message: "Workflow started" });
+		await this.updateProgress({ status: "running", message: "Workflow started" });
 		this.track("workflow_started", { phase_count: 0 });
 		try {
+			if (this.signal?.aborted || this.context?.signal?.aborted) {
+				throw new Error("Workflow operation was aborted");
+			}
 			const vmResult = await this.vmExecutor(script, args, this.host(0), {
 				...vmOptions,
 				filename: vmOptions.filename ?? this.journal.paths.scriptPath,
@@ -168,6 +178,7 @@ export class WorkflowRuntime {
 				// cancelled run reports "aborted" instead of a silent "completed".
 				throw new Error("Workflow operation was aborted");
 			}
+			if (this.budgetError) throw this.budgetError;
 			const budgetTotal = this.budget.total();
 			if (budgetTotal !== null && this.budget.spent() > budgetTotal) {
 				// The script may have swallowed the per-call WorkflowBudgetExceeded (e.g. via
@@ -176,7 +187,7 @@ export class WorkflowRuntime {
 				throw new WorkflowBudgetExceeded(budgetTotal, this.budget.spent(), 0);
 			}
 			const finishedAt = this.readNow();
-			await this.progress.update({
+			await this.updateProgress({
 				status: "completed",
 				spentTokens: this.budget.spent(),
 				message: "Workflow completed",
@@ -210,7 +221,7 @@ export class WorkflowRuntime {
 					: error instanceof WorkflowBudgetExceeded
 						? "budget_exceeded"
 						: "failed";
-			await this.progress.update({ status, spentTokens: this.budget.spent(), message: errorMessage(error) });
+			await this.updateProgress({ status, spentTokens: this.budget.spent(), message: errorMessage(error) });
 			this.track("workflow_finished", {
 				status,
 				agent_count: this.agentCount,
@@ -242,8 +253,10 @@ export class WorkflowRuntime {
 		this.agentCount += 1;
 		const callHash = workflowHash({ prompt: normalizedPrompt, options: serializableOptions(normalizedOptions) });
 		const cached = this.journal.getCached(seq, callHash);
-		const label = normalizedOptions.label?.trim() || `agent-${seq + 1}`;
+		const task = normalizedPrompt.replace(/\s+/gu, " ").slice(0, 200);
+		const label = normalizedOptions.label?.trim() || task;
 		const agentId = `${this.runId}-${seq + 1}`;
+		const identity = { id: agentId, label, task, phase: normalizedOptions.phase };
 		if (cached) {
 			this.cacheHits += 1;
 			await this.journal.append({
@@ -254,11 +267,9 @@ export class WorkflowRuntime {
 				status: "cached",
 				createdAt: this.readNow(),
 			});
-			await this.progress.update({
+			await this.updateProgress({
 				agent: {
-					id: agentId,
-					label,
-					phase: normalizedOptions.phase,
+					...identity,
 					status: "cached",
 					finishedAt: this.readNow(),
 					usageTokens: workflowUsageTokens(cached.usage),
@@ -274,26 +285,19 @@ export class WorkflowRuntime {
 			return cached.result;
 		}
 
-		this.validateMounts(normalizedOptions);
-		const release = await this.semaphore.acquire(this.signal ?? this.context?.signal);
-		const budgetTotal = this.budget.total();
-		if (budgetTotal !== null && this.budget.remaining() <= 0) {
-			// Fail closed BEFORE spending: once completed calls have exhausted the budget,
-			// refuse to run further agents. parallel()/pipeline() invoke every agent() up
-			// front, so a check at the top of agent() would see zero spend and admit them all;
-			// gating here (after acquiring the concurrency slot, once prior waves have settled
-			// and accounted their tokens) bounds overspend to at most one in-flight wave — up
-			// to `maxConcurrency` agents can pass this gate before any of them account spend,
-			// so the effective cap is ~concurrency extra agents, not the budget value itself.
-			release();
-			throw new WorkflowBudgetExceeded(budgetTotal, this.budget.spent(), 0);
-		}
-		const startedAt = this.readNow();
 		const retries = clampRetries(normalizedOptions.retries);
 		const parentSignal = this.signal ?? this.context?.signal;
+		let release: (() => void) | undefined;
+		let startedAt: number | undefined;
 		let lastErrors: string[] = [];
 		let totalUsage: WorkflowUsage = emptyWorkflowUsage();
 		try {
+			await this.updateProgress({ agent: { ...identity, status: "queued" } });
+			this.validateMounts(normalizedOptions);
+			release = await this.semaphore.acquire(parentSignal);
+			// Check after acquiring a slot so queued waves see completed calls' spend.
+			// Already-running calls can still overshoot by one concurrency wave.
+			this.requireRemainingBudget();
 			if (normalizedOptions.writable && normalizedOptions.writable.length > 0) {
 				if (this.activeWriterId) {
 					throw new Error(
@@ -302,8 +306,9 @@ export class WorkflowRuntime {
 				}
 				this.activeWriterId = agentId;
 			}
-			await this.progress.update({
-				agent: { id: agentId, label, phase: normalizedOptions.phase, status: "running", startedAt },
+			startedAt = this.readNow();
+			await this.updateProgress({
+				agent: { ...identity, status: "running", startedAt },
 				totalAgents: this.agentCount,
 			});
 			this.track("workflow_agent_started", {
@@ -311,6 +316,22 @@ export class WorkflowRuntime {
 				phase_length: normalizedOptions.phase?.length ?? 0,
 			});
 			for (let attempt = 1; attempt <= retries; attempt += 1) {
+				if (attempt > 1) {
+					try {
+						this.requireRemainingBudget();
+					} catch (error) {
+						await this.appendFailure(
+							seq,
+							callHash,
+							normalizedPrompt,
+							normalizedOptions,
+							totalUsage,
+							attempt - 1,
+							errorMessage(error),
+						);
+						throw error;
+					}
+				}
 				const attemptPrompt =
 					attempt === 1
 						? normalizedPrompt
@@ -359,6 +380,7 @@ export class WorkflowRuntime {
 				try {
 					this.budget.consume(usage);
 				} catch (error: unknown) {
+					if (error instanceof WorkflowBudgetExceeded) this.budgetError ??= error;
 					await this.appendFailure(
 						seq,
 						callHash,
@@ -414,11 +436,9 @@ export class WorkflowRuntime {
 					attempt,
 					createdAt: this.readNow(),
 				});
-				await this.progress.update({
+				await this.updateProgress({
 					agent: {
-						id: agentId,
-						label,
-						phase: normalizedOptions.phase,
+						...identity,
 						status: "completed",
 						startedAt,
 						finishedAt: this.readNow(),
@@ -435,12 +455,10 @@ export class WorkflowRuntime {
 			}
 			throw new WorkflowSchemaError(lastErrors, retries);
 		} catch (error: unknown) {
-			await this.progress.update({
+			await this.updateProgress({
 				agent: {
-					id: agentId,
-					label,
-					phase: normalizedOptions.phase,
-					status: "failed",
+					...identity,
+					status: parentSignal?.aborted ? "aborted" : "failed",
 					startedAt,
 					finishedAt: this.readNow(),
 					usageTokens: workflowUsageTokens(totalUsage),
@@ -454,7 +472,7 @@ export class WorkflowRuntime {
 				});
 			throw error;
 		} finally {
-			release();
+			release?.();
 			if (this.activeWriterId === agentId) this.activeWriterId = undefined;
 		}
 	}
@@ -463,20 +481,18 @@ export class WorkflowRuntime {
 		const normalized = title.trim().slice(0, 200);
 		if (!normalized) return;
 		this.phases.push({ title: normalized });
-		void this.progress
-			.update({
-				currentPhase: normalized,
-				phaseIndex: this.phases.length - 1,
-				totalAgents: this.agentCount,
-			})
-			.catch(() => undefined);
+		void this.updateProgress({
+			currentPhase: normalized,
+			phaseIndex: this.phases.length - 1,
+			totalAgents: this.agentCount,
+		}).catch(() => undefined);
 		this.track("workflow_phase", { title_length: normalized.length, phase_index: this.phases.length - 1 });
 	}
 
 	log(message: string): void {
 		const normalized = message.trim().slice(0, 2_000);
 		if (!normalized) return;
-		void this.progress.update({ message: normalized }).catch(() => undefined);
+		void this.updateProgress({ message: normalized }).catch(() => undefined);
 	}
 
 	async iterate(rawOptions: Record<string, unknown>): Promise<unknown> {
@@ -570,6 +586,19 @@ export class WorkflowRuntime {
 			spec_coverage_percent: Math.round(coverage * 100),
 		});
 		return result;
+	}
+
+	private requireRemainingBudget(): void {
+		const total = this.budget.total();
+		if (total !== null && this.budget.remaining() <= 0) {
+			this.budgetError ??= new WorkflowBudgetExceeded(total, this.budget.spent(), 0);
+			throw this.budgetError;
+		}
+	}
+
+	private async updateProgress(patch: Partial<WorkflowProgress> & { agent?: WorkflowProgressAgent }): Promise<void> {
+		const snapshot = await this.progress.update(patch);
+		this.onProgress?.(snapshot);
 	}
 
 	private host(depth: number): WorkflowVmHost {
@@ -811,7 +840,7 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-export function workflowToolResult(value: unknown): AgentToolResult<unknown> {
+export function workflowToolResult<T>(value: T): AgentToolResult<T> {
 	return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], details: value };
 }
 

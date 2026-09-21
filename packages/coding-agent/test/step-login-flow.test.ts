@@ -22,7 +22,7 @@ describe("shared Step login flow storage", () => {
 		try {
 			await runStepLogin({
 				authPath,
-				themeName: "step-light/step",
+				themeName: "step-violet-light/step-violet",
 				env: {},
 				createHost: () => ({
 					addChild: (child) => {
@@ -35,7 +35,7 @@ describe("shared Step login flow storage", () => {
 				}),
 			});
 
-			expect(getCurrentThemeName()).toBe("step");
+			expect(getCurrentThemeName()).toBe("step-violet");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

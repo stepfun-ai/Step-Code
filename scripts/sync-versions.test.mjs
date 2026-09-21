@@ -36,8 +36,8 @@ test("synchronizes private dependencies without touching registry aliases, gener
 			name: "@step-harness/coding-agent",
 			version: "2.0.0",
 		});
-		await writeManifest(root, "packages/evals", {
-			name: "@step-harness/evals",
+		await writeManifest(root, "packages/contracts", {
+			name: "@step-harness/contracts",
 			version: "9.9.9",
 			private: true,
 			dependencies: {
@@ -57,9 +57,9 @@ test("synchronizes private dependencies without touching registry aliases, gener
 		const result = runSyncVersions(root);
 		assert.equal(result.status, 0, result.stderr);
 
-		const evalsManifest = await readManifest(root, "packages/evals");
-		assert.equal(evalsManifest.dependencies["@step-harness/coding-agent"], "^2.0.0");
-		assert.equal(evalsManifest.dependencies["@mariozechner/pi-ai"], "npm:@step-harness/providers@1.0.0");
+		const contractsManifest = await readManifest(root, "packages/contracts");
+		assert.equal(contractsManifest.dependencies["@step-harness/coding-agent"], "^2.0.0");
+		assert.equal(contractsManifest.dependencies["@mariozechner/pi-ai"], "npm:@step-harness/providers@1.0.0");
 		const generatedManifest = await readManifest(root, "packages/coding-agent/install-lock");
 		assert.equal(generatedManifest.dependencies["@step-harness/coding-agent"], "^1.0.0");
 

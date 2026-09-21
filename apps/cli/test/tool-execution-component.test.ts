@@ -153,7 +153,6 @@ describe("ToolExecutionComponent parity", () => {
 		};
 		const tool = createBashToolDefinition(process.cwd(), {
 			operations,
-			exposeSessionEnvironment: false,
 		});
 		const promise = tool.execute(
 			"tool-bash-1",
@@ -183,7 +182,6 @@ describe("ToolExecutionComponent parity", () => {
 		};
 		const tool = createBashToolDefinition(process.cwd(), {
 			operations,
-			exposeSessionEnvironment: false,
 		});
 		const result = await tool.execute(
 			"tool-bash-1b",
@@ -652,7 +650,7 @@ describe("ToolExecutionComponent parity", () => {
 
 describe("ToolExecutionComponent Step presentation", () => {
 	beforeAll(() => {
-		initTheme("step");
+		initTheme("step-blue");
 	});
 
 	test("uses the shared Step spinner frame and elapsed suffix while running", () => {

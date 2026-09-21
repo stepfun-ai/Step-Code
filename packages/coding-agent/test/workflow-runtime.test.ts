@@ -565,3 +565,51 @@ test("HoH iterate stops at max iterations and on stagnant coverage", async () =>
 		stopReason: "stagnation",
 	});
 });
+
+test.each([0, 1])("a swallowed budget rejection at an exact limit of %i still fails the run", async (budgetTotal) => {
+	const cwd = await workspace();
+	let calls = 0;
+	const execution = runtimeAt(
+		cwd,
+		async () => {
+			calls += 1;
+			return result("done", 1);
+		},
+		{
+			budgetTotal,
+			maxConcurrency: 1,
+			vmExecutor: async (_script, _args, host) => {
+				for (const prompt of ["first", "second"]) await host.agent(prompt, {}).catch(() => null);
+				return { value: null, meta: {} };
+			},
+		},
+	);
+	await expect(execution.runtime.runScript("swallowed limit", null)).rejects.toBeInstanceOf(WorkflowBudgetExceeded);
+	expect(calls).toBe(budgetTotal);
+	const progress = JSON.parse(await readFile(execution.paths.progressPath, "utf8")) as WorkflowProgress;
+	expect(progress).toMatchObject({ status: "budget_exceeded", spentTokens: budgetTotal });
+});
+
+test("schema retries stop when the previous attempt has exhausted the budget", async () => {
+	const cwd = await workspace();
+	let calls = 0;
+	const execution = runtimeAt(
+		cwd,
+		async () => {
+			calls += 1;
+			return result({}, 1);
+		},
+		{
+			budgetTotal: 1,
+			vmExecutor: async (_script, _args, host) => ({
+				value: await host.agent("return a value", {
+					schema: { type: "object", required: ["value"], properties: { value: { type: "string" } } },
+				}),
+				meta: {},
+			}),
+		},
+	);
+	await expect(execution.runtime.runScript("schema budget", null)).rejects.toBeInstanceOf(WorkflowBudgetExceeded);
+	expect(calls).toBe(1);
+	expect(execution.runtime.budget.spent()).toBe(1);
+});

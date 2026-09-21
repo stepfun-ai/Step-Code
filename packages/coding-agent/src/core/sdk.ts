@@ -22,7 +22,6 @@ import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import type { SystemPromptProduct } from "./system-prompt.ts";
-import { time } from "./timings.ts";
 import {
 	createBashTool,
 	createCodingTools,
@@ -208,7 +207,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settingsManager,
 		});
 		await resourceLoader.reload();
-		time("resourceLoader.reload");
 	}
 
 	// Check if session has existing data to restore

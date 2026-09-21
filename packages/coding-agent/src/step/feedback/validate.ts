@@ -1,5 +1,5 @@
 import { redactSecretString } from "../secret-redaction.ts";
-import { redactTelemetryString } from "../telemetry-runtime.ts";
+import { redactDiagnosticPii } from "./redact-diagnostics.ts";
 import {
 	FEEDBACK_CATEGORIES,
 	FEEDBACK_CATEGORY_CLI_SPELLINGS,
@@ -226,7 +226,7 @@ function sanitizeAndBoundFeedbackDiagnostics(input: {
 	}
 	return boundLines({
 		lines,
-		normalize: redactTelemetryString,
+		normalize: redactDiagnosticPii,
 		truncated: input.truncated,
 		...(input.source === "input_trace" ? { prioritize: isTraceNote } : {}),
 	});

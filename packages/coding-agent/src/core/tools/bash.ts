@@ -16,8 +16,7 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
-import { getExperimentalToolSampling } from "../experimental.ts";
-import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -46,7 +45,7 @@ const bashSchema = Type.Object({
 
 export const bashToolSystemPromptContribution = {
 	snippet: "Execute bash commands (ls, grep, find, etc.)",
-	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
+	guidelines: [],
 } as const;
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -165,35 +164,6 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
-function resolveSpawnContext(
-	command: string,
-	cwd: string,
-	spawnHook: BashSpawnHook | undefined,
-	exposeSessionEnvironment: boolean,
-	ctx: ExtensionContext | undefined,
-	agentDir: string | undefined,
-): BashSpawnContext {
-	const env = { ...getShellEnv(agentDir) };
-	delete env.PI_SESSION_ID;
-	delete env.PI_SESSION_FILE;
-	delete env.PI_PROVIDER;
-	delete env.PI_MODEL;
-	delete env.PI_REASONING_LEVEL;
-	if (exposeSessionEnvironment && ctx) {
-		const model = ctx.model;
-		env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
-		const sessionFile = ctx.sessionManager.getSessionFile();
-		if (sessionFile) env.PI_SESSION_FILE = sessionFile;
-		if (model) {
-			env.PI_PROVIDER = model.provider;
-			env.PI_MODEL = model.id;
-		}
-		if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
-	}
-	const baseContext: BashSpawnContext = { command, cwd, env };
-	return spawnHook ? spawnHook(baseContext) : baseContext;
-}
-
 export interface BashToolOptions {
 	/** Custom operations for command execution. Default: local shell */
 	operations?: BashOperations;
@@ -201,8 +171,6 @@ export interface BashToolOptions {
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
 	shellPath?: string;
-	/** Expose current Pi session metadata as PI_* environment variables. Default: true */
-	exposeSessionEnvironment?: boolean;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
 	/** Agent directory used for the managed binary PATH entry. Defaults to Pi's agent directory. */
@@ -344,32 +312,23 @@ export function createShellToolDefinition(
 	const ops =
 		options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath, agentDir: options?.agentDir });
 	const commandPrefix = options?.commandPrefix;
-	const exposeSessionEnvironment = options?.exposeSessionEnvironment ?? true;
 	const spawnHook = options?.spawnHook;
 	return {
 		name: config.name,
 		label: config.label,
 		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		promptSnippet: config.promptSnippet,
-		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
+		promptGuidelines: config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
-		constrainedSampling: getExperimentalToolSampling(),
 		async execute(
 			_toolCallId,
 			{ command, timeout }: { command: string; timeout?: number },
 			signal?: AbortSignal,
 			onUpdate?,
-			ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-			const spawnContext = resolveSpawnContext(
-				resolvedCommand,
-				cwd,
-				spawnHook,
-				exposeSessionEnvironment,
-				ctx,
-				options?.agentDir,
-			);
+			const baseContext = { command: resolvedCommand, cwd, env: getShellEnv(options?.agentDir) };
+			const spawnContext = spawnHook ? spawnHook(baseContext) : baseContext;
 			const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix });
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;

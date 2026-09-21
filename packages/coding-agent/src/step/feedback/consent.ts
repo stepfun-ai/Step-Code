@@ -32,6 +32,12 @@ export function formatFeedbackConsentPreview(input: FeedbackConsentPreviewInput)
 	const sections = [
 		`Category: ${input.submission.category ?? "none"}`,
 		`Comment:\n${input.submission.comment || "(empty comment)"}`,
+		[
+			"Identity sent with this feedback:",
+			...(["deviceId", "uid", "username", "channel", "version", "platform", "commit"] as const).map(
+				(field) => `${field}: ${neutralizeFeedbackConsentMetadata(input.submission.context[field] ?? "(not set)")}`,
+			),
+		].join("\n"),
 	];
 	const diagnostics = input.submission.diagnostics;
 	if (diagnostics && input.diagnosticsDisplayPath) {
