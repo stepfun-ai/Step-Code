@@ -54,38 +54,27 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 
 ## Supported Providers
 
-- **OpenAI**
-- **Ant Ling**
-- **Azure OpenAI (Responses)**
-- **OpenAI Codex** (ChatGPT Plus/Pro subscription, requires OAuth, see below)
-- **DeepSeek**
-- **NVIDIA NIM**
-- **Anthropic**
-- **Google**
-- **Vertex AI** (Gemini via Vertex AI)
-- **Mistral**
-- **Groq**
-- **Cerebras**
-- **Cloudflare AI Gateway**
-- **Cloudflare Workers AI**
-- **xAI**
-- **OpenRouter**
-- **Vercel AI Gateway**
-- **ZAI Coding Plan (Global)** (with separate China provider)
-- **MiniMax** (with separate China provider)
-- **Together AI**
-- **Baseten**
-- **Hugging Face**
-- **Moonshot AI** (with separate China provider)
-- **GitHub Copilot** (requires OAuth, see below)
-- **Amazon Bedrock**
-- **OpenCode Zen**
-- **OpenCode Go**
-- **Fireworks** (uses OpenAI- and Anthropic-compatible APIs)
-- **Kimi For Coding** (Moonshot AI subscription endpoint, uses Anthropic-compatible API)
-- **Qwen Token Plan** (separate Individual and existing catalogs, with a separate China provider)
-- **Xiaomi MiMo** (defaults to API billing endpoint, with separate Token Plan providers for `cn`/`ams`/`sgp` regions)
-- **Any OpenAI-compatible API**: Ollama, vLLM, LM Studio, etc.
+This build ships **no built-in provider catalog**: `builtinProviders()` returns
+`[]` and the generated model catalog is empty. The package provides the wire
+protocols and request dialects; concrete providers and models are configured at
+runtime.
+
+Wire protocols (implemented in `src/api/`):
+
+- **`openai-completions`** — OpenAI Chat Completions API
+- **`openai-responses`** — OpenAI Responses API
+- **`anthropic-messages`** — Anthropic Messages API
+
+Request dialects layered over `openai-completions` for vendor-specific quirks:
+DeepSeek, ZAI, Qwen, Kimi, OpenRouter, Ant Ling, and OpenCode.
+
+Configure providers and models at runtime against any OpenAI- or
+Anthropic-compatible endpoint on those protocols:
+
+- Declare custom providers in `~/.pi/agent/models.json`.
+- Fetch a live catalog from a provider's `/v1/models` endpoint (for example the
+  Step provider registered by the product).
+- Build a provider from parts with `createProvider()` (see [Custom Providers](#custom-providers)).
 
 ## Installation
 
