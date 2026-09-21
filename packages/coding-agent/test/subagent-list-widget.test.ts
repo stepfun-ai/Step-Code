@@ -242,6 +242,50 @@ test("a blocking parallel run publishes the list below the editor and clears it 
 	expect(mine.at(-1)?.cleared).toBe(true);
 });
 
+test("the list is published before any child produces output", async () => {
+	const { api, tools, ctx, calls } = harness(true);
+	let released: () => void = () => {};
+	const gate = new Promise<void>((resolve) => {
+		released = resolve;
+	});
+	createStepSubagentExtension({
+		includeBuiltinAgents: true,
+		agentDir: "/tmp/step-agent-test",
+		// Stand in for a child that has not streamed anything yet: spawn, mcp
+		// startup and the first token all happen before the first onUpdate.
+		runner: async () => {
+			await gate;
+			return runResult("done");
+		},
+	})(api);
+
+	const pending = tools.get("subagent")!.execute(
+		"call-3" as never,
+		{
+			tasks: [
+				{ agent: "general", task: "one" },
+				{ agent: "general", task: "two" },
+			],
+		} as never,
+		undefined as never,
+		undefined as never,
+		ctx as never,
+	);
+	// The roster emit lands after executeSubagent's agent discovery (real fs I/O),
+	// so wait for it rather than for a fixed number of microtasks. The gated
+	// runner guarantees no child has produced anything by the time it appears.
+	const key = "step-subagent-list:call-3";
+	const deadline = Date.now() + 3_000;
+	while (!calls.some((call) => call.key === key && !call.cleared)) {
+		if (Date.now() > deadline) throw new Error("the subagent list was never published");
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	expect(calls.some((call) => call.key === key && call.placement === "belowEditor")).toBe(true);
+	released();
+	await pending;
+	expect(calls.filter((call) => call.key === key).at(-1)?.cleared).toBe(true);
+});
+
 test("a headless host gets no widget", async () => {
 	const { api, tools, ctx, calls } = harness(false);
 	createStepSubagentExtension({
