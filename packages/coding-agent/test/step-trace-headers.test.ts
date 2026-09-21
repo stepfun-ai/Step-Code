@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	applyStepTraceHeaders,
 	encodeStepTraceHeaderValue,
+	isStepFirstPartyTraceUrl,
 	isStepTraceRequestAllowed,
 	matchesStepTraceBaseUrl,
 	resolveStepTraceAllowlist,
@@ -86,7 +87,31 @@ describe("Step trace headers", () => {
 			requestUrl: "https://collector.example/v1/messages",
 			allowedBaseUrls: [],
 		});
-		expect(headers).toEqual({ "x-step-client": "cli" });
+		expect(headers).toEqual({ "x-step-client": "stepcode" });
+	});
+
+	it("always attaches the session id to Step's first-party host, and nothing else", () => {
+		const headers: Record<string, string | null> = {};
+		// No allowlist and no field policy: still sends the session id to
+		// api.stepfun.com, but no other high-sensitivity field leaks there.
+		applyStepTraceHeaders(headers, trace, {
+			requestUrl: "https://api.stepfun.com/step_plan/v1/chat/completions",
+			allowedBaseUrls: [],
+		});
+		expect(headers).toEqual({
+			"x-step-client": "stepcode",
+			"x-step-session-id": "session-1",
+		});
+	});
+
+	it("recognizes only the https first-party host", () => {
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com/step_plan/v1")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com/v1/chat/completions")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("http://api.stepfun.com/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com.evil.example/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("https://other.stepfun.com/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("not a url")).toBe(false);
+		expect(isStepFirstPartyTraceUrl(undefined)).toBe(false);
 	});
 
 	it("matches only a complete URL prefix", () => {
