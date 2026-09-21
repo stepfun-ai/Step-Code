@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelRequestCompleted, ModelRequestStarted } from "../src/core/model-request-observer.ts";
+import { readFeedbackUsername } from "../src/step/feedback/context.ts";
+import { resolveFeedbackEndpoint } from "../src/step/feedback/endpoints.ts";
 import { createStepModelRequestObserver } from "../src/step/telemetry.ts";
 import {
 	createStepSystemMetricsCollector,
@@ -10,6 +12,7 @@ import {
 	installStepTelemetryCrashHandlers,
 	readTelemetryEndpoint,
 	redactTelemetryString,
+	resolveStepTelemetrySettings,
 	trackStepTelemetryError,
 } from "../src/step/telemetry-runtime.ts";
 
@@ -27,17 +30,79 @@ async function readSpool(directory: string, prefix: string): Promise<Array<Recor
 
 describe("Step telemetry runtime", () => {
 	it("uses the release collector default while keeping dev builds local", () => {
-		expect(readTelemetryEndpoint({ STEP_CLI_BUILD_CHANNEL: "release" })).toBe(
+		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" })).toBe(
 			"https://api.stepfun.com/stepcliobserserver/api/v1/events",
 		);
-		expect(readTelemetryEndpoint({ STEP_CLI_BUILD_CHANNEL: "dev" })).toBeUndefined();
+		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev" })).toBeUndefined();
 		expect(readTelemetryEndpoint({})).toBeUndefined();
+	});
+
+	// The build pipeline embeds STEPCODE_BUILD_CHANNEL (build-binaries.sh, Bun
+	// `--env=STEPCODE_BUILD_*`, the esbuild define allowlist). Telemetry used to
+	// read STEP_CLI_BUILD_CHANNEL, a name no build sets, so every release binary
+	// resolved "dev" and reported nothing. Lock both directions of the fix.
+	it("resolves the channel through the shared build identity", () => {
+		expect(readTelemetryEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" })).toBe(
+			"https://api.stepfun.com/stepcliobserserver/api/v1/events",
+		);
+		// The primary name wins over the legacy alias, so a release binary whose
+		// runtime sets the alias to dev degrades to silence rather than reporting.
+		expect(
+			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev", STEP_HARNESS_BUILD_CHANNEL: "release" }),
+		).toBeUndefined();
+		expect(readTelemetryEndpoint({ STEP_CLI_BUILD_CHANNEL: "release" })).toBeUndefined();
+	});
+
+	it("keeps the telemetry and feedback envelopes on one channel", () => {
+		const env = { STEP_HARNESS_BUILD_CHANNEL: "release" };
+		expect(readTelemetryEndpoint(env)).toBe("https://api.stepfun.com/stepcliobserserver/api/v1/events");
+		expect(resolveFeedbackEndpoint(env)).toBe("https://api.stepfun.com/stepcliobserserver/api/v1/feedback");
+
+		const devEnv = {};
+		expect(readTelemetryEndpoint(devEnv)).toBeUndefined();
+		expect(resolveFeedbackEndpoint(devEnv)).toBe(
+			"https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback",
+		);
+	});
+
+	it("prefers an environment endpoint on every channel and a config endpoint only on release", () => {
+		expect(readTelemetryEndpoint({ STEPCODE_TELEMETRY_ENDPOINT: "https://local.test/events" })).toBe(
+			"https://local.test/events",
+		);
+		expect(
+			readTelemetryEndpoint({
+				STEPCODE_TELEMETRY_ENDPOINT: "https://primary.test/events",
+				STEP_CLI_TELEMETRY_ENDPOINT: "https://legacy.test/events",
+			}),
+		).toBe("https://primary.test/events");
+		expect(readTelemetryEndpoint({ STEPCLI_TELEMETRY_ENDPOINT: "https://oldest.test/events" })).toBe(
+			"https://oldest.test/events",
+		);
+		expect(
+			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" }, { endpoint: "https://cfg.test/events" }),
+		).toBe("https://cfg.test/events");
+		expect(readTelemetryEndpoint({}, { endpoint: "https://cfg.test/events" })).toBeUndefined();
 	});
 
 	it("is disabled automatically in test environments", () => {
 		const runtime = createStepTelemetryRuntime({ env: { NODE_ENV: "test", VITEST: "1" } });
 		expect(runtime.enabled).toBe(false);
 		expect(runtime.endpoint).toBeUndefined();
+	});
+
+	// The gate must sit in front of endpoint resolution, or the whole suite would
+	// post to the real collector as soon as a release channel is in scope.
+	it("keeps the test-runtime gate in front of endpoint resolution", () => {
+		for (const env of [
+			{ NODE_ENV: "test", STEPCODE_BUILD_CHANNEL: "release" },
+			{ VITEST: "1", STEPCODE_TELEMETRY_ENDPOINT: "https://collector.example/api/v1/events" },
+		]) {
+			const settings = resolveStepTelemetrySettings(env);
+			expect(settings.enabled).toBe(false);
+			expect(settings.reason).toBe("test-runtime");
+			expect(settings.endpoint).toBeUndefined();
+			expect(createStepTelemetryRuntime({ enabled: true, env }).endpoint).toBeUndefined();
+		}
 	});
 
 	it("posts the legacy event envelope and keeps a local spool copy", async () => {
@@ -77,6 +142,50 @@ describe("Step telemetry runtime", () => {
 				properties: { provider: "step", model: "step-3.7-flash" },
 			});
 			expect(await readSpool(directory, "events")).toHaveLength(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	// Daily PV is a count of `cli_started`; daily UV is a distinct count of
+	// `context.deviceId`; new installs are `first_launch`. All three are read
+	// off the envelope, so lock the exact field spellings the collector indexes.
+	it("carries the usage-counting identity on every envelope", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "step-telemetry-runtime-"));
+		try {
+			const requests: Array<{ url: string; init: RequestInit }> = [];
+			const runtime = createStepTelemetryRuntime({
+				enabled: true,
+				env: { STEPCODE_BUILD_CHANNEL: "release" },
+				endpoint: "https://collector.example/api/v1/events",
+				spoolDirectory: directory,
+				flushThreshold: 10,
+				flushIntervalMs: 0,
+				clock: () => "2026-09-21T01:02:03.000Z",
+				fetchImpl: async (url, init) => {
+					requests.push({ url: String(url), init: init ?? {} });
+					return new Response("{}", { status: 200 });
+				},
+			});
+			runtime.setContext({ deviceId: "device-abc", sessionId: "session-xyz" });
+			runtime.track("cli_started", { entrypoint: "root", os: "darwin", node_version: "22.19" });
+			runtime.track("first_launch", { channel: "release" });
+			await runtime.flush();
+			await runtime.shutdown();
+
+			const body = JSON.parse(String(requests[0]?.init.body)) as { events: Array<Record<string, unknown>> };
+			expect(Object.keys(JSON.parse(String(requests[0]?.init.body)) as object)).toEqual(["events"]);
+			expect(body.events).toHaveLength(2);
+			const [started, firstLaunch] = body.events;
+			expect(started).toMatchObject({
+				event: "cli_started",
+				properties: { entrypoint: "root", os: "darwin", node_version: "22.19" },
+				context: { channel: "release", deviceId: "device-abc", sessionId: "session-xyz" },
+			});
+			expect(firstLaunch).toMatchObject({ event: "first_launch", properties: { channel: "release" } });
+			for (const record of body.events) {
+				expect(String(record.eventId)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
+			}
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
@@ -467,5 +576,31 @@ describe("Step telemetry runtime", () => {
 			properties: { error_type: "Error", source: "uncaught_exception" },
 		});
 		expect(flushes).toBe(1);
+	});
+});
+
+// The launcher injects the collector's "使用者" dimension through the
+// environment. Both envelopes must accept the same spellings, or one of them
+// silently loses the name — the same identity divergence the channel fix closed.
+describe("launcher username", () => {
+	it("reads the same aliases on telemetry and feedback envelopes", async () => {
+		for (const env of [{ STEPCODE_USER: "songxinying" }, { STEP_CLI_USER: "songxinying" }]) {
+			expect(readFeedbackUsername(env)).toBe("songxinying");
+			const runtime = createStepTelemetryRuntime({
+				enabled: true,
+				env,
+				endpoint: "https://collector.example/api/v1/events",
+				flushThreshold: 1,
+				flushIntervalMs: 0,
+				fetchImpl: async (_url, init) => {
+					const body = JSON.parse(String(init?.body)) as { events: Array<{ context: { username?: string } }> };
+					expect(body.events[0]?.context.username).toBe("songxinying");
+					return new Response("{}", { status: 200 });
+				},
+			});
+			runtime.track("cli_started", { entrypoint: "root", os: "darwin", node_version: "22.19" });
+			await runtime.flush();
+			await runtime.shutdown();
+		}
 	});
 });

@@ -3,7 +3,9 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { appendFile, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
+import { normalizeStepCommit, readStepBuildIdentity } from "./build-identity.ts";
 import { resolveStepStorageRoot } from "./device-id.ts";
+import { readEndpointChannelDefault, readEndpointEnvOverride } from "./observer-endpoints.ts";
 import type {
 	StepTelemetryContextPatch,
 	StepTelemetryEventName,
@@ -14,7 +16,7 @@ import type {
 	StepTelemetryTrackOptions,
 } from "./telemetry.ts";
 import { isKnownStepTelemetryEvent, STEP_TELEMETRY_EVENT_PROPERTY_NAMES } from "./telemetry-events.ts";
-import { resolveStepCodeVersion as resolveStepCliVersion, STEPCODE_VERSION as STEP_CLI_VERSION } from "./version.ts";
+import { resolveStepCodeVersion, STEPCODE_VERSION } from "./version.ts";
 
 /** Envelope written to the Step analytics collector and local spool. */
 export interface StepTelemetryRecord {
@@ -54,7 +56,7 @@ export interface StepTelemetryRuntimeOptions {
 	};
 	/** Test or host environment. Defaults to `process.env`. */
 	readonly env?: NodeJS.ProcessEnv;
-	/** HTTP collector URL. Defaults to STEP_CLI_TELEMETRY_ENDPOINT. */
+	/** HTTP collector URL. Defaults to STEPCODE_TELEMETRY_ENDPOINT. */
 	readonly endpoint?: string;
 	/** Directory for JSONL durability. Defaults to `<step-storage-root>/telemetry`. */
 	readonly spoolDirectory?: string;
@@ -130,7 +132,6 @@ const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 3_000;
 const DEFAULT_RETRY_BACKOFFS_MS = [1_000, 4_000, 16_000] as const;
-const DEFAULT_CHANNEL = "dev";
 const DEFAULT_SPOOL_FILE_PREFIX = "events";
 const FAILED_SPOOL_FILE_PREFIX = "failed";
 const DEFAULT_SPOOL_RETENTION_DAYS = 7;
@@ -138,13 +139,6 @@ const DEFAULT_SYSTEM_METRICS_INTERVAL_MS = 300_000;
 const DEFAULT_SYSTEM_METRICS_WARMUP_MS = 1_500;
 const MAX_USERNAME_LENGTH = 64;
 const PLAUSIBLE_USERNAME = /^[\w.@:-]+$/u;
-/** Release default from the legacy Step ObservableServer endpoint registry. */
-const RELEASE_TELEMETRY_ENDPOINT = "https://api.stepfun.com/stepcliobserserver/api/v1/events";
-// Bun's `--env` compiler only substitutes a literal `process.env.NAME` read.
-// Keep this static capture alongside the runtime override so release binaries
-// retain their channel when no runtime override is supplied.
-const INLINED_BUILD_CHANNEL = process.env.STEP_CLI_BUILD_CHANNEL;
-const INLINED_BUILD_COMMIT = process.env.STEP_CLI_BUILD_COMMIT;
 
 /**
  * Create the process-level reporter used by the Step entrypoint.
@@ -170,6 +164,7 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		resolved.spoolEnabled === false || options.config?.spool === false
 			? undefined
 			: (normalizePath(options.spoolDirectory) ??
+				normalizePath(env.STEPCODE_TELEMETRY_DIR) ??
 				normalizePath(env.STEP_CLI_TELEMETRY_DIR) ??
 				join(resolveStepStorageRoot(env), "telemetry"));
 	const maxQueued = positiveInt(options.maxQueued, DEFAULT_MAX_QUEUED);
@@ -182,20 +177,26 @@ export function createStepTelemetryRuntime(options: StepTelemetryRuntimeOptions 
 		options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 	const clock = options.clock ?? (() => new Date().toISOString());
 	const initialSessionId = options.context?.sessionId?.trim() || undefined;
+	// Channel and commit come from the shared resolver so the telemetry envelope
+	// can never disagree with the feedback envelope about which build this is.
+	const buildIdentity = readStepBuildIdentity(env);
 	let context: Omit<StepTelemetryContext, "sessionId"> = {
-		channel: normalizeContextValue(options.context?.channel) ?? readBuildChannel(env),
+		channel: normalizeContextValue(options.context?.channel) ?? buildIdentity.channel,
 		platform: normalizeContextValue(options.context?.platform ?? process.platform) ?? process.platform,
 		// The old TelemetryContext requires a version. Resolve an explicit
 		// runtime override first, then the injected build version, and finally the
-		// fixed Step source fallback. `resolveStepCliVersion` also knows how
+		// fixed Step source fallback. `resolveStepCodeVersion` also knows how
 		// to read Bun's compile-time value when its runtime environment is empty.
 		version:
 			normalizeVersionContext(options.context?.version ?? env.STEP_CLI_VERSION) ??
-			resolveStepCliVersion(env).value ??
-			STEP_CLI_VERSION.value,
-		...optionalContextValue("commit", readBuildCommit(env, options.context?.commit)),
-		...optionalContextValue("deviceId", options.context?.deviceId ?? env.STEP_CLI_DEVICE_ID ?? env.STEPCLI_DEVICE_ID),
-		...optionalContextValue("uid", options.context?.uid ?? env.STEP_CLI_UID ?? env.STEPCLI_UID),
+			resolveStepCodeVersion(env).value ??
+			STEPCODE_VERSION.value,
+		...optionalContextValue("commit", normalizeStepCommit(options.context?.commit) ?? buildIdentity.commit),
+		...optionalContextValue(
+			"deviceId",
+			options.context?.deviceId ?? env.STEPCODE_DEVICE_ID ?? env.STEP_CLI_DEVICE_ID ?? env.STEPCLI_DEVICE_ID,
+		),
+		...optionalContextValue("uid", options.context?.uid ?? env.STEPCODE_UID ?? env.STEP_CLI_UID ?? env.STEPCLI_UID),
 		...optionalContextValue("username", readTelemetryUsername(env, options.context?.username)),
 	};
 	// Session is the one context field that changes during a process. Keep it on
@@ -618,22 +619,20 @@ function safeTrackRuntime(
 	}
 }
 
-/** Resolve the old Step endpoint aliases and release-channel default. */
+/** Resolve the endpoint env overrides and the release-channel default. */
 export function readTelemetryEndpoint(
 	env: NodeJS.ProcessEnv = process.env,
 	config?: StepTelemetryRuntimeOptions["config"],
 ): string | undefined {
-	const explicit = env.STEP_CLI_TELEMETRY_ENDPOINT?.trim() || env.STEPCLI_TELEMETRY_ENDPOINT?.trim();
+	const explicit = readEndpointEnvOverride("telemetry", env);
 	if (explicit) return explicit;
 	// A persisted endpoint is honored only by release builds. This is the old
 	// Step safety boundary: a source checkout may spool locally, while an
 	// explicit environment endpoint remains the documented dev test escape hatch.
-	const configured = normalizeEndpoint(config?.endpoint);
-	if (configured && readBuildChannel(env) === "release") return configured;
-	// An unset/unknown channel is deliberately treated as dev so source
-	// checkouts continue to spool locally. Released binaries set this at build
-	// time, matching the legacy endpoint resolver.
-	return readBuildChannel(env) === "release" ? RELEASE_TELEMETRY_ENDPOINT : undefined;
+	if (readStepBuildIdentity(env).channel !== "release") return undefined;
+	// An unset/unknown channel resolves to dev above, so source checkouts keep
+	// spooling locally. Released binaries embed the channel at build time.
+	return normalizeEndpoint(config?.endpoint) ?? readEndpointChannelDefault("telemetry", "release");
 }
 
 /**
@@ -648,7 +647,11 @@ export function resolveStepTelemetrySettings(
 	config?: StepTelemetryRuntimeOptions["config"],
 ): StepResolvedTelemetrySettings {
 	if (isTestRuntime(env)) return { enabled: false, spoolEnabled: false, reason: "test-runtime" };
-	if (readFlag(env.STEP_CLI_DISABLE_TELEMETRY) || readFlag(env.STEPCLI_DISABLE_TELEMETRY)) {
+	if (
+		readFlag(env.STEPCODE_DISABLE_TELEMETRY) ||
+		readFlag(env.STEP_CLI_DISABLE_TELEMETRY) ||
+		readFlag(env.STEPCLI_DISABLE_TELEMETRY)
+	) {
 		return { enabled: false, spoolEnabled: false, reason: "env-opt-out" };
 	}
 	if (config?.enabled === false) return { enabled: false, spoolEnabled: false, reason: "config-opt-out" };
@@ -661,31 +664,6 @@ export function resolveStepTelemetrySettings(
 
 /** Compatibility spelling used by the former Step runtime's settings module. */
 export const resolveTelemetrySettings = resolveStepTelemetrySettings;
-
-function readBuildChannel(env: NodeJS.ProcessEnv): string {
-	const runtimeValue = env.STEP_CLI_BUILD_CHANNEL;
-	const embeddedValue = INLINED_BUILD_CHANNEL;
-	// Match the legacy build-env resolver: an explicit runtime value wins over
-	// the value embedded by Bun, while the embedded value supplies the release
-	// default when no override is present.
-	const value = runtimeValue ?? embeddedValue;
-	return value?.trim() === "release" ? "release" : DEFAULT_CHANNEL;
-}
-
-/**
- * Read the build commit while preserving Bun's compile-time environment.
- * Runtime aliases remain accepted for source launches and old release jobs;
- * the static value is only a fallback when no runtime alias is present.
- */
-function readBuildCommit(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
-	if (explicit?.trim()) return explicit;
-	const runtimeValue = env.STEP_CLI_BUILD_COMMIT ?? env.STEP_CLI_COMMIT;
-	const embeddedValue = INLINED_BUILD_COMMIT;
-	// Keep the same precedence as the old Step CLI: a caller-provided commit
-	// alias is authoritative, and the compiled value is only a fallback.
-	const value = runtimeValue ?? embeddedValue;
-	return value?.trim() || undefined;
-}
 
 function createDisabledRuntime(): StepTelemetryRuntime {
 	return {
@@ -844,7 +822,7 @@ export function redactTelemetryString(value: string): string {
  * accepting the Step CLI variable.
  */
 function readTelemetryUsername(env: NodeJS.ProcessEnv, explicit?: string): string | undefined {
-	return normalizeTelemetryUsername(explicit ?? env.STEP_CLI_USER);
+	return normalizeTelemetryUsername(explicit ?? env.STEPCODE_USER ?? env.STEP_CLI_USER);
 }
 
 function normalizeTelemetryUsername(value: string | undefined): string | undefined {

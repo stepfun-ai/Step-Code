@@ -1,14 +1,16 @@
+import { type ObserverEndpointName, readEndpointChannelDefault, resolveEndpoint } from "../observer-endpoints.ts";
 import { readFeedbackBuildEnv } from "./build-env.ts";
 
-const DEV_FEEDBACK_ENDPOINT = "https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback";
-const RELEASE_FEEDBACK_ENDPOINT = "https://api.stepfun.com/stepcliobserserver/api/v1/feedback";
-const DEV_BUNDLE_ENDPOINT = "https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback/bundle";
-const RELEASE_BUNDLE_ENDPOINT = "https://api.stepfun.com/stepcliobserserver/api/v1/feedback/bundle";
+function endpointName(bundle: boolean): ObserverEndpointName {
+	return bundle ? "feedbackBundle" : "feedback";
+}
 
 export function isBuiltInFeedbackEndpoint(endpoint: string, bundle = false): boolean {
-	return bundle
-		? equivalentEndpoint(endpoint, DEV_BUNDLE_ENDPOINT) || equivalentEndpoint(endpoint, RELEASE_BUNDLE_ENDPOINT)
-		: equivalentEndpoint(endpoint, DEV_FEEDBACK_ENDPOINT) || equivalentEndpoint(endpoint, RELEASE_FEEDBACK_ENDPOINT);
+	const name = endpointName(bundle);
+	return (
+		equivalentEndpoint(endpoint, readEndpointChannelDefault(name, "dev")) ||
+		equivalentEndpoint(endpoint, readEndpointChannelDefault(name, "release"))
+	);
 }
 
 function equivalentEndpoint(endpoint: string, expected: string): boolean {
@@ -37,11 +39,7 @@ function normalizedPathname(url: URL): string {
 }
 
 export function resolveFeedbackEndpoint(env: NodeJS.ProcessEnv = process.env, bundle = false): string | undefined {
-	const configured = bundle
-		? env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT?.trim() || env.STEP_HARNESS_FEEDBACK_BUNDLE_ENDPOINT?.trim()
-		: env.STEPCODE_FEEDBACK_ENDPOINT?.trim() || env.STEP_HARNESS_FEEDBACK_ENDPOINT?.trim();
-	if (configured) return configured;
-	const { channel } = readFeedbackBuildEnv(env);
-	if (bundle) return channel === "release" ? RELEASE_BUNDLE_ENDPOINT : DEV_BUNDLE_ENDPOINT;
-	return channel === "release" ? RELEASE_FEEDBACK_ENDPOINT : DEV_FEEDBACK_ENDPOINT;
+	// Unlike telemetry, feedback adopts the built-in default on both channels:
+	// a report is user-initiated, so there is no unattended-egress concern.
+	return resolveEndpoint(endpointName(bundle), { channel: readFeedbackBuildEnv(env).channel, env });
 }
