@@ -35,9 +35,9 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 		"Use run_command for non-interactive tests, builds, formatters, and git commands. Keep scope minimal, use its cwd parameter for another directory, and treat truncated output as incomplete. For long-running processes such as dev servers, set run_in_background:true — it returns a pid and a log path; read the log to confirm readiness and kill the pid to stop.",
 	find_tools: "Use find_tools when you know the intent but do not know the available tool name.",
 	task_create:
-		"Use task_create to add a todo item to the session execution checklist; it records work rather than starting it.",
+		"Use task_create to add a todo item to the active execution plan; newPlan starts a separate checklist and archives the current one. It records work rather than starting it.",
 	task_update:
-		"Use task_update to update todo progress, details, or dependencies; it does not execute or schedule work.",
+		"Use task_update to update todo progress, details, or dependencies; resumePlanId alone explicitly restores a historical checklist. It does not execute or schedule work.",
 	task_get: "Use task_get to read a todo item's full details and recorded dependencies, including completed ones.",
 	task_list:
 		"Use task_list to recover todo progress or choose the next open item; blockedBy contains only unfinished prerequisites.",
@@ -214,6 +214,8 @@ export function buildStepSystemPromptAppendix(
 				[
 					"- Tasks are todo items in the session execution checklist: what needs doing and its progress. They do not represent plan approval. Use task_* for tracking, not to execute, delegate, or schedule work.",
 					"- For work with three or more distinct steps, record one task per step with task_create before starting; skip tasks for trivial or purely conversational work.",
+					"- For a different user request, set newPlan to a short title on its first task_create call. This starts a separate checklist and archives the previous one, even if it has unfinished tasks. Omit newPlan on subsequent steps. Do not mix unrelated requests into the active checklist.",
+					"- Do not start a new plan merely because a turn ended, a clarification arrived, or context was compacted. Continue the current plan across turns. When the user explicitly asks to resume an older plan, inspect task_list with includeHistory:true, then call task_update with resumePlanId alone before updating its tasks. Inspecting history never switches plans. If the intended older plan is ambiguous, ask rather than guessing.",
 					"- Mark a task in_progress with task_update before starting it, and completed immediately after finishing it; never batch completions.",
 					"- Keep only one task in_progress at a time. Use task_list to pick the next open, unblocked task and task_get to re-read its details.",
 					"- Only mark a task completed when it is fully done and validated. If blocked, keep it in_progress and create a new task describing the blocker; record dependencies with addBlocks/addBlockedBy.",
@@ -231,7 +233,7 @@ export function buildStepSystemPromptAppendix(
 					"- subagent (Agent tool, when available): delegate a scoped task to a fresh context. Use when the parent context is precious, the task is exploration-heavy, or you want an independent verifier. The child agent has no memory of this conversation; brief it self-contained.",
 					"- cron_create (when available): use a five-field local-time schedule for recurrence or restart-survival; it is for calendar triggers, not completion-state work.",
 					"- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in. Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
-					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, and clear.",
+					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, budget, and clear.",
 					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; calendar recurrence or restart survival → cron_create; explicit completion-state continuation → create_goal; broad multi-agent work with per-agent budgets → workflow.",
 					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule or create a goal.",
 				].join("\n"),
@@ -245,7 +247,7 @@ export function buildStepSystemPromptAppendix(
 					"- Do not create a goal for ordinary work. Call create_goal only when the user or system/developer instructions explicitly request a session-scoped multi-turn goal.",
 					"- The objective is the completion standard for the session. Use get_goal to inspect its status, token budget, and elapsed usage.",
 					"- update_goal accepts only complete or blocked. Use complete only after the objective is achieved and verified; use blocked only after the same blocker recurs for at least three consecutive goal turns and you are truly at an impasse. After a blocked goal is resumed, start a fresh audit and require the same blocker for three consecutive resumed turns. Do not use blocked for work that is merely hard, uncertain, incomplete, or clarification-seeking, and do not mark complete just because the turn or budget is ending.",
-					"- Active goals continue automatically at the host's idle boundary. Do not implement a client-side while loop, busy-poll, timer, or pseudo tool call; pause, resume, edit, and clear are user controls through /goal.",
+					"- Active goals continue automatically at the host's idle boundary. Do not implement a client-side while loop, busy-poll, timer, or pseudo tool call; pause, resume, edit, budget, and clear are user controls through /goal. If a goal is budget_limited, the user can adjust /goal budget <tokens|none> and then /goal resume; never change the budget on their behalf.",
 					"- A goal is session-scoped and restored from the session snapshot. Do not redefine success around a smaller task or mark it complete merely because a turn ended.",
 				].join("\n"),
 			]
@@ -256,8 +258,8 @@ export function buildStepSystemPromptAppendix(
 				"# Scheduled work",
 				[
 					"- Use cron_create for five-field local-time calendar work. Set durable:true when the job must survive a session restart; durable jobs are stored in the trusted project under .step-cli/cron.",
-					"- recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed. Invalid expressions are rejected.",
-					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Running turns are never interrupted; a missed durable one-shot is surfaced when the session returns.",
+					"- A session can hold up to 50 jobs. Recurring jobs repeat and expire after seven days; recurring:false jobs fire once and are removed after delivery. Invalid expressions are rejected.",
+					"- Use cron_list to inspect next fire times and cron_delete to remove a job. Jobs fire only while StepCode is running and idle, after pending user input. A missed durable one-shot is surfaced with its original prompt when the session returns.",
 					"- Use create_goal for an explicitly requested multi-turn objective when that tool is available. Cron and goals have independent lifecycles.",
 				].join("\n"),
 			]
@@ -297,7 +299,7 @@ export function buildStepSystemPromptAppendix(
 		: [];
 
 	const sections = [
-		"# Step operating contract",
+		"# StepCode operating contract",
 		"Use the structured tools exposed by the model API. Never emit XML or pseudo tool-call syntax as assistant text; tool calls are represented by the API itself.",
 		"Use only the structured tools exposed by the model API and keep their arguments in the declared schema.",
 		buildEnvironmentSection(context, operatingMode),
@@ -357,7 +359,7 @@ export function buildStepSystemPromptAppendix(
 		"- Before a requested git mutation, inspect status and diff, target only relevant files, and preserve unrelated work. Never amend or rewrite commits you did not author in this session unless explicitly instructed.",
 
 		"# Tool usage",
-		"- Prefer dedicated Step tools over shell equivalents: list_directory over recursive ls, find_files over find, search_files over grep, and read_file over cat or sed.",
+		"- Prefer dedicated StepCode tools over shell equivalents: list_directory over recursive ls, find_files over find, search_files over grep, and read_file over cat or sed.",
 		"- Use read_file before edit_file when the current content is not already known. Use edit_file for targeted replacements and write_file only for new files or deliberate full replacements.",
 		"- Keep tool calls narrow and independently verifiable. Do not use interactive commands or shell chains when a structured argument (such as cwd) is available.",
 	];

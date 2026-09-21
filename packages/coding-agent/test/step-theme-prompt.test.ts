@@ -26,18 +26,25 @@ function createHost(): StepLoginHost & { mounted: StepThemePromptView | undefine
 
 describe("buildStepThemeOptions", () => {
 	it("leads with the auto pair and its two halves", () => {
-		const options = buildStepThemeOptions(["dark", "light", "sage", "step", "step-light"], "step-light/step");
+		const options = buildStepThemeOptions(
+			["dark", "light", "sage", "step-violet", "step-violet-light"],
+			"step-violet-light/step-violet",
+		);
 
 		expect(options.slice(0, 3)).toEqual([
-			{ setting: "step-light/step", label: "Auto (match terminal)", description: "step / step-light" },
-			{ setting: "step", label: "Dark mode", description: "step" },
-			{ setting: "step-light", label: "Light mode", description: "step-light" },
+			{
+				setting: "step-violet-light/step-violet",
+				label: "Auto (match terminal)",
+				description: "step-violet / step-violet-light",
+			},
+			{ setting: "step-violet", label: "Dark mode", description: "step-violet" },
+			{ setting: "step-violet-light", label: "Light mode", description: "step-violet-light" },
 		]);
 		expect(options.slice(3).map((option) => option.setting)).toEqual(["dark", "light", "sage"]);
 	});
 
 	it("lists plain themes when the default pair is not installed", () => {
-		const options = buildStepThemeOptions(["dark", "light"], "step-light/step");
+		const options = buildStepThemeOptions(["dark", "light"], "step-violet-light/step-violet");
 
 		expect(options).toEqual([
 			{ setting: "dark", label: "dark" },
@@ -51,10 +58,26 @@ describe("buildStepThemeOptions", () => {
 		expect(options.map((option) => option.setting)).toEqual(["dark", "light"]);
 	});
 
+	it("promotes and labels the single blue default without adding variants", () => {
+		const options = buildStepThemeOptions(
+			["dark", "light", "sage", "step-blue", "step-violet", "step-violet-light", "step-blue"],
+			"step-blue",
+		);
+		expect(options[0]).toEqual({ setting: "step-blue", label: "step-blue (default)" });
+		expect(options.map((option) => option.setting)).toEqual([
+			"step-blue",
+			"dark",
+			"light",
+			"sage",
+			"step-violet",
+			"step-violet-light",
+		]);
+	});
+
 	// An empty catalog is a broken install; the caller puts no question rather
 	// than opening a screen with nothing on it.
 	it("offers nothing when no theme is installed", () => {
-		expect(buildStepThemeOptions([], "step-light/step")).toEqual([]);
+		expect(buildStepThemeOptions([], "step-blue")).toEqual([]);
 	});
 });
 
@@ -73,7 +96,7 @@ describe("runStepThemePrompt", () => {
 	});
 
 	function promptOptions(host: StepLoginHost, overrides: Partial<RunStepThemePromptOptions> = {}) {
-		return { env, createHost: () => host, themeName: "step-light/step", ...overrides };
+		return { env, createHost: () => host, themeName: "step-blue", ...overrides };
 	}
 
 	it("previews each move and resolves the confirmed setting", async () => {
@@ -81,12 +104,13 @@ describe("runStepThemePrompt", () => {
 		const answered = runStepThemePrompt(promptOptions(host));
 
 		await Promise.resolve();
-		expect(host.mounted?.render(80).join("\n")).toContain("1. Auto (match terminal)");
+		expect(host.mounted?.render(80).join("\n")).toContain("1. step-blue (default)");
+		expect(getCurrentThemeName()).toBe("step-blue");
 		host.mounted?.handleInput("\x1b[B");
-		expect(getCurrentThemeName()).toBe("step");
+		expect(getCurrentThemeName()).toBe("dark");
 		host.mounted?.handleInput("\r");
 
-		expect(await answered).toBe("step");
+		expect(await answered).toBe("dark");
 		expect(host.stopped).toBe(true);
 	});
 
@@ -101,8 +125,23 @@ describe("runStepThemePrompt", () => {
 
 		// Taking the default is an answer, so the caller has something to persist
 		// and the screen needs no separate record of having been shown.
-		expect(await answered).toBe("step-light/step");
-		expect(getCurrentThemeName()).toBe("step");
+		expect(await answered).toBe("step-blue");
+		expect(getCurrentThemeName()).toBe("step-blue");
+	});
+
+	it.each(["15;0", "0;15"])("uses blue when no default is supplied with COLORFGBG=%s", async (colorfgbg) => {
+		const host = createHost();
+		const answered = runStepThemePrompt(
+			promptOptions(host, {
+				themeName: undefined,
+				env: { ...env, COLORFGBG: colorfgbg },
+			}),
+		);
+		await Promise.resolve();
+		expect(host.mounted?.render(80).join("\n")).toContain("1. step-blue (default)");
+		host.mounted?.handleInput("\r");
+		expect(await answered).toBe("step-blue");
+		expect(getCurrentThemeName()).toBe("step-blue");
 	});
 
 	it("writes nothing of its own", async () => {
@@ -122,11 +161,11 @@ describe("StepThemePromptView", () => {
 		initTheme("dark", false);
 		const view = new StepThemePromptView(
 			[
-				{ setting: "step-light/step", label: "Auto (match terminal)" },
-				{ setting: "step", label: "Dark mode" },
+				{ setting: "step-blue", label: "step-blue (default)" },
+				{ setting: "step-violet", label: "step-violet" },
 			],
 			{
-				initialSetting: "step",
+				initialSetting: "step-violet",
 				onPreview: () => {},
 				onConfirm: () => {},
 				onCancel: () => {},
@@ -138,8 +177,8 @@ describe("StepThemePromptView", () => {
 
 		expect(rendered).toContain("Choose the text style that looks best with your terminal");
 		expect(rendered).toContain("To change this later, run /theme");
-		expect(rendered).toContain("1. Auto (match terminal)");
-		expect(rendered).toContain("2. Dark mode");
+		expect(rendered).toContain("1. step-blue (default)");
+		expect(rendered).toContain("2. step-violet");
 		expect(rendered).toContain('console.log("Hello, World!");');
 		expect(rendered).toContain('console.log("Hello, Step!");');
 	});
@@ -149,14 +188,14 @@ describe("StepThemePromptView", () => {
 		const onConfirm = vi.fn();
 		const view = new StepThemePromptView(
 			[
-				{ setting: "step-light/step", label: "Auto (match terminal)" },
-				{ setting: "step", label: "Dark mode" },
+				{ setting: "step-blue", label: "step-blue (default)" },
+				{ setting: "step-violet", label: "step-violet" },
 			],
 			{ onPreview: () => {}, onConfirm, onCancel: () => {}, requestRender: () => {} },
 		);
 
 		view.handleInput("2");
 
-		expect(onConfirm).toHaveBeenCalledWith("step");
+		expect(onConfirm).toHaveBeenCalledWith("step-violet");
 	});
 });

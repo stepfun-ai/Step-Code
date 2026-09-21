@@ -36,9 +36,9 @@ describe("built-in tool system prompt contributions", () => {
 	test.each([
 		["bash", createBashToolDefinition],
 		["powershell", createPowerShellToolDefinition],
-	] as const)("keeps %s session-environment guidance conditional", (_name, createDefinition) => {
-		const definition = createDefinition("/workspace", { exposeSessionEnvironment: false });
+	] as const)("does not advertise removed %s session environment variables", (_name, createDefinition) => {
+		const definition = createDefinition("/workspace");
 
-		expect(definition.promptGuidelines).toBeUndefined();
+		expect(definition.promptGuidelines ?? []).toEqual([]);
 	});
 });

@@ -6,7 +6,6 @@ import { type Static, Type } from "typebox";
 import { renderDiff } from "../../render/diff.ts";
 import type { Theme } from "../../theme/theme.ts";
 import { splitBom } from "../../utils/text.ts";
-import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import {
 	applyEditsToNormalizedContent,
@@ -326,7 +325,6 @@ export function createEditToolDefinition(
 		promptSnippet: editToolSystemPromptContribution.snippet,
 		promptGuidelines: [...editToolSystemPromptContribution.guidelines],
 		parameters: editSchema,
-		constrainedSampling: getExperimentalToolSampling(),
 		renderShell: "self",
 		prepareArguments: prepareEditArguments,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {

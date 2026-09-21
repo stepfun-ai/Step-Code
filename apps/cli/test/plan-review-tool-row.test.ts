@@ -86,7 +86,7 @@ const dismissed: PlanReviewDetails = {
 	outcome: "dismissed",
 };
 
-beforeEach(() => initTheme("step"));
+beforeEach(() => initTheme("step-blue"));
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 	initTheme("dark");

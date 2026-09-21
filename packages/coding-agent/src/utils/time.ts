@@ -10,5 +10,5 @@ export function formatElapsedTime(totalSeconds: number): string {
 	if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
 	const hours = Math.floor(minutes / 60);
 	const remainingMinutes = minutes % 60;
-	return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+	return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${String(remainingMinutes).padStart(2, "0")}m`;
 }

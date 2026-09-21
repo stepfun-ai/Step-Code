@@ -60,7 +60,6 @@ import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension, ToolDefinition } from "./core/extensions/types.ts";
-import { shouldRunFirstTimeSetup } from "./core/first-time-setup-gate.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import type { ModelRequestObserver } from "./core/model-request-observer.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
@@ -85,7 +84,6 @@ import type { SessionManagerFactory } from "./core/session-manager-factory.ts";
 import { collectSettingsDiagnostics, deduplicateDiagnostics } from "./core/settings-diagnostics.ts";
 import { SettingsManager, type SettingsManagerCreateOptions } from "./core/settings-manager.ts";
 import type { SystemPromptProduct } from "./core/system-prompt.ts";
-import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./features/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -144,11 +142,6 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 		const prefix = diagnostic.type === "error" ? "Error: " : diagnostic.type === "warning" ? "Warning: " : "";
 		console.error(color(`${prefix}${diagnostic.message}`));
 	}
-}
-
-function isTruthyEnvFlag(value: string | undefined): boolean {
-	if (!value) return false;
-	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
 export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
@@ -816,7 +809,7 @@ export interface MainOptions {
  * including) the final `switch (appMode)`: it parses argv, runs the short-lived
  * metadata/auth/package/config commands, builds the runtime, resolves the final
  * `appMode` (including the piped-stdin → print flip), and applies the same
- * module-global side effects (timings buffer, stdout takeover, theme watcher).
+ * module-global side effects (stdout takeover, theme watcher).
  *
  *  - `kind: "completed"` — a short-command path already produced all output and
  *    the process should stop. `exitCode` encodes pi's historical exit contract:
@@ -852,7 +845,6 @@ export type MainPreparation =
 			initialMessage: string | undefined;
 			initialImages: ImageContent[] | undefined;
 			sessionRoot: string | undefined;
-			startupBenchmark: boolean;
 			parsed: Args;
 			// Computed here (not raw options) so the dispatcher and an embedding
 			// shell build InteractiveMode from the same resolved values pi uses.
@@ -867,7 +859,6 @@ export type MainPreparation =
  * bookkeeping (telemetry finally blocks) is never skipped by a `process.exit()`.
  */
 export async function prepareMain(args: string[], options?: MainOptions): Promise<MainPreparation> {
-	resetTimings();
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
 	const configDirName = options?.configDirName?.trim() || CONFIG_DIR_NAME;
 	const cwd = process.cwd();
@@ -952,7 +943,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			return { kind: "completed", exitCode: 1 };
 		}
 	}
-	time("parseArgs");
 
 	if (parsed.version) {
 		console.log(VERSION);
@@ -1011,22 +1001,9 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		agentDir,
 		configDirName,
 	});
-	time("runMigrations");
 
 	const startupSettingsManager = createSettingsManager(cwd, agentDir, { configDirName });
 	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
-
-	// Experimental first-time setup: theme choice and analytics opt-in.
-	// Runs before any runtime services are created so the chosen settings apply everywhere.
-	if (
-		appMode === "interactive" &&
-		!parsed.help &&
-		parsed.listModels === undefined &&
-		shouldRunFirstTimeSetup(join(agentDir, "settings.json"))
-	) {
-		await options?.uiHooks?.showFirstTimeSetup(startupSettingsManager, { agentDir, configDirName });
-		time("firstTimeSetup");
-	}
 
 	if (appMode === "interactive" && parsed.useTheme !== undefined) {
 		startupSettingsManager.applyOverrides({ theme: parsed.useTheme });
@@ -1104,7 +1081,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		}
 		sessionManager.appendSessionInfo(name);
 	}
-	time("createSessionManager");
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
@@ -1297,7 +1273,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			diagnostics,
 		};
 	};
-	time("createRuntime");
 	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
 	try {
 		runtime = await createAgentSessionRuntime(createRuntime, {
@@ -1312,7 +1287,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		if (error instanceof ProjectTrustDeclinedError) return { kind: "completed" };
 		throw error;
 	}
-	time("createAgentSessionRuntime");
 	const runtimeHost = options?.runtimeHostFactory?.(runtime) ?? runtime;
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRuntime, resourceLoader } = services;
@@ -1360,24 +1334,19 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			appMode = "print";
 		}
 	}
-	time("readPipedStdin");
 
 	const { initialMessage, initialImages } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),
 		stdinContent,
 	);
-	time("prepareInitialMessage");
 	setThemeStorageDir(agentDir);
 	initTheme(settingsManager.getTheme() ?? options?.defaultTheme, appMode === "interactive");
-	time("initTheme");
 
 	// Show deprecation warnings in interactive mode
 	if (appMode === "interactive" && deprecationWarnings.length > 0) {
 		await showDeprecationWarnings(deprecationWarnings);
 	}
-
-	time("resolveModelScope");
 	const startupDiagnostics = deduplicateDiagnostics([...startupSettingsDiagnostics, ...runtime.diagnostics]);
 	const hasRuntimeErrors = runtime.diagnostics.some((diagnostic) => diagnostic.type === "error");
 	if (appMode !== "interactive" || hasRuntimeErrors) {
@@ -1389,7 +1358,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		}
 		return { kind: "completed", exitCode: 1 };
 	}
-	time("createAgentSession");
 
 	if (appMode !== "interactive" && !session.model) {
 		console.error(chalk.red(formatNoModelsAvailableMessage()));
@@ -1408,12 +1376,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		// The shell must not force-exit this path: the framed host owns its own
 		// lifetime and its final length-prefixed frames on stdout must drain naturally.
 		return { kind: "completed", drainNaturally: true };
-	}
-
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
-	if (startupBenchmark && appMode !== "interactive") {
-		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
-		return { kind: "completed", exitCode: 1 };
 	}
 
 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
@@ -1441,7 +1403,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		initialMessage,
 		initialImages,
 		sessionRoot,
-		startupBenchmark,
 		parsed,
 		configDirName,
 		authPath,
@@ -1460,7 +1421,6 @@ async function dispatchAppMode(
 ): Promise<void> {
 	const { appMode, runtimeHost } = prep;
 	if (appMode === "rpc") {
-		printTimings();
 		await runRpcMode(runtimeHost);
 	} else if (appMode === "interactive") {
 		// The interactive TUI moved to @step-harness/cli (S4-0). coding-agent's own
@@ -1468,7 +1428,6 @@ async function dispatchAppMode(
 		// from the returned MainPreparation and run their own dispatch switch.
 		throw new Error("interactive mode moved to @step-harness/cli; coding-agent main() no longer dispatches the TUI");
 	} else {
-		printTimings();
 		const exitCode = await runPrintMode(runtimeHost, {
 			mode: toPrintOutputMode(appMode),
 			messages: prep.parsed.messages,

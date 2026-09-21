@@ -1,63 +1,61 @@
 /**
- * 工作状态行下方的一行小 tip（与 CC 的 spinner tips 同位同用途）。
- * 差异：CC 秒级轮换（社区抱怨没看清就滚走），我们一轮一条、下轮换下一条。
- * 池子小而精，只放高价值入口，不做语境推断（保持笨而稳）。
+ * The single rotating tip line under the working-status row (same slot and
+ * purpose as Claude Code's spinner tips). Unlike CC's second-level rotation,
+ * which users complain scrolls by unread, one tip serves a whole turn and the
+ * next turn takes the next one. Goal-command tips follow the current goal
+ * status without inferring user intent.
  */
 
-import { keyText } from "@step-harness/coding-agent";
+import { keyText, type StepGoalStatus } from "@step-harness/coding-agent";
 
-/** Which goal state the tip pool should teach for. */
-export type GoalTipState = "active" | "paused" | "none";
-
-export function buildStatusTips(goal: GoalTipState = "none"): string[] {
-	const [theme, model, expand, atFiles, queueMessage] = [
-		"Use /theme to switch themes (step / step-light)",
+export function buildStatusTips(goalStatus?: StepGoalStatus): string[] {
+	const general = [
+		"Use /theme to switch themes (step-blue / step-violet)",
 		"Use /model to switch models",
 		`Press ${keyText("app.tools.expand")} to expand tool output`,
 		"Type @ to autocomplete file paths",
 		"Press Enter while working to queue a message",
 	];
-	if (goal === "active") {
-		// Alternate each goal command with a base tip so the controls stay
-		// high-frequency while a goal runs; /theme keeps the fixed first slot.
-		return [
-			theme,
-			"Pause the running goal with /goal pause",
-			"Check goal progress with /goal status",
-			model,
-			"Resume a paused goal with /goal resume",
-			expand,
-			"End the goal early with /goal clear",
-			atFiles,
-			queueMessage,
+	if (goalStatus === "active") {
+		const commands = [
+			"Use /goal status to inspect progress and usage",
+			"Use /goal pause to pause; /goal resume continues it",
+			"Use /goal edit to revise the current objective",
+			"Use /goal clear to end the current goal",
 		];
+		return general.flatMap((tip) => [...commands, tip]);
 	}
-	if (goal === "paused") {
-		return ["Resume the paused goal with /goal resume", model, expand, atFiles, queueMessage];
+	if (goalStatus === "paused" || goalStatus === "blocked" || goalStatus === "usage_limited") {
+		return general.flatMap((tip) => ["Use /goal resume to continue the current goal", tip]);
 	}
-	return [theme, "Use /goal to drive long-running tasks", model, expand, atFiles, queueMessage];
+	if (goalStatus === "budget_limited") {
+		return ["Use /goal edit to revise the goal, or /goal clear to drop it", ...general];
+	}
+	return [...general, "Use /goal to set a long-running task and keep working across turns"];
 }
 
 /**
- * 每轮取一条：固定从池头（/theme，用户拍板每次会话首条）开始，顺序推进。
- * 一轮内不换、相邻两轮不重复同一条（池长 ≥2 时）。
+ * One tip per turn: the pool always starts from its head (/theme — the agreed
+ * first tip of every session) and advances in order. A tip never changes
+ * mid-turn, and consecutive turns never repeat the same tip (pools of ≥2).
  */
 export class StatusTipRotator {
-	private readonly pool: () => readonly string[];
+	private pool: readonly string[];
 	private index: number;
 
 	// Parameter properties are off (erasableSyntaxOnly) — assign explicitly.
-	// Pools are normalized to a function so state-aware tips (for example goal
-	// controls) re-read every turn without rebuilding the rotator.
-	constructor(pool: readonly string[] | (() => readonly string[]), startIndex = 0) {
-		this.pool = typeof pool === "function" ? pool : () => pool;
-		this.index = startIndex;
+	constructor(pool: readonly string[], startIndex = 0) {
+		this.pool = pool;
+		this.index = pool.length > 0 ? startIndex % pool.length : 0;
 	}
 
-	next(): string | undefined {
-		const tips = this.pool();
-		if (tips.length === 0) return undefined;
-		const tip = tips[this.index % tips.length];
+	next(pool: readonly string[] = this.pool): string | undefined {
+		if (pool.length !== this.pool.length || pool.some((tip, index) => tip !== this.pool[index])) {
+			this.pool = pool;
+			this.index = 0;
+		}
+		if (this.pool.length === 0) return undefined;
+		const tip = this.pool[this.index % this.pool.length];
 		this.index += 1;
 		return tip;
 	}

@@ -15,12 +15,9 @@ import {
 	configureHttpDispatcher,
 	createStepCli,
 	createStepCodeProviderInlineExtension,
-	createStepModelRequestObserver,
 	createStepProviderConfig,
 	createStepSessionManagerFactory,
 	createStepSettingsManager,
-	createStepSystemMetricsCollector,
-	createStepTelemetryRuntime,
 	createStepToolProfile,
 	decorateStepCodeSettingsManager,
 	describeStepMcpImportOutcome,
@@ -32,7 +29,6 @@ import {
 	getStepLoginStatus,
 	hasConfiguredStepCodeCredential,
 	installProcessStderrDevLogCapture,
-	installStepTelemetryCrashHandlers,
 	isStepConfigCommand,
 	isStepInteractiveLoginStartup,
 	isStepServicesDisabled,
@@ -47,7 +43,6 @@ import {
 	normalizeStepSessionSelectorArgs,
 	parseStepUpdateCommand,
 	prepareMain,
-	printTimings,
 	readFeedbackUsername,
 	readGlobalStepConfig,
 	readOrCreateStepDeviceId,
@@ -56,7 +51,6 @@ import {
 	resolveStepConfigDir,
 	resolveStepConfigRoot,
 	resolveStepStorageRoot,
-	resolveStepTraceHeaderBaseUrls,
 	restoreStdout,
 	runFeedbackCommand,
 	runStepConfigCommand,
@@ -72,8 +66,7 @@ import {
 	setStderrDevLogStorageRootDirectory,
 	stopThemeWatcher,
 	syncStepLoginProfileEndpoint,
-	time,
-	trackStepTelemetryError,
+	trackStepTelemetry,
 	translateStepCommandArgs,
 	updateGlobalMcpConfig,
 	withStepDefaults,
@@ -85,13 +78,13 @@ import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
 import { InteractiveMode, runPrintMode, runRpcMode } from "#modes/index";
 import { createSdkStdioMode } from "#modes/sdk-stdio";
 import { selectConfig, selectSession, showFirstTimeSetup, showStartupInput, showStartupSelector } from "#ui/index";
+import { observability } from "./observability.ts";
 
 /**
  * Step's product entrypoint. The process still runs pi's main implementation;
  * these defaults only isolate Step's persisted state from a user's pi install.
  */
 process.title = "step";
-process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = "step";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 ensureStepGlobalConfig(process.env);
@@ -119,18 +112,14 @@ const stepPermissionArgs = parseArgs(normalizeStepSessionSelectorArgs(process.ar
 // stream and retry loop; this reporter only receives the redacted dimensions
 // needed by the legacy Step analytics query system. The runtime is disabled in
 // test processes and can be opted out through the same Step environment flags.
-const telemetryRuntime = createStepTelemetryRuntime({
-	context: { version: STEP_CLI_VERSION.value },
+const telemetryReporter = observability.createReporter({
+	version: STEP_CLI_VERSION.value,
 	config: stepPersistedDefaults.telemetry,
 });
-const telemetryCrashHandlers = telemetryRuntime.enabled
-	? installStepTelemetryCrashHandlers(telemetryRuntime)
-	: undefined;
-const systemMetrics = telemetryRuntime.enabled ? createStepSystemMetricsCollector(telemetryRuntime) : undefined;
-systemMetrics?.start();
-const modelRequestObserver = createStepModelRequestObserver(telemetryRuntime, {
-	observerBaseUrls: resolveStepTraceHeaderBaseUrls(),
-});
+const telemetryCrashHandlers = observability.installCrashHandlers?.(telemetryReporter);
+const systemMetrics = observability.createSystemMetrics?.(telemetryReporter);
+systemMetrics?.start?.();
+const modelRequestObserver = observability.createModelRequestObserver(telemetryReporter);
 const telemetryStartedAt = Date.now();
 let telemetryExitRecorded = false;
 /**
@@ -148,13 +137,13 @@ const telemetryProcessExitHandler = (code: number): void => {
 	telemetryExitRecorded = true;
 	const effectiveCode = Number.isInteger(code) ? code : (process.exitCode ?? 0);
 	const exitReason = effectiveCode === 0 ? "normal" : effectiveCode === 130 ? "interrupt" : "error";
-	telemetryRuntime.track("cli_exited", {
+	trackStepTelemetry(telemetryReporter, "cli_exited", {
 		duration_ms: Date.now() - telemetryStartedAt,
 		exit_reason: exitReason,
 	});
 };
 process.prependListener("exit", telemetryProcessExitHandler);
-telemetryRuntime.track("cli_started", {
+trackStepTelemetry(telemetryReporter, "cli_started", {
 	entrypoint: readTelemetryEntrypoint(process.argv.slice(2)),
 	os: process.platform,
 	node_version: readTelemetryNodeVersion(),
@@ -192,7 +181,7 @@ const stepMainOptions: MainOptions = {
 	},
 	authPath: getStepAuthPath(),
 	extensionFactories: createStepExtensionFactories({
-		telemetry: telemetryRuntime,
+		telemetry: telemetryReporter,
 		stepSettings: () => currentStepSettingsManager,
 		feedbackIdentity: readCurrentFeedbackIdentity,
 		permission: {
@@ -200,6 +189,7 @@ const stepMainOptions: MainOptions = {
 			nonInteractiveApproval: stepPermissionArgs.nonInteractiveApproval,
 			toolOverrides: stepPermissionArgs.toolOverride ?? stepPermissionArgs.toolOverrides,
 		},
+		traceHeaderPolicy: observability.traceHeaderPolicy(),
 		stepCodeProviderExtension,
 	}),
 	authRuntimeSetup: (modelRuntime) => {
@@ -241,7 +231,7 @@ const stepMainOptions: MainOptions = {
 			};
 		},
 		onCredentialAuthenticated: ({ uid }) => {
-			if (uid) telemetryRuntime.setContext({ uid });
+			if (uid) telemetryReporter.setContext?.({ uid });
 		},
 		onStartup: async ({ ui, stop, dispose }) => {
 			// Auth-only startup uses the same InteractiveMode for its OAuth dialog,
@@ -262,12 +252,12 @@ const stepMainOptions: MainOptions = {
 			return outcome !== "restarted";
 		},
 	},
-	modelRequestObserver,
+	...(modelRequestObserver ? { modelRequestObserver } : {}),
 	systemPromptProduct: {
-		name: "Step",
-		role: "Step, an interactive terminal coding agent developed by StepFun",
+		name: "StepCode",
+		role: "an interactive terminal coding agent developed by StepFun",
 		introduction:
-			"You are step-cli, an interactive terminal coding agent developed by StepFun. You help with software engineering tasks in the current workspace: reading and changing code, running commands, and answering questions about the codebase. Optimize for correctness first, concision second, speed third.",
+			"You are StepCode, an interactive terminal coding agent developed by StepFun. You help with software engineering tasks in the current workspace: reading and changing code, running commands, and answering questions about the codebase. Optimize for correctness first, concision second, speed third.",
 		includeDocumentation: false,
 		promptAppendix: buildStepSystemPromptAppendix,
 	},
@@ -332,7 +322,7 @@ try {
 			? undefined
 			: readCredentialUid(readStoredCredential(STEP_PROVIDER_ID, getStepAuthPath()));
 		if (storedUid) {
-			telemetryRuntime.setContext({ uid: storedUid });
+			telemetryReporter.setContext?.({ uid: storedUid });
 		}
 	}
 	if (isTopLevelLogout) {
@@ -535,7 +525,7 @@ try {
 			storageRootDir: resolveStepStorageRoot(process.env),
 			...(feedbackIdentity.uid ? { uid: feedbackIdentity.uid } : {}),
 			...(feedbackIdentity.username ? { username: feedbackIdentity.username } : {}),
-			telemetry: telemetryRuntime,
+			telemetry: telemetryReporter,
 			settings: feedbackSettingsManager,
 			env: process.env,
 		});
@@ -624,16 +614,19 @@ try {
 	// the takeover, and no redirection leaks past this entry.
 	restoreStdout();
 	telemetryExitReason = "error";
-	trackStepTelemetryError(telemetryRuntime, error, "cli_entry", false);
+	trackStepTelemetry(telemetryReporter, "crash", {
+		error_type: error instanceof Error ? error.name : "Error",
+		source: "cli_entry",
+	});
 	const message = error instanceof Error ? error.message : String(error);
 	process.stderr.write(`step error: ${message}\n`);
 	process.exitCode = 1;
 } finally {
-	systemMetrics?.sample();
-	systemMetrics?.stop();
+	systemMetrics?.sample?.();
+	systemMetrics?.stop?.();
 	if (!telemetryExitRecorded) {
 		telemetryExitRecorded = true;
-		telemetryRuntime.track("cli_exited", {
+		trackStepTelemetry(telemetryReporter, "cli_exited", {
 			duration_ms: Date.now() - telemetryStartedAt,
 			exit_reason: telemetryExitReason,
 		});
@@ -641,7 +634,7 @@ try {
 	process.off("exit", telemetryProcessExitHandler);
 	telemetryCrashHandlers?.dispose();
 	try {
-		await telemetryRuntime.shutdown();
+		await telemetryReporter.shutdown?.();
 	} finally {
 		await flushStderrDevLog();
 	}
@@ -665,12 +658,12 @@ function readTelemetryNodeVersion(): string {
 }
 
 async function initializeTelemetryIdentity(): Promise<void> {
-	if (!telemetryRuntime.enabled) return;
+	if (telemetryReporter.enabled === false) return;
 	try {
 		const result = await readOrCreateStepDeviceId(resolveStepStorageRoot());
-		if (result.deviceId) telemetryRuntime.setContext({ deviceId: result.deviceId });
+		if (result.deviceId) telemetryReporter.setContext?.({ deviceId: result.deviceId });
 		if (result.created) {
-			telemetryRuntime.track("first_launch", {
+			trackStepTelemetry(telemetryReporter, "first_launch", {
 				channel: process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
 			});
 		}
@@ -692,14 +685,13 @@ function readCredentialUid(credential: unknown): string | undefined {
  *
  * Uses prep.appMode verbatim (never re-resolves it, so a piped-stdin launch that
  * prepareMain already flipped to "print" can never fall back into the TTY UI).
- * printTimings / stopThemeWatcher / restoreStdout are pi's exported functions:
- * they act on coding-agent module-global state (timings buffer, theme watcher,
+ * stopThemeWatcher / restoreStdout are coding-agent's exported functions:
+ * they act on coding-agent module-global state (theme watcher,
  * the stdout takeover prepareMain installed), so they must not be reimplemented.
  */
 async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispatch" }>): Promise<void> {
 	switch (prep.appMode) {
 		case "rpc": {
-			printTimings();
 			await runRpcMode(prep.runtimeHost);
 			break;
 		}
@@ -722,30 +714,11 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 				...stepMainOptions.interactiveModeOptions,
 				sessionRoot: prep.sessionRoot,
 			});
-			if (prep.startupBenchmark) {
-				await interactiveMode.init();
-				time("interactiveMode.init");
-				// Give the TUI's stdin handler a brief chance to consume terminal query replies
-				// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-				await new Promise((resolve) => setTimeout(resolve, 150));
-				interactiveMode.stop();
-				stopThemeWatcher();
-				printTimings();
-				if (process.stdout.writableLength > 0) {
-					await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
-				}
-				if (process.stderr.writableLength > 0) {
-					await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
-				}
-				break;
-			}
-			printTimings();
 			await interactiveMode.run();
 			break;
 		}
 		default: {
 			// print / json headless channels.
-			printTimings();
 			const exitCode = await runPrintMode(prep.runtimeHost, {
 				mode: toPrintOutputMode(prep.appMode),
 				messages: prep.parsed.messages,

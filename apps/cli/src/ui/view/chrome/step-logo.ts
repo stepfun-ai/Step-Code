@@ -3,16 +3,12 @@
  *
  * Two marks live here, chosen at render time by terminal capability:
  *
- * - **The riding bird** (`renderBirdFrame` / `renderBirdStatic`): a 22x8
- *   colored sprite in the brand's violet-and-gold, decoded from
- *   `logo-sprite.generated.ts`. Every terminal renders it the same way — each
- *   source half-cell becomes a 2x2 group in a 2x4 Braille dot matrix. This
- *   started as Apple Terminal's fallback (its block-glyph rasterizer leaves
- *   visible grid lines, and whole-cell backgrounds make the artwork too heavy),
- *   and is now used everywhere so the mark looks identical across terminals
- *   rather than switching between half-block and Braille per terminal. Colors
- *   render as truecolor or quantized 256-color through `style.ts`. The welcome
- *   block plays the frames once, then settles on the static frame.
+ * - **The riding bird** (`renderBirdFrame` / `renderBirdStatic`): the approved
+ *   20x18 artwork, encoded into 20x9 solid half-block text cells without any
+ *   resampling. Foreground and background retain independently colored halves.
+ *   Transparent pixels use the surrounding terminal background. All color
+ *   terminals use this same geometry; font metrics and color depth can still
+ *   affect physical appearance. The intro plays once, then restores the PNG.
  *
  * - **The CP437 block mark** (`renderStepMark`): the previous 3x3 abstract-S,
  *   kept as the monochrome fallback. It uses only space/`█`/`▀`/`▄` and emits
@@ -23,7 +19,7 @@
  * Why the bird is terminal cells and not a Kitty/iTerm2 inline image:
  * `scrollback-guard.ts` clips full redraws to the viewport, and an inline image
  * makes pi-tui reserve extra rows with cursor moves so its output no longer maps
- * one row per `\r\n`. Block and Braille glyphs are ordinary text cells and cost
+ * one row per `\r\n`. Block glyphs are ordinary text cells and cost
  * the differential renderer nothing.
  *
  * The CP437 mark's own design constraints (four glyphs, no SGR, why the axes
@@ -42,9 +38,10 @@ import {
 	BIRD_SPRITE_STATIC,
 } from "./step-logo-sprite.generated.ts";
 
-/** Minimal painter needed by the logo renderer. */
+/** Minimal painters needed by the logo renderer. */
 export interface StepLogoTheme {
 	fg(color: string, text: string): string;
+	bg(color: string, text: string): string;
 }
 
 type RgbColor = { r: number; g: number; b: number };
@@ -82,8 +79,21 @@ function rgbToAnsi256({ r, g, b }: RgbColor): number {
 	return 16 + 36 * nearestCubeLevel(r) + 6 * nearestCubeLevel(g) + nearestCubeLevel(b);
 }
 
+/** The opening SGR for a sprite color, for callers that style runs of cells. */
+export function stepLogoColorOpen(color: string): string {
+	const rgb = parseHexColor(color);
+	if (rgb === null) return "";
+	let mode: "truecolor" | "256color" = "truecolor";
+	try {
+		mode = theme.getColorMode();
+	} catch {
+		return "";
+	}
+	return mode === "truecolor" ? `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m` : `\x1b[38;5;${rgbToAnsi256(rgb)}m`;
+}
+
 /** Paint an arbitrary sprite color at the active Pi theme color depth. */
-export function paintStepLogoColor(color: string, text: string): string {
+export function paintStepLogoColor(color: string, text: string, layer: "fg" | "bg" = "fg"): string {
 	const rgb = parseHexColor(color);
 	if (rgb === null || text.length === 0) return text;
 	let mode: "truecolor" | "256color" = "truecolor";
@@ -94,8 +104,12 @@ export function paintStepLogoColor(color: string, text: string): string {
 		// preferable to making the welcome block fail in that case.
 		return text;
 	}
-	const open = mode === "truecolor" ? `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m` : `\x1b[38;5;${rgbToAnsi256(rgb)}m`;
-	return `${open}${text}\x1b[39m`;
+	const channel = layer === "fg" ? 38 : 48;
+	const open =
+		mode === "truecolor"
+			? `\x1b[${channel};2;${rgb.r};${rgb.g};${rgb.b}m`
+			: `\x1b[${channel};5;${rgbToAnsi256(rgb)}m`;
+	return `${open}${text}\x1b[${channel + 1}m`;
 }
 
 /** Paint the small `STEP` badge background used by the old welcome block. */
@@ -112,7 +126,7 @@ export function paintStepBadge(text: string): string {
 
 /** Adapter matching the old renderer's handle-shaped API. */
 export function createStepLogoTheme(): StepLogoTheme {
-	return { fg: paintStepLogoColor };
+	return { fg: paintStepLogoColor, bg: (color, text) => paintStepLogoColor(color, text, "bg") };
 }
 
 /** Terminal columns the riding-bird sprite occupies. */
@@ -126,41 +140,71 @@ export const BIRD_FRAME_DURATIONS_MS: readonly number[] = BIRD_SPRITE_FRAME_DURA
 /** Total run of one animation loop, in milliseconds. */
 export const BIRD_ANIMATION_DURATION_MS = BIRD_SPRITE_FRAME_DURATIONS_MS.reduce((sum, ms) => sum + ms, 0);
 
-/** Braille dot masks for two small square-ish samples in each half-cell. */
-const BRAILLE_UPPER_MASK = 0b00011011;
-const BRAILLE_LOWER_MASK = 0b11100100;
-const BRAILLE_BASE = 0x2800;
+const BIRD_WINK_STATIC = BIRD_SPRITE_STATIC.map((row, rowIndex) =>
+	rowIndex === 2 ? `${row.slice(0, 12)}1313${row.slice(16)}` : row,
+);
 
 /**
- * Renders a sprite (a frame or the static image) to colored Braille cells.
- *
- * Each source half-cell becomes a 2x2 group in the terminal's 2x4 Braille dot
- * matrix. The glyph uses foreground color only: transparent portions stay
- * transparent and no half-row expands into a full background cell. A terminal
- * cell can carry only one Braille foreground color, so when both halves have
- * different colors the upper sample wins while the full silhouette is kept.
- * Colors go through the theme handle, so `style.ts` downgrades them to the
- * terminal's color depth.
+ * Pair two source pixels into one cell without merging their colors.
+ * Returns styled single-width cells; `undefined` marks a blank cell so callers
+ * can composite the mark into a larger canvas (the welcome ride-in strip).
  */
-function renderBrailleSprite(handle: StepLogoTheme, rows: readonly string[]): string[] {
-	return rows.map((row) => {
-		let line = "";
-		for (let i = 0; i < row.length; i += 2) {
-			const upper = Number.parseInt(row[i]!, 16);
-			const lower = Number.parseInt(row[i + 1]!, 16);
-			const upperHex = upper > 0 ? BIRD_SPRITE_PALETTE[upper - 1] : undefined;
-			const lowerHex = lower > 0 ? BIRD_SPRITE_PALETTE[lower - 1] : undefined;
-			const color = upperHex ?? lowerHex;
-			const mask =
-				(upperHex === undefined ? 0 : BRAILLE_UPPER_MASK) | (lowerHex === undefined ? 0 : BRAILLE_LOWER_MASK);
-			line += color === undefined ? " " : handle.fg(color, String.fromCodePoint(BRAILLE_BASE | mask));
+function spriteRowCells(handle: StepLogoTheme, rows: readonly string[], rowIndex: number): (string | undefined)[] {
+	const row = rows[rowIndex]!;
+	const cells: (string | undefined)[] = [];
+	for (let i = 0; i < row.length; i += 2) {
+		const upper = BIRD_SPRITE_PALETTE[Number.parseInt(row[i]!, 16) - 1];
+		const lower = BIRD_SPRITE_PALETTE[Number.parseInt(row[i + 1]!, 16) - 1];
+		if (upper === undefined) {
+			// Underline fills the lower glyph's baseline gap without adding
+			// pixels to its transparent upper half on cell-aligned renderers.
+			cells.push(lower === undefined ? undefined : `\x1b[4m${handle.fg(lower, "▄")}\x1b[24m`);
+		} else if (lower === undefined) {
+			// Overline does the corresponding edge fill for the upper half.
+			// Terminals without overline support may ignore SGR 53/55.
+			const connectedAbove = rows[rowIndex - 1]?.[i + 1] === row[i];
+			if (connectedAbove) {
+				// Continue the same-color pixel above without a glyph-top gap
+				// (beak, tail, wheel rims). Cut out the transparent lower half
+				// using inverse video; underline clears the cutout's bottom rim.
+				// Default background is preserved without guessing its RGB.
+				cells.push(`\x1b[7m\x1b[4m${handle.fg(upper, "▄")}\x1b[24m\x1b[27m`);
+			} else {
+				cells.push(`\x1b[53m${handle.fg(upper, "▀")}\x1b[55m`);
+			}
+		} else if (upper === lower) {
+			// A background-colored space covers the cell independently of
+			// full-block font metrics, including any inter-line glyph gap.
+			cells.push(handle.bg(upper, " "));
+		} else {
+			// Paint the upper color as background and the lower as an
+			// underlined half-block: lower colors cannot bleed above the
+			// upper glyph (notably a false second eye glint / beak stripe).
+			cells.push(handle.bg(upper, `\x1b[4m${handle.fg(lower, "▄")}\x1b[24m`));
 		}
-		return line;
-	});
+	}
+	return cells;
 }
 
 function renderSprite(handle: StepLogoTheme, rows: readonly string[]): string[] {
-	return renderBrailleSprite(handle, rows);
+	return rows.map((_row, rowIndex) =>
+		spriteRowCells(handle, rows, rowIndex)
+			.map((cell) => cell ?? " ")
+			.join(""),
+	);
+}
+
+/** Composite-ready cells (undefined = blank) of animation frame `index`. */
+export function renderBirdFrameCells(handle: StepLogoTheme, index: number): (string | undefined)[][] {
+	const frame =
+		BIRD_SPRITE_FRAMES[((index % BIRD_FRAME_COUNT) + BIRD_FRAME_COUNT) % BIRD_FRAME_COUNT] ?? BIRD_SPRITE_STATIC;
+	return frame.map((_row, rowIndex) => spriteRowCells(handle, frame, rowIndex));
+}
+
+/** Composite-ready cells (undefined = blank) of the settled bird. */
+export function renderBirdStaticCells(handle: StepLogoTheme, wink = false): (string | undefined)[][] {
+	const frame = wink ? BIRD_WINK_STATIC : BIRD_SPRITE_STATIC;
+	return frame.map((_row, rowIndex) => spriteRowCells(handle, frame, rowIndex));
 }
 
 /** Renders animation frame `index` (wrapped into range) of the riding bird. */
@@ -171,8 +215,8 @@ export function renderBirdFrame(handle: StepLogoTheme, index: number): string[] 
 }
 
 /** Renders the settled riding bird shown after the launch animation ends. */
-export function renderBirdStatic(handle: StepLogoTheme): string[] {
-	return renderSprite(handle, BIRD_SPRITE_STATIC);
+export function renderBirdStatic(handle: StepLogoTheme, wink = false): string[] {
+	return renderSprite(handle, wink ? BIRD_WINK_STATIC : BIRD_SPRITE_STATIC);
 }
 
 /**

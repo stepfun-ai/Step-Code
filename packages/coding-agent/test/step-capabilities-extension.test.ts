@@ -436,7 +436,7 @@ test("parallel subagents inherit the current model and receive isolated worktree
 		),
 	).toBe(true);
 
-	initTheme("step");
+	initTheme("step-blue");
 	const collapsed = tool!.renderResult!(result, { expanded: false, isPartial: false }, theme, {} as never);
 	expect(collapsed.render(100).join("\n")).toContain("worktree:");
 	const expanded = tool!.renderResult!(result, { expanded: true, isPartial: false }, theme, {} as never);

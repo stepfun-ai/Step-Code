@@ -89,11 +89,9 @@ stages:
   - publish
   - notify
 
-# Enforce the branch flow: changes reach `main` only through `github-opensource`.
-# Any merge request targeting `main` whose source is not `github-opensource`
-# fails here, so (with "Pipelines must succeed" enabled on the project) it
-# cannot be merged. Legitimate promotions come from the github-opensource
-# branch and pass.
+# Enforce the branch flow: normal changes reach `main` through
+# `github-opensource`; the reviewed opensource promotion branch is the only
+# additional source permitted for the current filtered promotion.
 enforce-merge-order:
   stage: .pre
   image: "$RELEASE_BUILDER_IMAGE"
@@ -102,13 +100,16 @@ enforce-merge-order:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
   script:
     - |
-      if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" != "github-opensource" ]; then
-        echo "❌ Only 'github-opensource' may be merged into 'main'."
-        echo "   This MR's source branch is '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME'."
-        echo "   Merge your changes into 'github-opensource' first, then open an MR from there to 'main'."
-        exit 1
-      fi
-      echo "✅ Source branch is 'github-opensource'; allowed to merge into 'main'."
+      case "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" in
+        github-opensource|chore/opensource-main-promotion)
+          echo "✅ Source branch is '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME'; allowed to merge into 'main'."
+          ;;
+        *)
+          echo "❌ Only 'github-opensource' or 'chore/opensource-main-promotion' may be merged into 'main'."
+          echo "   This MR's source branch is '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME'."
+          exit 1
+          ;;
+      esac
 
 lint:
   stage: lint

@@ -36,7 +36,6 @@ function normalizedPathname(url: URL): string {
 	return decodeURIComponent(url.pathname).replace(/\/+$/u, "") || "/";
 }
 
-/** Environment override first, then the default for the current build channel. */
 export function resolveFeedbackEndpoint(env: NodeJS.ProcessEnv = process.env, bundle = false): string | undefined {
 	const configured = bundle
 		? env.STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT?.trim() ||

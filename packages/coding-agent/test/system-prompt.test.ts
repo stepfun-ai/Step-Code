@@ -162,13 +162,13 @@ describe("buildSystemPrompt", () => {
 			const prompt = buildSystemPrompt({
 				...base,
 				product: {
-					name: "Step",
-					introduction: "You are step-cli, an interactive terminal coding agent developed by StepFun.",
+					name: "StepCode",
+					introduction: "You are StepCode, an interactive terminal coding agent developed by StepFun.",
 					includeDocumentation: false,
 				},
 			});
 
-			expect(prompt.startsWith("You are step-cli, an interactive terminal coding agent developed by StepFun.")).toBe(
+			expect(prompt.startsWith("You are StepCode, an interactive terminal coding agent developed by StepFun.")).toBe(
 				true,
 			);
 			expect(prompt).not.toContain("documentation (read only");

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
-import { resolveStepConfigDir, resolveStepHomeDir } from "./environment.ts";
+export { resolveStepStorageRoot } from "./storage-root.ts";
 
 const DEVICE_ID_FILENAME = "device-id";
 const DEVICE_ID_FILE_MODE = 0o600;
@@ -12,15 +12,6 @@ export interface StepDeviceIdResult {
 	readonly deviceId?: string;
 	/** True only when this invocation created the identifier file. */
 	readonly created: boolean;
-}
-
-/** Resolve the shared Step storage root used by identity and telemetry spool. */
-export function resolveStepStorageRoot(env: NodeJS.ProcessEnv = process.env): string {
-	return (
-		env.STEP_CLI_STORAGE_ROOT_DIR?.trim() ||
-		env.STEPCLI_STORAGE_ROOT_DIR?.trim() ||
-		join(resolveStepHomeDir(env), resolveStepConfigDir(env))
-	);
 }
 
 /** Resolve the product-owned anonymous install identifier path. */

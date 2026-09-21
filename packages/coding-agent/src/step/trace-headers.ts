@@ -20,6 +20,8 @@ export interface StepTraceHeaderOptions {
 	readonly allowedBaseUrls?: readonly string[];
 	/** Low-sensitivity client label sent to the provider. */
 	readonly clientType?: string;
+	/** High-sensitivity fields permitted by the host observability policy. */
+	readonly highSensitivityFields?: readonly string[];
 }
 
 const PRINTABLE_ASCII_HEADER_VALUE = /^[\x20-\x7e]*$/u;
@@ -35,28 +37,27 @@ const TRACE_HEADER_ENV_NAMES = [
 ] as const;
 
 /**
- * Providers whose requests are routed through the legacy ObservableServer
- * detour.  The native Step provider is deliberately absent: its
- * `/step_plan/v1` endpoint is a direct model endpoint, not the cloud-trace
- * collector.  Treating every `step` URL as trusted would both leak the
- * high-sensitivity headers to custom Step-compatible endpoints and mark every
- * direct request as `routed_via_cloud_trace`.
+ * Providers whose model endpoint IS the ObservableServer cloud-trace detour.
+ * Used only by the cloud-trace URL allowlist below (telemetry's
+ * `routed_via_cloud_trace` and trusted-prefix resolution) — NOT by the
+ * attribution-header gate, which keys on the request URL allowlist and the
+ * host-provided high-sensitivity field list (see {@link applyStepTraceHeaders}).
+ * The native Step provider is absent here because its `/step_plan/v1` is a
+ * direct model endpoint, not the cloud-trace collector, so its requests must
+ * not be marked `routed_via_cloud_trace`.
  */
 const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
-
-const BUILTIN_CLOUD_TRACE_ORIGINS = {
-	dev: "https://test-openapi-stepcliobserserver.c.stepfun-inc.net",
-	release: "https://api.stepfun.com/stepcliobserserver",
-} as const;
 
 /**
  * Add Step attribution headers in place.
  *
- * `x-step-client` is deliberately sent to every Step request. Session and
- * workspace identifiers are only added for a trusted URL prefix. A missing
- * request URL is treated as the legacy trusted-provider case; Pi's resolved
- * model always has a URL, while this fallback keeps extension hosts that only
- * expose the old event shape source-compatible.
+ * `x-step-client` is sent on every request. The high-sensitivity fields
+ * (session/workspace/goal/...) are sent only when the request URL matches
+ * `options.allowedBaseUrls` AND the field appears in
+ * `options.highSensitivityFields`; an omitted or empty field list sends none of
+ * them (fail closed), so the local cwd and session id never egress to a
+ * third-party model endpoint. Values are size-bounded and header-safe via
+ * {@link encodeStepTraceHeaderValue}.
  */
 export function applyStepTraceHeaders(
 	headers: Record<string, string | null>,
@@ -71,14 +72,22 @@ export function applyStepTraceHeaders(
 		matchesStepTraceBaseUrl(options.requestUrl, options.allowedBaseUrls);
 	if (!traceAllowed) return;
 
-	setHeader(headers, "x-step-session-id", trace.sessionId);
-	setHeader(headers, "x-step-goal-id", trace.goalId);
-	setHeader(headers, "x-step-attempt-id", trace.attemptId);
-	setHeader(headers, "x-step-harness-id", trace.harnessId);
-	setHeader(headers, "x-step-span-id", trace.spanId);
-	setHeader(headers, "x-step-workspace-id", trace.workspaceId);
-	setHeader(headers, "x-step-provider-id", trace.provider);
-	setHeader(headers, "x-step-model", trace.model);
+	const fields = options.highSensitivityFields;
+	// Fail closed: a policy that omits the field list (undefined) must not leak
+	// every high-sensitivity header — treat it the same as an empty allowance.
+	if (!fields || fields.length === 0) return;
+	const allowed = new Set(fields);
+	const setIfAllowed = (field: string, value: string | undefined): void => {
+		if (allowed.has(field)) setHeader(headers, `x-step-${field}`, value);
+	};
+	setIfAllowed("session-id", trace.sessionId);
+	setIfAllowed("goal-id", trace.goalId);
+	setIfAllowed("attempt-id", trace.attemptId);
+	setIfAllowed("harness-id", trace.harnessId);
+	setIfAllowed("span-id", trace.spanId);
+	setIfAllowed("workspace-id", trace.workspaceId);
+	setIfAllowed("provider-id", trace.provider);
+	setIfAllowed("model", trace.model);
 }
 
 /**
@@ -131,11 +140,8 @@ export function resolveStepTraceRuntimeAllowlist(
 	provider: string | undefined,
 	env: Record<string, string | undefined> = process.env,
 ): string[] {
-	const values = resolveStepTraceHeaderBaseUrls(undefined, env);
-	if (isStepTraceProductProvider(provider)) {
-		values.push(resolveBuiltinCloudTraceOrigin(env));
-	}
-	return [...new Set(values.map(normalizeUrlPrefix).filter(Boolean))];
+	void provider;
+	return resolveStepTraceHeaderBaseUrls(undefined, env);
 }
 
 /** Shared predicate for high-sensitivity trace headers and routed telemetry. */
@@ -213,9 +219,4 @@ function setHeader(headers: Record<string, string | null>, name: string, value: 
 
 function normalizeUrlPrefix(value: string): string {
 	return value.trim().replace(/\/+$/u, "");
-}
-
-function resolveBuiltinCloudTraceOrigin(env: Record<string, string | undefined>): string {
-	const channel = env.STEP_CLI_BUILD_CHANNEL;
-	return channel?.trim() === "release" ? BUILTIN_CLOUD_TRACE_ORIGINS.release : BUILTIN_CLOUD_TRACE_ORIGINS.dev;
 }

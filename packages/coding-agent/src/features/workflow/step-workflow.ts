@@ -7,15 +7,21 @@ import type {
 	ExtensionFactory,
 	InlineExtension,
 } from "../../core/extensions/types.ts";
-import { resolveStepStorageRoot } from "../../step/device-id.ts";
+import { resolveStepStorageRoot } from "../../step/storage-root.ts";
 import type { StepTelemetryReporter } from "../../step/telemetry.ts";
 import { createDefaultWorkflowAgentRunner } from "./agent-runner.ts";
 import { createWorkflowRunPaths, newWorkflowRunId, resolveWorkflowRoot, WorkflowJournal } from "./journal.ts";
 import { formatWorkflowStatus, listSavedWorkflows, listWorkflowRuns } from "./progress.ts";
 import { resolveWorkflowRegistration, WORKFLOW_VM_UNAVAILABLE_WARNING } from "./registration-gate.ts";
+import {
+	renderWorkflowCall,
+	renderWorkflowResult,
+	type WorkflowRenderState,
+	workflowProgressResult,
+} from "./rendering.ts";
 import { WorkflowRuntime, workflowToolResult } from "./runtime.ts";
 import { isWorkflowPathInside } from "./tool-profile.ts";
-import type { WorkflowAgentRunner } from "./types.ts";
+import type { WorkflowAgentRunner, WorkflowProgress, WorkflowRunResult } from "./types.ts";
 import type { UltraloopTurnState } from "./ultraloop-opt-in.ts";
 import { type runInIsolatedVm, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";
 
@@ -141,9 +147,12 @@ export function createStepWorkflowExtension(options: StepWorkflowExtensionOption
 		const runner = options.runner ?? createDefaultWorkflowAgentRunner();
 		const homeRoot = options.homeRoot ?? resolveStepStorageRoot();
 
-		pi.registerTool({
+		pi.registerTool<typeof WorkflowParams, WorkflowProgress | WorkflowRunResult, WorkflowRenderState>({
 			name: "workflow",
 			label: "Workflow",
+			renderShell: "self",
+			renderCall: renderWorkflowCall,
+			renderResult: renderWorkflowResult,
 			description: `Run an isolated JavaScript workflow that coordinates many agents through phase(), parallel(), pipeline(), agent(), and the HoH iterate() loop. Scripts run in a sandboxed VM (no process, require, network, wall clock, or randomness); every agent call is journaled under .step-cli/workflows/runs so runs can resume. Provide exactly one of script (inline), scriptPath, or name (saved workflow); /workflows lists saved workflows and recent runs.
 
 OPT-IN REQUIRED. Use this tool only when the user has opted in via one of: the keyword "ultraloop" (or Claude Code's spelling "ultracode") in the current message; an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop turned on for the session (a system-reminder confirms it — see the Ultraloop section below); a saved workflow invoked by name; or a skill that instructs it. The harness attaches a customType:"ultraloop-opt-in" system-reminder to the opting turn — per-turn signals produce a "the user included ..." reminder, session-standing mode produces an "Ultraloop is on for the session ..." reminder that repeats every turn until /ultraloop off. Saved-workflow or skill invocations are valid opt-in even without a reminder. Never infer opt-in from task shape — a large or parallel-looking task is not consent, per-turn opt-in from an earlier turn does not carry forward, and this tool being registered (STEP_ENABLE_WORKFLOW) is an environment capability, not consent. Without any signal, prefer targeted tools: a single subagent (Agent tool), search_files, or read_file; for calendar-based deferral prefer cron_create; for a multi-turn objective prefer create_goal.
@@ -172,6 +181,7 @@ Sizing: default medium; keep a run under ~15 agents unless the user asks for sca
 Mechanics:
 - parallel(tasks) IS a barrier: it awaits every task before returning, and a task that throws resolves to null in the result array — the call never rejects, so .filter(Boolean) before using the results. pipeline(items, ...stages) runs each item's stage chain concurrently with NO barrier between stages: item A can be in stage 3 while item B is still in stage 1, and a stage sees only its own item, never sibling items' earlier-stage output. Stage callbacks receive (prevResult, originalItem, index); a stage that throws drops that item to null and skips its remaining stages. Both accept at most 4096 entries. Prefer pipeline(); insert a parallel() barrier between stages only when stage N truly needs every stage N-1 result (dedup, early exit, cross-referencing).
 - agent(prompt, {schema}) forces structured JSON output and retries schema mismatches up to 3 attempts, feeding validation errors back; failed attempts still consume budget.
+- Give agent() a short descriptive label; the live tool row shows running/queued counts, assigned tasks, phases, and terminal states while the workflow executes.
 - Budgets fail closed once spend crosses the limit; budget.total is null when unlimited, so guard adaptive waves with budget.total && budget.remaining() > estimate. A "+500k"-style token target in the user's current message becomes the run's default budget; an explicit budget parameter overrides it.
 - Resume: resumeFromRunId with the same script and args is a 100% cache hit on the unchanged prefix; after the first callHash mismatch, everything after it re-runs live. The tool result includes runId and the persisted scriptPath (.step-cli/workflows/runs/<runId>/script.js) — edit that file and re-invoke with scriptPath to iterate without resending the source.
 - Determinism: Date, new Date(), and Math.random() throw inside the VM. Pass timestamps via args; vary prompts by index, not randomness.
@@ -195,10 +205,11 @@ Mechanics:
 				"Use iterate({spec, ...}) for the Planner → single-writer Developer → independent QA loop with built-in coverage, stagnation, max-iteration, empty-objective, and budget stops; hand-roll agent() with readOnly/writable mounts when roles or stop conditions differ.",
 			],
 			parameters: WorkflowParams,
-			execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+			execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
 				const controller = new AbortController();
 				const abort = (): void => controller.abort();
-				if (signal) signal.addEventListener("abort", abort, { once: true });
+				if (signal?.aborted) abort();
+				else signal?.addEventListener("abort", abort, { once: true });
 				activeRuns.add(controller);
 				try {
 					const request = params as WorkflowRequest;
@@ -216,6 +227,12 @@ Mechanics:
 						runId,
 						name: source.name,
 						journal,
+						onProgress: onUpdate
+							? (progress) => {
+									// Ignore late child cleanup after this tool execution has settled.
+									if (activeRuns.has(controller)) onUpdate(workflowProgressResult(progress));
+								}
+							: undefined,
 						runner,
 						telemetry: options.telemetry,
 						budgetTotal: request.budget ?? options.turnState?.budgetTotal ?? options.budgetTotal,

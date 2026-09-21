@@ -6,11 +6,11 @@
  * unoptimized one, so this test drives the REAL TuiMainScreen render loop through
  * a matrix of scenarios (see render-equivalence-scenarios.mts) and compares the
  * recorded write() sequence against the baseline produced with
- * PI_TUI_DISABLE_INCREMENTAL=1, which disables the Container cache, the prefix
+ * --disable-incremental, which disables the Container cache, the prefix
  * reuse in applyLineResets, the diff bound and the Kitty-scan skip.
  *
- * The kill switch is latched on first use, so each run happens in its own child
- * process. The optimized arm runs twice: identical recordings across the two runs
+ * Each run happens in its own child process with an explicit rendering mode.
+ * The optimized arm runs twice: identical recordings across the two runs
  * are what make the comparison meaningful, since a wall-clock dependent frame (a
  * spinner glyph, say) would otherwise agree with itself and hide the divergence.
  *
@@ -45,15 +45,22 @@ type Diagnostics = {
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-function runChild(env: Record<string, string>): Payload {
+function runChild(disableIncremental = false): Payload {
 	const script = fileURLToPath(new URL("./render-equivalence-scenarios.mts", import.meta.url));
 	const result = spawnSync(
 		process.execPath,
-		["node_modules/tsx/dist/cli.mjs", "--tsconfig", "tsconfig.json", script, "--child"],
+		[
+			"node_modules/tsx/dist/cli.mjs",
+			"--tsconfig",
+			"tsconfig.json",
+			script,
+			"--child",
+			...(disableIncremental ? ["--disable-incremental"] : []),
+		],
 		{
 			encoding: "utf8",
 			cwd: repoRoot,
-			env: { ...process.env, ...env },
+			env: process.env,
 			maxBuffer: 256 * 1024 * 1024,
 		},
 	);
@@ -100,10 +107,10 @@ function bytes(recording: Recording): number {
 }
 
 test("optimized renderer writes the same bytes as the unoptimized baseline", () => {
-	const baseline = runChild({ PI_TUI_DISABLE_INCREMENTAL: "1" });
-	const optimized = runChild({ PI_TUI_DISABLE_INCREMENTAL: "" });
+	const baseline = runChild(true);
+	const optimized = runChild();
 	// Same arm, second run: proves the recording does not depend on wall-clock timing.
-	const optimizedAgain = runChild({ PI_TUI_DISABLE_INCREMENTAL: "" });
+	const optimizedAgain = runChild();
 
 	assert.ok(baseline.recording.length > 0, "baseline recorded no scenarios");
 
@@ -162,7 +169,7 @@ test("optimized renderer writes the same bytes as the unoptimized baseline", () 
 		assert.equal(
 			base.spacerCacheStable,
 			false,
-			`${presentation}: Spacer cache ignored PI_TUI_DISABLE_INCREMENTAL, so the baseline is not cache-free`,
+			`${presentation}: Spacer cache ignored --disable-incremental, so the baseline is not cache-free`,
 		);
 
 		// The two delicate guards are only worth having if the scenarios reach them.

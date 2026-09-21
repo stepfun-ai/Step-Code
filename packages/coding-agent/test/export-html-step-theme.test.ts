@@ -31,17 +31,23 @@ describe("Step HTML export theme", () => {
 		session.appendMessage(assistantMsg("ok"));
 		const outputPath = join(tempDir, "session.html");
 
-		await exportSessionToHtml(session, undefined, { outputPath, themeName: "step" });
+		await exportSessionToHtml(session, undefined, { outputPath, themeName: "step-blue" });
 
 		const html = readFileSync(outputPath, "utf8");
 		expect(html).toContain("--userMdHeading: #e8e8ea;");
 		expect(html).toContain("--userSyntaxKeyword: #e08fdf;");
+		expect(html).toContain("--mdCode: #68c0ff;");
+		expect(html).toContain("--codeInlineBg: transparent;");
+		expect(html).toContain("--customMessageBg: transparent;");
+		expect(html).toContain("--toolSuccessBg: transparent;");
+		expect(html).toContain("--userMessageBg: #3d3b39;");
+		expect(html).toMatch(/\.markdown-content code\s*\{[^}]*background:\s*var\(--codeInlineBg, transparent\);/s);
 		expect(html).toMatch(/\.user-message\s*\{[^}]*--mdHeading:\s*var\(--userMdHeading\);/s);
 		expect(html).toMatch(/\.user-message\s*\{[^}]*--syntaxKeyword:\s*var\(--userSyntaxKeyword\);/s);
 	});
 
 	test("uses the active user palette when exporting the active Step theme", async () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const tempDir = mkdtempSync(join(tmpdir(), "step-theme-export-"));
 		tempDirs.push(tempDir);
 		const session = SessionManager.create(tempDir, tempDir, { id: "active-step-theme" });
@@ -73,7 +79,7 @@ describe("Step HTML export theme", () => {
 		await expect(
 			main(["--export", sessionFile, outputPath], {
 				agentDir: join(tempDir, "agent"),
-				defaultTheme: "step-light/step",
+				defaultTheme: "step-blue",
 			}),
 		).rejects.toThrow("process.exit:0");
 

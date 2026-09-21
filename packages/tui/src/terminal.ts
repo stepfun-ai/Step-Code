@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { setKittyProtocolActive } from "./keys.ts";
@@ -110,10 +109,6 @@ const DEFAULT_SSH_ESCAPE_TIMEOUT_MS = 100;
  * another byte, so high-latency transports need a longer reassembly window.
  */
 export function resolveEscapeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-	const configured = Number(env.PI_TUI_ESC_TIMEOUT);
-	if (Number.isFinite(configured) && configured > 0) {
-		return configured;
-	}
 	if (env.SSH_CONNECTION || env.SSH_TTY) {
 		return DEFAULT_SSH_ESCAPE_TIMEOUT_MS;
 	}
@@ -135,20 +130,6 @@ export class ProcessTerminal implements Terminal {
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
 	private progressInterval?: ReturnType<typeof setInterval>;
-	private writeLogPath = (() => {
-		const env = process.env.PI_TUI_WRITE_LOG || "";
-		if (!env) return "";
-		try {
-			if (fs.statSync(env).isDirectory()) {
-				const now = new Date();
-				const ts = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}-${String(now.getSeconds()).padStart(2, "0")}`;
-				return path.join(env, `tui-${ts}-${process.pid}.log`);
-			}
-		} catch {
-			// Not an existing directory - use as-is (file path)
-		}
-		return env;
-	})();
 
 	get kittyProtocolActive(): boolean {
 		return this._kittyProtocolActive;
@@ -475,13 +456,6 @@ export class ProcessTerminal implements Terminal {
 
 	write(data: string): void {
 		process.stdout.write(data);
-		if (this.writeLogPath) {
-			try {
-				fs.appendFileSync(this.writeLogPath, data, { encoding: "utf8" });
-			} catch {
-				// Ignore logging errors
-			}
-		}
 	}
 
 	get columns(): number {

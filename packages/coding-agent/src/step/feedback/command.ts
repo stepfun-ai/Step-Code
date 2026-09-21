@@ -1,6 +1,6 @@
 import { stdin as input, stdout as output } from "node:process";
 import * as readline from "node:readline/promises";
-import { resolveStepStorageRoot } from "../device-id.ts";
+import { resolveStepStorageRoot } from "../storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../telemetry.ts";
 import { buildFeedbackSessionBundle, describeFeedbackBundle, type FeedbackBundleResult } from "./bundle.ts";
 import { neutralizeFeedbackConsentMetadata } from "./consent.ts";

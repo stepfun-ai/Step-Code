@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -140,21 +140,19 @@ describe("TUI render scheduling", () => {
 });
 
 describe("TUI debug logging", () => {
-	it("writes redraw logs to the provided directory", async () => {
-		const logDir = mkdtempSync(join(tmpdir(), "pi-tui-log-"));
+	it("does not write log files during normal rendering", async () => {
+		const logDir = mkdtempSync(join(tmpdir(), "tui-log-"));
 		try {
-			await withEnv({ PI_DEBUG_REDRAW: "1" }, async () => {
-				const terminal = new VirtualTerminal(40, 10);
-				const tui: TUI = new TuiMainScreen(terminal, undefined, logDir);
-				const component = new TestComponent();
-				tui.addChild(component);
-				component.lines = ["test"];
-				tui.start();
-				await terminal.waitForRender();
+			const terminal = new VirtualTerminal(40, 10);
+			const tui: TUI = new TuiMainScreen(terminal, undefined, logDir);
+			const component = new TestComponent();
+			tui.addChild(component);
+			component.lines = ["test"];
+			tui.start();
+			await terminal.waitForRender();
 
-				assert.match(readFileSync(join(logDir, "pi-debug.log"), "utf-8"), /fullRender: first render/);
-				tui.stop();
-			});
+			assert.deepEqual(readdirSync(logDir), []);
+			tui.stop();
 		} finally {
 			rmSync(logDir, { recursive: true, force: true });
 		}
@@ -540,7 +538,7 @@ describe("TUI content shrinkage", () => {
 	it("clears empty rows when content shrinks significantly", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui: TUI = new TuiMainScreen(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
+		tui.setClearOnShrink(true);
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -572,7 +570,7 @@ describe("TUI content shrinkage", () => {
 	it("handles shrink to single line", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui: TUI = new TuiMainScreen(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
+		tui.setClearOnShrink(true);
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -595,7 +593,7 @@ describe("TUI content shrinkage", () => {
 	it("handles shrink to empty", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui: TUI = new TuiMainScreen(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
+		tui.setClearOnShrink(true);
 		const component = new TestComponent();
 		tui.addChild(component);
 

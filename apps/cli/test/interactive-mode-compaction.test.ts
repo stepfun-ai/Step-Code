@@ -29,6 +29,7 @@ describe("InteractiveMode compaction events", () => {
 		const enabled = {
 			chatContainer: new Container(),
 			settingsManager: { getShowCacheMissNotices: () => true, getStatusTips: () => false },
+			sessionManager: { getBranch: () => [], getSessionId: () => "session-test" },
 		};
 		addCompactionCostNotice.call(enabled, { type: "compaction_cost", kind: "compaction", usage });
 		addCompactionCostNotice.call(enabled, {
@@ -143,7 +144,7 @@ describe("InteractiveMode compaction events", () => {
 			defaultEditor: {},
 			statusContainer: { clear: vi.fn() },
 			chatContainer: { clear: vi.fn() },
-			sessionManager: { buildContextEntries: vi.fn().mockReturnValue([latestCompaction, previousCompaction]) },
+			sessionManager: { buildContextEntries: vi.fn().mockReturnValue([latestCompaction, previousCompaction]), getBranch: () => [], getSessionId: () => "session-test" },
 			renderSessionEntries: vi.fn(),
 			addMessageToChat: vi.fn(),
 			addCompactionCostNotice: vi.fn(),
@@ -207,6 +208,8 @@ describe("InteractiveMode compaction events", () => {
 			showWorkingStatusIndicator: vi.fn(),
 			clearStatusIndicator: vi.fn(),
 			settingsManager: { getShowTerminalProgress: () => true, getStatusTips: () => false },
+			readGoalTipState: () => "none" as const,
+			sessionManager: { getBranch: () => [], getSessionId: () => "session-test" },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 			redraw: { requestRender: vi.fn(), forceRender: vi.fn(), renderNow: vi.fn() },
 		};

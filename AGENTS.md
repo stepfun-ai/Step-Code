@@ -46,8 +46,6 @@ Product:
   management and persistence wiring (`src/core/session-*`), extensions,
   interactive and one-shot modes, the built-in theme catalog
   (`src/modes/interactive/theme/`), and the StepCode integration (`src/step/`).
-- `packages/evals` (`@step-harness/evals`, depends on `ai`, `coding-agent`)
-  — evaluation harness.
 
 Pluggable backends:
 
@@ -140,9 +138,12 @@ Pluggable backends:
 - When updating `undici`, you MUST read its changelog/release notes for the target version and evaluate whether any changes may affect functionality before applying the update.
 - Hydrate/update locally with `pnpm install --ignore-scripts`; clean/CI-style with `pnpm install --frozen-lockfile --ignore-scripts`. Don't run lifecycle scripts unless the user asks.
 - If dep metadata changes, refresh `pnpm-lock.yaml` with `pnpm install --lockfile-only --ignore-scripts`.
-- Pre-commit blocks lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
+- Pre-commit blocks lockfile commits unless `STEP_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
 
 ## Git
+
+Create all new work branches from `github-opensource`. Target only
+`github-opensource` when opening or merging change requests.
 
 Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
 

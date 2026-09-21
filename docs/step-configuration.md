@@ -19,6 +19,40 @@ and `auth.json` keep their own formats — they hold model definitions and
 credentials, not settings — and a stale Step endpoint recorded in `models.json`
 by an older release is still repaired in place at startup.
 
+## Mandatory command approval
+
+Permission presets and tool overrides cannot automatically approve commands
+matched by the built-in command rules. In particular, `rm` with both recursive
+and force options requires confirmation for every target, including `./build`
+and `/tmp/cache`. Bypass, auto, and autopilot still ask for each call. Read-only
+mode blocks it, and runs without an approval channel cannot execute it even
+with `nonInteractiveApproval = "allow"`.
+
+See [command permissions](command-permissions.md) for matching behavior and
+how to extend the built-in rules.
+
+## Environment and shell commands
+
+`STEP_CODING_AGENT_DIR` selects the agent directory for CLI and SDK callers.
+`STEP_CODING_AGENT_SESSION_DIR` selects session storage unless `--session-dir`
+is supplied. These names are fixed; the application display name does not select
+another environment namespace.
+
+The CLI sets `AI_AGENT=step`. Shell tools inherit the shell environment and any
+explicit spawn-hook changes, without injecting session, model, or reasoning
+metadata. Extensions can read that metadata from their context instead.
+
+Terminal capabilities use automatic detection and the `terminal` settings;
+`showHardwareCursor` and `terminal.clearOnShrink` default to false. There are no
+environment overrides for these settings, experimental tool sampling, startup
+timing, raw terminal write logs, or redraw logs. Provider cache retention defaults
+to `short` and remains configurable per SDK request through `cacheRetention`.
+
+The renderer accepts an explicit crash-log directory from its host. Standalone
+Step screens pass the Step agent directory; generic TUI callers default to the
+system temporary directory. Rendering equivalence tests select the uncached
+renderer through a test-process argument.
+
 ## First-run theme prompt
 
 The first interactive launch asks which theme reads best in the terminal, after
@@ -29,8 +63,10 @@ applies the highlighted theme immediately, and a small sample below the list
 shows the syntax and diff colors. The chosen setting is written before the UI is
 built, so the session opens in the theme just chosen.
 
-Escape answers too: it takes the product default (`step-light/step`, which keeps
-following the terminal's light or dark mode) and writes that. So the `theme` key
+Escape answers too: it takes the product default (`step-blue`, a single bright-blue
+palette) and writes that. The picker lists it first as `step-blue (default)`.
+The violet palettes remain available as `step-violet` and `step-violet-light`.
+So the `theme` key
 in the global `config.toml` is the whole record — there is no separate "we asked
 you" flag, because every way out of the screen leaves a theme behind. A config
 that already has a `theme`, written here or through `/settings` or by hand, skips
