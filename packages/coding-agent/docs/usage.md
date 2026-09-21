@@ -162,7 +162,7 @@ step list                      # List installed packages
 step config                    # Enable/disable package resources
 ```
 
-These commands manage step packages and `step update` can update the step CLI installation. To uninstall step itself, see [Quickstart](quickstart.md#uninstall). `step config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command. `step update` never prompts for project trust.
+These commands manage step packages and `step update` can update the StepCode installation. To uninstall step itself, see [Quickstart](quickstart.md#uninstall). `step config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command. `step update` never prompts for project trust.
 
 See [Step Packages](packages.md) for package sources and security notes.
 

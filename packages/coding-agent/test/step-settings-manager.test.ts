@@ -316,7 +316,7 @@ describe("Step settings manager decorator", () => {
 		writeFileSync(
 			path,
 			[
-				"# Step CLI configuration",
+				"# StepCode configuration",
 				"# hand written note",
 				"",
 				'defaultModel = "keep"',
@@ -334,7 +334,7 @@ describe("Step settings manager decorator", () => {
 		});
 
 		const written = readFileSync(path, "utf8");
-		expect(written.startsWith("# Step CLI configuration\n# hand written note\n")).toBe(true);
+		expect(written.startsWith("# StepCode configuration\n# hand written note\n")).toBe(true);
 		expect(readStepConfig(path)).toEqual({ defaultModel: "next", mcp_servers: { demo: { command: "demo" } } });
 	});
 

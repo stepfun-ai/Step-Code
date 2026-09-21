@@ -229,7 +229,7 @@ describe("Step themes", () => {
 			"syntaxType",
 		] as const;
 
-		// The Step CLI sage palette is intentionally preserved as a visual
+		// The StepCode sage palette is intentionally preserved as a visual
 		// palette; its original user-badge background is not an AA contract for
 		// every possible syntax foreground. Keep the stricter user-message
 		// contract for the branded Step pair below.

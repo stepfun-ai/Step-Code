@@ -30,7 +30,7 @@ describe("Step product version", () => {
 		).toEqual({ value: "1.2.3", source: "override" });
 	});
 
-	it("accepts the Step CLI build and override variables", () => {
+	it("accepts the StepCode build and override variables", () => {
 		expect(resolveStepCodeVersion({ STEPCODE_BUILD_VERSION: "v2.0.0" })).toEqual({
 			value: "2.0.0",
 			source: "embedded",

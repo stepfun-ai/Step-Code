@@ -4,7 +4,7 @@ import { StepOnboardingView } from "../src/step/onboarding-view.ts";
 import { initTheme } from "../src/theme/theme.ts";
 
 describe("Step login onboarding", () => {
-	it("offers the four Step login profiles in step-cli order", () => {
+	it("offers the four Step login profiles in StepCode order", () => {
 		expect(resolveStepLoginProfiles().map((profile) => profile.id)).toEqual([
 			"step_plan",
 			"step_plan_oversea",

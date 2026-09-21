@@ -35,7 +35,7 @@ function createSessionStub(sessionId: string): SessionStub {
 	};
 }
 
-describe("Step CLI", () => {
+describe("StepCode", () => {
 	test("rebinds event subscriptions when pi replaces the session", async () => {
 		const first = createSessionStub("session-1");
 		const second = createSessionStub("session-2");

@@ -82,7 +82,7 @@ export function createStepCode(runtime: AgentSessionRuntime): StepCode {
 	const removeRuntimeListener = runtime.onSessionChange(rebindSubscriptions);
 	const ensureOpen = (): void => {
 		if (disposed) {
-			throw new Error("step cli is disposed");
+			throw new Error("stepcode runtime is disposed");
 		}
 	};
 
@@ -108,7 +108,7 @@ export function createStepCode(runtime: AgentSessionRuntime): StepCode {
 		},
 		input: (text, options) => {
 			ensureOpen();
-			// step cli calls are external to the interactive TUI. Keep their
+			// stepcode calls are external to the interactive TUI. Keep their
 			// source stable so input extensions, auditing, and telemetry do not
 			// depend on which convenience method the caller happened to use.
 			return runtime.session.prompt(text, {

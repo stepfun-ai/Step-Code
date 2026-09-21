@@ -142,14 +142,14 @@ describe("StepCode config compatibility", () => {
 			JSON.stringify({
 				model: "legacy-model",
 				modelSupportApis: [{ id: "chat" }],
-				agentModels: { stepcli: { model: "stepcli-model", modelSupportApis: [{ id: "claude_native" }] } },
+				agentModels: { stepcode: { model: "stepcode-model", modelSupportApis: [{ id: "claude_native" }] } },
 			}),
 		);
 		const config = await loadStepCodeConfig(
 			{ STEPCODE_CONFIG_PATH: configPath, STEP_BASE_URL: "https://proxy.example/v1" },
 			root,
 		);
-		expect(config).toMatchObject({ defaultProvider: "stepcode", defaultModel: "stepcli-model" });
+		expect(config).toMatchObject({ defaultProvider: "stepcode", defaultModel: "stepcode-model" });
 		expect(config?.providers[0]?.config.api).toBe("anthropic-messages");
 	});
 
@@ -179,7 +179,7 @@ describe("StepCode config compatibility", () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-authority-"));
 		roots.push(root);
 		const configPath = join(root, "stepcode", "config.json");
-		const agentDir = join(root, "step-cli", "agent");
+		const agentDir = join(root, "stepcode", "agent");
 		const projectDir = join(root, "project");
 		await mkdir(join(root, "stepcode"), { recursive: true });
 		await mkdir(agentDir, { recursive: true });

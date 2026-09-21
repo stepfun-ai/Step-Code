@@ -672,11 +672,14 @@ function findActiveModel(
 
 function readLegacyDefaultModel(root: JsonObject): string | undefined {
 	const agentModels = asObject(root.agentModels);
-	const stepCli = asObject(agentModels?.stepcode);
+	const stepCode = asObject(agentModels?.stepcode);
 	const codex = asObject(agentModels?.codex);
 	const modelObject = asObject(root.model);
 	return (
-		readString(stepCli?.model) ?? readString(codex?.model) ?? readString(root.model) ?? readString(modelObject?.model)
+		readString(stepCode?.model) ??
+		readString(codex?.model) ??
+		readString(root.model) ??
+		readString(modelObject?.model)
 	);
 }
 

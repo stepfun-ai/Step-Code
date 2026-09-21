@@ -38,7 +38,7 @@ step update npm:@foo/bar      # update one package
 step update --extension npm:@foo/bar
 ```
 
-These commands manage step packages and `step update` can update the step CLI installation. For experimental installer-managed installations, `step update` installs the exact checked version into a staged, lockfile-backed release and activates it only after verification, leaving the current release intact if the update fails. Managed installations do not support `--force`; rerun the installer to repair one. To uninstall step itself, see [Quickstart](quickstart.md#uninstall).
+These commands manage step packages and `step update` can update the StepCode installation. For experimental installer-managed installations, `step update` installs the exact checked version into a staged, lockfile-backed release and activates it only after verification, leaving the current release intact if the update fails. Managed installations do not support `--force`; rerun the installer to repair one. To uninstall step itself, see [Quickstart](quickstart.md#uninstall).
 
 By default, `install` and `remove` write to user settings (`~/.stepcode/agent/settings.json`). Use `-l` to write to project settings (`.stepcode/settings.json`) instead. Project settings can be shared with your team, and step installs any missing packages automatically on startup after the project is trusted.
 

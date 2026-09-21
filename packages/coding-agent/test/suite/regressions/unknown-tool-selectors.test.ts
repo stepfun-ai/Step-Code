@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "../harness.ts";
 
-// User feedback: `stepcli -p --tools definitely_missing ...` ran normally with no
+// User feedback: `stepcode -p --tools definitely_missing ...` ran normally with no
 // warning — an unknown name in the allowlist selected nothing and was silently
 // ignored. getUnknownToolSelectors reports those names so print mode can warn.
 describe("unknown --tools / --exclude-tools selectors", () => {

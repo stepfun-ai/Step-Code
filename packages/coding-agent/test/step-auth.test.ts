@@ -43,7 +43,7 @@ describe("Step credential compatibility", () => {
 	});
 
 	test("resolves the canonical auth file at the Step root", () => {
-		const env = { STEP_CODING_AGENT_DIR: "/tmp/step-cli-agent" };
+		const env = { STEP_CODING_AGENT_DIR: "/tmp/stepcode-agent" };
 		expect(getStepAuthPath(env)).toBe("/tmp/auth.json");
 	});
 
