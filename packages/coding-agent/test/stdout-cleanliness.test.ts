@@ -55,15 +55,11 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	);
 
 	return await new Promise((resolvePromise, reject) => {
-		const child = spawn(process.execPath, [cliPath, ...args], {
+		const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), cliPath, ...args], {
 			cwd: projectDir,
 			env: {
 				...process.env,
 				[ENV_AGENT_DIR]: agentDir,
-				// The @step-harness/cli entry resolves the Step storage namespace, so
-				// isolate its global agent dir explicitly (ENV_AGENT_DIR is computed
-				// from this test process's APP_NAME, which may differ from the child's).
-				STEP_CODING_AGENT_DIR: agentDir,
 				TSX_TSCONFIG_PATH: resolve(__dirname, "../../../tsconfig.json"),
 			},
 			stdio: ["ignore", "pipe", "pipe"],

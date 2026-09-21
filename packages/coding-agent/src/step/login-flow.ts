@@ -3,6 +3,7 @@ import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
 import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
+import { resolveStepAgentDir } from "./environment.ts";
 import {
 	INITIAL_STEP_LOGIN_STEP,
 	isStepLoginSettled,
@@ -290,7 +291,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
  * theme picker each own the terminal for their turn and hand it back empty.
  */
 export function createStandaloneStepHost(): StepLoginHost {
-	const ui = new TuiMainScreen(new ProcessTerminal());
+	const ui = new TuiMainScreen(new ProcessTerminal(), undefined, resolveStepAgentDir());
 	return {
 		addChild: (child) => ui.addChild(child as Parameters<TUI["addChild"]>[0]),
 		setFocus: (child) => ui.setFocus(child as Parameters<TUI["setFocus"]>[0]),

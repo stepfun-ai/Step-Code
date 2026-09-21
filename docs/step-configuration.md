@@ -19,6 +19,28 @@ and `auth.json` keep their own formats — they hold model definitions and
 credentials, not settings — and a stale Step endpoint recorded in `models.json`
 by an older release is still repaired in place at startup.
 
+## Environment and shell commands
+
+`STEP_CODING_AGENT_DIR` selects the agent directory for CLI and SDK callers.
+`STEP_CODING_AGENT_SESSION_DIR` selects session storage unless `--session-dir`
+is supplied. These names are fixed; the application display name does not select
+another environment namespace.
+
+The CLI sets `AI_AGENT=step`. Shell tools inherit the shell environment and any
+explicit spawn-hook changes, without injecting session, model, or reasoning
+metadata. Extensions can read that metadata from their context instead.
+
+Terminal capabilities use automatic detection and the `terminal` settings;
+`showHardwareCursor` and `terminal.clearOnShrink` default to false. There are no
+environment overrides for these settings, experimental tool sampling, startup
+timing, raw terminal write logs, or redraw logs. Provider cache retention defaults
+to `short` and remains configurable per SDK request through `cacheRetention`.
+
+The renderer accepts an explicit crash-log directory from its host. Standalone
+Step screens pass the Step agent directory; generic TUI callers default to the
+system temporary directory. Rendering equivalence tests select the uncached
+renderer through a test-process argument.
+
 ## First-run theme prompt
 
 The first interactive launch asks which theme reads best in the terminal, after

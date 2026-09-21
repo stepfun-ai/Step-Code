@@ -66,7 +66,7 @@ function probeTmuxHyperlinks(): boolean {
 	}
 }
 
-function detectCapabilitiesFromEnvironment(tmuxForwardsHyperlink: () => boolean): TerminalCapabilities {
+export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeTmuxHyperlinks): TerminalCapabilities {
 	const termProgram = process.env.TERM_PROGRAM?.toLowerCase() || "";
 	const terminalEmulator = process.env.TERMINAL_EMULATOR?.toLowerCase() || "";
 	const term = process.env.TERM?.toLowerCase() || "";
@@ -134,31 +134,6 @@ function detectCapabilitiesFromEnvironment(tmuxForwardsHyperlink: () => boolean)
 	// the rendered output. Default to the legacy `text (url)` behavior unless we
 	// have positively identified a hyperlink-capable terminal above.
 	return { images: null, trueColor: hasTrueColorHint, hyperlinks: false };
-}
-
-function parseBooleanCapabilityOverride(value: string | undefined): boolean | undefined {
-	return value === "1" ? true : value === "0" ? false : undefined;
-}
-
-export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeTmuxHyperlinks): TerminalCapabilities {
-	const hyperlinks = parseBooleanCapabilityOverride(process.env.PI_HYPERLINKS);
-	const detected = detectCapabilitiesFromEnvironment(
-		hyperlinks === undefined ? tmuxForwardsHyperlink : () => hyperlinks,
-	);
-	const imageProtocol = process.env.PI_IMAGE_PROTOCOL?.toLowerCase();
-	const images =
-		imageProtocol === "kitty" || imageProtocol === "iterm2"
-			? imageProtocol
-			: imageProtocol === "none" || imageProtocol === "0"
-				? null
-				: undefined;
-	const trueColor = parseBooleanCapabilityOverride(process.env.PI_TRUE_COLOR);
-	return {
-		...detected,
-		...(images !== undefined ? { images } : {}),
-		...(trueColor !== undefined ? { trueColor } : {}),
-		...(hyperlinks !== undefined ? { hyperlinks } : {}),
-	};
 }
 
 export function getCapabilities(): TerminalCapabilities {

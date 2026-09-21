@@ -16,13 +16,7 @@ import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } 
 
 /** Current Pi-shaped credential path under the Step CLI agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
-	return (
-		env.STEP_CLI_AUTH_PATH?.trim() ||
-		// This is a Step-only surface. Always resolve through the Step namespace,
-		// even when an embedded host has a stale PI_CODING_AGENT_DIR in its
-		// process environment. The Pi entrypoint uses getAgentDir() directly.
-		join(resolveStepConfigRoot(env), "auth.json")
-	);
+	return env.STEP_CLI_AUTH_PATH?.trim() || join(resolveStepConfigRoot(env), "auth.json");
 }
 
 /** Old product-owned credential path, used only as a migration fallback. */
