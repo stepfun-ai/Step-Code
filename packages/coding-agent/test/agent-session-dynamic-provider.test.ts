@@ -59,6 +59,14 @@ describe("AgentSession dynamic provider registration", () => {
 			credentials: authStorage,
 			modelsPath: join(agentDir, "models.json"),
 		});
+		const { provider: _provider, baseUrl: _modelBaseUrl, ...stepProviderModel } = stepModel();
+		modelRuntime.registerProvider("step", {
+			name: "Step",
+			baseUrl: "https://api.stepfun.com/v1",
+			api: "openai-completions",
+			apiKey: "test-key",
+			models: [stepProviderModel],
+		});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir,
