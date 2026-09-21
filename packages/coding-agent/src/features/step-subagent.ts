@@ -17,7 +17,7 @@ import { CONFIG_DIR_NAME } from "../config.ts";
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
-import type { StepAgentConfig, StepAgentScope } from "./step-subagent-agents.ts";
+import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
 import { executeSubagent } from "./subagent/execute.ts";
 import { allocateStepWorktree, cloneUsage, isRecordValue } from "./subagent/helpers.ts";
 import {
@@ -116,6 +116,11 @@ export interface StepSubagentRunInput {
 	sessionId?: string;
 	/** Keep the rpc child alive after the turn settles so replies reuse it. */
 	keepAlive?: boolean;
+	/**
+	 * Abandon the turn after this many ms with no output from the child.
+	 * Defaults to `resolveSubagentTurnIdleTimeoutMs()`; `0` disables the watchdog.
+	 */
+	turnIdleTimeoutMs?: number;
 	/** Workflow-owned path ACL passed to the child-side tool_call hook. */
 	workflowAcl?: {
 		baseCwd: string;
@@ -472,7 +477,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			description: [
 				"Delegate tasks to specialized subagents with isolated context.",
 				"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-				'Built-in agent names are exactly "general", "explore", "review", and "planner"; descriptions are not names.',
+				formatBuiltinAgentGuidance(),
 				`Default agent scope is "user" (from ${path.join(resolved.agentDir, "agents")}).`,
 				`To enable project-local agents in ${resolved.configDirName}/agents, set agentScope: "both" (or "project").`,
 			].join(" "),

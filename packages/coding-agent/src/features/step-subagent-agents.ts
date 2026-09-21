@@ -56,14 +56,14 @@ type AgentFrontmatter = {
 const BUILTIN_AGENTS: readonly StepAgentConfig[] = [
 	{
 		name: "general",
-		description: "General-purpose delegated agent for implementation tasks",
+		description: "Implementation and edits; full tool access, including file writes",
 		tools: undefined,
 		systemPrompt: "Work independently on the delegated task and return a concise, verifiable result.",
 		source: "builtin",
 	},
 	{
 		name: "explore",
-		description: "Read-only repository exploration and codebase reconnaissance",
+		description: "Read-only exploration and codebase reconnaissance; cannot edit files or run commands",
 		tools: ["read_file", "find_files", "search_files", "list_directory"],
 		systemPrompt:
 			"Explore the repository carefully. Do not modify files. Return precise findings and relevant paths.",
@@ -71,7 +71,7 @@ const BUILTIN_AGENTS: readonly StepAgentConfig[] = [
 	},
 	{
 		name: "review",
-		description: "Review code for correctness, regressions, and missing tests",
+		description: "Read-only review for correctness, regressions, and missing tests; can run commands",
 		tools: ["read_file", "find_files", "search_files", "list_directory", "run_command"],
 		systemPrompt:
 			"Review the requested change rigorously. Do not modify files; report concrete findings with file references.",
@@ -79,7 +79,7 @@ const BUILTIN_AGENTS: readonly StepAgentConfig[] = [
 	},
 	{
 		name: "planner",
-		description: "Analyze a task and produce an implementation plan",
+		description: "Read-only analysis producing an implementation plan; can run commands",
 		tools: ["read_file", "find_files", "search_files", "list_directory", "run_command"],
 		systemPrompt: "Analyze the task and repository, then return a focused implementation plan. Do not modify files.",
 		source: "builtin",
@@ -87,9 +87,9 @@ const BUILTIN_AGENTS: readonly StepAgentConfig[] = [
 ];
 
 /**
- * Models often turn a built-in description such as "General-purpose delegated
- * agent" into an agent name. Keep those descriptive forms as aliases while
- * retaining exact matching for user- and project-defined names.
+ * Models often reach for a descriptive form ("general-purpose") rather than the
+ * exact built-in name. Keep those forms as aliases while retaining exact
+ * matching for user- and project-defined names.
  */
 const BUILTIN_AGENT_ALIASES: ReadonlyMap<string, string> = new Map([
 	["general-purpose", "general"],
@@ -197,11 +197,32 @@ export async function discoverStepAgents(
 	return { agents: [...byName.values()], userAgentsDir, projectAgentsDir };
 }
 
+/**
+ * Built-in agent guidance for the `subagent` tool description.
+ *
+ * Derived from BUILTIN_AGENTS so the tool description cannot drift from the
+ * catalog, and capability-annotated because agent choice happens before any
+ * catalog is shown: `formatStepAgentCatalog` is only reached on the
+ * unknown-agent error path, so a caller picking an agent otherwise sees four
+ * bare names and no access levels, and defaults to "general" for work that
+ * should have been read-only.
+ */
+export function formatBuiltinAgentGuidance(): string {
+	const listed = BUILTIN_AGENTS.map((agent) => `"${agent.name}" (${agent.description})`).join(", ");
+	return [
+		`Built-in agents, by exact name: ${listed}.`,
+		"Pass the quoted name only; the parenthetical is a capability note, never a name.",
+		'Prefer a read-only agent for review, audit, or exploration work; "general" is the only built-in that can modify files.',
+	].join(" ");
+}
+
 export function formatStepAgentCatalog(agents: readonly StepAgentConfig[], maxItems = 8): string {
 	if (agents.length === 0) return "none";
+	// Pipe-separated: descriptions carry their own semicolons and commas, so a
+	// "; " joiner made entry boundaries ambiguous in the unknown-agent error.
 	const listed = agents.slice(0, maxItems).map((agent) => `${agent.name} (${agent.source}): ${agent.description}`);
-	const suffix = agents.length > maxItems ? `; ... +${agents.length - maxItems} more` : "";
-	return `${listed.join("; ")}${suffix}`;
+	const suffix = agents.length > maxItems ? ` | ... +${agents.length - maxItems} more` : "";
+	return `${listed.join(" | ")}${suffix}`;
 }
 
 /** Resolve an exact agent name, then a compatibility alias for a built-in. */
