@@ -1,6 +1,6 @@
 // Host-facing session surface: the handle an app drives, the events it observes,
 // the inputs it sends, and the tool-approval round-trip. These types are the
-// stable contract between a host (CLI/TUI/voice) and an agent product; they are
+// stable contract between a host (CLI/TUI) and an agent product; they are
 // modeled after the loop's AgentEvent (packages/agent-core) and AgentSession's
 // AgentSessionEvent (packages/coding-agent) but kept fully self-contained so the
 // contracts package carries zero runtime dependencies.
@@ -15,7 +15,7 @@ export interface AgentInputImage {
 	readonly data: string;
 }
 
-/** Canonical input a host sends into a session, regardless of surface (text/voice). */
+/** Canonical text input a host sends into a session. */
 export interface AgentInput {
 	readonly text: string;
 	readonly images?: readonly AgentInputImage[];

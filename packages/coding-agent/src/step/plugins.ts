@@ -15,8 +15,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";
-import { resolveStepStorageRoot } from "./device-id.ts";
 import { resolveStepConfigDir } from "./environment.ts";
+import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
 const execFileAsync = promisify(execFile);

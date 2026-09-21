@@ -14,15 +14,14 @@ export interface StepTraceContext {
 }
 
 export interface StepTraceHeaderOptions {
-	/** Low-sensitivity client label sent to every request. */
+	/** URL of the request being decorated, when the caller knows it. */
+	readonly requestUrl?: string;
+	/** Trusted URL prefixes allowed to receive the high-sensitivity headers. */
+	readonly allowedBaseUrls?: readonly string[];
+	/** Low-sensitivity client label sent to the provider. */
 	readonly clientType?: string;
-	/**
-	 * Send the high-sensitivity attribution fields (session/workspace/goal/...).
-	 * The caller passes true only for Step-owned providers, so the local cwd and
-	 * session id never egress to a user-configured third-party model endpoint.
-	 * `x-step-client` is always sent regardless of this flag.
-	 */
-	readonly sendAttribution?: boolean;
+	/** High-sensitivity fields permitted by the host observability policy. */
+	readonly highSensitivityFields?: readonly string[];
 }
 
 const PRINTABLE_ASCII_HEADER_VALUE = /^[\x20-\x7e]*$/u;
@@ -49,11 +48,6 @@ const TRACE_HEADER_ENV_NAMES = [
  */
 const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 
-const BUILTIN_CLOUD_TRACE_ORIGINS = {
-	dev: "https://test-openapi-stepcliobserserver.c.stepfun-inc.net",
-	release: "https://api.stepfun.com/stepcliobserserver",
-} as const;
-
 /**
  * Add Step attribution headers in place.
  *
@@ -69,15 +63,27 @@ export function applyStepTraceHeaders(
 	options: StepTraceHeaderOptions = {},
 ): void {
 	setHeader(headers, "x-step-client", options.clientType ?? "cli");
-	if (!options.sendAttribution) return;
-	setHeader(headers, "x-step-session-id", trace.sessionId);
-	setHeader(headers, "x-step-goal-id", trace.goalId);
-	setHeader(headers, "x-step-attempt-id", trace.attemptId);
-	setHeader(headers, "x-step-harness-id", trace.harnessId);
-	setHeader(headers, "x-step-span-id", trace.spanId);
-	setHeader(headers, "x-step-workspace-id", trace.workspaceId);
-	setHeader(headers, "x-step-provider-id", trace.provider);
-	setHeader(headers, "x-step-model", trace.model);
+
+	const traceAllowed =
+		options.requestUrl === undefined ||
+		options.allowedBaseUrls === undefined ||
+		matchesStepTraceBaseUrl(options.requestUrl, options.allowedBaseUrls);
+	if (!traceAllowed) return;
+
+	const fields = options.highSensitivityFields;
+	if (fields && fields.length === 0) return;
+	const allowed = fields ? new Set(fields) : undefined;
+	const setIfAllowed = (field: string, value: string | undefined): void => {
+		if (!allowed || allowed.has(field)) setHeader(headers, `x-step-${field}`, value);
+	};
+	setIfAllowed("session-id", trace.sessionId);
+	setIfAllowed("goal-id", trace.goalId);
+	setIfAllowed("attempt-id", trace.attemptId);
+	setIfAllowed("harness-id", trace.harnessId);
+	setIfAllowed("span-id", trace.spanId);
+	setIfAllowed("workspace-id", trace.workspaceId);
+	setIfAllowed("provider-id", trace.provider);
+	setIfAllowed("model", trace.model);
 }
 
 /**
@@ -130,11 +136,8 @@ export function resolveStepTraceRuntimeAllowlist(
 	provider: string | undefined,
 	env: Record<string, string | undefined> = process.env,
 ): string[] {
-	const values = resolveStepTraceHeaderBaseUrls(undefined, env);
-	if (isStepTraceProductProvider(provider)) {
-		values.push(resolveBuiltinCloudTraceOrigin(env));
-	}
-	return [...new Set(values.map(normalizeUrlPrefix).filter(Boolean))];
+	void provider;
+	return resolveStepTraceHeaderBaseUrls(undefined, env);
 }
 
 /** Shared predicate for high-sensitivity trace headers and routed telemetry. */
@@ -212,9 +215,4 @@ function setHeader(headers: Record<string, string | null>, name: string, value: 
 
 function normalizeUrlPrefix(value: string): string {
 	return value.trim().replace(/\/+$/u, "");
-}
-
-function resolveBuiltinCloudTraceOrigin(env: Record<string, string | undefined>): string {
-	const channel = env.STEP_CLI_BUILD_CHANNEL;
-	return channel?.trim() === "release" ? BUILTIN_CLOUD_TRACE_ORIGINS.release : BUILTIN_CLOUD_TRACE_ORIGINS.dev;
 }

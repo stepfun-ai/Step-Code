@@ -25,4 +25,3 @@ export type {
 	Unsubscribe,
 } from "./session-handle.ts";
 export type { SessionEntry, SessionEntryRole, SessionRecord, SessionRecordStats } from "./session-record.ts";
-export type { VoiceInteraction, VoiceInteractionHandle } from "./voice-interaction.ts";

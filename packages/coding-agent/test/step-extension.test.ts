@@ -393,9 +393,14 @@ describe("Step extension", () => {
 		expect(await toolHandler(writeCall, { hasUI: false })).toBeUndefined();
 	});
 
-	test("sends attribution only to Step-owned providers, not third-party endpoints", async () => {
+	test("limits trace headers to configured cloud-trace model requests", async () => {
 		const on = vi.fn();
-		stepExtension({
+		createStepExtension({
+			traceHeaderPolicy: {
+				allowedBaseUrls: ["https://trace.example.test/v1"],
+				highSensitivityFields: ["session-id", "workspace-id", "provider-id", "model"],
+			},
+		})({
 			registerProvider: vi.fn(),
 			on,
 			registerCommand: vi.fn(),
@@ -407,43 +412,44 @@ describe("Step extension", () => {
 			ctx: Pick<ExtensionContext, "model" | "cwd" | "sessionManager">,
 		) => void;
 
-		// Native Step provider: the full attribution set follows, including the
-		// direct /step_plan/v1 endpoint (which the old URL allowlist excluded).
-		const stepHeaders = {} as Record<string, string | null>;
-		await handler({ type: "before_provider_headers", headers: stepHeaders }, {
-			model: { provider: "step", id: "step-3.7-flash", baseUrl: "https://api.stepfun.com/step_plan/v1" },
+		const headers = {} as Record<string, string | null>;
+		await handler({ type: "before_provider_headers", headers }, {
+			model: {
+				provider: "step",
+				id: "step-3.7-flash",
+				baseUrl: "https://api.stepfun.com/step_plan/v1",
+			},
 			cwd: "/workspace",
 			sessionManager: { getSessionId: () => "session-1" },
 		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
-		expect(stepHeaders).toMatchObject({
-			"x-step-client": "cli",
-			"x-step-session-id": "session-1",
-			"x-step-workspace-id": "/workspace",
-			"x-step-provider-id": "step",
-			"x-step-model": "step-3.7-flash",
-		});
+		// The native Step endpoint is a direct model API, not the cloud-trace
+		// collector. Keep session/workspace identifiers off custom or direct
+		// provider requests; only the low-sensitivity client marker is universal.
+		expect(headers).toEqual({ "x-step-client": "cli" });
 
-		// Product proxy provider: also Step-owned, so it also carries attribution.
-		const proxyHeaders = {} as Record<string, string | null>;
-		await handler({ type: "before_provider_headers", headers: proxyHeaders }, {
-			model: { provider: "stepfunModelProxy", id: "step-proxy", baseUrl: "https://mp.example/v1/chat/completions" },
-			cwd: "/workspace",
-			sessionManager: { getSessionId: () => "session-2" },
-		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
-		expect(proxyHeaders).toMatchObject({
-			"x-step-client": "cli",
-			"x-step-session-id": "session-2",
-			"x-step-provider-id": "stepfunModelProxy",
-		});
-
-		// Third-party provider (user-configured OpenAI-compatible endpoint): only the
-		// low-sensitivity client marker; cwd and session id must NOT egress.
-		const thirdPartyHeaders = {} as Record<string, string | null>;
-		await handler({ type: "before_provider_headers", headers: thirdPartyHeaders }, {
-			model: { provider: "openai", id: "gpt-4o", baseUrl: "https://api.openai.example/v1" },
-			cwd: "/workspace",
-			sessionManager: { getSessionId: () => "session-3" },
-		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
-		expect(thirdPartyHeaders).toEqual({ "x-step-client": "cli" });
+		const originalOrigin = process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
+		process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
+		try {
+			const otherHeaders: Record<string, string | null> = {};
+			await handler({ type: "before_provider_headers", headers: otherHeaders }, {
+				model: {
+					provider: "stepfunModelProxy",
+					id: "step-proxy",
+					baseUrl: "https://trace.example.test/v1/chat/completions",
+				},
+				cwd: "/workspace",
+				sessionManager: { getSessionId: () => "session-2" },
+			} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
+			expect(otherHeaders).toMatchObject({
+				"x-step-client": "cli",
+				"x-step-session-id": "session-2",
+				"x-step-workspace-id": "/workspace",
+				"x-step-provider-id": "stepfunModelProxy",
+				"x-step-model": "step-proxy",
+			});
+		} finally {
+			if (originalOrigin === undefined) delete process.env.STEP_CLI_CLOUD_TRACE_ORIGIN;
+			else process.env.STEP_CLI_CLOUD_TRACE_ORIGIN = originalOrigin;
+		}
 	});
 });

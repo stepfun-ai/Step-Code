@@ -46,8 +46,6 @@ Product:
   management and persistence wiring (`src/core/session-*`), extensions,
   interactive and one-shot modes, the built-in theme catalog
   (`src/modes/interactive/theme/`), and the StepCode integration (`src/step/`).
-- `packages/evals` (`@step-harness/evals`, depends on `ai`, `coding-agent`)
-  — evaluation harness.
 
 Pluggable backends:
 
@@ -246,14 +244,9 @@ Attribution:
    ```
    Verify the binary starts, reports the tag-derived version, loads native TUI resources, and completes a smoke prompt with the intended Step provider. Failures are release blockers unless the user explicitly accepts the risk.
 
-3. **Run the Step release script**:
-   ```bash
-   STEP_CLI_RELEASE_PUSH=0 npm run release:step -- --dry-run
-   npm run release:step -- <x.y.z>
-   ```
-   The Step release command creates a `vX.Y.Z` tag. GitLab CI then builds six platform archives, uploads the installers and manifests to TOS, and creates the GitLab release. No npm package is published.
+3. **Public-source boundary**: the public repository only builds local artifacts. Internal tagging, binary publication, object-store upload, and release announcement jobs are intentionally kept outside this source tree.
 
-4. **If binary CI publication fails**: inspect the failed build, checksum, upload, or release job and rerun that job after fixing the issue. Do not recreate an existing tag.
+4. **If an internal binary publication fails**: inspect the private release pipeline and rerun that job after fixing the issue. Do not recreate an existing tag.
 
 ## Execution Protocol
 
