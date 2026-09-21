@@ -11,13 +11,26 @@ npm install
 npm run build
 ```
 
-Run from source:
+Run from source with a Node version that satisfies the root `package.json` engines requirement (currently Node 22.19.0 or later):
 
 ```bash
-/path/to/step-harness/test.sh
+NODE_OPTIONS=--no-node-snapshot /path/to/step-harness/step-test.sh
 ```
 
-The script can be run from any directory. Step keeps the caller's current working directory.
+The script can be run from any directory. Step keeps the caller's current working directory. It uses tsx and the repository's absolute tsconfig path, so source execution does not depend on built workspace packages. Workflow and subagent children preserve the parent's preload/loader options and inherit its environment, including `TSX_TSCONFIG_PATH` and `NODE_OPTIONS`. Debugger options and parent-only execution modes in `process.execArgv` are not forwarded.
+
+### Workflow runtime
+
+Workflow execution requires the optional `isolated-vm` native addon to load under the selected Node runtime. A successful install with `--ignore-scripts` alone does not establish that the native addon is built. From the repository root, check that the addon can create an isolate:
+
+```bash
+cd packages/coding-agent
+node --no-node-snapshot -e 'const vm = require("isolated-vm"); const isolate = new vm.Isolate({ memoryLimit: 16 }); console.log(isolate.createContextSync().evalSync("1 + 1")); isolate.dispose();'
+```
+
+The expected result is `2`. If loading fails under Node, inspect the underlying error and install or rebuild the addon for that runtime before using workflows.
+
+The Bun standalone executable cannot host this V8 addon. It therefore does not register the `workflow` tool, `/workflows`, or `/ultraloop`. Suppressing the unsupported-runtime warning does not enable those features; use the Node source entry with a working addon when workflows are required.
 
 ## Forking / Rebranding
 
