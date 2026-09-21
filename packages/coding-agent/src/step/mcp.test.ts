@@ -128,7 +128,7 @@ test("the installer override is honoured in the guidance", () => {
 		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), {
 			code: "ENOENT",
 		}),
-		env: { STEP_CLI_STEPPAGE_INSTALLER_URL: "https://example.test/install.sh" },
+		env: { STEPCODE_STEPPAGE_INSTALLER_URL: "https://example.test/install.sh" },
 	});
 
 	expect(message).toContain("curl -fsSL 'https://example.test/install.sh' | sh");

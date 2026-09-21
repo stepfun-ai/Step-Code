@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { applyStepEnvironment, isStepEntrypoint, STEP_CLI_CONFIG_DIR } from "./step/environment.ts";
-import { STEP_CLI_VERSION } from "./step/version.ts";
+import { applyStepEnvironment, isStepEntrypoint, STEPCODE_CONFIG_DIR } from "./step/environment.ts";
+import { STEPCODE_VERSION } from "./step/version.ts";
 import { normalizePath } from "./utils/paths.ts";
 import { stripBom } from "./utils/text.ts";
 
@@ -12,10 +12,10 @@ import { stripBom } from "./utils/text.ts";
 // compatible with ordinary static imports and bundled entrypoints alike.
 //
 // The @step-harness/cli entry file is named main.ts, so it is not detected by
-// isStepEntrypoint()'s filename heuristic. That app sets STEP_CLI_ENTRYPOINT=1
+// isStepEntrypoint()'s filename heuristic. That app sets STEPCODE_ENTRYPOINT=1
 // as its very first side effect (before this module is evaluated), which is an
 // explicit, additive opt-in signal. Ordinary `pi` launches never set it.
-export const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEP_CLI_ENTRYPOINT?.trim() === "1";
+export const STEP_ENTRYPOINT = isStepEntrypoint() || process.env.STEPCODE_ENTRYPOINT?.trim() === "1";
 if (STEP_ENTRYPOINT) applyStepEnvironment();
 /**
  * Whether this process was launched through the Step entrypoint. Decided once,
@@ -176,7 +176,7 @@ try {
 // Step product overrides for the app display name, project config directory,
 // and version identity apply only to the Step entrypoint. STEP_CODING_AGENT_DIR
 // and STEP_CODING_AGENT_SESSION_DIR remain shared with ordinary `pi` invocations.
-const configuredProductName = STEP_ENTRYPOINT ? process.env.STEP_CLI_APP_NAME?.trim() : undefined;
+const configuredProductName = STEP_ENTRYPOINT ? process.env.STEPCODE_APP_NAME?.trim() : undefined;
 const piConfigName: string | undefined = configuredProductName || pkg.piConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@step-harness/coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
@@ -185,14 +185,14 @@ export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 // changing the package metadata used by the upstream `pi` entrypoint. Step
 // Step CLI uses `.step-cli`; the launcher also imports files left by older
 // releases before Pi's managers read the directory.
-const configuredStepConfigDir = STEP_ENTRYPOINT ? process.env.STEP_CLI_CONFIG_DIR?.trim() : undefined;
+const configuredStepConfigDir = STEP_ENTRYPOINT ? process.env.STEPCODE_CONFIG_DIR?.trim() : undefined;
 export const CONFIG_DIR_NAME: string =
-	configuredStepConfigDir || (STEP_ENTRYPOINT ? STEP_CLI_CONFIG_DIR : pkg.piConfig?.configDir || ".pi");
+	configuredStepConfigDir || (STEP_ENTRYPOINT ? STEPCODE_CONFIG_DIR : pkg.piConfig?.configDir || ".pi");
 // `step` is a product facade over the upstream Pi package. Keep the native Pi
 // version for ordinary `pi` invocations, but expose the Step release identity
 // everywhere the Step entrypoint consumes this constant (CLI flags, TUI and
 // SDK metadata).
-export const VERSION: string = STEP_ENTRYPOINT ? STEP_CLI_VERSION.value : pkg.version || "0.0.0";
+export const VERSION: string = STEP_ENTRYPOINT ? STEPCODE_VERSION.value : pkg.version || "0.0.0";
 
 export const ENV_AGENT_DIR = "STEP_CODING_AGENT_DIR";
 export const ENV_SESSION_DIR = "STEP_CODING_AGENT_SESSION_DIR";

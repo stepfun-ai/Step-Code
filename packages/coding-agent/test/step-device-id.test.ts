@@ -52,7 +52,7 @@ describe("Step device id", () => {
 		expect(
 			resolveStepStorageRoot({
 				HOME: "/tmp/step-home",
-				STEP_CLI_CONFIG_DIR: ".step-custom",
+				STEPCODE_CONFIG_DIR: ".step-custom",
 			}),
 		).toBe("/tmp/step-home/.step-custom");
 	});

@@ -540,7 +540,7 @@ export async function installMarketplacePlugin(
 
 /** Resolve the StepPage installer URL, honouring the shell override. */
 export function resolveProvisionInstallerUrl(env: NodeJS.ProcessEnv = process.env): string {
-	return env.STEP_CLI_STEPPAGE_INSTALLER_URL?.trim() || STEPPAGE_INSTALLER_URL;
+	return env.STEPCODE_STEPPAGE_INSTALLER_URL?.trim() || STEPPAGE_INSTALLER_URL;
 }
 
 /** The shell command that installs a provisionable plugin executable, when one is declared. */

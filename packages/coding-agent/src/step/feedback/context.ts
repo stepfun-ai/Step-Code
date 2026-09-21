@@ -9,7 +9,7 @@ const PLAUSIBLE_USERNAME = /^[\w.@:-]+$/u;
 
 /** Read the launcher username within the feedback context boundary. */
 export function readFeedbackUsername(env: NodeJS.ProcessEnv = process.env, explicit?: string): string | undefined {
-	const value = explicit ?? env.STEP_CLI_USER;
+	const value = explicit ?? env.STEPCODE_USER;
 	if (typeof value !== "string") return undefined;
 	const raw = value.trim();
 	return raw && raw.length <= MAX_USERNAME_LENGTH && PLAUSIBLE_USERNAME.test(raw) ? raw : undefined;

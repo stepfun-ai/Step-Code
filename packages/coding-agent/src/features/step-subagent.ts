@@ -65,7 +65,7 @@ const MAX_PARALLEL_TASKS = 8;
 const DEFAULT_CONCURRENCY = 4;
 export const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
-export const CHILD_MARKER = "STEP_CLI_SUBAGENT_CHILD";
+export const CHILD_MARKER = "STEPCODE_SUBAGENT_CHILD";
 
 export interface StepSubagentUsage {
 	input: number;

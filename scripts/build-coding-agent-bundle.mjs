@@ -120,17 +120,17 @@ function commonBuildOptions() {
  */
 function readStepBuildDefines() {
 	const defines = {};
-	const version = process.env.STEP_CLI_BUILD_VERSION;
-	const channel = process.env.STEP_CLI_BUILD_CHANNEL;
-	const commit = process.env.STEP_CLI_BUILD_COMMIT;
-	const feedbackEndpoint = process.env.STEP_CLI_FEEDBACK_ENDPOINT;
-	const feedbackBundleEndpoint = process.env.STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT;
+	const version = process.env.STEPCODE_BUILD_VERSION;
+	const channel = process.env.STEPCODE_BUILD_CHANNEL;
+	const commit = process.env.STEPCODE_BUILD_COMMIT;
+	const feedbackEndpoint = process.env.STEPCODE_FEEDBACK_ENDPOINT;
+	const feedbackBundleEndpoint = process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
 	const aliases = [
-		["STEP_CLI_BUILD_VERSION", version],
-		["STEP_CLI_BUILD_CHANNEL", channel],
-		["STEP_CLI_BUILD_COMMIT", commit],
-		["STEP_CLI_FEEDBACK_ENDPOINT", feedbackEndpoint],
-		["STEP_CLI_FEEDBACK_BUNDLE_ENDPOINT", feedbackBundleEndpoint],
+		["STEPCODE_BUILD_VERSION", version],
+		["STEPCODE_BUILD_CHANNEL", channel],
+		["STEPCODE_BUILD_COMMIT", commit],
+		["STEPCODE_FEEDBACK_ENDPOINT", feedbackEndpoint],
+		["STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", feedbackBundleEndpoint],
 	];
 	for (const [name, value] of aliases) {
 		if (typeof value === "string" && value.trim()) {

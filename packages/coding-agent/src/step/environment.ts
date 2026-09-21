@@ -3,13 +3,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from "./defaults.ts";
 
 /** Canonical project directory for Step CLI state and resources. */
-export const STEP_CLI_CONFIG_DIR = ".step-cli";
+export const STEPCODE_CONFIG_DIR = ".step-cli";
 
 /** Directory used by releases before the product rename. */
 export const LEGACY_RENAMED_CONFIG_DIR = ".step-harness";
 
 /** Historical Step CLI directory. Its legacy files are converted in place. */
-export const LEGACY_STEP_CONFIG_DIR = STEP_CLI_CONFIG_DIR;
+export const LEGACY_STEP_CONFIG_DIR = STEPCODE_CONFIG_DIR;
 
 /**
  * Optional path overrides for hosts that embed the Step facade instead of
@@ -31,7 +31,7 @@ export function resolveStepHomeDir(env: Record<string, string | undefined> = pro
 
 /** Resolve the canonical project directory. */
 export function resolveStepConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-	return env.STEP_CLI_CONFIG_DIR?.trim() || STEP_CLI_CONFIG_DIR;
+	return env.STEPCODE_CONFIG_DIR?.trim() || STEPCODE_CONFIG_DIR;
 }
 
 /** Resolve the product's global agent directory. */
@@ -99,7 +99,7 @@ export function isStepEntrypoint(argv: readonly string[] = process.argv): boolea
  * not necessarily run under a binary named `step`.  In that case an explicit
  * Step agent-directory override (or the value written by applyStepEnvironment)
  * is enough to opt native helpers into the same namespace.  We intentionally do
- * not treat a bare STEP_CLI_APP_NAME/CONFIG_DIR override as a signal: ordinary
+ * not treat a bare STEPCODE_APP_NAME/CONFIG_DIR override as a signal: ordinary
  * Pi callers may inherit those presentation variables from a parent shell.
  */
 export function isStepStorageContext(env: Record<string, string | undefined> = process.env): boolean {
@@ -110,13 +110,13 @@ export function isStepStorageContext(env: Record<string, string | undefined> = p
 
 /** Apply Step's product defaults. Safe to call more than once. */
 export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, options: StepEnvironmentOptions = {}): void {
-	if (!env.STEP_CLI_APP_NAME?.trim()) env.STEP_CLI_APP_NAME = "step";
-	const configDir = options.configDir?.trim() || env.STEP_CLI_CONFIG_DIR?.trim() || STEP_CLI_CONFIG_DIR;
+	if (!env.STEPCODE_APP_NAME?.trim()) env.STEPCODE_APP_NAME = "step";
+	const configDir = options.configDir?.trim() || env.STEPCODE_CONFIG_DIR?.trim() || STEPCODE_CONFIG_DIR;
 	// Keep the canonical Step CLI variable populated. Blank values must not
 	// leak through to config.ts, where they would otherwise expose Pi's `.pi`
 	// package fallback.
-	env.STEP_CLI_CONFIG_DIR = configDir;
-	if (!env.STEP_CLI_DEFAULT_THEME?.trim()) env.STEP_CLI_DEFAULT_THEME = STEP_DEFAULT_THEME;
+	env.STEPCODE_CONFIG_DIR = configDir;
+	if (!env.STEPCODE_DEFAULT_THEME?.trim()) env.STEPCODE_DEFAULT_THEME = STEP_DEFAULT_THEME;
 	const agentDir =
 		options.agentDir?.trim() ||
 		env.STEP_CODING_AGENT_DIR?.trim() ||
@@ -133,18 +133,18 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 	} else {
 		delete env.STEP_CODING_AGENT_SESSION_DIR;
 	}
-	if (!env.STEP_CLI_DEFAULT_PROVIDER?.trim()) {
-		env.STEP_CLI_DEFAULT_PROVIDER = env.STEP_PROVIDER?.trim() || STEP_DEFAULT_PROVIDER;
+	if (!env.STEPCODE_DEFAULT_PROVIDER?.trim()) {
+		env.STEPCODE_DEFAULT_PROVIDER = env.STEP_PROVIDER?.trim() || STEP_DEFAULT_PROVIDER;
 	}
-	if (!env.STEP_CLI_DEFAULT_MODEL?.trim()) {
-		env.STEP_CLI_DEFAULT_MODEL = env.STEP_MODEL?.trim() || STEP_DEFAULT_MODEL;
+	if (!env.STEPCODE_DEFAULT_MODEL?.trim()) {
+		env.STEPCODE_DEFAULT_MODEL = env.STEP_MODEL?.trim() || STEP_DEFAULT_MODEL;
 	}
 	// Downstream attribution marker sent as `x-step-client`. Keep it overridable
 	// so an embedding host can identify itself, but default shipped Step CLI
 	// requests to `step-cli`.
 	if (!env.STEP_CLIENT?.trim()) env.STEP_CLIENT = "step-cli";
 	// Step should not contact Pi's release/install services unless explicitly
-	// opted in by setting STEP_CLI_DISABLE_PI_SERVICES to a false value.
-	if (!env.STEP_CLI_DISABLE_PI_SERVICES?.trim()) env.STEP_CLI_DISABLE_PI_SERVICES = "1";
+	// opted in by setting STEPCODE_DISABLE_PI_SERVICES to a false value.
+	if (!env.STEPCODE_DISABLE_PI_SERVICES?.trim()) env.STEPCODE_DISABLE_PI_SERVICES = "1";
 	env.AI_AGENT = "step";
 }

@@ -21,7 +21,7 @@ export interface ConfigSelectorOptions {
 export async function selectConfig(options: ConfigSelectorOptions): Promise<void> {
 	setThemeStorageDir(options.agentDir);
 	// Initialize theme before showing TUI
-	initTheme(options.settingsManager.getTheme() ?? process.env.STEP_CLI_DEFAULT_THEME?.trim(), true);
+	initTheme(options.settingsManager.getTheme() ?? process.env.STEPCODE_DEFAULT_THEME?.trim(), true);
 
 	return new Promise((resolve) => {
 		const ui: TUI = new TuiMainScreen(new ProcessTerminal(), undefined, options.agentDir);

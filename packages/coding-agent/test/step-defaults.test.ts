@@ -12,7 +12,7 @@ import {
 describe("Step entrypoint defaults", () => {
 	test("uses one blue theme unless the environment overrides it", () => {
 		expect(getStepDefaultTheme({})).toBe("step-blue");
-		expect(getStepDefaultTheme({ STEP_CLI_DEFAULT_THEME: "custom-light/custom-dark" })).toBe(
+		expect(getStepDefaultTheme({ STEPCODE_DEFAULT_THEME: "custom-light/custom-dark" })).toBe(
 			"custom-light/custom-dark",
 		);
 	});
@@ -79,8 +79,8 @@ describe("Step entrypoint defaults", () => {
 
 	test("uses product defaults consistently when direct overrides are absent", () => {
 		const env = {
-			STEP_CLI_DEFAULT_PROVIDER: "step-host",
-			STEP_CLI_DEFAULT_MODEL: "step-host-model",
+			STEPCODE_DEFAULT_PROVIDER: "step-host",
+			STEPCODE_DEFAULT_MODEL: "step-host-model",
 		};
 		expect(getStepDefaultProvider(env)).toBe("step-host");
 		expect(getStepDefaultModel(env)).toBe("step-host-model");
@@ -120,8 +120,8 @@ describe("Step entrypoint defaults", () => {
 			withStepDefaults(
 				[],
 				{
-					STEP_CLI_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER,
-					STEP_CLI_DEFAULT_MODEL: STEP_DEFAULT_MODEL,
+					STEPCODE_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER,
+					STEPCODE_DEFAULT_MODEL: STEP_DEFAULT_MODEL,
 				},
 				{ provider: "anthropic", model: "claude-sonnet" },
 			),
@@ -132,7 +132,7 @@ describe("Step entrypoint defaults", () => {
 		expect(
 			withStepDefaults(
 				["--print", "hello"],
-				{ STEP_CLI_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER, STEP_CLI_DEFAULT_MODEL: STEP_DEFAULT_MODEL },
+				{ STEPCODE_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER, STEPCODE_DEFAULT_MODEL: STEP_DEFAULT_MODEL },
 				{ provider: "models-proxy", model: "global-wire" },
 				{ deferSettingsSelection: true },
 			),
@@ -140,7 +140,7 @@ describe("Step entrypoint defaults", () => {
 		expect(
 			withStepDefaults(
 				["--print", "hello"],
-				{ STEP_PROVIDER: "custom", STEP_CLI_DEFAULT_PROVIDER: "custom", STEP_MODEL: "wire" },
+				{ STEP_PROVIDER: "custom", STEPCODE_DEFAULT_PROVIDER: "custom", STEP_MODEL: "wire" },
 				undefined,
 				{ deferSettingsSelection: true },
 			),
@@ -164,7 +164,7 @@ describe("Step entrypoint defaults", () => {
 		expect(
 			withStepDefaults(
 				[],
-				{ STEP_CLI_DEFAULT_PROVIDER: "anthropic", STEP_CLI_DEFAULT_MODEL: "claude-3-7" },
+				{ STEPCODE_DEFAULT_PROVIDER: "anthropic", STEPCODE_DEFAULT_MODEL: "claude-3-7" },
 				persisted,
 			),
 		).toEqual(["--provider", "anthropic", "--model", "claude-3-7"]);
@@ -212,7 +212,7 @@ describe("Step entrypoint defaults", () => {
 		expect(
 			withStepDefaults(
 				[],
-				{ STEP_CLI_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER, STEP_CLI_DEFAULT_MODEL: STEP_DEFAULT_MODEL },
+				{ STEPCODE_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER, STEPCODE_DEFAULT_MODEL: STEP_DEFAULT_MODEL },
 				{ provider: "models-proxy-openai", model: "step-3.7-flash" },
 				{ deferSettingsSelection: true },
 			),
@@ -220,7 +220,7 @@ describe("Step entrypoint defaults", () => {
 		expect(
 			withStepDefaults(
 				["--continue"],
-				{ STEP_CLI_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER, STEP_CLI_DEFAULT_MODEL: STEP_DEFAULT_MODEL },
+				{ STEPCODE_DEFAULT_PROVIDER: STEP_DEFAULT_PROVIDER, STEPCODE_DEFAULT_MODEL: STEP_DEFAULT_MODEL },
 				{ provider: "models-proxy-openai", model: "step-3.7-flash" },
 				{ deferSettingsSelection: true },
 			),
@@ -252,10 +252,10 @@ describe("Step entrypoint defaults", () => {
 	});
 
 	test("uses conventional false values for the service switch", () => {
-		expect(isStepServicesDisabled({ STEP_CLI_DISABLE_PI_SERVICES: "1" })).toBe(true);
-		expect(isStepServicesDisabled({ STEP_CLI_DISABLE_PI_SERVICES: "yes" })).toBe(true);
-		expect(isStepServicesDisabled({ STEP_CLI_DISABLE_PI_SERVICES: "0" })).toBe(false);
-		expect(isStepServicesDisabled({ STEP_CLI_DISABLE_PI_SERVICES: "off" })).toBe(false);
+		expect(isStepServicesDisabled({ STEPCODE_DISABLE_PI_SERVICES: "1" })).toBe(true);
+		expect(isStepServicesDisabled({ STEPCODE_DISABLE_PI_SERVICES: "yes" })).toBe(true);
+		expect(isStepServicesDisabled({ STEPCODE_DISABLE_PI_SERVICES: "0" })).toBe(false);
+		expect(isStepServicesDisabled({ STEPCODE_DISABLE_PI_SERVICES: "off" })).toBe(false);
 		expect(isStepServicesDisabled({})).toBe(false);
 	});
 });

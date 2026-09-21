@@ -34,8 +34,8 @@ describe("Step login onboarding", () => {
 
 	it("reads each profile endpoint from its own environment override", () => {
 		const profiles = resolveStepLoginProfiles({
-			STEP_CLI_STEP_PLAN_API_OVERSEA_URL: "https://api.oversea.test/step_plan/",
-			STEP_CLI_DEVCENTER_AUTH_OVERSEA_URL: "https://platform.oversea.test",
+			STEPCODE_STEP_PLAN_API_OVERSEA_URL: "https://api.oversea.test/step_plan/",
+			STEPCODE_DEVCENTER_AUTH_OVERSEA_URL: "https://platform.oversea.test",
 		});
 		const oversea = profiles.find((profile) => profile.id === "step_plan_oversea");
 		expect(oversea?.baseUrl).toBe("https://api.oversea.test/step_plan");

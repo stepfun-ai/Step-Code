@@ -86,7 +86,7 @@ export async function createStartupTui(
 	setRegisteredThemes(await loadStartupThemes(settingsManager, resolvedPaths));
 	const terminalTheme = detectTerminalBackgroundFromEnv().theme;
 	initTheme(
-		resolveThemeSetting(settingsManager.getThemeSetting() ?? process.env.STEP_CLI_DEFAULT_THEME, terminalTheme) ??
+		resolveThemeSetting(settingsManager.getThemeSetting() ?? process.env.STEPCODE_DEFAULT_THEME, terminalTheme) ??
 			terminalTheme,
 	);
 	setKeybindings(KeybindingsManager.create(resolvedPaths.agentDir));
@@ -105,7 +105,7 @@ export function startStartupTui(ui: TUI, settingsManager: SettingsManager): void
 }
 
 async function applyDetectedStartupTheme(ui: TUI, settingsManager: SettingsManager): Promise<void> {
-	const themeSetting = settingsManager.getThemeSetting() ?? process.env.STEP_CLI_DEFAULT_THEME?.trim();
+	const themeSetting = settingsManager.getThemeSetting() ?? process.env.STEPCODE_DEFAULT_THEME?.trim();
 	if (themeSetting && !parseAutoThemeSetting(themeSetting)) return;
 
 	const terminalTheme = await detectTerminalThemeForAuto({ ui, timeoutMs: 100 });

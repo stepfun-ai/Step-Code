@@ -16,7 +16,7 @@ import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } 
 
 /** Current Pi-shaped credential path under the Step CLI agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
-	return env.STEP_CLI_AUTH_PATH?.trim() || join(resolveStepConfigRoot(env), "auth.json");
+	return env.STEPCODE_AUTH_PATH?.trim() || join(resolveStepConfigRoot(env), "auth.json");
 }
 
 /** Old product-owned credential path, used only as a migration fallback. */
@@ -27,7 +27,7 @@ export function getLegacyStepAuthPath(env: Record<string, string | undefined> = 
 
 /** All historical locations used before this layout. */
 export function getLegacyStepAuthPaths(env: Record<string, string | undefined> = process.env): string[] {
-	const explicit = env.STEP_CLI_LEGACY_AUTH_PATH?.trim();
+	const explicit = env.STEPCODE_LEGACY_AUTH_PATH?.trim();
 	if (explicit) return [explicit];
 	const home = resolveStepHomeDir(env);
 	const canonicalRoot = join(home, ".step-cli");

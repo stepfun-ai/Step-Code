@@ -153,7 +153,7 @@ describe("Step credential compatibility", () => {
 		// The launcher only reads this path during the one-time migration. Keeping
 		// the helper independently testable lets embedded hosts explicitly invoke
 		// the same migration without making the normal runtime depend on it.
-		expect(getLegacyStepAuthPath({ STEP_CLI_LEGACY_AUTH_PATH: legacyPath })).toBe(legacyPath);
+		expect(getLegacyStepAuthPath({ STEPCODE_LEGACY_AUTH_PATH: legacyPath })).toBe(legacyPath);
 		const nativePath = join(directory, ".step-cli", "agent", "auth.json");
 		const result = await migrateLegacyStepCredential({ nativePath, legacyPath });
 

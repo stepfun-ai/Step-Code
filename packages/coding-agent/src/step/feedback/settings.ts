@@ -1,6 +1,6 @@
 import type { StepSettings } from "../settings-manager.ts";
 
-export const STEP_CLI_DISABLE_FEEDBACK_ENV_NAMES = ["STEP_CLI_DISABLE_FEEDBACK", "STEPCLI_DISABLE_FEEDBACK"] as const;
+export const STEPCODE_DISABLE_FEEDBACK_ENV_NAMES = ["STEPCODE_DISABLE_FEEDBACK"] as const;
 
 export type FeedbackDisabledReason = "env-opt-out" | "config-opt-out";
 
@@ -19,7 +19,7 @@ export function resolveFeedbackSettings(input: {
 	settings?: Pick<StepSettings, "feedbackEnabled">;
 }): ResolvedFeedbackSettings {
 	const env = input.env ?? process.env;
-	if (STEP_CLI_DISABLE_FEEDBACK_ENV_NAMES.some((name) => readEnvFlag(env[name]))) {
+	if (STEPCODE_DISABLE_FEEDBACK_ENV_NAMES.some((name) => readEnvFlag(env[name]))) {
 		return { enabled: false, reason: "env-opt-out" };
 	}
 	if (input.settings?.feedbackEnabled === false) {

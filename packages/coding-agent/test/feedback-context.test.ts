@@ -18,8 +18,8 @@ async function makeRoot(): Promise<string> {
 
 describe("feedback context identity boundaries", () => {
 	it("reads a bounded launcher username", () => {
-		expect(readFeedbackUsername({ STEP_CLI_USER: "  account@example.test\n" })).toBe("account@example.test");
-		expect(readFeedbackUsername({ STEP_CLI_USER: "not a username" })).toBeUndefined();
+		expect(readFeedbackUsername({ STEPCODE_USER: "  account@example.test\n" })).toBe("account@example.test");
+		expect(readFeedbackUsername({ STEPCODE_USER: "not a username" })).toBeUndefined();
 	});
 
 	it("keeps valid host and session identities after trimming", async () => {

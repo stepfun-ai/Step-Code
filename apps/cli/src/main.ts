@@ -58,10 +58,10 @@ import {
 	runStepMcpImportPrompt,
 	runStepThemePrompt,
 	runStepUpdateCommand,
-	STEP_CLI_VERSION,
 	STEP_DEFAULT_MODEL,
 	STEP_DEFAULT_PROVIDER,
 	STEP_PROVIDER_ID,
+	STEPCODE_VERSION,
 	type StepSettingsManager,
 	setStderrDevLogStorageRootDirectory,
 	stopThemeWatcher,
@@ -113,7 +113,7 @@ const stepPermissionArgs = parseArgs(normalizeStepSessionSelectorArgs(process.ar
 // needed by the legacy Step analytics query system. The runtime is disabled in
 // test processes and can be opted out through the same Step environment flags.
 const telemetryReporter = observability.createReporter({
-	version: STEP_CLI_VERSION.value,
+	version: STEPCODE_VERSION.value,
 	config: stepPersistedDefaults.telemetry,
 });
 const telemetryCrashHandlers = observability.installCrashHandlers?.(telemetryReporter);
@@ -238,7 +238,7 @@ const stepMainOptions: MainOptions = {
 			// but must never be interrupted by a binary update prompt.
 			if (process.argv[2] === "login" || process.argv[2] === "logout") return true;
 			const outcome = await maybeUpdateStep({
-				version: STEP_CLI_VERSION,
+				version: STEPCODE_VERSION,
 				storageRootDir: resolveStepStorageRoot(),
 				updateCheckEnabled: stepPermissionArgs.updateCheck,
 				ui,
@@ -664,7 +664,7 @@ async function initializeTelemetryIdentity(): Promise<void> {
 		if (result.deviceId) telemetryReporter.setContext?.({ deviceId: result.deviceId });
 		if (result.created) {
 			trackStepTelemetry(telemetryReporter, "first_launch", {
-				channel: process.env.STEP_CLI_BUILD_CHANNEL?.trim() || "dev",
+				channel: process.env.STEPCODE_BUILD_CHANNEL?.trim() || "dev",
 			});
 		}
 	} catch {

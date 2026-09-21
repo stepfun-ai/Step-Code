@@ -42,31 +42,31 @@ describe("Step early environment", () => {
 		const env: NodeJS.ProcessEnv = {
 			STEP_PROVIDER: "custom-provider",
 			STEP_MODEL: "custom-model",
-			STEP_CLI_DEFAULT_THEME: "custom-theme",
+			STEPCODE_DEFAULT_THEME: "custom-theme",
 			CUSTOM_PARENT_VALUE: "parent-value",
 		};
 
 		applyStepEnvironment(env);
 
-		expect(env.STEP_CLI_APP_NAME).toBe("step");
-		expect(env.STEP_CLI_CONFIG_DIR).toBe(".step-cli");
-		expect(env.STEP_CLI_DEFAULT_THEME).toBe("custom-theme");
-		expect(env.STEP_CLI_DEFAULT_PROVIDER).toBe("custom-provider");
-		expect(env.STEP_CLI_DEFAULT_MODEL).toBe("custom-model");
+		expect(env.STEPCODE_APP_NAME).toBe("step");
+		expect(env.STEPCODE_CONFIG_DIR).toBe(".step-cli");
+		expect(env.STEPCODE_DEFAULT_THEME).toBe("custom-theme");
+		expect(env.STEPCODE_DEFAULT_PROVIDER).toBe("custom-provider");
+		expect(env.STEPCODE_DEFAULT_MODEL).toBe("custom-model");
 		expect(env.STEP_CODING_AGENT_DIR).toMatch(/\.step-cli[\\/]agent$/u);
 		// No session override is injected: Pi's SessionManager derives the
 		// default from the resolved agent directory.
 		expect(env.STEP_CODING_AGENT_SESSION_DIR).toBeUndefined();
-		expect(env.STEP_CLI_DISABLE_PI_SERVICES).toBe("1");
+		expect(env.STEPCODE_DISABLE_PI_SERVICES).toBe("1");
 		expect(env.CUSTOM_PARENT_VALUE).toBe("parent-value");
 		expect(env.AI_AGENT).toBe("step");
 
-		env.STEP_CLI_APP_NAME = "custom-app";
-		env.STEP_CLI_CONFIG_DIR = "custom-config";
+		env.STEPCODE_APP_NAME = "custom-app";
+		env.STEPCODE_CONFIG_DIR = "custom-config";
 		env.STEP_CODING_AGENT_DIR = "/custom/agent";
 		applyStepEnvironment(env);
-		expect(env.STEP_CLI_APP_NAME).toBe("custom-app");
-		expect(env.STEP_CLI_CONFIG_DIR).toBe("custom-config");
+		expect(env.STEPCODE_APP_NAME).toBe("custom-app");
+		expect(env.STEPCODE_CONFIG_DIR).toBe("custom-config");
 		expect(env.STEP_CODING_AGENT_DIR).toBe("/custom/agent");
 	});
 

@@ -583,7 +583,7 @@ export {
 	resolveStepConfigRoot,
 	resolveStepHomeDir,
 	resolveStepSessionDir,
-	STEP_CLI_CONFIG_DIR,
+	STEPCODE_CONFIG_DIR,
 	type StepEnvironmentOptions,
 } from "./step/environment.ts";
 export { runFeedbackCommand } from "./step/feedback/command.ts";
@@ -750,9 +750,9 @@ export { createStepToolProfile } from "./step/tool-profile.ts";
 export { resolveStepTraceHeaderBaseUrls } from "./step/trace-headers.ts";
 export {
 	resolveStepCliVersion,
-	STEP_CLI_BUILD_VERSION_ENV,
-	STEP_CLI_VERSION,
-	STEP_CLI_VERSION_OVERRIDE_ENV,
+	STEPCODE_BUILD_VERSION_ENV,
+	STEPCODE_VERSION,
+	STEPCODE_VERSION_OVERRIDE_ENV,
 	type StepCliVersion,
 } from "./step/version.ts";
 // Step product facade. It delegates lifecycle and input handling to pi.

@@ -96,9 +96,9 @@ async function main() {
 	try {
 		await run("bash", ["scripts/build-binaries.sh", "--product", "step", "--offline-model-data", "--out", buildDir], {
 			env: {
-				STEP_CLI_BUILD_VERSION: version,
-				STEP_CLI_BUILD_CHANNEL: "release",
-				STEP_CLI_BUILD_COMMIT: process.env.CI_COMMIT_SHORT_SHA ?? "",
+				STEPCODE_BUILD_VERSION: version,
+				STEPCODE_BUILD_CHANNEL: "release",
+				STEPCODE_BUILD_COMMIT: process.env.CI_COMMIT_SHORT_SHA ?? "",
 			},
 		});
 		const versionDir = path.join(releaseDir, version);

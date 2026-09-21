@@ -24,24 +24,24 @@ const PLAUSIBLE_UID = /^[\w.@:-]+$/u;
 // Bun's --env compiler substitutes literal process.env.NAME reads. Keep these
 // captures in the shared resolver so both feedback and telemetry retain the
 // release identity when the compiled process has no runtime environment.
-const INLINED_CLI_BUILD_CHANNEL = process.env.STEP_CLI_BUILD_CHANNEL;
+const INLINED_CLI_BUILD_CHANNEL = process.env.STEPCODE_BUILD_CHANNEL;
 const INLINED_LEGACY_BUILD_CHANNEL = process.env.STEP_HARNESS_BUILD_CHANNEL;
-const INLINED_CLI_BUILD_COMMIT = process.env.STEP_CLI_BUILD_COMMIT;
+const INLINED_CLI_BUILD_COMMIT = process.env.STEPCODE_BUILD_COMMIT;
 const INLINED_LEGACY_BUILD_COMMIT = process.env.STEP_HARNESS_BUILD_COMMIT;
 
 /** Resolve the channel and commit using one precedence rule for both domains. */
 export function readStepBuildIdentity(env: NodeJS.ProcessEnv = process.env): StepBuildIdentity {
 	const useEmbeddedValues = env === process.env;
 	const channelValue = firstNonBlank(
-		env.STEP_CLI_BUILD_CHANNEL,
+		env.STEPCODE_BUILD_CHANNEL,
 		env.STEP_HARNESS_BUILD_CHANNEL,
 		useEmbeddedValues ? INLINED_CLI_BUILD_CHANNEL : undefined,
 		useEmbeddedValues ? INLINED_LEGACY_BUILD_CHANNEL : undefined,
 	);
 	const commitValue = firstNonBlank(
-		env.STEP_CLI_BUILD_COMMIT,
+		env.STEPCODE_BUILD_COMMIT,
 		env.STEP_HARNESS_BUILD_COMMIT,
-		env.STEP_CLI_COMMIT,
+		env.STEPCODE_COMMIT,
 		env.STEP_HARNESS_COMMIT,
 		useEmbeddedValues ? INLINED_CLI_BUILD_COMMIT : undefined,
 		useEmbeddedValues ? INLINED_LEGACY_BUILD_COMMIT : undefined,

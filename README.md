@@ -12,7 +12,7 @@
 
 ## Feedback privacy
 
-Feedback submission is disabled until `STEP_CLI_FEEDBACK_ENDPOINT` is supplied
+Feedback submission is disabled until `STEPCODE_FEEDBACK_ENDPOINT` is supplied
 by the host or release configuration. When submitted, the consent preview lists
 the identity fields included in the report: `deviceId`, `uid`, `username`,
 `channel`, `version`, `platform`, and `commit` (fields not available are shown

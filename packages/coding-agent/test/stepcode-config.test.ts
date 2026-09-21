@@ -47,7 +47,7 @@ describe("StepCode config compatibility", () => {
 
 		const config = await loadStepCodeConfig(
 			{
-				STEPCLI_CONFIG_PATH: configPath,
+				STEPCODE_CONFIG_PATH: configPath,
 				STEP_BASE_URL: "https://env.example/v1",
 				STEP_API_KEY: "test-key",
 				STEP_MAX_CONTEXT_TOKENS: "900000",
@@ -72,7 +72,7 @@ describe("StepCode config compatibility", () => {
 		});
 	});
 
-	test("supports the STEP_CLI_CONFIG_PATH alias and explicit launch overrides", async () => {
+	test("supports the STEPCODE_CONFIG_PATH alias and explicit launch overrides", async () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
 		roots.push(root);
 		const configPath = join(root, "config.json");
@@ -89,7 +89,7 @@ describe("StepCode config compatibility", () => {
 				activeModel: "fast",
 			}),
 		);
-		const config = await loadStepCodeConfig({ STEP_CLI_CONFIG_PATH: configPath }, root);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		expect(config).toMatchObject({ defaultProvider: "proxy", defaultModel: "fast" });
 		expect(config?.providers[0]?.config.api).toBe("openai-responses");
 		expect(config?.providers[0]?.config.models).toEqual(
@@ -146,7 +146,7 @@ describe("StepCode config compatibility", () => {
 			}),
 		);
 		const config = await loadStepCodeConfig(
-			{ STEPCLI_CONFIG_PATH: configPath, STEP_BASE_URL: "https://proxy.example/v1" },
+			{ STEPCODE_CONFIG_PATH: configPath, STEP_BASE_URL: "https://proxy.example/v1" },
 			root,
 		);
 		expect(config).toMatchObject({ defaultProvider: "stepcode", defaultModel: "stepcli-model" });
@@ -171,7 +171,7 @@ describe("StepCode config compatibility", () => {
 				defaultModel: "selected",
 			}),
 		);
-		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		expect(config).toMatchObject({ defaultProvider: "proxy", defaultModel: "selected" });
 	});
 
@@ -208,7 +208,7 @@ describe("StepCode config compatibility", () => {
 			}),
 		);
 
-		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(projectDir, agentDir), config!);
 		expect(manager.getDefaultProvider()).toBe("stepcode-anthropic");
 		expect(manager.getDefaultModel()).toBe("water18-new");
@@ -245,7 +245,7 @@ describe("StepCode config compatibility", () => {
 		});
 		expect(existsSync(join(agentDir, "step-settings.json"))).toBe(false);
 
-		const restartedConfig = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const restartedConfig = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		const restartedManager = decorateStepCodeSettingsManager(
 			createStepSettingsManager(projectDir, agentDir),
 			restartedConfig!,
@@ -282,7 +282,7 @@ describe("StepCode config compatibility", () => {
 			}),
 		);
 
-		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		const models = config?.providers[0]?.config.models ?? [];
 		const inputOf = (id: string) => models.find((model) => model.id === id)?.input;
 		expect(inputOf("omitted")).toEqual(["text", "image"]);
@@ -308,7 +308,7 @@ describe("StepCode config built-in catalog metadata", () => {
 				providers: { "stepcode-anthropic": { api: "anthropic-messages", models } },
 			}),
 		);
-		const config = await loadStepCodeConfig({ STEPCLI_CONFIG_PATH: configPath }, root);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		const byId = new Map<string, ProviderModelConfig>();
 		for (const model of config?.providers[0]?.config.models ?? []) {
 			byId.set(model.id, model);
