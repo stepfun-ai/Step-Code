@@ -86,7 +86,9 @@ export function readModelDataProviderIds(packageRoot: string): string[] {
 	const aggregatorPath = join(packageRoot, "src", "models.generated.ts");
 	const aggregator = readFileSync(aggregatorPath, "utf8");
 	const providerIds = Array.from(aggregator.matchAll(MODEL_DATA_IMPORT_PATTERN), (match) => match[1]).sort();
-	if (providerIds.length === 0) throw new Error(`No generated provider imports found in ${aggregatorPath}`);
+	// Step-only build: the generated catalog is empty (no built-in providers), so an
+	// aggregator with zero provider imports is valid, not an error.
+	if (providerIds.length === 0) return [];
 	if (new Set(providerIds).size !== providerIds.length) {
 		throw new Error(`Generated model aggregator contains duplicate provider imports: ${aggregatorPath}`);
 	}

@@ -10,7 +10,6 @@ import {
 } from "@step-harness/agent-core";
 import { NodeExecutionEnv } from "@step-harness/agent-core/node";
 import { createModels } from "@step-harness/providers";
-import { getModel } from "@step-harness/providers/compat";
 import { Type } from "typebox";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -18,6 +17,7 @@ import {
 	type CodingAgentHarnessTool,
 	createCodingAgentHarness,
 } from "../../src/server/create-harness.ts";
+import { stepModel } from "../utilities.ts";
 
 class CapturingExecutionEnv extends NodeExecutionEnv {
 	executionOverrides: Record<string, string> | undefined;
@@ -63,7 +63,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("anthropic", "claude-haiku-4-5"),
+			model: stepModel(),
 			thinkingLevel: "high",
 			env,
 			streamOptions: { maxTokens: 123 },
@@ -111,7 +111,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("anthropic", "claude-haiku-4-5"),
+			model: stepModel(),
 			env,
 			tools: [customTool],
 			activeToolNames: [],
@@ -132,7 +132,7 @@ describe("coding-agent Harness construction", () => {
 		const created = await createCodingAgentHarness({
 			session,
 			models: createModels(),
-			model: getModel("anthropic", "claude-haiku-4-5"),
+			model: stepModel(),
 			env,
 		});
 		try {
@@ -160,7 +160,7 @@ describe("coding-agent Harness construction", () => {
 			const created = await createCodingAgentHarness({
 				session,
 				models: createModels(),
-				model: getModel("anthropic", "claude-haiku-4-5"),
+				model: stepModel(),
 				env,
 			});
 			createSpy.mockRestore();

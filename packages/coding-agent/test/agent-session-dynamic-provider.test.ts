@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Provider } from "@step-harness/providers";
-import { getModel } from "@step-harness/providers/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
@@ -11,12 +10,13 @@ import type { ExtensionFactory } from "../src/core/sdk.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { stepModel } from "./utilities.ts";
 
-function nativeAnthropicProvider(baseUrl: string): Provider {
-	const model = { ...getModel("anthropic", "claude-sonnet-4-5")!, baseUrl };
+function nativeStepProvider(baseUrl: string): Provider {
+	const model = { ...stepModel(), baseUrl };
 	return {
-		id: "anthropic",
-		name: "Native Anthropic",
+		id: "step",
+		name: "Native Step",
 		baseUrl,
 		auth: {
 			apiKey: {
@@ -54,10 +54,18 @@ describe("AgentSession dynamic provider registration", () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
 		const modelRuntime = await ModelRuntime.create({
 			credentials: authStorage,
 			modelsPath: join(agentDir, "models.json"),
+		});
+		const { provider: _provider, baseUrl: _modelBaseUrl, ...stepProviderModel } = stepModel();
+		modelRuntime.registerProvider("step", {
+			name: "Step",
+			baseUrl: "https://api.stepfun.com/v1",
+			api: "openai-completions",
+			apiKey: "test-key",
+			models: [stepProviderModel],
 		});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
@@ -70,7 +78,7 @@ describe("AgentSession dynamic provider registration", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir,
-			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			model: stepModel(),
 			settingsManager,
 			sessionManager,
 			modelRuntime,
@@ -95,7 +103,7 @@ describe("AgentSession dynamic provider registration", () => {
 	it("applies top-level registerProvider overrides to the active model", async () => {
 		const session = await createSession([
 			(pi) => {
-				pi.registerProvider("anthropic", { baseUrl: "http://localhost:8080/top-level" });
+				pi.registerProvider("step", { baseUrl: "http://localhost:8080/top-level" });
 			},
 		]);
 
@@ -109,7 +117,7 @@ describe("AgentSession dynamic provider registration", () => {
 		const session = await createSession([
 			(pi) => {
 				pi.on("session_start", () => {
-					pi.registerProvider("anthropic", { baseUrl: "http://localhost:8080/session-start" });
+					pi.registerProvider("step", { baseUrl: "http://localhost:8080/session-start" });
 				});
 			},
 		]);
@@ -125,7 +133,7 @@ describe("AgentSession dynamic provider registration", () => {
 	it("registers native pi-ai providers during extension loading", async () => {
 		const session = await createSession([
 			(pi) => {
-				pi.registerProvider(nativeAnthropicProvider("http://localhost:8080/native-top-level"));
+				pi.registerProvider(nativeStepProvider("http://localhost:8080/native-top-level"));
 			},
 		]);
 
@@ -141,7 +149,7 @@ describe("AgentSession dynamic provider registration", () => {
 				pi.registerCommand("use-proxy", {
 					description: "Use proxy",
 					handler: async () => {
-						pi.registerProvider("anthropic", { baseUrl: "http://localhost:8080/command" });
+						pi.registerProvider("step", { baseUrl: "http://localhost:8080/command" });
 					},
 				});
 			},
@@ -162,7 +170,7 @@ describe("AgentSession dynamic provider registration", () => {
 				pi.registerCommand("use-native", {
 					description: "Use native provider",
 					handler: async () => {
-						pi.registerProvider(nativeAnthropicProvider("http://localhost:8080/native-command"));
+						pi.registerProvider(nativeStepProvider("http://localhost:8080/native-command"));
 					},
 				});
 			},

@@ -9,8 +9,8 @@
 
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getModel } from "../../src/compat.ts";
 import type { Context, Model } from "../../src/types.ts";
+import { responsesModel } from "../helpers/step-fixtures.ts";
 import { collectEventTypes, jsonErrorResponse, openAiDataSse, resolveAdapter, sseResponse } from "./harness.ts";
 
 interface ResponsesPayload {
@@ -21,7 +21,7 @@ interface ResponsesPayload {
 	tools?: Array<{ type?: string; name?: string }>;
 }
 
-const model: Model<"openai-responses"> = getModel("openai", "gpt-5.4");
+const model: Model<"openai-responses"> = responsesModel();
 
 const context: Context = {
 	systemPrompt: "You are a helpful assistant.",
@@ -101,7 +101,7 @@ describe("openai-responses conformance", () => {
 
 		expect(payload).toBeDefined();
 		// Responses protocol shape: model + `input` array (not `messages`) + stream/store flags.
-		expect(payload?.model).toBe("gpt-5.4");
+		expect(payload?.model).toBe("step-5-preview");
 		expect(payload?.stream).toBe(true);
 		expect(payload?.store).toBe(false);
 		expect(Array.isArray(payload?.input)).toBe(true);
@@ -111,7 +111,7 @@ describe("openai-responses conformance", () => {
 		expect(payload?.tools?.[0]?.name).toBe("ping");
 		// The captured payload is what got serialized onto the wire.
 		expect(rawBody).toBeDefined();
-		expect(JSON.parse(rawBody as string).model).toBe("gpt-5.4");
+		expect(JSON.parse(rawBody as string).model).toBe("step-5-preview");
 	});
 
 	it("stream events: canned Responses SSE -> stable canonical event order", async () => {

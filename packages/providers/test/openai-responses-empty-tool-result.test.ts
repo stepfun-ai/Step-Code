@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages } from "../src/api/openai-responses-shared.ts";
-import { getModel } from "../src/compat.ts";
 import type { AssistantMessage, Context, ToolResultMessage, Usage } from "../src/types.ts";
+import { responsesModel } from "./helpers/step-fixtures.ts";
 
 const usage: Usage = {
 	input: 0,
@@ -25,7 +25,7 @@ function buildEmptyToolResult(toolCallId: string, timestamp: number): ToolResult
 
 describe("OpenAI Responses convertResponsesMessages empty tool result", () => {
 	it("uses '(no tool output)' placeholder for empty tool results without images", () => {
-		const model = getModel("openai", "gpt-4o-mini");
+		const model = responsesModel();
 		const now = Date.now();
 		const assistant: AssistantMessage = {
 			role: "assistant",

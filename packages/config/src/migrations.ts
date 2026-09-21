@@ -243,11 +243,19 @@ function migrateToolsToBin(agentDir: string): void {
 /**
  * Check for deprecated hooks/ and tools/ directories.
  * Note: tools/ may contain fd/rg binaries extracted by pi, so only warn if it has other files.
+ *
+ * Both hooks/ and custom tools/ migrate into extensions/, which is never
+ * auto-created, so once this scope has an extensions/ directory the user has
+ * migrated and a leftover legacy directory is theirs to delete — stay silent
+ * instead of nagging on every launch. This mirrors the commands→prompts
+ * migration, which only fires while the prompts/ target is absent.
  */
 function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] {
 	const hooksDir = join(baseDir, "hooks");
 	const toolsDir = join(baseDir, "tools");
 	const warnings: string[] = [];
+
+	if (existsSync(join(baseDir, "extensions"))) return warnings;
 
 	if (existsSync(hooksDir)) {
 		warnings.push(`${label} hooks/ directory found. Hooks have been renamed to extensions.`);

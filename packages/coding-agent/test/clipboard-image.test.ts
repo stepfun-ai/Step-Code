@@ -201,6 +201,26 @@ describe("readClipboardImage", () => {
 		expect(result?.mimeType).toBe("image/png");
 		expect(Array.from(result?.bytes ?? [])).toEqual([8, 9]);
 	});
+
+	test("macOS: falls back to AppleScript when native image decoding rejects the pasteboard image", async () => {
+		mocks.clipboard.hasImage.mockReturnValue(true);
+		mocks.clipboard.getImageBinary.mockRejectedValue(new Error("unsupported TIFF representation"));
+		mocks.execFile.mockImplementation((command, args, _options, callback) => {
+			expect(command).toBe("osascript");
+			expect(args).toEqual(["-e", expect.stringContaining("«class PNGf»")]);
+			const script = String(args[1]);
+			const pathMatch = script.match(/POSIX file "([^"]+)"/);
+			if (!pathMatch) throw new Error("AppleScript fallback did not provide an output path");
+			writeFileSync(pathMatch[1]!, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+			(callback as (error: Error | null, stdout: string, stderr: string) => void)(null, "", "");
+		});
+
+		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
+		const result = await readClipboardImage({ platform: "darwin" });
+
+		expect(result).toEqual({ bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), mimeType: "image/png" });
+		expect(mocks.execFile).toHaveBeenCalledOnce();
+	});
 });
 
 // The isWSL gate in wslPathToPosix cannot be exercised host-independently in

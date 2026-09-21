@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@step-harness/agent-core";
 import type { Model } from "@step-harness/providers";
-import { getModel, streamSimple } from "@step-harness/providers/compat";
+import { streamSimple } from "@step-harness/providers/compat";
 import { getBuiltinModels, getBuiltinProviders } from "@step-harness/providers/providers/all";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
@@ -19,7 +19,7 @@ import {
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
-import { createTestResourceLoader } from "./utilities.ts";
+import { createTestResourceLoader, stepModel } from "./utilities.ts";
 
 // Mock models for testing
 const mockModels: Model<"anthropic-messages">[] = [
@@ -828,8 +828,8 @@ describe("default model selection", () => {
 
 	describe("persisted default model scoping", () => {
 		const tempDirs: string[] = [];
-		const sonnet = getModel("anthropic", "claude-sonnet-4-5")!;
-		const opus = getModel("anthropic", "claude-opus-4-8")!;
+		const sonnet = stepModel();
+		const opus = stepModel({ id: "step-5-preview-pro", name: "Step 5 Preview Pro" });
 
 		afterEach(() => {
 			for (const dir of tempDirs.splice(0)) {
@@ -847,7 +847,7 @@ describe("default model selection", () => {
 				settingsManager.setEnabledModels(options.persistedScope);
 			}
 
-			const authStorage = AuthStorage.inMemory({ anthropic: { type: "api_key", key: "test-key" } });
+			const authStorage = AuthStorage.inMemory({ step: { type: "api_key", key: "test-key" } });
 			const modelRuntime = getModelRuntime(await createModelRegistry(authStorage, join(tempDir, "models.json")));
 			const agent = new Agent({
 				initialState: {

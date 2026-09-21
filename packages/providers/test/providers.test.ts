@@ -4,8 +4,6 @@ import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { AuthContext } from "../src/auth/types.ts";
 import { createModels, createProvider } from "../src/models.ts";
 import { InMemoryModelsStore } from "../src/models-store.ts";
-import { builtinModels, builtinProviders, getBuiltinModel } from "../src/providers/all.ts";
-import { anthropicProvider } from "../src/providers/anthropic.ts";
 import { fauxAssistantMessage, fauxProvider } from "../src/providers/faux.ts";
 import type {
 	Api,
@@ -28,67 +26,6 @@ function fakeAuthContext(env: Record<string, string>, files: string[] = []): Aut
 const neverAbortedSignal = new AbortController().signal;
 
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
-
-describe("builtin providers", () => {
-	it("builtinModels registers every builtin provider with models", async () => {
-		const models = builtinModels();
-		const providers = models.getProviders();
-		expect(providers.length).toBe(builtinProviders().length);
-		expect(providers.map((p) => p.id)).toContain("anthropic");
-
-		const anthropic = models.getModel("anthropic", "claude-haiku-4-5");
-		expect(anthropic?.api).toBe("anthropic-messages");
-
-		const all = models.getModels();
-		// Post-strip the builtin catalog is anthropic + openai only (~53 models);
-		// assert the full catalog still loads rather than a bare non-empty check.
-		expect(all.length).toBeGreaterThan(40);
-
-		for (const provider of providers) {
-			const list = models.getModels(provider.id);
-			expect(list.length).toBeGreaterThan(0);
-			expect(list.every((m) => m.provider === provider.id)).toBe(true);
-		}
-	});
-
-	it("stores native constrained-sampling capabilities in model metadata", () => {
-		const gpt4o = getBuiltinModel("openai", "gpt-4o");
-		expect(gpt4o.compat?.supportsStrictMode).toBe(true);
-		expect(gpt4o.compat?.supportsOpenAIGrammarTools).toBeUndefined();
-		expect(getBuiltinModel("openai", "gpt-5.4").compat).toMatchObject({
-			supportsStrictMode: true,
-			supportsOpenAIGrammarTools: true,
-		});
-		expect(getBuiltinModel("anthropic", "claude-haiku-4-5").compat?.supportsStrictTools).toBe(true);
-	});
-
-	it("resolves Anthropic bearer auth from env with auth token precedence", async () => {
-		const models = createModels({
-			authContext: fakeAuthContext({
-				ANTHROPIC_AUTH_TOKEN: "auth-token",
-				ANTHROPIC_OAUTH_TOKEN: "oauth-token",
-				ANTHROPIC_API_KEY: "api-key",
-			}),
-		});
-		models.setProvider(anthropicProvider());
-
-		expect(await models.getAuth("anthropic")).toEqual({
-			auth: { headers: { Authorization: "Bearer auth-token" } },
-			source: "ANTHROPIC_AUTH_TOKEN",
-		});
-	});
-
-	it("preserves Anthropic OAuth token precedence over the API key", async () => {
-		const models = createModels({
-			authContext: fakeAuthContext({ ANTHROPIC_API_KEY: "key", ANTHROPIC_OAUTH_TOKEN: "oauth-token" }),
-		});
-		models.setProvider(anthropicProvider());
-
-		const result = await models.getAuth("anthropic");
-		expect(result?.auth.apiKey).toBe("oauth-token");
-		expect(result?.source).toBe("ANTHROPIC_OAUTH_TOKEN");
-	});
-});
 
 describe("envApiKeyAuth", () => {
 	it("prefers the stored credential key and falls back through env vars in order", async () => {

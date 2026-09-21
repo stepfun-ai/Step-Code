@@ -1,7 +1,6 @@
 import { Agent } from "@step-harness/agent-core";
 import {
 	type AssistantMessage,
-	getModel,
 	streamSimple,
 	type ToolResultMessage,
 	type Usage,
@@ -13,9 +12,9 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { getUsageCostBreakdown } from "../src/core/usage-totals.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
-import { createTestResourceLoader } from "./utilities.ts";
+import { createTestResourceLoader, stepModel } from "./utilities.ts";
 
-const model = getModel("anthropic", "claude-sonnet-4-5")!;
+const model = stepModel();
 
 function createUsage(totalTokens: number): Usage {
 	return {

@@ -1,9 +1,7 @@
 import { MODELS } from "../models.generated.ts";
 import { type CreateModelsOptions, createModels, type MutableModels, type Provider } from "../models.ts";
 import type { Api, Model } from "../types.ts";
-import { anthropicProvider } from "./anthropic.ts";
 import modelDataManifest from "./data/.manifest.json" with { type: "json" };
-import { openaiProvider } from "./openai.ts";
 
 /** Providers present in the generated catalog. */
 export type BuiltinProvider = keyof typeof MODELS;
@@ -43,7 +41,9 @@ export function getBuiltinModels<TProvider extends BuiltinProvider>(
 
 /** All built-in providers, freshly constructed. */
 export function builtinProviders(): Provider[] {
-	return [anthropicProvider(), openaiProvider()];
+	// Step-only build: no built-in providers ship. The Step provider is registered
+	// by the product layer; custom providers come from models.json.
+	return [];
 }
 
 /** A `Models` collection with every built-in provider registered. */

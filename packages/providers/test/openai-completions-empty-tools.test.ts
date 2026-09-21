@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getModel, streamSimple } from "../src/compat.ts";
+import { streamSimple } from "../src/compat.ts";
+import { stepModel } from "./helpers/step-fixtures.ts";
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -60,7 +61,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("omits tools field when context.tools is an empty array", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions" } as const;
 
 		await streamSimple(
@@ -77,7 +78,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("omits tools field when context.tools is undefined", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions" } as const;
 
 		await streamSimple(
@@ -93,7 +94,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("sends default maxTokens", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions" } as const;
 
 		await streamSimple(
@@ -110,7 +111,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("sends explicit maxTokens", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions" } as const;
 
 		await streamSimple(
@@ -127,7 +128,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("clamps default maxTokens to remaining context", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions", contextWindow: 10000, maxTokens: 8000 } as const;
 
 		await streamSimple(
@@ -144,7 +145,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("clamps explicit maxTokens to remaining context", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions", contextWindow: 10000, maxTokens: 8000 } as const;
 
 		await streamSimple(
@@ -161,7 +162,7 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("still emits tools: [] for Anthropic/LiteLLM proxy when conversation has tool history", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = stepModel();
 		const model = { ...baseModel, api: "openai-completions" } as const;
 
 		await streamSimple(
