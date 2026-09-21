@@ -96,6 +96,40 @@ describe("runMigrations", () => {
 		rmSync(cwd, { recursive: true, force: true });
 	});
 
+	it("stops warning about a leftover hooks/ once the scope has an extensions/ directory", () => {
+		const agentDir = makeAgentDir();
+		const cwd = mkdtempSync(join(tmpdir(), "step-config-mig-cwd-"));
+		// Migrated scope: extensions/ present, a stale hooks/ left behind must not nag.
+		mkdirSync(join(cwd, ".stepcode", "hooks"), { recursive: true });
+		mkdirSync(join(cwd, ".stepcode", "extensions"), { recursive: true });
+
+		const result = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+
+		expect(result.deprecationWarnings.some((w) => w.includes("hooks/"))).toBe(false);
+		rmSync(cwd, { recursive: true, force: true });
+	});
+
+	it("also silences the custom-tools warning once extensions/ exists", () => {
+		const agentDir = makeAgentDir();
+		const cwd = mkdtempSync(join(tmpdir(), "step-config-mig-cwd-"));
+		mkdirSync(join(cwd, ".stepcode", "tools"), { recursive: true });
+		writeFileSync(join(cwd, ".stepcode", "tools", "my-tool.js"), "export default {};");
+		mkdirSync(join(cwd, ".stepcode", "extensions"), { recursive: true });
+
+		const result = runMigrations(cwd, {
+			agentDir,
+			configDirName: ".stepcode",
+			migrateKeybindings: (config) => ({ config, migrated: false }),
+		});
+
+		expect(result.deprecationWarnings.some((w) => w.includes("tools/"))).toBe(false);
+		rmSync(cwd, { recursive: true, force: true });
+	});
+
 	it("invokes the injected keybindings migrator and persists a migrated config", () => {
 		const agentDir = makeAgentDir();
 		writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ old: true }));
