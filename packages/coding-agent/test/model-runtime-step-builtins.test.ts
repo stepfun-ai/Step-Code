@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 /**
- * The StepCode is StepFun-only: when running under the Step entrypoint, the
- * runtime must NOT seed the default anthropic/openai builtin providers (their
- * claude and gpt catalogs would otherwise leak into the model selector). The
- * `includeDefaultBuiltins` option is the deterministic seam for that behavior;
- * its default derives from STEP_ENTRYPOINT in production. See model-runtime.ts.
+ * The provider catalog is Step-only: the runtime must not seed the removed
+ * anthropic/openai builtins, regardless of the compatibility gating option.
+ * The `includeDefaultBuiltins` option remains a deterministic seam for hosts
+ * that supply a non-empty catalog; the generated Step catalog is intentionally
+ * empty and the product registers Step separately.
  */
 describe("ModelRuntime default builtins gating", () => {
 	async function providerIds(includeDefaultBuiltins: boolean): Promise<Set<string>> {
@@ -37,19 +37,17 @@ describe("ModelRuntime default builtins gating", () => {
 		expect(ids.has("openai")).toBe(false);
 	});
 
-	it("keeps anthropic/openai when includeDefaultBuiltins is true (plain pi / SDK)", async () => {
+	it("does not resurrect removed anthropic/openai builtins when enabled", async () => {
 		const ids = await providerIds(true);
-		expect(ids.has("anthropic")).toBe(true);
-		expect(ids.has("openai")).toBe(true);
+		expect(ids.has("anthropic")).toBe(false);
+		expect(ids.has("openai")).toBe(false);
 	});
 
-	// The default is `!STEP_ENTRYPOINT`. Vitest runs without the Step entrypoint
-	// signal, so the option-less default must seed the builtins (the non-step
-	// branch). The step branch (STEP_ENTRYPOINT set => omitted) is covered
-	// end-to-end by `step --list-models`, which shows only StepFun models.
-	it("defaults to seeding builtins outside the Step entrypoint", async () => {
+	// The default is `!STEP_ENTRYPOINT`, but the generated catalog is empty in
+	// both hosts. The Step entrypoint registers its dynamic provider separately.
+	it("keeps the default catalog empty outside the Step entrypoint", async () => {
 		const ids = await defaultProviderIds();
-		expect(ids.has("anthropic")).toBe(true);
-		expect(ids.has("openai")).toBe(true);
+		expect(ids.has("anthropic")).toBe(false);
+		expect(ids.has("openai")).toBe(false);
 	});
 });

@@ -8,17 +8,36 @@ import { checkProviderAuth, createAuthCheckModelRuntime, getProviderCredential }
 import { parseAuthCommand } from "../src/cli/auth-command.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { createStepProviderConfig } from "../src/features/step-provider/index.ts";
 
 const tempDir = join(tmpdir(), `pi-test-auth-check-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 async function createRuntime(credentials: AuthStorage | ReadOnlyAuthStorage): Promise<ModelRuntime> {
-	return ModelRuntime.create({
+	const runtime = await ModelRuntime.create({
 		credentials,
 		modelsPath: null,
 		modelsStore: new InMemoryModelsStore(),
 		allowModelNetwork: false,
 		refreshOnCreate: false,
 	});
+	runtime.registerProvider(
+		"step",
+		createStepProviderConfig({
+			env: {},
+			models: [
+				{
+					id: "step-5-preview",
+					name: "Step 5 Preview",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 8192,
+				},
+			],
+		}),
+	);
+	return runtime;
 }
 
 describe("auth check command", () => {
@@ -32,45 +51,45 @@ describe("auth check command", () => {
 	});
 
 	test("reports a configured provider as ready", async () => {
-		const runtime = await createRuntime(AuthStorage.inMemory({ openai: { type: "api_key", key: "test-key" } }));
+		const runtime = await createRuntime(AuthStorage.inMemory({ step: { type: "api_key", key: "test-key" } }));
 
-		await expect(checkProviderAuth(parseArgs(["--provider", "openai"]), runtime)).resolves.toEqual({
+		await expect(checkProviderAuth(parseArgs(["--provider", "step"]), runtime)).resolves.toEqual({
 			status: "ready",
-			provider: "openai",
+			provider: "step",
 			authType: "api_key",
 		});
 	});
 
 	test("resolves the provider from --model", async () => {
-		const runtime = await createRuntime(AuthStorage.inMemory({ openai: { type: "api_key", key: "test-key" } }));
+		const runtime = await createRuntime(AuthStorage.inMemory({ step: { type: "api_key", key: "test-key" } }));
 
-		await expect(checkProviderAuth(parseArgs(["--model", "openai/gpt-5.5"]), runtime)).resolves.toEqual({
+		await expect(checkProviderAuth(parseArgs(["--model", "step/step-5-preview"]), runtime)).resolves.toEqual({
 			status: "ready",
-			provider: "openai",
+			provider: "step",
 			authType: "api_key",
 		});
 		await expect(
-			checkProviderAuth(parseArgs(["--provider", "openai", "--model", "gpt-5.5"]), runtime),
-		).resolves.toMatchObject({ status: "ready", provider: "openai" });
+			checkProviderAuth(parseArgs(["--provider", "step", "--model", "step-5-preview"]), runtime),
+		).resolves.toMatchObject({ status: "ready", provider: "step" });
 	});
 
 	test("reads credentials without refreshing OAuth when requested", async () => {
-		const apiCredentials = AuthStorage.inMemory({ openai: { type: "api_key", key: "test-key" } });
+		const apiCredentials = AuthStorage.inMemory({ step: { type: "api_key", key: "test-key" } });
 		const apiRuntime = await createRuntime(apiCredentials);
-		await expect(getProviderCredential("openai", apiRuntime, apiCredentials, { refresh: false })).resolves.toBe(
+		await expect(getProviderCredential("step", apiRuntime, apiCredentials, { refresh: false })).resolves.toBe(
 			"test-key",
 		);
 
 		const credentials = AuthStorage.inMemory({
-			anthropic: { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
+			step: { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
 		});
 		const oauthRuntime = await createRuntime(credentials);
-		const oauth = oauthRuntime.getProvider("anthropic")?.auth.oauth;
-		if (!oauth) throw new Error("Anthropic OAuth provider is not registered");
+		const oauth = oauthRuntime.getProvider("step")?.auth.oauth;
+		if (!oauth) throw new Error("Step OAuth provider is not registered");
 		const refresh = vi.fn(oauth.refresh);
 		oauth.refresh = refresh;
 
-		await expect(getProviderCredential("anthropic", oauthRuntime, credentials, { refresh: false })).resolves.toBe(
+		await expect(getProviderCredential("step", oauthRuntime, credentials, { refresh: false })).resolves.toBe(
 			"old-token",
 		);
 		expect(refresh).not.toHaveBeenCalled();
@@ -78,11 +97,11 @@ describe("auth check command", () => {
 
 	test("refreshes OAuth by default", async () => {
 		const credentials = AuthStorage.inMemory({
-			anthropic: { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
+			step: { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
 		});
 		const runtime = await createRuntime(credentials);
-		const oauth = runtime.getProvider("anthropic")?.auth.oauth;
-		if (!oauth) throw new Error("Anthropic OAuth provider is not registered");
+		const oauth = runtime.getProvider("step")?.auth.oauth;
+		if (!oauth) throw new Error("Step OAuth provider is not registered");
 		const refresh = vi.fn(async () => ({
 			type: "oauth" as const,
 			access: "fresh-token",
@@ -92,7 +111,7 @@ describe("auth check command", () => {
 		oauth.refresh = refresh;
 
 		await expect(
-			checkProviderAuth(parseArgs(["--provider", "anthropic"]), runtime, { refresh: true }),
+			checkProviderAuth(parseArgs(["--provider", "step"]), runtime, { refresh: true }),
 		).resolves.toMatchObject({
 			status: "ready",
 		});
@@ -111,12 +130,12 @@ describe("auth check command", () => {
 
 	test("does not treat an unresolved stored environment reference as configured", async () => {
 		const authPath = join(tempDir, "auth.json");
-		writeFileSync(authPath, JSON.stringify({ openai: { type: "api_key", key: "$MISSING_AUTH_CHECK_KEY" } }), "utf-8");
+		writeFileSync(authPath, JSON.stringify({ step: { type: "api_key", key: "$MISSING_AUTH_CHECK_KEY" } }), "utf-8");
 		const runtime = await createRuntime(new ReadOnlyAuthStorage(authPath));
 
-		await expect(checkProviderAuth(parseArgs(["--provider", "openai"]), runtime)).resolves.toEqual({
+		await expect(checkProviderAuth(parseArgs(["--provider", "step"]), runtime)).resolves.toEqual({
 			status: "not_ready",
-			provider: "openai",
+			provider: "step",
 			reason: "credentials_not_configured",
 		});
 	});
@@ -126,9 +145,9 @@ describe("auth check command", () => {
 		writeFileSync(authPath, "{invalid-json", "utf-8");
 		const runtime = await createRuntime(new ReadOnlyAuthStorage(authPath));
 
-		await expect(checkProviderAuth(parseArgs(["--provider", "openai"]), runtime)).resolves.toEqual({
+		await expect(checkProviderAuth(parseArgs(["--provider", "step"]), runtime)).resolves.toEqual({
 			status: "invalid",
-			provider: "openai",
+			provider: "step",
 			reason: "invalid_state",
 		});
 	});
@@ -137,7 +156,7 @@ describe("auth check command", () => {
 		const authPath = join(tempDir, "agent", "auth.json");
 		const runtime = await createRuntime(new ReadOnlyAuthStorage(authPath));
 
-		await expect(checkProviderAuth(parseArgs(["--provider", "openai"]), runtime)).resolves.toMatchObject({
+		await expect(checkProviderAuth(parseArgs(["--provider", "step"]), runtime)).resolves.toMatchObject({
 			status: "not_ready",
 			reason: "credentials_not_configured",
 		});
@@ -166,6 +185,6 @@ describe("auth check command", () => {
 
 	test("creates an auth-check runtime without catalog storage", async () => {
 		const runtime = await createAuthCheckModelRuntime(AuthStorage.inMemory());
-		expect(runtime.getProvider("openai")).toBeDefined();
+		expect(runtime.getProvider("step")).toBeUndefined();
 	});
 });
