@@ -116,8 +116,11 @@ archive_tree="$(GIT_INDEX_FILE="$temporary_index" git write-tree)"
 archive_mtime="$(git show -s --format=%ct "$commit")"
 
 archive_root="step-${version}"
-git archive --format=tar --prefix="${archive_root}/" --mtime="@${archive_mtime}" "$archive_tree" \
-    | gzip -n -9 > "$temporary_archive"
+archive_options=(--format=tar --prefix="${archive_root}/")
+if git archive -h 2>&1 | grep -q -- '--mtime'; then
+	archive_options+=(--mtime="@${archive_mtime}")
+fi
+git archive "${archive_options[@]}" "$archive_tree" | gzip -n -9 > "$temporary_archive"
 tar -tzf "$temporary_archive" > "$manifest"
 
 required_paths=(
