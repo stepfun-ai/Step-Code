@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ThinkingLevel } from "@step-harness/agent-core";
 import { finalOutput, isFailed, resultText, runStepSubagentProcess } from "../step-subagent.ts";
 import { discoverStepAgents, formatStepAgentCatalog, resolveStepAgent } from "../step-subagent-agents.ts";
+import { WORKFLOW_SESSION_ID_PREFIX } from "../subagent/helpers.ts";
 import { resolveWorkflowToolProfile } from "./tool-profile.ts";
 import type { WorkflowAgentRunner, WorkflowAgentRunResult, WorkflowUsage } from "./types.ts";
 
@@ -40,7 +41,7 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 			model: input.options.model,
 			thinkingLevel: thinkingLevel(input.options.effort),
 			signal: input.signal,
-			sessionId: `workflow-${input.runId}-${input.agentId}`,
+			sessionId: `${WORKFLOW_SESSION_ID_PREFIX}${input.runId}-${input.agentId}`,
 			keepAlive: false,
 			workflowAcl: {
 				baseCwd: input.cwd,

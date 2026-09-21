@@ -195,18 +195,26 @@ When closing issues via commit:
 
 - Include `fixes #<number>` or `closes #<number>` in the message so merging auto-closes the issue. For multiple issues, repeat the keyword per issue (`closes #1, closes #2`); a shared keyword (`closes #1, #2`) only closes the first.
 
-## Testing pi Interactive Mode with tmux
+## Testing Step Interactive Mode with tmux
+
+`./step-test.sh` runs the CLI from source, so it reflects the working tree
+without a build (`--no-env` additionally strips provider credentials). Use the
+installed `step` instead when you need to verify a built artifact.
 
 Run the TUI in a controlled terminal (from the repo root):
 
 ```bash
-tmux new-session -d -s pi-test -x 80 -y 24
-tmux send-keys -t pi-test "./pi-test.sh" Enter
-sleep 3 && tmux capture-pane -t pi-test -p     # capture after startup
-tmux send-keys -t pi-test "your prompt here" Enter
-tmux send-keys -t pi-test Escape               # special keys (also C-o for ctrl+o, etc.)
-tmux kill-session -t pi-test
+tmux new-session -d -s step-test -x 120 -y 32
+tmux send-keys -t step-test "./step-test.sh" Enter
+sleep 3 && tmux capture-pane -t step-test -p     # capture after startup
+tmux send-keys -t step-test "your prompt here" Enter
+tmux send-keys -t step-test Escape               # special keys (also C-o for ctrl+o, etc.)
+tmux kill-session -t step-test
 ```
+
+A first run in a new directory asks whether the folder is trusted; answer it
+before sending a prompt. Widths below ~100 columns truncate tool rows, so prefer
+a wide session when checking layout.
 
 ## Changelog
 

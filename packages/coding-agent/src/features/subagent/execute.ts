@@ -374,6 +374,13 @@ export async function executeSubagent(
 		}
 	};
 
+	// Publish the roster before dispatching. Every other emit happens inside
+	// runOne, so without this the first update waits on a child's first streamed
+	// event — process spawn, its mcp servers, then a first token — and the live
+	// list stays invisible for the tens of seconds a caller most wants it. The
+	// records are already seeded by makeEmptyResult, so this renders every lane
+	// at 0s, including ones still queued behind maxConcurrency.
+	emit(mode);
 	if (parallel) await mapWithConcurrency(parallel, options.maxConcurrency, runOne);
 	else if (chain) {
 		let previous = "";
