@@ -36,7 +36,10 @@ export interface StepExtensionOptions {
 	/** Initial Step policy, normally populated from CLI/runtime options. */
 	permission?: StepPermissionControllerOptions;
 	/** Optional Step settings decorator used to restore and persist policy. */
-	stepSettings?: () => Pick<StepSettingsManager, "getStepSettings" | "setEffectiveStepSettings"> | undefined;
+	stepSettings?: () =>
+		| (Pick<StepSettingsManager, "getStepSettings" | "setEffectiveStepSettings"> &
+				Partial<Pick<StepSettingsManager, "getShellPath" | "getShellCommandPrefix">>)
+		| undefined;
 	/** Optional process/host reporter for Step lifecycle projections. */
 	telemetry?: StepTelemetryReporter;
 	/** Current account identity, resolved when `/feedback` is invoked. */
@@ -393,7 +396,18 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
  * Pi's resolver, so only inject it when no policy override is present.
  */
 function resolvePermissionOptions(options: StepExtensionOptions): StepPermissionControllerOptions | undefined {
-	const explicit = options.permission;
+	const explicit: StepPermissionControllerOptions = {
+		...options.permission,
+		shellContext:
+			options.permission?.shellContext ??
+			(() => {
+				const settings = options.stepSettings?.();
+				return {
+					shellPath: settings?.getShellPath?.(),
+					commandPrefix: settings?.getShellCommandPrefix?.(),
+				};
+			}),
+	};
 	const persisted = options.stepSettings?.()?.getStepSettings();
 	if (!persisted) return explicit;
 	const env = explicit?.env ?? process.env;

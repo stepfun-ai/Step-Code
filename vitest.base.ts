@@ -1,5 +1,4 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
 
 export const workspaceSourcePaths = {
 	telemetryIndex: fileURLToPath(new URL("./packages/telemetry/src/index.ts", import.meta.url)),
@@ -15,7 +14,7 @@ export const workspaceSourcePaths = {
 	configIndex: fileURLToPath(new URL("./packages/config/src/index.ts", import.meta.url)),
 } as const;
 
-export default defineConfig({
+export default {
 	resolve: {
 		alias: [
 			{ find: /^@step-harness\/telemetry$/, replacement: workspaceSourcePaths.telemetryIndex },
@@ -48,4 +47,4 @@ export default defineConfig({
 			{ find: /^@earendil-works\/pi-tui$/, replacement: workspaceSourcePaths.tuiIndex },
 		],
 	},
-});
+};

@@ -16,6 +16,42 @@ function commandContext(isIdle: boolean): ExtensionCommandContext {
 }
 
 describe("Step extension", () => {
+	test.each([
+		{ name: "selected non-Bash interpreter", shellPath: process.execPath, prefix: undefined },
+		{ name: "executed command prefix", shellPath: undefined, prefix: "rm -rf ./build" },
+	])("uses the real shell settings for approval: $name", async ({ shellPath, prefix }) => {
+		const on = vi.fn();
+		createStepExtension({
+			permission: { env: {}, initialPreset: "bypass", nonInteractiveApproval: "allow" },
+			stepSettings: () => ({
+				getStepSettings: () => ({}),
+				setEffectiveStepSettings: vi.fn(),
+				getShellPath: () => shellPath,
+				getShellCommandPrefix: () => prefix,
+			}),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+		const handler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		expect(
+			await handler(
+				{
+					type: "tool_call",
+					toolName: "run_command",
+					toolCallId: "shell-settings",
+					input: { command: "printf safe" },
+				},
+				{ hasUI: false },
+			),
+		).toMatchObject({ block: true, terminate: true });
+	});
+
 	test("does not register the removed /effort alias", () => {
 		const registerCommand = vi.fn();
 		createStepExtension()({
@@ -177,6 +213,35 @@ describe("Step extension", () => {
 			autoResume: true,
 		});
 	});
+
+	test.each(["bypass", "autopilot"] as const)(
+		"keeps recursive forced removal gated through the %s tool-call hook",
+		async (initialPreset) => {
+			const on = vi.fn();
+			createStepExtension({
+				permission: { env: {}, initialPreset, toolOverrides: { run_command: "allow" } },
+			})({
+				registerProvider: vi.fn(),
+				on,
+				registerCommand: vi.fn(),
+				sendUserMessage: vi.fn(),
+			} as unknown as ExtensionAPI);
+			const handler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<unknown>;
+			const event = {
+				type: "tool_call",
+				toolName: "run_command",
+				toolCallId: "remove-build",
+				input: { command: "rm -rf ./build" },
+			};
+			const confirm = vi.fn(async () => false);
+			expect(await handler(event, { hasUI: true, ui: { confirm } })).toMatchObject({ block: true });
+			expect(confirm).toHaveBeenCalledOnce();
+			expect(await handler(event, { hasUI: false })).toMatchObject({ block: true, terminate: true });
+		},
+	);
 
 	// The Shift+Tab shortcut is an in-the-moment gesture by someone watching the
 	// session. Persisting it also wrote `nonInteractiveApproval: "allow"`, which

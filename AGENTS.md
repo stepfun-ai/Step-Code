@@ -144,6 +144,9 @@ Pluggable backends:
 
 ## Git
 
+Create all new work branches from `github-opensource`. Target only
+`github-opensource` when opening or merging change requests.
+
 Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
 
 Committing:

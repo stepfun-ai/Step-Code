@@ -203,7 +203,7 @@ describe("Step permission presets", () => {
 		const noUI = { hasUI: false } as never;
 		const writeCall = {
 			toolName: "run_command",
-			input: { command: "rm -rf build" },
+			input: { command: "mkdir build" },
 		} as never;
 
 		it("marks an unselected policy as defaulted", () => {
