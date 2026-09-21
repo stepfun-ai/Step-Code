@@ -93,9 +93,11 @@ fi
 shopt -s nullglob
 model_data_files=("${model_data_dir}/.manifest.json" "${model_data_dir}"/*.json)
 shopt -u nullglob
-if [[ ${#model_data_files[@]} -eq 1 ]]; then
-    echo "Generated model data is missing from ${model_data_dir}" >&2
-    exit 1
+# Step-only source trees legitimately contain only the empty manifest. Other
+# catalogs must include one JSON shard for every generated provider import.
+if [[ ${#model_data_files[@]} -eq 1 ]] && git show "${commit}:packages/providers/src/models.generated.ts" | grep -Eq '^import \{ [A-Z][A-Z0-9_]*_MODELS \} from "\./providers/[^" ]+\.models\.ts";$'; then
+	echo "Generated model data is missing from ${model_data_dir}" >&2
+	exit 1
 fi
 
 temporary_archive="$(mktemp "${output}.tmp.XXXXXX")"
@@ -114,17 +116,19 @@ archive_tree="$(GIT_INDEX_FILE="$temporary_index" git write-tree)"
 archive_mtime="$(git show -s --format=%ct "$commit")"
 
 archive_root="step-${version}"
-git archive --format=tar --prefix="${archive_root}/" --mtime="@${archive_mtime}" "$archive_tree" \
-    | gzip -n -9 > "$temporary_archive"
+archive_options=(--format=tar --prefix="${archive_root}/")
+if git archive -h 2>&1 | grep -q -- '--mtime'; then
+	archive_options+=(--mtime="@${archive_mtime}")
+fi
+git archive "${archive_options[@]}" "$archive_tree" ':(exclude)**/*.map' | gzip -n -9 > "$temporary_archive"
 tar -tzf "$temporary_archive" > "$manifest"
 
 required_paths=(
     "package.json"
-    "pnpm-lock.yaml"
-    "scripts/build-binaries.sh"
-    "packages/providers/src/models.generated.ts"
-    "packages/providers/src/image-models.generated.ts"
-    "packages/providers/src/providers/data/.manifest.json"
+	"pnpm-lock.yaml"
+	"scripts/build-binaries.sh"
+	"packages/providers/src/models.generated.ts"
+	"packages/providers/src/providers/data/.manifest.json"
     "packages/coding-agent/package.json"
     "apps/cli/src/bun/stepcode.ts"
     "apps/cli/src/main.ts"

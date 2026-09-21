@@ -220,14 +220,6 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@22.19.19)(@vitest/coverage-v8@4.1.9)(vite@8.2.2(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.1)(yaml@2.9.0))
 
-  packages/coding-agent/examples/extensions/custom-provider-anthropic:
-    dependencies:
-      '@anthropic-ai/sdk':
-        specifier: 0.52.0
-        version: 0.52.0
-
-  packages/coding-agent/examples/extensions/custom-provider-gitlab-duo: {}
-
   packages/coding-agent/examples/extensions/gondolin:
     dependencies:
       '@earendil-works/gondolin':
@@ -336,10 +328,6 @@ packages:
   '@anthropic-ai/sandbox-runtime@0.0.26':
     resolution: {integrity: sha512-DYV5LSsVMnzq0lbfaYMSpxZPUMAx4+hy343dRss+pVCLIfF62qOhxpYfZ5TmOk1GTDQm5f9wPprMNSStmnsV4w==}
     engines: {node: '>=18.0.0'}
-    hasBin: true
-
-  '@anthropic-ai/sdk@0.52.0':
-    resolution: {integrity: sha512-d4c+fg+xy9e46c8+YnrrgIQR45CZlAi7PwdzIfDXDM6ACxEZli1/fxhURsq30ZpMZy6LvSkr41jGq5aF5TD7rQ==}
     hasBin: true
 
   '@anthropic-ai/sdk@0.91.1':
@@ -2048,8 +2036,6 @@ snapshots:
       lodash-es: 4.18.1
       shell-quote: 1.10.0
       zod: 3.25.76
-
-  '@anthropic-ai/sdk@0.52.0': {}
 
   '@anthropic-ai/sdk@0.91.1(zod@4.6.1)':
     dependencies:
