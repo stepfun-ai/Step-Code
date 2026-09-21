@@ -492,7 +492,7 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 			dark: JSON.parse(stripBom(fs.readFileSync(darkPath, "utf-8"))) as ThemeJson,
 			light: JSON.parse(stripBom(fs.readFileSync(lightPath, "utf-8"))) as ThemeJson,
 		};
-		for (const name of ["sage", "step", "step-light"] as const) {
+		for (const name of ["sage", "step-blue", "step-violet", "step-violet-light"] as const) {
 			const themePath = path.join(themesDir, `${name}.json`);
 			if (fs.existsSync(themePath)) {
 				themes[name] = JSON.parse(stripBom(fs.readFileSync(themePath, "utf-8"))) as ThemeJson;
@@ -602,7 +602,7 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
 			errorMessage +=
-				"\nSee the built-in themes (dark.json, light.json, sage.json, step.json, step-light.json) for reference values.";
+				"\nSee the built-in themes (dark.json, light.json, sage.json, step-blue.json, step-violet.json, step-violet-light.json) for reference values.";
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
@@ -1124,7 +1124,7 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
 			cssColors[key] = ansi256ToHex(value);
 		} else if (value === "") {
 			// Empty means default terminal color - use sensible fallback for HTML
-			cssColors[key] = defaultText;
+			cssColors[key] = key.endsWith("Bg") || key === "scrollbarThumb" ? "transparent" : defaultText;
 		} else {
 			cssColors[key] = value;
 		}
@@ -1136,7 +1136,7 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
  * Check if a theme is a "light" theme (for CSS that needs light/dark variants).
  */
 export function isLightTheme(themeName?: string): boolean {
-	return themeName === "light" || themeName === "step-light";
+	return themeName === "light" || themeName === "step-violet-light";
 }
 
 /**
@@ -1327,9 +1327,10 @@ export function getMarkdownTheme(activeTheme: Theme = theme): MarkdownTheme {
 		tableHeader: (text: string) => activeTheme.bold(activeTheme.fg("mdTableHeader", text)),
 		link: (text: string) => activeTheme.fg("mdLink", text),
 		linkUrl: (text: string) => activeTheme.fg("mdLinkUrl", text),
-		// Inline code gets a one-cell chip: bg fill plus a breathing space on
-		// each side, matching the inline-code look of Claude Code / GitHub.
-		code: (text: string) => activeTheme.bg("codeInlineBg", activeTheme.fg("mdCode", ` ${text} `)),
+		code: (text: string) =>
+			activeTheme.getBgAnsi("codeInlineBg") === "\x1b[49m"
+				? activeTheme.fg("mdCode", text)
+				: activeTheme.bg("codeInlineBg", activeTheme.fg("mdCode", ` ${text} `)),
 		codeBlock: (text: string) => activeTheme.fg("mdCodeBlock", text),
 		// The opening fence doubles as the language label; tint the tag with the
 		// accent so the block's language is scannable at a glance.

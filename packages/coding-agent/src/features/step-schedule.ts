@@ -209,6 +209,23 @@ function parseSnapshot(value: unknown, sessionId: string): StepGoalRestoreResult
 	}
 }
 
+/**
+ * Latest goal status on the active branch, for UI surfaces (tip pool, footer)
+ * that read state without a runtime instance.
+ */
+export function getStepGoalStatus(
+	entries: readonly { type: string; customType?: string; data?: unknown }[],
+	sessionId: string,
+): StepGoalStatus | undefined {
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
+		const snapshot = parseSnapshot(entry.data, sessionId);
+		if (snapshot.valid) return snapshot.goal?.status;
+	}
+	return undefined;
+}
+
 function makeId(idFactory: () => string, current?: StepGoalRecord): string {
 	for (let attempt = 0; attempt < 10; attempt++) {
 		try {

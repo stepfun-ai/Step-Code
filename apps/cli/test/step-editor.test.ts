@@ -1,5 +1,5 @@
-import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@step-harness/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
+import { CURSOR_MARKER, resetCapabilitiesCache, setCapabilities, setKeybindings, visibleWidth } from "@step-harness/pi-tui";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "../src/ui/view/editor/step-editor.ts";
 import { initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
@@ -33,12 +33,87 @@ function stripSgr(line: string): string {
 }
 
 afterEach(() => {
+	vi.useRealTimers();
+	resetCapabilitiesCache();
 	initTheme("dark");
 });
 
 describe("StepEditor", () => {
+	it.each([true, false])("colors command tokens and ultracode with trueColor=%s", (trueColor) => {
+		setCapabilities({ images: null, trueColor, hyperlinks: false });
+		initTheme("step-blue");
+		const editor = createEditor();
+		editor.setText("/goal status ultracode");
+		const painted = editor.render(80).join("\n");
+		expect(painted).toContain(theme.fg("accent", "/goal"));
+		expect(painted).toContain(theme.fg("accent", "ultracode"));
+		editor.handleInput("\x01");
+		expect(editor.render(80).join("\n")).not.toContain(theme.fg("accent", "/goal"));
+		editor.setText("/Users/project myultracode");
+		expect(editor.render(80).join("\n")).not.toContain(theme.getFgAnsi("accent"));
+	});
+
+	it("preserves wrapped highlights, native cursor and input text", () => {
+		initTheme("step-blue");
+		const editor = createEditor();
+		editor.setText("/command ultracode");
+		for (const width of [1, 7, 12, 20, 80]) {
+			const lines = editor.render(width);
+			expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+		}
+		editor.focused = true;
+		editor.handleInput("\x01");
+		const wrapped = editor.render(12).join("\n");
+		expect(wrapped).not.toContain(theme.fg("accent", "/comman"));
+		expect(wrapped).toContain(CURSOR_MARKER);
+		expect(editor.getText()).toBe("/command ultracode");
+		editor.dispose();
+	});
+
+	it("sweeps ultracode once, stays static, and rearms only after removing the keyword", () => {
+		vi.useFakeTimers();
+		initTheme("step-blue");
+		const editor = createEditor();
+		editor.focused = true;
+		editor.handleInput("ultracode");
+		const first = editor.render(80);
+		expect(first.join("\n")).toContain(theme.bold(theme.fg("text", "u")));
+		vi.advanceTimersByTime(180);
+		expect(editor.render(80)).not.toEqual(first);
+		vi.advanceTimersByTime(420);
+		expect(vi.getTimerCount()).toBe(0);
+		expect(editor.render(80).join("\n")).toContain(theme.fg("accent", "ultracode"));
+		editor.handleInput(" do work");
+		expect(vi.getTimerCount()).toBe(0);
+		editor.setText("");
+		editor.setText("ULTRACODE");
+		expect(vi.getTimerCount()).toBe(1);
+		editor.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("skips the entire keyword under the cursor and stops animation on blur or submit", () => {
+		vi.useFakeTimers();
+		initTheme("step-blue");
+		const editor = createEditor();
+		editor.focused = true;
+		editor.setText("ultracode");
+		editor.handleInput("\x01");
+		const covered = editor.render(80).join("\n");
+		expect(covered).not.toContain(theme.getFgAnsi("accent"));
+		expect(covered).not.toContain("\x1b[1m");
+		expect(covered).toContain(`${CURSOR_MARKER}\x1b[7mu\x1b[0m`);
+		editor.focused = false;
+		vi.advanceTimersByTime(60);
+		expect(vi.getTimerCount()).toBe(0);
+		editor.setText("");
+		editor.focused = true;
+		editor.setText("ultracode");
+		editor.handleInput("\r");
+		expect(vi.getTimerCount()).toBe(0);
+	});
 	it("renders the Step frame rules and placeholder without changing width", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		const lines = editor.render(80);
 
@@ -54,7 +129,7 @@ describe("StepEditor", () => {
 	});
 
 	it("marks the first row and aligns wrapped rows to the same content column", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		editor.setText("重构 renderMessage，拆成三个小函数，并且补上单元测试。".repeat(3));
 		const rows = editor
@@ -69,7 +144,7 @@ describe("StepEditor", () => {
 	});
 
 	it("keeps wrapped rows free of side rails so a terminal selection copies the prompt alone", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		editor.setText("重构 renderMessage，拆成三个小函数，并且补上单元测试。".repeat(3));
 		const lines = editor.render(80);
@@ -80,7 +155,7 @@ describe("StepEditor", () => {
 	});
 
 	it("shows bash-mode hints for a bare ! or !! prefix", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 
 		editor.setText("!");
@@ -96,7 +171,7 @@ describe("StepEditor", () => {
 	});
 
 	it("hides the bash hint once a command follows the prefix", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		editor.setText("!ls");
 		const lines = editor.render(80);
@@ -106,7 +181,7 @@ describe("StepEditor", () => {
 	});
 
 	it("paints the frame rules with the editor's borderColor", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		editor.borderColor = (str: string) => `<b>${str}</b>`;
 		const lines = editor.render(80);
@@ -116,7 +191,7 @@ describe("StepEditor", () => {
 	});
 
 	it("keeps native editor text and CJK width handling inside the frame", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		editor.setText("你好，世界");
 		const lines = editor.render(20);
@@ -129,7 +204,7 @@ describe("StepEditor", () => {
 	});
 
 	it("falls back to pi-tui's compact rendering in a narrow terminal", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		const lines = editor.render(7);
 
@@ -140,7 +215,7 @@ describe("StepEditor", () => {
 	});
 
 	it("keeps narrow CJK input safe when editor padding leaves no frame", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		for (const [width, padding, text] of [
 			[9, 2, "中文输入"],
 			[7, 3, "\t"],
@@ -158,7 +233,7 @@ describe("StepEditor", () => {
 	});
 
 	it("preserves the native cursor marker when clipping an undersized fallback", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		editor.focused = true;
 		editor.setText("a");
@@ -200,7 +275,7 @@ describe("StepEditor", () => {
 	});
 
 	it("delegates printable input and submit to the inherited editor", () => {
-		initTheme("step");
+		initTheme("step-blue");
 		const editor = createEditor();
 		let submitted = "";
 		editor.onSubmit = (text) => {

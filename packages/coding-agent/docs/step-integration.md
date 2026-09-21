@@ -45,8 +45,9 @@ The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
 `STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, Pi's
 native layout is `~/.step-cli/agent/sessions/<encoded-cwd>`. Project-local
 resources use `.step-cli/`. When no explicit theme has been saved, the
-built-in `step-light/step` pair follows the terminal appearance; the first name
-is the light theme and the second is the dark theme. Non-interactive
+built-in `step-blue` palette is used for either terminal appearance, without
+separate blue variants. `step-violet-light/step-violet` remains available for
+automatic violet light/dark switching. Non-interactive
 `step --export` uses the same precedence as startup: explicit `--use-theme`,
 saved settings, then the Step product default.
 Set `STEP_PROVIDER`, `STEP_MODEL`, `STEP_API_KEY`, or the provider endpoint
@@ -121,7 +122,7 @@ Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
 These presentation/runtime switches are passed to pi's composition root as
-explicit options: `defaultTheme` selects the automatic Step theme pair and
+explicit options: `defaultTheme` selects the single blue Step palette and
 `disableBackgroundServices` suppresses optional catalog, update, and install
 telemetry work. It is deliberately distinct from interactive `offline` mode,
 so disabling those background services does not prevent the first-run OAuth
@@ -249,31 +250,82 @@ from Markdown.
   exit behavior after validation; the caller must gate approval externally
   before allowing execution. `/plan` can still explicitly toggle planning off.
 - `task_create`, `task_update`, `task_get`, and `task_list` are the only task
-  tools and work with or without plan mode. Tasks retain their descriptions,
-  active labels, owners, metadata, and dependencies. Invalid dependency IDs,
+  tools and work with or without plan mode. Each execution checklist is a
+  separate task plan, distinct from the Markdown proposal. Tasks retain their
+  descriptions, active labels, owners, metadata, and dependencies. Invalid dependency IDs,
   self-links, and dependency cycles reject the update before changing state.
   Status changes remain explicit; dependencies do not schedule or complete work.
 - `task_list` reports only unfinished blockers that still exist; `task_get`
   returns the full stored dependency lists. `/todos` shows every task with its
   status, owner, and open blockers and belongs to the task extension, not the
   planning extension.
-- The task widget shows completion counts and at most five open task entries,
-  prioritizing in-progress tasks and their `activeForm`. Long labels are clipped;
-  `/todos` shows the full list. Tool results have compact native summaries and
-  expand to full details. Historical results render their own snapshots, never
-  the current task map. RPC widgets use plain string arrays; headless execution
-  needs no UI.
+- For a different user request, the first `task_create` supplies `newPlan`, a
+  nonempty plan title. This archives the current checklist, including unfinished
+  tasks, and starts an independent active plan. Subsequent creates omit
+  `newPlan` and append to that plan. The result includes its `planId`.
+  The runtime does not infer topic changes from user text or turn boundaries;
+  the task instructions tell the model when to start a new plan.
+- `task_list({includeHistory:true})` returns plan IDs, titles, active flags and
+  completed/total counts without switching plans. Only
+  `task_update({resumePlanId:"plan-1"})` explicitly restores a historical plan,
+  archiving the current one. Resume is a standalone operation, not combined
+  with task edits. The model should use it only when the user asks to continue
+  that older work; if the intended plan is ambiguous, it should ask.
+  Updates, reads, and dependencies using archived task IDs are rejected with
+  resume guidance rather than silently reactivating or mixing plans.
+- Tasks no longer create a persistent widget. Successful `task_create` and
+  `task_get` calls are hidden in the normal transcript; errors remain visible,
+  and expanding tools reveals their details. `task_update` and `task_list`
+  render an inline **Updated Plan (completed/total)** with every task in ID order: completed
+  entries use a checkmark, pending entries an empty checkbox, and in-progress
+  entries an accent-colored bold marker without a redundant status suffix. Long subjects wrap.
+  Update result details carry an immutable full-list `plan` projection; the
+  model-visible JSON response remains unchanged. Historical renderers consume
+  only their own result, never the current task map. This visual title does not
+  enter plan mode or add an `update_plan` tool. Headless execution needs no UI.
+  The heading count and rows come from the same successful result snapshot;
+  pending calls and partial results do not publish a completed plan update.
+  Only the active plan contributes rows or counts. Deleted tasks leave the
+  denominator; reopening a completed task reduces the numerator. Legacy
+  single-task results have no full-list count.
+
+Task updates synchronously mutate the session task map, append its snapshot,
+and copy the full display list before returning. The TUI routes the final result
+by `toolCallId`; a late result cannot overwrite a different call's plan. Earlier
+rows intentionally retain their earlier counts. Creation is silent, so newly
+created tasks appear in the next `task_update` or `task_list` snapshot; `/todos`
+reads current state immediately. Successful bash or subagent execution does not
+automatically complete a task: the model must explicitly call `task_update`
+after finishing and validating the work. Dependency links report prerequisites,
+not an execution scheduler.
+
+Task creation and updates use the agent loop's existing sequential execution
+mode so a batch cannot interleave plan switches with writes to another plan.
+Normal user messages, turn completion, clarification, and compaction do not
+reset or switch the plan. Completing or deleting every task leaves the current
+plan selected; it never revives older unfinished work automatically.
+
+For example, a three-task plan containing one completed task shows `1/3`.
+Starting a new five-task plan shows `0/5`, not `1/8`. Explicitly resuming the
+first plan restores `1/3` and its original dependencies and metadata; earlier
+transcript rows retain their own snapshots throughout these switches.
 
 Both extensions restore state from the active session branch on startup and
-branch navigation. Task snapshots are immutable, survive compaction, and use a
-session-wide ID high-water mark so deleted or sibling-branch IDs are not reused.
+branch navigation. Task snapshots include the active plan identity and archived
+plans, remain immutable, survive compaction, and use a session-wide ID high-water
+mark so deleted or sibling-branch IDs are not reused. Plan IDs derive from their
+first task ID. Restoring a session restores its selected plan, not every plan
+into the active checklist. Existing snapshots without plan identities restore
+as one plan; already-mixed historical tasks are not split by guessing intent.
 The Markdown plan remains a workspace file; restoring mode does not version or
 rewind its contents. On resume or after compaction, the model should call
 `task_list` before continuing multi-step work instead of recreating tasks. The
 whole task list is not injected into every turn.
 
-Compatibility is limited to the existing six tool names and schemas, `/todos`,
-and migration of legacy plan-mode todos into tasks on the active branch. Older
+The existing six tool names and `/todos` remain; the task schemas add explicit
+new-plan, history-query, and resume fields. Legacy support remains limited to
+migration of legacy plan-mode todos into tasks on the active branch and restoring
+existing task snapshots as a single plan. Older
 saved tool lists retain currently active plan/task tools on restore and exit;
 ordinary custom tools still follow the saved branch selection. There is no
 additional `TodoWrite` / `update_plan` alias or second checklist store.

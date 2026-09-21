@@ -652,7 +652,7 @@ describe("ToolExecutionComponent parity", () => {
 
 describe("ToolExecutionComponent Step presentation", () => {
 	beforeAll(() => {
-		initTheme("step");
+		initTheme("step-blue");
 	});
 
 	test("uses the shared Step spinner frame and elapsed suffix while running", () => {

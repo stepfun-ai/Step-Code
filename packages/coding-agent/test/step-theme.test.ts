@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resetCapabilitiesCache, setCapabilities } from "@step-harness/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, stripTerminalSequences } from "@step-harness/pi-tui";
 import { afterEach, describe, expect, test } from "vitest";
+import { getStepDefaultTheme } from "../src/step/defaults.ts";
 import {
 	getAvailableThemes,
 	getMarkdownTheme,
@@ -11,13 +12,15 @@ import {
 	initTheme,
 	isLightTheme,
 	loadThemeFromPath,
+	resolveThemeSetting,
 	theme,
 } from "../src/theme/theme.ts";
 
 const THEME_FILES = {
 	sage: new URL("../src/theme/sage.json", import.meta.url),
-	step: new URL("../src/theme/step.json", import.meta.url),
-	"step-light": new URL("../src/theme/step-light.json", import.meta.url),
+	"step-blue": new URL("../src/theme/step-blue.json", import.meta.url),
+	"step-violet": new URL("../src/theme/step-violet.json", import.meta.url),
+	"step-violet-light": new URL("../src/theme/step-violet-light.json", import.meta.url),
 } as const;
 
 type StepThemeName = keyof typeof THEME_FILES;
@@ -73,8 +76,10 @@ afterEach(() => {
 });
 
 describe("Step themes", () => {
-	test("registers the sage palette and branded light/dark palettes", () => {
-		expect(getAvailableThemes()).toEqual(expect.arrayContaining(["sage", "step", "step-light"]));
+	test("registers one blue palette alongside sage and the violet pair", () => {
+		expect(getAvailableThemes()).toEqual(
+			expect.arrayContaining(["dark", "light", "sage", "step-blue", "step-violet", "step-violet-light"]),
+		);
 		expect(getResolvedThemeColors("sage")).toMatchObject({
 			accent: "#a3ab78",
 			border: "#bde038",
@@ -87,7 +92,7 @@ describe("Step themes", () => {
 			syntaxKeyword: "#bde038",
 			syntaxFunction: "#a3ab78",
 		});
-		expect(getResolvedThemeColors("step")).toMatchObject({
+		expect(getResolvedThemeColors("step-violet")).toMatchObject({
 			accent: "#ab9eff",
 			// 2026-09-09 品牌紫收缩：边框走 line，正文标题/列表符去紫，
 			// 紫锚点只剩工具行（toolTitle/mdCode=brand）与门面
@@ -105,7 +110,7 @@ describe("Step themes", () => {
 			syntaxVariable: "#e8e8ea",
 			syntaxType: "#e8c076",
 		});
-		expect(getResolvedThemeColors("step-light")).toMatchObject({
+		expect(getResolvedThemeColors("step-violet-light")).toMatchObject({
 			accent: "#5b21b6",
 			border: "#d9d5e4",
 			muted: "#5c5c66",
@@ -120,9 +125,47 @@ describe("Step themes", () => {
 			syntaxVariable: "#1a1a22",
 			syntaxType: "#8a5a00",
 		});
-		expect(getThemeExportColors("step").pageBg).toBe("#0d1017");
-		expect(getThemeExportColors("step-light").pageBg).toBe("#fbfaff");
-		expect(isLightTheme("step-light")).toBe(true);
+		expect(getThemeExportColors("step-violet").pageBg).toBe("#0d1017");
+		expect(getThemeExportColors("step-violet-light").pageBg).toBe("#fbfaff");
+		expect(isLightTheme("step-violet")).toBe(false);
+		expect(isLightTheme("step-violet-light")).toBe(true);
+	});
+
+	test("uses the same bright blue default for both terminal appearances", () => {
+		const defaultSetting = getStepDefaultTheme({});
+		expect(defaultSetting).toBe("step-blue");
+		expect(resolveThemeSetting(defaultSetting, "dark")).toBe("step-blue");
+		expect(resolveThemeSetting(defaultSetting, "light")).toBe("step-blue");
+		expect(getResolvedThemeColors("step-blue")).toMatchObject({
+			accent: "#68c0ff",
+			mdCode: "#68c0ff",
+			mdLink: "#68c0ff",
+			toolTitle: "#68c0ff",
+		});
+		expect(isLightTheme("step-blue")).toBe(false);
+	});
+
+	test.each(["truecolor", "256color"] as const)("keeps built-in content backgrounds transparent in %s", (mode) => {
+		for (const name of ["dark", "light", "sage", "step-blue", "step-violet", "step-violet-light"]) {
+			const loaded = loadThemeFromPath(fileURLToPath(new URL(`../src/theme/${name}.json`, import.meta.url)), mode);
+			const markdown = getMarkdownTheme(loaded);
+			const inline = markdown.code("src/入口.ts");
+			expect(stripTerminalSequences(inline)).toBe("src/入口.ts");
+			expect(inline).toBe(loaded.fg("mdCode", "src/入口.ts"));
+			for (const token of [
+				"codeInlineBg",
+				"customMessageBg",
+				"toolPendingBg",
+				"toolSuccessBg",
+				"toolErrorBg",
+			] as const) {
+				expect(loaded.getBgAnsi(token), `${name}.${token}`).toBe("\x1b[49m");
+				expect(getResolvedThemeColors(name)[token]).toBe("transparent");
+			}
+			expect(loaded.getBgAnsi("userMessageBg")).not.toBe("\x1b[49m");
+			expect(loaded.getBgAnsi("selectedBg")).not.toBe("\x1b[49m");
+			expect(loaded.getBgAnsi("searchMatchBg")).not.toBe("\x1b[49m");
+		}
 	});
 
 	test.each(["sage"] as const)("%s prose uses one brand color and code uses separate slots", (name) => {
@@ -145,7 +188,7 @@ describe("Step themes", () => {
 
 	test("step 系正文不再一紫——品牌紫只锚行内代码（2026-09-09 收缩）", () => {
 		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
-		for (const name of ["step", "step-light"] as const) {
+		for (const name of ["step-violet", "step-violet-light"] as const) {
 			initTheme(name);
 			const markdown = getMarkdownTheme();
 
@@ -190,13 +233,13 @@ describe("Step themes", () => {
 		// palette; its original user-badge background is not an AA contract for
 		// every possible syntax foreground. Keep the stricter user-message
 		// contract for the branded Step pair below.
-		for (const name of ["sage", "step", "step-light"] as const) {
+		for (const name of ["sage", "step-blue", "step-violet", "step-violet-light"] as const) {
 			expect(existsSync(THEME_FILES[name]), `expected built-in ${name} theme file`).toBe(true);
 			const truecolor = getResolvedThemeColors(name);
 			const quantized = getQuantizedForegrounds(name);
 			const pageBg = getThemeExportColors(name).pageBg;
 			expect(pageBg).toMatch(/^#[0-9a-f]{6}$/i);
-			const backgrounds = name === "step-light" ? [pageBg!, "#ffffff"] : [pageBg!];
+			const backgrounds = isLightTheme(name) ? [pageBg!, "#ffffff"] : [pageBg!];
 
 			for (const token of foregroundTokens) {
 				for (const background of backgrounds) {
@@ -213,7 +256,7 @@ describe("Step themes", () => {
 			}
 		}
 
-		for (const name of ["step", "step-light"] as const) {
+		for (const name of ["step-blue", "step-violet", "step-violet-light"] as const) {
 			const colors = getResolvedThemeColors(name);
 			const quantizedColors = getQuantizedForegrounds(name);
 			const quantizedTheme = loadThemeFromPath(fileURLToPath(THEME_FILES[name]), "256color");

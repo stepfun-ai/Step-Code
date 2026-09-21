@@ -33,7 +33,7 @@ interface ApprovalTestMode {
 const cleanups: Array<() => void> = [];
 
 function createHarness(columns = 80, rows = 24, render = false) {
-	initTheme("step");
+	initTheme("step-blue");
 	setKeybindings(new KeybindingsManager());
 	const terminal = new VirtualTerminal(columns, rows);
 	const ui = new TuiMainScreen(terminal);
