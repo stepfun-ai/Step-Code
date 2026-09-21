@@ -1,4 +1,4 @@
-import { isIsolatedVmAvailable } from "./vm.ts";
+import { isIsolatedVmAvailable, isIsolatedVmHostable } from "./vm.ts";
 
 function envFlag(value: string | undefined): boolean {
 	const normalized = value?.trim().toLowerCase();
@@ -7,11 +7,12 @@ function envFlag(value: string | undefined): boolean {
 
 export type WorkflowRegistrationDecision =
 	| { enabled: true }
-	| { enabled: false; reason: "not-enabled" | "disabled-by-env" | "vm-unavailable" };
+	| { enabled: false; reason: "not-enabled" | "disabled-by-env" | "vm-unavailable" | "vm-unsupported-runtime" };
 
 /**
  * Startup warning for the one refusal that contradicts the default-on
- * registration: every other reason honors an explicit "off" and stays silent.
+ * registration: every other reason honors an explicit "off" or an unfixable
+ * runtime fact and stays silent.
  */
 export const WORKFLOW_VM_UNAVAILABLE_WARNING =
 	"Workflow tools are unavailable this session: the isolated-vm native module failed to load. Rebuild or reinstall isolated-vm to restore the workflow tool, /workflows, and /ultraloop, or set STEP_DISABLE_WORKFLOW=1 to silence this warning.";
@@ -34,10 +35,15 @@ export const WORKFLOW_VM_UNAVAILABLE_WARNING =
 export function resolveWorkflowRegistration(
 	options: { enabled?: boolean; vmExecutor?: unknown } = {},
 	vmAvailable: boolean = isIsolatedVmAvailable(),
+	vmHostable: boolean = isIsolatedVmHostable(),
 ): WorkflowRegistrationDecision {
 	if (envFlag(process.env.STEP_DISABLE_WORKFLOW)) return { enabled: false, reason: "disabled-by-env" };
 	if (options.enabled === false) return { enabled: false, reason: "not-enabled" };
-	if (!vmAvailable && !options.vmExecutor) return { enabled: false, reason: "vm-unavailable" };
+	if (!vmAvailable && !options.vmExecutor) {
+		// A missing native module is fixable on a V8 runtime (warn so the user can
+		// reinstall it); on a non-V8 runtime it never loads, so refuse silently.
+		return { enabled: false, reason: vmHostable ? "vm-unavailable" : "vm-unsupported-runtime" };
+	}
 	return { enabled: true };
 }
 
