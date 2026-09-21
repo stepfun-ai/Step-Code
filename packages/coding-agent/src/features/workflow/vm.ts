@@ -84,6 +84,22 @@ export function isIsolatedVmAvailable(): boolean {
 	return loadIsolatedVm() !== undefined;
 }
 
+/**
+ * Whether this runtime can host isolated-vm. isolated-vm is a native addon that
+ * links V8's C++ API directly, so the bun single-binary we ship — engine is
+ * JavaScriptCore, not V8 — can never load it however it is installed, while
+ * Node can. We key off bun explicitly rather than probing `process.versions.v8`
+ * because bun fills in a node-compat `process.versions.v8` (and `.node`) too, so
+ * a v8-key test would wrongly report bun as hostable. This is therefore a bun
+ * check, not a general non-V8 detector: any other (hypothetical) non-V8 runtime
+ * is treated as hostable and would still get the actionable warning. Callers use
+ * it to separate a fixable install gap (Node: warn, "reinstall isolated-vm"
+ * works) from an unfixable runtime fact (the shipped binary: stay silent).
+ */
+export function isIsolatedVmHostable(): boolean {
+	return !("bun" in process.versions);
+}
+
 /** Run a workflow script inside an isolated-vm context. */
 export async function runInIsolatedVm(
 	script: string,

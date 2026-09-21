@@ -5,14 +5,19 @@ import {
 	WORKFLOW_VM_UNAVAILABLE_WARNING,
 } from "../src/features/workflow/registration-gate.ts";
 import { createStepWorkflowExtension } from "../src/features/workflow/step-workflow.ts";
+import type * as VmModule from "../src/features/workflow/vm.ts";
+
+const runtime = vi.hoisted(() => ({ vmHostable: true }));
 
 vi.mock("../src/features/workflow/vm.ts", async (importOriginal) => ({
 	...(await importOriginal<object>()),
 	isIsolatedVmAvailable: () => false,
+	isIsolatedVmHostable: () => runtime.vmHostable,
 }));
 
 afterEach(() => {
 	vi.unstubAllEnvs();
+	runtime.vmHostable = true;
 });
 
 describe("resolveWorkflowRegistration", () => {
@@ -45,7 +50,39 @@ describe("resolveWorkflowRegistration", () => {
 		// The default-on path still requires a VM (or an injected executor standing in for it).
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 		expect(resolveWorkflowRegistration({}, false)).toEqual({ enabled: false, reason: "vm-unavailable" });
+		// A non-V8 runtime (the shipped bun binary) can never load the V8-native
+		// isolated-vm, so the refusal is a distinct, silent reason rather than a
+		// fixable install gap.
+		expect(resolveWorkflowRegistration({}, false, false)).toEqual({
+			enabled: false,
+			reason: "vm-unsupported-runtime",
+		});
 		expect(resolveWorkflowRegistration({ vmExecutor: () => {} }, false)).toEqual({ enabled: true });
+		// An injected executor wins even on a non-V8 runtime: the executor
+		// short-circuit is checked before the vmHostable branch, so an embedder can
+		// register workflows on the shipped bun binary.
+		expect(resolveWorkflowRegistration({ vmExecutor: () => {} }, false, false)).toEqual({ enabled: true });
+	});
+});
+
+describe("isIsolatedVmHostable", () => {
+	test("keys off the real runtime, not the file-wide mock", async () => {
+		// The file mocks vm.ts, so pull the real predicate to exercise its body -
+		// the one-line detection this whole change hinges on. A plain import here
+		// would return the mock and test nothing.
+		const { isIsolatedVmHostable } = await vi.importActual<typeof VmModule>("../src/features/workflow/vm.ts");
+		// vitest runs on Node (V8), which never carries a `bun` key.
+		expect("bun" in process.versions).toBe(false);
+		expect(isIsolatedVmHostable()).toBe(true);
+		// Simulate the shipped bun binary. bun also fakes a node-compat
+		// process.versions.v8, so the predicate must key off `bun`, not `v8`.
+		const versions = process.versions as Record<string, string | undefined>;
+		try {
+			versions.bun = "1.2.18";
+			expect(isIsolatedVmHostable()).toBe(false);
+		} finally {
+			delete versions.bun;
+		}
 	});
 });
 
@@ -78,6 +115,18 @@ describe("workflow registration warning", () => {
 		for (const handler of h.handlers.get("session_start") ?? []) handler({ type: "session_start" }, h.ctx);
 		expect(h.notifications).toEqual([{ message: WORKFLOW_VM_UNAVAILABLE_WARNING, level: "warning" }]);
 		expect(h.notifications[0]?.message).toContain("isolated-vm");
+	});
+
+	test("a non-V8 runtime that can never host the VM registers nothing and stays silent", () => {
+		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
+		runtime.vmHostable = false;
+		const h = harness();
+		createStepWorkflowExtension({})(h.api);
+		// Unlike the vm-unavailable path, vm-unsupported-runtime registers no
+		// session_start handler at all, so nothing exists that could warn.
+		expect(h.tools.size).toBe(0);
+		expect(h.handlers.size).toBe(0);
+		expect(h.notifications).toEqual([]);
 	});
 
 	test("a workflow turned off by option or env registers nothing and stays silent", () => {
