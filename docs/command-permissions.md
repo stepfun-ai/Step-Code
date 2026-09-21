@@ -1,64 +1,146 @@
 # Command permissions
 
-Explicit per-tool denial takes precedence over command approval. Otherwise,
-a built-in rule match requires approval for that individual call in Ask, Bypass,
-and Autopilot, including the low-level `auto` mode. Read-only (`strict`) mode
-denies the call. A run without an approval channel denies it even if
-`nonInteractiveApproval` or the tool override is `allow`.
+Explicit per-tool denial takes precedence. Otherwise, shared command analysis
+returns one of three outcomes:
 
-The policy belongs to `packages/coding-agent/src/step/permissions.ts` and runs
-through the existing `tool_call` hook for agent tools. The same check applies to foreground and
-background command requests. Each approval applies once; rejecting or cancelling
-the prompt does not execute the call. Clients render the existing confirmation
-request and do not implement a separate command policy.
-Manual `!` input and the RPC `bash` command use the separate `user_bash` event;
-they are user-issued shell commands and are outside this agent-tool policy.
+| Analysis | Ask / Bypass / Autopilot | Read-only | Without an approval channel |
+| --- | --- | --- | --- |
+| A built-in dangerous rule matched | Confirm each call | Deny | Deny |
+| Syntax or executable input could not be fully analyzed | Confirm each call, explaining the uncertainty | Deny | Deny |
+| Analysis completed without a rule match | Ordinary preset/tool policy | Ordinary read-only policy | Ordinary unattended policy |
 
-## Recursive forced removal
+Unresolved analysis is not reported as a detected dangerous command.
+`StepToolDecision.analysisIncomplete` distinguishes it from `hazardous`.
+Neither outcome can use an automatic tool override or unattended `allow`.
+Explicit user approval applies only to that call.
 
-The `recursive-force-remove` rule matches an `rm` invocation that has both a
-recursive option (`-r`, `-R`, `--recursive`) and a force option (`-f`, `--force`).
-The target does not affect the decision. Short options can be combined or split;
-`--` ends option parsing.
+The product policy in `packages/coding-agent/src/step/permissions.ts` runs through
+the existing `tool_call` hook, before foreground/background execution. Clients
+render the existing confirmation request; they do not implement another policy.
+The Step extension supplies the command tool's shell path and command prefix
+from the same settings manager. Analysis uses the shared shell resolver; a custom
+non-Bash shell cannot inherit a Bash-only ordinary verdict. Foreground prefixes
+are analyzed with the submitted command; background execution currently omits
+that prefix, matching the existing tool implementation. Embedders with custom
+command execution must supply the corresponding `shellContext` to the controller.
+Manual `!` input and RPC `bash` use the separate `user_bash` event and are outside
+this agent-tool policy.
 
-| Command | Rule match |
+## Syntax, command semantics, and rules
+
+`shell-analysis.ts` uses the pinned `unbash` parser and explicitly traverses its
+typed AST. Simple commands and executable substitutions are retained; array
+elements, arithmetic identifiers, conditional operands, case patterns, parameter
+values, and quoted words remain data. Function/compound bodies are conservatively
+inspected without evaluating control flow. Nested scripts and lazy word parts
+are visited explicitly, including their parse errors and source ownership.
+
+The adapter retains input redirections and pipeline relationships.
+`command-policy.ts` separately interprets common wrapper options, Bourne-shell
+`-c` arguments, literal interpreter stdin, `find -exec`, `xargs`, and literal
+`eval` / `trap` scripts and `let` arithmetic. `builtin` wrappers use the same
+dispatch. It never reparses ordinary arguments as command lists.
+For example:
+
+| Command | Interpretation |
 | --- | --- |
-| `rm -rf ./build` | Yes |
-| `rm -fr /tmp/cache` | Yes |
-| `rm -R -f "$TARGET"` | Yes |
-| `rm --recursive --force -- ./build` | Yes |
-| `sudo -u root /bin/rm -rf ./build` | Yes |
-| `cd project && rm -rf ./build` | Yes |
-| `sh -c 'rm -rf ./build'` | Yes |
-| `echo 'rm -rf ./build'` | No |
-| `rm -r ./build` | No |
-| `rm -- -rf` | No |
+| `bash -ec -- 'rm -rf ./build'` | Inspect the actual command string after shell options |
+| `bash script.sh -c 'rm -rf ./build'` | Script filename and positional arguments; file contents are not read |
+| `args=(rm -rf ./build); printf '%s\n' "${args[@]}"` | Array data and printing |
+| `declare -a args=("$(rm -rf ./build)")` | The substitution is executable |
+| `printf '%s\n' "$((rm -rf))"` | Arithmetic data, not an rm invocation |
+| `sh <<< 'rm -rf ./build'` | Literal stdin consumed as a shell script |
+| `cat <<< 'rm -rf ./build'` | Literal stdin consumed as data |
 
-A non-match still goes through ordinary permission policy. The detector inspects
-literal command names and arguments, common command wrappers, shell command
-strings, redirections, compound commands, command/process substitutions, and
-literal `find -exec` / `xargs` invocations. Quoting and comment context are retained
-while inspecting substitutions. Heredoc input is treated as text, with command
-substitutions inspected only for an unquoted delimiter. When a shell interpreter
-appears on that input line, the body is conservatively inspected as a script too.
-It is a static approval
-guard, not a shell sandbox: it does not resolve aliases, expand variables into
-commands or options, inspect script files, or evaluate arbitrary programs.
+Quoted heredoc bodies remain data unless they feed a known shell consumer.
+Unquoted bodies are inspected for substitutions. Backticks and nested compound
+syntax are located by the parser, not by a second bracket/comment scanner.
+Wrapper options have explicit operand arity; an unsupported option does not
+cause the following words to be guessed as a command.
+The supported wrappers include `timeout`, `nice`, `setsid`, and `stdbuf`.
+`timeout` consumes its duration before locating the executable; `nice` accepts
+`-n`/`--adjustment`, while legacy numeric options require review.
+Input-appended or replaced `xargs` operands remain unknown values in argv. They
+cannot be treated as literal placeholders or omitted when deciding executable
+names, option combinations, or shell command strings. Ordinary data-only
+consumers such as `xargs echo` still follow ordinary policy.
 
-## Adding rules
+## Incomplete analysis
 
-`packages/coding-agent/src/step/command-policy.ts` contains the typed
-`COMMAND_APPROVAL_RULES` registry. Each rule has a stable ID and one of two kinds:
+A parser is not an execution oracle. Parse errors, missing nested syntax,
+unverified heredoc boundaries, unsupported parser representations, and inspection
+budget exhaustion produce an explicit unresolved result. There is no fallback
+to the previous handwritten lexer and no parse-error-to-allow path.
 
-- `shell`: a predicate over a normalized command name and its argument tokens.
-  Use this for commands whose option combinations matter. Shell traversal and
-  wrapper handling are shared across rules.
-- `pattern`: a regular expression over the submitted command text. The existing
-  filesystem, device, Git, and SQL patterns retain this conservative behavior.
-  Use non-stateful expressions without the `g` or `y` flags.
+The pinned parser has known limitations. The adapter conservatively rejects
+confidence in escaped ANSI-C heredoc delimiters, continued heredoc lines, certain
+continued expansion openers, truncated substitution nodes, and quoted file
+descriptors whose syntax provenance was lost. Ambiguous ANSI word values and
+unquoted filename expansions remain nonliteral. If such a value determines the
+executable, wrapper layout, dangerous-command options, or interpreter script,
+approval is required. Ordinary dynamic data arguments, such as `echo "$VALUE"`,
+do not require approval solely for being dynamic.
+Filename expansion is checked across the complete word, retaining quote and
+escape information. A literal `[` command is not a bracket glob.
 
-To add a command, add a named rule and test both executable forms and similar
-text that should not match in `test/step-command-policy.test.ts`. Keep permission
-precedence in the controller; a new rule does not need branches for each preset.
-The matched ID appears in the confirmation reason. Built-in rules have no user
-configuration switch that can disable mandatory approval.
+An unreliable syntax tree produces unresolved analysis rather than a rule match
+from its partial tree. When syntax is reliable, a definite dangerous invocation
+can still be reported even if another command's runtime arguments are unknown.
+
+Bash syntax is the supported grammar. Other shell dialects do not receive an
+automatic safe verdict from a successful Bash parse. Known rule matches remain
+conservative; otherwise PowerShell, fish, zsh, and ksh command strings require
+review, as do `sh` and `dash`: their heredoc semantics can differ from Bash.
+Integer, nameref, and inherited-attribute declarations require review because their attributes can
+make later assignments execute arithmetic expressions. Variable-target builtins
+(`unset`, `read`, `printf -v`, declarations, and related APIs) accept ordinary
+names and literal numeric subscripts; other target expressions require review.
+Scalar declarations retain their known assignment target even when the value is
+dynamic. Quoted scalar values remain data; unquoted expansion and quoted `$@`
+or array `[@]` require a direct, syntactically recognized declaration assignment
+to rule out extra operands. Wrappers do not inherit that assignment context.
+Array names established by shell syntax or variable-target builtins are retained
+across inspected contexts. A declaration assigning an unknown value to a possible
+array requires review, since Bash can parse that value again as a compound array
+assignment. Known compound values are inspected as array syntax. This is
+conservative across branches, loops, and function scopes; it does not infer the
+variable's actual runtime type or erase an array possibility after `unset`.
+Callbacks passed to `mapfile`/`readarray` also require review. Data arguments such
+as a `read` prompt or plain `printf` output are not promoted to executable input.
+Parser limits and unsupported constructs are documented boundaries,
+not claims that those programs are necessarily dangerous.
+
+This remains static approval inspection, not a sandbox or full shell evaluation.
+It does not resolve aliases, track arbitrary runtime values, read script files,
+or inspect programs invoked by a command. All branches and function bodies may
+be inspected even when a particular execution would not reach them.
+
+## Rules and extension points
+
+The `recursive-force-remove` rule requires both a recursive flag
+(`-r`, `-R`, `--recursive`) and a force flag (`-f`, `--force`) on an actual `rm`
+invocation. Its target does not affect the result. Combined/split short options
+and long options are supported; `--` ends option parsing. Executable names are
+matched without case on Windows and conservatively on macOS, whose filesystems
+can resolve case variants to the same program. Other POSIX hosts preserve command
+name case. Arguments retain their original case on every platform.
+
+`COMMAND_APPROVAL_RULES` contains typed, named rules:
+
+- `shell` predicates consume analyzed command names and argument values.
+- `pattern` rules retain the existing conservative raw-text matching for
+  filesystem/device, Git, and SQL hazards.
+
+A rule ID identifies a known match. The Boolean `isDangerousCommand()` helper is
+a detection query, not an authorization API: callers making permission decisions
+must handle `analyzeCommandPolicy()`'s unresolved result as well.
+In particular, incomplete syntax can make this Boolean return `false` even when
+a preceding fragment contains a dangerous command. It does not mean permission
+was granted; the permission controller still requires approval or denies the call.
+
+Changes must test executable forms, data-only controls, and incomplete analysis.
+`step-command-policy-shell-semantics.test.ts` compares policy with harmless
+real-shell execution in an isolated environment. `step-shell-analysis.test.ts`
+covers grammar roles and parser boundaries; `step-command-policy-uncertainty.test.ts`
+covers confirmation and unattended denial. Tests must not equate an unexecuted
+branch with inert data or silently accept unresolved results as successful parsing.

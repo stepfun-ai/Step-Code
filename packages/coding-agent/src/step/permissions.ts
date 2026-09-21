@@ -14,8 +14,9 @@ import type {
 	ToolCallEvent,
 	ToolCallEventResult,
 } from "../core/extensions/types.ts";
+import { getShellConfig } from "../utils/shell.ts";
 
-import { findCommandApprovalRule } from "./command-policy.ts";
+import { analyzeCommandPolicy, type CommandPolicyAnalysis } from "./command-policy.ts";
 
 export { containsDangerousLifecycleCommand, isDangerousCommand } from "./command-policy.ts";
 
@@ -119,10 +120,14 @@ export interface StepPermissionState {
 export interface StepToolDecision {
 	action: "allow" | "confirm" | "deny";
 	hazardous: boolean;
+	/** Analysis uncertainty requires a human decision without claiming a dangerous rule matched. */
+	analysisIncomplete?: true;
 	reason: string;
 }
 
 export interface StepPermissionControllerOptions {
+	/** Shell settings used by the command tool; resolved at the same product boundary. */
+	shellContext?: () => ShellExecutionContext;
 	initialPreset?: StepPermissionPresetId;
 	/** Explicit approval mode (CLI `--approval-mode` takes precedence over env). */
 	approvalMode?: StepPermissionMode;
@@ -133,6 +138,11 @@ export interface StepPermissionControllerOptions {
 	/** Per-tool overrides (CLI `--tool-override` is merged here). */
 	toolOverrides?: Record<string, StepToolPermissionMode>;
 	env?: Record<string, string | undefined>;
+}
+
+interface ShellExecutionContext {
+	shellPath?: string;
+	commandPrefix?: string;
 }
 
 export function getStepPermissionPreset(id: string | undefined): StepPermissionPreset | undefined {
@@ -323,10 +333,26 @@ export function decideStepToolCall(
 	input: Record<string, unknown>,
 	state: StepPermissionState,
 	overrides: Readonly<Record<string, StepToolPermissionMode>> | undefined = state.toolOverrides,
+	shellContext?: ShellExecutionContext,
 ): StepToolDecision {
 	const normalizedName = toolName.trim().toLowerCase();
 	const command = extractCommand(input);
-	const commandRule = command === undefined ? undefined : findCommandApprovalRule(command);
+	let analysis: CommandPolicyAnalysis | undefined;
+	if (command !== undefined) {
+		try {
+			const shell = normalizedName === "powershell" ? "powershell" : getShellConfig(shellContext?.shellPath).shell;
+			const name = shell.split(/[\\/]/u).at(-1)?.toLowerCase();
+			const prefix =
+				normalizedName === "powershell" || (normalizedName === "run_command" && input.run_in_background === true)
+					? undefined
+					: shellContext?.commandPrefix;
+			const script = prefix ? `${prefix}\n${command}` : command;
+			analysis = analyzeCommandPolicy(script, name === "bash" || name === "bash.exe" ? "bash" : "unsupported");
+		} catch {
+			analysis = { kind: "unresolved", reason: "shell-configuration" };
+		}
+	}
+	const commandRule = analysis?.kind === "matched" ? analysis.ruleId : undefined;
 	const override = findToolOverride(normalizedName, overrides);
 
 	if (override === "deny") {
@@ -342,6 +368,15 @@ export function decideStepToolCall(
 			action: state.mode === "strict" ? "deny" : "confirm",
 			hazardous: true,
 			reason: `Dangerous command requires confirmation (${commandRule}): ${summarizeToolInput(toolName, input)}`,
+		};
+	}
+
+	if (analysis?.kind === "unresolved") {
+		return {
+			action: state.mode === "strict" ? "deny" : "confirm",
+			hazardous: false,
+			analysisIncomplete: true,
+			reason: `Shell command could not be fully analyzed (${analysis.reason}); explicit approval is required.`,
 		};
 	}
 
@@ -394,8 +429,10 @@ interface UnattendedCause {
 export class StepPermissionController {
 	private state: StepPermissionState;
 	private toolOverrides: Record<string, StepToolPermissionMode>;
+	private readonly shellContext: () => ShellExecutionContext;
 
 	constructor(options: StepPermissionControllerOptions = {}) {
+		this.shellContext = options.shellContext ?? (() => ({}));
 		this.state = resolveInitialStepPermissionState(options);
 		this.toolOverrides = cloneToolOverrides(options.toolOverrides ?? {});
 		if (Object.keys(this.toolOverrides).length > 0) this.state.toolOverrides = { ...this.toolOverrides };
@@ -431,7 +468,7 @@ export class StepPermissionController {
 	 */
 	decide(toolName: string, input: Record<string, unknown>, hasUI = true): StepToolDecision {
 		const cause = this.unattendedCause(hasUI);
-		return decideStepToolCall(toolName, input, this.effectiveState(cause), this.toolOverrides);
+		return decideStepToolCall(toolName, input, this.effectiveState(cause), this.toolOverrides, this.shellContext());
 	}
 
 	getOverrides(): Record<string, StepToolPermissionMode> {
@@ -488,7 +525,7 @@ export class StepPermissionController {
 		const input = event.input;
 		const cause = this.unattendedCause(context.hasUI);
 		const state = this.effectiveState(cause);
-		const decision = decideStepToolCall(event.toolName, input, state, this.toolOverrides);
+		const decision = decideStepToolCall(event.toolName, input, state, this.toolOverrides, this.shellContext());
 		if (decision.action === "allow") return undefined;
 
 		if (decision.action === "deny") {
@@ -499,7 +536,8 @@ export class StepPermissionController {
 			// Match the old Step policy: an explicit non-interactive `allow` can
 			// approve an ordinary confirmation once, while hazardous commands always
 			// fail closed. The default remains deny.
-			if (!decision.hazardous && state.nonInteractiveApproval === "allow") return undefined;
+			if (!decision.hazardous && !decision.analysisIncomplete && state.nonInteractiveApproval === "allow")
+				return undefined;
 			return {
 				block: true,
 				terminate: true,
@@ -527,6 +565,12 @@ export class StepPermissionController {
  * shortest way out.
  */
 function formatUnattendedBlockReason(decision: StepToolDecision, cause: UnattendedCause): string {
+	if (decision.analysisIncomplete) {
+		return (
+			decision.reason +
+			" No interactive approval is available. Use a supported literal command or review it in an interactive session."
+		);
+	}
 	if (decision.hazardous) {
 		return (
 			`${decision.reason} (no interactive approval is available). Dangerous commands always require ` +
@@ -574,7 +618,7 @@ function findToolOverride(
 function extractCommand(input: Record<string, unknown>): string | undefined {
 	for (const key of ["command", "cmd", "script"]) {
 		const value = input[key];
-		if (typeof value === "string" && value.trim().length > 0) return value;
+		if (typeof value === "string") return value;
 	}
 	return undefined;
 }
