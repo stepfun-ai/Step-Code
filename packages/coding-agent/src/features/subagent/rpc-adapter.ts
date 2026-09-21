@@ -145,12 +145,23 @@ export function resolveSubagentTurnIdleTimeoutMs(
 /**
  * Environment for one rpc child.
  *
- * Both kill switches are unconditional: a process we spawned is, by definition,
- * already inside somebody's fan-out, so it must never fan out again. Gating
+ * All four kill switches are unconditional: a process we spawned is, by
+ * definition, already inside somebody's fan-out, so it must neither fan out
+ * again nor hold scheduling authority of its own.
+ *
+ * `CHILD_MARKER` and `STEP_DISABLE_WORKFLOW` close the fan-out edges. Gating
  * `STEP_DISABLE_WORKFLOW` on `workflowAcl` (a permission payload, not a depth
  * marker) used to leave `subagent -> workflow` open, because the subagent runner
  * passes no ACL and its children were therefore misread as top-level: they
  * inherited an enabled workflow env and each fanned out another wave of agents.
+ *
+ * `STEP_DISABLE_CRON` and `STEP_DISABLE_GOAL` close the scheduling edge. A child
+ * runs in the parent's cwd and inherits its project trust, so a cron extension
+ * there attaches to the same `.step-cli/cron/tasks.json`: a durable job that
+ * comes due while the child sits idle is steered into the CHILD's session and
+ * consumed under the shared lock, so the parent never sees it fire. A goal in a
+ * child is the same escape in time rather than space: it keeps requesting
+ * continuations after the parent has settled the turn and stopped reading.
  *
  * `WORKFLOW_ACL_ENV` stays conditional and is explicitly set to `undefined` when
  * there is no ACL: Node's `spawn` drops `undefined` values, which clears a value
@@ -161,6 +172,8 @@ export function buildSubagentChildEnv(input: StepSubagentRunInput): NodeJS.Proce
 		...process.env,
 		[CHILD_MARKER]: "1",
 		STEP_DISABLE_WORKFLOW: "1",
+		STEP_DISABLE_CRON: "1",
+		STEP_DISABLE_GOAL: "1",
 		...(input.workflowAcl
 			? { [WORKFLOW_ACL_ENV]: JSON.stringify(input.workflowAcl) }
 			: { [WORKFLOW_ACL_ENV]: undefined }),

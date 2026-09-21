@@ -2,6 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
+import { createStepCronExtension } from "../src/features/step-cron.ts";
+import { createStepGoalExtension } from "../src/features/step-schedule.ts";
 import { CHILD_MARKER, type StepSubagentRunInput } from "../src/features/step-subagent.ts";
 import type { StepAgentConfig } from "../src/features/step-subagent-agents.ts";
 import { liveSubagentSessions } from "../src/features/subagent/lane-lifecycle.ts";
@@ -51,6 +54,46 @@ test("every rpc child is barred from fanning out again, with or without a workfl
 	const nested = buildSubagentChildEnv(runInput({ workflowAcl: { baseCwd: "/repo" } }));
 	expect(nested[CHILD_MARKER]).toBe("1");
 	expect(nested.STEP_DISABLE_WORKFLOW).toBe("1");
+});
+
+/** Minimal ExtensionAPI that records what an extension factory registers. */
+function registeredTools(factory: (pi: ExtensionAPI) => void): string[] {
+	const tools: string[] = [];
+	factory({
+		registerTool: (tool: ToolDefinition) => tools.push(tool.name),
+		registerCommand: () => {},
+		registerFlag: () => {},
+		registerShortcut: () => {},
+		on: () => {},
+		sendMessage: () => {},
+		sendUserMessage: () => {},
+		appendEntry: () => {},
+		getFlag: () => false,
+	} as unknown as ExtensionAPI);
+	return tools.sort();
+}
+
+// Regression: children inherited cron and goal as well. A child runs in the
+// parent's cwd and inherits its project trust, so its cron extension attached to
+// the same `.step-cli/cron/tasks.json`; a durable job coming due while the child
+// idled was steered into the child's session and consumed under the shared lock,
+// and the parent never saw it fire. Asserted through the env the child actually
+// receives, so renaming a switch on either side fails here.
+test("every rpc child is stripped of scheduling authority", () => {
+	// Positive control: without the child env, both extensions register normally,
+	// so the assertions below cannot pass for the wrong reason.
+	vi.stubEnv("STEP_DISABLE_CRON", "");
+	vi.stubEnv("STEP_DISABLE_GOAL", "");
+	vi.stubEnv("STEP_DISABLE_SCHEDULE", "");
+	expect(registeredTools(createStepCronExtension())).toEqual(["cron_create", "cron_delete", "cron_list"]);
+	expect(registeredTools(createStepGoalExtension()).length).toBeGreaterThan(0);
+
+	const childEnv = buildSubagentChildEnv(runInput());
+	vi.stubEnv("STEP_DISABLE_CRON", String(childEnv.STEP_DISABLE_CRON));
+	vi.stubEnv("STEP_DISABLE_GOAL", String(childEnv.STEP_DISABLE_GOAL));
+
+	expect(registeredTools(createStepCronExtension())).toEqual([]);
+	expect(registeredTools(createStepGoalExtension())).toEqual([]);
 });
 
 test("a workflow ACL is forwarded, and a stale inherited one is cleared", () => {
