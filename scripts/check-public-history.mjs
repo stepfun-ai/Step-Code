@@ -21,7 +21,6 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const guardPath = "scripts/check-public-history.mjs";
 const publicGuardPaths = new Set([guardPath, "scripts/check-public-boundary.mjs"]);
-const approvedVendorCompatibilityPaths = new Set(["packages/providers/src/api/anthropic-messages.ts"]);
 
 const FORBIDDEN_PATHS = [
 	{ label: "GitLab CI configuration", pattern: /^\.gitlab(?:-|\/|$)/u },
@@ -71,9 +70,7 @@ export function analyzeText(repoPath, text) {
 	if (publicGuardPaths.has(normalizedPath)) return [];
 	const violations = [];
 	for (const { label, pattern } of FORBIDDEN_TEXT) {
-		if (pattern.test(text) && !(label === "agent stealth compatibility" && approvedVendorCompatibilityPaths.has(normalizedPath))) {
-			violations.push(`${normalizedPath}: ${label}`);
-		}
+		if (pattern.test(text)) violations.push(`${normalizedPath}: ${label}`);
 	}
 	if (
 		/^packages\/coding-agent\/test\/fixtures\/(?:before-compaction|large-session)\.jsonl$/u.test(normalizedPath) &&
@@ -211,11 +208,8 @@ function runSelfTest() {
 	if (analyzeText("packages/coding-agent/src/modes/interactive/session-share.ts", "session.jsonl uploaded to a gist").length === 0) failures.push("expected exfiltration violation");
 	if (analyzeText("packages/coding-agent/test/fixtures/large-session.jsonl", '{"cwd":"synthetic-workspace"}').length !== 0) failures.push("synthetic fixture must be clean");
 	if (analyzeText("packages/coding-agent/test/fixtures/large-session.jsonl", '{"cwd":"/private/workspace","provider":"anthropic"}').length === 0) failures.push("expected raw fixture violation");
-	if (analyzeText("packages/providers/src/api/anthropic-messages.ts", "// stealth mode claudeCodeTools").length !== 0) {
-		failures.push("approved provider compatibility should be provenance-gated");
-	}
-	if (analyzeText("packages/coding-agent/examples/extensions/custom-provider-anthropic/index.ts", "// stealth mode claudeCodeTools").length === 0) {
-		failures.push("unapproved provider compatibility must be rejected");
+	if (analyzeText("packages/providers/src/api/anthropic-messages.ts", "// stealth mode claudeCodeTools").length === 0) {
+		failures.push("provider compatibility markers must be rejected");
 	}
 	if (analyzeRef("refs/tags/v0.3.7", new Set(["refs/heads/github-opensource"])).length === 0) failures.push("expected retired-tag violation");
 	for (const exemptPath of publicGuardPaths) {
