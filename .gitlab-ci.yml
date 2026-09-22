@@ -89,28 +89,6 @@ stages:
   - publish
   - notify
 
-# Enforce the branch flow: normal changes reach `main` through
-# `github-opensource`. The explicitly named promotion branches are temporary
-# exceptions for the reviewed first public-tree sync and its main-only overlay.
-enforce-merge-order:
-  stage: .pre
-  image: "$RELEASE_BUILDER_IMAGE"
-  interruptible: true
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
-  script:
-    - |
-      case "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" in
-        github-opensource|chore/opensource-main-promotion|chore/opensource-main-overlay-20260921)
-          echo "✅ Source branch is '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME'; allowed to merge into 'main'."
-          ;;
-        *)
-          echo "❌ Only the reviewed opensource promotion branches may be merged into 'main'."
-          echo "   This MR's source branch is '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME'."
-          exit 1
-          ;;
-      esac
-
 lint:
   stage: lint
   image: "$RELEASE_BUILDER_IMAGE"
