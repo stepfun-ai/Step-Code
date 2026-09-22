@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	applyStepTraceHeaders,
 	encodeStepTraceHeaderValue,
+	isStepFirstPartyTraceUrl,
 	isStepTraceRequestAllowed,
 	matchesStepTraceBaseUrl,
 	resolveStepTraceAllowlist,
@@ -86,7 +87,67 @@ describe("Step trace headers", () => {
 			requestUrl: "https://collector.example/v1/messages",
 			allowedBaseUrls: [],
 		});
-		expect(headers).toEqual({ "x-step-client": "cli" });
+		expect(headers).toEqual({ "x-step-client": "stepcode" });
+	});
+
+	it("always attaches the session id to a Step first-party host (.com and .ai), and nothing else", () => {
+		for (const requestUrl of [
+			"https://api.stepfun.com/step_plan/v1/chat/completions",
+			"https://api.stepfun.ai/step_plan/v1/chat/completions",
+		]) {
+			const headers: Record<string, string | null> = {};
+			// No allowlist and no field policy: still sends the session id to the
+			// first-party host, but no other high-sensitivity field leaks there.
+			applyStepTraceHeaders(headers, trace, { requestUrl, allowedBaseUrls: [] });
+			expect(headers).toEqual({
+				"x-step-client": "stepcode",
+				"x-step-session-id": "session-1",
+			});
+		}
+	});
+
+	it("omits the session id header on a first-party host when the session id is absent", () => {
+		// The always-send path relies on setHeader's empty guard: an undefined
+		// session id must not emit an empty/garbage x-step-session-id.
+		const headers: Record<string, string | null> = {};
+		applyStepTraceHeaders(headers, {}, { requestUrl: "https://api.stepfun.com/step_plan/v1", allowedBaseUrls: [] });
+		expect(headers).toEqual({ "x-step-client": "stepcode" });
+	});
+
+	it("does not double-send the session id when the first-party host is also allowlisted", () => {
+		const headers: Record<string, string | null> = {};
+		applyStepTraceHeaders(
+			headers,
+			{ sessionId: "s-overlap", workspaceId: "/ws" },
+			{
+				requestUrl: "https://api.stepfun.com/step_plan/v1",
+				allowedBaseUrls: ["https://api.stepfun.com/step_plan/v1"],
+				highSensitivityFields: ["session-id", "workspace-id"],
+			},
+		);
+		expect(headers).toEqual({
+			"x-step-client": "stepcode",
+			"x-step-session-id": "s-overlap",
+			"x-step-workspace-id": "/ws",
+		});
+	});
+
+	it("recognizes only the https first-party hosts", () => {
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com/step_plan/v1")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com/v1/chat/completions")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.ai/step_plan/v1")).toBe(true);
+		// Host comparison is case-insensitive (WHATWG lowercases the hostname).
+		expect(isStepFirstPartyTraceUrl("https://API.Stepfun.Com/v1")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("http://api.stepfun.com/v1")).toBe(false);
+		// Userinfo trick: the real host is evil.example, not api.stepfun.com.
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com@evil.example/v1")).toBe(false);
+		// Trailing-dot FQDN is intentionally not matched (fail closed).
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com./v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com.evil.example/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("https://other.stepfun.com/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.org/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("not a url")).toBe(false);
+		expect(isStepFirstPartyTraceUrl(undefined)).toBe(false);
 	});
 
 	it("matches only a complete URL prefix", () => {

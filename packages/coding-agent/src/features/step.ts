@@ -264,11 +264,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		pi.on("before_provider_headers", (event, ctx) => {
 			const model = ctx.model;
 			if (!model) return;
-			// x-step-client marks every request. The session/workspace/provider
-			// attribution follows only Step-owned providers (native step + product
-			// proxies), keyed by provider id, so it never egresses to a distinct
-			// third-party provider. Caveat: overriding STEP_BASE_URL under the
-			// "step" id points that provider at another host and attribution follows.
+			// x-step-client marks every request. The session id additionally rides
+			// every request to a Step first-party host (api.stepfun.com / .ai), keyed
+			// by the request URL host regardless of provider id. The remaining
+			// workspace/goal/provider attribution is policy-gated (allowlist +
+			// highSensitivityFields), so it never egresses to a third-party endpoint.
 			applyStepTraceHeaders(
 				event.headers,
 				{
