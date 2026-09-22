@@ -1,6 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
+cd "$script_dir"
+
+# Tests import workspace packages through their package entrypoints, which
+# point at ignored dist/ files. Build those outputs on the first test run in a
+# fresh worktree; established worktrees keep the existing fast path.
+build_outputs=(
+	"packages/tui/dist/index.js"
+	"packages/telemetry/dist/index.js"
+	"packages/providers/dist/index.js"
+	"packages/agent-core/dist/index.js"
+	"packages/config/dist/index.js"
+	"packages/coding-agent/dist/index.js"
+	"apps/cli/dist/main.js"
+)
+needs_build=false
+for output in "${build_outputs[@]}"; do
+	if [[ ! -f "$output" ]]; then
+		needs_build=true
+		break
+	fi
+done
+
+if [[ "$needs_build" == true ]]; then
+	echo "Workspace build output is missing; running the offline build before tests."
+	pnpm run build:offline
+fi
+
 # Isolate user resources, credentials, temporary files, and tool configuration.
 temp_parent="${TMPDIR:-/tmp}"
 temp_parent="${temp_parent%/}"
