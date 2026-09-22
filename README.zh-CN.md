@@ -1,5 +1,9 @@
 # Step Code Readme
 
+<p align="center">
+  <a href="README.md">English</a> · <strong>简体中文</strong>
+</p>
+
 ![test\.jpg](images-and-attachments/test.jpg)
 
 <h3><strong>迅捷执行，长程可靠，token 更省。</strong></h3>

@@ -1,5 +1,9 @@
 # Step Code
 
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 ![test\.jpg](images-and-attachments/test.jpg)
 
 <h3><strong>Swift execution, long-horizon reliability, and high token efficiency.</strong></h3>
