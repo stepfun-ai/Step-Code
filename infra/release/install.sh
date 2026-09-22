@@ -318,6 +318,7 @@ main() {
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
 	printf 'installed StepCode %s to %s\n' "$VERSION" "$destination"
 	configure_shell_path
+	printf '\nDone. Run: step\n'
 }
 
 main "$@"
