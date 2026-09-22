@@ -1,5 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: 安全漏洞披露 / Security disclosure
-    url: https://github.com/stepfun-ai/Step-Realtime-CLI/security/advisories/new
-    about: 不要公开提 issue，请通过 Security Advisories 私密披露。

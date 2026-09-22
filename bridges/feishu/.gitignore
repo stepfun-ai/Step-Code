@@ -1,9 +1,0 @@
-node_modules/
-.state/
-state/sessions.json
-state/processed.json
-logs/
-*.log
-.env
-.DS_Store
-package-lock.json
