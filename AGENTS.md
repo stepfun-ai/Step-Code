@@ -213,7 +213,7 @@ a wide session when checking layout.
 
 1. **Local binary smoke test**: build the standalone Step bundle and smoke test the current-platform binary outside the repo:
    ```bash
-   node infra/release/release-bundle.mjs --dry-run --version v0.3.1
+   node infra/release/release-bundle.mjs --dry-run --version v0.1.0
    ./scripts/build-binaries.sh --product step --offline-model-data --platform linux-x64 --out /tmp/stepcode-release
    /tmp/stepcode-release/step --help
    /tmp/stepcode-release/step --version
