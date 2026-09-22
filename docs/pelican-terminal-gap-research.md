@@ -101,10 +101,6 @@ DECDLD 下载动态可重定义字符集（DRCS）。Microsoft Terminal 官方 `
 - 这只是指定环境实测。线条位置/支持依赖终端；不支持上划线时可能忽略，不能保证全终端物理像素一致。
 - 原图编码 3240 个像素（8 帧+静态）无损验证；ANSI 解码测试验证补边仅出现在相应的半格，且属性不外泄。
 
-持久截图：
-- [第一轮 A/B/C/D](../pixel-art/pelican-terminal-gap-research/comparison.png)
-- [第二轮 B/E/F/G](../pixel-art/pelican-terminal-gap-research/refinements.png)
-- [B/F 裁剪对照](../pixel-art/pelican-terminal-gap-research/edge-rules-comparison.png)
-- [实际欢迎组件](../pixel-art/pelican-terminal-gap-research/welcome-refined.png)
+截图对照未包含在此仓库中。
 
 SGR4/24、53/55 属性定义亦见来源 [1]；其规范含义是 underline / overline，不是可移植的“像素补缝”接口。

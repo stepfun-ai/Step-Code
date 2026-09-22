@@ -777,7 +777,7 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Compaction settings from settings.jsonl	*/
 	settings: CompactionSettings;
 }
 

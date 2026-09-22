@@ -485,7 +485,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				}
 				if (!block) {
 					// Note: the "input" fallback here should/must not be taken.  in case the LLM makes up
-					// a tool we don't knwo about, we at least have a place to stash our stuff.
+					// a tool we don't know about, we at least have a place to stash our stuff.
 					const customInputProperty =
 						toolCall.custom && !toolCall.function ? (grammarToolInputProperties.get(name) ?? "input") : undefined;
 					const hasCustomInput = customInputProperty !== undefined;
