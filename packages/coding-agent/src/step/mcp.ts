@@ -14,7 +14,9 @@ import { readGlobalStepConfig } from "./config-toml.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
 import {
 	defaultStepPluginsDir,
+	ensureBuiltinPluginsInstalled,
 	listStepPluginDirectories,
+	provisionBuiltinPlugin,
 	provisionInstallCommand,
 	readStepPluginManifest,
 	type StepPluginProvision,
@@ -109,6 +111,21 @@ export function createStepMcpExtension(): ExtensionFactory {
 				// spawning processes. Awaiting Promise.all in session_start kept the
 				// entire initialization path behind the slowest server.
 				await yieldToEventLoop();
+				if (controller.signal.aborted) return;
+				// Provision the built-in StepPage plugin into a fresh install so its
+				// deploy tools appear without an explicit `/plugin install`. Copying the
+				// manifest is fast and blocks discovery so this session sees it;
+				// installing the MCP executable is fired in the background so a first
+				// launch never waits on the network. A still-missing executable then
+				// surfaces the normal actionable connect-failure remedy below.
+				try {
+					const preinstalled = await ensureBuiltinPluginsInstalled();
+					for (const plugin of preinstalled.installed) {
+						if (plugin.provision) void provisionBuiltinPlugin(plugin.provision).catch(() => undefined);
+					}
+				} catch {
+					// Best-effort: discovery still runs with whatever is already installed.
+				}
 				if (controller.signal.aborted) return;
 				const discovered = await discoverStepMcpServers(ctx.cwd, ctx.isProjectTrusted());
 				if (controller.signal.aborted) return;

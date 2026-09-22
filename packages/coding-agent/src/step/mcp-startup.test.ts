@@ -12,6 +12,8 @@ vi.mock("./config-toml.ts", () => ({ readGlobalStepConfig: () => config.value })
 vi.mock("./plugins.ts", () => ({
 	defaultStepPluginsDir: () => "/unused-test-plugins",
 	listStepPluginDirectories: async () => [],
+	ensureBuiltinPluginsInstalled: async () => ({ installed: [], warnings: [] }),
+	provisionBuiltinPlugin: async () => undefined,
 }));
 vi.mock("./mcp-oauth.ts", () => ({ hasStoredMcpOAuthCredential: () => false }));
 const cleanups: Array<() => Promise<void>> = [];
