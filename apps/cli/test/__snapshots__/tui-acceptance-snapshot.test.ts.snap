@@ -1,0 +1,148 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`A. 欢迎屏快照 > 中终端走方块 mark 档（A1） > welcome-mark-50 1`] = `
+[
+  "╭────────────────────────────────────────────────╮",
+  "│    ██ ██                                       │",
+  "│    ▄▄      model  step-3.8                     │",
+  "│    ▀▀      cwd    /tmp/project                 │",
+  "│ ██ ██                                          │",
+  "│                                                │",
+  "│ Tips                                           │",
+  "│ /cron      View and manage scheduled tasks.    │",
+  "│ /goal      Set a goal and keep working toward  │",
+  "│            it across turns.                    │",
+  "│ ultracode  Include this keyword in your prompt │",
+  "│             to enable parallel subagents.      │",
+  "╰────────────────────────────────────────────────╯",
+  "",
+]
+`;
+
+exports[`A. 欢迎屏快照 > 宽终端走小鸟档（A1/A2/A4） > welcome-bird-100 1`] = `
+[
+  "╭─ v0.3.2 ─────────────────────────────────────────────────────────────────────────────────────────╮",
+  "│       ▄▄▄▄                                                                                       │",
+  "│     ▄      ▄                                                                                     │",
+  "│        ▄   ▄▄▄▄▄▄▄                                                                               │",
+  "│                ▄▄      session  sess-1234                                                        │",
+  "│    ▄       ▄▄          model    step-3.8 · high                                                  │",
+  "│   ▄▀▄▄▄▄▄▄▄▀▀▄▀▀▀▄     cwd      /Users/demo/work/project                                         │",
+  "│     ▄▄▄▄▄ ▄▄ ▄ ▄▄                                                                                │",
+  "│  ▄▄   ▄▄    ▄▄   ▄▄                                                                              │",
+  "│    ▀▀▀        ▀▀▀                                                                                │",
+  "│                                                                                                  │",
+  "│ Tips                                                                                             │",
+  "│ /cron      View and manage scheduled tasks.                                                      │",
+  "│ /goal      Set a goal and keep working toward it across turns.                                   │",
+  "│ ultracode  Include this keyword in your prompt to enable parallel subagents.                     │",
+  "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯",
+  "",
+]
+`;
+
+exports[`A. 欢迎屏快照 > 窄终端走徽章档且不越界（A1/A4） > welcome-badge-30 1`] = `
+[
+  "╭────────────────────────────╮",
+  "│  STEP                      │",
+  "│                            │",
+  "│ model  step-3.8            │",
+  "│ cwd    /tmp/project        │",
+  "│                            │",
+  "│ Tips                       │",
+  "│ /cron                      │",
+  "│   View and manage schedule │",
+  "│   d tasks.                 │",
+  "│ /goal                      │",
+  "│   Set a goal and keep work │",
+  "│   ing toward it across tur │",
+  "│   ns.                      │",
+  "│ ultracode                  │",
+  "│   Include this keyword in  │",
+  "│   your prompt to enable pa │",
+  "│   rallel subagents.        │",
+  "╰────────────────────────────╯",
+  "",
+]
+`;
+
+exports[`B. 用户消息快照与底色 > 灰底整条 + › gutter（B1） > user-message-40 1`] = `
+[
+  "› 帮我看下 main.ts 里",
+  "",
+  "  第二个函数",
+  "",
+]
+`;
+
+exports[`C. 助手消息快照 > thinking + 回答 + 代码块（C1/C2/I2） > assistant-message-72 1`] = `
+[
+  "• thinking",
+  "  用户要一个示例。我先想一下结构，再决定示例语言。",
+  "",
+  "• ## 示例",
+  "",
+  "  下面是一个函数：",
+  "",
+  "  ts",
+  "    const greet = (name: string) => \`hi \${name}\`;",
+  "",
+  "  行内 code 与 强调。",
+  "",
+]
+`;
+
+exports[`D. 工具执行流快照 > 进行中/成功/失败三态（D1/D6） > tool-error-72 1`] = `
+[
+  "✗ scan ./src for todos",
+  "  └ boom",
+  "    ↳ 可回复「重试」让模型换一种方式，或补充说明预期结果",
+  "",
+]
+`;
+
+exports[`D. 工具执行流快照 > 进行中/成功/失败三态（D1/D6） > tool-success-72 1`] = `
+[
+  "● scan ./src for todos",
+  "  └ 3 matches",
+  "",
+]
+`;
+
+exports[`F/G. 选中样式与页脚快照 > 下拉选中行加粗 + accent（F4） > select-list-60 1`] = `
+[
+  "  model                           Select model",
+  "→ permissions                     Permission mode",
+  "  effort                          Thinking level",
+]
+`;
+
+exports[`F/G. 选中样式与页脚快照 > 页脚 step 呈现（G1/G2/G4） > footer-step-120 1`] = `
+[
+  "⏵ Ask · step-3.8 · high · /tmp/project                                                                  88% context left",
+]
+`;
+
+exports[`I. Markdown 渲染快照 > 全块型 + 代码高亮（I1/I2/I3） > markdown-blocks-60 1`] = `
+[
+  " # 标题一",
+  "",
+  " 段落，带 加粗、斜体、删除、行内码 和 链接",
+  " (https://example.com)。",
+  "",
+  " - 列表项 A",
+  " - 列表项 B",
+  "",
+  " │ 引用块",
+  "",
+  " 列1  列2",
+  " ━━━  ━━━",
+  " a    b",
+  "",
+  " \`\`\`ts",
+  "   const x: number = 42;",
+  " \`\`\`",
+  "",
+  " ———",
+]
+`;

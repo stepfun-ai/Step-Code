@@ -1,0 +1,16 @@
+{
+  "name": "builtin",
+  "description": "Plugins that ship inside the StepCode binary. Updated with the CLI itself, not fetched.",
+  "plugins": [
+    {
+      "name": "playwright",
+      "description": "Browser automation and end-to-end testing MCP server by Microsoft.",
+      "source": "./playwright"
+    },
+    {
+      "name": "steppage",
+      "description": "Deploy and manage static sites on StepFun's Page hosting product.",
+      "source": "./steppage"
+    }
+  ]
+}

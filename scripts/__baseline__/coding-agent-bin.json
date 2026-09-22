@@ -1,0 +1,6 @@
+{
+	"note": "S0-6 baseline snapshot of packages/coding-agent's entry surface, captured at the refactor baseline (1cfed08). check-coding-agent-entry-freeze.mjs fails only when the live surface GROWS beyond this set (new bin key or new export subpath). Shrinking is expected and allowed (step 1 removes pi/./rpc-entry/./client; step 3 moves step out).",
+	"package": "@step-harness/coding-agent",
+	"bin": ["pi", "step"],
+	"exports": [".", "./rpc-entry", "./client"]
+}

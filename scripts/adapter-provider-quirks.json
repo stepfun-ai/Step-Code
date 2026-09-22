@@ -1,0 +1,26 @@
+{
+	"_comment": "MAJ-7 sanctioned adapter compatibility quirks. Files listed here may branch on `model.provider === \"<literal>\"` or `!== \"<literal>\"` (either operand order) to tune headers / params / thinking format / capabilities for real gateway compatibility. This is NOT adapter selection — the dispatch key is always model.api (models.ts byApi[model.api] / compat.ts getApiProvider). scripts/check-no-provider-dispatch.mjs asserts that NO provider-literal branch appears in packages/providers/src/api/ outside this whitelist, and that no `switch (provider)` selects an adapter. Keys are paths relative to packages/providers/src. Field-to-field `X.provider === model.provider` comparisons are not quirks and are excluded by the literal-only regex. Do NOT widen this list to fold in coding-agent files — that scope is intentionally excluded (product-side attribution is legal there; A1 handles step-provider).",
+	"quirks": {
+		"api/openai-responses.ts": ["openrouter", "github-copilot", "xai"],
+		"api/anthropic-messages.ts": ["github-copilot", "anthropic"],
+		"api/openai-completions.ts": [
+			"opencode-go",
+			"github-copilot",
+			"openai",
+			"zai",
+			"zai-coding-cn",
+			"together",
+			"moonshotai",
+			"moonshotai-cn",
+			"openrouter",
+			"cloudflare-workers-ai",
+			"cloudflare-ai-gateway",
+			"nvidia",
+			"ant-ling",
+			"deepseek",
+			"cerebras",
+			"xai",
+			"opencode"
+		]
+	}
+}

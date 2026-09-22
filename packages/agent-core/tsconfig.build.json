@@ -1,0 +1,14 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@step-harness/telemetry": ["../telemetry/dist/index.d.ts"],
+			"@step-harness/providers": ["../providers/dist/index.d.ts"],
+			"@step-harness/providers/*": ["../providers/dist/*.d.ts", "../providers/dist/providers/*.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.d.ts", "src/**/*.d.ts"]
+}

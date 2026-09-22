@@ -1,0 +1,12 @@
+{
+  "id": "playwright",
+  "name": "Playwright",
+  "description": "Browser automation and end-to-end testing MCP server by Microsoft. Drives web pages, takes screenshots, fills forms, clicks elements and runs automated browser test flows.",
+  "version": "0.1.0",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    }
+  }
+}

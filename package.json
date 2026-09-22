@@ -1,0 +1,81 @@
+{
+	"name": "stepcode",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"apps/*",
+		"packages/*",
+		"packages/extensions/*",
+		"packages/coding-agent/examples/extensions/with-deps",
+		"packages/coding-agent/examples/extensions/sandbox",
+		"packages/coding-agent/examples/extensions/gondolin"
+	],
+	"packageManager": "pnpm@9.15.9",
+	"scripts": {
+		"clean": "pnpm -r --if-present clean",
+		"build": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
+		"build:offline": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build:offline && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
+		"build:binaries": "bash scripts/build-binaries.sh --product step --offline-model-data",
+		"check": "biome check --write --error-on-warnings . && pnpm run check:pinned-deps && pnpm run check:ts-imports && pnpm run check:layer-direction && pnpm run check:ui-layer && pnpm run check:workspace-registry && pnpm run check:tui-no-ai && pnpm run check:coding-agent-entry-freeze && pnpm run check:contracts-deps-empty && pnpm run check:derived-compat-only && pnpm run check:no-provider-dispatch && pnpm run check:metadata-not-in-dispatch && pnpm run check:no-secret-leak && pnpm run check:legacy-scope-prefix && pnpm run check:no-observability && pnpm run check:public-boundary && tsgo --noEmit && pnpm run check:browser-smoke",
+		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
+		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
+		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",
+		"check:layer-direction": "node scripts/check-layer-direction.mjs",
+		"check:ui-layer": "node scripts/check-ui-layer.mjs",
+		"check:workspace-registry": "node scripts/check-workspace-registry.mjs",
+		"check:tui-no-ai": "node scripts/check-tui-no-ai.mjs",
+		"check:coding-agent-entry-freeze": "node scripts/check-coding-agent-entry-freeze.mjs",
+		"check:contracts-deps-empty": "node scripts/check-contracts-deps-empty.mjs",
+		"check:derived-compat-only": "node scripts/check-derived-compat-only.mjs",
+		"check:no-provider-dispatch": "node scripts/check-no-provider-dispatch.mjs",
+		"check:metadata-not-in-dispatch": "node scripts/check-metadata-not-in-dispatch.mjs",
+		"check:no-secret-leak": "node scripts/check-no-secret-leak.mjs",
+		"check:legacy-scope-prefix": "node scripts/check-legacy-scope-prefix.mjs",
+		"check:no-observability": "node scripts/check-no-observability.mjs",
+		"check:public-boundary": "node scripts/check-public-boundary.mjs",
+		"generate:models": "npm --prefix packages/providers run generate-models",
+		"hydrate:model-data": "npm --prefix packages/providers run hydrate-model-data",
+		"check:model-data": "npm --prefix packages/providers run check:model-data",
+		"generate:model-catalog": "npm --prefix packages/providers run generate-model-catalog",
+		"diff:model-catalog": "node scripts/diff-model-catalog.mjs",
+		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
+		"profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
+		"step": "tsx --tsconfig tsconfig.json apps/cli/src/main.ts",
+		"test": "pnpm run test:scripts && pnpm -r --if-present test",
+		"test:scripts": "node --test scripts/*.test.mjs",
+		"version:patch": "pnpm -r exec npm version patch --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:minor": "pnpm -r exec npm version minor --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:major": "pnpm -r exec npm version major --no-git-tag-version && node scripts/sync-versions.js && pnpm install --lockfile-only --ignore-scripts",
+		"version:set": "pnpm -r exec npm version --no-git-tag-version",
+		"release:local": "node scripts/local-release.mjs",
+		"release:bundle": "node infra/release/release-bundle.mjs",
+		"release:fix-links": "node scripts/release-notes.mjs fix-github-releases",
+		"prepare": "husky"
+	},
+	"devDependencies": {
+		"@anthropic-ai/sandbox-runtime": "0.0.26",
+		"@biomejs/biome": "2.3.5",
+		"@types/node": "22.19.19",
+		"@typescript/native-preview": "7.0.0-dev.20260120.1",
+		"esbuild": "0.28.1",
+		"husky": "9.1.7",
+		"shx": "0.4.0",
+		"tsx": "4.22.1",
+		"typescript": "5.9.3",
+		"yaml": "2.9.0"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"version": "0.1.0",
+	"pnpm": {
+		"overrides": {
+			"protobufjs": "7.6.5",
+			"rimraf": "6.1.2",
+			"gaxios>rimraf": "6.1.2"
+		}
+	},
+	"dependencies": {
+		"smol-toml": "1.8.0"
+	}
+}

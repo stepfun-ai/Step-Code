@@ -1,0 +1,47 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"paths": {
+			"*": ["./*"],
+			"@step-harness/telemetry": ["./packages/telemetry/src/index.ts"],
+			"@step-harness/telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
+			"@step-harness/providers": ["./packages/providers/src/index.ts"],
+			"@step-harness/providers/step-provider": ["./packages/providers/src/step-provider/index.ts"],
+			"@step-harness/providers/oauth": ["./packages/providers/src/oauth.ts"],
+			"@step-harness/providers/*": ["./packages/providers/src/*.ts", "./packages/providers/src/providers/*.ts"],
+			"@step-harness/providers/dist/*": ["./packages/providers/src/*"],
+			"@step-harness/agent-core": ["./packages/agent-core/src/index.ts"],
+			"@step-harness/agent-core/node": ["./packages/agent-core/src/node.ts"],
+			"@step-harness/agent-core/session/testing": [
+				"./packages/agent-core/src/harness/session/testing/index.ts"
+			],
+			"@step-harness/agent-core/*": ["./packages/agent-core/src/*"],
+			"@step-harness/coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@step-harness/coding-agent/*": ["./packages/coding-agent/src/*"],
+			"typebox": ["./node_modules/typebox"],
+			"@step-harness/pi-tui": ["./packages/tui/src/index.ts"],
+			"@step-harness/pi-tui/*": ["./packages/tui/src/*"],
+			"@step-harness/cli": ["./apps/cli/src/index.ts"],
+			"@step-harness/contracts": ["./packages/contracts/src/in-process/index.ts"],
+			"@step-harness/contracts/wire": ["./packages/contracts/src/wire/index.ts"],
+			"@step-harness/config": ["./packages/config/src/index.ts"],
+			"@earendil-works/pi-telemetry": ["./packages/telemetry/src/index.ts"],
+			"@earendil-works/pi-telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
+			"@earendil-works/pi-ai": ["./packages/providers/src/index.ts"],
+			"@earendil-works/pi-ai/oauth": ["./packages/providers/src/oauth.ts"],
+			"@earendil-works/pi-ai/*": ["./packages/providers/src/*.ts", "./packages/providers/src/providers/*.ts"],
+			"@earendil-works/pi-agent-core": ["./packages/agent-core/src/index.ts"],
+			"@earendil-works/pi-agent-core/node": ["./packages/agent-core/src/node.ts"],
+			"@earendil-works/pi-agent-core/*": ["./packages/agent-core/src/*"],
+			"@earendil-works/pi-coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@earendil-works/pi-coding-agent/*": ["./packages/coding-agent/src/*"],
+			"@earendil-works/pi-tui": ["./packages/tui/src/index.ts"],
+			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"]
+		}
+	},
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "apps/cli/src/**/*", "apps/cli/test/**/*"],
+	"exclude": ["**/dist/**", "packages/coding-agent/examples/extensions/gondolin/**"]
+}

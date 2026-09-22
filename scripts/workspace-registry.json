@@ -1,0 +1,25 @@
+{
+	"note": "S0-4 workspace registry. Every workspace member matched by the workspaces globs must have a row here (matched by package name). New packages must use the @step-harness/* scope; the six @earendil-works/pi-* packages are grandfathered; example extensions are exempt. Checked by scripts/check-workspace-registry.mjs.",
+	"grandfatheredScope": "@earendil-works/pi-",
+	"requiredScope": "@step-harness/",
+	"baseline": [
+		"@step-harness/agent-core",
+		"@step-harness/providers",
+		"@step-harness/coding-agent",
+		"@step-harness/telemetry",
+		"@step-harness/pi-tui"
+	],
+	"members": [
+		{ "name": "@step-harness/agent-core", "dir": "packages/agent-core", "role": "engine", "reason": "通用 Agent loop 与工具调用时序" },
+		{ "name": "@step-harness/providers", "dir": "packages/providers", "role": "engine", "reason": "模型 API/provider、dialect/catalog" },
+		{ "name": "@step-harness/coding-agent", "dir": "packages/coding-agent", "role": "product", "reason": "编码 Agent 产品逻辑(prompt/tools/permissions)" },
+		{ "name": "@step-harness/telemetry", "dir": "packages/telemetry", "role": "engine", "reason": "通用 telemetry contract/实现" },
+		{ "name": "@step-harness/pi-tui", "dir": "packages/tui", "role": "renderer", "reason": "终端渲染原语，保持零 AI 依赖" },
+		{ "name": "@step-harness/cli", "dir": "apps/cli", "role": "app", "reason": "唯一进程入口宿主骨架(S0 起)；进程生命周期/argv/退出码" },
+		{ "name": "@step-harness/contracts", "dir": "packages/contracts", "role": "contract", "reason": "host 到 agent 的稳定契约(in-process facade 类型 + wire 帧),依赖为空" },
+		{ "name": "@step-harness/config", "dir": "packages/config", "role": "engine", "reason": "产品中立的配置格式/加载与启动迁移(config/migrations),不含资源解析" },
+		{ "name": "pi-extension-with-deps", "dir": "packages/coding-agent/examples/extensions/with-deps", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-sandbox", "dir": "packages/coding-agent/examples/extensions/sandbox", "role": "example", "reason": "扩展示例" },
+		{ "name": "pi-extension-gondolin", "dir": "packages/coding-agent/examples/extensions/gondolin", "role": "example", "reason": "扩展示例(tsconfig 排除)" }
+	]
+}
