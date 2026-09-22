@@ -240,12 +240,34 @@ release_bundle_upload_prod:
     - pnpm install --frozen-lockfile --ignore-scripts
     - pnpm run hydrate:model-data
     - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --upload
+    - |
+      base="${STEP_RELEASE_PROD_BASE_URL%/}"
+      version="${STEP_RELEASE_VERSION#v}"
+      cat > dist/release/publish.env <<EOF
+      STEP_RELEASE_VERSION=$version
+      STEP_RELEASE_TAG=${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_NAME=stepcode ${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_INSTALL_URL=$base/install.sh
+      STEP_RELEASE_INSTALL_PS1_URL=$base/install.ps1
+      STEP_RELEASE_LATEST_URL=$base/latest.json
+      STEP_RELEASE_MANIFEST_URL=$base/$version/manifest.json
+      STEP_RELEASE_DARWIN_ARM64_URL=$base/$version/step-$version-darwin-arm64.tar.gz
+      STEP_RELEASE_DARWIN_X64_URL=$base/$version/step-$version-darwin-x64.tar.gz
+      STEP_RELEASE_LINUX_ARM64_URL=$base/$version/step-$version-linux-arm64.tar.gz
+      STEP_RELEASE_LINUX_X64_URL=$base/$version/step-$version-linux-x64.tar.gz
+      STEP_RELEASE_WINDOWS_ARM64_URL=$base/$version/step-$version-windows-arm64.zip
+      STEP_RELEASE_WINDOWS_X64_URL=$base/$version/step-$version-windows-x64.zip
+      EOF
+  artifacts:
+    reports:
+      dotenv: dist/release/publish.env
+    expire_in: 7 days
 
 publish_release:
   stage: publish
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
-    - job: release_bundle_upload
+    - job: release_bundle_upload_prod
       artifacts: true
   rules:
     - if: '$CI_COMMIT_TAG'

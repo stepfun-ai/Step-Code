@@ -9,6 +9,31 @@ import { parse } from "yaml";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ciConfig = parse(readFileSync(path.join(repoRoot, ".gitlab-ci.yml"), "utf8"));
 
+test("publish_release uses production release metadata", () => {
+	const productionUpload = ciConfig.release_bundle_upload_prod;
+	const publishRelease = ciConfig.publish_release;
+	assert.ok(productionUpload, "expected release_bundle_upload_prod to exist");
+	assert.ok(publishRelease, "expected publish_release to exist");
+	assert.deepEqual(productionUpload.artifacts, {
+		reports: { dotenv: "dist/release/publish.env" },
+		expire_in: "7 days",
+	});
+	assert.deepEqual(publishRelease.needs, [{ job: "release_bundle_upload_prod", artifacts: true }]);
+
+	const productionScript = productionUpload.script.join("\n");
+	assert.match(productionScript, /base="\$\{STEP_RELEASE_PROD_BASE_URL%\/\}"/);
+	for (const variable of [
+		"STEP_RELEASE_TAG",
+		"STEP_RELEASE_NAME",
+		"STEP_RELEASE_INSTALL_URL",
+		"STEP_RELEASE_MANIFEST_URL",
+		"STEP_RELEASE_DARWIN_ARM64_URL",
+		"STEP_RELEASE_WINDOWS_X64_URL",
+	]) {
+		assert.match(productionScript, new RegExp(`^${variable}=`, "m"));
+	}
+});
+
 test("notify_release runs automatically only after the Step CLI release", () => {
 	const job = ciConfig.notify_release;
 	assert.ok(job, "expected notify_release to exist");
