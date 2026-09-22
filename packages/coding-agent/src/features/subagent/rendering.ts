@@ -24,13 +24,13 @@ const COLLAPSED_OUTPUT_LINES = 8;
 /** Rows the live widget will show before collapsing the rest into a counter. */
 const WIDGET_MAX_ROWS = 8;
 /**
- * Fixed width for the trailing "<elapsed> · <tokens>" column.
+ * Fixed width for the trailing "<elapsed> · ↓ <tokens> tokens" column.
  *
  * Sizing it to the widest value actually present made the column jump between
  * renders and between rows, so it is pinned instead: 6 columns of elapsed, the
- * 3-column separator, and 7 for "↓999.9k".
+ * 3-column separator, 8 for "↓ 999.9k", and 7 for the " tokens" unit.
  */
-const WIDGET_METRIC_WIDTH = 16;
+const WIDGET_METRIC_WIDTH = 24;
 
 function formatUsage(usage: StepSubagentUsage, model?: string): string {
 	const parts: string[] = [];
@@ -121,28 +121,6 @@ function formatTokenCount(value: number): string {
 }
 
 /**
- * One row's activity text plus which end to keep when it does not fit.
- *
- * The most specific live signal wins: the tool the child is running, else its
- * streamed text, else the task it was given (all a queued record has). A tool
- * row keeps its head so the tool name stays readable; streamed text keeps its
- * tail because the newest words are the useful ones.
- */
-function recordActivity(record: StepSubagentResultRecord): { text: string; bias: "head" | "tail" } {
-	if (record.activeTool) {
-		const args = record.activeToolArgs ? ` ${record.activeToolArgs}` : "";
-		return { text: `${record.activeTool}:${args}`.trimEnd(), bias: "head" };
-	}
-	// While a lane runs, its newest words are the status; once it settles the same
-	// field holds a conclusion, which reads from the front.
-	if (record.activeText?.trim()) {
-		return { text: record.activeText, bias: record.status === "running" ? "tail" : "head" };
-	}
-	if (record.status !== "running" && record.errorMessage) return { text: record.errorMessage, bias: "head" };
-	return { text: record.task, bias: "head" };
-}
-
-/**
  * Flatten to one line and fit it to `width` **display columns**.
  *
  * Measured with visibleWidth rather than String#length: CJK glyphs occupy two
@@ -153,7 +131,7 @@ function recordActivity(record: StepSubagentResultRecord): { text: string; bias:
  * Deliberately not `truncateText`, which appends a "[output truncated]" marker
  * on its own line — fine for a tool body, fatal for a single widget row.
  */
-function fitLine(value: string, width: number, bias: "head" | "tail"): string {
+function fitLine(value: string, width: number): string {
 	const flat = value.replace(/\s+/gu, " ").trim();
 	if (width <= 0) return "";
 	if (visibleWidth(flat) <= width) return flat;
@@ -161,29 +139,39 @@ function fitLine(value: string, width: number, bias: "head" | "tail"): string {
 	// Walked by hand rather than via truncateToWidth: that helper wraps its
 	// ellipsis in ANSI resets, which would clear the row's color mid-title on
 	// text that carries no escapes of its own.
-	const characters = Array.from(flat);
 	const kept: string[] = [];
 	let used = 0;
-	if (bias === "head") {
-		for (const character of characters) {
-			const next = visibleWidth(character);
-			if (used + next > width - 1) break;
-			used += next;
-			kept.push(character);
-		}
-		return `${kept.join("")}\u2026`;
-	}
-	for (let index = characters.length - 1; index >= 0; index -= 1) {
-		const next = visibleWidth(characters[index]);
+	for (const character of Array.from(flat)) {
+		const next = visibleWidth(character);
 		if (used + next > width - 1) break;
 		used += next;
-		kept.push(characters[index]);
+		kept.push(character);
 	}
-	return `\u2026${kept.reverse().join("")}`;
+	return `${kept.join("")}\u2026`;
+}
+
+/**
+ * Everything `render` draws except the clock, as one comparable string.
+ *
+ * The widget is republished on every child event, text deltas included, and a
+ * publish costs the host a widget teardown plus a full redraw. Row titles are
+ * now fixed, so a delta can only move the token column; when this signature is
+ * unchanged there is nothing new to draw and the caller skips the publish.
+ * Elapsed keeps advancing either way — render() reads the clock, and the
+ * working indicator already redraws.
+ */
+export function subagentListSignature(details: StepSubagentDetails): string {
+	const rows = details.results
+		.slice(0, WIDGET_MAX_ROWS)
+		.map((record) => [record.status, record.agent, record.task, record.usage.output].join("\u0000"));
+	return [details.results.length, ...rows].join("\u0001");
 }
 
 /**
  * Live list of a blocking subagent call's lanes, rendered under the editor.
+ *
+ * Each row is stable for the lane's lifetime apart from its status icon and
+ * metrics: the title is the task, not the child's live activity.
  *
  * Elapsed is computed in render() rather than stored, so the column advances on
  * the redraws the working indicator already triggers; no timer is needed. The
@@ -224,7 +212,9 @@ export class SubagentListWidget implements Component {
 		const shown = records.slice(0, WIDGET_MAX_ROWS);
 		const metrics = shown.map((record) => {
 			const tokens = record.usage.output;
-			return `${formatElapsed(record)}${tokens > 0 ? ` \u00b7 \u2193${formatTokenCount(tokens)}` : ""}`;
+			// Same shape as the working indicator's "· ↓ 1.2k tokens", so the two
+			// token readouts on screen read as one unit.
+			return `${formatElapsed(record)}${tokens > 0 ? ` \u00b7 \u2193 ${formatTokenCount(tokens)} tokens` : ""}`;
 		});
 		const metricWidth = WIDGET_METRIC_WIDTH;
 		const names = shown.map((record) => record.agent);
@@ -237,8 +227,12 @@ export class SubagentListWidget implements Component {
 			const fixed = 3 + 1 + 1 + nameWidth + 1 + metricWidth + 1;
 			// Never widen past the viewport: a terminal too narrow for a title drops
 			// it, and the final guard clips a row that still cannot fit.
-			const activity = recordActivity(record);
-			const title = fitLine(activity.text, width - fixed, activity.bias);
+			//
+			// The title is the lane's task and nothing else. It used to prefer the
+			// child's live tool call, then its streamed text, which rewrote every
+			// row on every delta: the column churned too fast to read and each
+			// change dragged the host through another republish and redraw.
+			const title = fitLine(record.task, width - fixed);
 			const gap = Math.max(1, width - fixed - visibleWidth(title) + 1);
 			const row = `   ${statusIcon(record.status, theme)} ${theme.fg("accent", name)} ${theme.fg("toolOutput", title)}${" ".repeat(gap)}${theme.fg("dim", metric.padStart(metricWidth))}`;
 			lines.push(visibleWidth(row) > width ? truncateToWidth(row, width, "\u2026") : row);

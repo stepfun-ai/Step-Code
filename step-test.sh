@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
 # Run the Step CLI straight from source, for manual/tmux testing of the TUI.
-#
-# Replaces the root pi-test.sh that commit 135ae6dc ("S1-C remove pi command")
-# deleted along with the rest of the pi entrypoints; it was never replaced, so
-# AGENTS.md kept pointing at a script that no longer existed. This wraps the
-# same thing apps/cli's "dev" script runs, so it always reflects the working
-# tree rather than dist/.
-#
 #   ./step-test.sh                  # run from source
 #   ./step-test.sh --no-env         # ...with provider credentials stripped
 #
