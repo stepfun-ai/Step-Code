@@ -85,6 +85,14 @@ test("rendering does not clobber the not-configured guard (sh)", async () => {
 	);
 });
 
+test("install.sh ends with the CLI launch command", async () => {
+	const source = await readFile(shPath, "utf8");
+	const pathSetupIndex = source.lastIndexOf("\tconfigure_shell_path");
+	const launchHintIndex = source.lastIndexOf("\tprintf '\\nDone. Run: step\\n'");
+	assert.ok(pathSetupIndex >= 0, "main must configure PATH before printing the launch command");
+	assert.ok(launchHintIndex > pathSetupIndex, "the final install guidance must tell users to run step");
+});
+
 test(
 	"unrendered install.sh fails fast with the not-configured error",
 	{ skip: commandAvailable("bash", "--version") ? false : "bash unavailable" },
