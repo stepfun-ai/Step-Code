@@ -26,6 +26,7 @@ packages/ai/src/providers/.model-generation-*/
 
 # Package specific
 .npm/
+.step-cli/
 coverage/
 .nyc_output/
 .pi_config/
