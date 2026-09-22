@@ -82,9 +82,9 @@ jobs:
           build_root="$(mktemp -d)"
           trap 'rm -rf "${build_root}"' EXIT
           tar -xzf "release-assets/step-${VERSION}-source.tar.gz" -C "${build_root}"
-          STEP_CLI_BUILD_VERSION="${VERSION}" \
-          STEP_CLI_BUILD_CHANNEL="release" \
-          STEP_CLI_BUILD_COMMIT="${GITHUB_SHA:0:12}" \
+          STEPCODE_BUILD_VERSION="${VERSION}" \
+          STEPCODE_BUILD_CHANNEL="release" \
+          STEPCODE_BUILD_COMMIT="${GITHUB_SHA:0:12}" \
           "${build_root}/step-${VERSION}/scripts/build-binaries.sh" \
             --product step \
             --offline-model-data \

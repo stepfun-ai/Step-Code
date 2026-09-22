@@ -13,7 +13,7 @@ variables:
   STEP_TOOLS_BASE_URL: "https://gitlab.basemind.com/api/v4/projects/10933/packages/generic/search-tools/1.0.0"
   STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
   STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
-  STEP_CLI_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
+  STEPCODE_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
   # Test release notifications use the same built-in token as stepcli-bot when
   # ENV_NAME=test. Both values may be overridden by masked CI variables for
   # other environments or during token rotation.
