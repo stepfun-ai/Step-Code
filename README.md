@@ -1,6 +1,6 @@
 # Step Code
 
-![test\.jpg](图片和附件/test.jpg)
+![test\.jpg](images-and-attachments/test.jpg)
 
 <h3><strong>Swift execution, long-horizon reliability, and high token efficiency.</strong></h3>
 
@@ -8,7 +8,7 @@
 
 Step Code runs in your terminal and handles the full task loop—reading code, making changes, and running tests\. It works with the Step provider and discovers the available Step models after sign\-in\. MCP servers, Agent Skills, plugins, and multi\-agent orchestration work out of the box; you can delegate long\-running tasks to `/goal` and let Step Code drive them forward autonomously\.
 
-![test\.jpg](图片和附件/test%201.jpg)
+![test\.jpg](images-and-attachments/test%201.jpg)
 
 ## Why Step Code
 

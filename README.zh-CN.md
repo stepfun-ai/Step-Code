@@ -1,6 +1,6 @@
 # Step Code Readme
 
-![test\.jpg](图片和附件/test.jpg)
+![test\.jpg](images-and-attachments/test.jpg)
 
 <h3><strong>迅捷执行，长程可靠，token 更省。</strong></h3>
 
@@ -8,7 +8,7 @@
 
 Step Code 运行于终端，单轮任务即可完成代码阅读、修改与测试验证的完整闭环。它与 Step（StepFun）provider 深度协同，登录后从 Step 服务发现可用模型。MCP 工具、Agent Skills、插件与多代理编排开箱即用；长任务可通过 /goal 托管，由 Step Code 持续自主推进。
 
-![test\.jpg](图片和附件/test%201.jpg)
+![test\.jpg](images-and-attachments/test%201.jpg)
 
 ## Why Step Code
 
