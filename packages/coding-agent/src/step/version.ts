@@ -8,7 +8,7 @@
  */
 
 /** Product version used by source/dev runs until a release tag is embedded. */
-export const STEPCODE_FALLBACK_VERSION = "0.3.1";
+export const STEPCODE_FALLBACK_VERSION = "0.1.0";
 
 /** Explicit local override, useful for smoke tests and embedders. */
 export const STEPCODE_VERSION_OVERRIDE_ENV = "STEPCODE_VERSION_OVERRIDE";

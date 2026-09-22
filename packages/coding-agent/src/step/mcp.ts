@@ -19,10 +19,11 @@ import {
 	readStepPluginManifest,
 	type StepPluginProvision,
 } from "./plugins.ts";
+import { STEPCODE_VERSION } from "./version.ts";
 
 const MCP_STARTUP_TIMEOUT_SEC = 30;
 const MCP_CALL_TIMEOUT_SEC = 300;
-const CLIENT_INFO = { name: "step-harness", version: "0.3.1" } as const;
+const CLIENT_INFO = { name: "step-harness", version: STEPCODE_VERSION.value } as const;
 const STEPPAGE_SERVER_NAME = "steppage__steppage";
 const STEPPAGE_DEPLOY_TOOL_NAME = "page_deploy";
 const STEPPAGE_MANAGEMENT_URL = "https://platform.stepfun.com/sites";

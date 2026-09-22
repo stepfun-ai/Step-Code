@@ -84,7 +84,7 @@ async function main(): Promise<void> {
 
 	// 场景 1：欢迎屏（A 区）
 	const welcome = new StepWelcomeComponent(() => ({
-		version: "0.3.1",
+		version: "0.1.0",
 		model: "step-3.5-flash",
 		thinkingLevel: "high",
 		workspaceRoot: "/Users/demo/Documents/step-harness",
