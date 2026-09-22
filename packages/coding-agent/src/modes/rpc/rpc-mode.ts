@@ -774,6 +774,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost): Promise<
 			return;
 		}
 
+		// `null` is valid JSON but carries no command fields. Guard before casting:
+		// otherwise handleCommand reads command.id and throws, the catch below reads
+		// command.id again and re-throws, and that second throw escapes handleInputLine
+		// (invoked as `void handleInputLine(line)`) as an unhandled rejection that kills
+		// the whole RPC agent. Emit an error response instead, like other bad input.
+		if (parsed === null || typeof parsed !== "object") {
+			output(error(undefined, "parse", "Failed to parse command: expected a JSON object"));
+			await waitForRawStdoutBackpressure();
+			return;
+		}
+
 		const command = parsed as RpcCommand;
 		try {
 			const response = await handleCommand(command);
