@@ -14,7 +14,7 @@ Step Code 运行于终端，单轮任务即可完成代码阅读、修改与测�
 
 Step Code 内置 StepPage 发布能力：本地页面构建完成后，只需一条命令即可发布为可访问的静态网站，让开发、调试与交付在同一个终端中完成。
 
-![StepPage 发布能力演示](https://static-openapi.stepfun.com/resource/demo1-small.gif)
+![StepPage 发布能力演示](https://static-openapi.stepfun.com/resource/demo1-v2.gif)
 
 ## Why Step Code
 

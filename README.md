@@ -14,7 +14,7 @@ Step Code runs in your terminal and handles the full task loop—reading code, m
 
 Step Code comes with built-in StepPage publishing. Once your local page is ready, you can publish it as an accessible static website with a single command—bringing development, debugging, and delivery all within the same terminal\.
 
-![StepPage publishing demo](https://static-openapi.stepfun.com/resource/demo1-small.gif)
+![StepPage publishing demo](https://static-openapi.stepfun.com/resource/demo1-v2.gif)
 
 ## Why Step Code
 
