@@ -107,7 +107,7 @@ describe("AgentSession retry", () => {
 		const settingsManager = SettingsManager.create(tempDir, tempDir);
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = await createModelRegistry(authStorage, tempDir);
-		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
 		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries, baseDelayMs: 1 } });
 
 		session = new AgentSession({
@@ -209,7 +209,7 @@ describe("AgentSession retry", () => {
 		const settingsManager = SettingsManager.create(tempDir, tempDir);
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = await createModelRegistry(authStorage, tempDir);
-		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
 		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
 		session = new AgentSession({
 			agent,
@@ -294,7 +294,7 @@ describe("AgentSession retry", () => {
 		const settingsManager = SettingsManager.create(tempDir, tempDir);
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = await createModelRegistry(authStorage, tempDir);
-		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
 		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
 
 		session = new AgentSession({

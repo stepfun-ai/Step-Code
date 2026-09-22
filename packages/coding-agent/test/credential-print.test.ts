@@ -5,21 +5,40 @@ import { AuthCommandError, isAuthCommandHelp, parseAuthCommand } from "../src/cl
 import { resolveCredentialForPrint } from "../src/cli/credential-print.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { createStepProviderConfig } from "../src/features/step-provider/index.ts";
 import { main } from "../src/main.ts";
 
 async function createRuntime(credentials: AuthStorage): Promise<ModelRuntime> {
-	return ModelRuntime.create({
+	const runtime = await ModelRuntime.create({
 		credentials,
 		modelsPath: null,
 		modelsStore: new InMemoryModelsStore(),
 		allowModelNetwork: false,
 	});
+	runtime.registerProvider(
+		"step",
+		createStepProviderConfig({
+			env: {},
+			models: [
+				{
+					id: "step-5-preview",
+					name: "Step 5 Preview",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 8192,
+				},
+			],
+		}),
+	);
+	return runtime;
 }
 
 describe("credential print commands", () => {
 	test("prints a resolved API key", async () => {
-		const runtime = await createRuntime(AuthStorage.inMemory({ openai: { type: "api_key", key: "test-api-key" } }));
-		const args = parseArgs(["--provider", "openai"]);
+		const runtime = await createRuntime(AuthStorage.inMemory({ step: { type: "api_key", key: "test-api-key" } }));
+		const args = parseArgs(["--provider", "step"]);
 
 		await expect(resolveCredentialForPrint(args, runtime, "api_key")).resolves.toBe("test-api-key");
 	});
@@ -27,7 +46,7 @@ describe("credential print commands", () => {
 	test("prints bearer tokens resolved from a stored OAuth credential", async () => {
 		const runtime = await createRuntime(
 			AuthStorage.inMemory({
-				anthropic: {
+				step: {
 					type: "oauth",
 					access: "header-test-token",
 					refresh: "test-refresh-token",
@@ -35,14 +54,14 @@ describe("credential print commands", () => {
 				},
 			}),
 		);
-		const args = parseArgs(["--provider", "anthropic"]);
+		const args = parseArgs(["--provider", "step"]);
 
 		await expect(resolveCredentialForPrint(args, runtime, "bearer_token")).resolves.toBe("header-test-token");
 	});
 
 	test("refreshes an expired OAuth token before printing it", async () => {
 		const storage = AuthStorage.inMemory({
-			anthropic: {
+			step: {
 				type: "oauth",
 				access: "old-test-token",
 				refresh: "test-refresh-token",
@@ -56,14 +75,14 @@ describe("credential print commands", () => {
 			refresh: "test-refresh-token",
 			expires: Date.now() + 60 * 60 * 1000,
 		}));
-		const oauth = runtime.getProvider("anthropic")?.auth.oauth;
-		if (!oauth) throw new Error("Anthropic OAuth provider is not registered");
+		const oauth = runtime.getProvider("step")?.auth.oauth;
+		if (!oauth) throw new Error("Step OAuth provider is not registered");
 		oauth.refresh = refresh;
-		const args = parseArgs(["--provider", "anthropic"]);
+		const args = parseArgs(["--provider", "step"]);
 
 		await expect(resolveCredentialForPrint(args, runtime, "bearer_token")).resolves.toBe("fresh-test-token");
 		expect(refresh).toHaveBeenCalledOnce();
-		expect(await storage.read("anthropic")).toMatchObject({ access: "fresh-test-token" });
+		expect(await storage.read("step")).toMatchObject({ access: "fresh-test-token" });
 	});
 
 	test("reports unknown auth options like package commands", async () => {
@@ -87,7 +106,7 @@ describe("credential print commands", () => {
 	test("parses credential commands and rejects invalid arguments or credential types", async () => {
 		const runtime = await createRuntime(
 			AuthStorage.inMemory({
-				anthropic: {
+				step: {
 					type: "oauth",
 					access: "test-token-not-to-be-printed",
 					refresh: "test-refresh-token",
@@ -123,8 +142,8 @@ describe("credential print commands", () => {
 		await expect(resolveCredentialForPrint(parseArgs([]), runtime, "api_key")).rejects.toThrow(
 			"requires --provider <provider> or --model <model>",
 		);
-		await expect(
-			resolveCredentialForPrint(parseArgs(["--provider", "anthropic"]), runtime, "api_key"),
-		).rejects.toThrow("configured with OAuth");
+		await expect(resolveCredentialForPrint(parseArgs(["--provider", "step"]), runtime, "api_key")).rejects.toThrow(
+			"configured with OAuth",
+		);
 	});
 });

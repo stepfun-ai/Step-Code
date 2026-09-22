@@ -32,13 +32,31 @@ function testModel(id: string) {
 	};
 }
 
+function registerTestAuthProvider(runtime: ModelRuntime, providerId = "test-provider", isSubscription = true): void {
+	runtime.registerProvider(providerId, {
+		name: providerId === "test-provider" ? "Test Provider" : providerId,
+		baseUrl: "https://example.test/v1",
+		api: "openai-completions",
+		apiKey: "$TEST_PROVIDER_API_KEY",
+		oauth: {
+			name: isSubscription ? "Test subscription" : "Test sign-in",
+			isSubscription,
+			login: async () => ({ access: "test-access", refresh: "test-refresh", expires: Date.now() + 60_000 }),
+			refreshToken: async (credential) => credential,
+			getApiKey: (credential) => credential.access,
+		},
+		models: [testModel("test-model")],
+	});
+}
+
 describe("ModelRuntime auth options", () => {
 	it("accepts a pi-ai CredentialStore", async () => {
 		const credentials = new InMemoryCredentialStore();
-		await credentials.modify("anthropic", async () => ({ type: "api_key", key: "stored-key" }));
+		await credentials.modify("test-provider", async () => ({ type: "api_key", key: "stored-key" }));
 		const runtime = await ModelRuntime.create({ credentials, modelsPath: null });
+		registerTestAuthProvider(runtime);
 
-		expect((await runtime.getAuth("anthropic"))?.auth.apiKey).toBe("stored-key");
+		expect((await runtime.getAuth("test-provider"))?.auth.apiKey).toBe("stored-key");
 	});
 
 	it("scopes provider availability reads and records refresh failures", async () => {
@@ -56,14 +74,17 @@ describe("ModelRuntime auth options", () => {
 			delete: (providerId) => base.delete(providerId),
 		};
 		const runtime = await ModelRuntime.create({ credentials, modelsPath: null });
+		registerTestAuthProvider(runtime);
 
 		reads.length = 0;
-		await runtime.getAvailable("anthropic");
-		expect(new Set(reads)).toEqual(new Set(["anthropic"]));
+		await runtime.getAvailable("test-provider");
+		expect(new Set(reads)).toEqual(new Set(["test-provider"]));
 
 		failReads = true;
-		await expect(runtime.getAvailable("anthropic")).rejects.toThrow("Credential store read failed for anthropic");
-		expect(runtime.getError()).toContain("Availability refresh: Credential store read failed for anthropic");
+		await expect(runtime.getAvailable("test-provider")).rejects.toThrow(
+			"Credential store read failed for test-provider",
+		);
+		expect(runtime.getError()).toContain("Availability refresh: Credential store read failed for test-provider");
 
 		failReads = false;
 		await runtime.getAvailable();
@@ -72,21 +93,29 @@ describe("ModelRuntime auth options", () => {
 
 	it("projects provider-owned methods, names, and status", async () => {
 		const runtime = await ModelRuntime.create({ credentials: AuthStorage.inMemory(), modelsPath: null });
+		registerTestAuthProvider(runtime);
+		runtime.registerProvider("test-api-key", {
+			name: "Test API Key",
+			baseUrl: "https://example.test/v1",
+			api: "openai-completions",
+			apiKey: "$TEST_API_KEY",
+			models: [testModel("api-key-model")],
+		});
 		const options = authOptions(runtime);
 
 		expect(options).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					type: "oauth",
-					provider: expect.objectContaining({ id: "anthropic", name: "Anthropic" }),
+					provider: expect.objectContaining({ id: "test-provider", name: "Test Provider" }),
 				}),
 				expect.objectContaining({
 					type: "api_key",
-					provider: expect.objectContaining({ id: "anthropic", name: "Anthropic" }),
+					provider: expect.objectContaining({ id: "test-provider", name: "Test Provider" }),
 				}),
 				expect.objectContaining({
 					type: "api_key",
-					provider: expect.objectContaining({ id: "openai" }),
+					provider: expect.objectContaining({ id: "test-api-key" }),
 				}),
 			]),
 		);
@@ -98,7 +127,7 @@ describe("ModelRuntime auth options", () => {
 	it("attaches the provider's active auth status to every method option", async () => {
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory({
-				anthropic: {
+				"test-provider": {
 					type: "oauth",
 					access: "access",
 					refresh: "refresh",
@@ -107,19 +136,20 @@ describe("ModelRuntime auth options", () => {
 			}),
 			modelsPath: null,
 		});
+		registerTestAuthProvider(runtime);
 
-		const options = authOptions(runtime).filter((option) => option.provider.id === "anthropic");
+		const options = authOptions(runtime).filter((option) => option.provider.id === "test-provider");
 		expect(options).toHaveLength(2);
-		expect(await runtime.checkAuth("anthropic")).toMatchObject({ type: "oauth" });
+		expect(await runtime.checkAuth("test-provider")).toMatchObject({ type: "oauth" });
 	});
 
 	it("distinguishes subscription OAuth from generic OAuth sign-in", async () => {
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory({
-				anthropic: {
+				"subscription-oauth": {
 					type: "oauth",
-					access: "anthropic-access",
-					refresh: "anthropic-refresh",
+					access: "subscription-access",
+					refresh: "subscription-refresh",
 					expires: Date.now() + 60 * 60_000,
 				},
 				"generic-oauth": {
@@ -131,9 +161,10 @@ describe("ModelRuntime auth options", () => {
 			}),
 			modelsPath: null,
 		});
+		registerTestAuthProvider(runtime, "subscription-oauth", true);
 		// A registered extension provider whose OAuth flow is NOT a subscription:
-		// the only built-in OAuth provider after the strip (anthropic) is a
-		// subscription, so the generic-sign-in tier is exercised via an extension.
+		// the subscription tier and generic-sign-in tier are both explicit
+		// extension providers now that the builtin catalog is empty.
 		runtime.registerProvider("generic-oauth", {
 			name: "Generic OAuth",
 			baseUrl: "https://example.test/v1",
@@ -146,9 +177,10 @@ describe("ModelRuntime auth options", () => {
 			},
 			models: [testModel("generic-model")],
 		});
+		await runtime.refresh({ allowNetwork: false });
 
-		expect(runtime.isUsingOAuth("anthropic")).toBe(true);
-		expect(runtime.isUsingSubscription("anthropic")).toBe(true);
+		expect(runtime.isUsingOAuth("subscription-oauth")).toBe(true);
+		expect(runtime.isUsingSubscription("subscription-oauth")).toBe(true);
 		expect(runtime.isUsingOAuth("generic-oauth")).toBe(true);
 		expect(runtime.isUsingSubscription("generic-oauth")).toBe(false);
 	});

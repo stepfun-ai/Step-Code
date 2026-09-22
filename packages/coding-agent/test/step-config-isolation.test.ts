@@ -34,7 +34,7 @@ describe("coding-agent config distribution isolation", () => {
 		expect(result.agentDir).toBe(join(homedir(), ".custom-assistant", "agent"));
 		expect(result.sessionsDir).toBe(join(homedir(), ".custom-assistant", "agent", "sessions"));
 		expect(result.defaultProvider).toBe("step");
-		expect(result.defaultModel).toBe("step-3.7-flash");
+		expect(result.defaultModel).toBe("step-5-preview");
 		expect(result.aiAgent).toBe("step");
 	});
 });
