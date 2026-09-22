@@ -1,0 +1,16 @@
+{
+  "id": "steppage",
+  "name": "StepPage",
+  "description": "Deploy and manage static sites on StepFun's Page hosting product. Publishes a local directory or .zip, lists sites and versions, promotes or rolls back a release, and mints shareable preview links.",
+  "version": "1.0.0",
+  "mcpServers": {
+    "steppage": {
+      "command": "steppage-mcp"
+    }
+  },
+  "provision": {
+    "command": "steppage-mcp",
+    "installer": "steppageInstaller",
+    "requiresEnv": ["STEPFUN_API_KEY"]
+  }
+}

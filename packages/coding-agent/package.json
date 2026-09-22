@@ -1,0 +1,95 @@
+{
+	"name": "@step-harness/coding-agent",
+	"version": "0.84.4",
+	"private": true,
+	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"type": "module",
+	"piConfig": {
+		"configDir": ".pi"
+	},
+	"bin": {
+		"step": "dist/bundle/step.js"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"docs",
+		"examples",
+		"containerization.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs",
+		"build:unbundled": "tsgo -p tsconfig.build.json && npm run copy-assets",
+		"build:binary": "npm --prefix ../tui run build && npm --prefix ../telemetry run build && npm --prefix ../providers run build && npm --prefix ../agent-core run build && npm run build && bun build --compile --no-compile-autoload-bunfig --env=STEPCODE_BUILD_* ../../apps/cli/src/bun/stepcode.ts ./src/utils/image-resize-worker.ts --outfile dist/step-bin && npm run copy-binary-assets",
+		"copy-assets": "shx mkdir -p dist/theme && shx cp src/theme/*.json dist/theme/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
+		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx mkdir -p dist/theme && shx cp src/theme/*.json dist/theme/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && node ../../scripts/copy-photon-wasm.mjs dist",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@step-harness/agent-core": "^0.84.4",
+		"@step-harness/providers": "^0.84.4",
+		"@step-harness/pi-tui": "^0.84.4",
+		"@step-harness/config": "workspace:*",
+		"@modelcontextprotocol/sdk": "1.27.1",
+		"@silvia-odwyer/photon-node": "0.3.4",
+		"chalk": "5.6.2",
+		"cross-spawn": "7.0.6",
+		"diff": "8.0.4",
+		"grok-mermaid": "0.2.2",
+		"highlight.js": "10.7.3",
+		"hosted-git-info": "9.0.3",
+		"ignore": "7.0.5",
+		"jiti": "2.7.0",
+		"minimatch": "10.2.5",
+		"proper-lockfile": "4.1.2",
+		"semver": "7.8.0",
+		"smol-toml": "1.8.0",
+		"typebox": "1.3.7",
+		"unbash": "4.0.11",
+		"undici": "8.9.0",
+		"yaml": "2.9.0"
+	},
+	"overrides": {
+		"protobufjs": "7.6.5",
+		"rimraf": "6.1.2",
+		"gaxios": {
+			"rimraf": "6.1.2"
+		}
+	},
+	"optionalDependencies": {
+		"@mariozechner/clipboard": "0.3.9",
+		"isolated-vm": "6.0.1"
+	},
+	"devDependencies": {
+		"@types/cross-spawn": "6.0.6",
+		"@types/hosted-git-info": "3.0.5",
+		"@types/node": "22.19.19",
+		"@types/proper-lockfile": "4.1.4",
+		"@types/semver": "7.7.1",
+		"shx": "0.4.0",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9"
+	},
+	"keywords": [
+		"coding-agent",
+		"ai",
+		"llm",
+		"cli",
+		"tui",
+		"agent"
+	],
+	"author": "Mario Zechner",
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}

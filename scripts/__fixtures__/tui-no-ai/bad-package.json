@@ -1,0 +1,12 @@
+{
+	"name": "fixture-tui-bad",
+	"private": true,
+	"dependencies": {
+		"get-east-asian-width": "1.6.0",
+		"openai": "4.0.0",
+		"@step-harness/ai": "workspace:*"
+	},
+	"devDependencies": {
+		"@anthropic-ai/sdk": "0.30.0"
+	}
+}
