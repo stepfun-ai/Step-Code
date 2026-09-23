@@ -178,7 +178,29 @@ function outputBytes(metafiles) {
 // stays self-contained despite the entry now living in the app package. Always
 // rebuild rather than trusting a pre-existing dist/main.js: a stale app compile
 // from an earlier checkout would otherwise be baked into the bundle.
-execFileSync("npm", ["--prefix", appEntryDir, "run", "build"], { stdio: "inherit", cwd: repoRoot });
+// Run npm's CLI entry point through the current Node binary instead of
+// spawning the `npm` command, which fails on Windows in every naive form:
+// `execFileSync("npm")` cannot resolve the `npm.cmd` shim (ENOENT), Node
+// rejects spawning `.cmd` files without a shell (EINVAL), and a
+// `shell: true` retry splits `--prefix <path>` on spaces (the argument is
+// passed to cmd.exe unquoted).
+// 1. npm/pnpm lifecycle scripts expose their own entry via `npm_execpath`.
+// 2. The standard Windows installer ships npm-cli.js next to node.exe.
+// 3. Otherwise fall back to spawning `npm` (shell-resolved on win32 only),
+//    matching profile-coding-agent-node.mjs.
+function resolveNpmEntryPoint() {
+	const fromEnv = process.env.npm_execpath;
+	if (fromEnv && fromEnv.endsWith(".js") && existsSync(fromEnv)) return fromEnv;
+	const besideNode = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+	return existsSync(besideNode) ? besideNode : undefined;
+}
+const npmBuildArgs = ["--prefix", appEntryDir, "run", "build"];
+const npmEntryPoint = resolveNpmEntryPoint();
+if (npmEntryPoint) {
+	execFileSync(process.execPath, [npmEntryPoint, ...npmBuildArgs], { stdio: "inherit", cwd: repoRoot });
+} else {
+	execFileSync("npm", npmBuildArgs, { stdio: "inherit", cwd: repoRoot, shell: process.platform === "win32" });
+}
 
 for (const entry of [
 	join(appEntryDistDir, "main.js"),
