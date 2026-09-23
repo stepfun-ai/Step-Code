@@ -93,7 +93,7 @@ function normalizeMcpCallToolResult(result: RawMcpCallToolResult): CallToolResul
 	});
 }
 
-async function listAllMcpTools(client: Client, signal: AbortSignal, timeoutMs: number): Promise<McpTool[]> {
+export async function listAllMcpTools(client: Client, signal: AbortSignal, timeoutMs: number): Promise<McpTool[]> {
 	const tools: McpTool[] = [];
 	let cursor: string | undefined;
 	do {

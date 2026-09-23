@@ -11,6 +11,7 @@ import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts
 import { theme } from "../theme/theme.ts";
 import { getStepAuthPath } from "./auth.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
+import { listAllMcpTools } from "./mcp-client.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
 import {
 	defaultStepPluginsDir,
@@ -306,13 +307,13 @@ export async function connectStepMcpServer(
 	try {
 		signal.throwIfAborted();
 		await client.connect(transport, { timeout, signal });
-		const listed = await client.listTools(undefined, { timeout, signal });
+		const tools = await listAllMcpTools(client, signal, timeout);
 		signal.throwIfAborted();
 		return {
 			name: input.name,
 			client,
 			transport,
-			tools: selectDeclaredTools(listed.tools, input.declaration),
+			tools: selectDeclaredTools(tools, input.declaration),
 			callTimeoutMs,
 		};
 	} catch (error) {

@@ -19,12 +19,17 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function slowServer(toolCount = 1) {
+async function slowServer(
+	toolCount = 1,
+	options: { pageSizes?: number[]; pausePage?: number; errorPage?: number } = {},
+) {
 	let release = () => {};
 	const ready = new Promise<void>((resolve) => {
 		release = resolve;
 	});
 	let requested = false;
+	const pageSizes = options.pageSizes ?? [toolCount];
+	const requestedPages: number[] = [];
 	const server = createServer(async (req, res) => {
 		if (req.method !== "POST") {
 			res.writeHead(405).end();
@@ -32,7 +37,11 @@ async function slowServer(toolCount = 1) {
 		}
 		const chunks: Buffer[] = [];
 		for await (const chunk of req) chunks.push(Buffer.from(chunk));
-		const message = JSON.parse(Buffer.concat(chunks).toString()) as { id?: number; method: string };
+		const message = JSON.parse(Buffer.concat(chunks).toString()) as {
+			id?: number;
+			method: string;
+			params?: { cursor?: string };
+		};
 		if (message.id === undefined) {
 			res.writeHead(202).end();
 			return;
@@ -46,12 +55,27 @@ async function slowServer(toolCount = 1) {
 			};
 		} else {
 			requested = true;
-			await ready;
+			const page = Number(message.params?.cursor ?? 0);
+			requestedPages.push(page);
+			if (page === (options.pausePage ?? 0)) await ready;
+			if (page === options.errorPage) {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(
+					JSON.stringify({
+						jsonrpc: "2.0",
+						id: message.id,
+						error: { code: -32603, message: "fixture page failed" },
+					}),
+				);
+				return;
+			}
+			const firstTool = pageSizes.slice(0, page).reduce((total, size) => total + size, 0);
 			result = {
-				tools: Array.from({ length: toolCount }, (_, index) => ({
-					name: `tool_${index}`,
+				tools: Array.from({ length: pageSizes[page] ?? 0 }, (_, index) => ({
+					name: `tool_${firstTool + index}`,
 					inputSchema: { type: "object", properties: {} },
 				})),
+				...(page + 1 < pageSizes.length ? { nextCursor: String(page + 1) } : {}),
 			};
 		}
 		res.writeHead(200, { "Content-Type": "application/json" });
@@ -65,7 +89,12 @@ async function slowServer(toolCount = 1) {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
-	return { url: `http://127.0.0.1:${address.port}/mcp`, release, requested: () => requested };
+	return {
+		url: `http://127.0.0.1:${address.port}/mcp`,
+		release,
+		requested: () => requested,
+		requestedPages: () => [...requestedPages],
+	};
 }
 
 async function setup(mode: ExtensionMode) {
@@ -113,6 +142,88 @@ test("a server publishes its whole catalog in a single tool-registry refresh", a
 	server.release();
 	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(40));
 	expect(refreshSizes).toEqual([40]);
+});
+
+test.each(["tui", "print"] as const)(
+	"%s discovery publishes all pages together, including after an empty page",
+	async (mode) => {
+		const server = await slowServer(1, { pageSizes: [1, 0, 2], pausePage: 2 });
+		config.value = { mcp_servers: { paged: { url: server.url } } };
+		const harness = await setup(mode);
+		const refreshSizes: number[] = [];
+		harness.runtime.refreshTools = () => {
+			refreshSizes.push(harness.extension.tools.size);
+		};
+		let bound = false;
+		const binding = harness.start().then(() => {
+			bound = true;
+		});
+		await vi.waitFor(() => expect(server.requestedPages()).toEqual([0, 1, 2]));
+		expect(bound).toBe(mode === "tui");
+		expect(harness.extension.tools.size).toBe(0);
+		expect(refreshSizes).toEqual([]);
+		expect(getStepMcpStatuses()).toEqual([{ name: "paged", status: "connecting", toolCount: 0 }]);
+		server.release();
+		await binding;
+		await vi.waitFor(() => expect(harness.extension.tools.size).toBe(3));
+		expect([...harness.extension.tools.keys()]).toEqual(["paged__tool_0", "paged__tool_1", "paged__tool_2"]);
+		expect(refreshSizes).toEqual([3]);
+		expect(getStepMcpStatuses()).toEqual([{ name: "paged", status: "connected", toolCount: 3 }]);
+	},
+);
+
+test("tool allow and deny lists apply to later pages", async () => {
+	const server = await slowServer(1, { pageSizes: [1, 2] });
+	config.value = {
+		mcp_servers: {
+			paged: { url: server.url, enabled_tools: ["tool_1", "tool_2"], disabled_tools: ["tool_2"] },
+		},
+	};
+	const harness = await setup("print");
+	server.release();
+	await harness.start();
+	expect(server.requestedPages()).toEqual([0, 1]);
+	expect([...harness.extension.tools.keys()]).toEqual(["paged__tool_1"]);
+	expect(getStepMcpStatuses()).toEqual([{ name: "paged", status: "connected", toolCount: 1 }]);
+});
+
+test("a later page failure does not publish a partial catalog", async () => {
+	const server = await slowServer(1, { pageSizes: [1, 1], errorPage: 1 });
+	config.value = { mcp_servers: { paged: { url: server.url } } };
+	const harness = await setup("print");
+	const refresh = vi.fn();
+	harness.runtime.refreshTools = refresh;
+	server.release();
+	await harness.start();
+	expect(server.requestedPages()).toEqual([0, 1]);
+	expect(harness.extension.tools.size).toBe(0);
+	expect(refresh).not.toHaveBeenCalled();
+	expect(getStepMcpStatuses()).toEqual([{ name: "paged", status: "failed", toolCount: 0 }]);
+	expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining("fixture page failed"), "warning");
+});
+
+test("shutdown cancels a pending later page and prevents late publication", async () => {
+	const server = await slowServer(1, { pageSizes: [1, 1], pausePage: 1 });
+	config.value = { mcp_servers: { paged: { url: server.url } } };
+	const harness = await setup("tui");
+	await harness.start();
+	await vi.waitFor(() => expect(server.requestedPages()).toEqual([0, 1]));
+	await harness.stop();
+	server.release();
+	await yieldToEventLoop();
+	expect(harness.extension.tools.size).toBe(0);
+	expect(getStepMcpStatuses()).toEqual([]);
+	expect(harness.notify).not.toHaveBeenCalled();
+});
+
+test("the startup deadline also bounds later page requests", async () => {
+	const server = await slowServer(1, { pageSizes: [1, 1], pausePage: 1 });
+	config.value = { mcp_servers: { paged: { url: server.url, startup_timeout_sec: 1 } } };
+	const harness = await setup("print");
+	await harness.start();
+	expect(server.requestedPages()).toEqual([0, 1]);
+	expect(harness.extension.tools.size).toBe(0);
+	expect(getStepMcpStatuses()).toEqual([{ name: "paged", status: "failed", toolCount: 0 }]);
 });
 
 test("publication yields to the event loop before touching the tool registry", async () => {
