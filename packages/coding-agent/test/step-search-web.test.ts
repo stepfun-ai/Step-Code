@@ -30,7 +30,7 @@ describe("Step search_web tool", () => {
 			}),
 		).toBe("https://first.example.com/v1/mcp/web_search/mcp");
 		expect(resolveSearchWebServerUrl(undefined, {}, "step_plan")).toBe(
-			"https://api.stepfun.com/v1/mcp/web_search/mcp",
+			"https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp",
 		);
 		expect(resolveSearchWebServerUrl(undefined, {}, "platform_cn")).toBe(
 			"https://api.stepfun.com/v1/mcp/web_search/mcp",
@@ -39,9 +39,53 @@ describe("Step search_web tool", () => {
 			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
 		);
 		expect(resolveSearchWebServerUrl(undefined, {}, "step_plan_oversea")).toBe(
-			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
+			"https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp",
 		);
 		expect(resolveSearchWebServerUrl(undefined, {}, "unknown")).toBe("https://api.stepfun.com/v1/mcp/web_search/mcp");
+	});
+
+	it("completes an origin-only override with the path of the profile's own endpoint", () => {
+		// A host-only override must not silently move a plan login onto the
+		// platform path, which would bill the searches to the API account.
+		expect(resolveSearchWebServerUrl("https://proxy.example.com", {}, "step_plan")).toBe(
+			"https://proxy.example.com/step_plan/v1/mcp/web_search/mcp",
+		);
+		expect(
+			resolveSearchWebServerUrl(
+				undefined,
+				{ STEPCODE_SEARCH_WEB_MCP_URL: "https://proxy.example.com/" },
+				"step_plan_oversea",
+			),
+		).toBe("https://proxy.example.com/step_plan/v1/mcp/web_search/mcp");
+		expect(resolveSearchWebServerUrl("https://proxy.example.com", {}, "platform_cn")).toBe(
+			"https://proxy.example.com/v1/mcp/web_search/mcp",
+		);
+		// A full override still wins outright, path included.
+		expect(resolveSearchWebServerUrl("https://proxy.example.com/custom/mcp", {}, "step_plan")).toBe(
+			"https://proxy.example.com/custom/mcp",
+		);
+	});
+
+	it("keeps credentials that carry no login profile on the platform endpoint", async () => {
+		// `--api-key` and `STEPCODE_SEARCH_API_KEY` persist without a profile.
+		// Step Plan credentials cannot reach this path: they only come from
+		// `/login`, which always records one. Routing these to the plan endpoint
+		// would spend a stranger's plan quota on a platform key.
+		const root = await mkdtemp(join(tmpdir(), "step-search-web-no-profile-"));
+		const authPath = join(root, "auth.json");
+		try {
+			await writeFile(authPath, JSON.stringify({ step: { type: "api_key", key: "stored-key" } }), "utf8");
+			let serverUrl = "";
+			const tool = createSearchWebTool({ env: {}, authPath }, async (input) => {
+				serverUrl = input.serverUrl;
+				return { structuredContent: { results: [] } };
+			});
+
+			await tool.execute("no-profile-call", { query: "query" }, undefined, undefined, undefined as never);
+			expect(serverUrl).toBe("https://api.stepfun.com/v1/mcp/web_search/mcp");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("prefers search credentials, then auth.json, and ignores the model credential", async () => {
@@ -123,11 +167,20 @@ describe("Step search_web tool", () => {
 		});
 	});
 
-	it("selects the overseas endpoint from either persisted overseas login profile", async () => {
+	it("selects the endpoint of the persisted login profile and never bills plan searches to the platform", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-search-web-profile-"));
 		const authPath = join(root, "auth.json");
+		const expectedByProfile = {
+			step_plan: "https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp",
+			step_plan_oversea: "https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp",
+			platform_cn: "https://api.stepfun.com/v1/mcp/web_search/mcp",
+			platform_oversea: "https://api.stepfun.ai/v1/mcp/web_search/mcp",
+			// Logins written before profiles existed; `readStepLoginProfile` maps
+			// them to `step_plan`, so they are plan users and bill the plan pool.
+			step: "https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp",
+		};
 		try {
-			for (const profile of ["platform_oversea", "step_plan_oversea"]) {
+			for (const [profile, expected] of Object.entries(expectedByProfile)) {
 				await writeFile(
 					authPath,
 					JSON.stringify({ step: { type: "oauth", access: "search-key", profile } }),
@@ -140,7 +193,7 @@ describe("Step search_web tool", () => {
 				});
 
 				await tool.execute("profile-call", { query: "query" }, undefined, undefined, undefined as never);
-				expect(serverUrl).toBe("https://api.stepfun.ai/v1/mcp/web_search/mcp");
+				expect(serverUrl, `profile ${profile}`).toBe(expected);
 			}
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -178,7 +231,7 @@ describe("Step search_web tool", () => {
 		}
 	});
 
-	it("turns remote MCP errors into tool failures", async () => {
+	it("turns remote MCP errors into tool failures that name the billed endpoint", async () => {
 		const tool = createSearchWebTool({ apiKey: "search-key" }, async () => ({
 			isError: true,
 			content: "502 Bad Gateway",
@@ -186,7 +239,7 @@ describe("Step search_web tool", () => {
 
 		await expect(
 			tool.execute("call-4", { query: "query" }, undefined, undefined, undefined as never),
-		).rejects.toThrow("502 Bad Gateway");
+		).rejects.toThrow("502 Bad Gateway (endpoint https://api.stepfun.com/v1/mcp/web_search/mcp)");
 	});
 
 	it("preserves transport failures as diagnostic tool errors", async () => {
