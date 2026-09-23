@@ -13,10 +13,18 @@ export { invokeRemoteMcpTool } from "./mcp-client.ts";
 
 export const SEARCH_WEB_SERVER_NAME = "stepsearch";
 export const SEARCH_WEB_TOOL_NAME = "web_search";
+/** Platform profiles bill search against the open-platform balance. */
 export const SEARCH_WEB_MAINLAND_URL = "https://api.stepfun.com/v1/mcp/web_search/mcp";
 export const SEARCH_WEB_OVERSEA_URL = "https://api.stepfun.ai/v1/mcp/web_search/mcp";
-/** Unrecognized login profiles fall back to the mainland endpoint. */
-export const SEARCH_WEB_DEFAULT_URL = SEARCH_WEB_MAINLAND_URL;
+/**
+ * Step Plan profiles bill search against the monthly Step Plan credit pool.
+ * This is the endpoint the StepSearch MCP documentation prescribes; the `/v1`
+ * path above rejects Step Plan credentials with HTTP 402 `quota_exceeded`.
+ */
+export const SEARCH_WEB_MAINLAND_STEP_PLAN_URL = "https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp";
+export const SEARCH_WEB_OVERSEA_STEP_PLAN_URL = "https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp";
+/** Unrecognized login profiles fall back to the mainland Step Plan endpoint. */
+export const SEARCH_WEB_DEFAULT_URL = SEARCH_WEB_MAINLAND_STEP_PLAN_URL;
 
 const SEARCH_WEB_MCP_PATH = "/v1/mcp/web_search/mcp";
 const SEARCH_WEB_RESULT_COUNT = 10;
@@ -60,11 +68,13 @@ export function resolveSearchWebServerUrl(
 	profile?: string,
 ): string {
 	const profileDefault =
-		profile === "platform_oversea" || profile === "step_plan_oversea"
+		profile === "platform_oversea"
 			? SEARCH_WEB_OVERSEA_URL
-			: profile === "step_plan" || profile === "platform_cn"
+			: profile === "platform_cn"
 				? SEARCH_WEB_MAINLAND_URL
-				: SEARCH_WEB_DEFAULT_URL;
+				: profile === "step_plan_oversea"
+					? SEARCH_WEB_OVERSEA_STEP_PLAN_URL
+					: SEARCH_WEB_DEFAULT_URL;
 	const value =
 		normalizeOptionalText(configured) ?? normalizeOptionalText(env.STEPCODE_SEARCH_WEB_MCP_URL) ?? profileDefault;
 
