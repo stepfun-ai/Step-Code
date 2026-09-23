@@ -30,7 +30,7 @@ describe("Step search_web tool", () => {
 			}),
 		).toBe("https://first.example.com/v1/mcp/web_search/mcp");
 		expect(resolveSearchWebServerUrl(undefined, {}, "step_plan")).toBe(
-			"https://api.stepfun.com/v1/mcp/web_search/mcp",
+			"https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp",
 		);
 		expect(resolveSearchWebServerUrl(undefined, {}, "platform_cn")).toBe(
 			"https://api.stepfun.com/v1/mcp/web_search/mcp",
@@ -39,9 +39,11 @@ describe("Step search_web tool", () => {
 			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
 		);
 		expect(resolveSearchWebServerUrl(undefined, {}, "step_plan_oversea")).toBe(
-			"https://api.stepfun.ai/v1/mcp/web_search/mcp",
+			"https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp",
 		);
-		expect(resolveSearchWebServerUrl(undefined, {}, "unknown")).toBe("https://api.stepfun.com/v1/mcp/web_search/mcp");
+		expect(resolveSearchWebServerUrl(undefined, {}, "unknown")).toBe(
+			"https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp",
+		);
 	});
 
 	it("prefers search credentials, then auth.json, and ignores the model credential", async () => {
@@ -123,11 +125,15 @@ describe("Step search_web tool", () => {
 		});
 	});
 
-	it("selects the overseas endpoint from either persisted overseas login profile", async () => {
+	it("selects the endpoint that matches the persisted overseas login profile", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-search-web-profile-"));
 		const authPath = join(root, "auth.json");
 		try {
-			for (const profile of ["platform_oversea", "step_plan_oversea"]) {
+			const expectations: Record<string, string> = {
+				platform_oversea: "https://api.stepfun.ai/v1/mcp/web_search/mcp",
+				step_plan_oversea: "https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp",
+			};
+			for (const [profile, expectedUrl] of Object.entries(expectations)) {
 				await writeFile(
 					authPath,
 					JSON.stringify({ step: { type: "oauth", access: "search-key", profile } }),
@@ -140,8 +146,30 @@ describe("Step search_web tool", () => {
 				});
 
 				await tool.execute("profile-call", { query: "query" }, undefined, undefined, undefined as never);
-				expect(serverUrl).toBe("https://api.stepfun.ai/v1/mcp/web_search/mcp");
+				expect(serverUrl).toBe(expectedUrl);
 			}
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("routes profile-less credentials to the mainland Step Plan endpoint", async () => {
+		// Credentials persisted without a `profile` field (for example by
+		// `setRuntimeApiKey` for `--api-key` / `STEP_API_KEY`) must not reach the
+		// balance-billed `/v1` endpoint: it answers HTTP 402 `quota_exceeded` for
+		// Step Plan credentials, which is the flavor StepCode login issues.
+		const root = await mkdtemp(join(tmpdir(), "step-search-web-no-profile-"));
+		const authPath = join(root, "auth.json");
+		try {
+			await writeFile(authPath, JSON.stringify({ step: { type: "api_key", key: "stored-key" } }), "utf8");
+			let serverUrl = "";
+			const tool = createSearchWebTool({ env: {}, authPath }, async (input) => {
+				serverUrl = input.serverUrl;
+				return { structuredContent: { results: [] } };
+			});
+
+			await tool.execute("no-profile-call", { query: "query" }, undefined, undefined, undefined as never);
+			expect(serverUrl).toBe("https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
