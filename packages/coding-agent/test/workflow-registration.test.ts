@@ -51,16 +51,11 @@ describe("resolveWorkflowRegistration", () => {
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 		expect(resolveWorkflowRegistration({}, false)).toEqual({ enabled: false, reason: "vm-unavailable" });
 		// A non-V8 runtime (the shipped bun binary) can never load the V8-native
-		// isolated-vm, so the refusal is a distinct, silent reason rather than a
-		// fixable install gap.
-		expect(resolveWorkflowRegistration({}, false, false)).toEqual({
-			enabled: false,
-			reason: "vm-unsupported-runtime",
-		});
+		// isolated-vm, but the bundled QuickJS WebAssembly executor runs there, so
+		// registration proceeds instead of failing silently.
+		expect(resolveWorkflowRegistration({}, false, false)).toEqual({ enabled: true });
 		expect(resolveWorkflowRegistration({ vmExecutor: () => {} }, false)).toEqual({ enabled: true });
-		// An injected executor wins even on a non-V8 runtime: the executor
-		// short-circuit is checked before the vmHostable branch, so an embedder can
-		// register workflows on the shipped bun binary.
+		// An injected executor wins on either runtime.
 		expect(resolveWorkflowRegistration({ vmExecutor: () => {} }, false, false)).toEqual({ enabled: true });
 	});
 });
@@ -117,15 +112,16 @@ describe("workflow registration warning", () => {
 		expect(h.notifications[0]?.message).toContain("isolated-vm");
 	});
 
-	test("a non-V8 runtime that can never host the VM registers nothing and stays silent", () => {
+	test("a non-V8 runtime registers through the QuickJS executor and stays silent", () => {
 		vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 		runtime.vmHostable = false;
 		const h = harness();
 		createStepWorkflowExtension({})(h.api);
-		// Unlike the vm-unavailable path, vm-unsupported-runtime registers no
-		// session_start handler at all, so nothing exists that could warn.
-		expect(h.tools.size).toBe(0);
-		expect(h.handlers.size).toBe(0);
+		// isolated-vm can never load here, but the bundled QuickJS WebAssembly
+		// executor can, so the tool registers and there is nothing to warn about.
+		// This is the path every released executable takes.
+		expect(h.tools.has("workflow")).toBe(true);
+		for (const handler of h.handlers.get("session_start") ?? []) handler({ type: "session_start" }, h.ctx);
 		expect(h.notifications).toEqual([]);
 	});
 
