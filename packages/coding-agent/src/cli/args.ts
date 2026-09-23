@@ -8,7 +8,12 @@ import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, IS_STEP_ENTR
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import type { TuiMode } from "../core/settings-manager.ts";
 import { getStepDefaultProvider } from "../step/defaults.ts";
-import type { StepNonInteractiveApproval, StepPermissionMode, StepToolPermissionMode } from "../step/permissions.ts";
+import type {
+	StepNonInteractiveApproval,
+	StepNonInteractiveDenial,
+	StepPermissionMode,
+	StepToolPermissionMode,
+} from "../step/permissions.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -61,6 +66,8 @@ export interface Args {
 	approvalMode?: StepPermissionMode;
 	/** Fallback for approval requests when no interactive UI is available. */
 	nonInteractiveApproval?: StepNonInteractiveApproval;
+	/** Outcome of a blocked call when no interactive UI is available. */
+	nonInteractiveDenial?: StepNonInteractiveDenial;
 	/** Repeated per-tool approval overrides (canonical runtime option name). */
 	toolOverride?: Record<string, StepToolPermissionMode>;
 	/** Backward-compatible plural alias for callers that used the TUI vocabulary. */
@@ -233,6 +240,24 @@ export function parseArgs(args: string[]): Args {
 					result.diagnostics.push({
 						type: "error",
 						message: `Invalid non-interactive approval mode "${value}". Valid values: allow, deny`,
+					});
+				}
+			}
+		} else if (arg === "--non-interactive-denial" || arg.startsWith("--non-interactive-denial=")) {
+			const value = arg === "--non-interactive-denial" ? args[i + 1] : arg.slice("--non-interactive-denial=".length);
+			if (arg === "--non-interactive-denial" && (value === undefined || value.startsWith("-"))) {
+				result.diagnostics.push({
+					type: "error",
+					message: "--non-interactive-denial requires terminate or continue",
+				});
+			} else {
+				if (arg === "--non-interactive-denial") i++;
+				if (value === "terminate" || value === "continue") {
+					result.nonInteractiveDenial = value;
+				} else {
+					result.diagnostics.push({
+						type: "error",
+						message: `Invalid non-interactive denial mode "${value}". Valid values: terminate, continue`,
 					});
 				}
 			}
@@ -518,11 +543,12 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 				"  STEPCODE_DISABLE_PI_SERVICES     Disable upstream update/catalog services (enabled by step)",
 				"  STEP_APPROVAL_MODE               Default tool approval mode (confirm|auto|strict)",
 				"  STEP_NON_INTERACTIVE_APPROVAL    Fallback when no approval UI is available (allow|deny)",
+				"  STEP_NON_INTERACTIVE_DENIAL      Blocked call without a UI (terminate|continue)",
 				"  STEP_AUTOPILOT                   Enable bounded model-error auto-resume",
 			].join("\n")
 		: "";
 	const stepPermissionOptionsText = IS_STEP_ENTRYPOINT
-		? "\n  --approval-mode <mode>           Tool approval mode: confirm, auto, or strict\n  --non-interactive-approval <mode> Fallback without a UI: allow or deny\n  --tool-override <tool=mode>       Per-tool override (repeatable; mode: allow, confirm, deny)"
+		? "\n  --approval-mode <mode>           Tool approval mode: confirm, auto, or strict\n  --non-interactive-approval <mode> Fallback without a UI: allow or deny\n  --non-interactive-denial <mode>  Blocked call without a UI: terminate the run or continue\n  --tool-override <tool=mode>       Per-tool override (repeatable; mode: allow, confirm, deny)"
 		: "";
 	const stepAuthCommandsText = IS_STEP_ENTRYPOINT
 		? `\n  ${APP_NAME} login                       Sign in with the Step account (OAuth)\n  ${APP_NAME} logout                      Remove the stored Step credential`

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStepExtension } from "../../src/features/step.ts";
 import type { StepPermissionControllerOptions } from "../../src/step/permissions.ts";
 import { createStepToolProfile } from "../../src/step/tool-profile.ts";
-import { createHarness, type Harness } from "./harness.ts";
+import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 const modes: Array<{ name: string; permission: StepPermissionControllerOptions }> = [
 	{ name: "ask", permission: { initialPreset: "ask" } },
@@ -111,6 +111,26 @@ describe("Step command approval through the agent loop", () => {
 		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
 			isError: true,
 		});
+	});
+
+	it("continues past a refused unattended deletion when denial recovery is enabled", async () => {
+		const session = await setup({
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			nonInteractiveDenial: "continue",
+			toolOverrides: { run_command: "allow" },
+		});
+		await session.session.bindExtensions({ mode: "print" });
+		const marker = prepareRemoval(session, "recovered-removal");
+		await session.session.prompt("Remove the test directory");
+		expect(existsSync(marker)).toBe(true);
+		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+		// The run keeps going: the follow-up assistant turn is consumed instead
+		// of the batch terminating after the blocked call.
+		expect(session.getPendingResponseCount()).toBe(0);
+		expect(getAssistantTexts(session)).toContain("done");
 	});
 
 	it.each([
