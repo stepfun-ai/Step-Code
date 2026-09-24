@@ -95,7 +95,6 @@ import {
 	type SessionEntry,
 	SessionImportFileNotFoundError,
 	SessionManager,
-	STEP_PROVIDER_ID,
 	type StepLoginHost,
 	sessionEntryToContextMessages,
 	setRegisteredThemes,
@@ -143,7 +142,7 @@ import {
 	TuiMainScreen,
 	visibleWidth,
 } from "@step-harness/pi-tui";
-import type { AuthEvent, AuthPrompt, ImageContent } from "@step-harness/providers";
+import { type AuthEvent, type AuthPrompt, clampThinkingLevel, type ImageContent } from "@step-harness/providers";
 import type { AssistantMessage, Message, Model, Usage } from "@step-harness/providers/compat";
 import chalk from "chalk";
 import { spawn } from "child_process";
@@ -4775,12 +4774,11 @@ export class InteractiveMode {
 			};
 			const availableLevels = this.session.getAvailableThinkingLevels();
 			const globalDefault = this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
-			// Step models default to their highest supported effort, so mark that as
-			// the default rather than the global level (which may not be selectable).
-			const defaultMarker =
-				this.session.model?.provider === STEP_PROVIDER_ID
-					? (availableLevels[availableLevels.length - 1] ?? globalDefault)
-					: globalDefault;
+			const model = this.session.model;
+			const savedDefault = model
+				? (this.settingsManager.getModelThinkingLevel(model.provider, model.id) ?? globalDefault)
+				: globalDefault;
+			const defaultMarker = model ? clampThinkingLevel(model, savedDefault) : savedDefault;
 			const selector = new ThinkingSelectorComponent(
 				this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
 				availableLevels,
