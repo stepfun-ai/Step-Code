@@ -187,6 +187,7 @@ const stepMainOptions: MainOptions = {
 		permission: {
 			approvalMode: stepPermissionArgs.approvalMode,
 			nonInteractiveApproval: stepPermissionArgs.nonInteractiveApproval,
+			nonInteractiveDenial: stepPermissionArgs.nonInteractiveDenial,
 			toolOverrides: stepPermissionArgs.toolOverride ?? stepPermissionArgs.toolOverrides,
 		},
 		traceHeaderPolicy: observability.traceHeaderPolicy(),
