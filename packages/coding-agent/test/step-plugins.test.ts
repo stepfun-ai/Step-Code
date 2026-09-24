@@ -13,12 +13,14 @@ import {
 	defaultStepPluginsDir,
 	diagnoseStepPlugin,
 	ensureBuiltinMarketplace,
+	ensureBuiltinPluginsInstalled,
 	installMarketplacePlugin,
 	listInstalledStepPlugins,
 	listMarketplacePlugins,
 	listMarketplaceSources,
 	parseStepPluginManifest,
 	registerStepPluginCommand,
+	uninstallPlugin,
 	updateMarketplaceSource,
 } from "../src/step/plugins.ts";
 
@@ -97,6 +99,35 @@ describe("Step plugin marketplace facade", () => {
 		await expect(diagnoseStepPlugin(installed.installedPath)).resolves.toMatchObject({
 			mcpServers: ["playwright"],
 		});
+	});
+
+	test("pre-installs the built-in StepPage plugin once and respects a later uninstall", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-preinstall-"));
+		roots.push(root);
+		const marketplacesDir = join(root, "marketplaces");
+		const pluginsDir = join(root, ".stepcode", "plugins");
+
+		// A fresh install copies the StepPage manifest without provisioning the
+		// executable and reports its provision descriptor for background install.
+		const first = await ensureBuiltinPluginsInstalled({ pluginsDir, marketplacesDir });
+		expect(first.installed.map((plugin) => plugin.name)).toEqual(["steppage"]);
+		expect(first.installed[0]?.provision).toMatchObject({ command: "steppage-mcp" });
+		expect(JSON.parse(await readFile(join(pluginsDir, "steppage", "step.plugin.json"), "utf8"))).toMatchObject({
+			id: "steppage",
+		});
+		const listed = await listInstalledStepPlugins({ userDir: pluginsDir });
+		expect(listed.plugins.map((plugin) => plugin.id)).toContain("steppage");
+
+		// A second launch is a no-op: the marker records the plugin as handled.
+		const second = await ensureBuiltinPluginsInstalled({ pluginsDir, marketplacesDir });
+		expect(second.installed).toEqual([]);
+
+		// Once the user uninstalls it, a later launch must not resurrect it.
+		await uninstallPlugin(pluginsDir, "steppage");
+		const third = await ensureBuiltinPluginsInstalled({ pluginsDir, marketplacesDir });
+		expect(third.installed).toEqual([]);
+		const afterUninstall = await listInstalledStepPlugins({ userDir: pluginsDir });
+		expect(afterUninstall.plugins.map((plugin) => plugin.id)).not.toContain("steppage");
 	});
 
 	test("does not overwrite a Claude-style plugin manifest", async () => {

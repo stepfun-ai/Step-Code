@@ -42,7 +42,7 @@ ARCHIVE_PREFIX="step"
 # Step's product identity is independent from the upstream Pi package version.
 # Release CI supplies these values from the tag; local/source builds use the
 # stable Step fallback and a dev channel.
-STEP_BUILD_VERSION="${STEPCODE_BUILD_VERSION:-0.3.1}"
+STEP_BUILD_VERSION="${STEPCODE_BUILD_VERSION:-0.1.0}"
 STEP_BUILD_CHANNEL="${STEPCODE_BUILD_CHANNEL:-dev}"
 STEP_BUILD_COMMIT="${STEPCODE_BUILD_COMMIT:-}"
 

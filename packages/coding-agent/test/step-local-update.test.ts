@@ -11,7 +11,7 @@ import {
 	writeStepSkippedUpdateVersion,
 } from "../src/step/local-update.ts";
 
-const embeddedVersion = { value: "0.3.1", source: "embedded" as const };
+const embeddedVersion = { value: "0.1.0", source: "embedded" as const };
 
 describe("Step binary updater", () => {
 	test("compares numeric versions and prereleases", () => {
@@ -48,7 +48,7 @@ describe("Step binary updater", () => {
 			});
 			expect(outcome).toBe("deferred");
 			expect(select).toHaveBeenCalledWith(
-				"Update available\nv0.3.1 -> v0.4.0",
+				"Update available\nv0.1.0 -> v0.4.0",
 				expect.arrayContaining(["Skip until next version"]),
 			);
 			expect(install).not.toHaveBeenCalled();
@@ -99,7 +99,7 @@ describe("Step binary updater", () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), "step-update-fallback-"));
 		try {
 			const fallback = await maybeUpdateStep({
-				version: { value: "0.3.1", source: "fallback" },
+				version: { value: "0.1.0", source: "fallback" },
 				storageRootDir: root,
 				executablePath: path.join(root, "step"),
 				interactive: true,

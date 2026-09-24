@@ -97,20 +97,28 @@ profile.
 The Step tool profile also registers `search_web`, backed by the remote
 `stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
 resolved from an explicit `step --api-key`, then `STEPCODE_SEARCH_API_KEY`,
-`STEPCODE_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
-	only as a Bearer header. The `step_plan_oversea` and `platform_oversea`
-	login profiles use `https://api.stepfun.ai/v1/mcp/web_search/mcp`;
-	`step_plan` and `platform_cn` use
-	`https://api.stepfun.com/v1/mcp/web_search/mcp`. An unrecognized profile
-	falls back to that same mainland endpoint.
-	`STEPCODE_SEARCH_WEB_MCP_URL` and `STEPCODE_SEARCH_WEB_MCP_URL` override this
-	profile-based selection. This adapter does not add a separate search
-	credential store or `integrations.search` settings surface. The
-	`STEP_API_KEY` environment variable is deliberately excluded from that
-	chain: StepCode injects it together with `STEP_BASE_URL` to reach its own
-	model gateway, and because the search endpoint never follows that base URL,
-	reusing the value would authenticate a gateway key against
-	`api.stepfun.com` and fail.
+then the Step login entry in `auth.json`; it is sent only as a Bearer header.
+Each login profile has its own endpoint, because the endpoint decides which
+account the search is billed to: `step_plan` uses
+`https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp` and
+`step_plan_oversea` uses `https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp`,
+both billed to the Step Plan quota; `platform_cn` uses
+`https://api.stepfun.com/v1/mcp/web_search/mcp` and `platform_oversea` uses
+`https://api.stepfun.ai/v1/mcp/web_search/mcp`, both billed to the
+pay-as-you-go API account. A credential with no profile falls back to the
+mainland platform endpoint: a profile is absent only when the credential came
+from `--api-key`, `STEPCODE_SEARCH_API_KEY`, or a hand-written `auth.json`, and
+a Step Plan credential is never one of those, since it only comes from `/login`,
+which always records a profile. `STEPCODE_SEARCH_WEB_MCP_URL` overrides this
+profile-based selection; an override that supplies only an origin keeps the path
+of the profile's own endpoint, so redirecting the host cannot move a plan user's
+searches onto the billed platform path. This adapter does not add a separate
+search credential store or `integrations.search` settings surface. The
+`STEP_API_KEY` environment variable is deliberately excluded from that
+chain: StepCode injects it together with `STEP_BASE_URL` to reach its own
+model gateway, and because the search endpoint never follows that base URL,
+reusing the value would authenticate a gateway key against
+`api.stepfun.com` and fail.
 
 Session storage is also selected through the Step wrapper. The wrapper keeps
 Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but

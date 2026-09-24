@@ -276,8 +276,8 @@ describe("deferred tools", () => {
 		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
 	});
 
-	it("normalizes OAuth names before checking prior tool usage", async () => {
-		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["read"]);
+	it("preserves OAuth tool names when checking prior tool usage", async () => {
+		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["Read"]);
 		const assistant = context.messages[1] as AssistantMessage;
 		assistant.content = [{ type: "toolCall", id: "call_1", name: "Read", arguments: {} }];
 		const payload = await capturePayload<AnthropicPayload>(
@@ -286,36 +286,38 @@ describe("deferred tools", () => {
 			"sk-ant-oat-fake",
 		);
 
-		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "Read"]);
-		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
+		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "read"]);
 		const content = findAnthropicToolResult(payload).content;
 		expect(Array.isArray(content) && content.some((block) => block.type === "tool_reference")).toBe(false);
 	});
 
-	it("matches OAuth-canonicalized markers to active tools", async () => {
-		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["Read"]);
+	it("matches OAuth markers by their original tool names", async () => {
+		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["read"]);
 		const payload = await capturePayload<AnthropicPayload>(
 			anthropicModel({ compat: { supportsToolReferences: true } }),
 			context,
 			"sk-ant-oat-fake",
 		);
 
-		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "Read", defer_loading: true }]);
+		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "read", defer_loading: true }]);
 		const content = findAnthropicToolResult(payload).content;
 		expect(
 			Array.isArray(content) &&
-				content.some((block) => block.type === "tool_reference" && block.tool_name === "Read"),
+				content.some((block) => block.type === "tool_reference" && block.tool_name === "read"),
 		).toBe(true);
 	});
 
-	it("deduplicates active tools after OAuth canonicalization", async () => {
+	it("does not merge distinct OAuth tool names", async () => {
 		const context: Context = {
 			messages: [makeUserMessage(1)],
 			tools: [makeTool("read"), { ...makeTool("Read"), description: "Canonical definition" }],
 		};
 		const payload = await capturePayload<AnthropicPayload>(anthropicModel(), context, "sk-ant-oat-fake");
 
-		expect(payload.tools).toMatchObject([{ name: "Read", description: "Canonical definition" }]);
+		expect(payload.tools).toMatchObject([
+			{ name: "read", description: "The read tool" },
+			{ name: "Read", description: "Canonical definition" },
+		]);
 	});
 
 	it("uses the normal tool list when Anthropic tool references are unsupported", async () => {

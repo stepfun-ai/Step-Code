@@ -2966,7 +2966,6 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `model-status.ts` | React to model changes | `on("model_select")`, `setStatus` |
 | `provider-payload.ts` | Inspect payloads and provider response headers | `on("before_provider_request")`, `on("after_provider_response")` |
 | `system-prompt-header.ts` | Display system prompt info | `on("agent_start")`, `getSystemPrompt` |
-| `claude-rules.ts` | Load rules from files | `on("session_start")`, `on("before_agent_start")` |
 | `prompt-customizer.ts` | Add context-aware tool guidance using `systemPromptOptions` | `on("before_agent_start")`, `BuildSystemPromptOptions` |
 | `file-trigger.ts` | File watcher triggers messages | `sendMessage` |
 | **Compaction & Sessions** |||
@@ -3004,8 +3003,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `space-invaders.ts` | Space Invaders game | `registerCommand`, `ui.custom` |
 | `doom-overlay/` | Doom in overlay | `ui.custom` with overlay |
 | **Providers** |||
-| `custom-provider-anthropic/` | Custom Anthropic proxy | `registerProvider` |
-| `custom-provider-gitlab-duo/` | GitLab Duo integration | `registerProvider` with OAuth |
+| Use the minimal provider registration example in `custom-provider.md`; third-party adapters are not bundled. |||
 | **Messages & Communication** |||
 | `message-renderer.ts` | Custom message rendering | `registerMessageRenderer`, `sendMessage` |
 | `entry-renderer.ts` | TUI-only custom entry rendering | `registerEntryRenderer`, `appendEntry` |

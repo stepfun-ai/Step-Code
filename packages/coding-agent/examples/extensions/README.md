@@ -49,7 +49,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `preset.ts` | Named presets for model, thinking level, tools, and instructions via `--preset` flag and `/preset` command |
-| `plan-mode/` | Claude Code-style plan mode for read-only exploration with `/plan` command and step tracking |
+| `plan-mode/` | Plan mode for read-only exploration with `/plan` command and step tracking |
 | `tools.ts` | Interactive `/tools` command to enable/disable tools with session persistence |
 | `handoff.ts` | Transfer context to a new focused session via `/handoff <goal>` |
 | `qna.ts` | Extracts questions from last response into editor via `ctx.ui.setEditorText()` |
@@ -92,7 +92,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `pirate.ts` | Demonstrates `systemPromptAppend` to dynamically modify system prompt |
-| `claude-rules.ts` | Scans `.claude/rules/` folder and lists rules in system prompt |
 | `custom-compaction.ts` | Custom compaction that summarizes entire conversation |
 | `trigger-compact.ts` | Triggers compaction when context usage exceeds 100k tokens and adds `/trigger-compact` command |
 
@@ -122,13 +121,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 |-----------|-------------|
 | `session-name.ts` | Name sessions for the session selector via `setSessionName` |
 | `bookmark.ts` | Bookmark entries with labels for `/tree` navigation via `setLabel` |
-
-### Custom Providers
-
-| Extension | Description |
-|-----------|-------------|
-| `custom-provider-anthropic/` | Custom Anthropic provider with OAuth support and custom streaming implementation |
-| `custom-provider-gitlab-duo/` | GitLab Duo provider using pi-ai's built-in Anthropic/OpenAI streaming via proxy |
 
 ### External Dependencies
 
