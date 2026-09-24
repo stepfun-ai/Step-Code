@@ -21,16 +21,16 @@ The script can be run from any directory. Step keeps the caller's current workin
 
 ### Workflow runtime
 
-Workflow execution requires the optional `isolated-vm` native addon to load under the selected Node runtime. A successful install with `--ignore-scripts` alone does not establish that the native addon is built. From the repository root, check that the addon can create an isolate:
+Workflow scripts run in QuickJS compiled to WebAssembly (`src/features/workflow/vm.ts`). The engine ships with the package as a pure-JavaScript dependency, so it needs no native build step and behaves identically under Node and under the standalone executable — the `workflow` tool, `/workflows`, and `/ultraloop` register on every supported runtime.
 
-```bash
-cd packages/coding-agent
-node --no-node-snapshot -e 'const vm = require("isolated-vm"); const isolate = new vm.Isolate({ memoryLimit: 16 }); console.log(isolate.createContextSync().evalSync("1 + 1")); isolate.dispose();'
-```
+This replaced the `isolated-vm` native addon, which linked V8's C++ API directly and therefore could only load on a V8 host. The standalone executable is built with Bun and runs on JavaScriptCore, so that addon could never load there: workflows, and with them the ultraloop opt-in that shares the workflow registration gate, were silently missing from every released build while working in a source run on Node.
 
-The expected result is `2`. If loading fails under Node, inspect the underlying error and install or rebuild the addon for that runtime before using workflows.
+Two constraints matter when editing the sandbox:
 
-The Bun standalone executable cannot host this V8 addon. It therefore does not register the `workflow` tool, `/workflows`, or `/ultraloop`. Suppressing the unsupported-runtime warning does not enable those features; use the Node source entry with a working addon when workflows are required.
+- Keep the `singlefile` QuickJS variant. The default `wasmfile` variant loads its `.wasm` from disk beside its own module, and that path does not exist inside a compiled executable's virtual filesystem.
+- Release every handle before disposing the context, and dispose the context before the runtime. Otherwise QuickJS aborts the whole WebAssembly instance on `JS_FreeRuntime`, and because the module is cached process-wide that poisons every later run in the session.
+
+Guest scripts have no access to `process`, `require`, `fetch`, the wall clock, or randomness, and run under a memory cap and a timeout. A single uninterrupted CPU burst longer than the timeout is terminated; time spent waiting on a host call is not counted against it.
 
 ## Forking / Rebranding
 
