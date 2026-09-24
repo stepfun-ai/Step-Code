@@ -1335,7 +1335,7 @@ Pass `env` in stream options to scope provider configuration to a request. Value
 const response = await models.complete(model, context, {
   env: {
     STEP_API_KEY: '...',
-    HTTPS_PROXY: 'http://proxy.internal:8080',
+    HTTPS_PROXY: 'http://proxy.example.test:8080',
   }
 });
 ```
@@ -1411,7 +1411,7 @@ Compat is a strict superset of the root entrypoint, so a file can switch its imp
 
 ### Adding a New Provider
 
-> The Step-only build ships no built-in providers; the supported way to add one is [`createProvider()`](#createprovider) / a `~/.pi/agent/models.json` entry, no package changes required. The internal checklist below is retained for reference on how a built-in catalog provider would be wired if the built-in surface is reintroduced.
+> The Step-only build ships no built-in providers; the supported way to add one is [`createProvider()`](#createprovider) / a `~/.pi/agent/models.json` entry, no package changes required.
 
 Adding a new LLM provider requires changes across multiple files. The layered layout: API implementations live in `src/api/`, provider factories in `src/providers/`, stable generated catalog wrappers live in `src/providers/<id>.models.ts`, and `src/models.generated.ts` registers them. This checklist covers all necessary steps:
 

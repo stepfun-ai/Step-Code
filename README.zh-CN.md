@@ -1,6 +1,10 @@
 # Step Code Readme
 
-![test\.jpg](图片和附件/test.jpg)
+<p align="center">
+  <a href="README.md">English</a> · <strong>简体中文</strong>
+</p>
+
+![test.jpg](https://static-openapi.stepfun.com/resource/test.jpg)
 
 <h3><strong>迅捷执行，长程可靠，token 更省。</strong></h3>
 
@@ -8,7 +12,9 @@
 
 Step Code 运行于终端，单轮任务即可完成代码阅读、修改与测试验证的完整闭环。它与 Step（StepFun）provider 深度协同，登录后从 Step 服务发现可用模型。MCP 工具、Agent Skills、插件与多代理编排开箱即用；长任务可通过 /goal 托管，由 Step Code 持续自主推进。
 
-![test\.jpg](图片和附件/test%201.jpg)
+Step Code 内置 [StepPage](https://platform.stepfun.com/docs/zh/step-code/reference/steppage) 发布能力：本地页面构建完成后，只需一条命令即可发布为可访问的静态网站，让开发、调试与交付在同一个终端中完成。
+
+![StepPage 发布能力演示](https://github.com/user-attachments/assets/66843695-3c77-4b26-bd2c-4cd2397a98bf)
 
 ## Why Step Code
 
@@ -55,12 +61,12 @@ step --help
 
 当前版本的默认产品入口只内置一个模型 provider：**Step（StepFun）**。下面四种入口只是同一 provider 的不同区域和计费方式，不是四个不同 provider。
 
-|入口|鉴权方式|计费|
-|---|---|---|
-|Step Plan（国内，[platform.stepfun.com](https://platform.stepfun.com/step-plan)）|浏览器 OAuth，凭据自动刷新|Mini / Plus / Pro / Max 订阅内含用量|
-|Step Plan Oversea（海外，[platform.stepfun.ai](https://platform.stepfun.ai/step-plan)）|浏览器 OAuth，凭据自动刷新|Mini / Plus / Pro / Max 订阅内含用量|
-|Step Platform（国内）|从 [platform.stepfun.com/interface-key](https://platform.stepfun.com/interface-key) 获取 API Key|按请求计费|
-|Step Platform Oversea（海外）|从 [platform.stepfun.ai/interface-key](https://platform.stepfun.ai/interface-key) 获取 API Key|按请求计费|
+| 入口                                                                                    | 鉴权方式                                                                                         | 计费                                 |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| Step Plan（国内，[platform.stepfun.com](https://platform.stepfun.com/step-plan)）       | 浏览器 OAuth，凭据自动刷新                                                                       | Mini / Plus / Pro / Max 订阅内含用量 |
+| Step Plan Oversea（海外，[platform.stepfun.ai](https://platform.stepfun.ai/step-plan)） | 浏览器 OAuth，凭据自动刷新                                                                       | Mini / Plus / Pro / Max 订阅内含用量 |
+| Step Platform（国内）                                                                   | 从 [platform.stepfun.com/interface-key](https://platform.stepfun.com/interface-key) 获取 API Key | 按请求计费                           |
+| Step Platform Oversea（海外）                                                           | 从 [platform.stepfun.ai/interface-key](https://platform.stepfun.ai/interface-key) 获取 API Key   | 按请求计费                           |
 
 在 TUI 中输入 `/login` 会打开 Step 登录流程；在 shell 中运行 `step login` 也可以启动登录。使用 API Key 时，设置 `STEP_API_KEY=<your_step_api_key>`，或在 `/login` 中输入；无交互运行也可以传入 `--api-key <your_step_api_key>`。
 
@@ -83,10 +89,10 @@ step -p "What is the tech stack of this project? What is each directory responsi
 
 用 `/init` 生成 `AGENTS.md` 项目指引；已有的 CLAUDE\.md 直接生效，无需重写。
 
-|入口|命令|适用场景|
-|---|---|---|
-|交互式 TUI|`step`|探索代码、持续对话、审阅修改|
-|Headless|`step -p "..."`|脚本、CI、批处理|
+| 入口       | 命令            | 适用场景                     |
+| ---------- | --------------- | ---------------------------- |
+| 交互式 TUI | `step`          | 探索代码、持续对话、审阅修改 |
+| Headless   | `step -p "..."` | 脚本、CI、批处理             |
 
 ### 示例
 
@@ -113,16 +119,16 @@ TUI 内输入 `/resume` 查找历史会话，`/hotkeys` 查看完整快捷键。
 
 ### 常用快捷键
 
-|快捷键|操作|
-|---|---|
-|`Enter`|发送消息|
-|`Shift+Enter` / `Ctrl+J` / `Alt+Enter`|换行|
-|`Enter`|流式输出期间排队插话（当前轮工具执行完自动送达）|
-|`@`|引用项目文件|
-|`!命令`|直接执行 Shell 命令并把输出交给模型|
-|`Shift+Tab`|循环权限模式|
-|`Ctrl+O`|折叠 / 展开工具输出|
-|`Esc`|中断正在运行的任务|
+| 快捷键                                 | 操作                                             |
+| -------------------------------------- | ------------------------------------------------ |
+| `Enter`                                | 发送消息                                         |
+| `Shift+Enter` / `Ctrl+J` / `Alt+Enter` | 换行                                             |
+| `Enter`                                | 流式输出期间排队插话（当前轮工具执行完自动送达） |
+| `@`                                    | 引用项目文件                                     |
+| `!命令`                                | 直接执行 Shell 命令并把输出交给模型              |
+| `Shift+Tab`                            | 循环权限模式                                     |
+| `Ctrl+O`                               | 折叠 / 展开工具输出                              |
+| `Esc`                                  | 中断正在运行的任务                               |
 
 ## 从其他 Agent 迁移
 

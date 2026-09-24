@@ -8,6 +8,7 @@ import { STEP_PROVIDER_ID } from "../features/step-provider/index.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { readStepLoginProfile } from "./login-flow.ts";
 import { invokeRemoteMcpTool, type RemoteMcpToolInvocation, type RemoteMcpToolResult } from "./mcp-client.ts";
+import type { StepLoginProfileId } from "./onboarding.ts";
 
 export { invokeRemoteMcpTool } from "./mcp-client.ts";
 
@@ -15,10 +16,35 @@ export const SEARCH_WEB_SERVER_NAME = "stepsearch";
 export const SEARCH_WEB_TOOL_NAME = "web_search";
 export const SEARCH_WEB_MAINLAND_URL = "https://api.stepfun.com/v1/mcp/web_search/mcp";
 export const SEARCH_WEB_OVERSEA_URL = "https://api.stepfun.ai/v1/mcp/web_search/mcp";
-/** Unrecognized login profiles fall back to the mainland endpoint. */
+export const SEARCH_WEB_PLAN_MAINLAND_URL = "https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp";
+export const SEARCH_WEB_PLAN_OVERSEA_URL = "https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp";
+/**
+ * Unrecognized login profiles fall back to the mainland platform endpoint.
+ *
+ * A profile is absent only when no login wrote one: an explicit `--api-key`, a
+ * `STEPCODE_SEARCH_API_KEY` environment key, or a hand-written `auth.json`.
+ * Those carry platform keys, because a Step Plan credential is only ever
+ * obtained through `/login`, which always records a profile — and a plan login
+ * from before profiles existed still resolves, through the legacy `"step"`
+ * mapping in `readStepLoginProfile`. So the fallback is not a guess about an
+ * unknown credential; it is the only kind of credential that can arrive here.
+ */
 export const SEARCH_WEB_DEFAULT_URL = SEARCH_WEB_MAINLAND_URL;
 
-const SEARCH_WEB_MCP_PATH = "/v1/mcp/web_search/mcp";
+/**
+ * One endpoint per login profile, mirroring the `baseUrl` split in
+ * `./onboarding.ts`: the plan profiles bill the user's Step Plan quota through
+ * `/step_plan/v1`, the platform profiles bill a pay-as-you-go API
+ * account through `/v1`. Plan and platform must never share a row — sending a
+ * plan credential to the platform endpoint silently charges the API account.
+ */
+const SEARCH_WEB_PROFILE_URLS: Record<StepLoginProfileId, string> = {
+	step_plan: SEARCH_WEB_PLAN_MAINLAND_URL,
+	step_plan_oversea: SEARCH_WEB_PLAN_OVERSEA_URL,
+	platform_cn: SEARCH_WEB_MAINLAND_URL,
+	platform_oversea: SEARCH_WEB_OVERSEA_URL,
+};
+
 const SEARCH_WEB_RESULT_COUNT = 10;
 const MAX_SNIPPET_CHARS = 400;
 
@@ -59,12 +85,7 @@ export function resolveSearchWebServerUrl(
 	env: Record<string, string | undefined> = process.env,
 	profile?: string,
 ): string {
-	const profileDefault =
-		profile === "platform_oversea" || profile === "step_plan_oversea"
-			? SEARCH_WEB_OVERSEA_URL
-			: profile === "step_plan" || profile === "platform_cn"
-				? SEARCH_WEB_MAINLAND_URL
-				: SEARCH_WEB_DEFAULT_URL;
+	const profileDefault = resolveProfileSearchWebUrl(profile);
 	const value =
 		normalizeOptionalText(configured) ?? normalizeOptionalText(env.STEPCODE_SEARCH_WEB_MCP_URL) ?? profileDefault;
 
@@ -76,7 +97,18 @@ export function resolveSearchWebServerUrl(
 	}
 
 	if (parsed.pathname && parsed.pathname !== "/") return value.replace(/\/+$/u, "");
-	return `${parsed.origin}${SEARCH_WEB_MCP_PATH}`;
+	// An override that carries only an origin still has to be billed to the
+	// account the login belongs to, so it inherits the profile's own path. A
+	// hardcoded `/v1` path here would send a plan login's searches to the
+	// platform account whenever someone redirected the host alone.
+	return `${parsed.origin}${new URL(profileDefault).pathname}`;
+}
+
+function resolveProfileSearchWebUrl(profile: string | undefined): string {
+	if (profile && Object.hasOwn(SEARCH_WEB_PROFILE_URLS, profile)) {
+		return SEARCH_WEB_PROFILE_URLS[profile as StepLoginProfileId];
+	}
+	return SEARCH_WEB_DEFAULT_URL;
 }
 
 /** Resolve search credentials without ever returning a placeholder value. */
@@ -135,16 +167,25 @@ export function createSearchWebTool(
 				);
 			}
 
-			const result = await invokeTool({
-				serverName: SEARCH_WEB_SERVER_NAME,
-				serverUrl,
-				toolName: SEARCH_WEB_TOOL_NAME,
-				arguments: { query, n: SEARCH_WEB_RESULT_COUNT },
-				headers: { Authorization: `Bearer ${apiKey}` },
-				signal,
-			});
+			// The endpoint decides which account the search is billed to, so every
+			// failure names it: a profile/endpoint mismatch is otherwise invisible
+			// until it shows up on a bill. The URL carries no credential.
+			let result: SearchWebMcpResult;
+			try {
+				result = await invokeTool({
+					serverName: SEARCH_WEB_SERVER_NAME,
+					serverUrl,
+					toolName: SEARCH_WEB_TOOL_NAME,
+					arguments: { query, n: SEARCH_WEB_RESULT_COUNT },
+					headers: { Authorization: `Bearer ${apiKey}` },
+					signal,
+				});
+			} catch (error) {
+				throw new Error(`${error instanceof Error ? error.message : String(error)} (endpoint ${serverUrl})`);
+			}
 			if (result.isError) {
-				throw new Error(result.content || `MCP tool ${SEARCH_WEB_SERVER_NAME}.${SEARCH_WEB_TOOL_NAME} failed`);
+				const detail = result.content || `MCP tool ${SEARCH_WEB_SERVER_NAME}.${SEARCH_WEB_TOOL_NAME} failed`;
+				throw new Error(`${detail} (endpoint ${serverUrl})`);
 			}
 			return renderSearchResults(query, result);
 		},

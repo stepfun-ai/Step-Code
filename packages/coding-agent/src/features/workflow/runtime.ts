@@ -49,13 +49,31 @@ import type {
 	WorkflowUsage,
 } from "./types.ts";
 import { emptyWorkflowUsage, mergeWorkflowUsage, workflowUsageTokens } from "./types.ts";
-import { runInIsolatedVm, type WorkflowVmHost, type WorkflowVmOptions, type WorkflowVmResult } from "./vm.ts";
+import {
+	isIsolatedVmAvailable,
+	runInIsolatedVm,
+	type WorkflowVmHost,
+	type WorkflowVmOptions,
+	type WorkflowVmResult,
+} from "./vm.ts";
+import { runInQuickJs } from "./vm-quickjs.ts";
 
 const DEFAULT_MAX_ITERATIONS = 20;
 const MAX_MAX_ITERATIONS = 100;
 const DEFAULT_STAGNATION_LIMIT = 3;
 const DEFAULT_AGENT_TIMEOUT_MS = 30 * 60 * 1_000;
 const MAX_AGENT_TIMEOUT_MS = 60 * 60 * 1_000;
+
+/**
+ * Pick the sandbox for this host. isolated-vm is a V8-native addon, so it is
+ * absent on the shipped executable's JavaScriptCore engine; QuickJS compiled to
+ * WebAssembly runs anywhere and stands in there. A V8 host with the addon
+ * installed keeps using it, so nothing changes for a source/Node run. An
+ * explicit `vmExecutor` still wins over both.
+ */
+export function defaultWorkflowVmExecutor(): NonNullable<WorkflowRuntimeOptions["vmExecutor"]> {
+	return isIsolatedVmAvailable() ? runInIsolatedVm : runInQuickJs;
+}
 
 export interface WorkflowRuntimeOptions {
 	cwd: string;
@@ -141,7 +159,7 @@ export class WorkflowRuntime {
 		this.signal = options.signal;
 		this.nestedWorkflow = options.nestedWorkflow;
 		this.now = options.now ?? Date.now;
-		this.vmExecutor = options.vmExecutor ?? runInIsolatedVm;
+		this.vmExecutor = options.vmExecutor ?? defaultWorkflowVmExecutor();
 		const startedAt = this.readNow();
 		this.startedAt = startedAt;
 		const initial: WorkflowProgress = {

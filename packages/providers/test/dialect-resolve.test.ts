@@ -39,7 +39,7 @@ describe("deriveFromLegacyProvider", () => {
 	it("derives nothing today — there is no faithful provider-name -> single-dialect mapping", () => {
 		expect(deriveFromLegacyProvider("anthropic")).toBeUndefined();
 		expect(deriveFromLegacyProvider("openai")).toBeUndefined();
-		expect(deriveFromLegacyProvider("radius")).toBeUndefined();
+		expect(deriveFromLegacyProvider("unknown-provider")).toBeUndefined();
 		expect(deriveFromLegacyProvider("some-unknown-provider")).toBeUndefined();
 	});
 });

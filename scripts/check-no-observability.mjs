@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDirectory, "..");
 const forbidden = [
-	/stepcliobserserver/iu,
+	/private-telemetry/iu,
 	/\/api\/v1\/events/iu,
 	/createStepTelemetryRuntime/iu,
 	/\bx-step-(session|goal|attempt|harness|span|workspace|provider|model)\b/iu,
-	/\b(?:gitlab\.basemind\.com|stepfun-inc\.(?:net|com)|projects\/10933)\b/iu,
+	/(?:git@|https?:\/\/|ssh:\/\/git@)gitlab\.(?!com(?:[\/:]|$))/iu,
 	/BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/iu,
-	/[\w.+-]+@(?:stepfun\.com|basemind)/iu,
+	/[\w.+-]+@(?:[\w-]+\.)+(?:internal|corp|local)\b/iu,
 ];
 const allowedFiles = new Set([
 	"packages/coding-agent/src/step/telemetry-contract.ts",
@@ -63,11 +63,11 @@ function runSelfTest() {
 	const failures = [];
 	const expect = (label, condition) => { if (!condition) failures.push(label); };
 	expect("clean source passes", analyzeFile("packages/coding-agent/src/step/foo.ts", "export const value = 1;").length === 0);
-	expect("collector host is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "https://stepcliobserserver.invalid").length > 0);
+	expect("collector host is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "https://private-telemetry.invalid").length > 0);
 	expect("sensitive header is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "x-step-session-id").length > 0);
 	expect("low sensitivity client is allowed", analyzeFile("packages/coding-agent/src/step/foo.ts", "x-step-client").length === 0);
 	expect("high-sensitivity model header is detected", analyzeFile("packages/coding-agent/src/step/foo.ts", "x-step-model").length > 0);
-	expect("collector base is no longer allowlisted in endpoints", analyzeFile("packages/coding-agent/src/step/feedback/endpoints.ts", "https://x/stepcliobserserver").length > 0);
+	expect("collector base is no longer allowlisted in endpoints", analyzeFile("packages/coding-agent/src/step/feedback/endpoints.ts", "https://x/private-telemetry").length > 0);
 	expect("feedback path suffix alone is allowed", analyzeFile("packages/coding-agent/src/step/feedback/endpoints.ts", "const suffix = '/api/v1/feedback';").length === 0);
 	if (failures.length) {
 		console.error("no-observability self-test FAILED:");

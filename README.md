@@ -1,6 +1,10 @@
 # Step Code
 
-![test\.jpg](图片和附件/test.jpg)
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+![test.jpg](https://static-openapi.stepfun.com/resource/test.jpg)
 
 <h3><strong>Swift execution, long-horizon reliability, and high token efficiency.</strong></h3>
 
@@ -8,7 +12,9 @@
 
 Step Code runs in your terminal and handles the full task loop—reading code, making changes, and running tests\. It works with the Step provider and discovers the available Step models after sign\-in\. MCP servers, Agent Skills, plugins, and multi\-agent orchestration work out of the box; you can delegate long\-running tasks to `/goal` and let Step Code drive them forward autonomously\.
 
-![test\.jpg](图片和附件/test%201.jpg)
+Step Code comes with built-in [StepPage](https://platform.stepfun.ai/docs/en/step-code/reference/steppage) publishing. Once your local page is ready, you can publish it as an accessible static website with a single command—bringing development, debugging, and delivery all within the same terminal\.
+
+![StepPage publishing demo](https://github.com/user-attachments/assets/66843695-3c77-4b26-bd2c-4cd2397a98bf)
 
 ## Why Step Code
 
@@ -55,12 +61,12 @@ Upgrade later with `step update`\.
 
 The default Step Code entrypoint exposes one built-in model provider: **Step (StepFun)**. The profiles below select the Step service region and billing method; they are not separate providers.
 
-|Profile|Credential|Billing|
-|---|---|---|
-|Step Plan (CN, [platform.stepfun.com](https://platform.stepfun.com/step-plan))|Browser OAuth; credentials refresh automatically|Usage included with Mini / Plus / Pro / Max plans|
-|Step Plan Oversea ([platform.stepfun.ai](https://platform.stepfun.ai/step-plan))|Browser OAuth; credentials refresh automatically|Usage included with Mini / Plus / Pro / Max plans|
-|Step Platform (CN)|API key from [platform.stepfun.com/interface-key](https://platform.stepfun.com/interface-key)|Pay per request|
-|Step Platform Oversea|API key from [platform.stepfun.ai/interface-key](https://platform.stepfun.ai/interface-key)|Pay per request|
+| Profile                                                                          | Credential                                                                                    | Billing                                           |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Step Plan (CN, [platform.stepfun.com](https://platform.stepfun.com/step-plan))   | Browser OAuth; credentials refresh automatically                                              | Usage included with Mini / Plus / Pro / Max plans |
+| Step Plan Oversea ([platform.stepfun.ai](https://platform.stepfun.ai/step-plan)) | Browser OAuth; credentials refresh automatically                                              | Usage included with Mini / Plus / Pro / Max plans |
+| Step Platform (CN)                                                               | API key from [platform.stepfun.com/interface-key](https://platform.stepfun.com/interface-key) | Pay per request                                   |
+| Step Platform Oversea                                                            | API key from [platform.stepfun.ai/interface-key](https://platform.stepfun.ai/interface-key)   | Pay per request                                   |
 
 Inside the TUI, `/login` opens the Step sign-in flow; from a shell, run `step login`. For API-key access, set `STEP_API_KEY=<your_step_api_key>` or enter the key in `/login`; headless runs can also pass `--api-key <your_step_api_key>`.
 
@@ -83,10 +89,10 @@ step -p "What is the tech stack of this project? What is each directory responsi
 
 Run `/init` to generate an `AGENTS.md` project guide; an existing `CLAUDE.md` is used as\-is\.
 
-|Entry|Command|Use case|
-|---|---|---|
-|Interactive TUI|`step`|Exploring code, ongoing conversations, reviewing changes|
-|Headless|`step -p "..."`|Scripts, CI, batch jobs|
+| Entry           | Command         | Use case                                                 |
+| --------------- | --------------- | -------------------------------------------------------- |
+| Interactive TUI | `step`          | Exploring code, ongoing conversations, reviewing changes |
+| Headless        | `step -p "..."` | Scripts, CI, batch jobs                                  |
 
 ### Examples
 
@@ -113,16 +119,16 @@ Inside the TUI, `/resume` finds past sessions and `/hotkeys` lists all shortcuts
 
 ### Common shortcuts
 
-|Key|Action|
-|---|---|
-|`Enter`|Send message|
-|`Shift+Enter` / `Ctrl+J` / `Alt+Enter`|Newline|
-|`Enter`|Queue a message while streaming \(delivered after the current tool call finishes\)|
-|`@`|Reference a project file|
-|`!command`|Run a shell command and hand the output to the model|
-|`Shift+Tab`|Cycle permission mode|
-|`Ctrl+O`|Toggle tool output|
-|`Esc`|Interrupt the running task|
+| Key                                    | Action                                                                             |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `Enter`                                | Send message                                                                       |
+| `Shift+Enter` / `Ctrl+J` / `Alt+Enter` | Newline                                                                            |
+| `Enter`                                | Queue a message while streaming \(delivered after the current tool call finishes\) |
+| `@`                                    | Reference a project file                                                           |
+| `!command`                             | Run a shell command and hand the output to the model                               |
+| `Shift+Tab`                            | Cycle permission mode                                                              |
+| `Ctrl+O`                               | Toggle tool output                                                                 |
+| `Esc`                                  | Interrupt the running task                                                         |
 
 ## Migrate from other agents
 

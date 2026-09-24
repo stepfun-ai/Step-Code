@@ -7,12 +7,12 @@ function envFlag(value: string | undefined): boolean {
 
 export type WorkflowRegistrationDecision =
 	| { enabled: true }
-	| { enabled: false; reason: "not-enabled" | "disabled-by-env" | "vm-unavailable" | "vm-unsupported-runtime" };
+	| { enabled: false; reason: "not-enabled" | "disabled-by-env" | "vm-unavailable" };
 
 /**
  * Startup warning for the one refusal that contradicts the default-on
- * registration: every other reason honors an explicit "off" or an unfixable
- * runtime fact and stays silent.
+ * registration: every other reason honors an explicit "off" or a runtime that
+ * has a working executor anyway.
  */
 export const WORKFLOW_VM_UNAVAILABLE_WARNING =
 	"Workflow tools are unavailable this session: the isolated-vm native module failed to load. Rebuild or reinstall isolated-vm to restore the workflow tool, /workflows, and /ultraloop, or set STEP_DISABLE_WORKFLOW=1 to silence this warning.";
@@ -31,6 +31,12 @@ export const WORKFLOW_VM_UNAVAILABLE_WARNING =
  * the ultraloop opt-in. An embedder's `enabled: false` or
  * STEP_DISABLE_WORKFLOW=1 turns registration off; STEP_ENABLE_WORKFLOW is no
  * longer read.
+ *
+ * A runtime that cannot host isolated-vm is not a refusal. The V8-native addon
+ * never loads on the shipped executable's JavaScriptCore engine, so that host
+ * runs workflows through the bundled QuickJS WebAssembly executor instead (see
+ * `vm-quickjs.ts`) and registers normally. Only a V8 host whose addon failed to
+ * load is a real, fixable gap — that one warns.
  */
 export function resolveWorkflowRegistration(
 	options: { enabled?: boolean; vmExecutor?: unknown } = {},
@@ -40,9 +46,9 @@ export function resolveWorkflowRegistration(
 	if (envFlag(process.env.STEP_DISABLE_WORKFLOW)) return { enabled: false, reason: "disabled-by-env" };
 	if (options.enabled === false) return { enabled: false, reason: "not-enabled" };
 	if (!vmAvailable && !options.vmExecutor) {
-		// A missing native module is fixable on a V8 runtime (warn so the user can
-		// reinstall it); on a non-V8 runtime it never loads, so refuse silently.
-		return { enabled: false, reason: vmHostable ? "vm-unavailable" : "vm-unsupported-runtime" };
+		// Non-V8 host: QuickJS stands in for isolated-vm, so workflows are available.
+		if (!vmHostable) return { enabled: true };
+		return { enabled: false, reason: "vm-unavailable" };
 	}
 	return { enabled: true };
 }

@@ -143,7 +143,7 @@ function runSelfTest() {
 	expectClean("packages/providers/src/api/openai-completions.ts", "const adapter = byApi[model.api];");
 
 	// violation — quirk literal in a file with NO registered quirks
-	expectViolation("packages/providers/src/api/pi-messages.ts", 'if (model.provider === "radius") special();');
+	expectViolation("packages/providers/src/api/pi-messages.ts", 'if (model.provider === "unknown-provider") special();');
 	// violation — NEW literal not in a registered file's whitelist (=== and !==)
 	expectViolation("packages/providers/src/api/openai-responses.ts", 'if (model.provider === "brand-new-vendor") hack();');
 	expectViolation("packages/providers/src/api/anthropic-messages.ts", 'if (model.provider !== "brand-x") skip();');
