@@ -12,7 +12,7 @@ import type { StepTelemetryReporter } from "../../step/telemetry.ts";
 import { createDefaultWorkflowAgentRunner } from "./agent-runner.ts";
 import { createWorkflowRunPaths, newWorkflowRunId, resolveWorkflowRoot, WorkflowJournal } from "./journal.ts";
 import { formatWorkflowStatus, listSavedWorkflows, listWorkflowRuns } from "./progress.ts";
-import { resolveWorkflowRegistration, WORKFLOW_VM_UNAVAILABLE_WARNING } from "./registration-gate.ts";
+import { resolveWorkflowRegistration } from "./registration-gate.ts";
 import {
 	renderWorkflowCall,
 	renderWorkflowResult,
@@ -23,7 +23,7 @@ import { WorkflowRuntime, workflowToolResult } from "./runtime.ts";
 import { isWorkflowPathInside } from "./tool-profile.ts";
 import type { WorkflowAgentRunner, WorkflowProgress, WorkflowRunResult } from "./types.ts";
 import type { UltraloopTurnState } from "./ultraloop-opt-in.ts";
-import { type runInIsolatedVm, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";
+import { type runInQuickJs, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";
 
 export const WorkflowParams = Type.Object({
 	script: Type.Optional(Type.String({ description: "Inline JavaScript workflow script" })),
@@ -51,7 +51,7 @@ export interface StepWorkflowExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 	enabled?: boolean;
 	runner?: WorkflowAgentRunner;
-	vmExecutor?: typeof runInIsolatedVm;
+	vmExecutor?: typeof runInQuickJs;
 	maxConcurrency?: number;
 	maxAgents?: number;
 	agentTimeoutMs?: number;
@@ -131,18 +131,7 @@ async function exists(filePath: string): Promise<boolean> {
 /** Register the feature-gated Workflow tool and /workflows status command. */
 export function createStepWorkflowExtension(options: StepWorkflowExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
-		const registration = resolveWorkflowRegistration(options);
-		if (!registration.enabled) {
-			if (registration.reason === "vm-unavailable") {
-				let warned = false;
-				pi.on("session_start", (_event, ctx) => {
-					if (warned) return;
-					warned = true;
-					ctx.ui.notify(WORKFLOW_VM_UNAVAILABLE_WARNING, "warning");
-				});
-			}
-			return;
-		}
+		if (!resolveWorkflowRegistration(options).enabled) return;
 		const activeRuns = new Set<AbortController>();
 		const runner = options.runner ?? createDefaultWorkflowAgentRunner();
 		const homeRoot = options.homeRoot ?? resolveStepStorageRoot();
