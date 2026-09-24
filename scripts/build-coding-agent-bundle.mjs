@@ -28,8 +28,6 @@ const allowedExternalPackages = new Set([
 	// Optional native accelerators. Their callers fall back to JavaScript when absent.
 	"bufferutil",
 	"utf-8-validate",
-	// Workflow's isolated runtime is a native optional dependency loaded at runtime.
-	"isolated-vm",
 	// Optional debug output coloring.
 	"supports-color",
 ]);

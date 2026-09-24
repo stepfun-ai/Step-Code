@@ -54,9 +54,11 @@ Updates from late child cleanup are ignored once the tool call has settled.
 This projection describes assigned tasks and lifecycle states; child tool and
 model output remain in the child trajectories.
 
-Workflows require the native `isolated-vm` runtime. Registration is disabled when
-it cannot load. Unit tests can inject a VM executor to check the host contract;
-those tests do not validate native isolation.
+Workflows run in QuickJS compiled to WebAssembly, a pure-JavaScript dependency
+that needs no native build, so registration no longer depends on the runtime and
+is disabled only by `enabled: false` or `STEP_DISABLE_WORKFLOW=1`. Unit tests can
+inject a VM executor to check the host contract; those tests do not validate
+isolation itself.
 
 ## Child fan-out and turn settlement
 

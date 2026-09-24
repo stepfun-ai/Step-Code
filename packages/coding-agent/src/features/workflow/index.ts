@@ -31,12 +31,7 @@ export {
 	workflowHash,
 } from "./journal.ts";
 export { formatWorkflowStatus, listSavedWorkflows, listWorkflowRuns, WorkflowProgressStore } from "./progress.ts";
-export {
-	defaultWorkflowVmExecutor,
-	WorkflowRuntime,
-	WorkflowSchemaError,
-	workflowToolResult,
-} from "./runtime.ts";
+export { WorkflowRuntime, WorkflowSchemaError, workflowToolResult } from "./runtime.ts";
 export { validateWorkflowSchema } from "./schema.ts";
 export {
 	createStepWorkflowExtension,
@@ -53,5 +48,4 @@ export {
 	WORKFLOW_TOOL_PROFILES,
 } from "./tool-profile.ts";
 export type * from "./types.ts";
-export { isIsolatedVmAvailable, loadIsolatedVm, runInIsolatedVm, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";
-export { isQuickJsVmAvailable, runInQuickJs } from "./vm-quickjs.ts";
+export { runInQuickJs, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";

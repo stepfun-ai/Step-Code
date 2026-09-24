@@ -8,9 +8,6 @@ import {
 	detectUltraloopOptIn,
 	type UltraloopTurnState,
 } from "../src/features/workflow/ultraloop-opt-in.ts";
-import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
-
-const nativeUltraloopTest = test.skipIf(!isIsolatedVmAvailable());
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -148,7 +145,7 @@ describe("buildUltraloopSessionReminder", () => {
 });
 
 describe("createUltraloopOptInExtension", () => {
-	nativeUltraloopTest("subscribes handlers only when enabled and native runtime is present", () => {
+	test("subscribes handlers only when workflow registration is enabled", () => {
 		const enabled = harness();
 		createUltraloopOptInExtension({ enabled: true })(enabled.api);
 		expect(enabled.handlers.has("before_agent_start")).toBe(true);

@@ -11,11 +11,9 @@ import {
 	type WorkflowRequest,
 } from "../src/features/workflow/step-workflow.ts";
 import type { WorkflowAgentRunResult, WorkflowProgress, WorkflowRunResult } from "../src/features/workflow/types.ts";
-import { isIsolatedVmAvailable } from "../src/features/workflow/vm.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 const cleanups: string[] = [];
-const nativeWorkflowTest = test.skipIf(!isIsolatedVmAvailable());
 
 afterEach(async () => {
 	vi.unstubAllEnvs();
@@ -124,7 +122,7 @@ test("child ACL hook blocks writes and emits redacted telemetry", async () => {
 	]);
 });
 
-nativeWorkflowTest("saved nested workflow executes once and a second nesting level is rejected", async () => {
+test("saved nested workflow executes once and a second nesting level is rejected", async () => {
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
 	const homeRoot = await workspace("step-workflow-home-");
@@ -150,7 +148,7 @@ nativeWorkflowTest("saved nested workflow executes once and a second nesting lev
 	);
 });
 
-nativeWorkflowTest("saved workflow lookup prefers the project and /workflows reports runs", async () => {
+test("saved workflow lookup prefers the project and /workflows reports runs", async () => {
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();
 	const homeRoot = await workspace("step-workflow-home-");
