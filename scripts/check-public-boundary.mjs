@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const guardPath = "scripts/check-public-boundary.mjs";
-const publicGuardPaths = new Set([guardPath, "scripts/check-public-history.mjs"]);
+const publicGuardPaths = new Set([guardPath, "scripts/check-no-observability.mjs"]);
 
 const FORBIDDEN_PATHS = [
 	/^\.gitlab-ci\.yml$/u,
@@ -31,15 +31,11 @@ const FORBIDDEN_PATHS = [
 ];
 
 const FORBIDDEN_TEXT = [
-	{ label: "private GitLab host", pattern: /gitlab\.basemind\.com/iu },
+	{ label: "self-hosted source control", pattern: /(?:git@|https?:\/\/|ssh:\/\/git@)gitlab\.(?!com(?:[\/:]|$))/iu },
+	{ label: "private infrastructure hostname", pattern: /https?:\/\/(?:[^/\s]+\.)+\b(?:internal|corp|local)(?:[/:]|$)/iu },
 	{ label: "GitLab API variable", pattern: /\b(?:CI_API_V4_URL|CI_PROJECT_ID)\b/u },
 	{ label: "private object-store variable", pattern: /\bSTEP_TOS_[A-Z0-9_]+\b/u },
 	{ label: "private object-store SDK", pattern: /@volcengine\/tos-sdk/u },
-	{
-		label: "private Step infrastructure host",
-		pattern: /(?:stepfun-inc\.(?:net|com)|(?:[a-z0-9-]+\.)?ivolces\.com|(?:[a-z0-9-]+\.)?volces\.com)/iu,
-	},
-	{ label: "private project identifier", pattern: /projects\/10933/u },
 ];
 
 function normalize(value) {
@@ -102,11 +98,11 @@ function runSelfTest() {
 
 	expectClean("README.md", "Public builds create local artifacts only.");
 	for (const exemptPath of publicGuardPaths) {
-		expectClean(exemptPath, "gitlab.basemind.com CI_PROJECT_ID");
+		expectClean(exemptPath, "https://gitlab.example.invalid CI_PROJECT_ID");
 	}
 	expectViolation(".gitlab-ci.yml", "stages: [.pre]");
 	expectViolation("docs/improvement-plan.md", "internal planning notes");
-	expectViolation("docs/public.md", "https://gitlab.basemind.com/aiagent/step-harness");
+	expectViolation("docs/public.md", "https://gitlab.example.invalid/example/project");
 	expectViolation("infra/release/private.mjs", "process.env.CI_API_V4_URL");
 	expectViolation("scripts/private.mjs", "STEP_TOS_BUCKET");
 	expectViolation("scripts/private.mjs", "@volcengine/tos-sdk");

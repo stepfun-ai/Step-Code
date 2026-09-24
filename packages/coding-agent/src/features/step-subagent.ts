@@ -27,7 +27,12 @@ import {
 	getLiveSubagentSession,
 	laneMatches,
 } from "./subagent/lane-lifecycle.ts";
-import { laneWidgetLines, renderSubagentResult, SubagentListWidget } from "./subagent/rendering.ts";
+import {
+	laneWidgetLines,
+	renderSubagentResult,
+	SubagentListWidget,
+	subagentListSignature,
+} from "./subagent/rendering.ts";
 import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
 
 // Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
@@ -452,12 +457,21 @@ async function withSubagentListWidget(
 	if (!ctx.hasUI) return run(onUpdate);
 	const key = `step-subagent-list:${toolCallId}`;
 	let widget: SubagentListWidget | undefined;
+	// Last signature actually handed to the host. Children emit an update per
+	// streamed delta, and every publish makes the host dispose the widget and
+	// redraw; the rows only move on status and token changes, so the rest are
+	// dropped here rather than paid for. The widget still takes each `details`,
+	// so a later publish draws from the newest records.
+	let published: string | undefined;
 	const update: AgentToolUpdateCallback<StepSubagentDetails> = (result) => {
 		onUpdate?.(result);
 		const details = result.details;
 		if (!details) return;
+		widget?.setDetails(details);
+		const signature = subagentListSignature(details);
+		if (signature === published) return;
+		published = signature;
 		try {
-			widget?.setDetails(details);
 			ctx.ui.setWidget(
 				key,
 				(_tui, theme) => {

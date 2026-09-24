@@ -5,13 +5,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Before you start:** Read [CONTRIBUTING.md](https://github.com/stepfun-ai/step-harness/blob/main/CONTRIBUTING.md).
-
-        New issues from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. Issues that do not meet the quality bar in [CONTRIBUTING.md](https://github.com/stepfun-ai/step-harness/blob/main/CONTRIBUTING.md) will not be reopened or receive a reply.
+        **Before you start:** Read [CONTRIBUTING.md](https://github.com/stepfun-ai/Step-Code/blob/main/CONTRIBUTING.md).
 
         Keep this short. If it doesn't fit on one screen, it's too long. Write in your own voice.
 
-        **Important:** before reporting an issue in core, please validate first with `pi -ne` that this is not caused by an extension you loaded.
+        **Important:** before reporting an issue in core, please validate first with `step -ne` that this is not caused by an extension you loaded.
 
   - type: textarea
     id: description
@@ -40,6 +38,6 @@ body:
     id: version
     attributes:
       label: Version
-      description: e.g. 0.49.0
+      description: e.g. 0.84.4
     validations:
       required: false
