@@ -93,6 +93,7 @@ export * from "./harness/prompt-templates.ts";
 // Harness
 export * from "./harness/result.ts";
 export * from "./harness/session/index.ts";
+export { SkillIgnoreMatcher } from "./harness/skill-discovery.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";
 export type {

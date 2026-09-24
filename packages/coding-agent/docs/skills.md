@@ -38,8 +38,10 @@ Discovery rules:
 - In all skill locations, directories containing `SKILL.md` are discovered recursively
 - In `~/.agents/skills/` and project `.agents/skills/`, root `.md` files are ignored, but nested `.md` files in grouping folders are discovered when they declare skill frontmatter
 - Root Markdown files other than `SKILL.md` that do not look like skills are ignored silently
+- Directory symlinks are followed once per scan, so cycles do not cause repeated traversal
+- `.gitignore`, `.ignore`, and `.fdignore` rules are applied relative to the directory containing each ignore file
 
-Disable discovery with `--no-skills` (explicit `--skill` paths still load).
+Disable automatic discovery with `--no-skills`. Skills from default paths, settings, and configured packages are not scanned; explicit `--skill` paths still load.
 
 ### Using Skills from Other Harnesses
 
@@ -66,10 +68,12 @@ For project-level Claude Code skills, add to `.stepcode/settings.json`:
 
 1. At startup, step scans skill locations and extracts names and descriptions
 2. The system prompt includes available skills in XML format per the [specification](https://agentskills.io/integrate-skills)
-3. When a task matches, the agent uses `read` to load the full SKILL.md (models don't always do this; use prompting or `/skill:name` to force it)
+3. When a task matches, the agent uses the available file-reading tool (`read_file` in Step) to load the full SKILL.md (models don't always do this; use prompting or `/skill:name` to force it)
 4. The agent follows the instructions, using relative paths to reference scripts and assets
 
 This is progressive disclosure: only descriptions are always in context, full instructions load on-demand.
+
+Built-in context compaction preserves instructions already loaded through file reads or `/skill:name`, along with their locations and any read ranges. Repeated reads are deduplicated, and a new full read replaces the previously loaded version. Instructions are carried into later compactions without reading inactive skills from disk. Extensions that provide their own compaction result remain responsible for the content they preserve.
 
 ## Skill Commands
 
@@ -80,7 +84,7 @@ Skills register as `/skill:name` commands:
 /skill:pdf-tools extract      # Load skill with arguments
 ```
 
-Arguments after the command are appended to the skill content as `User: <args>`.
+Any whitespace, including a newline or tab, can separate the skill name from its arguments. Arguments are appended after the skill content.
 
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 
@@ -186,7 +190,7 @@ Unknown frontmatter fields are ignored.
 
 Declared skills with missing descriptions are not loaded. Malformed `SKILL.md` files and `SKILL.md` files without a description produce warnings and are not loaded. Other Markdown files without valid skill frontmatter are ignored.
 
-Name collisions (same name from different locations) warn and keep the first skill found.
+Name collisions (same name from different locations) warn and keep the first skill found. In the default locations, project skills take precedence over user skills, including when using the `loadSkills()` SDK helper.
 
 ## Example
 

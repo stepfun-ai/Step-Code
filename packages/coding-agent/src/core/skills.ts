@@ -1,5 +1,5 @@
+import { SkillIgnoreMatcher } from "@step-harness/agent-core";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import ignore from "ignore";
 import { basename, dirname, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
@@ -15,51 +15,14 @@ const MAX_DESCRIPTION_LENGTH = 1024;
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 
-type IgnoreMatcher = ReturnType<typeof ignore>;
-
 function toPosixPath(p: string): string {
 	return p.split(sep).join("/");
 }
 
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-
-	if (pattern.startsWith("/")) {
-		pattern = pattern.slice(1);
-	}
-
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
-}
-
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
-	const relativeDir = relative(rootDir, dir);
-	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
-
+function addIgnoreRules(ig: SkillIgnoreMatcher, dir: string): void {
 	for (const filename of IGNORE_FILE_NAMES) {
-		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
 		try {
-			const content = readFileSync(ignorePath, "utf-8");
-			const patterns = content
-				.split(/\r?\n/)
-				.map((line) => prefixIgnorePattern(line, prefix))
-				.filter((line): line is string => Boolean(line));
-			if (patterns.length > 0) {
-				ig.add(patterns);
-			}
+			ig.add(readFileSync(join(dir, filename), "utf-8"));
 		} catch {}
 	}
 }
@@ -174,8 +137,9 @@ function loadSkillsFromDirInternal(
 	dir: string,
 	source: string,
 	includeRootFiles: boolean,
-	ignoreMatcher?: IgnoreMatcher,
+	ignoreMatcher?: SkillIgnoreMatcher,
 	rootDir?: string,
+	visitedDirs = new Set<string>(),
 ): LoadSkillsResult {
 	const skills: Skill[] = [];
 	const diagnostics: ResourceDiagnostic[] = [];
@@ -184,9 +148,13 @@ function loadSkillsFromDirInternal(
 		return { skills, diagnostics };
 	}
 
+	const realDir = canonicalizePath(dir);
+	if (visitedDirs.has(realDir)) return { skills, diagnostics };
+	visitedDirs.add(realDir);
+
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
+	const ig = new SkillIgnoreMatcher(toPosixPath(relative(root, dir)), ignoreMatcher);
+	addIgnoreRules(ig, dir);
 
 	try {
 		const entries = readdirSync(dir, { withFileTypes: true });
@@ -253,7 +221,7 @@ function loadSkillsFromDirInternal(
 			}
 
 			if (isDirectory) {
-				const subResult = loadSkillsFromDirInternal(fullPath, source, false, ig, root);
+				const subResult = loadSkillsFromDirInternal(fullPath, source, false, ig, root, visitedDirs);
 				skills.push(...subResult.skills);
 				diagnostics.push(...subResult.diagnostics);
 				continue;
@@ -352,7 +320,7 @@ function loadSkillFromFile(
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPrompt(skills: Skill[], readTool: "read" | "read_file" = "read"): string {
 	const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
 
 	if (visibleSkills.length === 0) {
@@ -361,7 +329,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 
 	const lines = [
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
-		"Use the read tool to load a skill's file when the task matches its description.",
+		`Use the ${readTool} tool to load a skill's file when the task matches its description.`,
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 		"",
 		"<available_skills>",
@@ -451,8 +419,8 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	}
 
 	if (includeDefaults) {
-		addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
 		addSkills(loadSkillsFromDirInternal(resolve(resolvedCwd, configDirName, "skills"), "project", true));
+		addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
 	}
 
 	const userSkillsDir = join(resolvedAgentDir, "skills");

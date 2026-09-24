@@ -23,6 +23,14 @@ import {
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
 import {
+	collectSkillInstructions,
+	formatSkillInstructions,
+	readSavedSkillInstructions,
+	type SkillInstruction,
+	type SkillInstructionContext,
+	stripSkillInstructions,
+} from "./skill-instructions.ts";
+import {
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
@@ -41,6 +49,8 @@ import {
 export interface CompactionDetails {
 	readFiles: string[];
 	modifiedFiles: string[];
+	/** Loaded skill instructions carried across successive compactions. */
+	activeSkills?: SkillInstruction[];
 }
 
 /**
@@ -777,13 +787,16 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Loaded instructions that must survive model-generated summaries. */
+	activeSkills?: SkillInstruction[];
+	/** Compaction settings from settings.jsonl. */
 	settings: CompactionSettings;
 }
 
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	skillContext?: SkillInstructionContext,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -798,10 +811,12 @@ export function prepareCompaction(
 	}
 
 	let previousSummary: string | undefined;
+	let previousSkills: SkillInstruction[] = [];
 	let boundaryStart = 0;
 	if (prevCompactionIndex >= 0) {
 		const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
-		previousSummary = prevCompaction.summary;
+		previousSkills = prevCompaction.fromHook ? [] : readSavedSkillInstructions(prevCompaction.details);
+		previousSummary = stripSkillInstructions(prevCompaction.summary, previousSkills);
 		const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
 		boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1;
 	}
@@ -850,6 +865,12 @@ export function prepareCompaction(
 		}
 	}
 
+	const activeSkills = collectSkillInstructions(
+		convertToLlm([...messagesToSummarize, ...turnPrefixMessages]),
+		previousSkills,
+		skillContext,
+	);
+
 	return {
 		firstKeptEntryId,
 		messagesToSummarize,
@@ -858,6 +879,7 @@ export function prepareCompaction(
 		tokensBefore,
 		previousSummary,
 		fileOps,
+		...(activeSkills.length > 0 ? { activeSkills } : {}),
 		settings,
 	};
 }
@@ -906,6 +928,7 @@ export async function compact(
 		tokensBefore,
 		previousSummary,
 		fileOps,
+		activeSkills = [],
 		settings,
 	} = preparation;
 
@@ -978,6 +1001,7 @@ export async function compact(
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
+	summary += formatSkillInstructions(activeSkills);
 
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no UUID - session may need migration");
@@ -988,7 +1012,11 @@ export async function compact(
 		firstKeptEntryId,
 		tokensBefore,
 		usage: summaryUsage,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
+		details: {
+			readFiles,
+			modifiedFiles,
+			...(activeSkills.length > 0 ? { activeSkills } : {}),
+		} as CompactionDetails,
 	};
 }
 

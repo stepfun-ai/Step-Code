@@ -4,6 +4,7 @@
 
 import type { AgentMessage } from "@step-harness/agent-core";
 import { contentText, type Message } from "@step-harness/providers";
+import { collectSkillReadResults } from "./skill-instructions.ts";
 
 /** File paths touched by a session branch or compaction range. */
 export interface FileOperations {
@@ -42,12 +43,15 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 
 		switch (block.name) {
 			case "read":
+			case "read_file":
 				fileOps.read.add(path);
 				break;
 			case "write":
+			case "write_file":
 				fileOps.written.add(path);
 				break;
 			case "edit":
+			case "edit_file":
 				fileOps.edited.add(path);
 				break;
 		}
@@ -168,6 +172,7 @@ export function serializeConversation(
 	toolResultTruncation: ToolResultTruncationOptions = DEFAULT_TOOL_RESULT_TRUNCATION,
 ): string {
 	const parts: string[] = [];
+	const skillReads = collectSkillReadResults(messages);
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
@@ -201,7 +206,9 @@ export function serializeConversation(
 		} else if (msg.role === "toolResult") {
 			const content = contentText(msg.content, "");
 			if (content) {
-				parts.push(`[Tool result]: ${truncateForSummary(content, toolResultTruncation)}`);
+				const skillRead = skillReads.get(msg);
+				const preserve = !msg.isError && skillRead?.toolName === msg.toolName;
+				parts.push(`[Tool result]: ${preserve ? content : truncateForSummary(content, toolResultTruncation)}`);
 			}
 		}
 	}

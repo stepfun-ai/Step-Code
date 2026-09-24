@@ -34,7 +34,7 @@ function getEnv(): NodeJS.ProcessEnv {
 
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
-import ignore from "ignore";
+import { SkillIgnoreMatcher } from "@step-harness/agent-core";
 import { minimatch } from "minimatch";
 import { gt, maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -104,7 +104,10 @@ export interface ConfiguredPackage {
 }
 
 export interface PackageManager {
-	resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths>;
+	resolve(
+		onMissing?: (source: string) => Promise<MissingSourceAction>,
+		options?: { includeSkills?: boolean },
+	): Promise<ResolvedPaths>;
 	install(source: string, options?: { local?: boolean }): Promise<void>;
 	installAndPersist(source: string, options?: { local?: boolean }): Promise<void>;
 	remove(source: string, options?: { local?: boolean }): Promise<void>;
@@ -163,6 +166,7 @@ interface GitUpdateTarget extends ConfiguredUpdateSource {
 }
 
 interface ResourceAccumulator {
+	resourceTypes: readonly ResourceType[];
 	extensions: Map<string, { metadata: PathMetadata; enabled: boolean }>;
 	skills: Map<string, { metadata: PathMetadata; enabled: boolean }>;
 	prompts: Map<string, { metadata: PathMetadata; enabled: boolean }>;
@@ -208,8 +212,6 @@ const FILE_PATTERNS: Record<ResourceType, RegExp> = {
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 
-type IgnoreMatcher = ReturnType<typeof ignore>;
-
 function toPosixPath(p: string): string {
 	return p.split(sep).join("/");
 }
@@ -225,45 +227,10 @@ export function getExtensionTempFolder(agentDir: string): string {
 	return tempFolder;
 }
 
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-
-	if (pattern.startsWith("/")) {
-		pattern = pattern.slice(1);
-	}
-
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
-}
-
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
-	const relativeDir = relative(rootDir, dir);
-	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
-
+function addIgnoreRules(ig: SkillIgnoreMatcher, dir: string): void {
 	for (const filename of IGNORE_FILE_NAMES) {
-		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
 		try {
-			const content = readFileSync(ignorePath, "utf-8");
-			const patterns = content
-				.split(/\r?\n/)
-				.map((line) => prefixIgnorePattern(line, prefix))
-				.filter((line): line is string => Boolean(line));
-			if (patterns.length > 0) {
-				ig.add(patterns);
-			}
+			ig.add(readFileSync(join(dir, filename), "utf-8"));
 		} catch {}
 	}
 }
@@ -309,15 +276,20 @@ function collectFiles(
 	dir: string,
 	filePattern: RegExp,
 	skipNodeModules = true,
-	ignoreMatcher?: IgnoreMatcher,
+	ignoreMatcher?: SkillIgnoreMatcher,
 	rootDir?: string,
+	visitedDirs = new Set<string>(),
 ): string[] {
 	const files: string[] = [];
 	if (!existsSync(dir)) return files;
 
+	const realDir = canonicalizePath(dir);
+	if (visitedDirs.has(realDir)) return [];
+	visitedDirs.add(realDir);
+
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
+	const ig = new SkillIgnoreMatcher(toPosixPath(relative(root, dir)), ignoreMatcher);
+	addIgnoreRules(ig, dir);
 
 	try {
 		const entries = readdirSync(dir, { withFileTypes: true });
@@ -344,7 +316,7 @@ function collectFiles(
 			if (ig.ignores(ignorePath)) continue;
 
 			if (isDir) {
-				files.push(...collectFiles(fullPath, filePattern, skipNodeModules, ig, root));
+				files.push(...collectFiles(fullPath, filePattern, skipNodeModules, ig, root, visitedDirs));
 			} else if (isFile && filePattern.test(entry.name)) {
 				files.push(fullPath);
 			}
@@ -361,15 +333,20 @@ type SkillDiscoveryMode = "pi" | "agents";
 function collectSkillEntries(
 	dir: string,
 	mode: SkillDiscoveryMode,
-	ignoreMatcher?: IgnoreMatcher,
+	ignoreMatcher?: SkillIgnoreMatcher,
 	rootDir?: string,
+	visitedDirs = new Set<string>(),
 ): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
+	const realDir = canonicalizePath(dir);
+	if (visitedDirs.has(realDir)) return [];
+	visitedDirs.add(realDir);
+
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
+	const ig = new SkillIgnoreMatcher(toPosixPath(relative(root, dir)), ignoreMatcher);
+	addIgnoreRules(ig, dir);
 
 	try {
 		const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -428,7 +405,7 @@ function collectSkillEntries(
 			if (!isDir) continue;
 			if (ig.ignores(`${relPath}/`)) continue;
 
-			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
+			entries.push(...collectSkillEntries(fullPath, mode, ig, root, visitedDirs));
 		}
 	} catch {
 		// Ignore errors
@@ -480,8 +457,8 @@ function collectAutoPromptEntries(dir: string): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
-	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
+	const ig = new SkillIgnoreMatcher();
+	addIgnoreRules(ig, dir);
 
 	try {
 		const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -517,8 +494,8 @@ function collectAutoThemeEntries(dir: string): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
-	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
+	const ig = new SkillIgnoreMatcher();
+	addIgnoreRules(ig, dir);
 
 	try {
 		const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -591,8 +568,8 @@ function collectAutoExtensionEntries(dir: string): string[] {
 	}
 
 	// Otherwise, discover extensions from directory contents
-	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
+	const ig = new SkillIgnoreMatcher();
+	addIgnoreRules(ig, dir);
 
 	try {
 		const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -907,8 +884,11 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	async resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
-		const accumulator = this.createAccumulator();
+	async resolve(
+		onMissing?: (source: string) => Promise<MissingSourceAction>,
+		options?: { includeSkills?: boolean },
+	): Promise<ResolvedPaths> {
+		const accumulator = this.createAccumulator(options?.includeSkills);
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
 
@@ -928,7 +908,7 @@ export class DefaultPackageManager implements PackageManager {
 		const globalBaseDir = this.agentDir;
 		const projectBaseDir = join(this.cwd, this.configDirName);
 
-		for (const resourceType of RESOURCE_TYPES) {
+		for (const resourceType of accumulator.resourceTypes) {
 			const target = this.getTargetMap(accumulator, resourceType);
 			const globalEntries = (globalSettings[resourceType] ?? []) as string[];
 			const projectEntries = (projectSettings[resourceType] ?? []) as string[];
@@ -2139,7 +2119,7 @@ export class DefaultPackageManager implements PackageManager {
 		metadata: PathMetadata,
 	): boolean {
 		if (filter) {
-			for (const resourceType of RESOURCE_TYPES) {
+			for (const resourceType of accumulator.resourceTypes) {
 				const patterns = filter[resourceType];
 				const target = this.getTargetMap(accumulator, resourceType);
 				if (filter.autoload === false) {
@@ -2155,7 +2135,7 @@ export class DefaultPackageManager implements PackageManager {
 
 		const manifest = readPiManifest(join(packageRoot, "package.json"));
 		if (manifest) {
-			for (const resourceType of RESOURCE_TYPES) {
+			for (const resourceType of accumulator.resourceTypes) {
 				const entries = manifest[resourceType as keyof PiManifest];
 				this.addManifestEntries(
 					entries,
@@ -2172,12 +2152,14 @@ export class DefaultPackageManager implements PackageManager {
 		for (const resourceType of RESOURCE_TYPES) {
 			const dir = join(packageRoot, resourceType);
 			if (existsSync(dir)) {
-				// Collect all files from the directory (all enabled by default)
+				// Disabled resource directories still identify a resource package;
+				// do not reinterpret a skills-only package as an extension.
+				hasAnyDir = true;
+				if (!accumulator.resourceTypes.includes(resourceType)) continue;
 				const files = collectResourceFiles(dir, resourceType);
 				for (const f of files) {
 					this.addResource(this.getTargetMap(accumulator, resourceType), f, metadata, true);
 				}
-				hasAnyDir = true;
 			}
 		}
 		return hasAnyDir;
@@ -2378,9 +2360,11 @@ export class DefaultPackageManager implements PackageManager {
 		};
 		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
 		const projectTrusted = this.settingsManager.isProjectTrusted();
-		const projectAgentsSkillDirs = projectTrusted
-			? collectAncestorAgentsSkillDirs(this.cwd).filter((dir) => resolve(dir) !== resolve(userAgentsSkillsDir))
-			: [];
+		const includeSkills = accumulator.resourceTypes.includes("skills");
+		const projectAgentsSkillDirs =
+			includeSkills && projectTrusted
+				? collectAncestorAgentsSkillDirs(this.cwd).filter((dir) => resolve(dir) !== resolve(userAgentsSkillsDir))
+				: [];
 
 		const addResources = (
 			resourceType: ResourceType,
@@ -2406,14 +2390,16 @@ export class DefaultPackageManager implements PackageManager {
 				projectBaseDir,
 			);
 
-			// Project skills from .pi/
-			addResources(
-				"skills",
-				collectAutoSkillEntries(projectDirs.skills, "pi"),
-				projectMetadata,
-				projectOverrides.skills,
-				projectBaseDir,
-			);
+			// Project skills from the product's configuration directory.
+			if (includeSkills) {
+				addResources(
+					"skills",
+					collectAutoSkillEntries(projectDirs.skills, "pi"),
+					projectMetadata,
+					projectOverrides.skills,
+					projectBaseDir,
+				);
+			}
 		}
 
 		// Project skills from .agents/ (each with its own baseDir)
@@ -2458,28 +2444,30 @@ export class DefaultPackageManager implements PackageManager {
 			globalBaseDir,
 		);
 
-		// User skills from ~/.pi/agent/
-		addResources(
-			"skills",
-			collectAutoSkillEntries(userDirs.skills, "pi"),
-			userMetadata,
-			userOverrides.skills,
-			globalBaseDir,
-		);
+		if (includeSkills) {
+			// User skills from ~/.pi/agent/
+			addResources(
+				"skills",
+				collectAutoSkillEntries(userDirs.skills, "pi"),
+				userMetadata,
+				userOverrides.skills,
+				globalBaseDir,
+			);
 
-		// User skills from ~/.agents/ (with its own baseDir)
-		const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-		const userAgentsMetadata: PathMetadata = {
-			...userMetadata,
-			baseDir: userAgentsBaseDir,
-		};
-		addResources(
-			"skills",
-			collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-			userAgentsMetadata,
-			userOverrides.skills,
-			userAgentsBaseDir,
-		);
+			// User skills from ~/.agents/ (with its own baseDir)
+			const userAgentsBaseDir = dirname(userAgentsSkillsDir);
+			const userAgentsMetadata: PathMetadata = {
+				...userMetadata,
+				baseDir: userAgentsBaseDir,
+			};
+			addResources(
+				"skills",
+				collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
+				userAgentsMetadata,
+				userOverrides.skills,
+				userAgentsBaseDir,
+			);
+		}
 
 		addResources(
 			"prompts",
@@ -2546,8 +2534,9 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	private createAccumulator(): ResourceAccumulator {
+	private createAccumulator(includeSkills = true): ResourceAccumulator {
 		return {
+			resourceTypes: includeSkills ? RESOURCE_TYPES : RESOURCE_TYPES.filter((type) => type !== "skills"),
 			extensions: new Map(),
 			skills: new Map(),
 			prompts: new Map(),
