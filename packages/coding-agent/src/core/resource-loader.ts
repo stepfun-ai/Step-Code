@@ -405,7 +405,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
 		await this.settingsManager.reload();
-		const resolvedPaths = await this.packageManager.resolve();
+		const resolvedPaths = await this.packageManager.resolve(undefined, { includeSkills: !this.noSkills });
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
@@ -551,7 +551,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {
-		const resolvedPaths = await this.packageManager.resolve();
+		const resolvedPaths = await this.packageManager.resolve(undefined, { includeSkills: false });
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});

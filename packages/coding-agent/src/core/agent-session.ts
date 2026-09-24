@@ -116,32 +116,7 @@ import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
-// ============================================================================
-// Skill Block Parsing
-// ============================================================================
-
-/** Parsed skill block from a user message */
-export interface ParsedSkillBlock {
-	name: string;
-	location: string;
-	content: string;
-	userMessage: string | undefined;
-}
-
-/**
- * Parse a skill block from message text.
- * Returns null if the text doesn't contain a skill block.
- */
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-	const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
-	if (!match) return null;
-	return {
-		name: match[1],
-		location: match[2],
-		content: match[3],
-		userMessage: match[4]?.trim() || undefined,
-	};
-}
+export { type ParsedSkillBlock, parseSkillBlock } from "../utils/skill-block.ts";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -1469,7 +1444,7 @@ export class AgentSession {
 	private _expandSkillCommand(text: string): string {
 		if (!text.startsWith("/skill:")) return text;
 
-		const spaceIndex = text.indexOf(" ");
+		const spaceIndex = text.search(/\s/u);
 		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
 
@@ -2080,7 +2055,10 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			const preparation = prepareCompaction(pathEntries, settings, {
+				cwd: this._cwd,
+				skills: this._resourceLoader.getSkills().skills,
+			});
 			if (!preparation) {
 				// Check why we can't compact
 				const lastEntry = pathEntries[pathEntries.length - 1];
@@ -2384,7 +2362,10 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			const preparation = prepareCompaction(pathEntries, settings, {
+				cwd: this._cwd,
+				skills: this._resourceLoader.getSkills().skills,
+			});
 			if (!preparation) {
 				return false;
 			}
