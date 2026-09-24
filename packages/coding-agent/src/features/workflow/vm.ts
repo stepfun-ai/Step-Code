@@ -295,19 +295,19 @@ return __workflow_main().then((__workflow_value) => ({
 `;
 }
 
-function transformExports(script: string): string {
+export function transformExports(script: string): string {
 	return script
 		.replace(/^[\t ]*export[\t ]+(?=(?:const|let|var|function|async[\t ]+function|class)\b)/gmu, "")
 		.replace(/^[\t ]*(const|let|var)[\t ]+meta[\t ]*=/mu, "$1 meta = globalThis.__workflow_meta =")
 		.replace(/^\s*export\s*\{[^}]*\};?\s*$/gmu, "");
 }
 
-function clampMemory(value: number | undefined): number {
+export function clampMemory(value: number | undefined): number {
 	if (value === undefined || !Number.isFinite(value)) return DEFAULT_MEMORY_LIMIT_MB;
 	return Math.max(8, Math.min(256, Math.floor(value)));
 }
 
-function clampTimeout(value: number | undefined): number {
+export function clampTimeout(value: number | undefined): number {
 	if (value === undefined || !Number.isFinite(value)) return DEFAULT_TIMEOUT_MS;
 	return Math.max(100, Math.min(600_000, Math.floor(value)));
 }
@@ -316,7 +316,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function toJsonSafe(value: unknown): unknown {
+export function toJsonSafe(value: unknown): unknown {
 	if (value === null || typeof value === "string" || typeof value === "boolean") return value;
 	if (typeof value === "number") return Number.isFinite(value) ? value : null;
 	if (Array.isArray(value)) return value.map((item) => toJsonSafe(item));
@@ -328,7 +328,7 @@ function toJsonSafe(value: unknown): unknown {
 	return String(value);
 }
 
-function normalizeMeta(value: unknown): WorkflowMeta {
+export function normalizeMeta(value: unknown): WorkflowMeta {
 	if (!isRecord(value)) return {};
 	const meta: WorkflowMeta = {};
 	if (typeof value.name === "string") meta.name = value.name.slice(0, 200);

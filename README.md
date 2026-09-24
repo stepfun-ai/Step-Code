@@ -1,115 +1,181 @@
+# Step Code
+
 <p align="center">
-  <strong>StepCode</strong>
-</p>
-<p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://gitlab.basemind.com/aiagent/step-harness"><img alt="GitLab" src="https://img.shields.io/badge/distribution-standalone%20binaries-222?style=flat-square" /></a>
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
+![test.jpg](https://static-openapi.stepfun.com/resource/test.jpg)
 
-# StepCode
+<h3><strong>Swift execution, long-horizon reliability, and high token efficiency.</strong></h3>
 
-## Feedback privacy
+---
 
-Feedback submission is disabled until `STEPCODE_FEEDBACK_ENDPOINT` is supplied
-by the host or release configuration. When submitted, the consent preview lists
-the identity fields included in the report: `deviceId`, `uid`, `username`,
-`channel`, `version`, `platform`, and `commit` (fields not available are shown
-as unset). The fields are used to correlate a report with its client build and
-account context; session bundles and diagnostics are shown separately before
-submission.
+Step Code runs in your terminal and handles the full task loop—reading code, making changes, and running tests\. It works with the Step provider and discovers the available Step models after sign\-in\. MCP servers, Agent Skills, plugins, and multi\-agent orchestration work out of the box; you can delegate long\-running tasks to `/goal` and let Step Code drive them forward autonomously\.
 
-StepCode is the Step product built on the Pi runtime. The product entrypoint,
-defaults, OAuth provider, harness facade, and TUI presentation are Step-owned;
-the `@step-harness/*` runtime packages under `packages/` provide the underlying
-agent, provider, and TUI implementation.
+Step Code comes with built-in [StepPage](https://platform.stepfun.ai/docs/en/step-code/reference/steppage) publishing. Once your local page is ready, you can publish it as an accessible static website with a single command—bringing development, debugging, and delivery all within the same terminal\.
 
-* **[@step-harness/coding-agent](packages/coding-agent)**: Interactive coding agent CLI
-* **[@step-harness/agent-core](packages/agent-core)**: Agent runtime with tool calling and state management
-* **[@step-harness/providers](packages/providers)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
+![StepPage publishing demo](https://github.com/user-attachments/assets/66843695-3c77-4b26-bd2c-4cd2397a98bf)
 
-To learn more about Step:
+## Why Step Code
 
-* You can ask the agent to explain itself
+- **Token efficiency** — tuned alongside Step models to consume fewer tokens for the same task; Long\-horizon tasks are split across parallel subagents, each with its own isolated context, so redundant content never enters the main conversation\.
 
-## Runtime Packages
+- **Static site publishing** — the built\-in steppage plugin publishes a local directory to a shareable static URL in one command, with version management and rollback\.
 
-| Package | Description |
-|---------|-------------|
-| **[@step-harness/telemetry](packages/telemetry)** | Vendor-neutral telemetry contracts, reference adapter, conformance tests, and typed schemas |
-| **[@step-harness/providers](packages/providers)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@step-harness/agent-core](packages/agent-core)** | Agent runtime with tool calling and state management |
-| **[@step-harness/coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
-| **[@step-harness/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
+- **Long\-running task delegation** — `/goal` hands an objective to Step Code, which works toward it autonomously, and `/cron` runs on a schedule; the status line shows a live timer for the active task\.
 
-## Permissions & Containerization
+- **Step provider access** — sign in with a Step Plan account or use a Step Platform API key; switch among the models returned by Step in `/model`\.
 
-StepCode does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
+- **Ecosystem compatibility** — MCP servers and Agent Skills work out of the box, and most Claude Code plugins are directly compatible\.
 
-If you need stronger boundaries, containerize or sandbox StepCode. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
+## Installation
 
-- **Gondolin extension**: keep StepCode and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
-- **Plain Docker**: run the whole StepCode process in a local container for simple isolation.
-- **OpenShell**: run the whole StepCode process in a policy-controlled sandbox.
+Pick the official installer for your platform\. It downloads the latest release, verifies the checksum, installs step to `~/.stepcode/bin`, and updates your PATH; reopen your terminal and you are done\.
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).
-
-## Development
+**macOS / Linux / WSL**
 
 ```bash
-pnpm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
-pnpm run build         # Refresh model data, then build all packages
-pnpm run build:offline # Rebuild using existing model data without network access
-pnpm run check         # Lint, format, and type check
-./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./step-test.sh       # Run StepCode from sources (can be run from any directory)
-pnpm step            # Run the StepCode entrypoint from sources
+curl -fsSL https://static-openapi.stepfun.com/stepcode/install.sh | bash
 ```
 
-Standalone Step binaries can update themselves from the published release
-manifests:
+**Windows \(PowerShell\)**
+
+```powershell
+irm https://static-openapi.stepfun.com/stepcode/install.ps1 | iex
+```
+
+- Windows PowerShell support is currently in beta; on Windows, we recommend installing in WSL
+
+- Installer flags: `--version <vX.Y.Z|latest>` installs a specific version; `--install-dir <path>` overrides the install directory
+
+- Verify the installation in a fresh terminal:
 
 ```bash
-step update          # Install the latest stable release
-step update 0.4.0    # Install an exact stable release
-step upgrade         # Alias for step update
-step upgrade 0.4.0   # Install an exact release through the alias
+step --version
+step --help
 ```
 
-Updates download and verify the platform archive directly. They do not require
-`curl` or `wget`; npm/pnpm/source installations must be updated through the
-tool that provided them.
+Upgrade later with `step update`\.
 
-## Building standalone binaries from release source
+## Sign in to the Step provider
 
-GitHub releases include a versioned source archive covered by the release's `SHA256SUMS` file. Extract it and run the same build script used for the official standalone binaries:
+The default Step Code entrypoint exposes one built-in model provider: **Step (StepFun)**. The profiles below select the Step service region and billing method; they are not separate providers.
+
+| Profile                                                                          | Credential                                                                                    | Billing                                           |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Step Plan (CN, [platform.stepfun.com](https://platform.stepfun.com/step-plan))   | Browser OAuth; credentials refresh automatically                                              | Usage included with Mini / Plus / Pro / Max plans |
+| Step Plan Oversea ([platform.stepfun.ai](https://platform.stepfun.ai/step-plan)) | Browser OAuth; credentials refresh automatically                                              | Usage included with Mini / Plus / Pro / Max plans |
+| Step Platform (CN)                                                               | API key from [platform.stepfun.com/interface-key](https://platform.stepfun.com/interface-key) | Pay per request                                   |
+| Step Platform Oversea                                                            | API key from [platform.stepfun.ai/interface-key](https://platform.stepfun.ai/interface-key)   | Pay per request                                   |
+
+Inside the TUI, `/login` opens the Step sign-in flow; from a shell, run `step login`. For API-key access, set `STEP_API_KEY=<your_step_api_key>` or enter the key in `/login`; headless runs can also pass `--api-key <your_step_api_key>`.
+
+`/status` shows the current session and model status. Use `step login status` (or `step login status --json`) to check the Step credential and its validity. Stored credentials live in `~/.stepcode/auth.json` with mode `0600`; `/logout` clears the Step credential. After sign-in, `/model` lists the models discovered from the active Step endpoint.
+
+## Getting started
+
+Change into your project directory:
 
 ```bash
-VERSION="<release-version>"
-tar -xzf "step-${VERSION}-source.tar.gz"
-cd "step-${VERSION}"
-./scripts/build-binaries.sh --offline-model-data --platform linux-x64 --out "$PWD/out"
+cd /path/to/your/project
+step
 ```
 
-The source archive includes the generated provider model data used for the release. `--offline-model-data` builds with that snapshot instead of refreshing it from live provider catalogs. The script still installs dependencies, builds the monorepo, compiles the Bun executable, and stages its runtime assets. Package maintainers who provide dependencies separately can pass `--skip-install --skip-deps`.
+Describe the task in the TUI, or submit one at launch:
 
-## Distribution and supply-chain hardening
+```bash
+step -p "What is the tech stack of this project? What is each directory responsible for? How do I run it locally?"
+```
 
-We treat pnpm dependency changes as reviewed code changes.
+Run `/init` to generate an `AGENTS.md` project guide; an existing `CLAUDE.md` is used as\-is\.
 
-- Direct external dependencies are pinned to exact versions. Internal workspace packages remain version-ranged.
-- `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during resolution, and `link-workspace-packages=true` / `prefer-workspace-packages=true` so range-specified internal packages link to local workspace source under pnpm.
-- `pnpm-lock.yaml` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `STEP_ALLOW_LOCKFILE_CHANGE=1` is set.
-- `pnpm run check` verifies pinned direct deps and native TypeScript import compatibility. `pnpm install --frozen-lockfile` guards lockfile drift.
-- Release artifacts are standalone Step binaries and platform installers; this repository does not publish npm packages.
-- `pnpm run release:local` is retained for internal runtime smoke tests and dependency validation, not for distribution.
-- Internal build and smoke-test installs use `--ignore-scripts` where supported.
-- CI installs with `pnpm install --frozen-lockfile --ignore-scripts`, and a scheduled GitHub workflow runs `pnpm audit --prod`.
-- Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
+| Entry           | Command         | Use case                                                 |
+| --------------- | --------------- | -------------------------------------------------------- |
+| Interactive TUI | `step`          | Exploring code, ongoing conversations, reviewing changes |
+| Headless        | `step -p "..."` | Scripts, CI, batch jobs                                  |
+
+### Examples
+
+Start the TUI in any project and enter:
+
+```text
+What is the tech stack of this project? What is each directory responsible for? How do I run it locally? Don't modify any files yet.
+```
+
+Then one that makes changes:
+
+```text
+Create a reference table for the error codes in src/api/errors.ts (code, meaning, trigger scenario) and save it to docs/errors.md
+```
+
+### Resume a session
+
+```bash
+step -c   # Continue the most recent session
+step -r   # Browse session history and pick one to resume
+```
+
+Inside the TUI, `/resume` finds past sessions and `/hotkeys` lists all shortcuts\.
+
+### Common shortcuts
+
+| Key                                    | Action                                                                             |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `Enter`                                | Send message                                                                       |
+| `Shift+Enter` / `Ctrl+J` / `Alt+Enter` | Newline                                                                            |
+| `Enter`                                | Queue a message while streaming \(delivered after the current tool call finishes\) |
+| `@`                                    | Reference a project file                                                           |
+| `!command`                             | Run a shell command and hand the output to the model                               |
+| `Shift+Tab`                            | Cycle permission mode                                                              |
+| `Ctrl+O`                               | Toggle tool output                                                                 |
+| `Esc`                                  | Interrupt the running task                                                         |
+
+## Migrate from other agents
+
+- **MCP config**: Claude Code / Codex MCP configuration is imported automatically on first launch; source files are never modified, the import is idempotent, and secrets are never inlined\.
+
+- **Plugins**: most Claude Code plugins work as\-is, managed via `/plugin`\.
+
+- **Project guides**: an existing `CLAUDE.md` is used as\-is; `/init` generates the equivalent `AGENTS.md`\.
+
+## Build from source
+
+Developing Step Code or running from this repository requires Git, Node\.js, and pnpm:
+
+```bash
+git clone https://github.com/stepfun-ai/Step-Code.git
+cd Step-Code
+pnpm install --ignore-scripts
+pnpm run build
+pnpm step
+```
+
+When running from the source tree, replace `step` with `pnpm step`\.
+
+## Security
+
+- Four permission modes \(Ask / Read Only / Bypass / Autopilot\), cycled with `Shift+Tab`; dangerous commands require a separate confirmation dialog in every mode\.
+
+## Uninstall
+
+Make sure no step sessions are running before you uninstall\.
+
+**Remove the binary**: delete the step executable from the install directory \(default `~/.stepcode/bin`\)\. The installer appends a PATH block marked `# stepcode` to your shell config; removing that block completes the uninstall \(zsh: `~/.zshrc`, bash: `~/.bashrc`, fish: the `fish_add_path` config\)\.
+
+**Remove user data \(optional\)**: everything lives under `~/.stepcode` \(config, credentials, sessions, logs\); delete the directory to remove all Step Code data:
+
+```bash
+rm -rf ~/.stepcode
+```
+
+## Docs \& community
+
+- Quick start · Interaction \& input · Platforms \& models · All docs \(links finalized at release\)
+
+- Contributing · \[Report a bug / request a feature\]\(issues link added at release\) · Report a security issue
+
+- When filing an issue, include `step --version`, reproduction steps, and how you run Step Code; strip credentials and private project content first\.
 
 ## License
 
-MIT
+Released under the MIT license; see LICENSE\.

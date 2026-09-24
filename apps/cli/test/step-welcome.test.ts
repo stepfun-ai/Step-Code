@@ -13,7 +13,7 @@ describe("StepWelcomeComponent", () => {
 	it("renders the branded rounded identity block", () => {
 		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
-			version: "0.3.1",
+			version: "0.1.0",
 			model: "step-model",
 			thinkingLevel: "high",
 			workspaceRoot: "/tmp/project",
@@ -24,7 +24,7 @@ describe("StepWelcomeComponent", () => {
 		// Wide terminal: the wordmark strip sits above the framed info box.
 		expect(lines[0]).not.toContain("╭");
 		expect(lines[10]).toContain("╭");
-		expect(lines[10]).toContain("v0.3.1"); // version rides in the border title
+		expect(lines[10]).toContain("v0.1.0"); // version rides in the border title
 		// The wordmark art replaces the literal title text.
 		expect(lines.join("\n")).not.toContain("Step CLI");
 		expect(lines.join("\n")).toContain("step-model · high");
