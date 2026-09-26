@@ -746,6 +746,9 @@ export async function generateSummaryWithUsage(
 		callbacks,
 	);
 
+	if (response.stopReason === "aborted") {
+		throw new DOMException(response.errorMessage || "Summarization aborted", "AbortError");
+	}
 	const failure = getSummarizationFailure(response, "Summarization", maxTokens);
 	if (failure) {
 		throw new Error(failure);
@@ -755,6 +758,10 @@ export async function generateSummaryWithUsage(
 	}
 
 	const textContent = contentText(response.content);
+	// Validate model text before split-turn scaffolding or file metadata can make it look nonempty.
+	if (textContent.trim().length === 0) {
+		throw new Error("Summarization failed: empty summary");
+	}
 
 	return { text: textContent, usage: response.usage };
 }
@@ -914,7 +921,8 @@ export async function compact(
 	let summaryUsage: Usage;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		let historyText = "No prior history.";
+		// With no new history to summarize, the previous checkpoint still carries the earlier context.
+		let historyText = previousSummary ?? "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
 			const historyResult = await generateSummaryWithUsage(
@@ -1025,6 +1033,9 @@ async function generateTurnPrefixSummary(
 		callbacks,
 	);
 
+	if (response.stopReason === "aborted") {
+		throw new DOMException(response.errorMessage || "Turn prefix summarization aborted", "AbortError");
+	}
 	const failure = getSummarizationFailure(response, "Turn prefix summarization", maxTokens);
 	if (failure) {
 		throw new Error(failure);
@@ -1033,8 +1044,14 @@ async function generateTurnPrefixSummary(
 		throw new Error("Turn prefix summarization attempted to call a tool");
 	}
 
+	const textContent = contentText(response.content);
+	// A valid history summary cannot substitute for a missing turn-prefix summary.
+	if (textContent.trim().length === 0) {
+		throw new Error("Turn prefix summarization failed: empty summary");
+	}
+
 	return {
-		text: contentText(response.content),
+		text: textContent,
 		usage: response.usage,
 	};
 }

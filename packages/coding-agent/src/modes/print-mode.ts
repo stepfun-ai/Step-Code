@@ -6,17 +6,25 @@
  * - `pi --mode json "prompt"` - JSON event stream
  */
 
+import type { AgentMessage } from "@step-harness/agent-core";
 import type { AssistantMessage, ImageContent } from "@step-harness/providers";
 import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
+import {
+	type CompletionCheckOptions,
+	completionCheckFeedback,
+	createGitCompletionCheck,
+	type GitCompletionState,
+	getCompletionCheckAttempts,
+} from "./completion-check.ts";
 import { toJsonEvent } from "./json-event.ts";
 
 /**
  * Options for print mode.
  */
-export interface PrintModeOptions {
+export interface PrintModeOptions extends CompletionCheckOptions {
 	/** Output mode: "text" for final response only, "json" for all events */
 	mode: "text" | "json";
 	/** Array of additional prompts to send after initialMessage */
@@ -63,6 +71,22 @@ function getTerminatingBlock(event: AgentSessionEvent): TerminatingBlock | undef
 	return { toolName: event.toolName, reason: reason || "no reason given" };
 }
 
+function getAssistantFailure(message: AgentMessage | undefined): AssistantMessage | undefined {
+	if (message?.role !== "assistant") return undefined;
+	const assistant = message as AssistantMessage;
+	return assistant.stopReason === "error" || assistant.stopReason === "aborted" ? assistant : undefined;
+}
+
+function hasFinalAssistantText(message: AgentMessage | undefined): boolean {
+	if (message?.role !== "assistant" || getAssistantFailure(message)) return false;
+	const assistant = message as AssistantMessage;
+	return (
+		assistant.stopReason !== "toolUse" &&
+		!assistant.content.some((part) => part.type === "toolCall") &&
+		assistant.content.some((part) => part.type === "text" && part.text.trim().length > 0)
+	);
+}
+
 /**
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
@@ -79,10 +103,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	// only reach the model, so a denied call looked like the run doing nothing.
 	// Feedback issue-d8b499026f19831c.
 	const terminatingBlocks: TerminatingBlock[] = [];
+	// Sticky across native retries and runtime rebinds: the completion check
+	// must never resume past a terminal denial, assistant error, or abort.
+	let assistantFailure: AssistantMessage | undefined;
+	const completionAbort = new AbortController();
+	let completionAttempts: number | undefined;
 
 	const disposeRuntime = async (): Promise<void> => {
 		if (disposed) return;
 		disposed = true;
+		completionAbort.abort();
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		await runtimeHost.dispose();
@@ -123,6 +153,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		unsubscribe = session.subscribe((event) => {
 			const block = getTerminatingBlock(event);
 			if (block) terminatingBlocks.push(block);
+			if (event.type === "message_end") assistantFailure ??= getAssistantFailure(event.message);
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(toJsonEvent(event))}\n`);
 			}
@@ -165,6 +196,17 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	};
 
 	try {
+		completionAttempts = getCompletionCheckAttempts(options);
+		if (completionAttempts !== undefined && mode !== "text" && mode !== "json") {
+			throw new Error("--completion-check is only supported in print or JSON mode");
+		}
+		const completionSession = session;
+		const completionCwd = runtimeHost.cwd;
+		const checkGit =
+			completionAttempts === undefined
+				? undefined
+				: await createGitCompletionCheck(completionCwd, completionAbort.signal);
+
 		if (mode === "json") {
 			const header = session.sessionManager.getHeader();
 			if (header) {
@@ -191,12 +233,60 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			console.error(`Available tools: ${unknownSelectors.knownTools.join(", ") || "(none)"}`);
 		}
 
-		if (initialMessage) {
+		const terminalOutcome = () => disposed || terminatingBlocks.length > 0 || assistantFailure !== undefined;
+		if (initialMessage && !(checkGit && terminalOutcome())) {
 			await session.prompt(initialMessage, { images: initialImages });
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
 		}
 
+		// Keep all explicit user messages in order; the completion budget is for
+		// the entire invocation, not a fresh budget after each user message.
 		for (const message of messages) {
+			if (checkGit && terminalOutcome()) break;
 			await session.prompt(message);
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+		}
+
+		if (checkGit && completionAttempts !== undefined) {
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+			for (let attempt = 0; attempt <= completionAttempts && !terminalOutcome(); attempt++) {
+				// Extension commands may explicitly replace the runtime. Keep normal
+				// rebinding intact, but never carry automatic feedback to a new session.
+				if (session !== completionSession || runtimeHost.cwd !== completionCwd) break;
+				let git: GitCompletionState;
+				try {
+					git = await checkGit();
+				} catch (error) {
+					console.error(error instanceof Error ? error.message : "Completion check: Git state unavailable.");
+					if (mode === "json") {
+						writeRawStdout(
+							`${JSON.stringify({ type: "completion_check", check: "git-committed", attempt, status: "unavailable", willFollowUp: false })}\n`,
+						);
+					}
+					// Do not turn a task failure with valid final text into a retryable
+					// infrastructure error after the model has already run.
+					break;
+				}
+				if (terminalOutcome() || session !== completionSession || runtimeHost.cwd !== completionCwd) break;
+				const hasFinalText = hasFinalAssistantText(session.state.messages.at(-1));
+				const passed =
+					git.hasNewCommit && git.hasCommittedChanges && !git.trackedDirty && !git.untrackedFiles && hasFinalText;
+				const willFollowUp = !passed && attempt < completionAttempts;
+				if (mode === "json") {
+					writeRawStdout(
+						`${JSON.stringify({ type: "completion_check", check: "git-committed", attempt, maxAttempts: completionAttempts, ...git, hasFinalText, status: passed ? "passed" : willFollowUp ? "follow_up" : "exhausted", willFollowUp })}\n`,
+					);
+					await waitForRawStdoutBackpressure();
+				}
+				if (!willFollowUp) {
+					if (!passed) console.error(`Completion check incomplete after ${attempt} follow-up(s).`);
+					break;
+				}
+				// Backpressure may yield to a signal or a runtime replacement.
+				if (terminalOutcome() || session !== completionSession || runtimeHost.cwd !== completionCwd) break;
+				await session.prompt(completionCheckFeedback(git, hasFinalText), { expandPromptTemplates: false });
+				assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+			}
 		}
 
 		// Exit-code determination applies to both text and json modes so a failed
@@ -222,6 +312,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 						writeRawStdout(`${content.text}\n`);
 					}
 				}
+			}
+		}
+
+		if (completionAttempts !== undefined && exitCode === 0 && !hasFinalAssistantText(lastMessage)) {
+			if (assistantFailure) {
+				console.error(assistantFailure.errorMessage || `Request ${assistantFailure.stopReason}`);
+				exitCode = 1;
+			} else {
+				console.error("Completion check incomplete: no final answer text after bounded follow-up.");
+				exitCode = 2;
 			}
 		}
 
