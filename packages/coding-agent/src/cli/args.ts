@@ -40,6 +40,10 @@ export interface Args {
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
+	/** Opt-in completion check in print/json mode. */
+	completionCheck?: "git-committed";
+	/** Maximum completion follow-up prompts, 1..3 (default 2). */
+	completionCheckAttempts?: number;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -200,6 +204,29 @@ export function parseArgs(args: string[]): Args {
 				i = taken.nextIndex;
 				if (taken.value === "text" || taken.value === "json" || taken.value === "rpc") {
 					result.mode = taken.value;
+				}
+			}
+		} else if (arg === "--completion-check" || arg.startsWith("--completion-check=")) {
+			const taken = arg.startsWith("--completion-check=")
+				? { value: arg.slice("--completion-check=".length), nextIndex: i }
+				: takeOptionValue(args, i, "--completion-check", result);
+			if (taken) {
+				i = taken.nextIndex;
+				if (taken.value === "git-committed") result.completionCheck = taken.value;
+				else result.diagnostics.push({ type: "error", message: "--completion-check must be git-committed" });
+			}
+		} else if (arg === "--completion-check-attempts" || arg.startsWith("--completion-check-attempts=")) {
+			const taken = arg.startsWith("--completion-check-attempts=")
+				? { value: arg.slice("--completion-check-attempts=".length), nextIndex: i }
+				: takeOptionValue(args, i, "--completion-check-attempts", result);
+			if (taken) {
+				i = taken.nextIndex;
+				if (/^[1-3]$/.test(taken.value)) result.completionCheckAttempts = Number(taken.value);
+				else {
+					result.diagnostics.push({
+						type: "error",
+						message: "--completion-check-attempts must be an integer from 1 to 3",
+					});
 				}
 			}
 		} else if (arg === "--approval-mode" || arg.startsWith("--approval-mode=")) {
@@ -503,6 +530,21 @@ export function parseArgs(args: string[]): Args {
 		}
 	}
 
+	if (result.completionCheck) {
+		result.completionCheckAttempts ??= 2;
+		if (result.mode === "rpc" || result.sdkStdio) {
+			result.diagnostics.push({
+				type: "error",
+				message: "--completion-check is only supported in print or JSON mode",
+			});
+		}
+	} else if (result.completionCheckAttempts !== undefined) {
+		result.diagnostics.push({
+			type: "error",
+			message: "--completion-check-attempts requires --completion-check git-committed",
+		});
+	}
+
 	return result;
 }
 
@@ -563,6 +605,8 @@ ${chalk.bold("Options:")}
 ${stepPermissionOptionsText}
   --sdk-stdio                    Run the Step Agent SDK length-prefixed stdio host
   --print, -p                    Non-interactive mode: process prompt and exit
+  --completion-check <check>     Opt-in print/json completion check: git-committed
+  --completion-check-attempts <n> Maximum same-session follow-ups: 1..3 (default: 2)
   --continue, -c                 Continue previous session
   --resume, -r [path|id]         Resume a session: with a path/id resume it directly, without opens a selector
   --session <path|id>            Use specific session file or partial UUID
