@@ -3,12 +3,12 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
+import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { type TSchema, Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
+import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
 import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
 import {
@@ -35,7 +35,10 @@ interface ConnectedServer {
 	readonly name: string;
 	readonly client: Client;
 	readonly transport: StdioClientTransport | StreamableHTTPClientTransport;
-	readonly tools: McpTool[];
+	tools: McpTool[];
+	/** Ends when this connection closes or its session shuts down. */
+	readonly signal: AbortSignal;
+	readonly catalogTimeoutMs: number;
 	/** Per-call timeout for this server, from `tool_timeout_sec`. */
 	readonly callTimeoutMs: number;
 }
@@ -142,22 +145,76 @@ export function createStepMcpExtension(): ExtensionFactory {
 				await Promise.all(
 					discovered.map(async (item, index) => {
 						let connected: ConnectedServer | undefined;
+						let published = false;
+						let pending = false;
+						let refreshing = false;
+						const refreshCatalog = async () => {
+							if (refreshing || !published || !connected || connected.signal.aborted) return;
+							const server = connected;
+							refreshing = true;
+							try {
+								while (pending && !server.signal.aborted) {
+									// Coalesce a notification burst before listing, with at most one
+									// more pass when notifications arrive during an in-flight list.
+									await yieldToEventLoop();
+									pending = false;
+									try {
+										const tools = selectDeclaredTools(
+											await listAllMcpTools(server.client, server.signal, server.catalogTimeoutMs),
+											item.declaration,
+										);
+										const remoteTools = tools.map((tool) => createRemoteTool(server, tool));
+										await yieldToEventLoop();
+										if (server.signal.aborted || !published) return;
+										pi.registerTools(remoteTools, {
+											remove: server.tools.map((tool) => remoteToolName(server, tool)),
+										});
+										server.tools = tools;
+										statuses[index] = { name: item.name, status: "connected", toolCount: tools.length };
+									} catch (error) {
+										if (server.signal.aborted || !published) return;
+										ctx.ui.notify(
+											`MCP server '${item.name}' catalog refresh failed; keeping the previous tools: ${error instanceof Error ? error.message : String(error)}`,
+											"warning",
+										);
+									}
+								}
+							} finally {
+								refreshing = false;
+							}
+						};
+						const onToolsChanged = () => {
+							pending = true;
+							void refreshCatalog();
+						};
 						try {
-							const server = await connectStepMcpServer(item, controller.signal);
+							const server = await connectStepMcpServer(item, controller.signal, onToolsChanged);
 							connected = server;
 							const remoteTools = server.tools.map((tool) => createRemoteTool(server, tool));
 							// Publishing a server's catalog refreshes the registry and the
 							// Step prompt once. Yield first so a server that finished while
 							// the loop was busy cannot preempt input or rendering.
 							await yieldToEventLoop();
-							controller.signal.throwIfAborted();
+							server.signal.throwIfAborted();
 							pi.registerTools(remoteTools);
+							published = true;
 							servers.push(server);
+							server.signal.addEventListener(
+								"abort",
+								() => {
+									published = false;
+									if (controller.signal.aborted) return;
+									pi.registerTools([], { remove: server.tools.map((tool) => remoteToolName(server, tool)) });
+									statuses[index] = { name: item.name, status: "failed", toolCount: 0 };
+								},
+								{ once: true },
+							);
 							statuses[index] = {
 								name: item.name,
 								status: "connected",
 								toolCount: server.tools.length,
 							};
+							void refreshCatalog();
 						} catch (error) {
 							if (connected) await closeStepMcpServer(connected);
 							if (controller.signal.aborted) return;
@@ -197,6 +254,9 @@ export function createStepMcpExtension(): ExtensionFactory {
 			servers = [];
 			startup = undefined;
 			if (currentMcpStatuses === statuses) currentMcpStatuses = [];
+			pi.registerTools([], {
+				remove: closing.flatMap((server) => server.tools.map((tool) => remoteToolName(server, tool))),
+			});
 			await Promise.all(closing.map(closeStepMcpServer));
 		});
 	};
@@ -287,6 +347,7 @@ function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration
 export async function connectStepMcpServer(
 	input: DiscoveredServer,
 	abortSignal?: AbortSignal,
+	onToolsChanged?: () => void,
 ): Promise<ConnectedServer> {
 	abortSignal?.throwIfAborted();
 	const timeout = timeoutMs(input.declaration.startup_timeout_sec, MCP_STARTUP_TIMEOUT_SEC);
@@ -316,7 +377,11 @@ export async function connectStepMcpServer(
 		throw new Error("MCP server must define command or url");
 	}
 	const client = new Client(CLIENT_INFO, { capabilities: {} });
-	const signal = AbortSignal.any([AbortSignal.timeout(timeout), ...(abortSignal ? [abortSignal] : [])]);
+	const closed = new AbortController();
+	client.onclose = () => closed.abort(new Error("MCP connection closed"));
+	const lifetime = AbortSignal.any([closed.signal, ...(abortSignal ? [abortSignal] : [])]);
+	if (onToolsChanged) client.setNotificationHandler(ToolListChangedNotificationSchema, onToolsChanged);
+	const signal = AbortSignal.any([AbortSignal.timeout(timeout), lifetime]);
 	const closeOnAbort = () => {
 		void closeStepMcpServer({ client, transport });
 	};
@@ -324,13 +389,15 @@ export async function connectStepMcpServer(
 	try {
 		signal.throwIfAborted();
 		await client.connect(transport, { timeout, signal });
-		const listed = await client.listTools(undefined, { timeout, signal });
+		const tools = await listAllMcpTools(client, signal, timeout);
 		signal.throwIfAborted();
 		return {
 			name: input.name,
 			client,
 			transport,
-			tools: selectDeclaredTools(listed.tools, input.declaration),
+			tools: selectDeclaredTools(tools, input.declaration),
+			signal: lifetime,
+			catalogTimeoutMs: timeout,
 			callTimeoutMs,
 		};
 	} catch (error) {
@@ -455,23 +522,30 @@ export function convertMcpCallResult(serverName: string, toolName: string, resul
 	};
 }
 
+function remoteToolName(server: Pick<ConnectedServer, "name">, remote: McpTool): string {
+	return `${server.name}__${sanitizeName(remote.name)}`;
+}
+
 function createRemoteTool(server: ConnectedServer, remote: McpTool) {
-	const name = `${server.name}__${sanitizeName(remote.name)}`;
+	const name = remoteToolName(server, remote);
+	const call = createMcpToolCaller(server.client, remote);
 	return {
 		name,
 		label: remote.title?.trim() || remote.name,
 		description: remote.description?.trim() || `MCP tool '${remote.name}' from server '${server.name}'.`,
-		parameters: schemaFromJson(remote.inputSchema),
+		// The provider boundary accepts JSON Schema directly. Reconstructing it
+		// as TypeBox types loses constraints, local references and combinators.
+		parameters: remote.inputSchema,
 		execute: async (
 			_toolCallId: string,
 			params: unknown,
 			signal: AbortSignal | undefined,
 		): Promise<AgentToolResult<unknown>> => {
-			const result = (await server.client.callTool(
-				{ name: remote.name, arguments: isRecord(params) ? params : {} },
-				CallToolResultSchema,
-				{ timeout: server.callTimeoutMs, resetTimeoutOnProgress: true, signal },
-			)) as McpCallResult;
+			const result = await call(isRecord(params) ? params : {}, {
+				timeout: server.callTimeoutMs,
+				resetTimeoutOnProgress: true,
+				signal: signal ? AbortSignal.any([signal, server.signal]) : server.signal,
+			});
 			return convertMcpCallResult(server.name, remote.name, result);
 		},
 	};
@@ -480,35 +554,6 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 export function appendStepPageManagementHint(serverName: string, toolName: string, text: string): string {
 	if (serverName !== STEPPAGE_SERVER_NAME || toolName !== STEPPAGE_DEPLOY_TOOL_NAME) return text;
 	return `${text}\n\nTo manage your deployed pages, visit ${STEPPAGE_MANAGEMENT_URL}`;
-}
-
-function schemaFromJson(schema: unknown): TSchema {
-	if (!isRecord(schema) || !isRecord(schema.properties)) return Type.Object({}, { additionalProperties: true });
-	const properties: Record<string, TSchema> = {};
-	for (const [key, value] of Object.entries(schema.properties)) {
-		const property = schemaValueToTypeBox(value);
-		properties[key] =
-			Array.isArray(schema.required) && schema.required.includes(key) ? property : Type.Optional(property);
-	}
-	return Type.Object(properties, { additionalProperties: true });
-}
-
-function schemaValueToTypeBox(value: unknown): TSchema {
-	if (!isRecord(value)) return Type.Unknown();
-	if (Array.isArray(value.enum) && value.enum.length > 0) {
-		const literals = value.enum.filter(
-			(item): item is string | number | boolean =>
-				typeof item === "string" || typeof item === "number" || typeof item === "boolean",
-		);
-		if (literals.length === 1) return Type.Literal(literals[0]);
-		if (literals.length > 1) return Type.Union(literals.map((item) => Type.Literal(item)));
-	}
-	if (value.type === "array") return Type.Array(schemaValueToTypeBox(value.items));
-	if (value.type === "object" && isRecord(value.properties)) return schemaFromJson(value);
-	if (value.type === "boolean") return Type.Boolean();
-	if (value.type === "number" || value.type === "integer") return Type.Number();
-	if (value.type === "string") return Type.String();
-	return Type.Unknown();
 }
 
 function sanitizeName(value: string): string {

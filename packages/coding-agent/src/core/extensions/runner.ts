@@ -801,6 +801,12 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return runner.getSystemPromptFn();
 			},
+			getToolCatalog: () => {
+				runner.assertActive();
+				runner.runtime.assertActive();
+				const active = new Set(runner.runtime.getActiveTools());
+				return runner.runtime.getAllTools().filter((tool) => active.has(tool.name));
+			},
 			get autoRetryEnabled() {
 				runner.assertActive();
 				return runner.getAutoRetryEnabledFn?.();

@@ -388,6 +388,8 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Read the currently active tool definitions at call time, when the host provides a live catalog. */
+	getToolCatalog?(): readonly ToolInfo[];
 	/** Whether Pi's native provider retry loop is enabled, when exposed by the host. */
 	readonly autoRetryEnabled?: boolean;
 	/** Toggle Pi's native provider retry loop, when exposed by the host. */
@@ -1356,11 +1358,12 @@ export interface ExtensionAPI {
 	): void;
 
 	/**
-	 * Register several tools and refresh the tool registry once. Registering a
-	 * large catalog one tool at a time rebuilds the registry and the system
-	 * prompt per tool, which is quadratic work on the startup path.
+	 * Register several tools and optionally remove this extension's registrations
+	 * in one registry refresh. Removals never delete another extension's tools;
+	 * removing an override reveals the next definition under normal precedence.
+	 * Names present in both lists are replaced by the supplied definitions.
 	 */
-	registerTools(tools: readonly ToolDefinition<any, any, any>[]): void;
+	registerTools(tools: readonly ToolDefinition<any, any, any>[], options?: { remove?: readonly string[] }): void;
 
 	// =========================================================================
 	// Command, Shortcut, Flag Registration

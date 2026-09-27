@@ -311,16 +311,20 @@ function createExtensionAPI(
 			runtime.refreshTools();
 		},
 
-		registerTools(tools: readonly ToolDefinition[]): void {
+		registerTools(tools: readonly ToolDefinition[], options?: { remove?: readonly string[] }): void {
 			assertActive();
-			if (tools.length === 0) return;
+			let changed = false;
+			for (const name of options?.remove ?? []) {
+				if (extension.tools.delete(name)) changed = true;
+			}
 			for (const tool of tools) {
 				extension.tools.set(tool.name, {
 					definition: tool,
 					sourceInfo: extension.sourceInfo,
 				});
+				changed = true;
 			}
-			runtime.refreshTools();
+			if (changed) runtime.refreshTools();
 		},
 
 		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void {
