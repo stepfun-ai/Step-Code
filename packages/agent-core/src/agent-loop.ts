@@ -242,7 +242,7 @@ async function runLoop(
 				// them all instead of executing potentially borked calls.
 				const executedToolBatch =
 					message.stopReason === "length"
-						? await failToolCallsFromTruncatedMessage(toolCalls, emit)
+						? await failToolCallsFromTruncatedMessage(toolCalls, config, signal, emit)
 						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
@@ -417,6 +417,8 @@ async function streamAssistantResponse(
  */
 async function failToolCallsFromTruncatedMessage(
 	toolCalls: AgentToolCall[],
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
 	const messages: ToolResultMessage[] = [];
@@ -434,7 +436,7 @@ async function failToolCallsFromTruncatedMessage(
 			),
 			isError: true,
 		};
-		await emitToolExecutionEnd(finalized, emit);
+		await emitToolExecutionEnd(finalized, config, signal, emit);
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
 		messages.push(toolResultMessage);
@@ -506,7 +508,7 @@ async function executeToolCallsSequential(
 			);
 		}
 
-		await emitToolExecutionEnd(finalized, emit);
+		await emitToolExecutionEnd(finalized, config, signal, emit);
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
@@ -548,7 +550,7 @@ async function executeToolCallsParallel(
 				result: preparation.result,
 				isError: preparation.isError,
 			} satisfies FinalizedToolCallOutcome;
-			await emitToolExecutionEnd(finalized, emit);
+			await emitToolExecutionEnd(finalized, config, signal, emit);
 			finalizedCalls.push(finalized);
 			if (signal?.aborted) {
 				break;
@@ -566,7 +568,7 @@ async function executeToolCallsParallel(
 				config,
 				signal,
 			);
-			await emitToolExecutionEnd(finalized, emit);
+			await emitToolExecutionEnd(finalized, config, signal, emit);
 			return finalized;
 		});
 		if (signal?.aborted) {
@@ -801,7 +803,33 @@ function createErrorToolResult(message: string): AgentToolResult<any> {
 	};
 }
 
-async function emitToolExecutionEnd(finalized: FinalizedToolCallOutcome, emit: AgentEventSink): Promise<void> {
+async function emitToolExecutionEnd(
+	finalized: FinalizedToolCallOutcome,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	emit: AgentEventSink,
+): Promise<void> {
+	if (config.transformToolResult) {
+		try {
+			const content = await config.transformToolResult(finalized.result.content ?? [], signal);
+			finalized.result = { ...finalized.result, content };
+		} catch (error) {
+			const reason = error instanceof Error ? error.message.slice(0, 512) : "Unknown output processing error";
+			finalized.result = {
+				...finalized.result,
+				content: [
+					{
+						type: "text",
+						text: `Tool output could not be prepared: ${reason}. The tool may already have run; check its effects before repeating a state-changing call.`,
+					},
+					...(Array.isArray(finalized.result.content)
+						? finalized.result.content.filter((part) => part?.type === "image")
+						: []),
+				],
+			};
+			finalized.isError = true;
+		}
+	}
 	await emit({
 		type: "tool_execution_end",
 		toolCallId: finalized.toolCall.id,

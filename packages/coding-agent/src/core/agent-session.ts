@@ -14,7 +14,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type {
 	Agent,
 	AgentContext,
@@ -34,6 +34,7 @@ import type {
 	Model,
 	ProviderHeaders,
 	TextContent,
+	ToolResultMessage,
 	Usage,
 } from "@step-harness/providers/compat";
 import {
@@ -48,6 +49,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@step-harness/providers/compat";
+import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { sleep } from "../utils/sleep.ts";
@@ -114,6 +116,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt, type SystemPromptProd
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { boundToolResultContent } from "./tools/tool-output.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
 // ============================================================================
@@ -500,6 +503,14 @@ export class AgentSession {
 		}
 	}
 
+	private _boundToolContent(content: ToolResultMessage["content"], signal?: AbortSignal) {
+		return boundToolResultContent(
+			content,
+			join(this.sessionManager.getSessionDir() || this._agentDir || getAgentDir(), "tool-output"),
+			signal,
+		);
+	}
+
 	/**
 	 * Install tool hooks once on the Agent instance.
 	 *
@@ -509,6 +520,8 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
+		this.agent.transformToolResult = (content, signal) => this._boundToolContent(content, signal);
+
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
@@ -712,7 +725,7 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
-	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+	private _handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -736,7 +749,7 @@ export class AgentSession {
 		}
 
 		// Emit to extensions first
-		await this._emitExtensionEvent(event);
+		await this._emitExtensionEvent(event, signal);
 
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
@@ -838,7 +851,7 @@ export class AgentSession {
 	}
 
 	/** Emit extension events based on agent events */
-	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
+	private async _emitExtensionEvent(event: AgentEvent, signal?: AbortSignal): Promise<void> {
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
 			await this._extensionRunner.emit({ type: "agent_start" });
@@ -882,7 +895,7 @@ export class AgentSession {
 			if (replacement) {
 				// Untyped extension handlers can return messages with null/missing content;
 				// normalize so it never enters agent state or session history.
-				const normalized =
+				let normalized =
 					(replacement.role === "user" ||
 						replacement.role === "assistant" ||
 						replacement.role === "toolResult" ||
@@ -890,6 +903,28 @@ export class AgentSession {
 					replacement.content == null
 						? ({ ...replacement, content: [] } as AgentMessage)
 						: replacement;
+				// message_end replacements happen after terminal tool events. Bound an
+				// accepted replacement before the shared message is persisted or replayed.
+				if (normalized.role === "toolResult") {
+					try {
+						normalized = { ...normalized, content: await this._boundToolContent(normalized.content, signal) };
+					} catch (error) {
+						const reason = error instanceof Error ? error.message.slice(0, 512) : "Unknown retention error";
+						normalized = {
+							...normalized,
+							isError: true,
+							content: [
+								{
+									type: "text",
+									text: `Tool result replacement could not be retained: ${reason}. The tool may already have run; check its effects before repeating a state-changing call.`,
+								},
+								...(Array.isArray(normalized.content)
+									? normalized.content.filter((part) => part?.type === "image")
+									: []),
+							],
+						};
+					}
+				}
 				this._replaceMessageInPlace(event.message, normalized);
 			}
 		} else if (event.type === "tool_execution_start") {
