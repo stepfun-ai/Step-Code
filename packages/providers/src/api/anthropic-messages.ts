@@ -78,8 +78,10 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
 	}
 
-	// If we have images, convert to content block array
-	const blocks = content.map((block) => {
+	// If we have images, convert to content block array. Anthropic rejects
+	// whitespace-only text blocks, so drop them as user and assistant content does.
+	const kept = content.filter((block) => block.type !== "text" || block.text.trim().length > 0);
+	const blocks = kept.map((block) => {
 		if (block.type === "text") {
 			return {
 				type: "text" as const,
