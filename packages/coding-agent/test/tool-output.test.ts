@@ -145,3 +145,19 @@ it("keeps a retained empty first line consistent with the notice", async () => {
 	const result = await boundToolResultContent([{ type: "text", text: original }], root);
 	expect(text(result)).toMatch(/^\n\[Showing first 1 of 2 lines/);
 });
+
+it("leaves a producer's own truncation notice and exit status in place", async () => {
+	// Native bash keeps the last 2,000 lines, then appends its notice and status.
+	const kept = Array.from({ length: DEFAULT_MAX_LINES }, (_, n) => `line ${n + 1001}`).join("\n");
+	const original = `${kept}\n\n[Showing lines 1001-3000 of 3000. Full output: /tmp/step-bash-0123456789abcdef.log]\n\nCommand exited with code 1`;
+	const content: Content = [{ type: "text", text: original }];
+	expect(await boundToolResultContent(content, join(root, "not-created"))).toBe(content);
+	expect(await readdir(root)).toEqual([]);
+});
+
+it("still bounds output that exceeds the room left for a producer trailer", async () => {
+	const original = "line\n".repeat(DEFAULT_MAX_LINES + 20);
+	const result = await boundToolResultContent([{ type: "text", text: original }], root);
+	expect(text(result).split("\n").length).toBeLessThanOrEqual(DEFAULT_MAX_LINES);
+	expect(await readFile(artifact(result), "utf8")).toBe(original);
+});

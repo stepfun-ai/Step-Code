@@ -11,8 +11,11 @@ An oversized result keeps a prefix and a `Full output:` path. The complete text
 from all text blocks, joined by newlines, is saved before the preview is
 published. Individual oversized lines may leave no complete line in the
 preview; the full file remains readable with the normal file tools. A producer's
-`truncated` metadata does not disable this final bound. If a producer already
-lost content before returning, this file contains only what it returned.
+`truncated` metadata does not disable this final bound. Results that exceed the
+limits by at most 8 lines and 1 KiB are left unchanged: built-in tools truncate
+to the same limits and then append a notice and, for bash, an exit status, and
+that tail must not be cut again. If a producer already lost content before
+returning, this file contains only what it returned.
 
 Artifacts live in `tool-output` under the session directory. If the session has
 no storage directory, the configured agent directory (or its default) is used.

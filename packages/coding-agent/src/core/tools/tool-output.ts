@@ -8,6 +8,11 @@ type Content = (TextContent | ImageContent)[];
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_SCAN_LIMIT = 100;
 const OWNED_FILE = /^tool-[0-9a-f]{32}\.txt$/u;
+// Built-in tools truncate to the same limits, then append a notice and, for
+// bash, an exit status. Leave room for that trailer so a tail they kept on
+// purpose is not cut by a second, head-only pass.
+const PRODUCER_TRAILER_LINES = 8;
+const PRODUCER_TRAILER_BYTES = 1024;
 
 /** Bound final model-visible text while keeping the full textual view available on disk. */
 export async function boundToolResultContent(
@@ -19,7 +24,10 @@ export async function boundToolResultContent(
 		.filter((part) => part.type === "text")
 		.map((part) => part.text)
 		.join("\n");
-	const original = truncateHead(text);
+	const original = truncateHead(text, {
+		maxLines: DEFAULT_MAX_LINES + PRODUCER_TRAILER_LINES,
+		maxBytes: DEFAULT_MAX_BYTES + PRODUCER_TRAILER_BYTES,
+	});
 	if (!original.truncated) return content;
 
 	signal?.throwIfAborted();

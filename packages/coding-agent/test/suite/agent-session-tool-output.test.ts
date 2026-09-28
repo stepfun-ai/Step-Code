@@ -1,10 +1,14 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool, ToolExecutionMode } from "@step-harness/agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "../../src/core/tools/truncate.ts";
+import { createStepExtension } from "../../src/features/step.ts";
+import { createStepToolProfile } from "../../src/step/tool-profile.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 const harnesses: Harness[] = [];
@@ -61,7 +65,7 @@ async function runOutput(output: string, hookOutput?: string) {
 describe("AgentSession final tool output", () => {
 	it.each([
 		["many lines", Array.from({ length: 2100 }, (_, n) => `line ${n}`).join("\n")],
-		["one long line", "x".repeat(DEFAULT_MAX_BYTES + 1000)],
+		["one long line", "x".repeat(DEFAULT_MAX_BYTES + 2000)],
 		["multibyte output", "中文🙂\n".repeat(9000)],
 	])("bounds %s and retains the exact complete text", async (_name, original) => {
 		const { harness, requestText } = await runOutput(original);
@@ -230,5 +234,52 @@ describe("AgentSession final tool output", () => {
 	it("keeps small output unchanged", async () => {
 		const { requestText } = await runOutput("unchanged");
 		expect(requestText).toBe("unchanged");
+	});
+
+	it("keeps the tail and exit status of a failed command that bash already truncated", async () => {
+		if (process.platform === "win32") return;
+		const sandbox = mkdtempSync(join(tmpdir(), "step-tool-output-bash-"));
+		vi.stubEnv("STEP_CODING_AGENT_DIR", join(sandbox, "agent"));
+		try {
+			const harness = await createHarness({
+				tools: [],
+				initialActiveToolNames: ["run_command"],
+				settings: { compaction: { enabled: false } },
+				extensionFactories: [
+					createStepExtension({
+						permission: { env: {}, initialPreset: "bypass", toolOverrides: { run_command: "allow" } },
+					}),
+					(pi) => {
+						const tool = createStepToolProfile(sandbox, { agentDir: join(sandbox, "agent") }).find(
+							(candidate) => candidate.name === "run_command",
+						);
+						if (!tool) throw new Error("Step run_command tool is missing");
+						pi.registerTool(tool);
+					},
+				],
+			});
+			harnesses.push(harness);
+			await harness.session.bindExtensions({ mode: "print" });
+			let requestText = "";
+			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("run_command", { command: "seq 1 3000; exit 1", cwd: sandbox }), {
+					stopReason: "toolUse",
+				}),
+				(context) => {
+					const result = context.messages.find((message) => message.role === "toolResult");
+					if (result?.role === "toolResult") requestText = text(result.content);
+					return fauxAssistantMessage("done");
+				},
+			]);
+			await harness.session.prompt("run the build");
+			await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			expect(requestText).toContain("\n3000\n");
+			expect(requestText).toMatch(/Full output: \S*step-bash-\S+\.log\]/);
+			expect(requestText.endsWith("Command exited with code 1")).toBe(true);
+			expect(requestText).not.toContain("Showing first");
+		} finally {
+			vi.unstubAllEnvs();
+			rmSync(sandbox, { recursive: true, force: true });
+		}
 	});
 });
