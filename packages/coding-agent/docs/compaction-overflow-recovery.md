@@ -9,7 +9,7 @@ The reducer removes complete older message groups, oldest first. An assistant's 
 - The previous summary and summarization/custom instructions verbatim.
 - The latest real user request, including image input with blank or absent text, even if synthetic messages follow it.
 - The newest assistant group and newest complete tool batch, plus trailing context.
-- Checkpoint messages already present in the source.
+- Checkpoint messages already present in the source, including compaction and branch summaries.
 
 Retained groups use the existing serialization and tool-output truncation. Recovery does not further rewrite their contents. A note inside the conversation reports how many older groups were omitted. If the protected content cannot fit, no further measurable reduction is possible, or tool calls/results cannot be grouped safely, compaction fails explicitly instead of resending an unchanged rejected payload.
 

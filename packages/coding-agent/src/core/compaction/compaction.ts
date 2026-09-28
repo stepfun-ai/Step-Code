@@ -591,6 +591,9 @@ export function getSummarizationFailure(
 	label: string,
 	maxTokens?: number,
 ): string | undefined {
+	if (response.stopReason === "aborted") {
+		return `${label} aborted before producing a summary`;
+	}
 	if (response.stopReason === "error") {
 		return `${label} failed: ${response.errorMessage || "Unknown error"}`;
 	}
@@ -846,13 +849,18 @@ export async function generateSummaryWithUsage(
 
 	const failure = getSummarizationFailure(response, "Summarization", maxTokens);
 	if (failure) {
-		throw new Error(failure);
+		const error = new Error(failure);
+		if (response.stopReason === "aborted") error.name = "AbortError";
+		throw error;
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
 		throw new Error("Summarization attempted to call a tool");
 	}
 
 	const textContent = contentText(response.content);
+	if (!textContent.trim()) {
+		throw new Error("Summarization failed: response contained no summary text");
+	}
 
 	return { text: textContent, usage: response.usage };
 }
@@ -1141,14 +1149,20 @@ async function generateTurnPrefixSummary(
 
 	const failure = getSummarizationFailure(response, "Turn prefix summarization", maxTokens);
 	if (failure) {
-		throw new Error(failure);
+		const error = new Error(failure);
+		if (response.stopReason === "aborted") error.name = "AbortError";
+		throw error;
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
 		throw new Error("Turn prefix summarization attempted to call a tool");
 	}
+	const textContent = contentText(response.content);
+	if (!textContent.trim()) {
+		throw new Error("Turn prefix summarization failed: response contained no summary text");
+	}
 
 	return {
-		text: contentText(response.content),
+		text: textContent,
 		usage: response.usage,
 	};
 }

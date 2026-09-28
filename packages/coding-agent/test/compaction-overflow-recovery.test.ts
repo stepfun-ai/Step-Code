@@ -455,11 +455,21 @@ describe.each<SummaryPath>(["history", "prefix"])("%s summary context overflow r
 		expect(requests).toHaveLength(0);
 	});
 
-	it("does not make another request after an aborted reduced response", async () => {
-		const aborted: AssistantMessage = { ...reply(""), stopReason: "aborted" };
-		const { streamFn, requests } = scriptedStream([failure(), aborted, reply()]);
+	it.each([
+		{
+			name: "aborted",
+			response: { ...reply(""), stopReason: "aborted" as const },
+		},
+		{ name: "empty", response: reply("") },
+		{ name: "whitespace-only", response: reply(" \n\t ") },
+		{
+			name: "thinking-only",
+			response: { ...reply(""), content: [{ type: "thinking" as const, thinking: "internal reasoning" }] },
+		},
+	])("rejects an invalid reduced $name response without another request", async ({ response }) => {
+		const { streamFn, requests } = scriptedStream([failure(), response, reply()]);
 
-		await summarize(path, streamFn).catch(() => undefined);
+		await expect(summarize(path, streamFn)).rejects.toThrow(/aborted|no summary text/i);
 		expect(requests).toHaveLength(2);
 	});
 
@@ -591,6 +601,28 @@ describe("compaction overflow protection and accounting", () => {
 		expectProtectedContent(requests[1]!);
 		expect(prompt(requests[1]!)).toContain("The newest assistant conclusion.");
 		expect(prompt(requests[1]!)).not.toContain("Older completed analysis.");
+	});
+
+	it("preserves branch summaries while removing older source groups", async () => {
+		const branchSummary: AgentMessage = {
+			role: "branchSummary",
+			summary: "BRANCH CHECKPOINT: the abandoned migration investigation found a schema mismatch.",
+			fromId: "branch-entry",
+			timestamp: 1,
+		};
+		const messages = [
+			branchSummary,
+			user("An older request that can be omitted."),
+			reply("Older analysis. ".repeat(5000)),
+			user(latestRequest),
+			...toolGroup("newest", 100),
+		];
+		const { streamFn, requests } = scriptedStream([failure(), reply("summary with branch context")]);
+
+		await summarize("history", streamFn, { messages });
+
+		expect(requests).toHaveLength(2);
+		expect(prompt(requests[1]!)).toContain(branchSummary.summary);
 	});
 
 	it("does not infer overflow from a successful response's reported input usage", async () => {

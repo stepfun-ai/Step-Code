@@ -77,7 +77,7 @@ export function createSummarySourceReducer(
 			index === latestUser ||
 			index === latestTools ||
 			index >= tailStart ||
-			group.some((message) => message.role === "compactionSummary"),
+			group.some((message) => message.role === "compactionSummary" || message.role === "branchSummary"),
 	}));
 	let textChars = sources.reduce((sum, source) => sum + source.text.length, 0);
 	let textCount = sources.filter((source) => source.text.length > 0).length;
