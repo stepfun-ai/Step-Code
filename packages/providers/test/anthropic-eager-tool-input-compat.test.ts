@@ -37,6 +37,21 @@ const schemaCompatibilityTool: Tool = {
 	parameters: Type.Object({ value: Type.String() }, { additionalProperties: false, title: "LookupInput" }),
 };
 
+// Shape emitted by pydantic-based MCP servers (for example FastMCP) for enum and nested-model parameters.
+const localReferenceTool: Tool = {
+	...tool,
+	parameters: {
+		type: "object",
+		properties: {
+			priority: { $ref: "#/$defs/Priority" },
+			owner: { $ref: "#/definitions/Owner" },
+		},
+		required: ["priority"],
+		$defs: { Priority: { type: "string", enum: ["low", "high"] } },
+		definitions: { Owner: { type: "object", properties: { name: { type: "string" } } } },
+	} as unknown as Tool["parameters"],
+};
+
 const strictTool: Tool = {
 	...tool,
 	parameters: Type.Object(
@@ -161,6 +176,18 @@ describe("Anthropic eager tool input streaming compatibility", () => {
 			required: ["value", "optional"],
 			properties: { optional: { anyOf: [{ type: "number" }, { type: "null" }] } },
 			title: "StrictLookupInput",
+		});
+	});
+
+	it("keeps local definitions referenced by legacy input schemas", async () => {
+		const request = await captureAnthropicRequest(undefined, createContext([localReferenceTool]));
+		const parameters = localReferenceTool.parameters as Record<string, unknown>;
+		expect(getFirstToolInputSchema(request.body)).toEqual({
+			type: "object",
+			properties: parameters.properties,
+			required: ["priority"],
+			$defs: parameters.$defs,
+			definitions: parameters.definitions,
 		});
 	});
 });

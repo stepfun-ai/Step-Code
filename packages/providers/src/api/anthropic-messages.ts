@@ -1254,11 +1254,19 @@ function convertTools(
 	return tools.map((tool, index) => {
 		const strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools);
 		const parameters = getJsonSchemaToolParameters(tool, strict);
-		const schema = parameters as { properties?: unknown; required?: string[] };
+		const schema = parameters as {
+			properties?: unknown;
+			required?: string[];
+			$defs?: unknown;
+			definitions?: unknown;
+		};
 		const legacyInputSchema = {
 			type: "object" as const,
 			properties: schema.properties ?? {},
 			required: schema.required ?? [],
+			// Keep local definitions so `$ref`s inside the kept properties still resolve.
+			...(schema.$defs !== undefined ? { $defs: schema.$defs } : {}),
+			...(schema.definitions !== undefined ? { definitions: schema.definitions } : {}),
 		};
 		const inputSchema =
 			strict === true
