@@ -723,16 +723,6 @@ export function stepThinkingLevelMap(efforts: readonly string[]): ThinkingLevelM
 	return map;
 }
 
-/** Highest supported reasoning effort (used as the default level for a model). */
-export function stepHighestEffort(efforts: readonly string[]): ThinkingLevel | undefined {
-	const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
-	for (let index = STEP_EFFORT_LEVELS.length - 1; index >= 0; index -= 1) {
-		const level = STEP_EFFORT_LEVELS[index]!;
-		if (supported.has(level)) return level;
-	}
-	return undefined;
-}
-
 export interface FetchStepModelEffortsInput {
 	/** OpenAI-style base (`.../v1`); the request targets `{baseUrl}/models/{modelId}`. */
 	readonly baseUrl: string;

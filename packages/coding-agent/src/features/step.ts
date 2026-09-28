@@ -1,5 +1,5 @@
 import process from "node:process";
-import { type Api, clampThinkingLevel, type Model } from "@step-harness/providers";
+import { type Api, clampThinkingLevel, type Model, modelsAreEqual } from "@step-harness/providers";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -81,7 +81,7 @@ async function enrichStepModelEffort(
 		}
 		// Discovery may finish after a model switch or a user effort change. Only
 		// validate the still-active model, using the latest session preference.
-		if (ctx.model !== model) return;
+		if (!modelsAreEqual(ctx.model, model)) return;
 		const selected = pi.getThinkingLevel();
 		const supported = clampThinkingLevel(model, selected);
 		if (supported !== selected) pi.setThinkingLevel(supported);
