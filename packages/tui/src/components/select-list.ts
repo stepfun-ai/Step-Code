@@ -69,6 +69,19 @@ export class SelectList implements Component {
 		this.selectedIndex = clamp(this.selectedIndex, 0, Math.max(0, items.length - 1));
 	}
 
+	/**
+	 * Show the empty result state while keeping the current options.
+	 *
+	 * A caller that filters outside this component (fuzzy matching, remote
+	 * search) needs to distinguish "no match" from "no items": setItems with an
+	 * empty array would drop the options it still holds, and setItems with the
+	 * full array would ignore the query.
+	 */
+	setEmpty(): void {
+		this.filteredItems = [];
+		this.selectedIndex = 0;
+	}
+
 	getSelectedIndex(): number {
 		return this.selectedIndex;
 	}

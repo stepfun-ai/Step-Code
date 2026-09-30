@@ -221,6 +221,31 @@ describe("AgentSession compaction characterization", () => {
 		expect(getStreamCallCount()).toBe(1);
 	});
 
+	it("does not persist a compaction when the summary response is aborted", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const model = harness.getModel();
+		harness.session.agent.streamFunction = (_model, _context, _options) => {
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message: AssistantMessage = {
+					...fauxAssistantMessage("", { stopReason: "aborted" }),
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: createUsage(10),
+				};
+				stream.push({ type: "error", reason: "aborted", error: message });
+			});
+			return stream;
+		};
+
+		await expect(harness.session.compact()).rejects.toThrow(/aborted/i);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(harness.session.messages.some((message) => message.role === "compactionSummary")).toBe(false);
+	});
+
 	it("manually compacts with provider-resolved bearer auth", async () => {
 		const harness = await createHarness({ withConfiguredAuth: false });
 		harnesses.push(harness);

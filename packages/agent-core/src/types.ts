@@ -303,6 +303,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * The hook receives the agent abort signal and is responsible for honoring it.
 	 */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+
+	/**
+	 * Final content-only transform for every tool outcome, including validation failures,
+	 * denied calls and truncated-call rejections. Runs after execution hooks and before
+	 * terminal events or result messages; it cannot override usage or termination policy.
+	 * A transform failure becomes an error result while preserving the original metadata.
+	 */
+	transformToolResult?: (
+		content: AgentToolResult<unknown>["content"],
+		signal?: AbortSignal,
+	) => Promise<AgentToolResult<unknown>["content"]>;
 }
 
 /**

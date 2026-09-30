@@ -211,7 +211,7 @@ export const TUI_KEYBINDINGS = {
 		description: "Close transcript search",
 	},
 	"tui.altScreen.top": { defaultKeys: "home", description: "Scroll viewport to top" },
-	"tui.altScreen.bottom": { defaultKeys: "end", description: "Scroll viewport to bottom" },
+	"tui.altScreen.bottom": { defaultKeys: ["end", "ctrl+end"], description: "Scroll viewport to bottom" },
 } as const satisfies KeybindingDefinitions;
 
 export interface KeybindingConflict {

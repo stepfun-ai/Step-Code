@@ -1181,7 +1181,12 @@ export class StepStdioHost {
 			confirm: (title, message, opts) =>
 				dialog("user_dialog.request", { kind: "confirm", title, message }, false, opts),
 			input: (title, placeholder, opts) =>
-				dialog("user_dialog.request", { kind: "input", title, placeholder }, undefined, opts),
+				dialog(
+					"user_dialog.request",
+					{ kind: "input", title, placeholder, examples: opts?.examples },
+					undefined,
+					opts,
+				),
 			notify: (message, type) => this.#emitEvent("user_notification", { message, type }),
 			onTerminalInput: () => () => {},
 			setStatus: (key, text) => this.#emitEvent("ui.status", { key, text }),

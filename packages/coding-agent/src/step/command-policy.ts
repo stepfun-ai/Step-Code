@@ -94,12 +94,13 @@ const COMMAND_APPROVAL_RULES: readonly CommandApprovalRule[] = [
 	{ id: "recursive-force-remove", kind: "shell", matches: isRecursiveForceRemove },
 	{ id: "system-lifecycle", kind: "shell", matches: isLifecycleCommand },
 	{ id: "format-filesystem", kind: "pattern", pattern: /\bmkfs(?:\.[\w.-]+)?\b/iu },
-	{ id: "copy-device", kind: "pattern", pattern: /\bdd\s+if=/iu },
-	{ id: "truncate-device", kind: "pattern", pattern: /\b:>\s*\/dev\//u },
+	{ id: "copy-device", kind: "pattern", pattern: /\bdd\b[^;&|\n]*\bif=/iu },
+	{ id: "truncate-device", kind: "pattern", pattern: /(?:^|[;&|]\s*):\s*>\s*\/dev\//imu },
 	{
 		id: "destructive-git",
 		kind: "pattern",
-		pattern: /\bgit\s+(?:reset\s+--hard|clean\s+-[^\n]*f|push\s+[^\n]*--force(?:-with-lease)?)/iu,
+		pattern:
+			/\bgit\s+(?:reset\s+--hard|clean\s+-[^\n]*f|push\s+[^\n]*(?:--force(?:-with-lease(?:=\S*)?)?|-f)(?=\s|$))/iu,
 	},
 	{ id: "destructive-sql", kind: "pattern", pattern: /\b(?:drop\s+database|truncate\s+table)\b/iu },
 ];

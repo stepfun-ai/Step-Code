@@ -1113,7 +1113,7 @@ function countOccurrences(text: string, needle: string): number {
 }
 
 function createFindToolsDefinition(
-	definitions: readonly AnyToolDefinition[],
+	fallbackDefinitions: readonly AnyToolDefinition[],
 ): ToolDefinition<typeof findToolsSchema, undefined> {
 	return {
 		name: "find_tools",
@@ -1121,7 +1121,8 @@ function createFindToolsDefinition(
 		description: "Search registered tools by natural-language intent, tool name, description, and parameter names.",
 		promptSnippet: "Find a tool by describing the operation you need",
 		parameters: findToolsSchema,
-		execute: async (_toolCallId, args: FindToolsInput) => {
+		execute: async (_toolCallId, args: FindToolsInput, _signal, _onUpdate, ctx) => {
+			const definitions = ctx?.getToolCatalog?.() ?? fallbackDefinitions;
 			const queryTokens = args.query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
 			const limit = Math.max(1, Math.min(20, args.limit ?? 8));
 			const matches = definitions
@@ -1140,7 +1141,7 @@ function createFindToolsDefinition(
 				? matches
 						.map(
 							({ definition, score }, index) =>
-								`${index + 1}. ${definition.name} [score=${score}]\ndescription: ${definition.description}`,
+								`${index + 1}. ${definition.name} [score=${score}]\ndescription: ${definition.description}\nparameters: ${JSON.stringify(definition.parameters)}`,
 						)
 						.join("\n\n")
 				: "(no matching tools)";

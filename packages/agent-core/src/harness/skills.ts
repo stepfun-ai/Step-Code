@@ -1,12 +1,10 @@
-import ignore from "ignore";
 import { parse } from "yaml";
+import { SkillIgnoreMatcher } from "./skill-discovery.ts";
 import { type ExecutionEnv, type FileInfo, type Result, type Skill, toError } from "./types.ts";
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
-
-type IgnoreMatcher = ReturnType<typeof ignore>;
 
 export type SkillDiagnosticCode =
 	| "file_info_failed"
@@ -68,7 +66,7 @@ export async function loadSkills(
 		}
 		const rootInfo = rootInfoResult.value;
 		if ((await resolveKind(env, rootInfo, diagnostics)) !== "directory") continue;
-		const result = await loadSkillsFromDirInternal(env, rootInfo.path, true, ignore(), rootInfo.path);
+		const result = await loadSkillsFromDirInternal(env, rootInfo.path, true, undefined, rootInfo.path, new Set());
 		skills.push(...result.skills);
 		diagnostics.push(...result.diagnostics);
 	}
@@ -105,8 +103,9 @@ async function loadSkillsFromDirInternal(
 	env: ExecutionEnv,
 	dir: string,
 	includeRootFiles: boolean,
-	ignoreMatcher: IgnoreMatcher,
+	parentIgnoreMatcher: SkillIgnoreMatcher | undefined,
 	rootDir: string,
+	visitedDirs: Set<string>,
 ): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[] }> {
 	const skills: Skill[] = [];
 	const diagnostics: SkillDiagnostic[] = [];
@@ -126,7 +125,13 @@ async function loadSkillsFromDirInternal(
 	const dirInfo = dirInfoResult.value;
 	if ((await resolveKind(env, dirInfo, diagnostics)) !== "directory") return { skills, diagnostics };
 
-	await addIgnoreRules(env, ignoreMatcher, dir, rootDir, diagnostics);
+	const canonicalDir = await env.canonicalPath(dir);
+	const realDir = canonicalDir.ok ? canonicalDir.value : dirInfo.path;
+	if (visitedDirs.has(realDir)) return { skills, diagnostics };
+	visitedDirs.add(realDir);
+
+	const ignoreMatcher = new SkillIgnoreMatcher(relativeEnvPath(rootDir, dir), parentIgnoreMatcher);
+	await addIgnoreRules(env, ignoreMatcher, dir, diagnostics);
 
 	const entriesResult = await env.listDir(dir);
 	if (!entriesResult.ok) {
@@ -160,7 +165,7 @@ async function loadSkillsFromDirInternal(
 		if (ignoreMatcher.ignores(ignorePath)) continue;
 
 		if (kind === "directory") {
-			const result = await loadSkillsFromDirInternal(env, fullPath, false, ignoreMatcher, rootDir);
+			const result = await loadSkillsFromDirInternal(env, fullPath, false, ignoreMatcher, rootDir, visitedDirs);
 			skills.push(...result.skills);
 			diagnostics.push(...result.diagnostics);
 			continue;
@@ -177,14 +182,10 @@ async function loadSkillsFromDirInternal(
 
 async function addIgnoreRules(
 	env: ExecutionEnv,
-	ig: IgnoreMatcher,
+	ig: SkillIgnoreMatcher,
 	dir: string,
-	rootDir: string,
 	diagnostics: SkillDiagnostic[],
 ): Promise<void> {
-	const relativeDir = relativeEnvPath(rootDir, dir);
-	const prefix = relativeDir ? `${relativeDir}/` : "";
-
 	for (const filename of IGNORE_FILE_NAMES) {
 		const ignorePathResult = await env.joinPath([dir, filename]);
 		if (!ignorePathResult.ok) {
@@ -215,30 +216,8 @@ async function addIgnoreRules(
 			diagnostics.push({ type: "warning", code: "read_failed", message: content.error.message, path: ignorePath });
 			continue;
 		}
-		const patterns = content.value
-			.split(/\r?\n/)
-			.map((line) => prefixIgnorePattern(line, prefix))
-			.filter((line): line is string => Boolean(line));
-		if (patterns.length > 0) ig.add(patterns);
+		ig.add(content.value);
 	}
-}
-
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-	if (pattern.startsWith("/")) pattern = pattern.slice(1);
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
 }
 
 async function loadSkillFromFile(
@@ -324,7 +303,10 @@ function parseFrontmatter<T extends Record<string, unknown>>(
 	content: string,
 ): Result<{ frontmatter: T; body: string }, Error> {
 	try {
-		const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+		const normalized = content
+			.replace(/^\uFEFF/, "")
+			.replace(/\r\n/g, "\n")
+			.replace(/\r/g, "\n");
 		if (!normalized.startsWith("---")) return { ok: true, value: { frontmatter: {} as T, body: normalized } };
 		const endIndex = normalized.indexOf("\n---", 3);
 		if (endIndex === -1) return { ok: true, value: { frontmatter: {} as T, body: normalized } };
