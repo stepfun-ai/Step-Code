@@ -114,7 +114,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		const customPromptHasRead =
 			!selectedTools || selectedTools.some((name) => name === "read" || name === "read_file");
 		if (customPromptHasRead && skills.length > 0) {
-			prompt += formatSkillsForPrompt(skills);
+			prompt += formatSkillsForPrompt(skills, activeToolNames.includes("read") ? "read" : "read_file");
 		}
 		if (productAppendix) {
 			prompt += productAppendix;
@@ -218,7 +218,7 @@ ${
 
 	// Append skills section (only if read tool is available)
 	if (hasRead && skills.length > 0) {
-		prompt += formatSkillsForPrompt(skills);
+		prompt += formatSkillsForPrompt(skills, activeToolNames.includes("read") ? "read" : "read_file");
 	}
 	if (productAppendix) {
 		prompt += productAppendix;

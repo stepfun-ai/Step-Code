@@ -10,6 +10,7 @@ import "#bootstrap/environment";
 import { join } from "node:path";
 
 import {
+	ambiguousPluginServerNames,
 	applyStepCodeConfigDefaults,
 	buildStepSystemPromptAppendix,
 	configureHttpDispatcher,
@@ -50,6 +51,7 @@ import {
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepConfigRoot,
+	resolveStepMcpServer,
 	resolveStepStorageRoot,
 	restoreStdout,
 	runFeedbackCommand,
@@ -187,6 +189,7 @@ const stepMainOptions: MainOptions = {
 		permission: {
 			approvalMode: stepPermissionArgs.approvalMode,
 			nonInteractiveApproval: stepPermissionArgs.nonInteractiveApproval,
+			nonInteractiveDenial: stepPermissionArgs.nonInteractiveDenial,
 			toolOverrides: stepPermissionArgs.toolOverride ?? stepPermissionArgs.toolOverrides,
 		},
 		traceHeaderPolicy: observability.traceHeaderPolicy(),
@@ -426,9 +429,43 @@ try {
 			}
 		} else if (subcommand === "login" || subcommand === "logout") {
 			const name = args[1];
-			const server = name ? servers[name] : undefined;
-			if (!name || !server) {
+			// A plugin's servers are named `<pluginId>__<serverName>`, which is the
+			// name a start-failure message prints and the name `/mcp` shows. Reading
+			// only config.toml here meant those servers could not be logged into at
+			// all, even by copying the name out of the error.
+			//
+			// Keep the *resolved* name, not the user's input: credentials are stored
+			// under `<name>|<url>` and the runtime reads them under the published
+			// name, so logging in with a bare `context7` would write a key that the
+			// `context7__context7` connection never looks up — reporting success and
+			// then failing the same way on the next start.
+			const resolved = name && !servers[name] ? await resolveStepMcpServer(name) : undefined;
+			const serverName = resolved?.name ?? name;
+			const server = name ? (servers[name] ?? resolved?.declaration) : undefined;
+			// A bare name shared by several plugins resolves to nothing. Say so
+			// instead of claiming no such server exists, which sends the user
+			// hunting for a typo that is not there.
+			const ambiguous = name && !servers[name] && !resolved ? await ambiguousPluginServerNames(name) : [];
+			if (!name) {
 				process.stderr.write("Usage: step mcp login|logout <http-server-name>\n");
+				process.exitCode = 1;
+			} else if (!server) {
+				if (ambiguous.length > 0) {
+					process.stderr.write(
+						`Several plugins declare a server named '${name}': ${ambiguous.join(", ")}. ` +
+							"Use the qualified name.\n",
+					);
+				} else {
+					// Name the sources so a typo is distinguishable from a server
+					// that exists only in a plugin, and point at /mcp for the latter.
+					process.stderr.write(
+						`No MCP server named '${name}'. It is not in config.toml` +
+							(servers && Object.keys(servers).length > 0
+								? ` (which has: ${Object.keys(servers).join(", ")})`
+								: "") +
+							", and no plugin declares it. Run /mcp inside Step to see the names in use.\n",
+					);
+				}
 				process.exitCode = 1;
 			} else if (!server.url) {
 				process.stderr.write(
@@ -437,7 +474,7 @@ try {
 				process.exitCode = 1;
 			} else if (subcommand === "login") {
 				try {
-					await loginMcpServer(name, server.url, server.oauth, process.env);
+					await loginMcpServer(serverName!, server.url, server.oauth, process.env);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					if (message.includes("403") && name.toLowerCase().includes("figma")) {
@@ -449,9 +486,9 @@ try {
 				}
 			} else {
 				process.stdout.write(
-					logoutMcpServer(name, server.url, process.env)
-						? `Logged out of MCP server '${name}'.\n`
-						: `No stored credentials for MCP server '${name}'.\n`,
+					logoutMcpServer(serverName!, server.url, process.env)
+						? `Logged out of MCP server '${serverName}'.\n`
+						: `No stored credentials for MCP server '${serverName}'.\n`,
 				);
 			}
 		} else {

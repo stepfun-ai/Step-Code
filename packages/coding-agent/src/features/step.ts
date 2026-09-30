@@ -1,5 +1,5 @@
 import process from "node:process";
-import { type Api, getSupportedThinkingLevels, type Model } from "@step-harness/providers";
+import { type Api, clampThinkingLevel, type Model, modelsAreEqual } from "@step-harness/providers";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -19,6 +19,7 @@ import {
 	StepPermissionController,
 	type StepPermissionControllerOptions,
 } from "../step/permissions.ts";
+import { createStepPluginResourcesExtension } from "../step/plugins.ts";
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
@@ -54,14 +55,13 @@ export interface StepExtensionOptions {
  * carries `reasoning_effort_support_list` on some profiles (e.g. step_plan); when
  * it does not (e.g. platform), fetch the per-model detail from the domain-root
  * `/v1`. Mutates the model in place — the session's active model is the same
- * object the picker reads. When `applyDefault` is set (fresh activation, not a
- * restore), also default the level to the highest supported effort.
+ * object the picker reads. Keep the session's resolved thinking preference;
+ * capability discovery may only clamp a level the active model cannot support.
  */
 async function enrichStepModelEffort(
 	model: Model<Api> | undefined,
 	ctx: ExtensionContext,
 	pi: ExtensionAPI,
-	applyDefault: boolean,
 ): Promise<void> {
 	try {
 		if (!model || model.provider !== STEP_PROVIDER_ID) return;
@@ -80,11 +80,12 @@ async function enrichStepModelEffort(
 				}
 			}
 		}
-		if (applyDefault) {
-			const supported = getSupportedThinkingLevels(model).filter((level) => level !== "off");
-			const highest = supported[supported.length - 1];
-			if (highest) pi.setThinkingLevel(highest);
-		}
+		// Discovery may finish after a model switch or a user effort change. Only
+		// validate the still-active model, using the latest session preference.
+		if (!modelsAreEqual(ctx.model, model)) return;
+		const selected = pi.getThinkingLevel();
+		const supported = clampThinkingLevel(model, selected);
+		if (supported !== selected) pi.setThinkingLevel(supported);
 	} catch {
 		// Best-effort; the model keeps its existing thinking-level defaults.
 	}
@@ -100,17 +101,19 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		// Fire-and-forget; failures leave the model's defaults untouched.
 		// (The initial model catalog is refreshed by the launcher before the
 		// session's model is resolved, so it is already available here.)
-		pi.on("session_start", (event, ctx) => {
-			const fresh = event.reason === "startup" || event.reason === "new";
-			void enrichStepModelEffort(ctx.model, ctx, pi, fresh);
+		pi.on("session_start", (_event, ctx) => {
+			void enrichStepModelEffort(ctx.model, ctx, pi);
 		});
 		pi.on("model_select", (event, ctx) => {
-			void enrichStepModelEffort(event.model, ctx, pi, event.source !== "restore");
+			void enrichStepModelEffort(event.model, ctx, pi);
 		});
 		// Declarative plugins (including StepPage) contribute MCP servers. The
 		// bridge is loaded as part of the Step product extension so ordinary Pi
 		// sessions remain unchanged.
 		createStepMcpExtension()(pi);
+		// The same plugins also contribute skills and commands, which the resource
+		// loader reads from agent/project directories rather than the plugin root.
+		createStepPluginResourcesExtension()(pi);
 		registerStepPiCommandAdapters(pi, options.telemetry, options.stepSettings, options.feedbackIdentity);
 		const builtInSlashCommands = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		// Extension commands are wrapped at registration time below. Inputs that

@@ -23,6 +23,7 @@ export { containsDangerousLifecycleCommand, isDangerousCommand } from "./command
 export type StepPermissionPresetId = "ask" | "read-only" | "bypass" | "autopilot";
 export type StepPermissionMode = "confirm" | "strict" | "auto";
 export type StepNonInteractiveApproval = "allow" | "deny";
+export type StepNonInteractiveDenial = "terminate" | "continue";
 export type StepToolPermissionMode = "allow" | "confirm" | "deny";
 
 export interface StepPermissionPreset {
@@ -122,6 +123,8 @@ export interface StepToolDecision {
 	hazardous: boolean;
 	/** Analysis uncertainty requires a human decision without claiming a dangerous rule matched. */
 	analysisIncomplete?: true;
+	/** Machine-readable reason for an incomplete command analysis. */
+	analysisReason?: string;
 	reason: string;
 }
 
@@ -133,6 +136,13 @@ export interface StepPermissionControllerOptions {
 	approvalMode?: StepPermissionMode;
 	/** Fallback for confirmation requests when no interactive UI exists. */
 	nonInteractiveApproval?: StepNonInteractiveApproval;
+	/**
+	 * What an unapprovable confirmation does to an unattended run: `terminate`
+	 * (default) ends the run after the blocked batch, `continue` reports the
+	 * block as a failed tool result and lets the agent keep working. The command
+	 * itself is never executed either way.
+	 */
+	nonInteractiveDenial?: StepNonInteractiveDenial;
 	/** Enables the bounded continuation ladder when the mode permits it. */
 	autoResume?: boolean;
 	/** Per-tool overrides (CLI `--tool-override` is merged here). */
@@ -376,6 +386,7 @@ export function decideStepToolCall(
 			action: state.mode === "strict" ? "deny" : "confirm",
 			hazardous: false,
 			analysisIncomplete: true,
+			analysisReason: analysis.reason,
 			reason: `Shell command could not be fully analyzed (${analysis.reason}); explicit approval is required.`,
 		};
 	}
@@ -430,11 +441,13 @@ export class StepPermissionController {
 	private state: StepPermissionState;
 	private toolOverrides: Record<string, StepToolPermissionMode>;
 	private readonly shellContext: () => ShellExecutionContext;
+	private readonly nonInteractiveDenial: StepNonInteractiveDenial;
 
 	constructor(options: StepPermissionControllerOptions = {}) {
 		this.shellContext = options.shellContext ?? (() => ({}));
 		this.state = resolveInitialStepPermissionState(options);
 		this.toolOverrides = cloneToolOverrides(options.toolOverrides ?? {});
+		this.nonInteractiveDenial = resolveNonInteractiveDenial(options);
 		if (Object.keys(this.toolOverrides).length > 0) this.state.toolOverrides = { ...this.toolOverrides };
 	}
 
@@ -538,6 +551,12 @@ export class StepPermissionController {
 			// fail closed. The default remains deny.
 			if (!decision.hazardous && !decision.analysisIncomplete && state.nonInteractiveApproval === "allow")
 				return undefined;
+			// Opt-in recovery: the call stays blocked, but the block is reported as
+			// a failed tool result instead of ending the run, so the agent can take
+			// a safer route. Explicit `deny` decisions above keep terminating.
+			if (this.nonInteractiveDenial === "continue" && !isEnvironmentAnalysisFailure(decision)) {
+				return { block: true, reason: formatDenialRecoveryReason(decision, cause) };
+			}
 			return {
 				block: true,
 				terminate: true,
@@ -593,6 +612,53 @@ function formatUnattendedBlockReason(decision: StepToolDecision, cause: Unattend
 		);
 	}
 	return `${decision.reason} (no interactive approval is available).`;
+}
+
+/**
+ * These failures describe the execution environment rather than the submitted
+ * command. Letting the model retry cannot make an unsupported or missing shell
+ * analyzable, so an unattended run must terminate and surface the diagnosis.
+ */
+function isEnvironmentAnalysisFailure(decision: StepToolDecision): boolean {
+	return decision.analysisReason === "unsupported-shell" || decision.analysisReason === "shell-configuration";
+}
+
+/**
+ * Explain a non-terminating unattended block to the model.
+ *
+ * The audience differs from formatUnattendedBlockReason: recovery mode feeds
+ * this text back as a failed tool result, so it needs "what to do instead"
+ * guidance rather than CLI flags the model cannot change.
+ */
+function formatDenialRecoveryReason(decision: StepToolDecision, cause: UnattendedCause): string {
+	const hint = formatUnattendedRecoveryHint(decision, cause);
+	return [
+		`${decision.reason} No interactive approval is available in this run, so the call was not executed.`,
+		hint,
+		"Do not retry it verbatim; use a safer equivalent or continue the task without it.",
+	]
+		.filter(Boolean)
+		.join(" ");
+}
+
+function formatUnattendedRecoveryHint(decision: StepToolDecision, cause: UnattendedCause): string {
+	if (decision.analysisIncomplete || decision.hazardous) return "";
+	if (cause.refused) {
+		return "Permit ordinary unattended approvals with --non-interactive-approval allow or --approval-mode auto.";
+	}
+	if (cause.unconfigured) {
+		return "Configure a permission preset, or permit unattended writes with --non-interactive-approval allow or --approval-mode auto.";
+	}
+	return "";
+}
+
+/** Resolve the unattended denial outcome from options, then the environment. */
+function resolveNonInteractiveDenial(options: StepPermissionControllerOptions): StepNonInteractiveDenial {
+	if (options.nonInteractiveDenial === "terminate" || options.nonInteractiveDenial === "continue") {
+		return options.nonInteractiveDenial;
+	}
+	const env = options.env ?? process.env;
+	return env.STEP_NON_INTERACTIVE_DENIAL?.trim().toLowerCase() === "continue" ? "continue" : "terminate";
 }
 
 function cloneToolOverrides(overrides: Record<string, StepToolPermissionMode>): Record<string, StepToolPermissionMode> {

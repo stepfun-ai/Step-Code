@@ -77,12 +77,20 @@ describe("TuiAltScreen", () => {
 		assert.strictEqual(tui.viewportTop, 5);
 		assert.strictEqual(tui.isFollowingOutput, false);
 
+		terminal.sendInput("\x1b[1;5F");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 7", "line 8", "line 9", "line 10"],
+		);
+		assert.strictEqual(tui.isFollowingOutput, true);
+
 		text.setText(Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n"));
 		tui.requestRender();
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 6", "line 7", "line 8", "line 9"],
+			["line 9", "line 10", "line 11", "line 12"],
 		);
 
 		tui.stop();
@@ -561,7 +569,7 @@ describe("TuiAltScreen", () => {
 		}
 	});
 
-	it("routes Ctrl-modified viewport navigation to the focused component", async () => {
+	it("routes Ctrl-modified viewport navigation to the focused component except Ctrl+End", async () => {
 		const terminal = new VirtualTerminal(20, 6);
 		const tui = new TuiAltScreen(terminal);
 		const transcript = new ScrollView(
@@ -590,16 +598,21 @@ describe("TuiAltScreen", () => {
 		assert.strictEqual(transcript.scrollTop, 0);
 		assert.deepStrictEqual(editorInputs, []);
 
-		const modifiedInputs = ["\x1b[1;5H", "\x1b[1;5F", "\x1b[5;5~", "\x1b[6;5~", "\x1b[57423;5u"];
+		const modifiedInputs = ["\x1b[1;5H", "\x1b[5;5~", "\x1b[6;5~", "\x1b[57423;5u"];
 		for (const input of modifiedInputs) terminal.sendInput(input);
 		terminal.sendInput("\x1b[57423;5:3u");
 		await terminal.waitForRender();
 		assert.strictEqual(transcript.scrollTop, 0);
 		assert.deepStrictEqual(editorInputs, modifiedInputs);
 
+		terminal.sendInput("\x1b[1;5F");
+		await terminal.waitForRender();
+		assert.strictEqual(transcript.scrollTop, 7);
+		assert.deepStrictEqual(editorInputs, modifiedInputs);
+
 		terminal.sendInput("\x1b[6~");
 		await terminal.waitForRender();
-		assert.strictEqual(transcript.scrollTop, 1);
+		assert.strictEqual(transcript.scrollTop, 7);
 		assert.deepStrictEqual(editorInputs, modifiedInputs);
 
 		tui.stop();

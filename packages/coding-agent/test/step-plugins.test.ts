@@ -1,17 +1,19 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "../src/core/extensions/types.ts";
+import { loadSkillsFromDir } from "../src/core/skills.ts";
 import {
 	addMarketplaceSource,
 	BUILTIN_MARKETPLACE_NAME,
 	defaultStepMarketplacesDir,
 	defaultStepPluginsDir,
 	diagnoseStepPlugin,
+	discoverStepPluginResourcePaths,
 	ensureBuiltinMarketplace,
 	ensureBuiltinPluginsInstalled,
 	installMarketplacePlugin,
@@ -20,6 +22,7 @@ import {
 	listMarketplaceSources,
 	parseStepPluginManifest,
 	registerStepPluginCommand,
+	splitCloneProgress,
 	uninstallPlugin,
 	updateMarketplaceSource,
 } from "../src/step/plugins.ts";
@@ -62,6 +65,24 @@ describe("Step plugin marketplace facade", () => {
 		expect(result.warnings[0]).toEqual(expect.stringContaining("1 url"));
 	});
 
+	test("skips a marketplace entry whose source is the checkout's own parent", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-parent-"));
+		roots.push(root);
+		const checkout = join(root, "marketplaces", "hostile");
+		await mkdir(join(checkout, ".step-plugin"), { recursive: true });
+		await writeFile(
+			join(checkout, ".step-plugin", "marketplace.json"),
+			JSON.stringify({ name: "hostile", plugins: [{ name: "parent", source: ".." }] }),
+		);
+		// Make the parent look like a valid plugin, so only the containment check
+		// stands between this entry and a copy of the whole directory.
+		await writeFile(join(root, "marketplaces", "step.plugin.json"), JSON.stringify({ id: "parent" }));
+
+		const result = await listMarketplacePlugins([join(root, "marketplaces")]);
+		expect(result.entries).toEqual([]);
+		expect(result.warnings).toEqual([expect.stringContaining("has a source outside the checkout")]);
+	});
+
 	test("materializes built-ins under the supplied Step marketplace root", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-plugins-builtin-"));
 		roots.push(root);
@@ -75,6 +96,241 @@ describe("Step plugin marketplace facade", () => {
 		expect(listed.warnings).toEqual([]);
 		expect(listed.entries.map((entry) => entry.name)).toEqual(["playwright", "steppage"]);
 		expect(listed.entries.every((entry) => entry.sourcePath.startsWith(result.path))).toBe(true);
+	});
+
+	test("lists each plugin once when the same marketplace is reachable from two roots", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-twice-"));
+		roots.push(root);
+		// The built-in marketplace is materialized under every root, and a project
+		// root is scanned alongside the global one, so the same checkout is
+		// reachable twice. The listing must not grow with the root count.
+		const globalRoot = join(root, "global", "marketplaces");
+		const projectRoot = join(root, "project", "marketplaces");
+		for (const marketplacesDir of [globalRoot, projectRoot]) {
+			await ensureBuiltinMarketplace({ marketplacesDir });
+		}
+		await writeMarketplace(join(globalRoot, "plan-to-lark"), {
+			name: "plan-to-lark",
+			plugins: [{ name: "plan-to-lark", source: "plugins/plan-to-lark" }],
+		});
+
+		const listed = await listMarketplacePlugins([projectRoot, globalRoot]);
+		expect(listed.entries.map((entry) => entry.name)).toEqual(["playwright", "steppage", "plan-to-lark"]);
+		expect(listed.warnings).toEqual([]);
+	});
+
+	test("accepts the name@marketplace spelling and reports where a name does live", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-spec-"));
+		roots.push(root);
+		const marketplacesDir = join(root, "marketplaces");
+		const pluginsDir = join(root, "plugins");
+		await writeMarketplace(join(marketplacesDir, "official"), {
+			name: "official",
+			plugins: [{ name: "skill-creator", source: "plugins/skill-creator" }],
+		});
+
+		const commands = new Map<string, RegisteredCommand>();
+		// The handler captures its dirs from registration, not from the context.
+		const registerCommand = vi.fn((name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
+			commands.set(name, { ...command, name, sourceInfo: {} as RegisteredCommand["sourceInfo"] });
+		});
+		registerStepPluginCommand({ registerCommand } as unknown as ExtensionAPI, { marketplacesDir, pluginsDir });
+		const notify = vi.fn();
+		const ctx = { cwd: root, ui: { notify } } as unknown as ExtensionCommandContext;
+
+		// The qualifier selects the marketplace rather than forming part of the name.
+		await commands.get("plugin")!.handler("install skill-creator@official", ctx);
+		const installedManifest = join(pluginsDir, "skill-creator", "step.plugin.json");
+		expect(JSON.parse(await readFile(installedManifest, "utf8"))).toMatchObject({ id: "skill-creator" });
+
+		// A wrong qualifier names the marketplaces that do carry the plugin.
+		notify.mockClear();
+		await commands.get("plugin")!.handler("install skill-creator@elsewhere", ctx);
+		expect(String(notify.mock.calls[0]?.[0])).toContain("It is available from: official");
+	});
+
+	test("streams clone progress so a long add is not silent", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-progress-"));
+		roots.push(root);
+		const marketplacesDir = join(root, "marketplaces");
+		const origin = join(root, "origin");
+		await writeMarketplace(origin, { name: "origin", plugins: [{ name: "one", source: "one" }] });
+		await mkdir(join(origin, "one"), { recursive: true });
+		await writeFile(join(origin, "one", "step.plugin.json"), JSON.stringify({ id: "one" }));
+		await execFileAsync("git", ["init", "--quiet", origin]);
+		await execFileAsync("git", ["-C", origin, "add", "-A"]);
+		await execFileAsync("git", [
+			"-C",
+			origin,
+			"-c",
+			"user.email=test@example.invalid",
+			"-c",
+			"user.name=test",
+			"commit",
+			"--quiet",
+			"-m",
+			"seed",
+		]);
+
+		const seen: string[] = [];
+		const added = await addMarketplaceSource({
+			source: pathToFileURL(origin).toString(),
+			marketplacesDir,
+			onProgress: (message) => seen.push(message),
+		});
+		expect(added.warnings).toEqual([]);
+		// Progress starts before the clone so the spinner is never blank, and the
+		// manifest check reports after it.
+		expect(seen[0]).toContain("Cloning repository (timeout: 120s)");
+		expect(seen.at(-1)).toContain("Reading marketplace manifest");
+		// git separates progress updates with carriage returns rather than
+		// newlines, so the parser must split on both or the spinner text would
+		// never change after the first update.
+		// The trailing empty element is the unfinished line the caller keeps as
+		// its buffer, so complete updates are the ones before it.
+		expect(splitCloneProgress("Receiving objects: 10%\rReceiving objects: 90%\r")).toEqual([
+			"Receiving objects: 10%",
+			"Receiving objects: 90%",
+			"",
+		]);
+	});
+
+	test("prefers the first root when two roots offer the same plugin name", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-precedence-"));
+		roots.push(root);
+		const projectRoot = join(root, "project", "marketplaces");
+		const globalRoot = join(root, "global", "marketplaces");
+		await writeMarketplace(join(projectRoot, "local"), {
+			name: "local",
+			plugins: [{ name: "shared", source: "shared" }],
+		});
+		await writeMarketplace(join(globalRoot, "remote"), {
+			name: "remote",
+			plugins: [{ name: "shared", source: "shared" }],
+		});
+
+		const listed = await listMarketplacePlugins([projectRoot, globalRoot]);
+		expect(listed.entries).toHaveLength(1);
+		expect(listed.entries[0]?.marketplace).toBe("local");
+	});
+
+	test("contributes plugin skills and commands as resource paths", async () => {
+		const root = await mkdtemp(join(await realpath(tmpdir()), "step-plugins-resources-"));
+		roots.push(root);
+		const pluginsDir = join(root, "plugins");
+
+		// A plugin whose manifest names its contributions explicitly.
+		const declared = join(pluginsDir, "declared");
+		await mkdir(join(declared, "my-skills"), { recursive: true });
+		await mkdir(join(declared, "my-commands"), { recursive: true });
+		await writeFile(
+			join(declared, "step.plugin.json"),
+			JSON.stringify({ id: "declared", skills: ["my-skills"], commands: ["my-commands"] }),
+		);
+
+		// A plugin relying on the conventional directories.
+		const conventional = join(pluginsDir, "conventional");
+		await mkdir(join(conventional, "skills", "one"), { recursive: true });
+		await mkdir(join(conventional, "commands"), { recursive: true });
+		await writeFile(join(conventional, "step.plugin.json"), JSON.stringify({ id: "conventional" }));
+
+		// A plugin with no such contributions at all.
+		const bare = join(pluginsDir, "bare");
+		await mkdir(bare, { recursive: true });
+		await writeFile(join(bare, "step.plugin.json"), JSON.stringify({ id: "bare" }));
+
+		const discovered = await discoverStepPluginResourcePaths({ userDir: pluginsDir });
+		expect(discovered.warnings).toEqual([]);
+		expect(discovered.skillPaths.sort()).toEqual([join(declared, "my-skills"), join(conventional, "skills")].sort());
+		expect(discovered.promptPaths.sort()).toEqual(
+			[join(declared, "my-commands"), join(conventional, "commands")].sort(),
+		);
+	});
+
+	test("withholds project plugin resources unless the project is trusted", async () => {
+		const root = await mkdtemp(join(await realpath(tmpdir()), "step-plugins-trust-"));
+		roots.push(root);
+		const projectDir = join(root, "project");
+		const userDir = join(root, "user");
+		await writeMarketplacePlaceholder(join(projectDir, "from-project"), "project-skill");
+		await writeMarketplacePlaceholder(join(userDir, "from-user"), "user-skill");
+
+		// Untrusted: only the user's own plugins contribute.
+		const untrusted = await discoverStepPluginResourcePaths({ projectDir, userDir, projectTrusted: false });
+		expect(untrusted.skillPaths).toEqual([join(userDir, "from-user", "skills")]);
+
+		// Trusted: the project's plugins are read too.
+		const trusted = await discoverStepPluginResourcePaths({ projectDir, userDir, projectTrusted: true });
+		expect(trusted.skillPaths).toEqual([
+			join(projectDir, "from-project", "skills"),
+			join(userDir, "from-user", "skills"),
+		]);
+	});
+
+	test("keeps a path that is both a skills root and a commands root", async () => {
+		const root = await mkdtemp(join(await realpath(tmpdir()), "step-plugins-both-"));
+		roots.push(root);
+		const pluginsDir = join(root, "plugins");
+		const plugin = join(pluginsDir, "both");
+		// One directory serving both kinds must not be deduped across them.
+		await mkdir(join(plugin, "shared"), { recursive: true });
+		await writeFile(
+			join(plugin, "step.plugin.json"),
+			JSON.stringify({ id: "both", skills: ["shared"], commands: ["shared"] }),
+		);
+
+		const discovered = await discoverStepPluginResourcePaths({ userDir: pluginsDir });
+		expect(discovered.skillPaths).toEqual([join(plugin, "shared")]);
+		expect(discovered.promptPaths).toEqual([join(plugin, "shared")]);
+	});
+
+	test("honors an explicitly empty contribution list over the conventions", async () => {
+		const root = await mkdtemp(join(await realpath(tmpdir()), "step-plugins-empty-"));
+		roots.push(root);
+		const pluginsDir = join(root, "plugins");
+		const plugin = join(pluginsDir, "none");
+		// A stale conventional directory must not resurrect what the manifest
+		// explicitly declared as none.
+		await mkdir(join(plugin, "skills", "stale"), { recursive: true });
+		await writeFile(join(plugin, "step.plugin.json"), JSON.stringify({ id: "none", skills: [] }));
+
+		const discovered = await discoverStepPluginResourcePaths({ userDir: pluginsDir });
+		expect(discovered.skillPaths).toEqual([]);
+	});
+
+	test("skips a declared contribution that is missing", async () => {
+		const root = await mkdtemp(join(await realpath(tmpdir()), "step-plugins-missing-"));
+		roots.push(root);
+		const pluginsDir = join(root, "plugins");
+		const plugin = join(pluginsDir, "bad");
+		await mkdir(plugin, { recursive: true });
+		await writeFile(join(plugin, "step.plugin.json"), JSON.stringify({ id: "bad", skills: ["gone"] }));
+
+		const discovered = await discoverStepPluginResourcePaths({ userDir: pluginsDir });
+		expect(discovered.skillPaths).toEqual([]);
+		expect(discovered.warnings).toHaveLength(1);
+		expect(discovered.warnings[0]).toContain("missing");
+	});
+
+	test("ships plugin skills through the resource loader", async () => {
+		const root = await mkdtemp(join(await realpath(tmpdir()), "step-plugins-skill-"));
+		roots.push(root);
+		const pluginsDir = join(root, "plugins");
+		// The conventional layout Claude Code plugins use, which the plugin's own
+		// manifest does not describe.
+		const skillDir = join(pluginsDir, "maker", "skills", "maker");
+		await mkdir(skillDir, { recursive: true });
+		await writeFile(join(pluginsDir, "maker", "step.plugin.json"), JSON.stringify({ id: "maker" }));
+		await writeFile(
+			join(skillDir, "SKILL.md"),
+			["---", "name: maker", "description: Make things on request.", "---", "", "# Maker", ""].join("\n"),
+		);
+
+		const discovered = await discoverStepPluginResourcePaths({ userDir: pluginsDir });
+		const loaded = loadSkillsFromDir({ dir: discovered.skillPaths[0]!, source: "plugin" });
+		expect(loaded.diagnostics).toEqual([]);
+		expect(loaded.skills.map((skill) => skill.name)).toEqual(["maker"]);
+		expect(loaded.skills[0]?.description).toBe("Make things on request.");
 	});
 
 	test("installs a manifest and reports MCP declarations without starting a process", async () => {
@@ -321,6 +577,28 @@ describe("Step plugin marketplace facade", () => {
 		expect(notify).toHaveBeenCalled();
 	});
 });
+
+/** Write a marketplace checkout with one directory and manifest per declared plugin. */
+async function writeMarketplace(
+	marketplaceDir: string,
+	manifest: { name: string; plugins: Array<{ name: string; source: string }> },
+): Promise<void> {
+	await mkdir(join(marketplaceDir, ".step-plugin"), { recursive: true });
+	await writeFile(join(marketplaceDir, ".step-plugin", "marketplace.json"), JSON.stringify(manifest));
+	for (const plugin of manifest.plugins) {
+		await mkdir(join(marketplaceDir, plugin.source), { recursive: true });
+		await writeFile(
+			join(marketplaceDir, plugin.source, "step.plugin.json"),
+			JSON.stringify({ id: plugin.name, name: plugin.name }),
+		);
+	}
+}
+
+/** A plugin exposing one conventional `skills/` directory. */
+async function writeMarketplacePlaceholder(pluginDir: string, skillName: string): Promise<void> {
+	await mkdir(join(pluginDir, "skills", skillName), { recursive: true });
+	await writeFile(join(pluginDir, "step.plugin.json"), JSON.stringify({ id: pluginDir.split("/").pop() }));
+}
 
 async function writePlugin(root: string, directory: string, id: string, name: string): Promise<void> {
 	const pluginDir = join(root, directory);

@@ -130,6 +130,15 @@ The `beforeToolCall` hook runs after `tool_execution_start` and validated argume
 
 Tools, blocked `beforeToolCall` results, and `afterToolCall` overrides can return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
 
+`transformToolResult` is an optional final content-only transform on `AgentOptions`
+and `AgentLoopConfig`. It runs before terminal tool events and result messages for
+all outcomes, including validation failures, denied calls and rejected truncated
+calls. It runs after `afterToolCall` for executed tools; existing execution-hook
+semantics are unchanged. Its returned content cannot override usage, metadata or
+termination hints. A thrown error becomes a bounded error result while preserving
+those fields. Applications can use this boundary to retain and limit output;
+agent-core itself does not own storage or output-limit policy.
+
 The `Agent` class accepts `shouldStopAfterTurn` in `AgentOptions`. Low-level loop callers can set the same hook in `AgentLoopConfig`:
 
 ```typescript

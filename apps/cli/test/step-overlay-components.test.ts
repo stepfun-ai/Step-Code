@@ -120,6 +120,80 @@ describe("Step transient presentation", () => {
 		for (const row of rows) expect(visibleWidth(row)).toBe(48);
 	});
 
+	it("filters a searchable selector by typing and keeps the list in charge of Enter", () => {
+		initTheme("step-blue");
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const selected: string[] = [];
+		const selector = new ExtensionSelectorComponent(
+			"All Plugins (3 available)",
+			["skill-creator · official", "code-review · official", "plan-to-lark · plan-to-lark"],
+			(value) => selected.push(value),
+			() => undefined,
+			{ presentation: "step", searchable: true },
+		);
+
+		const plain = (): string => selector.render(80).map(stripTerminalSequences).join("\n");
+		expect(plain()).toContain("Search:");
+
+		// Typing goes to the query, not to the list.
+		for (const char of "rev") selector.handleInput(char);
+		const filtered = plain();
+		expect(filtered).toContain("code-review");
+		expect(filtered).not.toContain("plan-to-lark");
+
+		// Enter still confirms the highlighted match.
+		selector.handleInput("\r");
+		expect(selected).toEqual(["code-review · official"]);
+
+		// A query that matches nothing shows the empty state instead of the
+		// options it excluded.
+		const empty = new ExtensionSelectorComponent(
+			"All Plugins",
+			["alpha", "beta"],
+			() => undefined,
+			() => undefined,
+			{ presentation: "step", searchable: true },
+		);
+		for (const char of "zzz") empty.handleInput(char);
+		const emptyRows = empty.render(80).map(stripTerminalSequences).join("\n");
+		expect(emptyRows).toContain("No matching");
+		expect(emptyRows).not.toContain("alpha");
+	});
+
+	it("lists examples above the input row", () => {
+		initTheme("step-blue");
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const input = new ExtensionInputComponent(
+			"Add Marketplace",
+			undefined,
+			() => undefined,
+			() => undefined,
+			{
+				presentation: "step",
+				examples: ["owner/repo (GitHub)", "./path/to/marketplace"],
+			},
+		);
+
+		const before = input.render(60);
+		const plainBefore = before.map(stripTerminalSequences);
+		const examplesRow = plainBefore.findIndex((row) => row.includes("Examples:"));
+		const firstExampleRow = plainBefore.findIndex((row) => row.includes("owner/repo (GitHub)"));
+		expect(examplesRow).toBeGreaterThan(0);
+		expect(firstExampleRow).toBe(examplesRow + 1);
+		// The examples sit above the editable row, not below it.
+		const inputRow = plainBefore.findIndex((row) => row.includes("> "));
+		expect(inputRow).toBeGreaterThan(firstExampleRow);
+		for (const row of before) expect(visibleWidth(row)).toBe(60);
+
+		// The reference lines stay put while the value is edited.
+		input.handleInput("g");
+		const after = input.render(60).map(stripTerminalSequences);
+		expect(after.some((row) => row.includes("Examples:"))).toBe(true);
+		expect(after.some((row) => row.includes("owner/repo (GitHub)"))).toBe(true);
+	});
+
 	it("frames the extension editor while retaining native editing", () => {
 		initTheme("step-blue");
 		const keybindings = new KeybindingsManager();

@@ -40,6 +40,7 @@ import {
 	WorkingStatusIndicator,
 } from "../view/index.ts";
 import type { RuntimeContext } from "./context.ts";
+import { keepLatestTaskUpdateResult, registerTaskUpdateCall } from "./task-update-transcript.ts";
 
 /** Subscribe to the session's agent events. Returns/records the unsubscribe handle (owned by the composition root). */
 export function subscribeToAgent(ctx: RuntimeContext): void {
@@ -171,6 +172,9 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 							);
 							component.setExpanded(ctx.toolOutputExpanded);
 							ctx.chatContainer.addChild(component);
+							if (content.name === "task_update") {
+								registerTaskUpdateCall(ctx.chatContainer, content.id);
+							}
 							ctx.pendingTools.set(content.id, component);
 						} else {
 							const component = ctx.pendingTools.get(content.id);
@@ -209,11 +213,12 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 					if (!errorMessage) {
 						errorMessage = ctx.streamingMessage.errorMessage || "Error";
 					}
-					for (const [, component] of ctx.pendingTools.entries()) {
+					for (const [toolCallId, component] of ctx.pendingTools.entries()) {
 						component.updateResult({
 							content: [{ type: "text", text: errorMessage }],
 							isError: true,
 						});
+						keepLatestTaskUpdateResult(ctx.chatContainer, toolCallId, component, true);
 					}
 					for (const toolCallId of ctx.pendingTools.keys()) {
 						ctx.stepSpinner?.stop(toolCallId);
@@ -256,7 +261,12 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				);
 				component.setExpanded(ctx.toolOutputExpanded);
 				ctx.chatContainer.addChild(component);
+				if (event.toolName === "task_update") {
+					registerTaskUpdateCall(ctx.chatContainer, event.toolCallId);
+				}
 				ctx.pendingTools.set(event.toolCallId, component);
+			} else if (event.toolName === "task_update") {
+				registerTaskUpdateCall(ctx.chatContainer, event.toolCallId);
 			}
 			component.markExecutionStarted();
 			ctx.stepSpinner?.start(event.toolCallId, event.toolName);
@@ -289,6 +299,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			const component = ctx.pendingTools.get(event.toolCallId);
 			if (component) {
 				component.updateResult({ ...event.result, isError: event.isError });
+				keepLatestTaskUpdateResult(ctx.chatContainer, event.toolCallId, component, event.isError);
 				ctx.pendingTools.delete(event.toolCallId);
 				ctx.stepSpinner?.stop(event.toolCallId);
 				// 工具结束不立刻降级动词：瞬时工具（read ~300ms）的动词如果

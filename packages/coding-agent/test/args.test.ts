@@ -376,6 +376,23 @@ describe("parseArgs", () => {
 			});
 		});
 
+		test("parses the non-interactive denial outcome", () => {
+			expect(parseArgs(["--non-interactive-denial", "continue"])).toMatchObject({
+				nonInteractiveDenial: "continue",
+			});
+			expect(parseArgs(["--non-interactive-denial=terminate"])).toMatchObject({
+				nonInteractiveDenial: "terminate",
+			});
+			expect(parseArgs(["--non-interactive-denial", "abort"]).diagnostics).toContainEqual({
+				type: "error",
+				message: 'Invalid non-interactive denial mode "abort". Valid values: terminate, continue',
+			});
+			expect(parseArgs(["--non-interactive-denial"]).diagnostics).toContainEqual({
+				type: "error",
+				message: "--non-interactive-denial requires terminate or continue",
+			});
+		});
+
 		test("supports equals syntax and repeated per-tool overrides", () => {
 			expect(
 				parseArgs([

@@ -1,16 +1,19 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
+import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { type TSchema, Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
+import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
 import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
+import { isPathContained } from "./path-containment.ts";
 import {
 	defaultStepPluginsDir,
 	ensureBuiltinPluginsInstalled,
@@ -27,7 +30,9 @@ export { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 const MCP_STARTUP_TIMEOUT_SEC = 30;
 const MCP_CALL_TIMEOUT_SEC = 300;
 const CLIENT_INFO = { name: "step-harness", version: STEPCODE_VERSION.value } as const;
-const STEPPAGE_SERVER_NAME = "steppage__steppage";
+/** Joins a plugin id to the server name it declares, e.g. `context7__context7`. */
+const PLUGIN_SERVER_SEPARATOR = "__";
+const STEPPAGE_SERVER_NAME = `steppage${PLUGIN_SERVER_SEPARATOR}steppage`;
 const STEPPAGE_DEPLOY_TOOL_NAME = "page_deploy";
 const STEPPAGE_MANAGEMENT_URL = "https://platform.stepfun.com/sites";
 
@@ -35,7 +40,10 @@ interface ConnectedServer {
 	readonly name: string;
 	readonly client: Client;
 	readonly transport: StdioClientTransport | StreamableHTTPClientTransport;
-	readonly tools: McpTool[];
+	tools: McpTool[];
+	/** Ends when this connection closes or its session shuts down. */
+	readonly signal: AbortSignal;
+	readonly catalogTimeoutMs: number;
 	/** Per-call timeout for this server, from `tool_timeout_sec`. */
 	readonly callTimeoutMs: number;
 }
@@ -142,22 +150,76 @@ export function createStepMcpExtension(): ExtensionFactory {
 				await Promise.all(
 					discovered.map(async (item, index) => {
 						let connected: ConnectedServer | undefined;
+						let published = false;
+						let pending = false;
+						let refreshing = false;
+						const refreshCatalog = async () => {
+							if (refreshing || !published || !connected || connected.signal.aborted) return;
+							const server = connected;
+							refreshing = true;
+							try {
+								while (pending && !server.signal.aborted) {
+									// Coalesce a notification burst before listing, with at most one
+									// more pass when notifications arrive during an in-flight list.
+									await yieldToEventLoop();
+									pending = false;
+									try {
+										const tools = selectDeclaredTools(
+											await listAllMcpTools(server.client, server.signal, server.catalogTimeoutMs),
+											item.declaration,
+										);
+										const remoteTools = tools.map((tool) => createRemoteTool(server, tool));
+										await yieldToEventLoop();
+										if (server.signal.aborted || !published) return;
+										pi.registerTools(remoteTools, {
+											remove: server.tools.map((tool) => remoteToolName(server, tool)),
+										});
+										server.tools = tools;
+										statuses[index] = { name: item.name, status: "connected", toolCount: tools.length };
+									} catch (error) {
+										if (server.signal.aborted || !published) return;
+										ctx.ui.notify(
+											`MCP server '${item.name}' catalog refresh failed; keeping the previous tools: ${error instanceof Error ? error.message : String(error)}`,
+											"warning",
+										);
+									}
+								}
+							} finally {
+								refreshing = false;
+							}
+						};
+						const onToolsChanged = () => {
+							pending = true;
+							void refreshCatalog();
+						};
 						try {
-							const server = await connectStepMcpServer(item, controller.signal);
+							const server = await connectStepMcpServer(item, controller.signal, onToolsChanged);
 							connected = server;
 							const remoteTools = server.tools.map((tool) => createRemoteTool(server, tool));
 							// Publishing a server's catalog refreshes the registry and the
 							// Step prompt once. Yield first so a server that finished while
 							// the loop was busy cannot preempt input or rendering.
 							await yieldToEventLoop();
-							controller.signal.throwIfAborted();
+							server.signal.throwIfAborted();
 							pi.registerTools(remoteTools);
+							published = true;
 							servers.push(server);
+							server.signal.addEventListener(
+								"abort",
+								() => {
+									published = false;
+									if (controller.signal.aborted) return;
+									pi.registerTools([], { remove: server.tools.map((tool) => remoteToolName(server, tool)) });
+									statuses[index] = { name: item.name, status: "failed", toolCount: 0 };
+								},
+								{ once: true },
+							);
 							statuses[index] = {
 								name: item.name,
 								status: "connected",
 								toolCount: server.tools.length,
 							};
+							void refreshCatalog();
 						} catch (error) {
 							if (connected) await closeStepMcpServer(connected);
 							if (controller.signal.aborted) return;
@@ -197,6 +259,9 @@ export function createStepMcpExtension(): ExtensionFactory {
 			servers = [];
 			startup = undefined;
 			if (currentMcpStatuses === statuses) currentMcpStatuses = [];
+			pi.registerTools([], {
+				remove: closing.flatMap((server) => server.tools.map((tool) => remoteToolName(server, tool))),
+			});
 			await Promise.all(closing.map(closeStepMcpServer));
 		});
 	};
@@ -208,6 +273,65 @@ async function closeStepMcpServer(server: Pick<ConnectedServer, "client" | "tran
 	} catch {
 		await server.transport.close().catch(() => undefined);
 	}
+}
+
+/** The server name a plugin declared, stripped of the plugin qualifier. */
+export function bareServerName(published: string): string {
+	// The plugin qualifier is the *first* segment; a declared server name may
+	// itself contain the separator (`acme__my__service` names the server
+	// `my__service`). Splitting at the last one would mangle that into `service`,
+	// which resolves to nothing.
+	const separator = published.indexOf(PLUGIN_SERVER_SEPARATOR);
+	return separator > 0 ? published.slice(separator + PLUGIN_SERVER_SEPARATOR.length) : published;
+}
+
+/**
+ * Look up one configured MCP server by the name the runtime reports for it.
+ *
+ * `step mcp login|logout` is handed a name from a start-failure message, which is
+ * the *discovered* name. Config entries keep their own name, but a plugin's
+ * servers are published as `<pluginId>__<serverName>` because the manifest nests
+ * them — so a login command that only read `config.toml` could never resolve the
+ * very name its own error message printed.
+ *
+ * Discovery is consulted only as a fallback: a config entry with the same name
+ * still wins, matching the precedence used everywhere else.
+ */
+export async function resolveStepMcpServer(
+	name: string,
+	options: { cwd?: string; projectTrusted?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<DiscoveredServer | undefined> {
+	const env = options.env ?? process.env;
+	const config = readGlobalStepConfig(env);
+	const entry = config.mcp_servers?.[name];
+	if (isRecord(entry) && entry.enabled !== false) return { name, declaration: normalizeDeclaration(entry) };
+	const discovered = await discoverStepMcpServers(options.cwd ?? process.cwd(), options.projectTrusted ?? false);
+	const exact = discovered.find((server) => server.name === name);
+	if (exact) return exact;
+	// A plugin's server is published as `<pluginId>__<serverName>`, but the part
+	// that identifies it to the user is the server name the manifest declared.
+	// Accept that bare name too, so `step mcp login context7` works on the
+	// `context7__context7` server — the qualifier only disambiguates.
+	const qualified = `${PLUGIN_SERVER_SEPARATOR}${name}`;
+	const matches = discovered.filter((server) => server.name.endsWith(qualified));
+	// Two plugins can declare a server of the same name. Picking whichever
+	// discovery reached first would log the user into an arbitrary one, so an
+	// ambiguous bare name resolves to nothing; the caller reports it as ambiguous.
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * The published names of plugin servers whose declared name matches `name`.
+ *
+ * A caller needs this to tell "no such server" from "several plugins declare
+ * one": an ambiguous bare name must be reported, not resolved to a guess. Empty
+ * means nothing matched; two or more means the name needs qualifying.
+ */
+export async function ambiguousPluginServerNames(name: string): Promise<string[]> {
+	const discovered = await discoverStepMcpServers(process.cwd(), false);
+	const qualified = `${PLUGIN_SERVER_SEPARATOR}${name}`;
+	const matches = discovered.filter((server) => server.name.endsWith(qualified)).map((server) => server.name);
+	return matches.length > 1 ? matches : [];
 }
 
 export async function discoverStepMcpServers(cwd: string, projectTrusted: boolean): Promise<DiscoveredServer[]> {
@@ -228,16 +352,23 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 		for (const pluginDir of await listStepPluginDirectories(root)) {
 			const parsed = await readStepPluginManifest(pluginDir);
 			if (!parsed.manifest) continue;
-			const declared = parsed.manifest?.mcpServers;
-			if (!declared || typeof declared === "string") continue;
+			const declared = await resolveDeclaredServers(pluginDir, parsed.manifest?.mcpServers);
+			if (!declared) continue;
 			for (const [serverName, value] of Object.entries(declared)) {
-				if (!isRecord(value) || typeof value.command !== "string" || !value.command.trim()) continue;
-				const name = `${parsed.manifest.id}__${serverName}`;
+				// A declared server may be stdio (command) or remote (url). Requiring
+				// `command` here dropped remote servers silently, even though the
+				// global-config path and `normalizeDeclaration` both accept a url —
+				// so the same server worked from config.toml but not from a plugin.
+				if (!isRecord(value) || !hasTransport(value)) continue;
+				const name = `${parsed.manifest.id}${PLUGIN_SERVER_SEPARATOR}${serverName}`;
 				if (seen.has(name)) continue;
 				seen.add(name);
 				const discovered: DiscoveredServer = {
 					name,
-					declaration: normalizeDeclaration(value),
+					declaration: anchorPluginServerCwd(
+						pluginDir,
+						applyPluginHeaderAliases(normalizeDeclaration(value), value),
+					),
 				};
 				if (parsed.manifest.provision) discovered.provision = parsed.manifest.provision;
 				result.push(discovered);
@@ -245,6 +376,117 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 		}
 	}
 	return result;
+}
+
+/**
+ * Run a plugin's stdio server from the plugin root.
+ *
+ * Without this the child inherited the directory `step` was launched from, so a
+ * manifest such as `{"command":"node","args":["server/index.mjs"]}` could not
+ * find its own script. A relative `cwd` is read against the plugin root, and one
+ * that escapes the plugin falls back to the root; an absolute `cwd` is the
+ * author's explicit choice and is kept. This stays out of `normalizeDeclaration`
+ * because `config.toml` shares it, and there a relative `cwd` keeps meaning the
+ * process directory.
+ */
+function anchorPluginServerCwd(pluginDir: string, declaration: ServerDeclaration): ServerDeclaration {
+	if (typeof declaration.command !== "string") return declaration;
+	const declared = declaration.cwd ?? "";
+	if (path.isAbsolute(declared)) return declaration;
+	const resolved = path.resolve(pluginDir, declared);
+	return { ...declaration, cwd: isPathContained(pluginDir, resolved) ? resolved : path.resolve(pluginDir) };
+}
+
+/** True when a declaration names either transport: a stdio command or a url. */
+function hasTransport(value: Record<string, unknown>): boolean {
+	const command = typeof value.command === "string" ? value.command.trim() : "";
+	const url = typeof value.url === "string" ? value.url.trim() : "";
+	return command.length > 0 || url.length > 0;
+}
+
+/**
+ * Expand the environment interpolation Claude Code plugins use in header values:
+ * `${VAR}` inserts the variable, `${VAR:-fallback}` falls back when it is unset
+ * or empty, and `$$` escapes a literal dollar sign.
+ *
+ * Returns undefined when there is no value to send, so the caller omits the
+ * header entirely. That covers two cases a plugin uses interchangeably to mean
+ * "no credential configured": a variable with no fallback at all, and an empty
+ * fallback as in `Authorization: "Bearer ${CONTEXT7_API_KEY:-}"`. The second is
+ * not equivalent to sending `Bearer ` — that is a malformed credential, and a
+ * server rejecting it reads as a broken plugin rather than an unset key.
+ */
+export function expandHeaderTemplate(template: string): string | undefined {
+	const pattern = /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/gu;
+	let missing = false;
+	const expanded = template.replace(pattern, (match, name: string | undefined, fallback: string | undefined) => {
+		if (match === "$$") return "$";
+		const value = name === undefined ? undefined : process.env[name];
+		if (value !== undefined && value !== "") return value;
+		if (fallback !== undefined && fallback !== "") return fallback;
+		// Unset with no usable fallback: the header has no value, and the literal
+		// template must never reach the server.
+		missing = true;
+		return "";
+	});
+	return missing ? undefined : expanded;
+}
+
+/**
+ * Resolve a manifest's `mcpServers` into a server map.
+ *
+ * The field is either the map itself or a path to a file holding it. The path
+ * form is how Claude Code plugins keep MCP config in a sibling `.mcp.json`, and
+ * `readPluginManifestAtPath` fills it in automatically when it finds that file —
+ * so a plugin reaching this point with a string is the normal Claude layout, not
+ * a malformed one. Treating it as unsupported dropped every such plugin's
+ * servers without a word.
+ */
+async function resolveDeclaredServers(
+	pluginDir: string,
+	declared: unknown,
+): Promise<Record<string, unknown> | undefined> {
+	if (isRecord(declared)) return declared;
+	if (typeof declared !== "string" || !declared.trim()) return undefined;
+	const resolved = path.resolve(pluginDir, declared);
+	if (!isPathContained(pluginDir, resolved)) return undefined;
+	try {
+		const raw = JSON.parse(await readFile(resolved, "utf8")) as unknown;
+		// The file may hold the map directly or wrap it under `mcpServers`, the
+		// shape `.mcp.json` itself uses.
+		if (isRecord(raw) && isRecord(raw.mcpServers)) return raw.mcpServers;
+		return isRecord(raw) ? raw : undefined;
+	} catch {
+		// A missing, unreadable, or non-file target (a directory rejects with
+		// EISDIR). Nothing to declare either way.
+		return undefined;
+	}
+}
+
+/**
+ * Apply the Claude-plugin header spelling to an already-normalized declaration.
+ *
+ * Kept separate from {@link normalizeDeclaration} because the two entries have
+ * different contracts. A plugin's `.mcp.json` may write `headers` and interpolate
+ * the environment (`"Bearer ${API_KEY:-}"`), which is Claude's format. A
+ * `config.toml` entry documents `http_headers` as a literal string map, so its
+ * values are sent verbatim — expanding them here would silently rewrite or drop
+ * headers that already worked.
+ */
+function applyPluginHeaderAliases(declaration: ServerDeclaration, value: Record<string, unknown>): ServerDeclaration {
+	if (!isRecord(value.headers)) return declaration;
+	const headers: Record<string, string> = {};
+	for (const [name, entry] of Object.entries(value.headers)) {
+		if (typeof entry !== "string") continue;
+		const expanded = expandHeaderTemplate(entry);
+		// A header whose variable is unset and has no fallback has no value to send,
+		// and the literal template must never reach the server.
+		if (expanded !== undefined) headers[name] = expanded;
+	}
+	// An explicit `http_headers` still wins: it is the more specific spelling, and
+	// a manifest that carries both should not have one silently discarded.
+	if (Object.keys(headers).length === 0 || declaration.http_headers !== undefined) return declaration;
+	return { ...declaration, http_headers: headers };
 }
 
 function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration {
@@ -264,7 +506,11 @@ function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration
 		if (key === "startup_timeout_sec" && typeof value[key] === "number") declaration.startup_timeout_sec = value[key];
 		if (key === "tool_timeout_sec" && typeof value[key] === "number") declaration.tool_timeout_sec = value[key];
 	}
-	for (const key of ["http_headers", "env_http_headers"] as const) {
+	if (isRecord(value.http_headers))
+		declaration.http_headers = Object.fromEntries(
+			Object.entries(value.http_headers).filter(([, v]) => typeof v === "string"),
+		) as Record<string, string>;
+	for (const key of ["env_http_headers"] as const) {
 		if (isRecord(value[key]))
 			declaration[key] = Object.fromEntries(
 				Object.entries(value[key]).filter(([, v]) => typeof v === "string"),
@@ -287,6 +533,7 @@ function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration
 export async function connectStepMcpServer(
 	input: DiscoveredServer,
 	abortSignal?: AbortSignal,
+	onToolsChanged?: () => void,
 ): Promise<ConnectedServer> {
 	abortSignal?.throwIfAborted();
 	const timeout = timeoutMs(input.declaration.startup_timeout_sec, MCP_STARTUP_TIMEOUT_SEC);
@@ -316,7 +563,11 @@ export async function connectStepMcpServer(
 		throw new Error("MCP server must define command or url");
 	}
 	const client = new Client(CLIENT_INFO, { capabilities: {} });
-	const signal = AbortSignal.any([AbortSignal.timeout(timeout), ...(abortSignal ? [abortSignal] : [])]);
+	const closed = new AbortController();
+	client.onclose = () => closed.abort(new Error("MCP connection closed"));
+	const lifetime = AbortSignal.any([closed.signal, ...(abortSignal ? [abortSignal] : [])]);
+	if (onToolsChanged) client.setNotificationHandler(ToolListChangedNotificationSchema, onToolsChanged);
+	const signal = AbortSignal.any([AbortSignal.timeout(timeout), lifetime]);
 	const closeOnAbort = () => {
 		void closeStepMcpServer({ client, transport });
 	};
@@ -324,13 +575,15 @@ export async function connectStepMcpServer(
 	try {
 		signal.throwIfAborted();
 		await client.connect(transport, { timeout, signal });
-		const listed = await client.listTools(undefined, { timeout, signal });
+		const tools = await listAllMcpTools(client, signal, timeout);
 		signal.throwIfAborted();
 		return {
 			name: input.name,
 			client,
 			transport,
-			tools: selectDeclaredTools(listed.tools, input.declaration),
+			tools: selectDeclaredTools(tools, input.declaration),
+			signal: lifetime,
+			catalogTimeoutMs: timeout,
 			callTimeoutMs,
 		};
 	} catch (error) {
@@ -395,8 +648,12 @@ export function describeMcpStartFailure(input: {
 		input.error instanceof UnauthorizedError ||
 		(input.error instanceof StreamableHTTPError && input.error.code === 401)
 	) {
-		const name = /^[\w.-]+$/u.test(input.name) ? input.name : `'${input.name.replace(/'/gu, "'\\''")}'`;
-		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${name}, then restart Step.`;
+		// Print the bare server name, not the `<pluginId>__<serverName>` form the
+		// runtime publishes: the qualifier is an implementation detail of how
+		// plugin servers are namespaced, and `login` accepts either spelling.
+		const bare = bareServerName(input.name);
+		const quoted = /^[\w.-]+$/u.test(bare) ? bare : `'${bare.replace(/'/gu, "'\\''")}'`;
+		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${quoted}, then restart Step.`;
 	}
 	if (!isMissingExecutable(input.error)) return `MCP server '${input.name}' could not start: ${detail}`;
 	const install = input.provision ? provisionInstallCommand(input.provision, input.env ?? process.env) : undefined;
@@ -455,23 +712,30 @@ export function convertMcpCallResult(serverName: string, toolName: string, resul
 	};
 }
 
+function remoteToolName(server: Pick<ConnectedServer, "name">, remote: McpTool): string {
+	return `${server.name}${PLUGIN_SERVER_SEPARATOR}${sanitizeName(remote.name)}`;
+}
+
 function createRemoteTool(server: ConnectedServer, remote: McpTool) {
-	const name = `${server.name}__${sanitizeName(remote.name)}`;
+	const name = remoteToolName(server, remote);
+	const call = createMcpToolCaller(server.client, remote);
 	return {
 		name,
 		label: remote.title?.trim() || remote.name,
 		description: remote.description?.trim() || `MCP tool '${remote.name}' from server '${server.name}'.`,
-		parameters: schemaFromJson(remote.inputSchema),
+		// The provider boundary accepts JSON Schema directly. Reconstructing it
+		// as TypeBox types loses constraints, local references and combinators.
+		parameters: remote.inputSchema,
 		execute: async (
 			_toolCallId: string,
 			params: unknown,
 			signal: AbortSignal | undefined,
 		): Promise<AgentToolResult<unknown>> => {
-			const result = (await server.client.callTool(
-				{ name: remote.name, arguments: isRecord(params) ? params : {} },
-				CallToolResultSchema,
-				{ timeout: server.callTimeoutMs, resetTimeoutOnProgress: true, signal },
-			)) as McpCallResult;
+			const result = await call(isRecord(params) ? params : {}, {
+				timeout: server.callTimeoutMs,
+				resetTimeoutOnProgress: true,
+				signal: signal ? AbortSignal.any([signal, server.signal]) : server.signal,
+			});
 			return convertMcpCallResult(server.name, remote.name, result);
 		},
 	};
@@ -480,35 +744,6 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 export function appendStepPageManagementHint(serverName: string, toolName: string, text: string): string {
 	if (serverName !== STEPPAGE_SERVER_NAME || toolName !== STEPPAGE_DEPLOY_TOOL_NAME) return text;
 	return `${text}\n\nTo manage your deployed pages, visit ${STEPPAGE_MANAGEMENT_URL}`;
-}
-
-function schemaFromJson(schema: unknown): TSchema {
-	if (!isRecord(schema) || !isRecord(schema.properties)) return Type.Object({}, { additionalProperties: true });
-	const properties: Record<string, TSchema> = {};
-	for (const [key, value] of Object.entries(schema.properties)) {
-		const property = schemaValueToTypeBox(value);
-		properties[key] =
-			Array.isArray(schema.required) && schema.required.includes(key) ? property : Type.Optional(property);
-	}
-	return Type.Object(properties, { additionalProperties: true });
-}
-
-function schemaValueToTypeBox(value: unknown): TSchema {
-	if (!isRecord(value)) return Type.Unknown();
-	if (Array.isArray(value.enum) && value.enum.length > 0) {
-		const literals = value.enum.filter(
-			(item): item is string | number | boolean =>
-				typeof item === "string" || typeof item === "number" || typeof item === "boolean",
-		);
-		if (literals.length === 1) return Type.Literal(literals[0]);
-		if (literals.length > 1) return Type.Union(literals.map((item) => Type.Literal(item)));
-	}
-	if (value.type === "array") return Type.Array(schemaValueToTypeBox(value.items));
-	if (value.type === "object" && isRecord(value.properties)) return schemaFromJson(value);
-	if (value.type === "boolean") return Type.Boolean();
-	if (value.type === "number" || value.type === "integer") return Type.Number();
-	if (value.type === "string") return Type.String();
-	return Type.Unknown();
 }
 
 function sanitizeName(value: string): string {

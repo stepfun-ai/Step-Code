@@ -60,6 +60,19 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "second prompt");
 		});
 
+		it("recalls history immediately from a single-line draft", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+
+			editor.addToHistory("previous prompt");
+			editor.setText("draft");
+
+			editor.handleInput("\x1b[A");
+
+			assert.strictEqual(editor.getText(), "previous prompt");
+			editor.handleInput("\x1b[B");
+			assert.strictEqual(editor.getText(), "draft");
+		});
+
 		it("cycles through history entries on repeated Up arrow", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
@@ -80,24 +93,15 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "first");
 		});
 
-		it("jumps to start before entering history from a non-empty draft", () => {
+		it("uses cursor movement instead of history within a multiline draft", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			editor.addToHistory("prompt");
-			editor.setText("draft");
-			editor.handleInput("\x1b[D");
-			editor.handleInput("\x1b[D");
+			editor.setText("line1\nline2");
 
-			editor.handleInput("\x1b[A"); // Up - jumps to start before history browsing
-			assert.strictEqual(editor.getText(), "draft");
-			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 0 });
-
-			editor.handleInput("\x1b[A"); // Up at start - shows "prompt"
-			assert.strictEqual(editor.getText(), "prompt");
-
-			editor.handleInput("\x1b[B"); // Down - restores draft
-			assert.strictEqual(editor.getText(), "draft");
-			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 0 });
+			editor.handleInput("\x1b[A");
+			assert.strictEqual(editor.getText(), "line1\nline2");
+			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 5 });
 		});
 
 		it("navigates forward through history with Down arrow", () => {
