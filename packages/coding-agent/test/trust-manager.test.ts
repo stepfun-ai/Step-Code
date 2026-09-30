@@ -42,6 +42,7 @@ describe("ProjectTrustStore", () => {
 		try {
 			mkdirSync(join(tempDir, ".pi", "agent"), { recursive: true });
 			mkdirSync(join(tempDir, ".agents", "skills"), { recursive: true });
+			mkdirSync(join(tempDir, ".claude", "skills"), { recursive: true });
 			expect(hasTrustRequiringProjectResources(tempDir)).toBe(false);
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
 
@@ -64,11 +65,21 @@ describe("ProjectTrustStore", () => {
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
 			rmSync(join(tempDir, ".pi", "config.toml"), { force: true });
 
+			// ~/.pi/skills is auto-discovered as user skills, so it is not project input either.
+			mkdirSync(join(tempDir, ".pi", "skills"), { recursive: true });
+			expect(hasTrustRequiringProjectResources(tempDir)).toBe(false);
+			rmSync(join(tempDir, ".pi", "skills"), { recursive: true, force: true });
+
 			writeFileSync(join(cwd, ".pi", "settings.json"), "{}");
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
 
 			rmSync(join(cwd, ".pi"), { recursive: true, force: true });
 			mkdirSync(join(cwd, ".agents", "skills"), { recursive: true });
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
+
+			rmSync(join(cwd, ".agents"), { recursive: true, force: true });
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
+			mkdirSync(join(cwd, ".claude", "skills"), { recursive: true });
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
 		} finally {
 			if (originalHome === undefined) {

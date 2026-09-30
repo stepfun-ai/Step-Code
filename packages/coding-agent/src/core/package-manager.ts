@@ -432,14 +432,21 @@ function findGitRepoRoot(startDir: string): string | null {
 	}
 }
 
-function collectAncestorAgentsSkillDirs(startDir: string): string[] {
+/**
+ * Directories whose `skills/` subdirectory is auto-discovered in the user's home
+ * and in cwd and its ancestors. `.claude` keeps skills authored for Claude Code
+ * usable without duplicating them.
+ */
+const SHARED_SKILL_DIR_NAMES = [".agents", ".claude"] as const;
+
+function collectAncestorSkillDirs(startDir: string, dirName: string): string[] {
 	const skillDirs: string[] = [];
 	const resolvedStartDir = resolve(startDir);
 	const gitRepoRoot = findGitRepoRoot(resolvedStartDir);
 
 	let dir = resolvedStartDir;
 	while (true) {
-		skillDirs.push(join(dir, ".agents", "skills"));
+		skillDirs.push(join(dir, dirName, "skills"));
 		if (gitRepoRoot && dir === gitRepoRoot) {
 			break;
 		}
@@ -2358,12 +2365,19 @@ export class DefaultPackageManager implements PackageManager {
 			prompts: join(projectBaseDir, "prompts"),
 			themes: join(projectBaseDir, "themes"),
 		};
-		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
+		const userSharedSkillDirs = SHARED_SKILL_DIR_NAMES.map((name) => join(getHomeDir(), name, "skills"));
+		// ~/.stepcode/skills sits beside the agent dir rather than inside it. It is
+		// user-owned, so when cwd is $HOME it is not also read as a project directory.
+		const userConfigBaseDir = join(getHomeDir(), this.configDirName);
+		const userConfigSkillsDir = join(userConfigBaseDir, "skills");
+		const projectSkillsIsUserConfig = resolve(projectDirs.skills) === resolve(userConfigSkillsDir);
 		const projectTrusted = this.settingsManager.isProjectTrusted();
 		const includeSkills = accumulator.resourceTypes.includes("skills");
-		const projectAgentsSkillDirs =
+		const projectSharedSkillDirs =
 			includeSkills && projectTrusted
-				? collectAncestorAgentsSkillDirs(this.cwd).filter((dir) => resolve(dir) !== resolve(userAgentsSkillsDir))
+				? SHARED_SKILL_DIR_NAMES.flatMap((name) => collectAncestorSkillDirs(this.cwd, name)).filter(
+						(dir) => !userSharedSkillDirs.some((userDir) => resolve(dir) === resolve(userDir)),
+					)
 				: [];
 
 		const addResources = (
@@ -2391,7 +2405,7 @@ export class DefaultPackageManager implements PackageManager {
 			);
 
 			// Project skills from the product's configuration directory.
-			if (includeSkills) {
+			if (includeSkills && !projectSkillsIsUserConfig) {
 				addResources(
 					"skills",
 					collectAutoSkillEntries(projectDirs.skills, "pi"),
@@ -2402,19 +2416,19 @@ export class DefaultPackageManager implements PackageManager {
 			}
 		}
 
-		// Project skills from .agents/ (each with its own baseDir)
-		for (const agentsSkillsDir of projectAgentsSkillDirs) {
-			const agentsBaseDir = dirname(agentsSkillsDir); // the .agents directory
-			const agentsMetadata: PathMetadata = {
+		// Project skills from .agents/ and .claude/ (each with its own baseDir)
+		for (const sharedSkillsDir of projectSharedSkillDirs) {
+			const sharedBaseDir = dirname(sharedSkillsDir); // the .agents or .claude directory
+			const sharedMetadata: PathMetadata = {
 				...projectMetadata,
-				baseDir: agentsBaseDir,
+				baseDir: sharedBaseDir,
 			};
 			addResources(
 				"skills",
-				collectAutoSkillEntries(agentsSkillsDir, "agents"),
-				agentsMetadata,
+				collectAutoSkillEntries(sharedSkillsDir, "agents"),
+				sharedMetadata,
 				projectOverrides.skills,
-				agentsBaseDir,
+				sharedBaseDir,
 			);
 		}
 
@@ -2454,19 +2468,32 @@ export class DefaultPackageManager implements PackageManager {
 				globalBaseDir,
 			);
 
-			// User skills from ~/.agents/ (with its own baseDir)
-			const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-			const userAgentsMetadata: PathMetadata = {
-				...userMetadata,
-				baseDir: userAgentsBaseDir,
-			};
-			addResources(
-				"skills",
-				collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-				userAgentsMetadata,
-				userOverrides.skills,
-				userAgentsBaseDir,
-			);
+			// User skills from ~/.stepcode/skills (the config dir, not the agent dir)
+			if (resolve(userConfigSkillsDir) !== resolve(userDirs.skills)) {
+				addResources(
+					"skills",
+					collectAutoSkillEntries(userConfigSkillsDir, "pi"),
+					{ ...userMetadata, baseDir: userConfigBaseDir },
+					userOverrides.skills,
+					userConfigBaseDir,
+				);
+			}
+
+			// User skills from ~/.agents/ and ~/.claude/ (each with its own baseDir)
+			for (const userSharedSkillsDir of userSharedSkillDirs) {
+				const userSharedBaseDir = dirname(userSharedSkillsDir);
+				const userSharedMetadata: PathMetadata = {
+					...userMetadata,
+					baseDir: userSharedBaseDir,
+				};
+				addResources(
+					"skills",
+					collectAutoSkillEntries(userSharedSkillsDir, "agents"),
+					userSharedMetadata,
+					userOverrides.skills,
+					userSharedBaseDir,
+				);
+			}
 		}
 
 		addResources(

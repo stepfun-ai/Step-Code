@@ -25,19 +25,22 @@ Step loads skills from:
 
 - Global:
   - `~/.stepcode/agent/skills/`
+  - `~/.stepcode/skills/`
   - `~/.agents/skills/`
+  - `~/.claude/skills/` (Claude Code's user skill directory)
 - Project (only after the project is trusted):
   - `.stepcode/skills/`
-  - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
+  - `.agents/skills/` and `.claude/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Packages: `skills/` directories or `pi.skills` entries in `package.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
 
 Discovery rules:
-- In `~/.stepcode/agent/skills/` and `.stepcode/skills/`, direct root `.md` files are discovered as individual skills when they have valid skill frontmatter with a non-empty `description`
+- In `~/.stepcode/agent/skills/`, `~/.stepcode/skills/`, and `.stepcode/skills/`, direct root `.md` files are discovered as individual skills when they have valid skill frontmatter with a non-empty `description`
 - In all skill locations, directories containing `SKILL.md` are discovered recursively
-- In `~/.agents/skills/` and project `.agents/skills/`, root `.md` files are ignored, but nested `.md` files in grouping folders are discovered when they declare skill frontmatter
+- In `~/.agents/skills/`, `~/.claude/skills/`, and project `.agents/skills/` and `.claude/skills/`, root `.md` files are ignored, but nested `.md` files in grouping folders are discovered when they declare skill frontmatter
 - Root Markdown files other than `SKILL.md` that do not look like skills are ignored silently
+- A skill reached through several locations (for example `~/.claude/skills/foo` symlinked to `~/.agents/skills/foo`) is loaded once
 - Directory symlinks are followed once per scan, so cycles do not cause repeated traversal
 - `.gitignore`, `.ignore`, and `.fdignore` rules are applied relative to the directory containing each ignore file
 

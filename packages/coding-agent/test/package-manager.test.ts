@@ -228,9 +228,11 @@ Content`,
 				});
 
 				// Project auto-discovered has higher precedence than user auto-discovered,
-				// so the surviving entry should be scoped to project.
+				// so the surviving entry should be scoped to project. Skills are the
+				// exception: with cwd at $HOME, ~/.pi/skills is the user's own skill
+				// directory rather than project input.
 				expect(result.extensions[0].metadata.scope).toBe("project");
-				expect(result.skills[0].metadata.scope).toBe("project");
+				expect(result.skills[0].metadata.scope).toBe("user");
 				expect(result.prompts[0].metadata.scope).toBe("project");
 				expect(result.themes[0].metadata.scope).toBe("project");
 			} finally {
@@ -516,6 +518,150 @@ Content`,
 				const fooSkills = result.skills.filter((r) => pathEndsWith(r.path, "foo/SKILL.md"));
 
 				expect(fooSkills).toHaveLength(1);
+			} finally {
+				if (previousHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = previousHome;
+				}
+			}
+		});
+	});
+
+	describe("~/<configDir>/skills auto-discovery", () => {
+		it("should discover user skills from ~/.pi/skills with ~/.pi as baseDir", async () => {
+			const previousHome = process.env.HOME;
+			process.env.HOME = tempDir;
+
+			try {
+				const configBaseDir = join(tempDir, ".pi");
+				const skillPath = join(configBaseDir, "skills", "config-dir", "SKILL.md");
+				mkdirSync(join(configBaseDir, "skills", "config-dir"), { recursive: true });
+				writeFileSync(skillPath, "---\nname: config-dir\ndescription: config dir\n---\n");
+
+				const result = await packageManager.resolve();
+				const skill = result.skills.find((r) => r.path === skillPath);
+
+				expect(skill?.enabled).toBe(true);
+				expect(skill?.metadata.source).toBe("auto");
+				expect(skill?.metadata.scope).toBe("user");
+				expect(skill?.metadata.baseDir).toBe(configBaseDir);
+			} finally {
+				if (previousHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = previousHome;
+				}
+			}
+		});
+
+		it("should keep ~/.pi/skills user-scoped and loaded once when cwd is $HOME", async () => {
+			const previousHome = process.env.HOME;
+			process.env.HOME = tempDir;
+
+			try {
+				const skillPath = join(tempDir, ".pi", "skills", "home-config", "SKILL.md");
+				mkdirSync(join(tempDir, ".pi", "skills", "home-config"), { recursive: true });
+				writeFileSync(skillPath, "---\nname: home-config\ndescription: home config\n---\n");
+
+				const pm = new DefaultPackageManager({
+					cwd: tempDir,
+					agentDir,
+					settingsManager,
+				});
+
+				const result = await pm.resolve();
+				const matchingSkills = result.skills.filter((r) => r.path === skillPath);
+
+				expect(matchingSkills).toHaveLength(1);
+				expect(matchingSkills[0]?.enabled).toBe(true);
+				expect(matchingSkills[0]?.metadata.scope).toBe("user");
+			} finally {
+				if (previousHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = previousHome;
+				}
+			}
+		});
+	});
+
+	describe(".claude/skills auto-discovery", () => {
+		it("should discover user skills from ~/.claude/skills with ~/.claude as baseDir", async () => {
+			const previousHome = process.env.HOME;
+			process.env.HOME = tempDir;
+
+			try {
+				const claudeBaseDir = join(tempDir, ".claude");
+				const skillPath = join(claudeBaseDir, "skills", "user-claude", "SKILL.md");
+				mkdirSync(join(claudeBaseDir, "skills", "user-claude"), { recursive: true });
+				writeFileSync(skillPath, "---\nname: user-claude\ndescription: user claude\n---\n");
+
+				const result = await packageManager.resolve();
+				const skill = result.skills.find((r) => r.path === skillPath);
+
+				expect(skill?.enabled).toBe(true);
+				expect(skill?.metadata.source).toBe("auto");
+				expect(skill?.metadata.scope).toBe("user");
+				expect(skill?.metadata.baseDir).toBe(claudeBaseDir);
+			} finally {
+				if (previousHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = previousHome;
+				}
+			}
+		});
+
+		it("should scan project .claude/skills from cwd up to git repo root", async () => {
+			const repoRoot = join(tempDir, "repo");
+			const nestedCwd = join(repoRoot, "packages", "feature");
+			mkdirSync(nestedCwd, { recursive: true });
+			mkdirSync(join(repoRoot, ".git"), { recursive: true });
+
+			const aboveRepoSkill = join(tempDir, ".claude", "skills", "above-repo", "SKILL.md");
+			mkdirSync(join(tempDir, ".claude", "skills", "above-repo"), { recursive: true });
+			writeFileSync(aboveRepoSkill, "---\nname: above-repo\ndescription: above\n---\n");
+
+			const repoClaudeBaseDir = join(repoRoot, ".claude");
+			const repoSkill = join(repoClaudeBaseDir, "skills", "repo", "SKILL.md");
+			mkdirSync(join(repoClaudeBaseDir, "skills", "repo"), { recursive: true });
+			writeFileSync(repoSkill, "---\nname: repo\ndescription: repo\n---\n");
+
+			const pm = new DefaultPackageManager({
+				cwd: nestedCwd,
+				agentDir,
+				settingsManager,
+			});
+
+			const result = await pm.resolve();
+			const resolvedRepoSkill = result.skills.find((r) => r.path === repoSkill);
+
+			expect(resolvedRepoSkill?.enabled).toBe(true);
+			expect(resolvedRepoSkill?.metadata.scope).toBe("project");
+			expect(resolvedRepoSkill?.metadata.baseDir).toBe(repoClaudeBaseDir);
+			expect(result.skills.some((r) => r.path === aboveRepoSkill)).toBe(false);
+		});
+
+		it("should dedupe ~/.claude/skills entries that symlink to ~/.agents/skills", async () => {
+			const previousHome = process.env.HOME;
+			process.env.HOME = tempDir;
+
+			try {
+				const agentsSkillDir = join(tempDir, ".agents", "skills", "linked");
+				mkdirSync(agentsSkillDir, { recursive: true });
+				writeFileSync(join(agentsSkillDir, "SKILL.md"), "---\nname: linked\ndescription: linked\n---\n");
+
+				const claudeSkillsDir = join(tempDir, ".claude", "skills");
+				mkdirSync(claudeSkillsDir, { recursive: true });
+				const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+				symlinkSync(agentsSkillDir, join(claudeSkillsDir, "linked"), directoryLinkType);
+
+				const result = await packageManager.resolve();
+				const linkedSkills = result.skills.filter((r) => pathEndsWith(r.path, "linked/SKILL.md"));
+
+				expect(linkedSkills).toHaveLength(1);
+				expect(linkedSkills[0]?.enabled).toBe(true);
 			} finally {
 				if (previousHome === undefined) {
 					delete process.env.HOME;

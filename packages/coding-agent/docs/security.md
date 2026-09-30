@@ -11,7 +11,7 @@ Step considers a project to have resources that require trust when it finds any 
 - `.stepcode/settings.json`
 - `.stepcode/extensions`, `.stepcode/skills`, `.stepcode/prompts`, or `.stepcode/themes`
 - `.stepcode/SYSTEM.md` or `.stepcode/APPEND_SYSTEM.md`
-- project `.agents/skills` in the current directory or an ancestor directory
+- project `.agents/skills` or `.claude/skills` in the current directory or an ancestor directory
 
 A bare `.stepcode` directory does not count as a project resource that requires trust.
 
