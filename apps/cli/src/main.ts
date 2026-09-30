@@ -71,7 +71,7 @@ import {
 	updateGlobalMcpConfig,
 	withStepDefaults,
 } from "@step-harness/coding-agent";
-import { parseArgs, toPrintOutputMode } from "#args/index";
+import { parseArgs, resolveAppMode, toPrintOutputMode } from "#args/index";
 import { loadStepStartupConfig } from "#bootstrap/config";
 import { createStepExtensionFactories } from "#bootstrap/extensions";
 import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
@@ -555,6 +555,22 @@ try {
 				syncStepLoginProfileEndpoint(getStepAuthPath());
 				let shouldLaunchMain = true;
 				const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
+				if (
+					parsedInteractiveArgs.completionReview &&
+					!parsedInteractiveArgs.completionCheck &&
+					!parsedInteractiveArgs.help &&
+					!parsedInteractiveArgs.version
+				) {
+					throw new Error("--completion-review requires --completion-check git-committed");
+				}
+				if (
+					parsedInteractiveArgs.completionCheck &&
+					!parsedInteractiveArgs.help &&
+					!parsedInteractiveArgs.version &&
+					resolveAppMode(parsedInteractiveArgs, process.stdin.isTTY, process.stdout.isTTY) === "interactive"
+				) {
+					throw new Error("--completion-check requires print or JSON mode; use --print or --mode json.");
+				}
 				const interactiveStartup = isStepInteractiveLoginStartup({
 					stdinIsTTY: process.stdin.isTTY,
 					stdoutIsTTY: process.stdout.isTTY,
@@ -722,6 +738,9 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 			// print / json headless channels.
 			const exitCode = await runPrintMode(prep.runtimeHost, {
 				mode: toPrintOutputMode(prep.appMode),
+				completionCheck: prep.parsed.completionCheck,
+				completionCheckAttempts: prep.parsed.completionCheckAttempts,
+				completionReview: prep.parsed.completionReview,
 				messages: prep.parsed.messages,
 				initialMessage: prep.initialMessage,
 				initialImages: prep.initialImages,

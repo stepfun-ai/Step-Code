@@ -150,9 +150,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	const hasBash = tools.includes("bash") || tools.includes("run_command");
 	const hasPowerShell = tools.includes("powershell");
-	const hasGrep = tools.includes("grep");
-	const hasFind = tools.includes("find");
-	const hasLs = tools.includes("ls");
+	const hasGrep = tools.includes("grep") || tools.includes("search_files");
+	const hasFind = tools.includes("find") || tools.includes("find_files");
+	const hasLs = tools.includes("ls") || tools.includes("list_directory");
 	const hasRead = tools.includes("read") || tools.includes("read_file");
 
 	// File exploration guidelines

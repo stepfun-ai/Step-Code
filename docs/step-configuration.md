@@ -68,6 +68,38 @@ Step screens pass the Step agent directory; generic TUI callers default to the
 system temporary directory. Rendering equivalence tests select the uncached
 renderer through a test-process argument.
 
+### Plan file storage
+
+Native Markdown plans default to
+`<cwd>/.stepcode/plans/session-<session-id>.md`. Headless clients can keep
+these runtime files outside the project Git worktree by setting
+`STEP_CODING_AGENT_PLAN_DIR` before starting Step, for example:
+
+```sh
+export STEP_CODING_AGENT_PLAN_DIR="$HOME/.cache/step/plans"
+```
+
+The selected directory directly contains `session-<session-id>.md`. Absolute
+paths and `~/` paths are accepted; relative paths resolve from the session's
+project working directory. Surrounding whitespace is trimmed, and unset or
+blank values preserve the project-local default in every mode. The override
+is explicit and also applies to interactive launches when set. It does not
+create a directory or file until the proposal is written through the normal
+file tools, with their existing permissions. An unwritable location produces
+the normal file-tool error; it does not fall back to writing in the project.
+
+The session saves its selected plan path. Resume, branch navigation, and
+re-entering plan mode keep that saved path even if the environment changes;
+a fresh session selects the current setting. Existing plans are not moved,
+deleted, or rewritten by this option. Keep external storage available for as
+long as the session needs its plan; retention and cleanup belong to the host.
+
+This setting affects only generated plan paths. Agent/session storage options
+do not select it, and project `.stepcode/config.toml`, skills, task checklists,
+and user-created or tracked files keep their existing behavior. Git ignore
+files and [completion checks](completion-check.md) are unchanged. Choose a
+directory outside the worktree when the goal is to avoid untracked plan files.
+
 ## First-run theme prompt
 
 The first interactive launch asks which theme reads best in the terminal, after

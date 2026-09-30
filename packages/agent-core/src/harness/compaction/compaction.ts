@@ -170,10 +170,10 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 };
 
 /**
- * Pick the summary output cap for a compaction request. Uses whichever is
- * larger of the reserve-token budget and the model's own output cap (clamped to
- * {@link SUMMARY_OUTPUT_TOKENS_CEILING}), so large-output models are not
- * throttled by the conservative 0.8 * reserveTokens heuristic on rich sessions.
+ * Pick the summary output cap without letting the trigger reserve bypass output limits.
+ * Valid existing budgets are preserved. A positive model limit and the summary
+ * ceiling bound the final budget; an unknown model limit uses the reserve fraction
+ * bounded by {@link SUMMARY_OUTPUT_TOKENS_CEILING}.
  */
 export function pickSummaryMaxTokens(
 	model: { readonly maxTokens: number },
@@ -182,7 +182,9 @@ export function pickSummaryMaxTokens(
 ): number {
 	const reserveBudget = Math.floor(reserveFraction * reserveTokens);
 	const modelBudget = model.maxTokens > 0 ? Math.min(model.maxTokens, SUMMARY_OUTPUT_TOKENS_CEILING) : 0;
-	return Math.max(reserveBudget, modelBudget) || reserveBudget;
+	// reserveTokens also controls the trigger threshold; an early trigger must not expand the output cap.
+	const requestedBudget = Math.max(reserveBudget, modelBudget) || reserveBudget;
+	return Math.min(requestedBudget, modelBudget || SUMMARY_OUTPUT_TOKENS_CEILING);
 }
 
 /** Calculate total context tokens from provider usage. */
@@ -609,6 +611,10 @@ export async function generateSummaryWithUsage(
 	}
 
 	const textContent = contentText(response.content);
+	// Validate model text before split-turn scaffolding or file metadata can make it look nonempty.
+	if (textContent.trim().length === 0) {
+		return err(new CompactionError("summarization_failed", "Summarization failed: empty summary"));
+	}
 
 	return ok({ text: textContent, usage: response.usage });
 }
@@ -743,7 +749,8 @@ export async function compact(
 	let summaryUsage: Usage;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		let historyText = "No prior history.";
+		// With no new history to summarize, the previous checkpoint still carries the earlier context.
+		let historyText = previousSummary ?? "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
 			const historyResult = await generateSummaryWithUsage(
@@ -862,8 +869,14 @@ async function generateTurnPrefixSummary(
 		);
 	}
 
+	const textContent = contentText(response.content);
+	// A valid history summary cannot substitute for a missing turn-prefix summary.
+	if (textContent.trim().length === 0) {
+		return err(new CompactionError("summarization_failed", "Turn prefix summarization failed: empty summary"));
+	}
+
 	return ok({
-		text: contentText(response.content),
+		text: textContent,
 		usage: response.usage,
 	});
 }

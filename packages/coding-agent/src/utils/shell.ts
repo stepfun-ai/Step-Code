@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { type ChildProcess, spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
@@ -238,6 +238,51 @@ export function killTrackedDetachedChildren(): void {
 	trackedDetachedChildPids.clear();
 }
 
+type LinuxProcessIdentity = { pid: number; ppid: number; startTime: string };
+
+function readLinuxProcessIdentity(pid: number): LinuxProcessIdentity | undefined {
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+		const startTime = fields[19];
+		return startTime ? { pid, ppid: Number(fields[1]), startTime } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Snapshot descendants before killing their parent makes them untraceable. */
+function getLinuxDescendants(pid: number): LinuxProcessIdentity[] {
+	const children = new Map<number, LinuxProcessIdentity[]>();
+	try {
+		// /proc/<pid>/task/<tid>/children is absent on some Linux kernels.
+		// The stat parent field is available without that optional interface.
+		for (const entry of readdirSync("/proc")) {
+			const childPid = Number(entry);
+			if (!Number.isSafeInteger(childPid) || childPid <= 0) continue;
+			const child = readLinuxProcessIdentity(childPid);
+			if (!child) continue;
+			const siblings = children.get(child.ppid) ?? [];
+			siblings.push(child);
+			children.set(child.ppid, siblings);
+		}
+	} catch {
+		return [];
+	}
+	const descendants: LinuxProcessIdentity[] = [];
+	const pending = [pid];
+	const visited = new Set(pending);
+	for (let index = 0; index < pending.length; index++) {
+		for (const child of children.get(pending[index]) ?? []) {
+			if (visited.has(child.pid)) continue;
+			visited.add(child.pid);
+			descendants.push(child);
+			pending.push(child.pid);
+		}
+	}
+	return descendants;
+}
+
 /**
  * Kill a process and all its children (cross-platform)
  */
@@ -260,6 +305,7 @@ export function killProcessTree(pid: number): void {
 			// Ignore errors if taskkill fails.
 		}
 	} else {
+		const descendants = process.platform === "linux" ? getLinuxDescendants(pid) : [];
 		// Use SIGKILL on Unix/Linux/Mac
 		try {
 			process.kill(-pid, "SIGKILL");
@@ -269,6 +315,16 @@ export function killProcessTree(pid: number): void {
 				process.kill(pid, "SIGKILL");
 			} catch {
 				// Process already dead
+			}
+		}
+		// A detached child can have a different group/session. Target only the
+		// identities observed in this command's subtree, never all host processes.
+		for (const descendant of descendants.reverse()) {
+			if (readLinuxProcessIdentity(descendant.pid)?.startTime !== descendant.startTime) continue;
+			try {
+				process.kill(descendant.pid, "SIGKILL");
+			} catch {
+				// The descendant already exited or was killed with the parent group.
 			}
 		}
 	}

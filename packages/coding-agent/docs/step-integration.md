@@ -185,6 +185,50 @@ normal user-message path. The model inspects the project and uses pi's native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
 
+## Shell command execution
+
+Foreground `run_command` calls use a 120-second timeout when `timeout_ms` is
+omitted. A timed-out command and its child processes are stopped through the
+native shell backend, and the agent receives an error tool result so it can
+inspect the failure and continue. The timeout measures command execution after
+permission handling; it does not approve or dismiss an approval request.
+
+Set `timeout_ms` explicitly to choose a foreground timeout between 1,000 and
+600,000 milliseconds. An explicit value takes precedence over an embedded
+host's existing `commandTimeoutMs` context override, which takes precedence
+over the 120-second default. For a server, watcher, or longer job, use
+`run_in_background: true`, inspect the returned log path, and stop the process
+with the returned command when it is no longer needed. Background execution
+keeps its session-bound lifecycle and ignores the foreground timeout fields.
+Pi's separate native `bash` tool retains its optional timeout contract.
+
+On Linux, timeout and abort cleanup snapshots the command's current descendants
+before killing its process group. Descendants in separate process groups are
+also signaled, after checking their process start times to avoid targeting a
+reused PID. This snapshot cannot contain descendants already reparented outside
+the command tree or new forks racing the snapshot. It does not adopt grandchildren
+for reaping; the native backend waits for its direct child and drains captured
+output. Normal post-exit output draining remains unchanged.
+
+A foreground process terminated by a signal returns a failed tool result with
+its captured output and signal name. Caller cancellation takes precedence over a
+timeout, and both take precedence over the signal used for cleanup. These failed
+tool results remain available to later model turns; caller cancellation itself
+still stops the active turn.
+
+The Step character cap applies to successful and failed command output. When it
+is smaller than the native 50KiB/2,000-line limit, the existing output accumulator
+saves the complete raw stream before Step removes any diagnostics. Returned
+fragments preserve the command status and a readable full-output log path. Those
+recovery fields can exceed a very small cap rather than truncate the path. If
+this additional spool fails, Step retains the full in-memory result instead of
+discarding its only diagnostic copy. A command printing a log-looking notice
+cannot substitute for the accumulator's actual saved-log metadata.
+
+Background commands keep their separate detached lifecycle and streaming log;
+foreground capture limits do not apply to them. Permission decisions and explicit
+denial termination still occur before command execution.
+
 ## Interactive tool rendering
 
 Step's projected tool titles and collapsed summaries are single physical
@@ -242,6 +286,14 @@ todo items in the session execution checklist: what needs doing and what is
 pending, in progress, or completed. The task tools track work; they do not
 execute, delegate, or schedule it. Approving a plan does not generate tasks
 from Markdown.
+
+Markdown proposals normally live at
+`<cwd>/.stepcode/plans/session-<session-id>.md`. Hosts can set
+`STEP_CODING_AGENT_PLAN_DIR` to keep newly selected plan files outside the
+project, including in headless runs. Saved session paths take precedence on
+restore; this option does not migrate existing plans or project settings.
+See [plan file storage](../../../docs/step-configuration.md#plan-file-storage)
+for path rules and retention responsibilities.
 
 - `enter_plan_mode`, `/plan`, and `--plan` share the same setup. Entry takes
   effect immediately; it does not request approval. An explicit `--plan`
@@ -325,7 +377,7 @@ mark so deleted or sibling-branch IDs are not reused. Plan IDs derive from their
 first task ID. Restoring a session restores its selected plan, not every plan
 into the active checklist. Existing snapshots without plan identities restore
 as one plan; already-mixed historical tasks are not split by guessing intent.
-The Markdown plan remains a workspace file; restoring mode does not version or
+The Markdown plan remains a file at its saved path; restoring mode does not version or
 rewind its contents. On resume or after compaction, the model should call
 `task_list` before continuing multi-step work instead of recreating tasks. The
 whole task list is not injected into every turn.

@@ -23,6 +23,7 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
+import { ShellToolError } from "../core/tools/bash.ts";
 import type { EditToolOptions } from "../core/tools/edit.ts";
 import { generateDiffString, generateUnifiedPatch, normalizeToLF } from "../core/tools/edit-diff.ts";
 import { withFileMutationQueue } from "../core/tools/file-mutation-queue.ts";
@@ -79,6 +80,7 @@ const STEP_NATIVE_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep",
 const PATH_DESCRIPTION =
 	"Relative paths resolve from the initial working directory; absolute paths and ~/ home paths are accepted.";
 const RUN_COMMAND_CWD_DESCRIPTION = `Working directory. ${PATH_DESCRIPTION}`;
+const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const READ_FILE_DESCRIPTION =
 	"Read a text file with optional line range; image files (PNG/JPEG/GIF/WebP) are returned as attached images. Prefer this over shell cat for token efficiency.";
 const WRITE_FILE_DESCRIPTION =
@@ -130,7 +132,13 @@ const editFileSchema = Type.Object({
 const runCommandSchema = Type.Object({
 	command: Type.String({ description: "Shell command string" }),
 	cwd: Type.Optional(Type.String({ description: RUN_COMMAND_CWD_DESCRIPTION })),
-	timeout_ms: Type.Optional(Type.Integer({ minimum: 1000, maximum: 600000 })),
+	timeout_ms: Type.Optional(
+		Type.Integer({
+			minimum: 1000,
+			maximum: 600000,
+			description: `Foreground timeout in milliseconds. Defaults to ${DEFAULT_COMMAND_TIMEOUT_MS}.`,
+		}),
+	),
 	max_output_chars: Type.Optional(
 		Type.Integer({ minimum: 200, maximum: 120000, description: "Output character cap for stdout+stderr" }),
 	),
@@ -257,6 +265,44 @@ function withStepTextLimit(
 	return { text: `${prefix}${body}${compatibilitySuffix}`, truncated: true };
 }
 
+/** Keep recovery metadata intact when limiting either successful or failed commands. */
+function limitRunCommandText(
+	text: string,
+	maxChars: number,
+	fullOutputPath: string | undefined,
+): { text: string; truncated: boolean } {
+	if (!fullOutputPath || text.length <= maxChars) return { text, truncated: false };
+	let body = text;
+	let suffix = "";
+	const status =
+		/(?:^|\n\n)(Command (?:aborted|timed out after [^\n]+|exited with code [^\n]+|terminated by signal [^\n]+))$/u.exec(
+			body,
+		);
+	if (status) {
+		suffix = `\n\n${status[1]}`;
+		body = body.slice(0, status.index);
+	}
+	const notice = /\n\n\[(?:Showing [^\n]*\. )?Full output: ([^\n]+)\]$/u.exec(body);
+	// This also preserves all diagnostics when additional log persistence failed.
+	if (!notice || notice[1] !== fullOutputPath) return { text, truncated: false };
+	suffix = `\n\n[Full output: ${notice[1]}]${suffix}`;
+	body = body.slice(0, notice.index);
+	const prefix = maxChars < 512 ? "[Output truncated]\n" : `${STEP_TRUNCATION_HINTS.run_command.banner}\n\n`;
+	// A path/status longer than the cap must remain usable, even without inline output.
+	const remaining = Math.max(0, maxChars - prefix.length - suffix.length);
+	let limitedBody = "";
+	if (body.length <= remaining) {
+		limitedBody = body;
+	} else if (remaining >= 5) {
+		const head = Math.ceil((remaining - 5) * 0.7);
+		const tail = remaining - 5 - head;
+		limitedBody = `${body.slice(0, head)}\n...\n${tail > 0 ? body.slice(-tail) : ""}`;
+	} else if (remaining > 0) {
+		limitedBody = body.slice(-remaining);
+	}
+	return { text: `${prefix}${limitedBody}${suffix}`, truncated: true };
+}
+
 /** Preserve the historical read_file suffix used by clients that display caps verbatim. */
 function withReadTextLimit(text: string, maxChars: number): { text: string; truncated: boolean } {
 	if (text.length <= maxChars) return { text, truncated: false };
@@ -268,7 +314,14 @@ function withReadTextLimit(text: string, maxChars: number): { text: string; trun
 
 function applyStepTextLimit(result: AnyResult, toolName: StepTruncationToolName, maxChars: number): AnyResult {
 	const text = textFromResult(result);
-	const limited = withStepTextLimit(toolName, text, maxChars);
+	const limited =
+		toolName === "run_command"
+			? limitRunCommandText(
+					text,
+					maxChars,
+					typeof result.details?.fullOutputPath === "string" ? result.details.fullOutputPath : undefined,
+				)
+			: withStepTextLimit(toolName, text, maxChars);
 	if (!limited.truncated) return result;
 	return {
 		...result,
@@ -1012,10 +1065,11 @@ function mapRunCommandArgs(args: RunCommandInput, ctx?: ExtensionContext): { com
 		throw new Error(`max_output_chars must be between ${MIN_COMMAND_OUTPUT_CHARS} and ${MAX_COMMAND_OUTPUT_CHARS}`);
 	}
 	const configuredTimeout = getContextValue<number>(ctx, "commandTimeoutMs");
-	const timeoutMs = args.timeout_ms ?? (typeof configuredTimeout === "number" ? configuredTimeout : undefined);
+	const timeoutMs =
+		args.timeout_ms ?? (typeof configuredTimeout === "number" ? configuredTimeout : DEFAULT_COMMAND_TIMEOUT_MS);
 	return {
 		command: args.command,
-		timeout: timeoutMs === undefined ? undefined : timeoutMs / 1000,
+		timeout: args.run_in_background === true ? undefined : timeoutMs / 1000,
 	};
 }
 
@@ -1409,10 +1463,22 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 					agentDir,
 				});
 			}
-			const nativeForCwd =
-				args.cwd === undefined ? nativeBash : createBashToolDefinition(commandCwd, nativeBashOptions);
-			const result = await nativeForCwd.execute(toolCallId, mapRunCommandArgs(args, ctx), signal, onUpdate, ctx);
-			return applyStepTextLimit(result, "run_command", resolveStepMaxChars(args.max_output_chars, ctx));
+			const nativeArgs = mapRunCommandArgs(args, ctx);
+			const maxChars = resolveStepMaxChars(args.max_output_chars, ctx);
+			const nativeForCwd = createBashToolDefinition(args.cwd === undefined ? cwd : commandCwd, {
+				...nativeBashOptions,
+				persistOutputAboveChars: maxChars,
+			});
+			try {
+				const result = await nativeForCwd.execute(toolCallId, nativeArgs, signal, onUpdate, ctx);
+				return applyStepTextLimit(result, "run_command", maxChars);
+			} catch (error) {
+				if (error instanceof ShellToolError) {
+					const limited = limitRunCommandText(error.message, maxChars, error.fullOutputPath);
+					if (limited.truncated) throw new Error(limited.text, { cause: error });
+				}
+				throw error;
+			}
 		},
 		renderCall: nativeBash.renderCall
 			? (args, theme, context) =>

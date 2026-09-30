@@ -1,13 +1,14 @@
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { type Component, setKeybindings } from "@step-harness/pi-tui";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { getPlanFilePath } from "../src/features/plan-mode-tools.ts";
 import { createStepPlanExtension } from "../src/features/step-plan.ts";
 import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
@@ -59,6 +60,7 @@ const cleanups: Array<() => void> = [];
 
 // The review component resolves keys through the global keybindings registry.
 beforeAll(() => setKeybindings(new KeybindingsManager()));
+beforeEach(() => vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", undefined));
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -607,10 +609,16 @@ test("plan extension registers only the plan command and its two model tools", (
 	expect([...harness.tools.keys()]).toEqual(["enter_plan_mode", "exit_plan_mode"]);
 });
 
-test.each(["/plan", "--plan", "enter_plan_mode"])(
-	"%s preserves tools and announces a writable plan path",
-	async (entry) => {
+const planEntryCases = ["/plan", "--plan", "enter_plan_mode"].flatMap((entry) =>
+	[false, true].map((external) => [entry, external] as const),
+);
+
+test.each(planEntryCases)(
+	"%s preserves tools and announces a writable plan path (external storage: %s)",
+	async (entry, external) => {
 		const cwd = makeWorkspace();
+		const planDir = external ? path.join(makeWorkspace(), "runtime plans") : path.join(cwd, ".stepcode", "plans");
+		if (external) vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", planDir);
 		const { telemetry, events } = createTelemetryRecorder();
 		const harness = createHarness({ cwd, flags: { plan: entry === "--plan" } });
 		const originalTools = ["read_file", "run_command", "write", "edit", "custom_tool"];
@@ -621,7 +629,8 @@ test.each(["/plan", "--plan", "enter_plan_mode"])(
 		else if (entry === "--plan") await harness.emit({ type: "session_start", reason: "startup" }, context);
 		else await runTool(harness, "enter_plan_mode", {}, context);
 
-		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+		const planPath = path.join(planDir, "session-sess-1.md");
+		expect(fs.existsSync(planDir)).toBe(false);
 		const source = entry === "enter_plan_mode" ? "agent" : "user";
 		expect(lastPlanEntry(harness)).toMatchObject({
 			enabled: true,
@@ -642,9 +651,11 @@ test.each(["/plan", "--plan", "enter_plan_mode"])(
 			await expect(
 				harness.emit({ type: "tool_call", toolName, input: { path: path.relative(cwd, planPath) } }, context),
 			).resolves.toBeUndefined();
-			await expect(
-				harness.emit({ type: "tool_call", toolName, input: { path: "src/app.ts" } }, context),
-			).resolves.toMatchObject({ block: true });
+			for (const target of ["src/app.ts", ".stepcode/config.toml", path.join(planDir, "other-plan.md")]) {
+				await expect(
+					harness.emit({ type: "tool_call", toolName, input: { path: target } }, context),
+				).resolves.toMatchObject({ block: true });
+			}
 		}
 		await expect(
 			harness.emit({ type: "tool_call", toolName: "run_command", input: { command: "git status" } }, context),
@@ -685,10 +696,11 @@ test.each(["session_start", "session_tree"] as const)(
 	"%s restores the active sibling's source, path and original tools without telemetry",
 	async (type) => {
 		const cwd = makeWorkspace();
+		vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", path.join(makeWorkspace(), "new-plans"));
 		const { telemetry, events } = createTelemetryRecorder();
 		const harness = createHarness({ cwd });
 		const root = harness.session.appendCustomEntry("branch-root");
-		const pathA = path.join(cwd, "proposal-a.md");
+		const pathA = path.join(cwd, ".stepcode", "plans", "proposal-a.md");
 		const pathB = path.join(cwd, "proposal-b.md");
 		const toolsA = ["read_file", "write", "edit", "branch_a_tool"];
 		const toolsB = ["read_file", "write_file", "branch_b_tool"];
@@ -971,6 +983,55 @@ test("switching to a fresh session clears the preceding plan path and source", a
 		planSource: "user",
 		planFilePath: path.join(cwd, ".stepcode", "plans", "session-sess-2.md"),
 	});
+});
+
+test.each([undefined, "", " \t "])("plan storage keeps the legacy default for %j", (value) => {
+	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", value);
+	const cwd = makeWorkspace();
+	expect(getPlanFilePath("sess-1", cwd)).toBe(path.join(cwd, ".stepcode", "plans", "session-sess-1.md"));
+	expect(getPlanFilePath("sess-1")).toBe(path.join(process.cwd(), ".stepcode", "plans", "session-sess-1.md"));
+});
+
+test("plan storage resolves absolute, session-relative and home-relative overrides", () => {
+	const cwd = path.join(makeWorkspace(), "project");
+	const external = path.join(makeWorkspace(), "plans with spaces");
+	for (const [value, expected] of [
+		[`  ${external}  `, external],
+		["../runtime plans", path.resolve(cwd, "../runtime plans")],
+		["~/runtime-plans", path.join(homedir(), "runtime-plans")],
+	]) {
+		vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", value);
+		expect(getPlanFilePath("sess-1", cwd)).toBe(path.join(expected, "session-sess-1.md"));
+	}
+});
+
+test("the selected external plan path stays pinned until a fresh session", async () => {
+	const cwd = makeWorkspace();
+	const firstRoot = makeWorkspace();
+	const nextRoot = makeWorkspace();
+	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", firstRoot);
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	const firstPath = path.join(firstRoot, "session-sess-1.md");
+	expect(lastPlanEntry(harness).planFilePath).toBe(firstPath);
+	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", nextRoot);
+	for (const type of ["session_start", "session_tree"] as const) {
+		await restoreLifecycle(harness, type);
+		expect(await runTool(harness, "enter_plan_mode", {}, harness.ctx())).toMatchObject({
+			content: [{ text: expect.stringContaining(firstPath) }],
+		});
+	}
+	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", undefined);
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	await restoreLifecycle(harness, "session_start");
+	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	expect(lastPlanEntry(harness).planFilePath).toBe(firstPath);
+	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", nextRoot);
+	harness.session.newSession({ id: "sess-2" });
+	await harness.emit({ type: "session_start", reason: "new" }, harness.ctx());
+	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	expect(lastPlanEntry(harness).planFilePath).toBe(path.join(nextRoot, "session-sess-2.md"));
 });
 
 test.each(["session_start", "session_tree"] as const)(
