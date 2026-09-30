@@ -78,8 +78,10 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
 	}
 
-	// If we have images, convert to content block array
-	const blocks = content.map((block) => {
+	// If we have images, convert to content block array. Anthropic rejects
+	// whitespace-only text blocks, so drop them as user and assistant content does.
+	const kept = content.filter((block) => block.type !== "text" || block.text.trim().length > 0);
+	const blocks = kept.map((block) => {
 		if (block.type === "text") {
 			return {
 				type: "text" as const,
@@ -1254,11 +1256,19 @@ function convertTools(
 	return tools.map((tool, index) => {
 		const strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools);
 		const parameters = getJsonSchemaToolParameters(tool, strict);
-		const schema = parameters as { properties?: unknown; required?: string[] };
+		const schema = parameters as {
+			properties?: unknown;
+			required?: string[];
+			$defs?: unknown;
+			definitions?: unknown;
+		};
 		const legacyInputSchema = {
 			type: "object" as const,
 			properties: schema.properties ?? {},
 			required: schema.required ?? [],
+			// Keep local definitions so `$ref`s inside the kept properties still resolve.
+			...(schema.$defs !== undefined ? { $defs: schema.$defs } : {}),
+			...(schema.definitions !== undefined ? { definitions: schema.definitions } : {}),
 		};
 		const inputSchema =
 			strict === true

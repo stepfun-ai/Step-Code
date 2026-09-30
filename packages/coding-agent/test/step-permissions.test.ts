@@ -196,6 +196,144 @@ describe("Step permission presets", () => {
 		expect(dangerous).toMatchObject({ block: true, terminate: true });
 	});
 
+	describe("non-interactive denial recovery", () => {
+		const noUI = { hasUI: false } as never;
+		const hazardousCall = {
+			toolName: "run_command",
+			input: { command: "rm -rf ./build" },
+		} as never;
+
+		it("blocks a hazardous command without terminating when denial is continue", async () => {
+			const controller = new StepPermissionController({
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			const result = await controller.handleToolCall(hazardousCall, noUI);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+			expect((result as { reason: string }).reason).toContain("was not executed");
+		});
+
+		it("resolves continue from the environment", async () => {
+			const controller = new StepPermissionController({
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				env: { STEP_NON_INTERACTIVE_DENIAL: "continue" },
+			});
+			const result = await controller.handleToolCall(hazardousCall, noUI);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+		});
+
+		it("still terminates by default and on unrecognized values", async () => {
+			for (const env of [{}, { STEP_NON_INTERACTIVE_DENIAL: "recover" }]) {
+				const controller = new StepPermissionController({
+					approvalMode: "auto",
+					nonInteractiveApproval: "allow",
+					env,
+				});
+				expect(await controller.handleToolCall(hazardousCall, noUI)).toMatchObject({
+					block: true,
+					terminate: true,
+				});
+			}
+		});
+
+		it("does not approve anything: incomplete analysis stays blocked", async () => {
+			const controller = new StepPermissionController({
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "run_command", input: { command: "eval $unresolved" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+		});
+
+		it.each([
+			["unsupported-shell", { shellPath: process.execPath }],
+			["shell-configuration", { shellPath: `${process.cwd()}/.missing-step-shell` }],
+		])("terminates environmental analysis failures in continue mode (%s)", async (reason, shellContext) => {
+			const controller = new StepPermissionController({
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				nonInteractiveDenial: "continue",
+				shellContext: () => shellContext,
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "run_command", input: { command: "printf safe" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true, terminate: true });
+			expect((result as { reason: string }).reason).toContain(reason);
+		});
+
+		it("keeps explicit denials terminating even with continue", async () => {
+			const readOnly = new StepPermissionController({
+				initialPreset: "read-only",
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			expect(
+				await readOnly.handleToolCall(
+					{ toolName: "write_file", input: { path: "x", content: "y" } } as never,
+					noUI,
+				),
+			).toMatchObject({ block: true, terminate: true });
+			const overridden = new StepPermissionController({
+				initialPreset: "bypass",
+				nonInteractiveDenial: "continue",
+				toolOverrides: { run_command: "deny" },
+				env: {},
+			});
+			expect(await overridden.handleToolCall(hazardousCall, noUI)).toMatchObject({
+				block: true,
+				terminate: true,
+			});
+		});
+
+		it("keeps refused-policy guidance in continue mode", async () => {
+			const controller = new StepPermissionController({
+				approvalMode: "confirm",
+				nonInteractiveApproval: "deny",
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "write_file", input: { path: "x", content: "y" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+			const reason = (result as { reason: string }).reason;
+			expect(reason).toContain("--non-interactive-approval allow");
+			expect(reason).toContain("--approval-mode auto");
+		});
+
+		it("keeps unconfigured-policy guidance in continue mode", async () => {
+			const controller = new StepPermissionController({
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "write_file", input: { path: "x", content: "y" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+			const reason = (result as { reason: string }).reason;
+			expect(reason).toContain("--non-interactive-approval allow");
+			expect(reason).toContain("--approval-mode auto");
+		});
+	});
+
 	// Feedback issue-287bfff1a5fe7668: with the approval config removed entirely,
 	// a non-interactive run inherited the interactive Bypass default and deleted
 	// files with nobody watching.

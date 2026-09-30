@@ -183,5 +183,6 @@ export interface StartupUiHooks {
 		title: string,
 		placeholder?: string,
 		paths?: StartupTuiPathOptions,
+		examples?: readonly string[],
 	): Promise<string | undefined>;
 }

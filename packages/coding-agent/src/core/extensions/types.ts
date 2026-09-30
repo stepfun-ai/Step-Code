@@ -110,6 +110,22 @@ export interface ExtensionUIDialogOptions {
 	 * drift is visible because no output follows the dialog to fill the gap back in.
 	 */
 	overlay?: boolean;
+	/**
+	 * Reference lines for an input dialog, rendered under the title and above the
+	 * editable row. Use them to show the accepted spellings of an answer that has
+	 * more than one (a git URL, an owner/repo pair, a local path), so the accepted
+	 * forms are visible while typing instead of only in the placeholder that
+	 * disappears on the first keystroke. Ignored by select, confirm and editor
+	 * dialogs, and by hosts that render dialogs as plain transport.
+	 */
+	examples?: readonly string[];
+	/**
+	 * Add a search row to a select dialog and filter its options as the user
+	 * types. Use it for lists whose length is set by the environment rather than
+	 * by the dialog — a marketplace can carry hundreds of plugins, and scrolling
+	 * is not a way to find one. Ignored by non-select dialogs.
+	 */
+	searchable?: boolean;
 }
 
 /** Placement for extension widgets. */
@@ -388,6 +404,8 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Read the currently active tool definitions at call time, when the host provides a live catalog. */
+	getToolCatalog?(): readonly ToolInfo[];
 	/** Whether Pi's native provider retry loop is enabled, when exposed by the host. */
 	readonly autoRetryEnabled?: boolean;
 	/** Toggle Pi's native provider retry loop, when exposed by the host. */
@@ -1356,11 +1374,12 @@ export interface ExtensionAPI {
 	): void;
 
 	/**
-	 * Register several tools and refresh the tool registry once. Registering a
-	 * large catalog one tool at a time rebuilds the registry and the system
-	 * prompt per tool, which is quadratic work on the startup path.
+	 * Register several tools and optionally remove this extension's registrations
+	 * in one registry refresh. Removals never delete another extension's tools;
+	 * removing an override reveals the next definition under normal precedence.
+	 * Names present in both lists are replaced by the supplied definitions.
 	 */
-	registerTools(tools: readonly ToolDefinition<any, any, any>[]): void;
+	registerTools(tools: readonly ToolDefinition<any, any, any>[], options?: { remove?: readonly string[] }): void;
 
 	// =========================================================================
 	// Command, Shortcut, Flag Registration

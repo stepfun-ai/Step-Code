@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@step-harness/coding-agent";
-import { stripTerminalSequences, type TUI, visibleWidth } from "@step-harness/pi-tui";
+import { Container, stripTerminalSequences, type TUI, visibleWidth } from "@step-harness/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStepTasksExtension } from "../../../packages/coding-agent/src/features/step-tasks.ts";
 import { initTheme, theme } from "../../../packages/coding-agent/src/theme/theme.ts";
@@ -88,6 +88,7 @@ describe("inline task plan", () => {
 			await execute("task_create", { subject: `Task ${index}`, description: "work" });
 		}
 		const pendingTools = new Map<string, ToolExecutionComponent>();
+		const chatContainer = new Container();
 		const runtime = {
 			isInitialized: true,
 			footer: { invalidate: vi.fn() },
@@ -97,7 +98,7 @@ describe("inline task plan", () => {
 			getRegisteredToolDefinition: (name: string) => tools.get(name),
 			ui,
 			sessionManager: { getCwd: () => "/tmp" },
-			chatContainer: { addChild: vi.fn() },
+			chatContainer,
 			workingOutputTracker: { notifyToolStarted: vi.fn() },
 			workingVisible: false,
 			redraw: { requestRender: vi.fn() },
@@ -140,6 +141,7 @@ describe("inline task plan", () => {
 		});
 		expect(first.render(80).map(stripTerminalSequences).join("\n")).toContain("Updated Plan (1/5)");
 		expect(second.render(80)).toEqual(latestRows);
+		expect(chatContainer.children).toEqual([second]);
 		expect(pendingTools.size).toBe(0);
 		expect(runtime.redraw.requestRender).toHaveBeenCalledTimes(4);
 	});
