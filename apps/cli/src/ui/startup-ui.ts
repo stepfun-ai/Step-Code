@@ -202,6 +202,7 @@ export async function showStartupInput(
 	title: string,
 	placeholder?: string,
 	paths?: StartupTuiPathOptions,
+	examples?: readonly string[],
 ): Promise<string | undefined> {
 	const ui = await createStartupTui(settingsManager, paths);
 	return new Promise((resolve) => {
@@ -225,6 +226,7 @@ export async function showStartupInput(
 			{
 				tui: ui,
 				presentation: STARTUP_PRESENTATION,
+				examples,
 			},
 		);
 		ui.addChild(input);

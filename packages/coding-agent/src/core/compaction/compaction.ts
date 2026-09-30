@@ -8,6 +8,7 @@
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@step-harness/agent-core";
 import {
 	contentText,
+	isContextOverflow,
 	type RetryCallbacks,
 	type RetryPolicy,
 	retryAssistantCall,
@@ -22,6 +23,15 @@ import {
 	type SessionEntry,
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
+import {
+	collectSkillInstructions,
+	formatSkillInstructions,
+	readSavedSkillInstructions,
+	type SkillInstruction,
+	type SkillInstructionContext,
+	stripSkillInstructions,
+} from "./skill-instructions.ts";
+import { createSummarySourceReducer } from "./summary-overflow.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -41,6 +51,8 @@ import {
 export interface CompactionDetails {
 	readFiles: string[];
 	modifiedFiles: string[];
+	/** Loaded skill instructions carried across successive compactions. */
+	activeSkills?: SkillInstruction[];
 }
 
 /**
@@ -579,6 +591,9 @@ export function getSummarizationFailure(
 	label: string,
 	maxTokens?: number,
 ): string | undefined {
+	if (response.stopReason === "aborted") {
+		return `${label} aborted before producing a summary`;
+	}
 	if (response.stopReason === "error") {
 		return `${label} failed: ${response.errorMessage || "Unknown error"}`;
 	}
@@ -689,6 +704,93 @@ function buildSummarizationContext(promptText: string): Context {
 	};
 }
 
+/** Shares of the first rejected request's estimate, never compounded across retries. */
+const SUMMARY_OVERFLOW_TARGETS = [0.7, 0.5, 0.35] as const;
+
+/**
+ * Keep the initial summary payload intact, reducing only its source history after an
+ * explicit context-overflow error. The outer transient policy retains one retry budget
+ * across reductions; completeSummarization performs each individual request with the
+ * usual cache/routing behavior. Branch summaries keep their existing independent path.
+ */
+async function completeSummaryWithOverflowRecovery(
+	messages: AgentMessage[],
+	buildPrompt: (conversation: string) => string,
+	model: Model<any>,
+	options: SimpleStreamOptions,
+	label: string,
+	streamFn?: StreamFn,
+	retry?: RetryPolicy,
+	callbacks?: RetryCallbacks,
+): Promise<AssistantMessage> {
+	let conversation = serializeConversation(convertToLlm(messages));
+	let context = buildSummarizationContext(buildPrompt(conversation));
+	const promptOverhead = buildPrompt("").length;
+	const estimateRequestTokens = (conversationChars: number) =>
+		Math.ceil(SUMMARIZATION_SYSTEM_PROMPT.length / 4) + Math.ceil((promptOverhead + conversationChars) / 4);
+	const originalTokens = estimateRequestTokens(conversation.length);
+	let rejectedTokens = originalTokens;
+	let reductions = 0;
+	let reduceSource: ReturnType<typeof createSummarySourceReducer>;
+	let usage: Usage | undefined;
+	const requestOptions = { ...options, sessionId: options.sessionId ?? uuidv7() };
+
+	// A local recovery/cancellation failure can end produce() while a transient retry is
+	// active. Close its reporting lifecycle just as retryAssistantCall does for responses.
+	let activeRetry: number | undefined;
+	const retryCallbacks: RetryCallbacks = {
+		...callbacks,
+		onRetryScheduled: async (...args) => {
+			activeRetry = args[0];
+			await callbacks?.onRetryScheduled?.(...args);
+		},
+		onRetryFinished: async (...args) => {
+			activeRetry = undefined;
+			await callbacks?.onRetryFinished?.(...args);
+		},
+	};
+
+	const produce = async (): Promise<AssistantMessage> => {
+		for (;;) {
+			if (options.signal?.aborted) throw new Error("Compaction cancelled");
+			const response = await completeSummarization(model, context, requestOptions, streamFn);
+			usage = usage ? combineUsage(usage, response.usage) : response.usage;
+			if (options.signal?.aborted) throw new Error("Compaction cancelled");
+			// Do not infer overflow from successful usage or empty/length-limited output.
+			if (response.stopReason !== "error" || !isContextOverflow(response)) return response;
+
+			const fraction = SUMMARY_OVERFLOW_TARGETS[reductions];
+			if (fraction === undefined) {
+				throw new Error(
+					`${label} failed: context overflow after ${reductions} reduced requests (70%, 50%, 35%): ${response.errorMessage}`,
+				);
+			}
+			reduceSource ??= createSummarySourceReducer(messages, estimateRequestTokens);
+			const reduced = reduceSource?.(Math.floor(originalTokens * fraction), rejectedTokens);
+			if (reduced === undefined) {
+				throw new Error(
+					`${label} failed: context overflow recovery cannot reduce the request further while preserving protected summaries, instructions, the latest user request and complete tool groups`,
+					{ cause: response.errorMessage },
+				);
+			}
+			reductions++;
+			conversation = reduced;
+			rejectedTokens = estimateRequestTokens(conversation.length);
+			context = buildSummarizationContext(buildPrompt(conversation));
+		}
+	};
+
+	try {
+		const response = await retryAssistantCall(produce, retry, options.signal, retryCallbacks);
+		return { ...response, usage: usage ?? response.usage };
+	} catch (error) {
+		if (activeRetry !== undefined) {
+			await callbacks?.onRetryFinished?.(false, activeRetry, error instanceof Error ? error.message : String(error));
+		}
+		throw error;
+	}
+}
+
 /** Generate or update a conversation summary and return its provider usage. */
 export async function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
@@ -714,17 +816,14 @@ export async function generateSummaryWithUsage(
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
 	}
 
-	// Serialize conversation to text so model doesn't try to continue it
-	// Convert to LLM messages first (handles custom types like bashExecution, custom, etc.)
-	const llmMessages = convertToLlm(currentMessages);
-	const conversationText = serializeConversation(llmMessages);
-
-	// Build the prompt with conversation wrapped in tags
-	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-	if (previousSummary) {
-		promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-	}
-	promptText += basePrompt;
+	// Only the conversation can shrink. Instructions and the previous summary remain verbatim.
+	const buildPrompt = (conversation: string): string => {
+		let promptText = `<conversation>\n${conversation}\n</conversation>\n\n`;
+		if (previousSummary) {
+			promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
+		}
+		return promptText + basePrompt;
+	};
 
 	const completionOptions = createSummarizationOptions(
 		model,
@@ -737,10 +836,12 @@ export async function generateSummaryWithUsage(
 		sessionId,
 	);
 
-	const response = await completeSummarization(
+	const response = await completeSummaryWithOverflowRecovery(
+		currentMessages,
+		buildPrompt,
 		model,
-		buildSummarizationContext(promptText),
 		completionOptions,
+		"Summarization",
 		streamFn,
 		retry,
 		callbacks,
@@ -748,13 +849,18 @@ export async function generateSummaryWithUsage(
 
 	const failure = getSummarizationFailure(response, "Summarization", maxTokens);
 	if (failure) {
-		throw new Error(failure);
+		const error = new Error(failure);
+		if (response.stopReason === "aborted") error.name = "AbortError";
+		throw error;
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
 		throw new Error("Summarization attempted to call a tool");
 	}
 
 	const textContent = contentText(response.content);
+	if (!textContent.trim()) {
+		throw new Error("Summarization failed: response contained no summary text");
+	}
 
 	return { text: textContent, usage: response.usage };
 }
@@ -777,13 +883,16 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Loaded instructions that must survive model-generated summaries. */
+	activeSkills?: SkillInstruction[];
+	/** Compaction settings from settings.jsonl. */
 	settings: CompactionSettings;
 }
 
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	skillContext?: SkillInstructionContext,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -798,10 +907,12 @@ export function prepareCompaction(
 	}
 
 	let previousSummary: string | undefined;
+	let previousSkills: SkillInstruction[] = [];
 	let boundaryStart = 0;
 	if (prevCompactionIndex >= 0) {
 		const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
-		previousSummary = prevCompaction.summary;
+		previousSkills = prevCompaction.fromHook ? [] : readSavedSkillInstructions(prevCompaction.details);
+		previousSummary = stripSkillInstructions(prevCompaction.summary, previousSkills);
 		const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
 		boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1;
 	}
@@ -850,6 +961,12 @@ export function prepareCompaction(
 		}
 	}
 
+	const activeSkills = collectSkillInstructions(
+		convertToLlm([...messagesToSummarize, ...turnPrefixMessages]),
+		previousSkills,
+		skillContext,
+	);
+
 	return {
 		firstKeptEntryId,
 		messagesToSummarize,
@@ -858,6 +975,7 @@ export function prepareCompaction(
 		tokensBefore,
 		previousSummary,
 		fileOps,
+		...(activeSkills.length > 0 ? { activeSkills } : {}),
 		settings,
 	};
 }
@@ -906,6 +1024,7 @@ export async function compact(
 		tokensBefore,
 		previousSummary,
 		fileOps,
+		activeSkills = [],
 		settings,
 	} = preparation;
 
@@ -978,6 +1097,7 @@ export async function compact(
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
+	summary += formatSkillInstructions(activeSkills);
 
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no UUID - session may need migration");
@@ -988,7 +1108,11 @@ export async function compact(
 		firstKeptEntryId,
 		tokensBefore,
 		usage: summaryUsage,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
+		details: {
+			readFiles,
+			modifiedFiles,
+			...(activeSkills.length > 0 ? { activeSkills } : {}),
+		} as CompactionDetails,
 	};
 }
 
@@ -1012,14 +1136,12 @@ async function generateTurnPrefixSummary(
 	// Smaller output budget for turn-prefix summaries: the suffix of the turn
 	// is retained verbatim, so the summary only needs to describe the prefix.
 	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.5);
-	const llmMessages = convertToLlm(messages);
-	const conversationText = serializeConversation(llmMessages);
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-
-	const response = await completeSummarization(
+	const response = await completeSummaryWithOverflowRecovery(
+		messages,
+		(conversation) => `<conversation>\n${conversation}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`,
 		model,
-		buildSummarizationContext(promptText),
 		createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel, sessionId),
+		"Turn prefix summarization",
 		streamFn,
 		retry,
 		callbacks,
@@ -1027,14 +1149,20 @@ async function generateTurnPrefixSummary(
 
 	const failure = getSummarizationFailure(response, "Turn prefix summarization", maxTokens);
 	if (failure) {
-		throw new Error(failure);
+		const error = new Error(failure);
+		if (response.stopReason === "aborted") error.name = "AbortError";
+		throw error;
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
 		throw new Error("Turn prefix summarization attempted to call a tool");
 	}
+	const textContent = contentText(response.content);
+	if (!textContent.trim()) {
+		throw new Error("Turn prefix summarization failed: response contained no summary text");
+	}
 
 	return {
-		text: contentText(response.content),
+		text: textContent,
 		usage: response.usage,
 	};
 }

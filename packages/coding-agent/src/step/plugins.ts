@@ -14,9 +14,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";
+import { BorderedLoader } from "../components/bordered-loader.ts";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { resolveStepConfigDir } from "./environment.ts";
 import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
+import { isPathContained } from "./path-containment.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -194,11 +196,6 @@ function pathExists(candidate: string): Promise<boolean> {
 
 function isSafeName(value: string): boolean {
 	return SAFE_NAME.test(value) && value !== "." && value !== "..";
-}
-
-function isContained(root: string, candidate: string): boolean {
-	const relative = path.relative(path.resolve(root), path.resolve(candidate));
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function normalizeRelativePath(value: unknown): string | undefined {
@@ -404,11 +401,21 @@ export async function listStepPluginDirectories(root: string): Promise<string[]>
 	}
 }
 
-/** Discover installable entries from one or more local marketplace roots. */
+/**
+ * Discover installable entries from one or more local marketplace roots.
+ *
+ * The same marketplace checkout can be reachable from more than one root: the
+ * built-in marketplace is materialized under each root's `marketplaces`
+ * directory, and a project root is scanned alongside the global one. Roots are
+ * already ordered by precedence, so an entry is kept only the first time its
+ * name is seen and later duplicates are dropped — otherwise every built-in
+ * plugin would be listed once per root.
+ */
 export async function listMarketplacePlugins(
 	marketplaceRoots: readonly string[] = defaultMarketplaceRoots(),
 ): Promise<ListMarketplacePluginsResult> {
 	const entries: MarketplacePluginEntry[] = [];
+	const seenPluginNames = new Set<string>();
 	const warnings: string[] = [];
 	for (const root of marketplaceRoots) {
 		const candidates = (await findMarketplaceManifest(root)) ? [root] : await listStepPluginDirectories(root);
@@ -440,6 +447,10 @@ export async function listMarketplacePlugins(
 					warnings.push(`Marketplace '${marketplaceName}' entry '${name}' is not a safe plugin name; skipped.`);
 					continue;
 				}
+				// Dedupe before probing the source: a shadowed entry is never listed,
+				// so warning about its missing checkout would describe a problem the
+				// user does not have while the visible copy works.
+				if (seenPluginNames.has(name)) continue;
 				if (isRecord(value.source)) {
 					const sourceKind =
 						typeof value.source.source === "string" && value.source.source.trim()
@@ -453,7 +464,7 @@ export async function listMarketplacePlugins(
 						? value.source.trim()
 						: path.join("plugins", name);
 				const sourcePath = path.resolve(marketplaceDir, relative);
-				if (!isContained(marketplaceDir, sourcePath)) {
+				if (!isPathContained(marketplaceDir, sourcePath)) {
 					warnings.push(
 						`Marketplace '${marketplaceName}' entry '${name}' has a source outside the checkout; skipped.`,
 					);
@@ -465,6 +476,9 @@ export async function listMarketplacePlugins(
 					);
 					continue;
 				}
+				// Precedence is "first root wins": a project-level marketplace of the
+				// same name shadows the global copy rather than adding a second entry.
+				seenPluginNames.add(name);
 				entries.push({
 					name,
 					description: typeof value.description === "string" ? value.description : undefined,
@@ -496,7 +510,7 @@ export async function installMarketplacePlugin(
 ): Promise<{ installedPath: string; warnings: string[]; diagnostics: StepPluginDiagnostics }> {
 	if (!isSafeName(entry.name)) throw new Error(`'${entry.name}' is not a safe plugin name.`);
 	const target = path.resolve(pluginsDir, entry.name);
-	if (!isContained(pluginsDir, target) || path.basename(target) !== entry.name)
+	if (!isPathContained(pluginsDir, target) || path.basename(target) !== entry.name)
 		throw new Error(`'${entry.name}' is not an installed plugin name.`);
 	if (await pathExists(target))
 		throw new Error(`Plugin '${entry.name}' is already installed at ${target}. Remove it first.`);
@@ -597,7 +611,7 @@ export async function uninstallPlugin(pluginsDir: string, name: string): Promise
 	if (!isSafeName(name.trim())) throw new Error(`'${name}' is not an installed plugin name.`);
 	const root = path.resolve(pluginsDir);
 	const target = path.resolve(root, name.trim());
-	if (!isContained(root, target) || path.dirname(target) !== root)
+	if (!isPathContained(root, target) || path.dirname(target) !== root)
 		throw new Error(`'${name}' is not an installed plugin name.`);
 	const stat = await fs.lstat(target).catch(() => undefined);
 	if (!stat?.isDirectory()) throw new Error(`Plugin '${name}' is not installed in ${root}.`);
@@ -617,7 +631,7 @@ export async function diagnoseStepPlugin(
 	const mcpServers: string[] = [];
 	if (typeof read.manifest.mcpServers === "string") {
 		const declarationPath = path.resolve(pluginDir, read.manifest.mcpServers);
-		if (!isContained(pluginDir, declarationPath)) {
+		if (!isPathContained(pluginDir, declarationPath)) {
 			warnings.push(`MCP declaration ${read.manifest.mcpServers} escapes ${pluginDir}.`);
 		} else if (!(await pathExists(declarationPath))) {
 			warnings.push(`MCP declaration ${read.manifest.mcpServers} is missing from ${pluginDir}.`);
@@ -645,12 +659,11 @@ export async function diagnoseStepPlugin(
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
 	// Judged against the environment the matching servers are actually spawned
-	// with: `connectStepMcpServer` layers the process environment, the server's
-	// own declared `env`, and the Step login credential. Checking `process.env`
-	// alone reported every logged-in user as missing a variable they were never
-	// expected to export by hand. Only an inline `mcpServers` record can start a
-	// server — discovery skips a string declaration path — so that is the only
-	// shape whose declared `env` can satisfy a requirement.
+	// with: `connectStepMcpServer` layers the SDK's safe inherited environment,
+	// the server's own declared `env`, and the Step login credential. Only an
+	// inline `mcpServers` record can start a server — discovery skips a string
+	// declaration path — so that is the only shape whose declared `env` can
+	// satisfy a requirement.
 	const requiredEnvironment = read.manifest.provision?.requiresEnv ?? [];
 	if (requiredEnvironment.length > 0) {
 		const candidates = provisionedServerEnvironments(read.manifest).map((declared) =>
@@ -665,12 +678,12 @@ export async function diagnoseStepPlugin(
 		const missingOther = missingEnvironment.filter((name) => !STEP_LOGIN_SUPPLIED_ENV.includes(name));
 		if (missingLogin.length > 0) {
 			warnings.push(
-				`Plugin provisioning has no value for ${missingLogin.join(", ")}; run /login or export it before using this plugin.`,
+				`Plugin provisioning has no value for ${missingLogin.join(", ")}; run /login or declare it in the plugin's mcpServers env before using this plugin.`,
 			);
 		}
 		if (missingOther.length > 0) {
 			warnings.push(
-				`Plugin provisioning has no value for ${missingOther.join(", ")}; export it or declare it in the plugin's mcpServers env before using this plugin.`,
+				`Plugin provisioning has no value for ${missingOther.join(", ")}; declare it in the plugin's mcpServers env before using this plugin.`,
 			);
 		}
 	}
@@ -694,6 +707,73 @@ function provisionedServerEnvironments(manifest: StepPluginManifest): Array<Reco
 		return [env];
 	});
 	return declared.length > 0 ? declared : [undefined];
+}
+
+/**
+ * Resolve the skill and command directories contributed by installed plugins.
+ *
+ * A plugin's non-MCP contributions live beside its manifest rather than in the
+ * agent's own resource directories, so nothing finds them by default: MCP is the
+ * one contribution that reads the plugin root directly. This is the bridge for
+ * the other two, returning paths that `ResourceLoader.extendResources` accepts.
+ *
+ * Declared entries win over convention. A manifest that names `skills` /
+ * `commands` is taken at its word (resolved against the plugin root, and skipped
+ * when it escapes or does not exist); otherwise the conventional `skills/` and
+ * `commands/` directories are used when present. This mirrors how
+ * `readPluginManifestAtPath` fills those fields in for Claude-style manifests.
+ */
+export async function discoverStepPluginResourcePaths(input: {
+	userDir?: string;
+	projectDir?: string;
+	/** Project plugins are read only when the project is trusted, as MCP discovery does. */
+	projectTrusted?: boolean;
+}): Promise<{ skillPaths: string[]; promptPaths: string[]; warnings: string[] }> {
+	const warnings: string[] = [];
+	const seenByKind = { skills: new Set<string>(), commands: new Set<string>() };
+	const collected = { skills: [] as string[], commands: [] as string[] };
+	// An untrusted project must not inject skill instructions or prompt templates
+	// into the session, so its plugin root is skipped entirely. The global root is
+	// always read: it is the user's own configuration, not the checkout's.
+	const roots = [
+		...(input.projectTrusted && input.projectDir ? [input.projectDir] : []),
+		input.userDir ?? defaultStepPluginsDir(),
+	];
+
+	for (const root of roots) {
+		for (const pluginDir of await listStepPluginDirectories(root)) {
+			const read = await readStepPluginManifest(pluginDir);
+			if (!read.manifest) continue;
+			const manifest = read.manifest;
+			for (const key of ["skills", "commands"] as const) {
+				const declared = manifest[key];
+				// A declared empty array means "this plugin contributes none": honor
+				// it instead of falling through to a stale conventional directory.
+				const candidates =
+					declared !== undefined ? declared : (await pathExists(path.join(pluginDir, key))) ? [key] : [];
+				for (const relative of candidates) {
+					const resolved = path.resolve(pluginDir, relative);
+					if (!isPathContained(pluginDir, resolved)) {
+						warnings.push(
+							`Plugin '${manifest.id}' declares ${key} '${relative}', which is outside the plugin; skipped.`,
+						);
+						continue;
+					}
+					if (!(await pathExists(resolved))) {
+						warnings.push(`Plugin '${manifest.id}' declares ${key} '${relative}', which is missing; skipped.`);
+						continue;
+					}
+					// Dedupe within a kind, not across kinds: one directory can
+					// legitimately be both a skills root and a commands root.
+					const canonical = path.resolve(resolved);
+					if (seenByKind[key].has(canonical)) continue;
+					seenByKind[key].add(canonical);
+					collected[key].push(canonical);
+				}
+			}
+		}
+	}
+	return { skillPaths: collected.skills, promptPaths: collected.commands, warnings };
 }
 
 export async function listInstalledStepPlugins(
@@ -763,7 +843,7 @@ export async function ensureBuiltinMarketplace(
 		await fs.rm(target, { recursive: true, force: true });
 		for (const [relative, contents] of Object.entries(BUILTIN_MARKETPLACE_FILES)) {
 			const resolved = path.resolve(target, relative);
-			if (!isContained(target, resolved))
+			if (!isPathContained(target, resolved))
 				return { path: target, warnings: [`Built-in marketplace entry ${relative} escapes its directory.`] };
 			await fs.mkdir(path.dirname(resolved), { recursive: true });
 			await fs.writeFile(resolved, contents, "utf8");
@@ -907,7 +987,16 @@ export async function addMarketplaceSource(input: {
 	source: string;
 	marketplacesDir?: string;
 	name?: string;
+	/**
+	 * Called as the add moves through its stages. A git clone can run for a
+	 * minute or more, and a caller that only hears back on completion has no way
+	 * to show the user that anything is happening.
+	 */
+	onProgress?: (message: string) => void;
+	/** Aborts an in-flight clone when the caller's dialog is cancelled. */
+	signal?: AbortSignal;
 }): Promise<MarketplaceOperationResult> {
+	const report = input.onProgress ?? (() => {});
 	const source = input.source.trim();
 	if (!source) return { warnings: ["Marketplace source is empty."] };
 	const marketplacesDir = input.marketplacesDir ?? defaultStepMarketplacesDir();
@@ -945,8 +1034,8 @@ export async function addMarketplaceSource(input: {
 		const resolvedTarget = path.resolve(target);
 		if (
 			resolvedSource === resolvedTarget ||
-			isContained(resolvedSource, resolvedTarget) ||
-			isContained(resolvedTarget, resolvedSource)
+			isPathContained(resolvedSource, resolvedTarget) ||
+			isPathContained(resolvedTarget, resolvedSource)
 		) {
 			return {
 				warnings: [
@@ -960,16 +1049,17 @@ export async function addMarketplaceSource(input: {
 		if (sourcePath) {
 			const local = path.resolve(sourcePath);
 			if (!(await pathExists(local))) return { warnings: [`Marketplace source does not exist: ${local}`] };
+			report(`Copying ${local}`);
 			await fs.cp(local, target, { recursive: true, errorOnExist: true, force: false });
 		} else {
-			await execFileAsync("git", ["clone", "--depth", "1", "--quiet", "--", cloneSource!, target], {
-				timeout: 120_000,
-			});
+			report(`Cloning repository (timeout: 120s): ${cloneSource}`);
+			await cloneMarketplace(cloneSource!, target, report, input.signal);
 		}
 	} catch (error) {
 		await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
 		return { warnings: [`Could not add marketplace '${cloneName}': ${describe(error)}`] };
 	}
+	report("Reading marketplace manifest");
 	if (!(await findMarketplaceManifest(target))) {
 		await fs.rm(target, { recursive: true, force: true });
 		return { warnings: [`${source} has no marketplace manifest; it was not added.`] };
@@ -985,6 +1075,50 @@ export async function addMarketplaceSource(input: {
 	};
 }
 
+/**
+ * Clone a marketplace, forwarding git's progress lines as they arrive.
+ *
+ * `--progress` is what makes git emit percentage updates to stderr when it is
+ * not attached to a terminal; without it a large clone is silent until it
+ * finishes, which is indistinguishable from a hang.
+ */
+async function cloneMarketplace(
+	cloneSource: string,
+	target: string,
+	report: (message: string) => void,
+	signal?: AbortSignal,
+): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
+		const child = execFile(
+			"git",
+			["clone", "--depth", "1", "--progress", "--", cloneSource, target],
+			{ timeout: 120_000, ...(signal ? { signal } : {}) },
+			(error) => (error ? reject(error) : resolve()),
+		);
+		let pending = "";
+		child.stderr?.on("data", (chunk: Buffer | string) => {
+			pending += chunk.toString();
+			// Keep the trailing partial line: a chunk can end mid-update, and the
+			// rest arrives in the next one.
+			const parts = splitCloneProgress(pending);
+			pending = parts.pop() ?? "";
+			for (const line of parts) report(`Cloning repository: ${line}`);
+		});
+	});
+}
+
+/**
+ * Split accumulated git output into complete progress lines, keeping the last
+ * partial line as the final element.
+ *
+ * git redraws its progress with carriage returns instead of newlines, so
+ * splitting on newlines alone would hold the whole transfer in the buffer and
+ * leave the caller with a single update at the end.
+ */
+export function splitCloneProgress(pending: string): string[] {
+	return pending.split(/[\r\n]+/u).map((line) => line.trim());
+}
+
 export async function removeMarketplaceSource(input: {
 	name: string;
 	marketplacesDir?: string;
@@ -994,7 +1128,7 @@ export async function removeMarketplaceSource(input: {
 		return { warnings: [`Marketplace '${name}' cannot be removed.`] };
 	const root = input.marketplacesDir ?? defaultStepMarketplacesDir();
 	const target = path.resolve(root, name);
-	if (!isContained(root, target) || path.dirname(target) !== path.resolve(root))
+	if (!isPathContained(root, target) || path.dirname(target) !== path.resolve(root))
 		return { warnings: [`Marketplace '${name}' is not a valid name.`] };
 	if (!(await pathExists(target))) return { warnings: [`No marketplace named '${name}' is configured.`] };
 	const isGitCheckout = await pathExists(path.join(target, ".git"));
@@ -1034,6 +1168,43 @@ interface InteractivePluginOptions extends StepPluginCommandOptions {
 	marketplaceRoots: readonly string[];
 }
 
+/**
+ * Contribute installed plugins' skills and commands to the session.
+ *
+ * MCP is discovered by reading the plugin root directly, but skills and commands
+ * are consumed by `ResourceLoader` from agent/project resource directories that
+ * plugins do not write to. This extension is the bridge: it answers
+ * `resources_discover` with the plugin-owned paths, which the loader already
+ * knows how to merge (`extendResources`) and re-merge on reload, so a plugin
+ * installed during a session takes effect on the next resource reload instead of
+ * requiring a restart.
+ *
+ * Failures are reported as warnings on the extension error channel rather than
+ * thrown: a broken plugin must not cost the session its other resources.
+ */
+export function createStepPluginResourcesExtension(): ExtensionFactory {
+	return (pi: ExtensionAPI): void => {
+		pi.on("resources_discover", async (_event, ctx) => {
+			const projectDir = defaultStepPluginsDir(process.env, { cwd: ctx.cwd, project: true });
+			try {
+				const discovered = await discoverStepPluginResourcePaths({
+					projectDir,
+					projectTrusted: ctx.isProjectTrusted(),
+					userDir: defaultStepPluginsDir(process.env),
+				});
+				// Surface a malformed declaration once, on the channel the loader
+				// already uses for resource diagnostics, rather than throwing: the
+				// rest of the plugins' resources must still load.
+				for (const warning of discovered.warnings) ctx.ui?.notify?.(warning, "warning");
+				return { skillPaths: discovered.skillPaths, promptPaths: discovered.promptPaths };
+			} catch (error) {
+				ctx.ui?.notify?.(`Could not read plugin resources: ${describe(error)}`, "warning");
+				return {};
+			}
+		});
+	};
+}
+
 function reportPluginWarnings(say: PluginNotice, warnings: readonly string[]): void {
 	if (warnings.length > 0) say(warnings.join("\n"), "warning");
 }
@@ -1055,18 +1226,18 @@ async function openInteractivePluginMenu(
 	options: InteractivePluginOptions,
 	say: PluginNotice,
 ): Promise<void> {
-	// Materialize the built-in source before reading the source list so its
-	// count is stable in the top-level menu.
+	// Materialize the built-in source before listing so the available count is
+	// stable in the top-level menu.
 	const available = await loadAvailablePlugins(options);
-	const [installed, sources] = await Promise.all([
-		listInstalledStepPlugins({ userDir: options.pluginsDir, projectDir: projectPluginsDir(ctx) }),
-		listMarketplaceSources(options.marketplacesDir),
-	]);
+	const installed = await listInstalledStepPlugins({
+		userDir: options.pluginsDir,
+		projectDir: projectPluginsDir(ctx),
+	});
 	reportPluginWarnings(say, [...installed.warnings, ...available.builtinWarnings, ...available.warnings]);
 	const choices = [
 		`Installed (${installed.plugins.length})`,
-		`Marketplace (${available.entries.length} available)`,
-		`Marketplaces (${sources.length})`,
+		`All Plugins (${available.entries.length} available)`,
+		"Marketplaces",
 	];
 	const selected = await ctx.ui.select("Plugins", choices);
 	if (selected === choices[0]) await openInstalledPlugins(ctx, options, say);
@@ -1152,7 +1323,11 @@ async function openMarketplacePlugins(
 		const state = installedIds.has(entry.name) ? " · installed" : "";
 		return `${entry.name} · ${entry.marketplace}${state}`;
 	});
-	const selected = await ctx.ui.select(`Marketplace (${available.entries.length} available)`, labels);
+	const selected = await ctx.ui.select(`All Plugins (${available.entries.length} available)`, labels, {
+		// A marketplace can carry hundreds of plugins, so this list is the one
+		// place that needs a query rather than a scroll.
+		searchable: true,
+	});
 	if (!selected) return;
 	const index = labels.indexOf(selected);
 	const entry = index >= 0 ? available.entries[index] : undefined;
@@ -1192,6 +1367,41 @@ async function openMarketplacePluginDetails(
 	}
 }
 
+/**
+ * Run `work` behind a spinner that shows the latest progress message.
+ *
+ * The marketplace add is the one `/plugin` action that can take minutes, and it
+ * used to hand the terminal back to the editor for its whole duration. The
+ * spinner keeps the dialog mounted and updates in place; hosts without a UI
+ * (print, RPC) simply run the work, since they have nothing to render into.
+ */
+async function runWithProgress<T>(
+	ctx: ExtensionCommandContext,
+	work: (report: (message: string) => void, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	if (!ctx.hasUI || ctx.mode !== "tui") return work(() => undefined, new AbortController().signal);
+	const settled = await ctx.ui.custom<{ ok: true; value: T } | { ok: false; error: unknown }>(
+		(tui, theme, _keybindings, done) => {
+			// Cancellable: a clone can run for the full two-minute timeout, and a
+			// mistyped URL should not hold the command hostage with no way out.
+			const loader = new BorderedLoader(tui, theme, "Working...", { cancellable: true });
+			const controller = new AbortController();
+			loader.onAbort = () => controller.abort();
+			void work((message) => loader.setMessage(message), controller.signal).then(
+				(value) => done({ ok: true, value }),
+				// The failure travels back as a value so the dialog always unmounts
+				// before the caller reports it; rejecting through the dialog would
+				// leave the spinner on screen next to the error.
+				(error: unknown) => done({ ok: false, error }),
+			);
+			return loader;
+		},
+		{ hideFooter: true },
+	);
+	if (settled.ok) return settled.value;
+	throw settled.error;
+}
+
 async function openMarketplaceSources(
 	ctx: ExtensionCommandContext,
 	options: InteractivePluginOptions,
@@ -1200,24 +1410,45 @@ async function openMarketplaceSources(
 	const builtin = await ensureBuiltinMarketplace({ marketplacesDir: options.marketplacesDir });
 	const sources = await listMarketplaceSources(options.marketplacesDir);
 	reportPluginWarnings(say, builtin.warnings);
-	const labels = sources.map((source) =>
-		source.kind === "builtin" ? `${source.name} · built in` : `${source.name} · ${source.kind}`,
-	);
+	// The built-in source ships with the CLI: it cannot be updated or removed, so
+	// listing it here would only add a row that does nothing. It stays out of the
+	// labels and the parallel `sources` slice so the index lookup stays aligned.
+	const manageable = sources.filter((source) => source.kind !== "builtin");
+	const labels = manageable.map((source) => `${source.name} · ${source.kind}`);
 	const addLabel = "Add marketplace";
-	const selected = await ctx.ui.select(`Marketplaces (${sources.length})`, [...labels, addLabel]);
+	const selected = await ctx.ui.select("Marketplaces", [...labels, addLabel]);
 	if (!selected) return;
 	if (selected === addLabel) {
-		const source = await ctx.ui.input("Add marketplace", "git URL, owner/repo, or local path");
+		const source = await ctx.ui.input("Add Marketplace\nEnter marketplace source:", undefined, {
+			examples: [
+				"owner/repo (GitHub)",
+				"git@github.com:owner/repo.git (SSH)",
+				"https://example.com/marketplace.json",
+				"./path/to/marketplace",
+			],
+		});
 		if (!source?.trim()) return;
-		const added = await addMarketplaceSource({ source, marketplacesDir: options.marketplacesDir });
+		const added = await runWithProgress(ctx, (report, signal) =>
+			addMarketplaceSource({
+				source,
+				marketplacesDir: options.marketplacesDir,
+				onProgress: report,
+				signal,
+			}),
+		);
 		say(
 			[...(added.source ? [`Added marketplace '${added.source.name}'.`] : []), ...added.warnings].join("\n"),
 			added.source ? "info" : "warning",
 		);
+		// Land on the new marketplace's plugins instead of bouncing back to the
+		// source list: adding a source is only ever a step toward installing from it.
+		// A failed add keeps the user where they are so the warning stays adjacent
+		// to the list they can retry from.
+		if (added.source) await openMarketplacePlugins(ctx, options, say);
 		return;
 	}
 	const index = labels.indexOf(selected);
-	const source = index >= 0 ? sources[index] : undefined;
+	const source = index >= 0 ? manageable[index] : undefined;
 	if (source) await openMarketplaceSourceDetails(ctx, options, source, say);
 }
 
@@ -1227,10 +1458,8 @@ async function openMarketplaceSourceDetails(
 	source: MarketplaceSource,
 	say: PluginNotice,
 ): Promise<void> {
-	if (source.kind === "builtin") {
-		say(`${source.name} ships with StepCode and cannot be updated or removed.`);
-		return;
-	}
+	// `openMarketplaceSources` filters the built-in source out of the list, so
+	// only user-added marketplaces reach here — and both can be updated/removed.
 	const details = `${source.origin ?? source.path}\nKind: ${source.kind}`;
 	const selected = await ctx.ui.select(`${source.name}\n${details}`, ["Update", "Remove", "Back"]);
 	if (selected === "Back") {
@@ -1311,26 +1540,42 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 						return;
 					}
 					case "install": {
-						const name = action[1];
-						if (!name) {
+						// Accept the `name@marketplace` spelling that Claude Code uses
+						// alongside a bare name; the marketplace half only narrows the
+						// search, since a plugin name alone is already unambiguous here.
+						const requested = action[1];
+						if (!requested) {
 							say("Usage: /plugin install <name>", "warning");
 							return;
 						}
+						const { name, marketplace } = parsePluginSpecifier(requested);
 						await ensureBuiltinMarketplace({ marketplacesDir });
 						const available = await listMarketplacePlugins(
 							options.marketplacesDir || options.storageRootDir
 								? [marketplacesDir]
 								: defaultMarketplaceRoots(process.env, { includeProject: true }),
 						);
-						const entry = available.entries.find((candidate) => candidate.name === name);
+						const matches = available.entries.filter(
+							(candidate) => candidate.name === name && (!marketplace || candidate.marketplace === marketplace),
+						);
+						const entry = matches[0];
 						if (!entry) {
-							say(`No marketplace entry named '${name}' is available locally.`, "warning");
+							// Name the marketplaces that do carry this plugin: the bare name
+							// resolves across all of them, so a wrong marketplace half is
+							// the one failure the user cannot see from the message alone.
+							const elsewhere = available.entries.filter((candidate) => candidate.name === name);
+							const alternatives =
+								elsewhere.length > 0
+									? ` It is available from: ${[...new Set(elsewhere.map((candidate) => candidate.marketplace))].join(", ")}.`
+									: "";
+							const wanted = marketplace ? `'${name}' from '${marketplace}'` : `'${name}'`;
+							say(`No marketplace entry named ${wanted} is available locally.${alternatives}`, "warning");
 							return;
 						}
 						const installed = await installMarketplacePlugin(entry, pluginsDir);
 						say(
 							[
-								`Installed ${name} from ${entry.marketplace} to ${installed.installedPath}.`,
+								`Installed ${entry.name} from ${entry.marketplace} to ${installed.installedPath}.`,
 								"Restart Step to start the plugin's MCP server.",
 								...installed.warnings,
 							].join("\n"),
@@ -1455,6 +1700,32 @@ export function buildManifestFromMarketplaceEntry(entry: MarketplacePluginEntry)
 		} else if (key === "provision" && isRecord(source[key])) manifest.provision = source[key] as never;
 	}
 	return manifest;
+}
+
+/**
+ * Split the `name@marketplace` spelling into its two halves.
+ *
+ * The marketplace half is optional: a bare name is what `/plugin install` has
+ * always accepted, and Step resolves a name across every configured
+ * marketplace rather than requiring the qualifier.
+ */
+/**
+ * Split the `name@marketplace` spelling into its two halves.
+ *
+ * Only the last `@` can introduce the qualifier, and only when it is not the
+ * first character — a scoped npm-style name such as `@scope/plugin` has no
+ * qualifier at all. A name that itself contains `@` (`foo@bar@baz`) is
+ * ambiguous, so the whole specifier is taken as the name rather than silently
+ * resolving to `foo@bar` and reporting a marketplace miss the user cannot see.
+ */
+function parsePluginSpecifier(specifier: string): { name: string; marketplace?: string } {
+	const trimmed = specifier.trim();
+	const separator = trimmed.lastIndexOf("@");
+	if (separator <= 0) return { name: trimmed };
+	const name = trimmed.slice(0, separator);
+	const marketplace = trimmed.slice(separator + 1);
+	if (!marketplace.trim() || name.includes("@")) return { name: trimmed };
+	return { name, marketplace: marketplace.trim() };
 }
 
 function deriveMarketplaceName(source: string): string | undefined {

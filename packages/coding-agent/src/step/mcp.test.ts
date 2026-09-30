@@ -46,6 +46,32 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+test("inherits only the MCP SDK safe environment defaults", () => {
+	const resolved = resolveStepMcpEnvironment(undefined, {
+		env: {
+			PATH: "/bin",
+			AWS_SECRET_ACCESS_KEY: "aws-secret",
+			OPENAI_API_KEY: "openai-secret",
+			UNRELATED_PRIVATE_TOKEN: "private",
+		},
+		authPath: "/definitely/missing/auth.json",
+	});
+
+	expect(resolved).toEqual({ PATH: "/bin" });
+});
+
+test("adds explicitly declared server variables without inheriting unrelated secrets", () => {
+	const resolved = resolveStepMcpEnvironment(
+		{ SERVER_TOKEN: "declared", PATH: "/server/bin" },
+		{
+			env: { PATH: "/shell/bin", UNRELATED_PRIVATE_TOKEN: "private" },
+			authPath: "/definitely/missing/auth.json",
+		},
+	);
+
+	expect(resolved).toEqual({ PATH: "/server/bin", SERVER_TOKEN: "declared" });
+});
+
 test("uses the logged-in Step credential only as a server env fallback", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "step-mcp-auth-"));
 	roots.push(root);
@@ -69,7 +95,7 @@ test("uses the logged-in Step credential only as a server env fallback", async (
 	expect(resolved.STEPFUN_API_KEY).toBe("login-key");
 });
 
-test("explicit declaration wins over both shell and login credentials", async () => {
+test("explicit declaration wins over the login credential", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "step-mcp-auth-"));
 	roots.push(root);
 	const authPath = path.join(root, "auth.json");

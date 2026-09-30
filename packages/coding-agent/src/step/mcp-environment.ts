@@ -8,6 +8,7 @@
  * describes starts fine.
  */
 
+import { DEFAULT_INHERITED_ENV_VARS } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import { getStepAuthPath } from "./auth.ts";
 
@@ -18,13 +19,22 @@ import { getStepAuthPath } from "./auth.ts";
  */
 export const STEP_LOGIN_SUPPLIED_ENV: readonly string[] = ["STEPFUN_API_KEY"];
 
-/** Resolve the environment passed to a plugin server, including Step login fallback. */
+/**
+ * Resolve the environment passed to a plugin server, including Step login fallback.
+ *
+ * Match the MCP SDK's default environment allowlist instead of exposing every
+ * variable held by the Step process to an arbitrary local MCP executable.
+ */
 export function resolveStepMcpEnvironment(
 	declared: Record<string, string> | undefined,
 	input: { env?: NodeJS.ProcessEnv; authPath?: string } = {},
 ): Record<string, string> {
 	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(input.env ?? process.env)) if (value !== undefined) resolved[key] = value;
+	const inherited = input.env ?? process.env;
+	for (const key of DEFAULT_INHERITED_ENV_VARS) {
+		const value = inherited[key];
+		if (value !== undefined && !value.startsWith("()")) resolved[key] = value;
+	}
 	Object.assign(resolved, declared ?? {});
 	if (!resolved.STEPFUN_API_KEY?.trim()) {
 		const credential = readStoredCredential("step", input.authPath ?? getStepAuthPath());

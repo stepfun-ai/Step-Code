@@ -112,7 +112,13 @@ describe("mandatory command approval", () => {
 	it.each([
 		"mkfs.ext4 /dev/test",
 		"dd if=image of=/dev/test",
+		"dd of=/dev/test if=image",
 		"git reset --hard",
+		"git push -f origin main",
+		"git push origin main -f",
+		"git push --force-with-lease=main:expected origin main",
+		":> /dev/test",
+		": >/dev/test",
 		"sudo reboot",
 		"sh -c 'shutdown now'",
 	])("preserves existing hazardous commands: %s", (command) => {

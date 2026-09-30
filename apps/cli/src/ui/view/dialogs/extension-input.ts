@@ -3,7 +3,16 @@
  */
 
 import { DynamicBorder, keyHint, theme } from "@step-harness/coding-agent";
-import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@step-harness/pi-tui";
+import {
+	Container,
+	type Focusable,
+	getKeybindings,
+	Input,
+	Spacer,
+	Text,
+	type TUI,
+	truncateToWidth,
+} from "@step-harness/pi-tui";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { renderStepDialogFrame, splitStepDialogTitle } from "./step-dialog.ts";
 
@@ -11,6 +20,8 @@ export interface ExtensionInputOptions {
 	tui?: TUI;
 	timeout?: number;
 	presentation?: "native" | "step";
+	/** Reference lines listed under the title while the input is still empty. */
+	examples?: readonly string[];
 }
 
 export class ExtensionInputComponent extends Container implements Focusable {
@@ -22,6 +33,7 @@ export class ExtensionInputComponent extends Container implements Focusable {
 	private currentTitle: string;
 	private countdown: CountdownTimer | undefined;
 	private readonly placeholder: string | undefined;
+	private readonly examples: readonly string[];
 	private readonly presentation: "native" | "step";
 
 	// Focusable implementation - propagate to input for IME cursor positioning
@@ -48,6 +60,7 @@ export class ExtensionInputComponent extends Container implements Focusable {
 		this.baseTitle = title;
 		this.currentTitle = title;
 		this.placeholder = placeholder;
+		this.examples = opts?.examples ?? [];
 		this.presentation = opts?.presentation ?? "native";
 
 		this.addChild(new DynamicBorder());
@@ -90,6 +103,17 @@ export class ExtensionInputComponent extends Container implements Focusable {
 		}
 	}
 
+	/** The examples block, listed under the title above the editable row. */
+	private renderExamples(contentWidth: number): string[] {
+		if (this.examples.length === 0) return [];
+		const rows = [theme.fg("muted", "Examples:")];
+		for (const example of this.examples) {
+			rows.push(theme.fg("dim", truncateToWidth(`  · ${example}`, contentWidth, "…", false)));
+		}
+		rows.push("");
+		return rows;
+	}
+
 	dispose(): void {
 		this.countdown?.dispose();
 	}
@@ -105,6 +129,7 @@ export class ExtensionInputComponent extends Container implements Focusable {
 		if (heading.length > 0) rows.push(theme.fg("accent", theme.bold(`● ${heading}`)));
 		for (const line of body) rows.push(theme.fg("muted", line));
 		if (rows.length > 0) rows.push("");
+		for (const row of this.renderExamples(contentWidth)) rows.push(row);
 
 		let inputLine = this.input.render(contentWidth)[0] ?? "> ";
 		if (this.input.getValue().length === 0 && this.placeholder) {

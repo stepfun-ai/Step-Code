@@ -23,6 +23,7 @@ export interface ProjectTrustUiPrimitives {
 		title: string,
 		placeholder?: string,
 		paths?: StartupTuiPathOptions,
+		examples?: readonly string[],
 	) => Promise<string | undefined>;
 }
 
@@ -80,7 +81,7 @@ export function createProjectTrustContext(options: {
 					)) ?? false
 				);
 			},
-			input: async (title, placeholder) => {
+			input: async (title, placeholder, opts) => {
 				if (!options.hasUI) {
 					return undefined;
 				}
@@ -90,7 +91,7 @@ export function createProjectTrustContext(options: {
 				if (!showStartupInput) {
 					return undefined;
 				}
-				return showStartupInput(options.settingsManager, title, placeholder, options.paths);
+				return showStartupInput(options.settingsManager, title, placeholder, options.paths, opts?.examples);
 			},
 			notify: (message, type = "info") => {
 				if (options.mode !== "interactive") {

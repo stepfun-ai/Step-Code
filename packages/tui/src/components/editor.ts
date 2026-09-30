@@ -849,7 +849,10 @@ export class Editor implements Component, Focusable {
 		if (kb.matches(data, "tui.editor.cursorUp")) {
 			if (
 				this.isOnFirstVisualLine() &&
-				(this.isEditorEmpty() || this.historyIndex > -1 || this.state.cursorCol === 0)
+				(this.isEditorEmpty() ||
+					this.historyIndex > -1 ||
+					this.state.lines.length === 1 ||
+					this.state.cursorCol === 0)
 			) {
 				this.navigateHistory(-1);
 			} else if (this.isOnFirstVisualLine()) {

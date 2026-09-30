@@ -14,7 +14,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type {
 	Agent,
 	AgentContext,
@@ -34,6 +34,7 @@ import type {
 	Model,
 	ProviderHeaders,
 	TextContent,
+	ToolResultMessage,
 	Usage,
 } from "@step-harness/providers/compat";
 import {
@@ -48,6 +49,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@step-harness/providers/compat";
+import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { sleep } from "../utils/sleep.ts";
@@ -114,34 +116,10 @@ import { type BuildSystemPromptOptions, buildSystemPrompt, type SystemPromptProd
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { boundToolResultContent } from "./tools/tool-output.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
-// ============================================================================
-// Skill Block Parsing
-// ============================================================================
-
-/** Parsed skill block from a user message */
-export interface ParsedSkillBlock {
-	name: string;
-	location: string;
-	content: string;
-	userMessage: string | undefined;
-}
-
-/**
- * Parse a skill block from message text.
- * Returns null if the text doesn't contain a skill block.
- */
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-	const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
-	if (!match) return null;
-	return {
-		name: match[1],
-		location: match[2],
-		content: match[3],
-		userMessage: match[4]?.trim() || undefined,
-	};
-}
+export { type ParsedSkillBlock, parseSkillBlock } from "../utils/skill-block.ts";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -500,6 +478,14 @@ export class AgentSession {
 		}
 	}
 
+	private _boundToolContent(content: ToolResultMessage["content"], signal?: AbortSignal) {
+		return boundToolResultContent(
+			content,
+			join(this.sessionManager.getSessionDir() || this._agentDir || getAgentDir(), "tool-output"),
+			signal,
+		);
+	}
+
 	/**
 	 * Install tool hooks once on the Agent instance.
 	 *
@@ -509,6 +495,8 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
+		this.agent.transformToolResult = (content, signal) => this._boundToolContent(content, signal);
+
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
@@ -712,7 +700,7 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
-	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+	private _handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -736,7 +724,7 @@ export class AgentSession {
 		}
 
 		// Emit to extensions first
-		await this._emitExtensionEvent(event);
+		await this._emitExtensionEvent(event, signal);
 
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
@@ -838,7 +826,7 @@ export class AgentSession {
 	}
 
 	/** Emit extension events based on agent events */
-	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
+	private async _emitExtensionEvent(event: AgentEvent, signal?: AbortSignal): Promise<void> {
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
 			await this._extensionRunner.emit({ type: "agent_start" });
@@ -882,7 +870,7 @@ export class AgentSession {
 			if (replacement) {
 				// Untyped extension handlers can return messages with null/missing content;
 				// normalize so it never enters agent state or session history.
-				const normalized =
+				let normalized =
 					(replacement.role === "user" ||
 						replacement.role === "assistant" ||
 						replacement.role === "toolResult" ||
@@ -890,6 +878,28 @@ export class AgentSession {
 					replacement.content == null
 						? ({ ...replacement, content: [] } as AgentMessage)
 						: replacement;
+				// message_end replacements happen after terminal tool events. Bound an
+				// accepted replacement before the shared message is persisted or replayed.
+				if (normalized.role === "toolResult") {
+					try {
+						normalized = { ...normalized, content: await this._boundToolContent(normalized.content, signal) };
+					} catch (error) {
+						const reason = error instanceof Error ? error.message.slice(0, 512) : "Unknown retention error";
+						normalized = {
+							...normalized,
+							isError: true,
+							content: [
+								{
+									type: "text",
+									text: `Tool result replacement could not be retained: ${reason}. The tool may already have run; check its effects before repeating a state-changing call.`,
+								},
+								...(Array.isArray(normalized.content)
+									? normalized.content.filter((part) => part?.type === "image")
+									: []),
+							],
+						};
+					}
+				}
 				this._replaceMessageInPlace(event.message, normalized);
 			}
 		} else if (event.type === "tool_execution_start") {
@@ -1469,7 +1479,7 @@ export class AgentSession {
 	private _expandSkillCommand(text: string): string {
 		if (!text.startsWith("/skill:")) return text;
 
-		const spaceIndex = text.indexOf(" ");
+		const spaceIndex = text.search(/\s/u);
 		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
 
@@ -2080,7 +2090,10 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			const preparation = prepareCompaction(pathEntries, settings, {
+				cwd: this._cwd,
+				skills: this._resourceLoader.getSkills().skills,
+			});
 			if (!preparation) {
 				// Check why we can't compact
 				const lastEntry = pathEntries[pathEntries.length - 1];
@@ -2384,7 +2397,10 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			const preparation = prepareCompaction(pathEntries, settings, {
+				cwd: this._cwd,
+				skills: this._resourceLoader.getSkills().skills,
+			});
 			if (!preparation) {
 				return false;
 			}
