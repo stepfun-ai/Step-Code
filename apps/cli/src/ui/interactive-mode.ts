@@ -234,7 +234,14 @@ export function applyStepKeybindingRemap(keybindings: KeybindingsManager): void 
  * model/effort/mode switches most often, so they lead the list instead of
  * following builtin registration order (feedback issue-c6b8e3bb543482b7).
  */
-const STEP_SLASH_COMMAND_PRIORITY: readonly string[] = ["model", "permissions", "effort", "thinking", "plan"];
+const STEP_SLASH_COMMAND_PRIORITY: readonly string[] = [
+	"model",
+	"permissions",
+	"ultracode",
+	"effort",
+	"thinking",
+	"plan",
+];
 
 /** Exported for the acceptance test suite (tui-acceptance-interactions.test.ts). */
 // 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/input-dispatch.ts —— 斜杠命令分派属于交互编排。
@@ -727,6 +734,9 @@ export class InteractiveMode {
 					thinkingLevel: this.session.model?.reasoning ? this.session.thinkingLevel : undefined,
 					workspaceRoot: this.sessionManager.getCwd(),
 					sessionId: this.sessionManager.getSessionId(),
+					ultracodeAvailable:
+						this.session.getAllTools().some((tool) => tool.name === "workflow") &&
+						this.session.extensionRunner.getCommand("ultracode") !== undefined,
 				}),
 				{
 					requestRender: () => this.redraw.requestRender(),

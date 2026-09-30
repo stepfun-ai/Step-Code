@@ -2,14 +2,27 @@
  * TUI 验收交互套件（第 2 层）—— 对应《tui-acceptance-manual.md》F2/F6/F7/K6 项。
  *
  * 验证三件交互级行为（不经真实终端）：
- * - F2 斜杠命令优先级：model/permissions/effort/thinking/plan 置顶，其余稳定排序；
+ * - F2 斜杠命令优先级：model/permissions/ultracode/effort/thinking/plan 置顶，其余稳定排序；
  * - F7/K6 Ctrl+L 重映射：step 模式 ctrl+l → app.redraw，model.select 让位；
  *   native 模式不受影响；用户显式绑定永远优先。
  */
 
-import { describe, expect, test, vi } from "vitest";
+import {
+	type AgentSession,
+	type AgentSessionRuntimeHost,
+	createSyntheticSourceInfo,
+	type ResolvedCommand,
+	SessionManager,
+	SettingsManager,
+	stopThemeWatcher,
+	type ToolInfo,
+} from "@step-harness/coding-agent";
+import { type AutocompleteProvider, stripTerminalSequences, TuiMainScreen } from "@step-harness/pi-tui";
+import { Type } from "typebox";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../../../packages/coding-agent/src/core/keybindings.ts";
-import { applyStepKeybindingRemap, orderStepSlashCommands } from "../src/ui/interactive-mode.ts";
+import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
+import { applyStepKeybindingRemap, InteractiveMode, orderStepSlashCommands } from "../src/ui/interactive-mode.ts";
 
 describe("F2. 斜杠命令优先级", () => {
 	test("高频命令置顶，其余保持原有相对顺序", () => {
@@ -30,6 +43,129 @@ describe("F2. 斜杠命令优先级", () => {
 	test("无优先级命中时原样返回", () => {
 		const commands = [{ name: "b" }, { name: "a" }];
 		expect(orderStepSlashCommands(commands).map((command) => command.name)).toEqual(["b", "a"]);
+	});
+
+	test("pins registered Ultracode near the top while keeping Ultraloop in the remaining commands", () => {
+		const names = ["settings", "ultraloop", "model", "permissions", "effort", "thinking", "plan", "ultracode", "quit"];
+		const commands = names.map((name) => ({ name }));
+		const ordered = orderStepSlashCommands(commands).map((command) => command.name);
+
+		expect(ordered.slice(0, 6)).toEqual(["model", "permissions", "ultracode", "effort", "thinking", "plan"]);
+		expect(ordered.slice(6)).toEqual(["settings", "ultraloop", "quit"]);
+		expect(commands.map((command) => command.name)).toEqual(names);
+	});
+
+	test("does not invent an Ultracode command when only the alias is registered", () => {
+		const commands = ["settings", "ultraloop", "model"].map((name) => ({ name }));
+		expect(orderStepSlashCommands(commands).map((command) => command.name)).toEqual([
+			"model",
+			"settings",
+			"ultraloop",
+		]);
+	});
+});
+
+describe("Ultracode discovery from session registration", () => {
+	const modes: InteractiveMode[] = [];
+	const sourceInfo = createSyntheticSourceInfo("test:ultracode", { source: "test" });
+	const workflow: ToolInfo = {
+		name: "workflow",
+		description: "Workflow orchestration",
+		parameters: Type.Object({}),
+		sourceInfo,
+	};
+
+	function createMode(getAllTools: AgentSession["getAllTools"], commandNames: string[]): InteractiveMode {
+		vi.spyOn(TuiMainScreen.prototype, "requestRender").mockImplementation(() => {});
+		const commands = commandNames.map<ResolvedCommand>((name) => ({
+			name,
+			invocationName: name,
+			sourceInfo,
+			handler: async () => {},
+		}));
+		// Exercise the real UI constructor without starting a terminal, model, or workflow.
+		const runtimeHost = {
+			services: { agentDir: "/tmp/welcome-registration-test/.step" },
+			setBeforeSessionInvalidate: () => {},
+			setRebindSession: () => {},
+			session: {
+				sessionManager: SessionManager.inMemory("/tmp/welcome-registration-test"),
+				settingsManager: SettingsManager.inMemory({ theme: "step-blue", enableSkillCommands: false }),
+				resourceLoader: { getThemes: () => ({ themes: [] }) },
+				promptTemplates: [],
+				getAllTools,
+				getActiveToolNames: () => [],
+				extensionRunner: {
+					getRegisteredCommands: () => commands,
+					getCommand: (name: string) => commands.find((command) => command.invocationName === name),
+				},
+			},
+		};
+		const mode = new InteractiveMode(runtimeHost as unknown as AgentSessionRuntimeHost, {
+			tuiStyle: "step",
+			tuiMode: "regular",
+		});
+		modes.push(mode);
+		return mode;
+	}
+
+	afterEach(() => {
+		for (const mode of modes) mode.stop();
+		modes.length = 0;
+		stopThemeWatcher();
+		initTheme("dark");
+		vi.restoreAllMocks();
+	});
+
+	test("shows the welcome command for deferred workflow tools and refreshes availability", () => {
+		const getAllTools = vi.fn((): ToolInfo[] => [workflow]);
+		const mode = createMode(getAllTools, ["ultracode", "ultraloop"]);
+
+		expect(mode.stepWelcome?.render(120).join("\n")).toContain("/ultracode on");
+		getAllTools.mockReturnValue([]);
+		expect(mode.stepWelcome?.render(120).join("\n")).not.toContain("ultracode");
+		getAllTools.mockReturnValue([workflow]);
+		expect(mode.stepWelcome?.render(120).join("\n")).toContain("/ultracode on");
+	});
+
+	test.each([
+		{ label: "workflow disabled", tools: [], commands: [] },
+		{ label: "workflow excluded", tools: [], commands: ["ultracode", "ultraloop"] },
+		{ label: "canonical command missing", tools: [workflow], commands: ["ultraloop"] },
+	])("omits the welcome tip with $label", ({ tools, commands }) => {
+		const mode = createMode(() => tools, commands);
+
+		for (const width of [30, 120]) {
+			const output = mode.stepWelcome!.render(width).map(stripTerminalSequences).join("\n");
+			expect(output).not.toMatch(/ultracode|ultraloop|parallel subagents/u);
+			expect(output).toContain("/goal");
+		}
+	});
+
+	test("offers registered Ultracode near the top of bare slash completion and retains its alias", async () => {
+		const mode = createMode(() => [workflow], ["permissions", "plan", "ultraloop", "ultracode"]);
+		const provider = (
+			mode as unknown as { createBaseAutocompleteProvider(): AutocompleteProvider }
+		).createBaseAutocompleteProvider();
+		const suggestions = await provider.getSuggestions(["/"], 0, 1, { signal: new AbortController().signal });
+		const names = suggestions!.items.map((item) => item.value);
+
+		expect(names.slice(0, 6)).toEqual(["model", "permissions", "ultracode", "effort", "thinking", "plan"]);
+		expect(names.filter((name) => name === "ultracode")).toHaveLength(1);
+		expect(names.filter((name) => name === "ultraloop")).toHaveLength(1);
+		expect(names.indexOf("ultraloop")).toBeGreaterThan(5);
+	});
+
+	test("does not add unavailable workflow commands to bare slash completion", async () => {
+		const mode = createMode(() => [], ["permissions", "plan"]);
+		const provider = (
+			mode as unknown as { createBaseAutocompleteProvider(): AutocompleteProvider }
+		).createBaseAutocompleteProvider();
+		const suggestions = await provider.getSuggestions(["/"], 0, 1, { signal: new AbortController().signal });
+		const names = suggestions!.items.map((item) => item.value);
+
+		expect(names).not.toContain("ultracode");
+		expect(names).not.toContain("ultraloop");
 	});
 });
 

@@ -13,40 +13,41 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
+type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
+
 interface Recorded {
 	entries: Array<{ customType: string; data?: unknown }>;
-	handlers: Map<string, (event: never) => unknown>;
-	commands: Map<string, { description: string; handler: (args: string, ctx: ExtensionCommandContext) => unknown }>;
+	handlers: Map<string, (event: never, ctx?: ExtensionCommandContext) => unknown>;
+	commands: Map<string, Command>;
 	notifications: Array<{ message: string; level: string }>;
+	statuses: Map<string, string>;
+	activeTools: string[];
 	api: ExtensionAPI;
 }
 
 function harness(): Recorded {
 	const entries: Array<{ customType: string; data?: unknown }> = [];
-	const handlers = new Map<string, (event: never) => unknown>();
-	const commands = new Map<
-		string,
-		{ description: string; handler: (args: string, ctx: ExtensionCommandContext) => unknown }
-	>();
+	const handlers = new Map<string, (event: never, ctx?: ExtensionCommandContext) => unknown>();
+	const commands = new Map<string, Command>();
 	const notifications: Array<{ message: string; level: string }> = [];
+	const statuses = new Map<string, string>();
+	const activeTools = ["find_tools"];
 	const api = {
-		on: (event: string, handler: (event: never) => unknown) => {
-			handlers.set(event, (payload: never) => handler(payload));
+		on: (event: string, handler: (event: never, ctx: ExtensionCommandContext) => unknown) => {
+			handlers.set(event, (payload, ctx) => handler(payload, ctx ?? makeCtx(notifications, statuses)));
 		},
 		registerTool: () => {},
-		registerCommand: (
-			name: string,
-			command: { description: string; handler: (args: string, ctx: ExtensionCommandContext) => unknown },
-		) => {
+		registerCommand: (name: string, command: Command) => {
 			commands.set(name, command);
 		},
 		appendEntry: (customType: string, data?: unknown) => {
 			entries.push({ customType, data });
 		},
+		getActiveTools: () => [...activeTools],
 		sendMessage: () => {},
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
-	return { entries, handlers, commands, notifications, api };
+	return { entries, handlers, commands, notifications, statuses, activeTools, api };
 }
 
 /** Install with both gates open so tests can exercise handler behaviour without a native binding. */
@@ -54,13 +55,20 @@ function install(h: Recorded): void {
 	createUltraloopOptInExtension({ enabled: true, vmExecutor: () => {} })(h.api);
 }
 
-function makeCtx(notifications: Array<{ message: string; level: string }>): ExtensionCommandContext {
+function makeCtx(
+	notifications: Array<{ message: string; level: string }>,
+	statuses = new Map<string, string>(),
+): ExtensionCommandContext {
 	return {
 		cwd: "/tmp/ultraloop",
 		mode: "tui",
 		hasUI: true,
 		ui: {
 			notify: (message: string, level: string) => notifications.push({ message, level }),
+			setStatus: (key: string, text: string | undefined) => {
+				if (text === undefined) statuses.delete(key);
+				else statuses.set(key, text);
+			},
 		},
 		sessionManager: { getEntries: () => [], getSessionId: () => "test" },
 	} as unknown as ExtensionCommandContext;
@@ -183,14 +191,14 @@ describe("createUltraloopOptInExtension", () => {
 		expect(result?.message?.details).toEqual({ source: "turn", token: "ultraloop" });
 	});
 
-	test("no signal and no session mode yields no reminder", () => {
+	test("no signal and no session mode yields no opt-in reminder", () => {
 		const h = harness();
 		install(h);
 		const result = h.handlers.get("before_agent_start")?.({
 			type: "before_agent_start",
 			prompt: "fix the flaky assertion",
 		} as never);
-		expect(result).toBeUndefined();
+		expect((result as { message?: { customType: string } })?.message?.customType).not.toBe("ultraloop-opt-in");
 	});
 
 	test("off-consent workflow tool_call is journaled but not blocked", () => {
@@ -261,13 +269,11 @@ describe("createUltraloopOptInExtension", () => {
 		install(h);
 
 		// Baseline: no signal, no session — no reminder.
-		expect(
-			h.handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "hi" } as never),
-		).toBeUndefined();
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
 
 		// Turn session mode on via slash.
 		void h.commands.get("ultraloop")?.handler("on", makeCtx(h.notifications));
-		expect(h.notifications.at(-1)?.message).toContain("Ultraloop is on for the session");
+		expect(h.notifications.at(-1)?.message).toContain("Ultracode is on for the session");
 
 		// Any subsequent turn — even without a keyword — produces the session reminder.
 		const first = h.handlers.get("before_agent_start")?.({
@@ -291,11 +297,9 @@ describe("createUltraloopOptInExtension", () => {
 		install(h);
 		void h.commands.get("ultraloop")?.handler("on", makeCtx(h.notifications));
 		void h.commands.get("ultraloop")?.handler("off", makeCtx(h.notifications));
-		expect(h.notifications.at(-1)?.message).toContain("Ultraloop session mode is off");
+		expect(h.notifications.at(-1)?.message).toContain("Ultracode session mode is off");
 
-		expect(
-			h.handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "hi" } as never),
-		).toBeUndefined();
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
 
 		const kept = h.handlers.get("before_agent_start")?.({
 			type: "before_agent_start",
@@ -308,10 +312,10 @@ describe("createUltraloopOptInExtension", () => {
 		const h = harness();
 		install(h);
 		void h.commands.get("ultraloop")?.handler("status", makeCtx(h.notifications));
-		expect(h.notifications.at(-1)?.message).toBe("Ultraloop session mode: off.");
+		expect(h.notifications.at(-1)?.message).toBe("Ultracode session mode: off.");
 		void h.commands.get("ultraloop")?.handler("on", makeCtx(h.notifications));
 		void h.commands.get("ultraloop")?.handler("", makeCtx(h.notifications)); // empty args → status
-		expect(h.notifications.at(-1)?.message).toBe("Ultraloop session mode: on.");
+		expect(h.notifications.at(-1)?.message).toContain("Ultracode session mode: on.");
 	});
 
 	test("session mode is not journaled as off-consent", () => {
@@ -337,16 +341,17 @@ describe("createUltraloopOptInExtension", () => {
 		void h.commands.get("ultraloop")?.handler("on", makeCtx(h.notifications));
 		// Simulate new session boundary.
 		h.handlers.get("session_start")?.({ type: "session_start" } as never);
-		expect(
-			h.handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "hello" } as never),
-		).toBeUndefined();
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
 	});
 
 	test("unknown /ultraloop arg surfaces a usage warning", () => {
 		const h = harness();
 		install(h);
 		void h.commands.get("ultraloop")?.handler("please-toggle", makeCtx(h.notifications));
-		expect(h.notifications.at(-1)).toEqual({ message: "Usage: /ultraloop [on|off|status]", level: "warning" });
+		expect(h.notifications.at(-1)).toEqual({
+			message: "Usage: /ultracode [on|off|status|help] (/ultraloop is an alias).",
+			level: "warning",
+		});
 	});
 
 	test("a +500k directive fills the shared turn state and clears with the turn", () => {
@@ -388,4 +393,115 @@ test("internal attempt endings retain workflow consent and the turn budget until
 	expect(turnState.budgetTotal).toBe(500_000);
 	h.handlers.get("agent_settled")?.({ type: "agent_settled" } as never);
 	expect(turnState.budgetTotal).toBeUndefined();
+});
+
+function startOrdinaryTurn(h: Recorded) {
+	return h.handlers.get("before_agent_start")?.({
+		type: "before_agent_start",
+		prompt: "explain the available features",
+		systemPrompt: "base prompt",
+	} as never) as { systemPrompt?: string; message?: { customType: string; content: string } } | undefined;
+}
+
+describe("Ultracode discovery and command aliases", () => {
+	test("registers both names over the same session state", async () => {
+		const h = harness();
+		install(h);
+		const canonical = h.commands.get("ultracode");
+		expect(canonical).toBeDefined();
+		await canonical!.handler("on", makeCtx(h.notifications, h.statuses));
+		expect(startOrdinaryTurn(h)?.message?.customType).toBe("ultraloop-opt-in");
+		await h.commands.get("ultraloop")!.handler("off", makeCtx(h.notifications, h.statuses));
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
+		await h.commands.get("ultraloop")!.handler("on", makeCtx(h.notifications, h.statuses));
+		await canonical!.handler("status", makeCtx(h.notifications, h.statuses));
+		expect(h.notifications.at(-1)?.message).toContain("on");
+		await canonical!.handler("off", makeCtx(h.notifications, h.statuses));
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
+	});
+
+	test.each(["ultracode", "ultraloop"])(
+		"%s help and bare command explain activation without enabling",
+		async (name) => {
+			const h = harness();
+			install(h);
+			const command = h.commands.get(name);
+			expect(command).toBeDefined();
+			for (const args of ["", "help"]) {
+				await command!.handler(args, makeCtx(h.notifications, h.statuses));
+				const text = h.notifications.at(-1)?.message;
+				expect(text).toContain("off");
+				expect(text).toContain("/ultracode on");
+				expect(text).toContain("ultracode:");
+				expect(text).toContain("/ultraloop");
+				expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
+				expect(h.statuses.has("ultracode")).toBe(false);
+			}
+		},
+	);
+
+	test.each(["ultracode", "ultraloop"])("%s offers its mode arguments before execution", async (name) => {
+		const h = harness();
+		install(h);
+		const complete = h.commands.get(name)?.getArgumentCompletions;
+		expect(complete).toBeDefined();
+		expect((await complete!(""))?.map((item) => item.value)).toEqual(["on", "off", "status", "help"]);
+		expect((await complete!("o"))?.map((item) => item.value)).toEqual(["on", "off"]);
+		expect((await complete!("st"))?.map((item) => item.value)).toEqual(["status"]);
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
+	});
+
+	test("projects enabled mode and clears it on disable and session reset", async () => {
+		const h = harness();
+		install(h);
+		const command = h.commands.get("ultraloop")!;
+		const ctx = makeCtx(h.notifications, h.statuses);
+		await command.handler("on", ctx);
+		expect(h.statuses.get("ultracode")).toBe("Ultracode on");
+		await command.handler("help", ctx);
+		expect(h.statuses.get("ultracode")).toBe("Ultracode on");
+		await command.handler("off", ctx);
+		expect(h.statuses.has("ultracode")).toBe(false);
+		await command.handler("on", ctx);
+		h.handlers.get("session_start")?.({ type: "session_start" } as never, ctx);
+		expect(h.statuses.has("ultracode")).toBe(false);
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
+	});
+
+	test("explains mode and tool availability without granting consent or replacing the system prompt", () => {
+		const h = harness();
+		install(h);
+		const result = startOrdinaryTurn(h);
+		expect(result?.message?.customType).toBe("ultraloop-discovery");
+		expect(result?.message?.content).toContain("Ultracode");
+		expect(result?.message?.content).toContain("Ultraloop");
+		expect(result?.message?.content).toContain("/ultracode on");
+		expect(result?.message?.content).toContain("Current session mode: off");
+		expect(result?.message?.content).toContain("tool profile");
+		expect(result?.message?.content).not.toContain("To load the workflow tool");
+		expect(result?.message?.content).toContain("workflow");
+		expect(result?.message?.content).toContain("not consent");
+		expect(result).not.toHaveProperty("systemPrompt");
+		h.handlers.get("tool_call")?.({ toolName: "workflow", toolCallId: "unapproved" } as never);
+		expect(h.entries.at(-1)?.data).toEqual({ offConsentCall: true, toolCallId: "unapproved" });
+	});
+
+	test("describes active or unavailable tools accurately", () => {
+		const h = harness();
+		install(h);
+		h.activeTools.splice(0, h.activeTools.length, "workflow");
+		expect(startOrdinaryTurn(h)?.message?.content).toContain("workflow");
+		expect(startOrdinaryTurn(h)?.message?.content).not.toContain("find_tools");
+		h.activeTools.length = 0;
+		expect(startOrdinaryTurn(h)?.message?.content).toContain("not active");
+		expect(startOrdinaryTurn(h)?.message?.customType).not.toBe("ultraloop-opt-in");
+	});
+
+	test("disabled registration advertises neither alias nor model guidance", () => {
+		const h = harness();
+		createUltraloopOptInExtension({ enabled: false })(h.api);
+		expect(h.commands.has("ultracode")).toBe(false);
+		expect(h.commands.has("ultraloop")).toBe(false);
+		expect(h.handlers.has("before_agent_start")).toBe(false);
+	});
 });

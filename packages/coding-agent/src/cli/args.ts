@@ -553,6 +553,22 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 	const stepAuthCommandsText = IS_STEP_ENTRYPOINT
 		? `\n  ${APP_NAME} login                       Sign in with the Step account (OAuth)\n  ${APP_NAME} logout                      Remove the stored Step credential`
 		: "";
+	const stepUltracodeHelpText = IS_STEP_ENTRYPOINT
+		? `
+
+${chalk.bold("Ultracode (multi-agent workflows):")}
+  In the interactive editor, when workflows are available:
+  /ultracode on                  Enable session mode
+  /ultracode off                 Disable session mode
+  /ultracode status              Show current session mode
+  /ultracode help                Show usage and current session mode
+  /ultracode                     Same as help; leaves the mode unchanged
+
+  /ultraloop [on|off|status|help] is an exact alias of /ultracode.
+  Session mode stays on until /ultracode off or a session boundary.
+  One turn: "ultracode: <task>" (also "ultraloop: <task>").
+  From the shell: ${APP_NAME} -p "ultracode: <task>"`
+		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
@@ -577,7 +593,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
 ${stepAuthCommandsText}
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth${stepUltracodeHelpText}
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: ${defaultProvider})

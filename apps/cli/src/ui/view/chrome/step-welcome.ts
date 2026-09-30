@@ -26,6 +26,8 @@ export interface StepWelcomeInfo {
 	thinkingLevel?: string;
 	workspaceRoot: string;
 	sessionId?: string;
+	/** Whether the workflow tool and Ultracode command are registered for this session. */
+	ultracodeAvailable?: boolean;
 }
 
 const WELCOME_MARK = renderStepMark();
@@ -59,11 +61,11 @@ const WELCOME_TIPS = [
 		command: "/goal",
 		description: "Set a goal and keep working toward it across turns.",
 	},
-	{
-		command: "ultracode",
-		description: "Include this keyword in your prompt to enable parallel subagents.",
-	},
 ] as const;
+const ULTRACODE_TIP = {
+	command: "/ultracode on",
+	description: "Use parallel agents for this session. One turn: ultracode: task.",
+} as const;
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, {
 	granularity: "grapheme",
@@ -348,8 +350,9 @@ export class StepWelcomeComponent implements Component {
 			return `${paintStepWordmarkBorder("│ ")}${row}${" ".repeat(padding)}${paintStepWordmarkBorder(" │")}`;
 		};
 		const tips = ["", muted("Tips")];
-		const prefixWidth = Math.max(...WELCOME_TIPS.map((tip) => visibleWidth(tip.command))) + 2;
-		for (const tip of WELCOME_TIPS) {
+		const welcomeTips = info.ultracodeAvailable ? [...WELCOME_TIPS, ULTRACODE_TIP] : WELCOME_TIPS;
+		const prefixWidth = Math.max(...welcomeTips.map((tip) => visibleWidth(tip.command))) + 2;
+		for (const tip of welcomeTips) {
 			const prefix = tip.command + " ".repeat(prefixWidth - visibleWidth(tip.command));
 			if (innerWidth - prefixWidth < 24) {
 				tips.push(...wrapMultiline(tip.command, innerWidth).map(brand));

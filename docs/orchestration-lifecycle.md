@@ -7,18 +7,54 @@ namespace remain `step` and `.stepcode`.
 
 ## Ultracode and workflows
 
+Ultracode and Ultraloop name the same workflow opt-in mode. Workflow registration
+is enabled by default; `STEP_DISABLE_WORKFLOW=1` or an embedder opt-out hides the
+commands and capability guidance. When the workflow
+capability is registered, use these commands in the interactive editor:
+
+| Command | Effect |
+| --- | --- |
+| `/ultracode on` | Enable session mode |
+| `/ultracode off` | Remove the standing session opt-in |
+| `/ultracode status` | Show the current session mode |
+| `/ultracode help` | Show usage and the current session mode |
+| `/ultracode` | Same as `help`; leaves the mode unchanged |
+
+`/ultraloop` is an exact alias. Both names complete `on`, `off`, `status`, and
+`help`, and share one state in the workflow extension. Bare commands, `help`,
+and `status` leave that state unchanged. Enabling session mode projects
+`Ultracode on` into the status line; disabling it or crossing a session boundary
+clears the projection. The UI reads this state from the extension.
+
+For one turn, send `ultracode: <task>` or `ultraloop: <task>` in the TUI, or pass
+it as a launch prompt, for example:
+
+```sh
+step -p "ultracode: Review the API changes and verify the tests"
+```
+
 A prompt containing `ultracode`, `ultraloop`, or an explicit workflow request opts
-that prompt into workflow orchestration. `/ultraloop on` enables it for the
-session; `/ultraloop off` removes that standing opt-in. The prompt's `+500k` or
-`+1.5m` directive supplies a default token budget for its workflow calls. Saved
-workflow invocations and skills can also authorize workflow use. The opt-in is a
-model-guidance and journaling contract; off-consent calls are recorded, not
-rejected by a hard permission gate.
+that prompt into workflow orchestration without changing session mode. The
+prompt's `+500k` or `+1.5m` directive supplies a default token budget for its
+workflow calls. Saved workflow invocations and skills can also authorize
+workflow use.
+
+Capability discovery is separate from consent. When workflows are registered,
+the model receives guidance that maps both names to `workflow` and states the
+current session mode and tool-profile availability. `find_tools` only searches
+tools; it does not activate session mode or expand tool access. Registration,
+welcome tips, and discovery guidance do not authorize workflow use. The guidance
+does not replace the dynamic system prompt, so active-tool guidance can refresh
+when active tools change. The `ultraloop-opt-in` reminder remains tied to a per-turn or
+session signal. Opt-in is a model-guidance and journaling contract; off-consent
+calls are recorded, not rejected by a hard permission gate. Tool permissions
+and model thinking settings remain separate from this mode.
 
 A product run may contain multiple low-level attempts because of retries or
 context compaction. The opt-in and prompt budget survive those attempts and
 clear at `agent_settled`. The next submitted prompt replaces the prompt-specific
-state. Session mode survives settlement and resets with the session.
+state. Session mode survives settlement until `/ultracode off` (or
+`/ultraloop off`) or a session boundary, when it resets to off.
 
 The runtime checks cancellation before entering the VM and after it returns.
 A tool call whose signal was already aborted does not start a child agent.
@@ -181,7 +217,7 @@ The comparison uses official documentation retrieved on 2026-09-20:
 
 | Area | Current StepCode behavior | Follow-up for closer alignment |
 | --- | --- | --- |
-| Workflow entry | Prompt keyword and `/ultraloop` session controls | Add `/effort ultracode` or an equivalent entry if that vocabulary is desired |
+| Workflow entry | `/ultracode` and `/ultraloop` share session controls; `ultracode: <task>` and `ultraloop: <task>` opt in for one turn | — |
 | Workflow execution | Foreground tool with live agent counts/tasks, journals, cancellation, replay | Background workflow task view with pause/resume controls |
 | Goal completion | Working agent calls `update_goal`; user pause/resume and persisted budgets | Independent completion evaluator with visible verdict/reason and a no-progress stop policy |
 | Interval scheduling | `cron_create`, `cron_list`, `cron_delete`, `/cron` | `/loop` convenience command, including a design for completion-relative intervals |
