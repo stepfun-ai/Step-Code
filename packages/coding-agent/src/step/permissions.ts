@@ -17,6 +17,7 @@ import type {
 import { getShellConfig } from "../utils/shell.ts";
 
 import { analyzeCommandPolicy, type CommandPolicyAnalysis } from "./command-policy.ts";
+import { getThenRunCommand } from "./then-run.ts";
 
 export { containsDangerousLifecycleCommand, isDangerousCommand } from "./command-policy.ts";
 
@@ -333,6 +334,34 @@ export function resolveInitialStepPermissionState(options: StepPermissionControl
 	return resolved;
 }
 
+const DECISION_RANK = { allow: 0, confirm: 1, deny: 2 } as const;
+
+/**
+ * A then_run command is an embedded run_command call: the fused call takes the
+ * stricter of the two decisions, and a confirmation names the command because
+ * the dialog's input summary may clip it behind a large file payload.
+ */
+function combineThenRunDecisions(
+	mutation: StepToolDecision,
+	verification: StepToolDecision,
+	command: string,
+): StepToolDecision {
+	const flagged = (decision: StepToolDecision) => decision.hazardous || decision.analysisIncomplete === true;
+	const verificationRank = DECISION_RANK[verification.action];
+	const mutationRank = DECISION_RANK[mutation.action];
+	const verificationLeads =
+		verificationRank > mutationRank ||
+		(verificationRank === mutationRank && flagged(verification) && !flagged(mutation));
+	const lead = verificationLeads ? verification : mutation;
+	const baseReason = verificationLeads ? `then_run (run_command): ${verification.reason}` : mutation.reason;
+	return {
+		action: lead.action,
+		hazardous: mutation.hazardous || verification.hazardous,
+		...(mutation.analysisIncomplete || verification.analysisIncomplete ? { analysisIncomplete: true as const } : {}),
+		reason: lead.action === "confirm" ? `${baseReason}\nthen_run: ${command}` : baseReason,
+	};
+}
+
 /**
  * Decide a tool call without involving the terminal. This is intentionally
  * conservative for unknown tools: ask mode confirms them, read-only blocks
@@ -345,6 +374,13 @@ export function decideStepToolCall(
 	overrides: Readonly<Record<string, StepToolPermissionMode>> | undefined = state.toolOverrides,
 	shellContext?: ShellExecutionContext,
 ): StepToolDecision {
+	const thenRun = getThenRunCommand(toolName, input);
+	if (thenRun !== undefined) {
+		const { then_run: _thenRun, ...mutationInput } = input;
+		const mutation = decideStepToolCall(toolName, mutationInput, state, overrides, shellContext);
+		const verification = decideStepToolCall("run_command", { command: thenRun }, state, overrides, shellContext);
+		return combineThenRunDecisions(mutation, verification, thenRun);
+	}
 	const normalizedName = toolName.trim().toLowerCase();
 	const command = extractCommand(input);
 	let analysis: CommandPolicyAnalysis | undefined;

@@ -108,6 +108,14 @@ describe("Step permission presets", () => {
 			expect(decision.action).toBe("confirm");
 			expect(decision.hazardous).toBe(true);
 		}
+		const fused = decideStepToolCall(
+			"write_file",
+			{ path: "a.txt", content: "x", then_run: "rm -rf /etc" },
+			stepPermissionStateForPreset("bypass"),
+		);
+		expect(fused.action).toBe("confirm");
+		expect(fused.hazardous).toBe(true);
+		expect(fused.reason).toContain("then_run: rm -rf /etc");
 		expect(isDangerousCommand("sudo -n reboot")).toBe(true);
 		expect(isDangerousCommand("qemu-system-x86_64 -no-reboot -no-shutdown")).toBe(false);
 		expect(containsDangerousLifecycleCommand("sh -c 'systemctl reboot'")).toBe(true);
@@ -607,5 +615,24 @@ describe("Step autopilot continuation", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(announce).toHaveBeenCalledWith("Autopilot could not resume: session closed");
+	});
+
+	it("gates edit_file then_run as an embedded run_command call", () => {
+		const bypass = stepPermissionStateForPreset("bypass");
+		const input = { path: "a.txt", search: "a", replace: "b", then_run: "npm test" };
+		expect(decideStepToolCall("edit_file", input, bypass).action).toBe("allow");
+
+		const denied = decideStepToolCall("edit_file", input, bypass, { run_command: "deny" });
+		expect(denied.action).toBe("deny");
+		expect(denied.reason).toContain("then_run (run_command)");
+
+		const ask = decideStepToolCall("edit_file", input, stepPermissionStateForPreset("ask"));
+		expect(ask.action).toBe("confirm");
+		expect(ask.reason).toContain("then_run: npm test");
+
+		const readOnly = stepPermissionStateForPreset("read-only");
+		expect(decideStepToolCall("edit_file", input, readOnly)).toEqual(
+			decideStepToolCall("edit_file", { path: "a.txt", search: "a", replace: "b" }, readOnly),
+		);
 	});
 });

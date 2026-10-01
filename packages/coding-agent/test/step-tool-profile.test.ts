@@ -30,7 +30,7 @@ describe("Step tool profile", () => {
 		const edit = tools.find((tool) => tool.name === "edit_file")!;
 		const editSchema = edit.parameters as { required?: string[]; properties: Record<string, unknown> };
 		expect(editSchema.required).toEqual(["path", "search", "replace"]);
-		expect(Object.keys(editSchema.properties)).toEqual(["path", "search", "replace", "replace_all"]);
+		expect(Object.keys(editSchema.properties)).toEqual(["path", "search", "replace", "replace_all", "then_run"]);
 	});
 
 	it("keeps the legacy model-facing descriptions byte-for-byte compatible", () => {
@@ -498,5 +498,82 @@ describe("Step tool profile", () => {
 			undefined as never,
 		);
 		expect(text(webResult)).toContain("search_web");
+	});
+
+	it("then_run appends the verification outcome to edit_file and write_file results", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			const tools = createStepToolProfile(root);
+			const edit = tools.find((tool) => tool.name === "edit_file")!;
+			const write = tools.find((tool) => tool.name === "write_file")!;
+			await writeFile(join(root, "sample.txt"), "alpha\n");
+
+			const passed = await edit.execute(
+				"then-run-pass",
+				{ path: "sample.txt", search: "alpha", replace: "beta", then_run: "cat sample.txt" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(passed)).toContain("Successfully replaced 1 occurrence(s) in sample.txt.");
+			expect(text(passed)).toContain("then_run: $ cat sample.txt\nbeta");
+			expect(text(passed)).toMatch(/Command exited with code 0$/u);
+			expect((passed.details as { thenRun: unknown }).thenRun).toEqual({
+				command: "cat sample.txt",
+				exitCode: 0,
+				timedOut: false,
+				stepTruncated: false,
+			});
+
+			const failed = await edit.execute(
+				"then-run-fail",
+				{ path: "sample.txt", search: "beta", replace: "gamma", then_run: "echo broken; exit 3" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(await readFile(join(root, "sample.txt"), "utf8")).toBe("gamma\n");
+			expect(text(failed)).toContain("broken");
+			expect(text(failed)).toMatch(/Command exited with code 3$/u);
+			expect((failed.details as { thenRun: { exitCode: number } }).thenRun.exitCode).toBe(3);
+
+			const written = await write.execute(
+				"then-run-write",
+				{ path: "new.txt", content: "fresh\n", then_run: "cat new.txt" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(written)).toContain("Wrote 6 chars to new.txt.");
+			expect(text(written)).toContain("then_run: $ cat new.txt\nfresh");
+
+			const noop = await write.execute(
+				"then-run-noop",
+				{ path: "new.txt", content: "fresh\n", then_run: "echo checked" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(noop)).toContain("already matches");
+			expect(text(noop)).toContain("checked");
+
+			for (const thenRun of [undefined, "   "]) {
+				const plain = await write.execute(
+					"then-run-skip",
+					{
+						path: "plain.txt",
+						content: `${thenRun ?? "x"}\n`,
+						...(thenRun === undefined ? {} : { then_run: thenRun }),
+					},
+					undefined,
+					undefined,
+					undefined as never,
+				);
+				expect(text(plain)).not.toContain("then_run");
+				expect((plain.details as { thenRun?: unknown }).thenRun).toBeUndefined();
+			}
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });

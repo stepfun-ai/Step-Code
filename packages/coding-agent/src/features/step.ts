@@ -24,6 +24,7 @@ import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
+import { getThenRunCommand } from "../step/then-run.ts";
 import { applyStepTraceHeaders } from "../step/trace-headers.ts";
 import {
 	fetchStepModelEfforts,
@@ -243,6 +244,15 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		});
 
 		pi.on("tool_call", async (event, ctx) => {
+			if (
+				getThenRunCommand(event.toolName, event.input) !== undefined &&
+				!pi.getActiveTools().includes("run_command")
+			) {
+				return {
+					block: true,
+					reason: "then_run requires run_command, which is not available in this session; retry without then_run",
+				};
+			}
 			return await permissions.handleToolCall(event, ctx);
 		});
 

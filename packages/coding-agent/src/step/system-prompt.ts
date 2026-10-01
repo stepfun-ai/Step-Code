@@ -364,6 +364,12 @@ export function buildStepSystemPromptAppendix(
 		"- Keep tool calls narrow and independently verifiable. Do not use interactive commands or shell chains when a structured argument (such as cwd) is available.",
 	];
 
+	if ((active.has("edit_file") || active.has("write_file")) && active.has("run_command")) {
+		sections.push(
+			"- To verify a change immediately, pass the check as then_run on edit_file or write_file (for example a focused test or typecheck) instead of a separate run_command call; it runs only after the change succeeds and needs the same approval as run_command.",
+		);
+	}
+
 	if (hasWrite || hasExecute) {
 		sections.push(
 			"For large source files and reports, create a small initial section, then grow it with focused edits across separate responses. Keep generated code or text in tool arguments to roughly 100 lines or a few kilobytes per response when practical; this is a planning guideline, not permission to truncate content. Do not combine many large writes in one response or embed the same large payload in a shell command. Complete all sections before final validation and report any unfinished work.",

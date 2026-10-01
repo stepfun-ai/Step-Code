@@ -234,6 +234,27 @@ editor refocus/disposal callback is cancelled before mounting. This prevents
 an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
 refocused editor to open the next dialog.
 
+### Fused verification (`then_run`)
+
+`edit_file` and `write_file` accept an optional `then_run` shell command. It
+runs only after the mutation succeeds (including a no-op), from the initial
+working directory like `run_command` without `cwd`, with the same timeout and
+output cap. Its output and exit status are appended to the mutation receipt
+and recorded in `details.thenRun`. A failing check does not mark the call as
+an error, because the file change has already been applied. Empty or
+whitespace-only values are ignored.
+
+The Step extension gates `then_run` as an embedded `run_command` call: the
+permission decision is the stricter of the mutation and the command
+(including `run_command` overrides and dangerous-command analysis), the
+confirmation reason names the command, workflow path ACLs check it, and the
+call is blocked when `run_command` is not active in the session. SDK
+`acceptEdits` does not auto-approve an edit carrying `then_run`. SDK
+`PreToolUse` hooks and third-party `tool_call` handlers see it as
+`input.then_run`; embedders that skip the Step extension must gate it
+themselves. In plan mode a `then_run` on the plan file behaves like
+`run_command`, which keeps normal permissions there.
+
 ## Plans and tasks
 
 Plans and tasks serve different purposes. A **plan** is the Markdown proposal:

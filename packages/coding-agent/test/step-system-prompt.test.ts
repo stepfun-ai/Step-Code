@@ -23,6 +23,8 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).toContain("- edit_file:");
 		expect(prompt).toContain("- run_command:");
 		expect(prompt).not.toContain("- write_file:");
+		expect(prompt).toContain("then_run on edit_file or write_file");
+		expect(buildStepSystemPromptAppendix(["read_file", "edit_file"])).not.toContain("then_run");
 	});
 
 	it("returns a useful base contract when no tools are active", () => {

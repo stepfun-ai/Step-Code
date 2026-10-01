@@ -424,6 +424,14 @@ test("path ACL blocks read-only writes, traversal, and symlink escapes", async (
 	expect(checkWorkflowToolCall(cwd, "write_file", { path: path.join(cwd, "output", "ok.ts") }, acl).allowed).toBe(
 		true,
 	);
+	expect(
+		checkWorkflowToolCall(
+			cwd,
+			"write_file",
+			{ path: path.join(cwd, "output", "ok.ts"), then_run: `echo changed > '${artifact}/file.ts'` },
+			acl,
+		).allowed,
+	).toBe(false);
 });
 
 function plan(objective: string) {
