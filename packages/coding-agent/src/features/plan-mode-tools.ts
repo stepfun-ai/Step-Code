@@ -18,6 +18,7 @@ import {
 	type PlanReviewResult,
 	renderPlanReviewResult,
 } from "../render/plan-review.ts";
+import { resolvePath } from "../utils/paths.ts";
 
 /** Exit outcome dimension for plan_mode_exited telemetry. */
 export type StepPlanExitOutcome = "approved" | "toggled_off" | "auto_headless" | "auto_rpc";
@@ -36,9 +37,14 @@ export interface StepPlanModeController {
 	resolvePlanFilePath(extensionContext: ExtensionContext): string;
 }
 
-/** Absolute path of the per-session plan file under the project workspace. */
+/** Select a new per-session plan path; the extension retains saved paths on restore. */
 export function getPlanFilePath(sessionId: string, projectCwd?: string): string {
-	return path.join(projectCwd ?? process.cwd(), ".stepcode", "plans", `session-${sessionId}.md`);
+	const cwd = projectCwd ?? process.cwd();
+	const planDir = process.env.STEP_CODING_AGENT_PLAN_DIR?.trim();
+	return path.join(
+		planDir ? resolvePath(planDir, cwd) : path.join(cwd, ".stepcode", "plans"),
+		`session-${sessionId}.md`,
+	);
 }
 
 /**

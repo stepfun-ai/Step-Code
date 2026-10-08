@@ -108,6 +108,32 @@ Then one that makes changes:
 Create a reference table for the error codes in src/api/errors.ts (code, meaning, trigger scenario) and save it to docs/errors.md
 ```
 
+### Ultracode: multi-agent workflows
+
+Use Ultracode to opt into multi-agent workflow orchestration for one task or for the current session. When workflows are available, enter these commands in the interactive TUI:
+
+| Command | Effect |
+| --- | --- |
+| `/ultracode on` | Enable workflow orchestration for the session |
+| `/ultracode off` | Turn off session mode |
+| `/ultracode status` | Show the current session mode |
+| `/ultracode help` | Show usage and the current session mode |
+| `/ultracode` | Same as `help`; leaves the mode unchanged |
+
+`/ultraloop` is an exact alias with the same `on`, `off`, `status`, and `help` subcommands; both names control the same mode. The editor completes these subcommands. Bare commands, `help`, and `status` leave the mode unchanged.
+
+While enabled, the status line shows `Ultracode on`. Session mode stays on across turns until `/ultracode off` or a session boundary, when it resets to off.
+
+For one turn, send `ultracode: <task>` (or `ultraloop: <task>`) in the TUI or as a launch prompt:
+
+```bash
+step -p "ultracode: Review the API changes and verify the tests"
+```
+
+If the commands are missing, check `STEP_DISABLE_WORKFLOW` and whether the host enables workflow support. A restricted tool profile must also expose `workflow`; the session switch does not expand tool access.
+
+The prompt prefix opts in only that turn and leaves session mode unchanged. Workflow availability and tool discovery alone do not grant consent to run workflows. Ultracode leaves tool permissions and model thinking settings unchanged. See the [workflow lifecycle](docs/orchestration-lifecycle.md) for opt-in and budget scope.
+
 ### Resume a session
 
 ```bash

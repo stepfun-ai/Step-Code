@@ -49,7 +49,7 @@ function createStepProviderConfigFromResolved(resolved: ResolvedStepProviderOpti
 			name: "Step Plan",
 			isSubscription: true,
 			login: (callbacks) => loginStepOAuth(callbacks, resolved),
-			refreshToken: (credentials, signal) => refreshStepOAuth(credentials, resolved, signal),
+			refreshToken: refreshStepOAuth,
 			getApiKey: getStepOAuthApiKey,
 		},
 	};

@@ -7,11 +7,15 @@ Step reads the variables below. Configuration shared across launches belongs in
 |----------|-------------|
 | `STEP_CODING_AGENT_DIR` | Override the agent directory; default is `~/.stepcode/agent` |
 | `STEP_CODING_AGENT_SESSION_DIR` | Override session storage; `--session-dir` takes precedence |
+| `STEP_CODING_AGENT_PLAN_DIR` | Directory for newly selected native Markdown plan paths; defaults to `<cwd>/.stepcode/plans` |
 | `STEP_API_KEY` | StepFun API credential |
 | `STEP_BASE_URL` | Override the StepFun API endpoint |
 | `STEP_PROVIDER`, `STEP_MODEL` | Default provider and model selection |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
+
+For headless plan storage outside a Git worktree, path resolution, and saved
+session behavior, see [plan file storage](../../../docs/step-configuration.md#plan-file-storage).
 
 The CLI sets `AI_AGENT=step`. Child processes inherit this process marker and the
 ordinary shell environment. Shell tools do not inject session IDs, transcript

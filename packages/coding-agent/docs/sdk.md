@@ -345,7 +345,7 @@ const { session } = await createAgentSession({
 - Project extensions (`.stepcode/extensions/`)
 - Project skills:
   - `.stepcode/skills/`
-  - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
+  - `.agents/skills/` and `.claude/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Project prompts (`.stepcode/prompts/`)
 - Context files (`AGENTS.md` walking up from cwd)
 - Session directory naming
@@ -354,7 +354,9 @@ const { session } = await createAgentSession({
 - Global extensions (`extensions/`)
 - Global skills:
   - `skills/` under `agentDir` (for example `~/.stepcode/agent/skills/`)
+  - `~/.stepcode/skills/`
   - `~/.agents/skills/`
+  - `~/.claude/skills/`
 - Global prompts (`prompts/`)
 - Global context file (`AGENTS.md`)
 - Settings (`settings.json`)

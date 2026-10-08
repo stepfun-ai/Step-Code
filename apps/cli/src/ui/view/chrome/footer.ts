@@ -308,7 +308,8 @@ export class FooterComponent implements Component {
 		const warning = (text: string) => theme.fg("warning", text);
 		const error = (text: string) => theme.fg("error", text);
 
-		const permissionStatus = this.footerData.getExtensionStatuses().get("step-permission");
+		const extensionStatuses = this.footerData.getExtensionStatuses();
+		const permissionStatus = extensionStatuses.get("step-permission");
 		const statusPreset = permissionStatus?.match(/^Mode:\s*([^()]+?)(?:\s*\(auto-resume\))?$/u)?.[1]?.trim();
 		// Extension statuses use human-readable labels (for example "Read Only"),
 		// while embedded hosts may expose the corresponding id ("read-only" or
@@ -342,6 +343,11 @@ export class FooterComponent implements Component {
 		const segments: string[] = [
 			displayMode.paint(`⏵ ${displayMode.label}`) + (cycleHint ? muted(` (${cycleHint})`) : ""),
 		];
+		// Keep session mode ahead of model/path details so it survives compact-layout truncation.
+		if (safeWidth >= 80) {
+			const ultracodeStatus = sanitizeStatusText(extensionStatuses.get("ultracode") ?? "");
+			if (ultracodeStatus) segments.push(muted(ultracodeStatus));
+		}
 
 		const model = state.model?.id;
 		if (safeWidth >= 60 && model) {
@@ -364,12 +370,10 @@ export class FooterComponent implements Component {
 			}
 		}
 
-		const extensionStatuses = this.footerData.getExtensionStatuses();
 		if (safeWidth >= 100) {
 			for (const [key, status] of [...extensionStatuses.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-				// Permission is already the leading segment; keeping its status here
-				// duplicates the mode on wide terminals.
-				if (key === "step-permission") continue;
+				// Permission and Ultracode already have leading segments.
+				if (key === "step-permission" || key === "ultracode") continue;
 				const cleaned = status
 					.replace(/[\r\n\t]+/gu, " ")
 					.replace(/ +/gu, " ")

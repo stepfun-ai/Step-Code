@@ -45,6 +45,12 @@ export interface Args {
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
+	/** Opt-in completion check in print/json mode. */
+	completionCheck?: "git-committed";
+	/** Maximum completion follow-up prompts, 1..3 (default 2). */
+	completionCheckAttempts?: number;
+	/** Opt-in self-review sharing the completion-check follow-up budget. */
+	completionReview?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -207,6 +213,33 @@ export function parseArgs(args: string[]): Args {
 				i = taken.nextIndex;
 				if (taken.value === "text" || taken.value === "json" || taken.value === "rpc") {
 					result.mode = taken.value;
+				}
+			}
+		} else if (arg === "--completion-review") {
+			result.completionReview = true;
+		} else if (arg.startsWith("--completion-review=")) {
+			result.diagnostics.push({ type: "error", message: "--completion-review does not take a value" });
+		} else if (arg === "--completion-check" || arg.startsWith("--completion-check=")) {
+			const taken = arg.startsWith("--completion-check=")
+				? { value: arg.slice("--completion-check=".length), nextIndex: i }
+				: takeOptionValue(args, i, "--completion-check", result);
+			if (taken) {
+				i = taken.nextIndex;
+				if (taken.value === "git-committed") result.completionCheck = taken.value;
+				else result.diagnostics.push({ type: "error", message: "--completion-check must be git-committed" });
+			}
+		} else if (arg === "--completion-check-attempts" || arg.startsWith("--completion-check-attempts=")) {
+			const taken = arg.startsWith("--completion-check-attempts=")
+				? { value: arg.slice("--completion-check-attempts=".length), nextIndex: i }
+				: takeOptionValue(args, i, "--completion-check-attempts", result);
+			if (taken) {
+				i = taken.nextIndex;
+				if (/^[1-3]$/.test(taken.value)) result.completionCheckAttempts = Number(taken.value);
+				else {
+					result.diagnostics.push({
+						type: "error",
+						message: "--completion-check-attempts must be an integer from 1 to 3",
+					});
 				}
 			}
 		} else if (arg === "--approval-mode" || arg.startsWith("--approval-mode=")) {
@@ -528,6 +561,27 @@ export function parseArgs(args: string[]): Args {
 		}
 	}
 
+	if (result.completionCheck) {
+		result.completionCheckAttempts ??= 2;
+		if (result.mode === "rpc" || result.sdkStdio) {
+			result.diagnostics.push({
+				type: "error",
+				message: "--completion-check is only supported in print or JSON mode",
+			});
+		}
+	} else if (result.completionCheckAttempts !== undefined) {
+		result.diagnostics.push({
+			type: "error",
+			message: "--completion-check-attempts requires --completion-check git-committed",
+		});
+	}
+	if (result.completionReview && !result.completionCheck) {
+		result.diagnostics.push({
+			type: "error",
+			message: "--completion-review requires --completion-check git-committed",
+		});
+	}
+
 	return result;
 }
 
@@ -553,6 +607,22 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 	const stepAuthCommandsText = IS_STEP_ENTRYPOINT
 		? `\n  ${APP_NAME} login                       Sign in with the Step account (OAuth)\n  ${APP_NAME} logout                      Remove the stored Step credential`
 		: "";
+	const stepUltracodeHelpText = IS_STEP_ENTRYPOINT
+		? `
+
+${chalk.bold("Ultracode (multi-agent workflows):")}
+  In the interactive editor, when workflows are available:
+  /ultracode on                  Enable session mode
+  /ultracode off                 Disable session mode
+  /ultracode status              Show current session mode
+  /ultracode help                Show usage and current session mode
+  /ultracode                     Same as help; leaves the mode unchanged
+
+  /ultraloop [on|off|status|help] is an exact alias of /ultracode.
+  Session mode stays on until /ultracode off or a session boundary.
+  One turn: "ultracode: <task>" (also "ultraloop: <task>").
+  From the shell: ${APP_NAME} -p "ultracode: <task>"`
+		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
@@ -577,7 +647,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
 ${stepAuthCommandsText}
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth${stepUltracodeHelpText}
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: ${defaultProvider})
@@ -589,6 +659,9 @@ ${chalk.bold("Options:")}
 ${stepPermissionOptionsText}
   --sdk-stdio                    Run the Step Agent SDK length-prefixed stdio host
   --print, -p                    Non-interactive mode: process prompt and exit
+  --completion-check <check>     Opt-in print/json completion check: git-committed
+  --completion-check-attempts <n> Maximum same-session follow-ups: 1..3 (default: 2)
+  --completion-review           Opt-in self-review; requires git-committed and shares its follow-up budget
   --continue, -c                 Continue previous session
   --resume, -r [path|id]         Resume a session: with a path/id resume it directly, without opens a selector
   --session <path|id>            Use specific session file or partial UUID
