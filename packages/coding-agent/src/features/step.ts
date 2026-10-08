@@ -22,7 +22,7 @@ import {
 import { createStepPluginResourcesExtension } from "../step/plugins.ts";
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
-import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
 import { getThenRunCommand } from "../step/then-run.ts";
 import { applyStepTraceHeaders } from "../step/trace-headers.ts";
@@ -127,6 +127,10 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			recordStepSlashCommand(options.telemetry, token, builtInSlashCommands.has(name));
 		});
 		let permissions = new StepPermissionController(resolvePermissionOptions(options));
+		const lifecycle = options.telemetry ? createStepLifecycleTelemetry(options.telemetry) : undefined;
+		// Register before the permission hook: blocked calls short-circuit later
+		// tool_call handlers, but still need a start paired with their result.
+		lifecycle?.register(pi);
 		let notify: ((message: string, type?: "info" | "warning" | "error") => void) | undefined;
 		let autoResumeAllowed = false;
 		let nativeRetryPreference: boolean | undefined;
@@ -253,7 +257,39 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 					reason: "then_run requires run_command, which is not available in this session; retry without then_run",
 				};
 			}
-			return await permissions.handleToolCall(event, ctx);
+			let approvalRisk: string | undefined;
+			try {
+				const result = await permissions.handleToolCall(event, ctx, (decision) => {
+					const risk = decision.hazardous ? "high" : decision.action === "allow" ? "low" : "normal";
+					// Observe the exact decision used by the controller, without running
+					// shell analysis or resolving mutable settings a second time.
+					lifecycle?.recordPermissionDecision({
+						toolName: event.toolName,
+						mode: decision.action,
+						risk,
+						hazardous: decision.hazardous,
+					});
+					if (decision.action === "confirm" && ctx.hasUI) approvalRisk = risk;
+				});
+				if (approvalRisk) {
+					lifecycle?.recordPermissionApproval({
+						toolName: event.toolName,
+						decision: result?.block ? "deny" : "allow",
+						risk: approvalRisk,
+					});
+				}
+				if (result?.block) lifecycle?.markToolBlocked(event.toolCallId);
+				return result;
+			} catch (error) {
+				if (approvalRisk) {
+					lifecycle?.recordPermissionApproval({
+						toolName: event.toolName,
+						decision: "error",
+						risk: approvalRisk,
+					});
+				}
+				throw error;
+			}
 		});
 
 		pi.on("before_agent_start", (event) => {

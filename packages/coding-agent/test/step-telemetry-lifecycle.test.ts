@@ -157,6 +157,36 @@ describe("Step lifecycle telemetry", () => {
 		]);
 	});
 
+	it.each(["missing", "throws"])("clears prior reporter identity when the new session identity %s", (kind) => {
+		const { reporter, contexts } = createReporter();
+		const lifecycle = createStepLifecycleTelemetry(reporter);
+		lifecycle.onSessionStart({ type: "session_start", reason: "startup" }, context());
+		const next = {
+			mode: "print",
+			sessionManager: {
+				getSessionId: () => {
+					if (kind === "throws") throw new Error("stale session");
+					return "";
+				},
+				getEntries: () => [],
+			},
+		} as unknown as ExtensionContext;
+		lifecycle.onSessionStart({ type: "session_start", reason: "new" }, next);
+		expect(contexts).toEqual([{ sessionId: "session-1" }, { sessionId: "" }]);
+	});
+
+	it("drops in-flight aggregates and reporter identity on reset", () => {
+		const { reporter, contexts, events } = createReporter();
+		const lifecycle = createStepLifecycleTelemetry(reporter);
+		const ctx = context();
+		lifecycle.onSessionStart({ type: "session_start", reason: "startup" }, ctx);
+		lifecycle.onAgentStart({ type: "agent_start" }, ctx);
+		lifecycle.reset();
+		lifecycle.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+		expect(contexts).toEqual([{ sessionId: "session-1" }, { sessionId: "" }]);
+		expect(events.map((event) => event.event)).toEqual(["session_started"]);
+	});
+
 	it("classifies denied and failed tools and reports permission decisions", () => {
 		const { reporter, events } = createReporter();
 		let now = 1_000;
@@ -248,6 +278,7 @@ describe("Step lifecycle telemetry", () => {
 		lifecycle.register(api);
 		expect(registered).toEqual([
 			"session_start",
+			"session_shutdown",
 			"session_compact",
 			"agent_start",
 			"agent_end",
