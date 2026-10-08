@@ -153,7 +153,8 @@ export async function stagePackages({ version, baseUrl, archivesDir, outDir }) {
 	await mkdir(outDir, { recursive: true });
 	const license = path.join(repoRoot, "LICENSE");
 	const release = await loadRelease({ version, baseUrl, archivesDir });
-	const workDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-npm-"));
+	// Extract next to the output so moving the tree into a package is a same-device rename.
+	const workDir = await mkdtemp(path.join(outDir, ".work-"));
 	const packageDirs = [];
 	try {
 		for (const target of NPM_TARGETS) {
