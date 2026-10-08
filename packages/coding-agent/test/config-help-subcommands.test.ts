@@ -15,6 +15,7 @@ describe("config --help subcommands", () => {
 		expect(result.help).not.toMatch(/^\s+step (?:login|logout)\s/m);
 		expect(result.help).not.toContain("--approval-mode <mode>");
 		expect(result.help).not.toContain("STEP_APPROVAL_MODE");
+		expect(result.help).not.toMatch(/ultra(?:code|loop)/i);
 	});
 
 	test.each(["step", "custom-assistant"])(
@@ -35,6 +36,13 @@ describe("config --help subcommands", () => {
 			expect(result.help).toContain(`${appName} logout`);
 			expect(result.help).toContain("--approval-mode <mode>");
 			expect(result.help).toContain("STEP_APPROVAL_MODE");
+			for (const subcommand of ["on", "off", "status", "help"]) {
+				expect(result.help).toMatch(new RegExp(`^\\s+/ultracode ${subcommand}\\s`, "m"));
+			}
+			expect(result.help).toContain("/ultraloop [on|off|status|help]");
+			expect(result.help).toContain(`${appName} -p "ultracode: <task>"`);
+			expect(result.help).toContain('"ultraloop: <task>"');
+			expect(result.help).not.toMatch(/--ultra(?:code|loop)\b|\/effort ultracode\b/);
 		},
 	);
 });

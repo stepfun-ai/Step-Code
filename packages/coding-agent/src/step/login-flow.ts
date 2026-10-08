@@ -1,6 +1,11 @@
 import { ProcessTerminal, type TUI, TuiMainScreen } from "@step-harness/pi-tui";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
-import { loginStepOAuth, STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
+import {
+	defaultStepCliClientInfo,
+	loginStepOAuth,
+	STEP_PROVIDER_ID,
+	STEP_STATIC_REFRESH_TOKEN,
+} from "../features/step-provider/index.ts";
 import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import { resolveStepAgentDir } from "./environment.ts";
@@ -15,6 +20,7 @@ import {
 	type StepLoginStep,
 } from "./onboarding.ts";
 import { StepOnboardingView } from "./onboarding-view.ts";
+import { resolveStepCodeVersion } from "./version.ts";
 
 export interface StepLoginHost {
 	addChild(child: unknown): void;
@@ -38,6 +44,11 @@ export interface RunStepLoginOptions {
 	readonly now?: () => Date;
 	readonly env?: Record<string, string | undefined>;
 	readonly themeName?: string;
+	/**
+	 * Never try to launch a browser; only print the URL. Useful over SSH and in
+	 * containers, where a launcher may "succeed" without a window ever appearing.
+	 */
+	readonly noBrowser?: boolean;
 }
 
 export async function writeStepLoginCredential(input: {
@@ -224,10 +235,13 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				{
 					signal: controller.signal,
 					onAuth: ({ url }) => {
+						// Show the URL before launching anything: if the launcher hangs or
+						// the host has no browser, the user still has something to copy.
 						dispatch({ type: "browserOpened", authUrl: url });
-						openBrowser(url);
+						if (!options.noBrowser) openBrowser(url);
 					},
 					onDeviceCode: () => {},
+					// Cloud login never prompts for a callback URL or opens a local port.
 					onPrompt: async () => "",
 					onSelect: async () => undefined,
 				},
@@ -235,6 +249,8 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 					apiBaseUrl: profile.baseUrl,
 					authBaseUrl: profile.authBaseUrl,
 					env: options.env ?? process.env,
+					loginProfile: choice,
+					client: defaultStepCliClientInfo(resolveStepCodeVersion(options.env).value),
 				},
 			);
 			dispatch({

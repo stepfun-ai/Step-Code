@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import process from "node:process";
 import type { Credential, OAuthCredentials } from "../auth/types.ts";
 import type { OAuthLoginCallbacks } from "../compat/extension-oauth-types.ts";
@@ -27,32 +27,32 @@ export interface StepModelConfig {
 }
 
 import {
-	buildStepAuthorizationUrl,
-	buildStepCallbackUrl,
-	DEFAULT_STEP_OAUTH_TIMEOUT_MS,
-	STEP_OAUTH_CALLBACK_PATH,
-	type StartStepCallbackServerOptions,
-	type StepCallbackResult,
-	type StepCallbackServer,
-	type StepOAuthErrorCode,
-	startStepCallbackServer,
-} from "./callback-server.ts";
+	defaultStepCliClientInfo,
+	initStepCliLogin,
+	type StepCliClientInfo,
+	withStepCliLoginTimeout,
+} from "./login-client.ts";
+import { waitForStepCliLogin } from "./login-polling.ts";
 
 export type {
-	StartStepCallbackServerOptions,
-	StepCallbackResult,
-	StepCallbackServer,
-	StepOAuthErrorCode,
-} from "./callback-server.ts";
+	InitStepCliLoginInput,
+	PollStepCliLoginInput,
+	StepCliClientInfo,
+	StepCliLoginErrorKind,
+	StepCliLoginFailureReason,
+	StepCliLoginInit,
+	StepCliLoginPoll,
+} from "./login-client.ts";
 export {
-	buildStepAuthorizationUrl,
-	buildStepCallbackUrl,
-	DEFAULT_STEP_OAUTH_TIMEOUT_MS,
-	STEP_OAUTH_CALLBACK_PATH,
-	STEP_OAUTH_CANCEL_PATH,
-	STEP_OAUTH_ERROR_CODES,
-	startStepCallbackServer,
-} from "./callback-server.ts";
+	defaultStepCliClientInfo,
+	initStepCliLogin,
+	isRetryableStepCliLoginError,
+	pollStepCliLogin,
+	STEP_CLI_LOGIN_PATH_PREFIX,
+	StepCliLoginRequestError,
+} from "./login-client.ts";
+export type { StepCliLoginReady, WaitForStepCliLoginInput } from "./login-polling.ts";
+export { MIN_STEP_POLL_INTERVAL_MS, waitForStepCliLogin } from "./login-polling.ts";
 
 /** Provider id used by the default Step extension. */
 export const STEP_PROVIDER_ID = "step";
@@ -61,14 +61,12 @@ export const STEP_PROVIDER_ID = "step";
 export const STEP_PROVIDER_ENV = {
 	apiBaseUrl: "STEP_BASE_URL",
 	authBaseUrl: "STEPCODE_DEVCENTER_AUTH_CN_URL",
-	tokenUrl: "STEP_OAUTH_TOKEN_URL",
 	apiKey: "STEP_API_KEY",
-	callbackHost: "STEP_OAUTH_CALLBACK_HOST",
-	callbackPort: "STEP_OAUTH_CALLBACK_PORT",
 	timeoutMs: "STEP_OAUTH_TIMEOUT_MS",
-	clientId: "STEP_OAUTH_CLIENT_ID",
-	scope: "STEP_OAUTH_SCOPE",
 } as const;
+
+/** Maximum time for a cloud sign-in, including init and polling. */
+export const DEFAULT_STEP_CLI_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Production defaults; every endpoint can be replaced through the options/env. */
 export const STEP_PROVIDER_DEFAULTS = {
@@ -76,9 +74,7 @@ export const STEP_PROVIDER_DEFAULTS = {
 	// must be the route prefix rather than a versioned operation URL.
 	apiBaseUrl: "https://api.stepfun.com/step_plan",
 	authBaseUrl: "https://platform.stepfun.com",
-	callbackHost: "127.0.0.1",
-	callbackPort: 0,
-	timeoutMs: DEFAULT_STEP_OAUTH_TIMEOUT_MS,
+	timeoutMs: DEFAULT_STEP_CLI_LOGIN_TIMEOUT_MS,
 } as const;
 
 /** Marker used for credentials that contain a non-expiring Step API key. */
@@ -170,28 +166,21 @@ const AUTH_BASE_URL_ENV_NAMES = [
 	"STEP_LOGIN_PROFILE_AUTH_URL",
 	STEP_PROVIDER_ENV.authBaseUrl,
 ] as const;
-const REFRESH_SKEW_MS = 5 * 60 * 1000;
-const MAX_ERROR_DETAIL_LENGTH = 240;
 
 export interface StepProviderOptions {
 	readonly providerId?: string;
 	readonly name?: string;
 	readonly apiBaseUrl?: string;
 	readonly authBaseUrl?: string;
-	readonly tokenUrl?: string;
 	readonly apiKeyEnv?: string;
-	readonly callbackHost?: string;
-	readonly callbackPort?: number;
 	readonly timeoutMs?: number;
-	readonly clientId?: string;
-	readonly scope?: string;
 	readonly env?: Record<string, string | undefined>;
 	readonly models?: readonly StepModelConfig[];
-	readonly createState?: () => string;
-	readonly createCallbackServer?: CallbackServerFactory;
 	readonly fetch?: typeof fetch;
-	/** Enable a terminal prompt for hosts where the browser cannot reach loopback. */
-	readonly allowManualCallback?: boolean;
+	/** Login profile metadata recorded by the backend. */
+	readonly loginProfile?: string;
+	/** Terminal metadata for server audit logs. Never used for auth. */
+	readonly client?: StepCliClientInfo;
 }
 
 export interface ResolvedStepProviderOptions {
@@ -199,22 +188,14 @@ export interface ResolvedStepProviderOptions {
 	readonly name: string;
 	readonly apiBaseUrl: string;
 	readonly authBaseUrl: string;
-	readonly tokenUrl?: string;
 	readonly apiKeyEnv: string;
-	readonly callbackHost: string;
-	readonly callbackPort: number;
 	readonly timeoutMs: number;
-	readonly clientId?: string;
-	readonly scope?: string;
 	readonly env: Record<string, string | undefined>;
 	readonly models: readonly StepModelConfig[];
-	readonly createState: () => string;
-	readonly createCallbackServer: CallbackServerFactory;
 	readonly fetch?: typeof fetch;
-	readonly allowManualCallback: boolean;
+	readonly loginProfile: string;
+	readonly client: StepCliClientInfo;
 }
-
-export type CallbackServerFactory = (options: StartStepCallbackServerOptions) => Promise<StepCallbackServer>;
 
 /** Resolve provider settings at registration time, after environment setup. */
 export function resolveStepProviderOptions(options: StepProviderOptions = {}): ResolvedStepProviderOptions {
@@ -229,8 +210,6 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 		options.authBaseUrl ?? readFirstEnv(env, AUTH_BASE_URL_ENV_NAMES) ?? STEP_PROVIDER_DEFAULTS.authBaseUrl,
 		"Step OAuth authorization URL",
 	);
-	const tokenUrlValue = options.tokenUrl ?? readFirstEnv(env, [STEP_PROVIDER_ENV.tokenUrl]);
-	const tokenUrl = tokenUrlValue ? validateHttpEndpoint(tokenUrlValue, "Step OAuth token URL") : undefined;
 	const providerId = nonEmpty(options.providerId ?? STEP_PROVIDER_ID, "Step provider id");
 	const name = nonEmpty(options.name ?? "Step", "Step provider name");
 	const apiKeyEnv = nonEmpty(options.apiKeyEnv ?? STEP_PROVIDER_ENV.apiKey, "Step API key environment variable");
@@ -238,18 +217,11 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 		throw new Error(`Invalid Step API key environment variable name: ${apiKeyEnv}`);
 	}
 
-	const callbackHost =
-		options.callbackHost ??
-		readFirstEnv(env, [STEP_PROVIDER_ENV.callbackHost]) ??
-		STEP_PROVIDER_DEFAULTS.callbackHost;
-	const callbackPort =
-		options.callbackPort ?? readPortEnv(env[STEP_PROVIDER_ENV.callbackPort]) ?? STEP_PROVIDER_DEFAULTS.callbackPort;
 	const timeoutMs =
 		options.timeoutMs ?? readPositiveInteger(env[STEP_PROVIDER_ENV.timeoutMs]) ?? STEP_PROVIDER_DEFAULTS.timeoutMs;
-	if (timeoutMs <= 0) throw new Error("Step OAuth timeout must be greater than zero");
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+		throw new Error("Step login timeout must be finite and greater than zero");
 
-	const clientId = options.clientId ?? readFirstEnv(env, [STEP_PROVIDER_ENV.clientId]);
-	const scope = options.scope ?? readFirstEnv(env, [STEP_PROVIDER_ENV.scope]);
 	// Empty is allowed: the Step catalog is discovered dynamically from
 	// `{base}/v1/models`; there is no built-in baseline.
 	const models = options.models ?? STEP_MODELS;
@@ -259,19 +231,15 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 		name,
 		apiBaseUrl,
 		authBaseUrl,
-		tokenUrl,
 		apiKeyEnv,
-		callbackHost,
-		callbackPort,
 		timeoutMs,
-		clientId,
-		scope,
 		env,
 		models,
-		createState: options.createState ?? randomUUID,
-		createCallbackServer: options.createCallbackServer ?? startStepCallbackServer,
 		fetch: options.fetch,
-		allowManualCallback: options.allowManualCallback ?? false,
+		loginProfile:
+			options.loginProfile?.trim() ||
+			(new URL(authBaseUrl).hostname.endsWith(".ai") ? "step_plan_oversea" : "step_plan"),
+		client: options.client ?? defaultStepCliClientInfo("unknown"),
 	};
 }
 
@@ -296,171 +264,66 @@ export function normalizeStepModel(model: Model<Api>, openaiBaseUrl: string): Mo
 	return { ...model, api: STEP_MODEL_API, baseUrl: openaiBaseUrl };
 }
 
+/** Cloud login has one path: init, open the supplied URL, poll, store the existing API key. */
 export async function loginStepOAuth(
 	callbacks: OAuthLoginCallbacks,
 	options: ResolvedStepProviderOptions | StepOAuthLoginOptions,
 ): Promise<OAuthCredentials> {
-	const resolved = isResolvedOptions(options) ? options : resolveStepProviderOptions(options);
-	const state = nonEmpty(resolved.createState(), "Step OAuth state");
-	const server = await resolved.createCallbackServer({
-		state,
-		host: resolved.callbackHost,
-		port: resolved.callbackPort,
-		timeoutMs: resolved.timeoutMs,
-		signal: callbacks.signal,
-	});
-
-	try {
-		const authUrl = buildStepAuthorizationUrl({
-			authBaseUrl: resolved.authBaseUrl,
-			port: server.port,
-			state,
-		});
-		callbacks.onAuth({
-			url: authUrl,
-			instructions: "Complete sign-in in your browser. The terminal will continue automatically.",
-		});
-
-		const result = resolved.allowManualCallback
-			? await waitForCallbackOrManualInput(server, callbacks, state)
-			: await server.waitForResult();
-		if (result.kind === "credential") return credentialFromCallback(result);
-		if (result.kind === "code") {
-			return exchangeAuthorizationCode(result.code, state, server.port, resolved, callbacks.signal);
-		}
-		if (result.kind === "error") {
-			const detail = result.description ? `: ${result.description}` : "";
-			throw new Error(`Step OAuth login failed (${result.code})${detail}`);
-		}
-		if (result.kind === "timeout") throw new Error("Step OAuth login timed out");
-		throw new Error("Step OAuth login cancelled");
-	} finally {
-		await server.close();
-	}
+	const resolved = resolveStepProviderOptions(options);
+	return withStepCliLoginTimeout(
+		resolved.timeoutMs,
+		callbacks.signal,
+		() => new Error("Step sign-in timed out. Run `step login` again."),
+		async (signal) => {
+			const pollToken = randomBytes(32).toString("hex");
+			const init = await initStepCliLogin({
+				authBaseUrl: resolved.authBaseUrl,
+				pollToken,
+				profile: resolved.loginProfile,
+				client: resolved.client,
+				signal,
+				fetch: resolved.fetch,
+			});
+			signal.throwIfAborted();
+			callbacks.onAuth({
+				url: init.authorizeUrl,
+				instructions: "Open this URL in any browser and approve the sign-in.",
+			});
+			callbacks.onProgress?.("Waiting for browser confirmation...");
+			const ready = await waitForStepCliLogin({
+				init,
+				authBaseUrl: resolved.authBaseUrl,
+				pollToken,
+				signal,
+				fetch: resolved.fetch,
+			});
+			signal.throwIfAborted();
+			return {
+				access: ready.apiKey,
+				refresh: STEP_STATIC_REFRESH_TOKEN,
+				expires: Number.MAX_SAFE_INTEGER,
+				...(ready.uid ? { uid: ready.uid } : {}),
+			};
+		},
+	);
 }
 
 export interface StepOAuthLoginOptions extends StepProviderOptions {
 	readonly authBaseUrl: string;
 }
 
-export async function refreshStepOAuth(
-	credentials: OAuthCredentials,
-	options: ResolvedStepProviderOptions | StepProviderOptions = {},
-	signal?: AbortSignal,
-): Promise<OAuthCredentials> {
-	const resolved = isResolvedOptions(options) ? options : resolveStepProviderOptions(options);
-	if (credentials.refresh === STEP_STATIC_REFRESH_TOKEN) {
-		return { ...credentials, expires: Number.MAX_SAFE_INTEGER };
+// The provider interface calls this for expired credentials; current Step keys do not expire locally.
+export async function refreshStepOAuth(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+	if (credentials.refresh !== STEP_STATIC_REFRESH_TOKEN) {
+		throw new Error("This Step credential cannot be refreshed. Run `step login` again.");
 	}
-	if (!credentials.refresh) throw new Error("Step OAuth credentials do not contain a refresh token");
-	if (!resolved.tokenUrl) throw new Error("Step OAuth credentials have expired and no token endpoint is configured");
-	const refreshed = await requestToken(
-		resolved.tokenUrl,
-		new URLSearchParams({
-			grant_type: "refresh_token",
-			refresh_token: credentials.refresh,
-			...(resolved.clientId ? { client_id: resolved.clientId } : undefined),
-		}),
-		resolved,
-		credentials.refresh,
-		signal,
-	);
-	const uid = readBoundedUid(readString(credentials, "uid"));
-	return uid && !readBoundedUid(readString(refreshed, "uid")) ? { ...refreshed, uid } : refreshed;
+	return { ...credentials, expires: Number.MAX_SAFE_INTEGER };
 }
 
 export function getStepOAuthApiKey(credentials: OAuthCredentials): string {
 	const access = credentials.access.trim();
 	if (!access) throw new Error("Step OAuth credentials do not contain an access token");
 	return access;
-}
-
-function isResolvedOptions(
-	options: StepProviderOptions | ResolvedStepProviderOptions,
-): options is ResolvedStepProviderOptions {
-	return (
-		"providerId" in options &&
-		"name" in options &&
-		"apiBaseUrl" in options &&
-		"authBaseUrl" in options &&
-		"apiKeyEnv" in options &&
-		"callbackHost" in options &&
-		"callbackPort" in options &&
-		"timeoutMs" in options &&
-		"env" in options &&
-		"models" in options &&
-		"createState" in options &&
-		"createCallbackServer" in options &&
-		"allowManualCallback" in options
-	);
-}
-
-async function exchangeAuthorizationCode(
-	code: string,
-	state: string,
-	callbackPort: number,
-	options: ResolvedStepProviderOptions,
-	signal?: AbortSignal,
-): Promise<OAuthCredentials> {
-	if (!options.tokenUrl) throw new Error("Step OAuth callback returned a code but no token endpoint is configured");
-	const redirectUri = buildStepCallbackUrl({
-		host: options.callbackHost,
-		port: callbackPort,
-		path: STEP_OAUTH_CALLBACK_PATH,
-	});
-	return requestToken(
-		options.tokenUrl,
-		new URLSearchParams({
-			grant_type: "authorization_code",
-			code,
-			state,
-			redirect_uri: redirectUri,
-			...(options.clientId ? { client_id: options.clientId } : undefined),
-			...(options.scope ? { scope: options.scope } : undefined),
-		}),
-		options,
-		undefined,
-		signal,
-	);
-}
-
-async function requestToken(
-	tokenUrl: string,
-	body: URLSearchParams,
-	options: ResolvedStepProviderOptions,
-	previousRefreshToken?: string,
-	signal?: AbortSignal,
-): Promise<OAuthCredentials> {
-	const fetchFn = resolveFetch(options.fetch);
-	let response: Response;
-	try {
-		response = await fetchFn(tokenUrl, {
-			method: "POST",
-			headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-			body,
-			signal,
-		});
-	} catch (error) {
-		if (signal?.aborted) throw new Error("Step OAuth login cancelled");
-		throw new Error(`Step OAuth token request failed: ${describeError(error)}`);
-	}
-
-	const payload = await readJsonObject(response);
-	if (!response.ok) {
-		throw new Error(`Step OAuth token request failed (HTTP ${response.status})${tokenErrorDetail(payload)}`);
-	}
-
-	const access = readString(payload, "access_token") ?? readString(payload, "access");
-	if (!access) throw new Error("Step OAuth token response did not contain an access token");
-	const refresh = readString(payload, "refresh_token") ?? readString(payload, "refresh") ?? previousRefreshToken ?? "";
-	const expiresIn = readPositiveNumber(payload, "expires_in") ?? readPositiveNumber(payload, "expires");
-	const uid = readBoundedUid(readString(payload, "uid") ?? readString(payload, "user_id"));
-	return {
-		access,
-		refresh,
-		expires: expiresIn ? Date.now() + expiresIn * 1000 - REFRESH_SKEW_MS : Number.MAX_SAFE_INTEGER,
-		...(uid ? { uid } : undefined),
-	};
 }
 
 async function readJsonObject(response: Response): Promise<Record<string, unknown>> {
@@ -471,68 +334,6 @@ async function readJsonObject(response: Response): Promise<Record<string, unknow
 		return {};
 	}
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function readBoundedUid(value: string | undefined): string | undefined {
-	const trimmed = value?.trim();
-	if (!trimmed || trimmed.length > 64 || !/^[\w.@:-]+$/u.test(trimmed)) return undefined;
-	return trimmed;
-}
-
-function credentialFromCallback(result: Extract<StepCallbackResult, { kind: "credential" }>): OAuthCredentials {
-	const expires = result.expiresInSeconds
-		? Date.now() + result.expiresInSeconds * 1000 - REFRESH_SKEW_MS
-		: Number.MAX_SAFE_INTEGER;
-	return {
-		access: result.apiKey,
-		refresh: result.refreshToken ?? (result.expiresInSeconds ? "" : STEP_STATIC_REFRESH_TOKEN),
-		expires,
-		...(result.uid ? { uid: result.uid } : undefined),
-	};
-}
-
-async function waitForCallbackOrManualInput(
-	server: StepCallbackServer,
-	callbacks: OAuthLoginCallbacks,
-	expectedState: string,
-): Promise<StepCallbackResult> {
-	const callback = server.waitForResult();
-	const manual = callbacks.onManualCodeInput
-		? callbacks.onManualCodeInput()
-		: callbacks.onPrompt({
-				message: "Paste the Step callback URL (or API key) if the browser cannot reach this terminal:",
-			});
-	const manualResult = manual.then((value): StepCallbackResult => parseManualCallback(value, expectedState));
-	return Promise.race([callback, manualResult]);
-}
-
-function parseManualCallback(value: string, expectedState: string): StepCallbackResult {
-	const trimmed = value.trim();
-	if (!trimmed) return { kind: "error", code: "unknown", description: "Empty callback input" };
-	try {
-		const url = new URL(trimmed);
-		const state = url.searchParams.get("state")?.trim();
-		if (state && state !== expectedState) {
-			return { kind: "error", code: "unknown", description: "OAuth state mismatch" };
-		}
-		const error = url.searchParams.get("error")?.trim();
-		if (error) {
-			return {
-				kind: "error",
-				code: isKnownErrorCode(error) ? error : "unknown",
-				description: url.searchParams.get("error_description")?.trim() || undefined,
-			};
-		}
-		const apiKey = url.searchParams.get("api_key")?.trim() ?? url.searchParams.get("access_token")?.trim();
-		if (apiKey) {
-			const uid = readBoundedUid(url.searchParams.get("uid") ?? undefined);
-			return { kind: "credential", apiKey, ...(uid ? { uid } : undefined) };
-		}
-		const code = url.searchParams.get("code")?.trim();
-		return code ? { kind: "code", code } : { kind: "error", code: "unknown", description: "Missing callback result" };
-	} catch {
-		return { kind: "credential", apiKey: trimmed };
-	}
 }
 
 function resolveFetch(fetchFn: typeof fetch | undefined): typeof fetch {
@@ -553,15 +354,6 @@ function readPositiveInteger(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const parsed = Number(value);
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function readPortEnv(value: string | undefined): number | undefined {
-	if (value === undefined || value.trim() === "") return undefined;
-	const parsed = Number(value);
-	if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
-		throw new Error("STEP_OAUTH_CALLBACK_PORT must be an integer between 0 and 65535");
-	}
-	return parsed;
 }
 
 function validateHttpEndpoint(value: string, label: string): string {
@@ -793,19 +585,4 @@ function readStringArray(value: Record<string, unknown>, key: string): string[] 
 	if (!Array.isArray(result)) return undefined;
 	const items = result.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
 	return items.length > 0 ? items : undefined;
-}
-
-function tokenErrorDetail(value: Record<string, unknown>): string {
-	const error = readString(value, "error");
-	const description = readString(value, "error_description");
-	const detail = [error, description].filter((part): part is string => Boolean(part)).join(": ");
-	return detail ? `: ${detail.slice(0, MAX_ERROR_DETAIL_LENGTH)}` : "";
-}
-
-function describeError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-function isKnownErrorCode(value: string): value is StepOAuthErrorCode {
-	return ["no_access_key", "access_denied", "bad_request", "server_error"].includes(value as StepOAuthErrorCode);
 }

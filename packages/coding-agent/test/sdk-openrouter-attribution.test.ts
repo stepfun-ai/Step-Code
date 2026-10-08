@@ -132,12 +132,20 @@ describe("createAgentSession provider headers", () => {
 		}
 	}
 
-	it("does not add provider attribution headers for OpenRouter models", async () => {
+	it("adds StepCode attribution headers for OpenRouter models without changing the provider", async () => {
 		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"));
 
-		expect(headers?.["HTTP-Referer"]).toBeUndefined();
-		expect(headers?.["X-OpenRouter-Title"]).toBeUndefined();
-		expect(headers?.["X-OpenRouter-Categories"]).toBeUndefined();
+		expect(headers?.["HTTP-Referer"]).toBe("https://github.com/stepfun-ai/Step-Code");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("StepCode");
+		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
+	});
+
+	it("adds StepCode attribution headers for other providers", async () => {
+		const headers = await captureHeaders(createModel("custom", "https://provider.example/v1"));
+
+		expect(headers?.["HTTP-Referer"]).toBe("https://github.com/stepfun-ai/Step-Code");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("StepCode");
+		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
 	});
 
 	it("does not add provider attribution headers for NVIDIA NIM endpoints", async () => {
@@ -146,7 +154,7 @@ describe("createAgentSession provider headers", () => {
 		expect(headers?.["X-BILLING-INVOKE-ORIGIN"]).toBeUndefined();
 	});
 
-	it("passes provider and request headers through", async () => {
+	it("lets configured OpenRouter attribution override the defaults", async () => {
 		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"), {
 			providerHeaders: {
 				"HTTP-Referer": "https://provider.example",
@@ -157,6 +165,7 @@ describe("createAgentSession provider headers", () => {
 		});
 
 		expect(headers?.["HTTP-Referer"]).toBe("https://provider.example");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("StepCode");
 		expect(headers?.["X-Request-Header"]).toBe("request-value");
 	});
 

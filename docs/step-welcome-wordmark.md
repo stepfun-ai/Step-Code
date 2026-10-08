@@ -41,16 +41,16 @@ T 的竖笔居中，C 的开口上下对称，P 的内部字腔不再填入投�
 
 ### 使用提示
 
-信息框底部新增静态 Tips 区，保留上方原有信息。三条提示分别覆盖：
+信息框底部的 Tips 区保留上方原有信息，始终显示 `/cron` 和 `/goal`；当前会话同时注册了 `workflow` 工具和 `/ultracode` 命令时，再显示 Ultracode 提示：
 
 - `/cron`：View and manage scheduled tasks.
 - `/goal`：Set a goal and keep working toward it across turns.
-- `ultracode`：Include this keyword in your prompt to enable parallel subagents.
+- `/ultracode on`：Use parallel agents for this session. One turn: ultracode: task.
 
-每项只用一句话，不展示参数占位符、别名、子命令、预算或引擎细节；仅精简欢迎文案，不改变实际功能。
+Ultracode 提示给出会话开启命令和单轮提示词前缀；完整用法见 `/ultracode help`、`step --help` 和 [workflow 生命周期](orchestration-lifecycle.md)。`/ultraloop` 是等价别名，两者共用 `on`、`off`、`status`、`help` 子命令和同一状态；裸命令显示帮助与当前状态，不开启模式。
 
-命令使用当前主题 accent，说明使用 muted，配合原有 P 色边框。Tips 在所有布局中独占框内全宽，不挤入鹈鹕旁的窄信息列；命令按最长项的显示宽度补齐，再空两列，因此说明及其续行均从同一列开始。先按显示列宽折行再上色；说明列不足 24 列时，三项统一改为命令与说明分行显示。
-提示仅描述用法，不表示当前会话已经开启 workflow，也不探测原生模块或导入引擎。没有新增计时器、状态持久化或工具调用。
+命令使用当前主题 accent，说明使用 muted，配合原有 P 色边框。Tips 在所有布局中独占框内全宽，不挤入鹈鹕旁的窄信息列；命令按可见项中最长命令的显示宽度补齐，再空两列，因此说明及其续行均从同一列开始。先按显示列宽折行再上色；说明列不足 24 列时，所有可见项统一改为命令与说明分行显示。
+提示描述已注册能力和用法，不表示用户已经授权执行 workflow。`/ultracode on` 开启后，状态行显示 `Ultracode on`；会话模式跨轮保留，直到 `off` 或会话边界重置。`ultracode: <task>`（也支持 `ultraloop: <task>`）只授权当前轮，不改变会话模式。欢迎组件只读取已注册能力，不导入引擎或调用工具；会话模式与状态投影由 workflow 扩展维护。
 
 ## 验证
 

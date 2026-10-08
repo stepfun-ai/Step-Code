@@ -48,8 +48,11 @@ describe("buildSystemPrompt", () => {
 		});
 
 		test.each([
+			[["bash"], "Use bash for file operations"],
+			[["run_command"], "Use bash for file operations"],
 			[["powershell"], "Use PowerShell for file operations"],
 			[["bash", "powershell"], "Use bash or PowerShell for file operations"],
+			[["run_command", "powershell"], "Use bash or PowerShell for file operations"],
 		] as const)("uses shell-specific guidance for %j", (selectedTools, expected) => {
 			const prompt = buildSystemPrompt({
 				selectedTools: [...selectedTools],
@@ -73,6 +76,44 @@ describe("buildSystemPrompt", () => {
 			);
 			expect(prompt).toContain("environment variables (docs/environment-variables.md)");
 		});
+	});
+
+	describe.each(["run_command", "powershell"])("file exploration guidance with %s", (shell) => {
+		test.each(["search_files", "find_files", "list_directory"])(
+			"does not add shell fallback when the Step %s alias is available",
+			(tool) => {
+				const prompt = buildSystemPrompt({
+					selectedTools: [shell, tool],
+					contextFiles: [],
+					skills: [],
+					cwd: process.cwd(),
+				});
+
+				expect(prompt).not.toContain("for file operations");
+			},
+		);
+
+		test.each(["grep", "find", "ls"])("keeps the legacy %s capability recognized", (tool) => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [shell, tool],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).not.toContain("for file operations");
+		});
+	});
+
+	test("recognizes mixed legacy and Step file exploration tools", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: ["run_command", "grep", "find_files", "list_directory"],
+			contextFiles: [],
+			skills: [],
+			cwd: process.cwd(),
+		});
+
+		expect(prompt).not.toContain("for file operations");
 	});
 
 	describe("custom tool snippets", () => {

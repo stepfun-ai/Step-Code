@@ -11,7 +11,7 @@ Edit directly or use `/settings` for common options. To save startup model defau
 
 ## Project Trust
 
-On interactive startup, step asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.stepcode/agent/trust.json`. Trusting a project allows step to load `.stepcode/settings.json` and `.stepcode` resources, install missing project packages, and execute project extensions.
+On interactive startup, step asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` or `.claude/skills` and has no saved decision for the folder or a parent folder in `~/.stepcode/agent/trust.json`. Trusting a project allows step to load `.stepcode/settings.json` and `.stepcode` resources, install missing project packages, and execute project extensions.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 

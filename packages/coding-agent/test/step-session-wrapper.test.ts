@@ -1,5 +1,5 @@
 import { chmodSync, existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -112,7 +112,9 @@ describe("Step Pi storage wrappers", () => {
 		const agentDir = join(root, ".stepcode", "agent");
 		const rgPath = join(agentDir, "bin", process.platform === "win32" ? "rg.exe" : "rg");
 		await mkdir(join(agentDir, "bin"), { recursive: true });
-		await writeFile(rgPath, "placeholder");
+		// Managed tools must pass --version before lookup can select them.
+		// Node provides a runnable cross-platform fixture for this path-only test.
+		await copyFile(process.execPath, rgPath);
 
 		expect(getToolPath("rg", agentDir)).toBe(rgPath);
 		expect(getToolPath("rg", agentDir)).not.toContain(`${join(root, ".pi")}/`);
