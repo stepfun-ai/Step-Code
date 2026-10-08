@@ -55,6 +55,16 @@ export interface BashToolDetails {
 	fullOutputPath?: string;
 }
 
+/** Captured command failure with a log produced by the native accumulator. */
+export class ShellToolError extends Error {
+	readonly fullOutputPath: string | undefined;
+
+	constructor(message: string, fullOutputPath?: string) {
+		super(message);
+		this.fullOutputPath = fullOutputPath;
+	}
+}
+
 /**
  * Pluggable operations for the bash tool.
  * Override these to delegate command execution to remote systems (for example SSH).
@@ -136,6 +146,9 @@ export function createLocalShellOperations(
 				if (timedOut) {
 					throw new Error(`timeout:${timeout}`);
 				}
+				if (child.signalCode) {
+					throw new Error(`signal:${child.signalCode}`);
+				}
 				return { exitCode };
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
@@ -175,6 +188,8 @@ export interface BashToolOptions {
 	spawnHook?: BashSpawnHook;
 	/** Agent directory used for the managed binary PATH entry. Defaults to Pi's agent directory. */
 	agentDir?: string;
+	/** Preserve raw output before a caller applies a smaller character cap. Does not change native truncation. */
+	persistOutputAboveChars?: number;
 }
 
 const BASH_PREVIEW_LINES = 5;
@@ -387,6 +402,21 @@ export function createShellToolDefinition(
 				clearUpdateTimer();
 				emitOutputUpdate();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
+				if (
+					!snapshot.fullOutputPath &&
+					options?.persistOutputAboveChars !== undefined &&
+					snapshot.content.length > options.persistOutputAboveChars
+				) {
+					try {
+						const preserved = output.snapshot({ persistFullOutput: true });
+						await output.closeTempFile();
+						return preserved;
+					} catch {
+						// Keep the complete in-memory output if this additional spool fails.
+						// The downstream cap must not discard text without a usable log.
+						return snapshot;
+					}
+				}
 				await output.closeTempFile();
 				return snapshot;
 			};
@@ -407,6 +437,9 @@ export function createShellToolDefinition(
 					} else {
 						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
 					}
+				} else if (snapshot.fullOutputPath) {
+					details = { fullOutputPath: snapshot.fullOutputPath };
+					text += `\n\n[Full output: ${snapshot.fullOutputPath}]`;
 				}
 				return { text, details };
 			};
@@ -427,11 +460,20 @@ export function createShellToolDefinition(
 					const snapshot = await finishOutput();
 					const { text } = formatOutput(snapshot, "");
 					if (err instanceof Error && err.message === "aborted") {
-						throw new Error(appendStatus(text, "Command aborted"));
+						throw new ShellToolError(appendStatus(text, "Command aborted"), snapshot.fullOutputPath);
 					}
 					if (err instanceof Error && err.message.startsWith("timeout:")) {
 						const timeoutSecs = err.message.split(":")[1];
-						throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
+						throw new ShellToolError(
+							appendStatus(text, `Command timed out after ${timeoutSecs} seconds`),
+							snapshot.fullOutputPath,
+						);
+					}
+					if (err instanceof Error && err.message.startsWith("signal:")) {
+						throw new ShellToolError(
+							appendStatus(text, `Command terminated by signal ${err.message.slice(7)}`),
+							snapshot.fullOutputPath,
+						);
 					}
 					throw err;
 				}
@@ -439,7 +481,10 @@ export function createShellToolDefinition(
 				const snapshot = await finishOutput();
 				const { text: outputText, details } = formatOutput(snapshot);
 				if (exitCode !== 0 && exitCode !== null) {
-					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
+					throw new ShellToolError(
+						appendStatus(outputText, `Command exited with code ${exitCode}`),
+						snapshot.fullOutputPath,
+					);
 				}
 				return { content: [{ type: "text", text: outputText }], details };
 			} finally {

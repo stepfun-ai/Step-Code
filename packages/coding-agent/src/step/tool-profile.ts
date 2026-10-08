@@ -14,7 +14,7 @@ import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, write
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import type { Component } from "@step-harness/pi-tui";
+import { type Component, Text } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type {
 	AgentToolUpdateCallback,
@@ -23,6 +23,7 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
+import { ShellToolError } from "../core/tools/bash.ts";
 import type { EditToolOptions } from "../core/tools/edit.ts";
 import { generateDiffString, generateUnifiedPatch, normalizeToLF } from "../core/tools/edit-diff.ts";
 import { withFileMutationQueue } from "../core/tools/file-mutation-queue.ts";
@@ -57,6 +58,7 @@ import {
 } from "../utils/shell.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { createSearchWebTool, type SearchWebToolOptions } from "./search-web-tool.ts";
+import { readThenRunCommand } from "./then-run.ts";
 
 const STEP_TOOL_NAMES = [
 	"list_directory",
@@ -79,10 +81,13 @@ const STEP_NATIVE_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep",
 const PATH_DESCRIPTION =
 	"Relative paths resolve from the initial working directory; absolute paths and ~/ home paths are accepted.";
 const RUN_COMMAND_CWD_DESCRIPTION = `Working directory. ${PATH_DESCRIPTION}`;
+const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const READ_FILE_DESCRIPTION =
 	"Read a text file with optional line range; image files (PNG/JPEG/GIF/WebP) are returned as attached images. Prefer this over shell cat for token efficiency.";
 const WRITE_FILE_DESCRIPTION =
 	"Write full content to a file, creating parent directories if missing. Overwrites existing content — for existing files prefer edit_file.";
+const THEN_RUN_DESCRIPTION =
+	"Optional shell command to run after the change succeeds, from the initial working directory like run_command (e.g. a focused test or typecheck); its output and exit status are appended to this result, saving a separate run_command call. Requires the same approval as run_command.";
 
 const listDirectorySchema = Type.Object({
 	path: Type.Optional(Type.String({ description: `Directory path. ${PATH_DESCRIPTION} Defaults to '.'` })),
@@ -118,6 +123,7 @@ const readFileSchema = Type.Object({
 const writeFileSchema = Type.Object({
 	path: Type.String({ description: `File path. ${PATH_DESCRIPTION}` }),
 	content: Type.String({ description: "Full file content" }),
+	then_run: Type.Optional(Type.String({ description: THEN_RUN_DESCRIPTION })),
 });
 
 const editFileSchema = Type.Object({
@@ -125,12 +131,19 @@ const editFileSchema = Type.Object({
 	search: Type.String({ description: "Literal string to find" }),
 	replace: Type.String({ description: "Replacement string" }),
 	replace_all: Type.Optional(Type.Boolean({ description: "Replace all matches" })),
+	then_run: Type.Optional(Type.String({ description: THEN_RUN_DESCRIPTION })),
 });
 
 const runCommandSchema = Type.Object({
 	command: Type.String({ description: "Shell command string" }),
 	cwd: Type.Optional(Type.String({ description: RUN_COMMAND_CWD_DESCRIPTION })),
-	timeout_ms: Type.Optional(Type.Integer({ minimum: 1000, maximum: 600000 })),
+	timeout_ms: Type.Optional(
+		Type.Integer({
+			minimum: 1000,
+			maximum: 600000,
+			description: `Foreground timeout in milliseconds. Defaults to ${DEFAULT_COMMAND_TIMEOUT_MS}.`,
+		}),
+	),
 	max_output_chars: Type.Optional(
 		Type.Integer({ minimum: 200, maximum: 120000, description: "Output character cap for stdout+stderr" }),
 	),
@@ -257,6 +270,44 @@ function withStepTextLimit(
 	return { text: `${prefix}${body}${compatibilitySuffix}`, truncated: true };
 }
 
+/** Keep recovery metadata intact when limiting either successful or failed commands. */
+function limitRunCommandText(
+	text: string,
+	maxChars: number,
+	fullOutputPath: string | undefined,
+): { text: string; truncated: boolean } {
+	if (!fullOutputPath || text.length <= maxChars) return { text, truncated: false };
+	let body = text;
+	let suffix = "";
+	const status =
+		/(?:^|\n\n)(Command (?:aborted|timed out after [^\n]+|exited with code [^\n]+|terminated by signal [^\n]+))$/u.exec(
+			body,
+		);
+	if (status) {
+		suffix = `\n\n${status[1]}`;
+		body = body.slice(0, status.index);
+	}
+	const notice = /\n\n\[(?:Showing [^\n]*\. )?Full output: ([^\n]+)\]$/u.exec(body);
+	// This also preserves all diagnostics when additional log persistence failed.
+	if (!notice || notice[1] !== fullOutputPath) return { text, truncated: false };
+	suffix = `\n\n[Full output: ${notice[1]}]${suffix}`;
+	body = body.slice(0, notice.index);
+	const prefix = maxChars < 512 ? "[Output truncated]\n" : `${STEP_TRUNCATION_HINTS.run_command.banner}\n\n`;
+	// A path/status longer than the cap must remain usable, even without inline output.
+	const remaining = Math.max(0, maxChars - prefix.length - suffix.length);
+	let limitedBody = "";
+	if (body.length <= remaining) {
+		limitedBody = body;
+	} else if (remaining >= 5) {
+		const head = Math.ceil((remaining - 5) * 0.7);
+		const tail = remaining - 5 - head;
+		limitedBody = `${body.slice(0, head)}\n...\n${tail > 0 ? body.slice(-tail) : ""}`;
+	} else if (remaining > 0) {
+		limitedBody = body.slice(-remaining);
+	}
+	return { text: `${prefix}${limitedBody}${suffix}`, truncated: true };
+}
+
 /** Preserve the historical read_file suffix used by clients that display caps verbatim. */
 function withReadTextLimit(text: string, maxChars: number): { text: string; truncated: boolean } {
 	if (text.length <= maxChars) return { text, truncated: false };
@@ -268,7 +319,14 @@ function withReadTextLimit(text: string, maxChars: number): { text: string; trun
 
 function applyStepTextLimit(result: AnyResult, toolName: StepTruncationToolName, maxChars: number): AnyResult {
 	const text = textFromResult(result);
-	const limited = withStepTextLimit(toolName, text, maxChars);
+	const limited =
+		toolName === "run_command"
+			? limitRunCommandText(
+					text,
+					maxChars,
+					typeof result.details?.fullOutputPath === "string" ? result.details.fullOutputPath : undefined,
+				)
+			: withStepTextLimit(toolName, text, maxChars);
 	if (!limited.truncated) return result;
 	return {
 		...result,
@@ -1012,10 +1070,154 @@ function mapRunCommandArgs(args: RunCommandInput, ctx?: ExtensionContext): { com
 		throw new Error(`max_output_chars must be between ${MIN_COMMAND_OUTPUT_CHARS} and ${MAX_COMMAND_OUTPUT_CHARS}`);
 	}
 	const configuredTimeout = getContextValue<number>(ctx, "commandTimeoutMs");
-	const timeoutMs = args.timeout_ms ?? (typeof configuredTimeout === "number" ? configuredTimeout : undefined);
+	const timeoutMs =
+		args.timeout_ms ?? (typeof configuredTimeout === "number" ? configuredTimeout : DEFAULT_COMMAND_TIMEOUT_MS);
 	return {
 		command: args.command,
-		timeout: timeoutMs === undefined ? undefined : timeoutMs / 1000,
+		timeout: args.run_in_background === true ? undefined : timeoutMs / 1000,
+	};
+}
+
+export interface StepThenRunDetails {
+	command: string;
+	exitCode: number | null;
+	timedOut: boolean;
+	stepTruncated: boolean;
+}
+
+/**
+ * Action fusion: run the `then_run` verification command after a successful
+ * file mutation and fold its outcome into the mutation result.  The native
+ * bash tool throws on non-zero exits; a failing check must not hide the
+ * already-applied mutation, so those throws become part of the fused output
+ * and the result is not marked as an error.  Caller cancellation still
+ * propagates, carrying the mutation receipt.
+ */
+async function withThenRunResult(
+	result: AnyResult,
+	nativeBash: AnyToolDefinition,
+	command: string,
+	signal: AbortSignal | undefined,
+	ctx: ExtensionContext | undefined,
+): Promise<AnyResult> {
+	const configuredTimeout = getContextValue<number>(ctx, "commandTimeoutMs");
+	const receipt = textFromResult(result);
+	let output: string;
+	let status: string | undefined;
+	let exitCode: number | null = 0;
+	let timedOut = false;
+	try {
+		// No onUpdate: bash partials would reach the edit/write renderers.
+		const bashResult = await nativeBash.execute(
+			"step-then-run",
+			{ command, timeout: typeof configuredTimeout === "number" ? configuredTimeout / 1000 : undefined },
+			signal,
+			undefined,
+			ctx as ExtensionContext,
+		);
+		output = textFromResult(bashResult);
+		status = "Command exited with code 0";
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (isCallerAborted(signal)) throw new Error(`${receipt}\n\nthen_run: $ ${command}\n${message}`);
+		const match = /(?:^|\n\n)(Command exited with code (\d+)|Command timed out after .+ seconds)$/u.exec(message);
+		if (match) {
+			output = message.slice(0, match.index);
+			status = match[1];
+			exitCode = match[2] === undefined ? null : Number(match[2]);
+			timedOut = match[2] === undefined;
+		} else {
+			output = message;
+			exitCode = null;
+		}
+	}
+	const limited = withStepTextLimit("run_command", output || "(no output)", resolveStepMaxChars(undefined, ctx));
+	const thenRun: StepThenRunDetails = { command, exitCode, timedOut, stepTruncated: limited.truncated };
+	return {
+		...result,
+		content: [
+			{
+				type: "text",
+				text: `${receipt}\n\n${thenRunMarker(command)}${limited.text}${status ? `\n\n${status}` : ""}`,
+			},
+		],
+		details: { ...nativeDetails(result), thenRun },
+	} as AnyResult;
+}
+
+function thenRunMarker(command: string): string {
+	return `then_run: $ ${command}\n`;
+}
+
+function readThenRunDetails(result: AnyResult): StepThenRunDetails | undefined {
+	const value = nativeDetails(result).thenRun;
+	return value && typeof value === "object" && typeof (value as StepThenRunDetails).command === "string"
+		? (value as StepThenRunDetails)
+		: undefined;
+}
+
+/** Appends the then_run summary below the native edit/write result component. */
+class ThenRunResultComponent implements Component {
+	readonly wantsKeyRelease?: boolean;
+	readonly inner: Component;
+	readonly extra: Text;
+	private cache?: { innerLines: string[]; extraLines: string[]; lines: string[] };
+
+	constructor(inner: Component, text: string) {
+		this.inner = inner;
+		this.extra = new Text(text, 0, 0);
+		this.wantsKeyRelease = inner.wantsKeyRelease;
+	}
+
+	render(width: number): string[] {
+		const innerLines = this.inner.render(width);
+		const extraLines = this.extra.render(width);
+		// Return a stable array so parent containers can reuse their cached prefix.
+		if (this.cache?.innerLines === innerLines && this.cache.extraLines === extraLines) return this.cache.lines;
+		const lines = [...innerLines, ...extraLines];
+		this.cache = { innerLines, extraLines, lines };
+		return lines;
+	}
+
+	handleInput(data: string): void {
+		this.inner.handleInput?.(data);
+	}
+
+	invalidate(): void {
+		this.cache = undefined;
+		this.inner.invalidate();
+		this.extra.invalidate();
+	}
+}
+
+function formatThenRunSummary(result: AnyResult, thenRun: StepThenRunDetails, expanded: boolean, theme: any): string {
+	const command = thenRun.command.replace(/\s+/gu, " ").trim();
+	const status = thenRun.timedOut
+		? theme.fg("error", "timed out")
+		: thenRun.exitCode === 0
+			? theme.fg("success", "exit 0")
+			: theme.fg("error", thenRun.exitCode === null ? "failed" : `exit ${thenRun.exitCode}`);
+	const summary = `${theme.fg("muted", `then_run $ ${command} ·`)} ${status}`;
+	if (!expanded) return summary;
+	const text = textFromResult(result);
+	const markerIndex = text.indexOf(thenRunMarker(thenRun.command));
+	if (markerIndex < 0) return summary;
+	const body = text
+		.slice(markerIndex + thenRunMarker(thenRun.command).length)
+		.replace(/\n\n(Command exited with code \d+|Command timed out after .+ seconds)$/u, "");
+	return `${theme.fg("toolOutput", body)}\n${summary}`;
+}
+
+/** Wrap a native edit/write result renderer so then_run output stays visible. */
+function withThenRunRenderResult(renderResult: Renderer["renderResult"]): Renderer["renderResult"] {
+	if (!renderResult) return undefined;
+	return (result, options, theme, context) => {
+		const lastComponent =
+			context.lastComponent instanceof ThenRunResultComponent ? context.lastComponent.inner : context.lastComponent;
+		const inner = renderResult(result, options, theme, { ...context, lastComponent });
+		const thenRun = options.isPartial ? undefined : readThenRunDetails(result);
+		if (!thenRun) return inner;
+		return new ThenRunResultComponent(inner, formatThenRunSummary(result, thenRun, options.expanded, theme));
 	};
 }
 
@@ -1351,13 +1553,18 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 	);
 	const writeFile = {
 		...writeFileBase,
-		execute: (
+		execute: async (
 			_toolCallId: string,
 			args: WriteFileInput,
 			signal: AbortSignal | undefined,
 			_onUpdate: AgentToolUpdateCallback<any> | undefined,
 			ctx: ExtensionContext,
-		) => executeStepWriteFile(args, cwd, options.write, signal, ctx),
+		) => {
+			const result = await executeStepWriteFile(args, cwd, options.write, signal, ctx);
+			const thenRun = readThenRunCommand(args);
+			return thenRun === undefined ? result : withThenRunResult(result, nativeBash, thenRun, signal, ctx);
+		},
+		renderResult: withThenRunRenderResult(writeFileBase.renderResult as Renderer["renderResult"]),
 	} as AnyToolDefinition;
 
 	const editFile: ToolDefinition<typeof editFileSchema, EditToolDetails | undefined> = {
@@ -1373,8 +1580,11 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		constrainedSampling: nativeEdit.constrainedSampling,
 		executionMode: nativeEdit.executionMode,
 		renderShell: nativeEdit.renderShell,
-		execute: (toolCallId, args, signal, onUpdate, ctx) =>
-			executeStepEdit(nativeEdit, toolCallId, args, cwd, options.edit, signal, onUpdate, ctx),
+		execute: async (toolCallId, args, signal, onUpdate, ctx) => {
+			const result = await executeStepEdit(nativeEdit, toolCallId, args, cwd, options.edit, signal, onUpdate, ctx);
+			const thenRun = readThenRunCommand(args);
+			return thenRun === undefined ? result : withThenRunResult(result, nativeBash, thenRun, signal, ctx);
+		},
 		renderCall: nativeEdit.renderCall
 			? (args, theme, context) =>
 					nativeEdit.renderCall!(mapEditFileArgs(args), theme, {
@@ -1382,13 +1592,15 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 						args: mapEditFileArgs(args),
 					})
 			: undefined,
-		renderResult: nativeEdit.renderResult
-			? (result, renderOptions, theme, context) =>
-					nativeEdit.renderResult!(result, renderOptions, theme, {
-						...context,
-						args: mapEditFileArgs(context.args),
-					})
-			: undefined,
+		renderResult: withThenRunRenderResult(
+			nativeEdit.renderResult
+				? (result, renderOptions, theme, context) =>
+						nativeEdit.renderResult!(result, renderOptions, theme, {
+							...context,
+							args: mapEditFileArgs(context.args),
+						})
+				: undefined,
+		),
 	};
 
 	const runCommand: ToolDefinition<typeof runCommandSchema> = {
@@ -1409,10 +1621,22 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 					agentDir,
 				});
 			}
-			const nativeForCwd =
-				args.cwd === undefined ? nativeBash : createBashToolDefinition(commandCwd, nativeBashOptions);
-			const result = await nativeForCwd.execute(toolCallId, mapRunCommandArgs(args, ctx), signal, onUpdate, ctx);
-			return applyStepTextLimit(result, "run_command", resolveStepMaxChars(args.max_output_chars, ctx));
+			const nativeArgs = mapRunCommandArgs(args, ctx);
+			const maxChars = resolveStepMaxChars(args.max_output_chars, ctx);
+			const nativeForCwd = createBashToolDefinition(args.cwd === undefined ? cwd : commandCwd, {
+				...nativeBashOptions,
+				persistOutputAboveChars: maxChars,
+			});
+			try {
+				const result = await nativeForCwd.execute(toolCallId, nativeArgs, signal, onUpdate, ctx);
+				return applyStepTextLimit(result, "run_command", maxChars);
+			} catch (error) {
+				if (error instanceof ShellToolError) {
+					const limited = limitRunCommandText(error.message, maxChars, error.fullOutputPath);
+					if (limited.truncated) throw new Error(limited.text, { cause: error });
+				}
+				throw error;
+			}
 		},
 		renderCall: nativeBash.renderCall
 			? (args, theme, context) =>

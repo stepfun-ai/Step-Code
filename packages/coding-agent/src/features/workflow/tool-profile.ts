@@ -1,5 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { getThenRunCommand } from "../../step/then-run.ts";
 
 const READ_ONLY_TOOLS = ["read_file", "search_files", "find_files", "list_directory", "find_tools"];
 const DEVELOPER_TOOLS = [...READ_ONLY_TOOLS, "write_file", "edit_file", "run_command"];
@@ -156,7 +157,11 @@ export function checkWorkflowToolCall(
 		const target = ["path", "filePath", "target", "filename"]
 			.map((key) => value[key])
 			.find((item) => typeof item === "string");
-		return checkWorkflowPathAccess(cwd, typeof target === "string" ? target : "", "write", acl);
+		const writeDecision = checkWorkflowPathAccess(cwd, typeof target === "string" ? target : "", "write", acl);
+		const thenRun = getThenRunCommand(toolName, value);
+		if (!writeDecision.allowed || thenRun === undefined) return writeDecision;
+		const runDecision = checkWorkflowToolCall(cwd, "run_command", { command: thenRun }, acl);
+		return runDecision.allowed ? writeDecision : runDecision;
 	}
 	if (EXECUTE_TOOL_NAMES.has(toolName)) {
 		const commandCwd = typeof value.cwd === "string" ? value.cwd : ".";

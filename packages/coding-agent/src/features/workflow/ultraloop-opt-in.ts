@@ -74,6 +74,20 @@ export function buildUltraloopSessionReminder(): string {
 	return "<system-reminder>Ultraloop is on for the session — the user has authorized multi-agent orchestration until they turn it off with /ultraloop off. Author and run a workflow for every substantive task by default; the goal is the most exhaustive, correct answer you can produce, and token cost is not a constraint. For multi-phase work (understand → design → implement → review), run several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward orchestrating with workflows and adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits.</system-reminder>";
 }
 
+/** Explain the mode and its current scope without changing the active tool profile. */
+function buildUltraloopDiscovery(activeTools: readonly string[], sessionMode: boolean): string {
+	const route = activeTools.includes("workflow")
+		? "The workflow tool is active; use it when the user requests orchestration."
+		: "The workflow tool is not active in the current tool profile. Explain that limitation; the session switch does not change tool access.";
+	return [
+		"<system-reminder>Ultracode and Ultraloop are names for the same multi-agent workflow capability.",
+		`Current session mode: ${sessionMode ? "on" : "off"}.`,
+		"Interactive controls: /ultracode on, /ultracode off, /ultracode status, /ultracode help; /ultraloop is an alias. For one turn, prefix the task with ultracode: or ultraloop:.",
+		route,
+		"This capability notice is not consent to start a workflow or enable session mode. For questions about these modes, explain the controls; running a workflow is unnecessary.</system-reminder>",
+	].join("\n");
+}
+
 /**
  * Per-turn state shared between the opt-in extension (writer) and the
  * workflow tool (reader). Both are constructed by step-capabilities with the
@@ -109,10 +123,11 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 		};
 
 		// Session boundary resets standing mode; each new session starts opted-out.
-		pi.on("session_start", () => {
+		pi.on("session_start", (_event, ctx) => {
 			sessionMode = false;
 			optedInThisTurn = false;
 			setTurnBudget(undefined);
+			ctx.ui.setStatus("ultracode", undefined);
 		});
 
 		// Fires after the user submits a prompt, before the agent loop; the returned
@@ -121,6 +136,7 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 			const token = detectUltraloopOptIn(event.prompt);
 			optedInThisTurn = token !== undefined;
 			setTurnBudget(detectUltraloopBudget(event.prompt));
+			const discovery = buildUltraloopDiscovery(pi.getActiveTools(), sessionMode);
 
 			// Session-standing wins when both signals fire: the LLM already knows
 			// workflow is authorized for the whole session; a per-turn reminder
@@ -129,18 +145,27 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 				return {
 					message: {
 						customType: "ultraloop-opt-in",
-						content: buildUltraloopSessionReminder(),
+						content: `${buildUltraloopSessionReminder()}\n\n${discovery}`,
 						display: false,
 						details: { source: "session" },
 					},
 				};
 			}
 
-			if (token === undefined) return;
+			if (token === undefined) {
+				return {
+					message: {
+						customType: "ultraloop-discovery",
+						content: discovery,
+						display: false,
+						details: { source: "discovery" },
+					},
+				};
+			}
 			return {
 				message: {
 					customType: "ultraloop-opt-in",
-					content: buildUltraloopReminder(token),
+					content: `${buildUltraloopReminder(token)}\n\n${discovery}`,
 					display: false,
 					details: { source: "turn", token },
 				},
@@ -163,30 +188,60 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 			setTurnBudget(undefined);
 		});
 
-		pi.registerCommand("ultraloop", {
+		const command = {
 			description:
-				'Enable multi-agent workflow orchestration. Usage: /ultraloop [on|off|status] for session-standing mode; prefix a message with "ultraloop:" for one-turn opt-in.',
+				"Ultracode multi-agent workflows. Use /ultracode on, off, status, or help; /ultraloop is an alias.",
+			getArgumentCompletions: (prefix: string) =>
+				[
+					{ value: "on", label: "on", description: "Enable workflows for this session" },
+					{ value: "off", label: "off", description: "Return to one-turn opt-in" },
+					{ value: "status", label: "status", description: "Show the current session mode" },
+					{ value: "help", label: "help", description: "Show session and one-turn usage" },
+				].filter((item) => item.value.startsWith(prefix.trim().toLowerCase())),
 			handler: async (args: string, ctx: ExtensionCommandContext) => {
 				const token = args.trim().toLowerCase();
 				if (token === "on") {
 					sessionMode = true;
+					ctx.ui.setStatus("ultracode", "Ultracode on");
 					ctx.ui.notify(
-						"Ultraloop is on for the session. The workflow tool is authorized until you run /ultraloop off.",
+						"Ultracode is on for the session. Multi-agent workflows are authorized until /ultracode off or the session ends.",
 						"info",
 					);
 					return;
 				}
 				if (token === "off") {
 					sessionMode = false;
-					ctx.ui.notify("Ultraloop session mode is off. Workflow now requires a per-turn opt-in signal.", "info");
+					ctx.ui.setStatus("ultracode", undefined);
+					ctx.ui.notify("Ultracode session mode is off. Use ultracode: <task> for one-turn opt-in.", "info");
 					return;
 				}
-				if (token === "" || token === "status") {
-					ctx.ui.notify(`Ultraloop session mode: ${sessionMode ? "on" : "off"}.`, "info");
+				if (token === "status") {
+					ctx.ui.notify(`Ultracode session mode: ${sessionMode ? "on" : "off"}.`, "info");
 					return;
 				}
-				ctx.ui.notify("Usage: /ultraloop [on|off|status]", "warning");
+				if (token === "" || token === "help") {
+					ctx.ui.notify(
+						[
+							`Ultracode session mode: ${sessionMode ? "on" : "off"}.`,
+							"Ultracode (Ultraloop) coordinates parallel agents through workflows.",
+							"/ultracode on      Enable for this session (can use more tokens)",
+							"/ultracode off     Return to one-turn opt-in",
+							"/ultracode status  Show the current mode",
+							"/ultracode help    Show this help",
+							"One turn: ultracode: <task> (or ultraloop: <task>)",
+							"/ultraloop is an alias with the same controls and state.",
+						].join("\n"),
+						"info",
+					);
+					return;
+				}
+				ctx.ui.notify("Usage: /ultracode [on|off|status|help] (/ultraloop is an alias).", "warning");
 			},
+		};
+		pi.registerCommand("ultracode", command);
+		pi.registerCommand("ultraloop", {
+			...command,
+			description: "Alias for /ultracode: multi-agent workflows with the same on/off/status/help controls.",
 		});
 	};
 }

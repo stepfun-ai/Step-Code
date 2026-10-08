@@ -35,6 +35,7 @@ import {
 	StepStdioFrameDecoder,
 	StepStdioProtocolViolation,
 } from "./stdio.ts";
+import { getThenRunCommand } from "./then-run.ts";
 
 type FrameWriter = (chunk: Buffer) => boolean | undefined;
 
@@ -798,7 +799,9 @@ export class StepStdioHost {
 		if (mode === "plan" || mode === "dontAsk") {
 			return { block: true, reason: `tool ${toolName} is not allowed in permission mode ${mode}`, terminate: true };
 		}
-		if (mode === "acceptEdits" && isEditTool(toolName)) return undefined;
+		if (mode === "acceptEdits" && isEditTool(toolName) && getThenRunCommand(toolName, context.args) === undefined) {
+			return undefined;
+		}
 		if (query.options.hasPermissionCallback !== true) {
 			return {
 				block: true,

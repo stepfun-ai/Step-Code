@@ -1,7 +1,9 @@
+import { visibleWidth } from "@step-harness/pi-tui";
 import { describe, expect, it } from "vitest";
 import { INITIAL_STEP_LOGIN_STEP, reduceStepLogin, resolveStepLoginProfiles } from "../src/step/onboarding.ts";
 import { StepOnboardingView } from "../src/step/onboarding-view.ts";
 import { initTheme } from "../src/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("Step login onboarding", () => {
 	it("offers the four Step login profiles in StepCode order", () => {
@@ -58,8 +60,16 @@ describe("Step login onboarding", () => {
 			choice: "step_plan_oversea",
 		});
 
-		expect(browser).toEqual({ kind: "continueInBrowser", choice: "step_plan", authUrl: "" });
-		expect(overseaBrowser).toEqual({ kind: "continueInBrowser", choice: "step_plan_oversea", authUrl: "" });
+		expect(browser).toEqual({
+			kind: "continueInBrowser",
+			choice: "step_plan",
+			authUrl: "",
+		});
+		expect(overseaBrowser).toEqual({
+			kind: "continueInBrowser",
+			choice: "step_plan_oversea",
+			authUrl: "",
+		});
 		expect(apiKey).toEqual({ kind: "apiKeyEntry", choice: "platform_cn", value: "", error: null });
 		expect(reduceStepLogin(apiKey, { type: "credential", apiKey: "platform-key" })).toEqual({
 			kind: "saving",
@@ -85,5 +95,26 @@ describe("Step login onboarding", () => {
 		expect(rendered).toContain("3. Step Platform (API key");
 		expect(rendered).toContain("4. Step Platform Oversea");
 		expect(rendered).toContain("Usage included with Mini, Plus, Pro, and Max plans");
+	});
+
+	it.each([12, 40, 80, 160])("shows the complete authorization URL at width %s", (width) => {
+		const view = new StepOnboardingView(resolveStepLoginProfiles(), {
+			onChoose: () => {},
+			onSubmitApiKey: () => {},
+			onType: () => {},
+			onBackspace: () => {},
+			onBack: () => {},
+			onQuit: () => {},
+			requestRender: () => {},
+		});
+		const authUrl = `https://platform.stepfun.com/cli-login?flow_id=${"a".repeat(32)}&extra=${"b".repeat(80)}`;
+		view.setStep({
+			kind: "continueInBrowser",
+			choice: "step_plan",
+			authUrl,
+		});
+		const rows = view.render(width);
+		expect(rows.map(stripAnsi).join("")).toContain(authUrl);
+		expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
 	});
 });

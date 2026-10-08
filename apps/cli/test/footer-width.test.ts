@@ -354,6 +354,69 @@ describe("FooterComponent width handling", () => {
 		expect(plain).toContain("plan 1/2");
 	});
 
+	it.each([
+		{ width: 80, showOtherStatuses: false },
+		{ width: 120, showOtherStatuses: true },
+	])("shows the session mode badge once at $width columns", ({ width, showOtherStatuses }) => {
+		const session = createSession({
+			sessionName: "",
+			modelId: "step-3.8",
+			reasoning: true,
+			thinkingLevel: "high",
+		});
+		const footer = new FooterComponent(
+			session,
+			createFooterData(
+				1,
+				new Map([
+					["step-permission", "Mode: Ask"],
+					["ultracode", "Ultracode on"],
+					["plan-mode", "plan 1/2"],
+				]),
+			),
+			{ presentation: "step", permissionCycleKey: () => "shift+tab" },
+		);
+
+		const [line = ""] = footer.render(width);
+		const plain = stripAnsi(line);
+		expect(plain).toContain("Ultracode on");
+		expect(plain.match(/Ultracode on/gu)).toHaveLength(1);
+		expect(plain).toContain("⏵ Ask (shift+tab)");
+		expect(plain).not.toContain("Mode: Ask");
+		expect(plain.includes("plan 1/2")).toBe(showOtherStatuses);
+		expect(plain).toMatch(/88% context left$/u);
+		expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	});
+
+	it.each([80, 120])("removes the mode badge when its extension status is cleared at width %i", (width) => {
+		const statuses = new Map<string, string>();
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1, statuses), {
+			presentation: "step",
+		});
+		const disabled = footer.render(width);
+		expect(stripAnsi(disabled.join("\n"))).not.toContain("Ultracode");
+
+		statuses.set("ultracode", "Ultracode on");
+		expect(stripAnsi(footer.render(width).join("\n"))).toContain("Ultracode on");
+		statuses.delete("ultracode");
+		expect(footer.render(width)).toEqual(disabled);
+	});
+
+	it("keeps the mode badge visible ahead of long model and workspace details at 80 columns", () => {
+		const session = createSession({ sessionName: "", modelId: `model-${"x".repeat(100)}` });
+		vi.spyOn(session.sessionManager, "getCwd").mockReturnValue(`/tmp/${"workspace-".repeat(20)}`);
+		const footer = new FooterComponent(session, createFooterData(1, new Map([["ultracode", "Ultracode on"]])), {
+			presentation: "step",
+			permissionCycleKey: () => "shift+tab",
+		});
+
+		const [line = ""] = footer.render(80);
+		const plain = stripAnsi(line);
+		expect(plain).toContain("Ultracode on");
+		expect(plain).toMatch(/88% context left$/u);
+		expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+	});
+
 	it("keeps the Step footer within narrow widths", () => {
 		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1), {
 			presentation: "step",

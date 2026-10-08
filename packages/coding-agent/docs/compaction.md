@@ -32,7 +32,7 @@ Auto-compaction triggers when:
 contextTokens > contextWindow - reserveTokens
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.stepcode/agent/settings.json` or `<project-dir>/.stepcode/settings.json`). This leaves room for the LLM's response.
+By default, `reserveTokens` is 16384 tokens (configurable in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). This leaves room for the LLM's response.
 
 During a multi-turn agent run, Step checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Step also checks the threshold before a new user prompt and after a low-level agent run ends.
 
@@ -40,7 +40,7 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 
 ### How It Works
 
-1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.stepcode/agent/settings.json` or `<project-dir>/.stepcode/settings.json`) is reached
+1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`) is reached
 2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
 3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
 4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
@@ -403,16 +403,13 @@ See `SessionBeforeTreeEvent` and `TreePreparation` in the types file.
 
 ## Settings
 
-Configure compaction in `~/.stepcode/agent/settings.json` or `<project-dir>/.stepcode/settings.json`:
+Configure compaction in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`:
 
-```json
-{
-  "compaction": {
-    "enabled": true,
-    "reserveTokens": 16384,
-    "keepRecentTokens": 20000
-  }
-}
+```toml
+[compaction]
+enabled = true
+reserveTokens = 16384
+keepRecentTokens = 20000
 ```
 
 | Setting | Default | Description |
@@ -421,4 +418,14 @@ Configure compaction in `~/.stepcode/agent/settings.json` or `<project-dir>/.ste
 | `reserveTokens` | `16384` | Tokens to reserve for LLM response |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 
-Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
+Disable auto-compaction with `enabled = false`. You can still compact manually with `/compact`.
+
+The reserve also influences generated summary budgets, but each history/update
+or split-turn prefix request is capped at 32000 tokens and at the model's positive
+`maxTokens` limit. Unknown/nonpositive model limits retain the reserve-fraction
+fallback up to 32000. For example, with a 1048576-token window, setting
+`reserveTokens = 851968` triggers compaction above 196608 tokens without inflating
+summary output beyond the limit. `keepRecentTokens` remains approximate; the
+ordinary model context/output declarations are unchanged. See the
+[compaction integrity contract](../../../docs/compaction-integrity.md) for exact
+request recognition and no-effort wire behavior.

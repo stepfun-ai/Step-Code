@@ -48,6 +48,49 @@ describe("StepWelcomeComponent", () => {
 		expect(output).not.toContain("step-model · off");
 	});
 
+	it("shows the session command and a separate one-turn example when Ultracode is available", () => {
+		initTheme("step-blue");
+		const component = new StepWelcomeComponent(() => ({
+			workspaceRoot: "/tmp/project",
+			ultracodeAvailable: true,
+		}));
+
+		const output = component.render(120).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("/ultracode on");
+		expect(output).toContain("Use parallel agents for this session.");
+		expect(output).toContain("One turn: ultracode: task.");
+	});
+
+	it.each([false, undefined])("omits the Ultracode tip when availability is %s", (ultracodeAvailable) => {
+		initTheme("step-blue");
+		const component = new StepWelcomeComponent(() => ({
+			workspaceRoot: "/tmp/project",
+			ultracodeAvailable,
+		}));
+
+		for (const width of [30, 120]) {
+			const output = component.render(width).map(stripTerminalSequences).join("\n");
+			expect(output).not.toMatch(/ultracode|ultraloop|parallel subagents/u);
+			expect(output).toContain("/cron");
+			expect(output).toContain("/goal");
+		}
+	});
+
+	it("reads capability availability again when rendering", () => {
+		initTheme("step-blue");
+		let ultracodeAvailable = true;
+		const component = new StepWelcomeComponent(() => ({
+			workspaceRoot: "/tmp/project",
+			ultracodeAvailable,
+		}));
+
+		expect(component.render(120).join("\n")).toContain("/ultracode on");
+		ultracodeAvailable = false;
+		expect(component.render(120).join("\n")).not.toContain("ultracode");
+		ultracodeAvailable = true;
+		expect(component.render(120).join("\n")).toContain("/ultracode on");
+	});
+
 	it("removes the first-session hint after a message is projected", () => {
 		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
@@ -172,10 +215,11 @@ describe("StepWelcomeComponent", () => {
 		expect(renderRequests).toBe(0);
 	});
 
-	it("does not overflow a very narrow terminal", () => {
+	it.each([false, true])("does not overflow narrow terminals with Ultracode available: %s", (ultracodeAvailable) => {
 		initTheme("step-blue");
 		const component = new StepWelcomeComponent(() => ({
 			workspaceRoot: "/tmp/project",
+			ultracodeAvailable,
 		}));
 		for (const width of [1, 4, 7, 8, 11, 30, 46, 47, 58, 59, 60, 80, 100]) {
 			for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);

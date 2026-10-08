@@ -7,10 +7,7 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionAPI, InlineExtension } from "../src/core/extensions/types.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { InMemoryCodingAgentModelsStore } from "../src/core/models-store.ts";
-import type { StepCallbackResult } from "../src/features/step-provider/index.ts";
 import {
-	buildStepAuthorizationUrl,
-	buildStepCallbackUrl,
 	createStepProviderConfig,
 	createStepProviderInlineExtension,
 	fetchStepModelEfforts,
@@ -21,16 +18,11 @@ import {
 	STEP_PROVIDER_ENV,
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
-	startStepCallbackServer,
 	stepModelsDetailBaseUrl,
 	stepOpenAiBaseUrl,
 	stepProviderInlineExtension,
 	stepThinkingLevelMap,
 } from "../src/features/step-provider/index.ts";
-
-async function request(port: number, path: string): Promise<Response> {
-	return fetch(`http://127.0.0.1:${port}${path}`);
-}
 
 function callbacks(overrides: Partial<OAuthLoginCallbacks> = {}): OAuthLoginCallbacks {
 	return {
@@ -42,59 +34,6 @@ function callbacks(overrides: Partial<OAuthLoginCallbacks> = {}): OAuthLoginCall
 	};
 }
 
-describe("Step OAuth callback server", () => {
-	it("accepts a credential only when state matches", async () => {
-		const server = await startStepCallbackServer({ state: "state-1", timeoutMs: 5000 });
-		try {
-			const invalid = await request(server.port, "/callback?state=wrong&api_key=ignored");
-			expect(invalid.status).toBe(400);
-
-			const resultPromise = server.waitForResult();
-			const valid = await request(server.port, "/callback?state=state-1&api_key=key%20123&uid=user-1");
-			expect(valid.status).toBe(200);
-			expect(await resultPromise).toEqual({
-				kind: "credential",
-				apiKey: "key 123",
-				uid: "user-1",
-			});
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("reports cancellation and timeout and closes idempotently", async () => {
-		const controller = new AbortController();
-		const cancelled = await startStepCallbackServer({ state: "cancel", signal: controller.signal, timeoutMs: 5000 });
-		const cancelledResult = cancelled.waitForResult();
-		controller.abort();
-		expect(await cancelledResult).toEqual({ kind: "cancelled" });
-		await cancelled.close();
-		await cancelled.close();
-
-		const timedOut = await startStepCallbackServer({ state: "timeout", timeoutMs: 5 });
-		await expect(timedOut.waitForResult()).resolves.toEqual({ kind: "timeout" });
-		await timedOut.close();
-	});
-
-	it("rejects non-loopback hosts and malformed state", async () => {
-		await expect(startStepCallbackServer({ state: "" })).rejects.toThrow("state");
-		await expect(startStepCallbackServer({ state: "ok", host: "0.0.0.0" })).rejects.toThrow("loopback");
-	});
-
-	it("builds authorization and callback URLs with encoded state", () => {
-		const authUrl = buildStepAuthorizationUrl({
-			authBaseUrl: "https://auth.example.test/root",
-			port: 4321,
-			state: "a state",
-		});
-		const parsed = new URL(authUrl);
-		expect(parsed.pathname).toBe("/cli-login");
-		expect(parsed.searchParams.get("port")).toBe("4321");
-		expect(parsed.searchParams.get("state")).toBe("a state");
-		expect(buildStepCallbackUrl({ host: "::1", port: 4321 })).toBe("http://[::1]:4321/callback");
-	});
-});
-
 describe("Step provider extension", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -105,15 +44,11 @@ describe("Step provider extension", () => {
 			env: {
 				[STEP_PROVIDER_ENV.apiBaseUrl]: "https://api.example.test/v1/",
 				[STEP_PROVIDER_ENV.authBaseUrl]: "https://auth.example.test/",
-				[STEP_PROVIDER_ENV.tokenUrl]: "https://auth.example.test/token",
-				[STEP_PROVIDER_ENV.callbackPort]: "3210",
 				[STEP_PROVIDER_ENV.timeoutMs]: "9000",
 			},
 		});
 		expect(options.apiBaseUrl).toBe("https://api.example.test");
 		expect(options.authBaseUrl).toBe("https://auth.example.test");
-		expect(options.tokenUrl).toBe("https://auth.example.test/token");
-		expect(options.callbackPort).toBe(3210);
 		expect(options.timeoutMs).toBe(9000);
 	});
 
@@ -350,121 +285,49 @@ describe("Step provider extension", () => {
 		}
 	});
 
-	it("converts a callback credential into OAuth credentials", async () => {
-		const callback: StepCallbackResult = {
-			kind: "credential",
-			apiKey: "step-key",
-			uid: "u-1",
-		};
-		const server = {
-			port: 4321,
-			waitForResult: vi.fn(async () => callback),
-			close: vi.fn(async () => {}),
-		};
+	it("converts a cloud credential into the provider storage format", async () => {
 		const onAuth = vi.fn();
-		const result = await loginStepOAuth(
-			callbacks({ onAuth }),
-			resolveStepProviderOptions({
-				authBaseUrl: "https://auth.example.test",
-				createState: () => "fixed-state",
-				createCallbackServer: async () => server,
-			}),
-		);
-		expect(result.access).toBe("step-key");
-		expect(result.refresh).toBe("step-static-credential");
-		expect(result.uid).toBe("u-1");
-		expect(onAuth).toHaveBeenCalledWith(
-			expect.objectContaining({
-				url: "https://auth.example.test/cli-login?port=4321&state=fixed-state",
-			}),
-		);
-		expect(server.close).toHaveBeenCalledTimes(1);
-	});
-
-	it("exchanges a callback code and uses the actual ephemeral port", async () => {
-		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-			expect(init?.body).toBeInstanceOf(URLSearchParams);
-			const body = init?.body as URLSearchParams;
-			expect(body.get("redirect_uri")).toBe("http://127.0.0.1:5432/callback");
-			return new Response(
-				JSON.stringify({ access_token: "access", refresh_token: "refresh", expires_in: 3600, uid: "u-token" }),
-				{
-					status: 200,
-					headers: { "content-type": "application/json" },
-				},
-			);
+		const result = await loginStepOAuth(callbacks({ onAuth }), {
+			authBaseUrl: "https://auth.example.test",
+			fetch: async (url) =>
+				new Response(
+					JSON.stringify(
+						String(url).endsWith("/init")
+							? {
+									status: 0,
+									flow_id: "flow-1",
+									poll_interval_sec: 2,
+									expires_at: Date.now() / 1000 + 600,
+								}
+							: { status: 0, state: "ready", uid: "u-1", credential: { api_key: "step-key" } },
+					),
+				),
 		});
-		const server = {
-			port: 5432,
-			waitForResult: vi.fn(async () => ({ kind: "code", code: "auth-code" }) as const),
-			close: vi.fn(async () => {}),
-		};
-		const result = await loginStepOAuth(
-			callbacks(),
-			resolveStepProviderOptions({
-				authBaseUrl: "https://auth.example.test",
-				tokenUrl: "https://auth.example.test/token",
-				createState: () => "fixed-state",
-				createCallbackServer: async () => server,
-				fetch: fetchMock,
-			}),
+		expect(result).toEqual({
+			access: "step-key",
+			refresh: STEP_STATIC_REFRESH_TOKEN,
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "u-1",
+		});
+		expect(onAuth).toHaveBeenCalledWith(
+			expect.objectContaining({ url: "https://auth.example.test/cli-login-remote?flow_id=flow-1" }),
 		);
-		expect(result.access).toBe("access");
-		expect(result.refresh).toBe("refresh");
-		expect(result.uid).toBe("u-token");
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-	});
-
-	it("preserves uid from a manually pasted callback URL", async () => {
-		const server = {
-			port: 5433,
-			waitForResult: vi.fn(() => new Promise<StepCallbackResult>(() => {})),
-			close: vi.fn(async () => {}),
-		};
-		const result = await loginStepOAuth(
-			callbacks({
-				onManualCodeInput: async () =>
-					"http://127.0.0.1:5433/callback?state=fixed-state&api_key=access&uid=u-manual",
-			}),
-			resolveStepProviderOptions({
-				authBaseUrl: "https://auth.example.test",
-				allowManualCallback: true,
-				createState: () => "fixed-state",
-				createCallbackServer: async () => server,
-			}),
-		);
-		expect(result).toMatchObject({ access: "access", uid: "u-manual" });
-		expect(server.close).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not refresh static Step keys", async () => {
 		const credential = { access: "key", refresh: STEP_STATIC_REFRESH_TOKEN, expires: 0 };
-		await expect(refreshStepOAuth(credential, { env: {} })).resolves.toMatchObject({
+		await expect(refreshStepOAuth(credential)).resolves.toMatchObject({
 			access: "key",
 			expires: Number.MAX_SAFE_INTEGER,
 		});
 	});
 
-	it("retains the account uid when a refresh response omits it", async () => {
-		const fetchMock = vi.fn(
-			async () =>
-				new Response(
-					JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 }),
-					{
-						status: 200,
-						headers: { "content-type": "application/json" },
-					},
-				),
+	it("requires a new login instead of refreshing legacy non-static tokens", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch");
+		await expect(refreshStepOAuth({ access: "old-access", refresh: "old-refresh", expires: 1 })).rejects.toThrow(
+			/step login/u,
 		);
-		const result = await refreshStepOAuth(
-			{ access: "old-access", refresh: "old-refresh", expires: 1, uid: "u-existing" },
-			{
-				env: {},
-				tokenUrl: "https://auth.example.test/token",
-				fetch: fetchMock,
-			},
-		);
-		expect(result).toMatchObject({ access: "new-access", uid: "u-existing" });
+		expect(fetch).not.toHaveBeenCalled();
 	});
 });
 
