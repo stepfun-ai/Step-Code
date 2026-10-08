@@ -13,6 +13,10 @@ variables:
   STEP_TOOLS_BASE_URL: "https://gitlab.basemind.com/api/v4/projects/10933/packages/generic/search-tools/1.0.0"
   STEP_TOS_PROD_BUCKET: "devcenter-web-cn-prod"
   STEP_TOS_PROD_ENDPOINT: "tos-cn-shanghai.ivolces.com"
+  # Local artifactory repo that receives @stepfun/stepcode (see release_npm_publish).
+  # The virtual npm-public repo has no default deployment repo and rejects
+  # publishes; it aggregates stepai-npm-release, so users install from npm-public.
+  STEP_NPM_REGISTRY: "https://artifactory.stepfun-inc.com/artifactory/api/npm/stepai-npm-release/"
   STEPCODE_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
   # Test release notifications use the same built-in token as stepcli-bot when
   # ENV_NAME=test. Both values may be overridden by masked CI variables for
@@ -311,6 +315,49 @@ publish_release:
           url: "$STEP_RELEASE_WINDOWS_ARM64_URL"
         - name: step-windows-x64.zip
           url: "$STEP_RELEASE_WINDOWS_X64_URL"
+
+# Publish @stepfun/stepcode and its six platform packages to the internal npm
+# registry. Repackages the exact archives on the prod CDN (checksums verified
+# against manifest.json), so npm and install.sh ship identical binaries.
+# Already-published versions are skipped, so a failed job can be retried.
+# NPM_TOKEN is a masked registry token with deploy rights on STEP_NPM_REGISTRY.
+.release_npm_publish:
+  stage: publish
+  image: "$RELEASE_BUILDER_IMAGE"
+  script:
+    - |
+      if [ -z "${NPM_TOKEN:-}" ]; then
+        echo "NPM_TOKEN is not set." >&2
+        echo "Add a masked npm token with deploy rights on $STEP_NPM_REGISTRY." >&2
+        exit 1
+      fi
+    - node infra/release/npm-packages.mjs --version "$STEP_NPM_PUBLISH_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --registry "$STEP_NPM_REGISTRY" --publish
+
+# Runs automatically once the prod upload of a release tag succeeds.
+release_npm_publish:
+  extends: .release_npm_publish
+  needs:
+    - job: release_bundle_upload_prod
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
+    - when: never
+  variables:
+    STEP_NPM_PUBLISH_VERSION: "$CI_COMMIT_TAG"
+
+# Backfill: publish an already-released version from any branch pipeline by
+# setting STEP_NPM_PUBLISH_VERSION (e.g. v0.1.2) in the Run pipeline form. Only
+# reads the prod CDN; never rebuilds or touches TOS.
+release_npm_backfill:
+  extends: .release_npm_publish
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$STEP_NPM_PUBLISH_VERSION'
+      when: on_success
+    - when: never
 
 # GitLab evaluates a job's `release:` block after its script succeeds. Keeping
 # this webhook in a dependent job guarantees both publish_release and the

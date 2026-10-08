@@ -77,6 +77,14 @@ export function getPackageDir(): string {
 }
 
 /**
+ * Get the rg/fd binaries shipped next to a standalone executable (`tools/` in the
+ * release archive). Undefined for Node/tsx runs, which have no bundled tools.
+ */
+export function getBundledToolsDir(): string | undefined {
+	return isBunBinary ? join(dirname(process.execPath), "tools") : undefined;
+}
+
+/**
  * Get path to built-in themes directory (shipped with package)
  * - For Bun binary: theme/ next to executable
  * - For Node.js (dist/): dist/theme/

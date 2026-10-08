@@ -4,7 +4,7 @@ import { arch, platform } from "os";
 import { join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
-import { APP_NAME, getBinDir } from "../config.ts";
+import { APP_NAME, getBinDir, getBundledToolsDir } from "../config.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "../step/environment.ts";
 import { fetchWithRetry } from "./management-http.ts";
 
@@ -85,13 +85,20 @@ export function commandExists(cmd: string): boolean {
 	}
 }
 
-// Get the path to a tool (system-wide or in our tools dir)
-export function getToolPath(tool: "fd" | "rg", agentDir?: string): string | null {
+// Get the path to a tool: our managed tools dir, then system PATH, then the
+// copy bundled next to a standalone executable. The bundled fallback lets
+// installs that skip install.sh (npm) work offline without a GitHub download.
+export function getToolPath(
+	tool: "fd" | "rg",
+	agentDir?: string,
+	bundledToolsDir: string | undefined = getBundledToolsDir(),
+): string | null {
 	const config = TOOLS[tool];
 	if (!config) return null;
+	const fileName = config.binaryName + (platform() === "win32" ? ".exe" : "");
 
 	// Check our tools directory first
-	const localPath = join(getToolsDir(agentDir), config.binaryName + (platform() === "win32" ? ".exe" : ""));
+	const localPath = join(getToolsDir(agentDir), fileName);
 	if (existsSync(localPath)) {
 		return localPath;
 	}
@@ -101,6 +108,13 @@ export function getToolPath(tool: "fd" | "rg", agentDir?: string): string | null
 	for (const systemBinaryName of systemBinaryNames) {
 		if (commandExists(systemBinaryName)) {
 			return systemBinaryName;
+		}
+	}
+
+	if (bundledToolsDir) {
+		const bundledPath = join(bundledToolsDir, fileName);
+		if (existsSync(bundledPath)) {
+			return bundledPath;
 		}
 	}
 
