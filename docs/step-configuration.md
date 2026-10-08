@@ -140,3 +140,28 @@ requests. Print and RPC sessions still wait for the initial tool catalog before
 accepting work.
 Closing or replacing a session cancels pending MCP connections and prevents their
 late tools or warnings from reaching the new session.
+
+The macOS/Linux installer and `step update` run `step mcp prepare` after
+installing the new binary. This prepares the built-in StepPage executable before
+the installer finishes. StepPage requires Node.js 20 or newer on PATH; Step itself
+does not require a separately installed Node.js. Download or prerequisite failures
+show a warning and leave Step usable.
+
+Before connecting `steppage__steppage`, Step verifies `steppage-mcp --version`
+and repairs a missing or broken managed executable. Existing preinstallation
+markers do not suppress this repair. Healthy executables in `~/.local/bin` can
+be used even when the current shell's PATH lacks that directory. Failed setup is
+retried on the next session; `step mcp prepare` also retries without requiring
+sign-in. The server name combines the plugin ID and its server name with `__`.
+Automatic StepPage installation is supported on macOS/Linux, including WSL.
+
+Preparation preserves credentials, custom server commands, global overrides,
+disabled servers, and intentionally uninstalled plugins. A global declaration
+that still uses the default `steppage-mcp` command without arguments shares the
+built-in executable repair; its environment and other settings remain unchanged.
+Global configuration takes precedence over user plugins, which take precedence
+over trusted project plugins. An explicit disable prevents a lower-priority copy
+from starting. Standalone interactive
+startup also repairs the managed Step PATH block for users upgraded by an older
+updater. The installer checks the shell profile even when the current terminal
+already has Step on PATH. Set `STEP_NO_MODIFY_PATH=1` to manage PATH yourself.

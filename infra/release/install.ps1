@@ -580,6 +580,14 @@ try {
 
   Write-Progress-Step -Step 6 -Total 6 -Message 'running smoke test'
   Test-Install -BinaryPath (Join-Path $InstallDir 'step.exe')
+  try {
+    & (Join-Path $InstallDir 'step.exe') mcp prepare
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning 'StepPage is not ready; Step remains usable. Run step mcp prepare after upgrading.'
+    }
+  } catch {
+    Write-Warning "StepPage preparation failed; Step remains usable. $($_.Exception.Message)"
+  }
   Write-Result -ResolvedVersion $resolvedVersion
 } catch {
   Write-Host "  error: $($_.Exception.Message)" -ForegroundColor Red

@@ -23,6 +23,7 @@ import {
 	decorateStepCodeSettingsManager,
 	describeStepMcpImportOutcome,
 	ensureStepGlobalConfig,
+	ensureStepShellPath,
 	flushStderrDevLog,
 	getLegacyStepAuthPath,
 	getStepAuthPath,
@@ -44,6 +45,7 @@ import {
 	normalizeStepSessionSelectorArgs,
 	parseStepUpdateCommand,
 	prepareMain,
+	prepareStepInstallation,
 	readFeedbackUsername,
 	readGlobalStepConfig,
 	readOrCreateStepDeviceId,
@@ -240,6 +242,7 @@ const stepMainOptions: MainOptions = {
 			// Auth-only startup uses the same InteractiveMode for its OAuth dialog,
 			// but must never be interrupted by a binary update prompt.
 			if (process.argv[2] === "login" || process.argv[2] === "logout") return true;
+			for (const warning of await ensureStepShellPath()) ui.notify(warning, "warning");
 			const outcome = await maybeUpdateStep({
 				version: STEPCODE_VERSION,
 				storageRootDir: resolveStepStorageRoot(),
@@ -309,7 +312,11 @@ let telemetryExitReason: "normal" | "error" = "normal";
 let forceOneShotExit = false;
 try {
 	await telemetryIdentityReady;
-	if (!isTopLevelLogout && !(isTopLevelLogin && topLevelAuthHelp)) {
+	if (
+		!isTopLevelLogout &&
+		!(isTopLevelLogin && topLevelAuthHelp) &&
+		!(isTopLevelMcp && process.argv[3] === "prepare")
+	) {
 		// Normalize only an old product-shaped credential file that is already
 		// inside the canonical StepCode path. This is the credential store, not
 		// settings: Step reads no configuration from a legacy layout.
@@ -354,7 +361,21 @@ try {
 		const json = args.includes("--json");
 		const config = readGlobalStepConfig(process.env);
 		const servers = config.mcp_servers ?? {};
-		if (subcommand === "list" || subcommand === "get") {
+		if (subcommand === "prepare") {
+			if (args.length !== 1) {
+				process.stderr.write("Usage: step mcp prepare\n");
+				process.exitCode = 1;
+			} else {
+				try {
+					for (const warning of await prepareStepInstallation()) process.stderr.write(`Warning: ${warning}\n`);
+				} catch (error) {
+					process.stderr.write(
+						`Warning: StepPage preparation failed; Step remains usable. ${error instanceof Error ? error.message : String(error)}\n`,
+					);
+				}
+			}
+			forceOneShotExit = true;
+		} else if (subcommand === "list" || subcommand === "get") {
 			const name = subcommand === "get" ? args[1] : undefined;
 			const selected = name ? (servers[name] ? { [name]: servers[name] } : {}) : servers;
 			if (json) process.stdout.write(`${JSON.stringify(selected)}\n`);
@@ -492,7 +513,7 @@ try {
 				);
 			}
 		} else {
-			process.stderr.write("Usage: step mcp list|get|add|remove|login|logout\n");
+			process.stderr.write("Usage: step mcp list|get|add|remove|login|logout|prepare\n");
 			process.exitCode = 1;
 		}
 	} else if (isTopLevelLogin) {

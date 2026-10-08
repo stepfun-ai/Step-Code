@@ -154,11 +154,17 @@ strip_step_block() {
 	# Remove a previously written, WELL-FORMED "# stepcode ... # stepcode end"
 	# block (and any blank lines directly above it) so reinstalls stay idempotent.
 	# A lone start marker with no matching end (a hand-edited rc, an interrupted
-	# prior write, or an unrelated "# stepcode" comment) is emitted verbatim
-	# rather than truncating everything below it to EOF. Returns non-zero (leaving
-	# the file untouched) if the rewrite could not be produced, so the caller can
+	# prior write, or an unrelated "# stepcode" comment) leaves the file untouched.
+	# Returns non-zero for malformed markers or a failed rewrite, so the caller can
 	# avoid appending a duplicate block on top of one it failed to remove.
 	local file="$1" tmp
+	# Never combine a dangling/nested marker with a newly appended block: the
+	# next reinstall could otherwise remove user content between those markers.
+	awk '
+		$0 == "# stepcode" { if (inblock) exit 1; inblock = 1 }
+		$0 == "# stepcode end" { if (!inblock) exit 1; inblock = 0 }
+		END { if (inblock) exit 1 }
+	' "$file" || return 1
 	tmp="$(mktemp "${file}.step.XXXXXX")" || return 1
 	if awk '
 		{
@@ -192,14 +198,14 @@ configure_shell_path() {
 	# drops the binary into a directory nothing sources, so a fresh shell reports
 	# "command not found: step". Opt out with STEP_NO_MODIFY_PATH=1 (package
 	# managers, CI, or callers that manage PATH themselves).
-	case ":${PATH}:" in *":${INSTALL_DIR}:"*) return 0 ;; esac
+	# An inherited PATH says nothing about what a fresh shell will load.
 	if [[ -n "${STEP_NO_MODIFY_PATH:-}" ]]; then path_hint; return 0; fi
 
 	# The install dir is interpolated into a shell-sourced file. Refuse to edit an
 	# rc when a path contains characters that could break quoting or inject a
 	# command, and fall back to a manual hint instead.
 	case "${INSTALL_DIR}:${AGENT_DIR}/bin" in
-		*'"'* | *'`'* | *'$'* | *$'\n'*)
+		*'"'* | *'`'* | *'$'* | *'\'* | *$'\n'* | *$'\r'*)
 			printf 'note: install dir contains characters unsafe to write into a shell profile; add it to PATH manually:\n  export PATH="%s:%s/bin:$PATH"\n' "$INSTALL_DIR" "$AGENT_DIR" >&2
 			return 0
 			;;
@@ -238,7 +244,7 @@ configure_shell_path() {
 					printf 'warning: could not update the existing stepcode block in %s; left it unchanged\n' "$rc" >&2
 					continue
 				fi
-				if printf '\n# stepcode\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:%s/bin:$PATH" ;;\nesac\n# stepcode end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" >>"$rc"; then
+				if printf '\n# stepcode\ncase ":$PATH:" in\n  *":%s:"*) ;;\n  *) export PATH="%s:$PATH" ;;\nesac\ncase ":$PATH:" in\n  *":%s/bin:"*) ;;\n  *) export PATH="%s/bin:$PATH" ;;\nesac\n# stepcode end\n' "$INSTALL_DIR" "$INSTALL_DIR" "$AGENT_DIR" "$AGENT_DIR" >>"$rc"; then
 					printf 'added %s to PATH in %s\n' "$INSTALL_DIR" "$rc"
 					updated=1
 				fi
@@ -316,8 +322,13 @@ main() {
 	for dir in native theme assets export-html docs examples; do copy_runtime_dir "$archive_root" "$dir"; done
 	install_managed_tools "$archive_root"
 	"$destination" --version >/dev/null || die 'installed Step failed its smoke test'
-	printf 'installed StepCode %s to %s\n' "$VERSION" "$destination"
 	configure_shell_path
+	# The new binary owns built-in preparation, including legacy markers and
+	# executable health checks. Older pinned binaries may not know this command.
+	if ! "$destination" mcp prepare; then
+		printf 'warning: StepPage is not ready; Step remains usable. Run step mcp prepare after upgrading.\n' >&2
+	fi
+	printf 'installed StepCode %s to %s\n' "$VERSION" "$destination"
 }
 
 main "$@"

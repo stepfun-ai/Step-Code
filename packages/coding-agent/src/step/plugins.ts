@@ -19,6 +19,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "..
 import { resolveStepConfigDir } from "./environment.ts";
 import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
 import { isPathContained } from "./path-containment.ts";
+import { ensureStepPageReady, stepPageInstallerUrl } from "./steppage-provision.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -33,7 +34,6 @@ export const MARKETPLACE_MANIFEST_CANDIDATES: readonly string[] = [
 ];
 export const MARKETPLACE_MANIFEST_RELATIVE_PATH = MARKETPLACE_MANIFEST_CANDIDATES[0]!;
 export const BUILTIN_MARKETPLACE_NAME = "builtin";
-const STEPPAGE_INSTALLER_URL = "https://dl.stepfun.com/steppage-mcp/p/install.sh";
 
 const BUILTIN_FINGERPRINT_FILE = ".stepcode-builtin-fingerprint";
 /** Records which built-in plugins have already been auto-installed, so a plugin
@@ -566,7 +566,7 @@ export async function installMarketplacePlugin(
 
 /** Resolve the StepPage installer URL, honouring the shell override. */
 export function resolveProvisionInstallerUrl(env: NodeJS.ProcessEnv = process.env): string {
-	return env.STEPCODE_STEPPAGE_INSTALLER_URL?.trim() || STEPPAGE_INSTALLER_URL;
+	return stepPageInstallerUrl(env);
 }
 
 /** The shell command that installs a provisionable plugin executable, when one is declared. */
@@ -585,22 +585,10 @@ export async function provisionBuiltinPlugin(provision: StepPluginProvision): Pr
 	}
 	const install = provisionInstallCommand(provision);
 	if (!install) return undefined;
-	try {
-		await execFileAsync("sh", ["-c", `command -v ${shellQuote(provision.command)}`], { timeout: 10_000 });
-		return undefined;
-	} catch {
-		// Expected when a plugin is first installed.
-	}
-	try {
-		await execFileAsync("sh", ["-c", install], {
-			env: process.env,
-			timeout: 120_000,
-			maxBuffer: 1_000_000,
-		});
-		return `Installed ${provision.command} from the StepPage installer.`;
-	} catch (error) {
-		return `Could not install ${provision.command} automatically: ${describe(error)}. Run the StepPage installer manually: ${install}`;
-	}
+	const result = await ensureStepPageReady();
+	return (
+		result.error ?? (result.installed ? `Installed ${provision.command} from the StepPage installer.` : undefined)
+	);
 }
 
 function shellQuote(value: string): string {
@@ -781,9 +769,16 @@ export async function listInstalledStepPlugins(
 ): Promise<{ plugins: InstalledStepPlugin[]; warnings: string[] }> {
 	const warnings: string[] = [];
 	const byId = new Map<string, InstalledStepPlugin>();
+	const userDir = input.userDir ?? defaultStepPluginsDir();
+	const [userRoot, projectRoot] = await Promise.all([
+		fs.realpath(userDir).catch(() => path.resolve(userDir)),
+		input.projectDir ? fs.realpath(input.projectDir).catch(() => path.resolve(input.projectDir!)) : undefined,
+	]);
+	// Starting in HOME (or a symlink to it) makes both scopes point at the same
+	// installation. Keep its user scope instead of reporting a false override.
 	const roots: Array<{ path: string; source: "user" | "project" }> = [
-		...(input.projectDir ? [{ path: input.projectDir, source: "project" as const }] : []),
-		{ path: input.userDir ?? defaultStepPluginsDir(), source: "user" },
+		...(input.projectDir && projectRoot !== userRoot ? [{ path: input.projectDir, source: "project" as const }] : []),
+		{ path: userDir, source: "user" },
 	];
 	for (const root of roots) {
 		for (const pluginDir of await listStepPluginDirectories(root.path)) {
@@ -877,8 +872,8 @@ export interface EnsureBuiltinPluginsResult {
  * reinstalled on the next launch.
  *
  * Only the declarative manifest is copied here (the executable is not
- * provisioned) so startup stays fast; each installed plugin's `provision`
- * descriptor is returned for the caller to install its executable out of band.
+ * provisioned) so startup stays fast. Executable readiness is checked separately
+ * before connecting, including manifests already installed by older versions.
  */
 export async function ensureBuiltinPluginsInstalled(
 	input: { pluginsDir?: string; marketplacesDir?: string } = {},

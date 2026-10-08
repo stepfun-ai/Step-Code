@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -495,6 +495,32 @@ describe("Step plugin marketplace facade", () => {
 		expect(listed.plugins).toHaveLength(1);
 		expect(listed.plugins[0]).toMatchObject({ id: "shared", name: "Project", source: "project" });
 		expect(listed.warnings.join(" ")).toContain("project plugin has precedence");
+	});
+
+	test("lists a shared user and project plugin root once as user plugins", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-shared-root-"));
+		roots.push(root);
+		const userDir = join(root, ".stepcode", "plugins");
+		await writePlugin(userDir, "steppage", "steppage", "StepPage");
+
+		const listed = await listInstalledStepPlugins({ userDir, projectDir: userDir });
+		expect(listed.plugins).toHaveLength(1);
+		expect(listed.plugins[0]).toMatchObject({ id: "steppage", source: "user" });
+		expect(listed.warnings).toEqual([]);
+	});
+
+	test("recognizes a symlink to the user plugin root as the same installation", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-aliased-root-"));
+		roots.push(root);
+		const userDir = join(root, "user");
+		const projectDir = join(root, "project-alias");
+		await writePlugin(userDir, "steppage", "steppage", "StepPage");
+		await symlink(userDir, projectDir, process.platform === "win32" ? "junction" : "dir");
+
+		const listed = await listInstalledStepPlugins({ userDir, projectDir });
+		expect(listed.plugins).toHaveLength(1);
+		expect(listed.plugins[0]).toMatchObject({ id: "steppage", source: "user", rootPath: join(userDir, "steppage") });
+		expect(listed.warnings).toEqual([]);
 	});
 
 	test("accepts a local file URL and labels it as a local marketplace", async () => {
