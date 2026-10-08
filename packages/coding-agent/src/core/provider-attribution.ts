@@ -3,6 +3,12 @@ import { APP_NAME } from "../config.ts";
 
 const OPENCODE_HOST = "opencode.ai";
 
+const OPENROUTER_ATTRIBUTION_HEADERS: ProviderHeaders = {
+	"HTTP-Referer": "https://github.com/stepfun-ai/Step-Code",
+	"X-OpenRouter-Title": "StepCode",
+	"X-OpenRouter-Categories": "cli-agent",
+};
+
 function matchesHost(baseUrl: string, expectedHost: string): boolean {
 	try {
 		return new URL(baseUrl).hostname === expectedHost;
@@ -29,6 +35,7 @@ export function mergeProviderAttributionHeaders(
 	...headerSources: Array<ProviderHeaders | undefined>
 ): ProviderHeaders | undefined {
 	const merged: ProviderHeaders = {
+		...OPENROUTER_ATTRIBUTION_HEADERS,
 		...getSessionHeaders(model, sessionId),
 	};
 

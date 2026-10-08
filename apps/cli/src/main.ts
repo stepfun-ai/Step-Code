@@ -73,7 +73,7 @@ import {
 	updateGlobalMcpConfig,
 	withStepDefaults,
 } from "@step-harness/coding-agent";
-import { parseArgs, toPrintOutputMode } from "#args/index";
+import { parseArgs, resolveAppMode, toPrintOutputMode } from "#args/index";
 import { loadStepStartupConfig } from "#bootstrap/config";
 import { createStepExtensionFactories } from "#bootstrap/extensions";
 import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
@@ -534,24 +534,34 @@ try {
 				}
 			}
 		} else if (topLevelAuthHelp) {
-			process.stdout.write("Usage: step login\nSign in with the Step account and store a credential.\n");
+			process.stdout.write(
+				"Usage: step login [--no-browser]\nSign in with the Step account and store a credential.\n\n  --no-browser  Print the sign-in URL instead of opening a browser.\n",
+			);
 		} else if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
 			process.stderr.write(
 				"step login needs an interactive terminal. Set STEP_API_KEY instead, or run it from a terminal.\n",
 			);
 			process.exitCode = 1;
 		} else {
-			const outcome = await runStepLogin({
-				authPath: getStepAuthPath(),
-				themeName: getStepDefaultTheme(),
-			});
-			if (outcome.kind === "completed") {
-				syncStepLoginProfileEndpoint(getStepAuthPath());
-				process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
-				if (outcome.credentialsPath) process.stdout.write(`Credential written: ${outcome.credentialsPath}\n`);
-			} else {
-				process.stderr.write("Sign-in cancelled. No credential was written.\n");
+			const loginArgs = process.argv.slice(3);
+			const unknownLoginArg = loginArgs.find((arg) => arg !== "--no-browser");
+			if (unknownLoginArg) {
+				process.stderr.write(`Unknown option "${unknownLoginArg}" for "login".\n`);
 				process.exitCode = 1;
+			} else {
+				const outcome = await runStepLogin({
+					authPath: getStepAuthPath(),
+					themeName: getStepDefaultTheme(),
+					noBrowser: loginArgs.includes("--no-browser"),
+				});
+				if (outcome.kind === "completed") {
+					syncStepLoginProfileEndpoint(getStepAuthPath());
+					process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
+					if (outcome.credentialsPath) process.stdout.write(`Credential written: ${outcome.credentialsPath}\n`);
+				} else {
+					process.stderr.write("Sign-in cancelled. No credential was written.\n");
+					process.exitCode = 1;
+				}
 			}
 		}
 	} else if (isTopLevelFeedback) {
@@ -591,6 +601,22 @@ try {
 				syncStepLoginProfileEndpoint(getStepAuthPath());
 				let shouldLaunchMain = true;
 				const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
+				if (
+					parsedInteractiveArgs.completionReview &&
+					!parsedInteractiveArgs.completionCheck &&
+					!parsedInteractiveArgs.help &&
+					!parsedInteractiveArgs.version
+				) {
+					throw new Error("--completion-review requires --completion-check git-committed");
+				}
+				if (
+					parsedInteractiveArgs.completionCheck &&
+					!parsedInteractiveArgs.help &&
+					!parsedInteractiveArgs.version &&
+					resolveAppMode(parsedInteractiveArgs, process.stdin.isTTY, process.stdout.isTTY) === "interactive"
+				) {
+					throw new Error("--completion-check requires print or JSON mode; use --print or --mode json.");
+				}
 				const interactiveStartup = isStepInteractiveLoginStartup({
 					stdinIsTTY: process.stdin.isTTY,
 					stdoutIsTTY: process.stdout.isTTY,
@@ -758,6 +784,9 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 			// print / json headless channels.
 			const exitCode = await runPrintMode(prep.runtimeHost, {
 				mode: toPrintOutputMode(prep.appMode),
+				completionCheck: prep.parsed.completionCheck,
+				completionCheckAttempts: prep.parsed.completionCheckAttempts,
+				completionReview: prep.parsed.completionReview,
 				messages: prep.parsed.messages,
 				initialMessage: prep.initialMessage,
 				initialImages: prep.initialImages,

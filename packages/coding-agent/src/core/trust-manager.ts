@@ -42,12 +42,13 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 ] as const;
 
 /**
- * Entries that double as the user's own global file at ~/<configDir>/<entry>.
- * When cwd is $HOME the project path resolves to that same file, so treating it
+ * Entries that double as the user's own global file or directory at
+ * ~/<configDir>/<entry> (config.toml, and skills/ which is auto-discovered as
+ * user skills). When cwd is $HOME the project path resolves to that same entry, so treating it
  * as project input would prompt for trust on the user's own configuration - and
  * a "do not trust" answer there would be inherited by every project below $HOME.
  */
-const USER_GLOBAL_CONFIG_RESOURCES: ReadonlySet<string> = new Set(["config.toml"]);
+const USER_GLOBAL_CONFIG_RESOURCES: ReadonlySet<string> = new Set(["config.toml", "skills"]);
 
 /**
  * Compare two already-resolved paths for filesystem equality.
@@ -207,14 +208,16 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
 
 /**
  * Returns true when cwd has project-local resources that must be gated by
- * project trust: trust-requiring entries under cwd/.pi, or .agents/skills in
- * cwd or one of its ancestors. Returns false when no such project resources
- * exist. The user/global ~/.agents/skills directory is always treated as a
- * trusted user resource and is ignored here, even when cwd is $HOME.
+ * project trust: trust-requiring entries under cwd/.pi, or .agents/skills or
+ * .claude/skills in cwd or one of its ancestors. Returns false when no such
+ * project resources exist. The user/global ~/.agents/skills and ~/.claude/skills
+ * directories are always treated as trusted user resources and are ignored
+ * here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string, configDirName: string = CONFIG_DIR_NAME): boolean {
 	const homeDir = canonicalizePath(resolvePath(process.env.HOME || homedir()));
-	const userAgentsSkillsDir = join(homeDir, ".agents", "skills");
+	const sharedSkillDirNames = [".agents", ".claude"];
+	const userSharedSkillDirs = sharedSkillDirNames.map((name) => join(homeDir, name, "skills"));
 	let currentDir = canonicalizePath(resolvePath(cwd));
 
 	const resolvedConfigDirName = configDirName.trim() || CONFIG_DIR_NAME;
@@ -228,9 +231,14 @@ export function hasTrustRequiringProjectResources(cwd: string, configDirName: st
 	}
 
 	while (true) {
-		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (!isSamePath(agentsSkillsDir, userAgentsSkillsDir) && existsSync(agentsSkillsDir)) {
-			return true;
+		for (const name of sharedSkillDirNames) {
+			const sharedSkillsDir = join(currentDir, name, "skills");
+			if (
+				!userSharedSkillDirs.some((userDir) => isSamePath(sharedSkillsDir, userDir)) &&
+				existsSync(sharedSkillsDir)
+			) {
+				return true;
+			}
 		}
 
 		const parentDir = dirname(currentDir);

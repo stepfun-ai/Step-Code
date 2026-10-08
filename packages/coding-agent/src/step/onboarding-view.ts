@@ -10,6 +10,7 @@ import {
 	Spacer,
 	Text,
 	truncateToWidth,
+	wrapTextWithAnsi,
 } from "@step-harness/pi-tui";
 import { DynamicBorder } from "../render/dynamic-border.ts";
 import { initTheme, theme } from "../theme/theme.ts";
@@ -126,8 +127,13 @@ export class StepOnboardingView extends Container implements Component, Focusabl
 	}
 
 	override render(width: number): string[] {
-		const safeWidth = Math.max(20, Math.floor(width));
+		const safeWidth = Math.max(1, Math.floor(width));
 		const rows = this.renderRows(safeWidth);
+		// In particular, never truncate the authorization URL or its query string.
+		// Remote users need every character, including on a narrow terminal.
+		if (this.step.kind === "continueInBrowser") {
+			return rows.flatMap((row) => wrapTextWithAnsi(row, safeWidth));
+		}
 		return rows.map((row) => truncateToWidth(row, safeWidth, "", false));
 	}
 
@@ -163,8 +169,10 @@ export class StepOnboardingView extends Container implements Component, Focusabl
 				rows.push(
 					"Continue sign-in in your browser:",
 					"",
+					// On its own unindented row, wrapping rather than truncating.
 					theme.fg("accent", this.step.authUrl || "Opening sign-in page..."),
 				);
+				rows.push("", muted("If the browser does not open here, copy this URL into a browser on any device."));
 				rows.push("", muted("  Esc cancel"));
 				return rows;
 			case "saving":
