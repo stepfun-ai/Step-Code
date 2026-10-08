@@ -31,4 +31,22 @@ describe("Step update command", () => {
 		expect(exitCode).toBe(1);
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
+
+	test("refuses to self-update an npm-managed install", async () => {
+		const fetchImpl = vi.fn<typeof fetch>();
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const exitCode = await runStepUpdateCommand({
+				version: "0.4.0",
+				executablePath: "/usr/lib/node_modules/@stepfun/stepcode-linux-x64/vendor/step",
+				env: { STEPCODE_INSTALL_METHOD: "npm" },
+				fetchImpl,
+			});
+			expect(exitCode).toBe(1);
+			expect(fetchImpl).not.toHaveBeenCalled();
+			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("npm install -g @stepfun/stepcode@0.4.0"));
+		} finally {
+			stderr.mockRestore();
+		}
+	});
 });
