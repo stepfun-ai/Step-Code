@@ -239,9 +239,15 @@ export function createStepLifecycleTelemetry(
 			try {
 				const sessionId = ctx.sessionManager.getSessionId();
 				activeSessionId = safeDimension(sessionId ?? "", "") || undefined;
-				if (activeSessionId) reporter.setContext?.({ sessionId: activeSessionId });
 			} catch {
 				// Session identity is diagnostic context; a stale host must not block UI.
+			}
+			try {
+				// Empty explicitly clears the runtime's foreground session. Omitting
+				// the field would retain the previous session when identity is absent.
+				reporter.setContext?.({ sessionId: activeSessionId ?? "" });
+			} catch {
+				// Context failures must not suppress the lifecycle event itself.
 			}
 			const resumed = options.isResumed
 				? safeBoolean(() => options.isResumed!(event, ctx))
@@ -411,6 +417,7 @@ export function createStepLifecycleTelemetry(
 		...handlers,
 		register(api) {
 			api.on("session_start", handlers.onSessionStart);
+			api.on("session_shutdown", () => lifecycle.reset());
 			api.on("session_compact", handlers.onSessionCompact);
 			api.on("agent_start", handlers.onAgentStart);
 			api.on("agent_end", handlers.onAgentEnd);
@@ -449,6 +456,11 @@ export function createStepLifecycleTelemetry(
 			pendingTools.clear();
 			completedToolIds.clear();
 			blockedToolIds.clear();
+			try {
+				reporter.setContext?.({ sessionId: "" });
+			} catch {
+				// Session teardown must succeed even when the reporter is unavailable.
+			}
 		},
 	};
 
@@ -486,12 +498,8 @@ export function createStepModelRequestObserver(
 			// are capability/auth probes, not user model calls, and must not inflate
 			// model-request telemetry.
 			if (!hasValidRequestTrace(request)) return;
-			try {
-				reporter.setContext?.(request.sessionId ? { sessionId: request.sessionId } : {});
-			} catch {
-				// A host context callback is diagnostic only. It must not prevent the
-				// request event from reaching the reporter.
-			}
+			// Requests own their record's identity, not the foreground session. A
+			// background or late completion must not reattribute subsequent UI events.
 			const endpointKind = readEndpointKind(classifyEndpoint, request.baseUrl);
 			const routedViaCloudTrace = readObserverRouted(isObserverRouted, request);
 			safeTrack(
