@@ -33,6 +33,12 @@ export interface StepSettings {
 	nonInteractiveApproval?: StepNonInteractiveApproval;
 	/** Enables the bounded model-error continuation ladder. */
 	autoResume?: boolean;
+	/**
+	 * The user accepted the Full Access risk with "don't ask again". Recorded
+	 * separately from the active preset so leaving Full Access does not force a
+	 * second acknowledgment when it is selected again.
+	 */
+	fullAccessAcknowledged?: boolean;
 	/** Enables the user feedback submission flow. Defaults to enabled. */
 	feedbackEnabled?: boolean;
 }
@@ -184,9 +190,34 @@ function normalizeSettings(value: JsonObject): StepSettings {
 		toolsApproval?.autoResume,
 		toolsApproval?.autopilot,
 	];
+	let autoResumeResolved = false;
 	for (const candidate of autoResumeCandidates) {
 		if (typeof candidate === "boolean") {
 			result.autoResume = candidate;
+			autoResumeResolved = true;
+			break;
+		}
+	}
+	// The retired `autopilot` preset carried auto-resume inside the preset id.
+	// Keep honoring an old `permissionPreset = "autopilot"` config that has no
+	// explicit autoResume field, so the continuation ladder is not silently lost.
+	if (!autoResumeResolved) {
+		for (const candidate of presetCandidates) {
+			if (typeof candidate === "string" && candidate.trim().toLowerCase() === "autopilot") {
+				result.autoResume = true;
+				break;
+			}
+		}
+	}
+
+	const fullAccessAcknowledgedCandidates = [
+		value.fullAccessAcknowledged,
+		approval?.fullAccessAcknowledged,
+		toolsApproval?.fullAccessAcknowledged,
+	];
+	for (const candidate of fullAccessAcknowledgedCandidates) {
+		if (typeof candidate === "boolean") {
+			result.fullAccessAcknowledged = candidate;
 			break;
 		}
 	}
@@ -206,6 +237,7 @@ const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
 	approvalMode: [],
 	nonInteractiveApproval: ["noninteractiveApproval"],
 	autoResume: ["autopilot"],
+	fullAccessAcknowledged: [],
 	feedbackEnabled: [],
 };
 
@@ -229,6 +261,10 @@ const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly
 		["approval", "autopilot"],
 		["tools", "approval", "autoResume"],
 		["tools", "approval", "autopilot"],
+	],
+	fullAccessAcknowledged: [
+		["approval", "fullAccessAcknowledged"],
+		["tools", "approval", "fullAccessAcknowledged"],
 	],
 	feedbackEnabled: [["feedback", "enabled"]],
 };
@@ -260,12 +296,7 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	if (settings.permissionPreset !== undefined && !getStepPermissionPreset(settings.permissionPreset)) {
 		throw new Error(`Invalid Step permission preset: ${String(settings.permissionPreset)}`);
 	}
-	if (
-		settings.approvalMode !== undefined &&
-		settings.approvalMode !== "confirm" &&
-		settings.approvalMode !== "strict" &&
-		settings.approvalMode !== "auto"
-	) {
+	if (settings.approvalMode !== undefined && settings.approvalMode !== "confirm" && settings.approvalMode !== "auto") {
 		throw new Error(`Invalid Step approval mode: ${String(settings.approvalMode)}`);
 	}
 	if (
@@ -277,6 +308,9 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	}
 	if (settings.autoResume !== undefined && typeof settings.autoResume !== "boolean") {
 		throw new Error(`Invalid Step autoResume setting: ${String(settings.autoResume)}`);
+	}
+	if (settings.fullAccessAcknowledged !== undefined && typeof settings.fullAccessAcknowledged !== "boolean") {
+		throw new Error(`Invalid Step fullAccessAcknowledged setting: ${String(settings.fullAccessAcknowledged)}`);
 	}
 	if (settings.feedbackEnabled !== undefined && typeof settings.feedbackEnabled !== "boolean") {
 		throw new Error(`Invalid Step feedbackEnabled setting: ${String(settings.feedbackEnabled)}`);
@@ -540,7 +574,7 @@ class StepSettingsDecorator {
 	}
 
 	setStepApprovalMode(mode: StepPermissionMode | undefined): void {
-		if (mode !== undefined && mode !== "confirm" && mode !== "strict" && mode !== "auto") {
+		if (mode !== undefined && mode !== "confirm" && mode !== "auto") {
 			throw new Error(`Invalid Step approval mode: ${String(mode)}`);
 		}
 		this.setEffectiveStepSettings({ approvalMode: mode });

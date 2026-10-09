@@ -154,7 +154,7 @@ pnpm step
 
 ## 安全
 
-- 权限四档（Ask / Read Only / Bypass / Autopilot），`Shift+Tab` 循环切换；危险命令在任何模式下都会单独弹窗确认。
+- 权限三档（Ask / Approve for Me / Full Access），`Shift+Tab` 循环切换；危险命令在 Ask 和 Approve for Me 下都会单独弹窗确认，只有 Full Access 在风险确认后不再拦截。
 
 ## 卸载
 

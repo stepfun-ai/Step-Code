@@ -247,7 +247,7 @@ describe("AgentSession final tool output", () => {
 				settings: { compaction: { enabled: false } },
 				extensionFactories: [
 					createStepExtension({
-						permission: { env: {}, initialPreset: "bypass", toolOverrides: { run_command: "allow" } },
+						permission: { env: {}, initialPreset: "approve-for-me", toolOverrides: { run_command: "allow" } },
 					}),
 					(pi) => {
 						const tool = createStepToolProfile(sandbox, { agentDir: join(sandbox, "agent") }).find(

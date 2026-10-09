@@ -336,13 +336,18 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 	const nonInteractiveApproval =
 		rawNonInteractive === "allow" || rawNonInteractive === "deny" ? rawNonInteractive : undefined;
 	const autoResume = readBoolean(approval?.autoResume ?? approval?.autopilot);
+	// The retired `autopilot` preset carried auto-resume in the preset id; keep
+	// honoring an old config that never wrote the separate flag.
+	const legacyAutopilot = readString(approval?.preset)?.trim().toLowerCase() === "autopilot";
+	const fullAccessAcknowledged = readBoolean(approval?.fullAccessAcknowledged);
 	const feedback = asObject(root.feedback);
 	const feedbackEnabled = readBoolean(feedback?.enabled);
 	return {
 		...(preset ? { permissionPreset: preset } : {}),
 		...(mode ? { approvalMode: mode } : {}),
 		...(nonInteractiveApproval ? { nonInteractiveApproval } : {}),
-		...(autoResume !== undefined ? { autoResume } : {}),
+		...(autoResume !== undefined ? { autoResume } : legacyAutopilot ? { autoResume: true } : {}),
+		...(fullAccessAcknowledged !== undefined ? { fullAccessAcknowledged } : {}),
 		...(feedbackEnabled !== undefined ? { feedbackEnabled } : {}),
 	};
 }
@@ -354,6 +359,7 @@ function writeStepCodeSettings(root: Record<string, unknown>, patch: Partial<Ste
 	writeOptionalField(approval, "mode", patch, "approvalMode");
 	writeOptionalField(approval, "nonInteractive", patch, "nonInteractiveApproval");
 	writeOptionalField(approval, "autoResume", patch, "autoResume");
+	writeOptionalField(approval, "fullAccessAcknowledged", patch, "fullAccessAcknowledged");
 	tools.approval = approval;
 	root.tools = tools;
 	if (Object.hasOwn(patch, "feedbackEnabled")) {
@@ -380,12 +386,7 @@ function validateStepSettings(settings: Partial<StepSettings>): void {
 	if (settings.permissionPreset !== undefined && !getStepPermissionPreset(settings.permissionPreset)) {
 		throw new Error(`Invalid Step permission preset: ${String(settings.permissionPreset)}`);
 	}
-	if (
-		settings.approvalMode !== undefined &&
-		settings.approvalMode !== "confirm" &&
-		settings.approvalMode !== "strict" &&
-		settings.approvalMode !== "auto"
-	) {
+	if (settings.approvalMode !== undefined && settings.approvalMode !== "confirm" && settings.approvalMode !== "auto") {
 		throw new Error(`Invalid Step approval mode: ${String(settings.approvalMode)}`);
 	}
 	if (
@@ -397,6 +398,9 @@ function validateStepSettings(settings: Partial<StepSettings>): void {
 	}
 	if (settings.autoResume !== undefined && typeof settings.autoResume !== "boolean") {
 		throw new Error(`Invalid Step autoResume setting: ${String(settings.autoResume)}`);
+	}
+	if (settings.fullAccessAcknowledged !== undefined && typeof settings.fullAccessAcknowledged !== "boolean") {
+		throw new Error(`Invalid Step fullAccessAcknowledged setting: ${String(settings.fullAccessAcknowledged)}`);
 	}
 }
 

@@ -11,7 +11,7 @@ vi.mock("../src/utils/shell.ts", () => ({ getShellConfig: () => ({ shell: "bash"
 
 async function checkDecision(command: string, kind: CommandPolicyAnalysis["kind"]): Promise<void> {
 	expect(analyzeCommandPolicy(command)).toMatchObject({ kind });
-	for (const preset of ["bypass", "autopilot"] as const) {
+	for (const preset of ["ask", "approve-for-me"] as const) {
 		expect(
 			decideStepToolCall("run_command", { command }, stepPermissionStateForPreset(preset), { run_command: "allow" }),
 		).toMatchObject({

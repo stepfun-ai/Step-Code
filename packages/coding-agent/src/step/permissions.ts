@@ -21,8 +21,8 @@ import { getThenRunCommand } from "./then-run.ts";
 
 export { containsDangerousLifecycleCommand, isDangerousCommand } from "./command-policy.ts";
 
-export type StepPermissionPresetId = "ask" | "read-only" | "bypass" | "autopilot";
-export type StepPermissionMode = "confirm" | "strict" | "auto";
+export type StepPermissionPresetId = "ask" | "approve-for-me" | "full-access";
+export type StepPermissionMode = "confirm" | "auto";
 export type StepNonInteractiveApproval = "allow" | "deny";
 export type StepNonInteractiveDenial = "terminate" | "continue";
 export type StepToolPermissionMode = "allow" | "confirm" | "deny";
@@ -34,40 +34,41 @@ export interface StepPermissionPreset {
 	mode: StepPermissionMode;
 	nonInteractiveApproval: StepNonInteractiveApproval;
 	autoResume: boolean;
+	/**
+	 * Full Access only: detected dangerous commands and commands whose analysis
+	 * is incomplete run without confirmation. This flag is the entire behavioral
+	 * difference between Approve for Me and Full Access; every other policy
+	 * (ordinary approvals, per-tool overrides, unattended fallback) is shared.
+	 */
+	skipCommandPolicy?: boolean;
 }
 
 export const STEP_PERMISSION_PRESETS: readonly StepPermissionPreset[] = [
 	{
 		id: "ask",
 		label: "Ask",
-		description: "Safe tools run; writes and commands ask first",
+		description: "Ask before modifying files or running commands",
 		mode: "confirm",
 		nonInteractiveApproval: "deny",
 		autoResume: false,
 	},
 	{
-		id: "read-only",
-		label: "Read Only",
-		description: "Read and discovery tools only",
-		mode: "strict",
-		nonInteractiveApproval: "deny",
-		autoResume: false,
-	},
-	{
-		id: "bypass",
-		label: "Bypass",
-		description: "Run ordinary tools without approval; dangerous commands still ask",
+		id: "approve-for-me",
+		label: "Approve for Me",
+		description:
+			"Routine actions run automatically; only actions detected as potentially unsafe and key decisions ask",
 		mode: "auto",
 		nonInteractiveApproval: "allow",
 		autoResume: false,
 	},
 	{
-		id: "autopilot",
-		label: "Autopilot",
-		description: "Bypass ordinary approvals and resume transient model failures",
+		id: "full-access",
+		label: "Full Access",
+		description: "Every action runs without confirmation, including dangerous commands; trusted environments only",
 		mode: "auto",
 		nonInteractiveApproval: "allow",
-		autoResume: true,
+		autoResume: false,
+		skipCommandPolicy: true,
 	},
 ];
 
@@ -115,6 +116,12 @@ export interface StepPermissionState {
 	 * permissive, so a run without a UI must not inherit it.
 	 */
 	defaulted?: boolean;
+	/**
+	 * Full Access only: dangerous-command and incomplete-analysis gates no
+	 * longer confirm or deny. Always accompanied by an acknowledged risk
+	 * confirmation (see confirmFullAccessRisk); never set by a default.
+	 */
+	skipCommandPolicy?: boolean;
 	/** Per-tool policy overrides supplied by the StepCode or an embedding host. */
 	toolOverrides?: Readonly<Record<string, StepToolPermissionMode>>;
 }
@@ -162,22 +169,38 @@ export function getStepPermissionPreset(id: string | undefined): StepPermissionP
 	return STEP_PERMISSION_PRESETS.find((preset) => preset.id === normalized);
 }
 
-/** Normalize the mode vocabulary used by older Step clients and pi hosts. */
+/**
+ * Normalize the mode vocabulary used by older Step clients and pi hosts.
+ * The retired read-only tier maps onto Ask, the strongest remaining tier.
+ */
 export function normalizeStepPermissionPresetId(value: string | undefined): StepPermissionPresetId | undefined {
 	switch (value?.trim().toLowerCase()) {
 		case "ask":
 		case "confirm":
 			return "ask";
+		case "approve-for-me":
+		case "approve":
+		case "approveforme":
+		// Legacy Bypass and Autopilot ids collapse into Approve for Me;
+		// auto-resume survives as the independent autoResume flag.
+		case "bypass":
+		case "auto":
+		case "autopilot":
+		case "bypasspermissions":
+			return "approve-for-me";
+		case "full-access":
+		case "fullaccess":
+		case "full":
+		case "yolo":
+		case "never-ask":
+			return "full-access";
+		// The retired Read Only tier degrades to Ask rather than to a tier that
+		// would silently execute writes.
 		case "read-only":
 		case "readonly":
 		case "strict":
-			return "read-only";
-		case "bypass":
-		case "auto":
-		case "bypasspermissions":
-			return "bypass";
-		case "autopilot":
-			return "autopilot";
+		case "plan":
+			return "ask";
 		default:
 			return undefined;
 	}
@@ -190,12 +213,12 @@ export function normalizeStepPermissionMode(value: string | undefined): StepPerm
 		case "ask":
 		case "default":
 		case "acceptedits":
-			return "confirm";
+		// Retired with the read-only tier; treated as the nearest remaining tier.
 		case "strict":
 		case "read-only":
 		case "readonly":
 		case "plan":
-			return "strict";
+			return "confirm";
 		case "auto":
 		case "bypass":
 		case "bypasspermissions":
@@ -216,6 +239,12 @@ interface ResolvedStepPermissionPreset {
 	preset: StepPermissionPresetId;
 	/** True only for the final fallback, where nothing selected a policy. */
 	defaulted: boolean;
+	/**
+	 * The retired `autopilot` preset id carried auto-resume in the preset
+	 * itself. Keep honoring it so an old `permissionPreset = "autopilot"`
+	 * config does not silently lose the auto-resume behavior.
+	 */
+	legacyAutoResume?: boolean;
 }
 
 function resolveStepPermissionPresetWithProvenance(
@@ -230,44 +259,40 @@ function resolveStepPermissionPresetWithProvenance(
 	// existing preset-first behavior for the older `STEP_PERMISSION_MODE` alias.
 	const explicitMode = options.approvalMode ?? normalizeStepPermissionMode(env.STEP_APPROVAL_MODE);
 	if (explicitMode) {
-		const nonInteractive =
-			options.nonInteractiveApproval ??
-			(env.STEP_NON_INTERACTIVE_APPROVAL ?? env.STEP_NONINTERACTIVE_APPROVAL)?.trim().toLowerCase();
-		const autoResume = options.autoResume ?? (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME));
-		if (explicitMode === "auto") {
-			return {
-				preset: autoResume && nonInteractive !== "deny" ? "autopilot" : "bypass",
-				defaulted: false,
-			};
-		}
-		return {
-			preset: explicitMode === "strict" ? "read-only" : "ask",
-			defaulted: false,
-		};
+		// Low-level modes select Approve for Me at most: Full Access is only
+		// reachable through an explicit preset id, because it additionally
+		// requires the risk acknowledgment.
+		if (explicitMode === "auto") return { preset: "approve-for-me", defaulted: false };
+		return { preset: "ask", defaulted: false };
 	}
 	const explicitPreset = env.STEP_PERMISSION_PRESET?.trim().toLowerCase();
 	const normalizedExplicitPreset = normalizeStepPermissionPresetId(explicitPreset);
-	if (normalizedExplicitPreset) return { preset: normalizedExplicitPreset, defaulted: false };
+	if (normalizedExplicitPreset) {
+		return {
+			preset: normalizedExplicitPreset,
+			defaulted: false,
+			...(explicitPreset === "autopilot" ? { legacyAutoResume: true } : {}),
+		};
+	}
 
 	const mode = env.STEP_PERMISSION_MODE?.trim().toLowerCase();
 	if (mode === "strict" || mode === "read-only" || mode === "readonly") {
-		return { preset: "read-only", defaulted: false };
+		return { preset: "ask", defaulted: false };
 	}
 	if (mode === "auto" || mode === "bypass" || mode === "bypasspermissions") {
-		return {
-			preset: isTruthy(env.STEP_AUTOPILOT) ? "autopilot" : "bypass",
-			defaulted: false,
-		};
+		return { preset: "approve-for-me", defaulted: false };
 	}
 	if (mode === "confirm" || mode === "ask") return { preset: "ask", defaulted: false };
-	if (isTruthy(env.STEP_AUTOPILOT)) return { preset: "autopilot", defaulted: false };
-	// Default to bypass: tools run without approval prompts. Explicit CLI flags,
-	// STEP_* env vars, and any persisted preset are all resolved above this line,
-	// so they continue to override the default. Dangerous commands (see
-	// decideStepToolCall / isDangerousCommand) still require confirmation even
-	// under bypass, and a run with no UI refuses the defaulted policy outright
-	// (see StepPermissionController.handleToolCall).
-	return { preset: "bypass", defaulted: true };
+	if (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME)) {
+		return { preset: "approve-for-me", defaulted: false };
+	}
+	// Default to Approve for Me: routine tools run without approval prompts.
+	// Explicit CLI flags, STEP_* env vars, and any persisted preset are all
+	// resolved above this line, so they continue to override the default.
+	// Dangerous commands (see decideStepToolCall / isDangerousCommand) still
+	// require confirmation, and a run with no UI refuses the defaulted policy
+	// outright (see StepPermissionController.handleToolCall).
+	return { preset: "approve-for-me", defaulted: true };
 }
 
 export function stepPermissionStateForPreset(presetId: StepPermissionPresetId): StepPermissionState {
@@ -277,6 +302,7 @@ export function stepPermissionStateForPreset(presetId: StepPermissionPresetId): 
 		mode: preset.mode,
 		nonInteractiveApproval: preset.nonInteractiveApproval,
 		autoResume: preset.autoResume,
+		...(preset.skipCommandPolicy ? { skipCommandPolicy: true } : {}),
 	};
 }
 
@@ -287,6 +313,16 @@ export function normalizeAutoResume(
 	autoResume: boolean | undefined,
 ): boolean {
 	return mode === "auto" && nonInteractiveApproval === "allow" && autoResume === true;
+}
+
+/**
+ * The raw auto-resume request from options, then the environment. Presets no
+ * longer carry it: the retired `autopilot` id is normalized by the caller, and
+ * persisted `autoResume` arrives as `options.autoResume`.
+ */
+export function resolveAutoResumeRequest(options: StepPermissionControllerOptions = {}): boolean {
+	const env = options.env ?? process.env;
+	return options.autoResume ?? (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME));
 }
 
 /**
@@ -306,20 +342,25 @@ export function resolveInitialStepPermissionState(options: StepPermissionControl
 		rawNonInteractive === "allow" || rawNonInteractive === "deny" ? rawNonInteractive : preset.nonInteractiveApproval;
 	const effectiveMode = mode ?? preset.mode;
 	const requestedAutoResume =
-		options.autoResume ?? (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME) || preset.autoResume);
+		resolveAutoResumeRequest(options) || presetResolution.legacyAutoResume === true || preset.autoResume;
 	const autoResume = normalizeAutoResume(effectiveMode, nonInteractiveApproval, requestedAutoResume);
 	const resolved: StepPermissionState = {
 		preset: preset.preset,
 		mode: effectiveMode,
 		nonInteractiveApproval,
 		autoResume,
+		...(preset.skipCommandPolicy ? { skipCommandPolicy: true } : {}),
 	};
+	// Approve for Me and Full Access share the (mode, approval, resume) triple,
+	// so skipCommandPolicy must participate in the relabeling match; otherwise a
+	// Full Access state would be renamed to Approve for Me here.
 	const matchingPreset =
 		STEP_PERMISSION_PRESETS.find(
 			(candidate) =>
 				candidate.mode === resolved.mode &&
 				candidate.nonInteractiveApproval === resolved.nonInteractiveApproval &&
-				candidate.autoResume === resolved.autoResume,
+				candidate.autoResume === resolved.autoResume &&
+				(candidate.skipCommandPolicy ?? false) === (resolved.skipCommandPolicy ?? false),
 		) ?? STEP_PERMISSION_PRESETS.find((candidate) => candidate.mode === resolved.mode);
 	if (matchingPreset) resolved.preset = matchingPreset.id;
 	// Only a grant counts as configuring the policy. An explicit `deny` asks for
@@ -364,8 +405,9 @@ function combineThenRunDecisions(
 
 /**
  * Decide a tool call without involving the terminal. This is intentionally
- * conservative for unknown tools: ask mode confirms them, read-only blocks
- * them, and bypass permits them unless the call is hazardous.
+ * conservative for unknown tools: ask mode confirms them, Approve for Me
+ * permits them unless the call is hazardous or its analysis is incomplete, and
+ * Full Access permits everything (see skipCommandPolicy).
  */
 export function decideStepToolCall(
 	toolName: string,
@@ -400,6 +442,11 @@ export function decideStepToolCall(
 	}
 	const commandRule = analysis?.kind === "matched" ? analysis.ruleId : undefined;
 	const override = findToolOverride(normalizedName, overrides);
+	// Full Access only: the dangerous-command and incomplete-analysis gates are
+	// the sole difference from Approve for Me, so they are skipped together.
+	// Explicit per-tool denials are user-configured blocks, not confirmations,
+	// and still apply below.
+	const enforceCommandPolicy = state.skipCommandPolicy !== true;
 
 	if (override === "deny") {
 		return {
@@ -409,17 +456,17 @@ export function decideStepToolCall(
 		};
 	}
 
-	if (commandRule) {
+	if (commandRule && enforceCommandPolicy) {
 		return {
-			action: state.mode === "strict" ? "deny" : "confirm",
+			action: "confirm",
 			hazardous: true,
 			reason: `Dangerous command requires confirmation (${commandRule}): ${summarizeToolInput(toolName, input)}`,
 		};
 	}
 
-	if (analysis?.kind === "unresolved") {
+	if (analysis?.kind === "unresolved" && enforceCommandPolicy) {
 		return {
-			action: state.mode === "strict" ? "deny" : "confirm",
+			action: "confirm",
 			hazardous: false,
 			analysisIncomplete: true,
 			analysisReason: analysis.reason,
@@ -436,18 +483,11 @@ export function decideStepToolCall(
 	}
 
 	const mutating = WRITE_OR_EXECUTE_TOOLS.has(normalizedName) || !READ_ONLY_TOOLS.has(normalizedName);
-	if (state.mode === "strict" && mutating) {
-		return {
-			action: "deny",
-			hazardous: false,
-			reason: `Read-only mode blocks ${toolName}`,
-		};
-	}
 	if (state.mode === "auto") {
 		return {
 			action: "allow",
 			hazardous: false,
-			reason: "Bypass approval mode is enabled",
+			reason: "Automatic approval mode is enabled",
 		};
 	}
 	if (!mutating) {
@@ -478,10 +518,16 @@ export class StepPermissionController {
 	private toolOverrides: Record<string, StepToolPermissionMode>;
 	private readonly shellContext: () => ShellExecutionContext;
 	private readonly nonInteractiveDenial: StepNonInteractiveDenial;
+	/**
+	 * The raw auto-resume request. It survives Ask, where the flag is inert, so
+	 * switching back to an automatic tier does not silently drop the preference.
+	 */
+	private readonly autoResumeRequest: boolean;
 
 	constructor(options: StepPermissionControllerOptions = {}) {
 		this.shellContext = options.shellContext ?? (() => ({}));
 		this.state = resolveInitialStepPermissionState(options);
+		this.autoResumeRequest = resolveAutoResumeRequest(options);
 		this.toolOverrides = cloneToolOverrides(options.toolOverrides ?? {});
 		this.nonInteractiveDenial = resolveNonInteractiveDenial(options);
 		if (Object.keys(this.toolOverrides).length > 0) this.state.toolOverrides = { ...this.toolOverrides };
@@ -497,15 +543,23 @@ export class StepPermissionController {
 	setPreset(presetId: string): StepPermissionState | undefined {
 		const preset = getStepPermissionPreset(presetId);
 		if (!preset) return undefined;
-		this.state = stepPermissionStateForPreset(preset.id);
+		const next = stepPermissionStateForPreset(preset.id);
+		// Auto-resume is an independent preference, not a preset property: keep
+		// the user's request across preset switches, re-normalized for the tier
+		// being entered (it stays inert under Ask).
+		next.autoResume = normalizeAutoResume(next.mode, next.nonInteractiveApproval, this.autoResumeRequest);
+		this.state = next;
 		return this.getState();
 	}
 
 	cycle(): StepPermissionState {
+		return this.setPreset(this.nextPresetId())!;
+	}
+
+	/** The preset `cycle()` would move to, without applying it. */
+	nextPresetId(): StepPermissionPresetId {
 		const index = STEP_PERMISSION_PRESETS.findIndex((preset) => preset.id === this.state.preset);
-		const next = STEP_PERMISSION_PRESETS[(index + 1) % STEP_PERMISSION_PRESETS.length]!;
-		this.state = stepPermissionStateForPreset(next.id);
-		return this.getState();
+		return STEP_PERMISSION_PRESETS[(index + 1) % STEP_PERMISSION_PRESETS.length]!.id;
 	}
 
 	/**
@@ -920,4 +974,31 @@ function describeAssistantFailure(messages: AgentMessage[]): string | undefined 
 export function publishStepPermissionStatus(ui: ExtensionUIContext, state: StepPermissionState): void {
 	const preset = getStepPermissionPreset(state.preset) ?? STEP_PERMISSION_PRESETS[0]!;
 	ui.setStatus("step-permission", `Mode: ${preset.label}${state.autoResume ? " (auto-resume)" : ""}`);
+}
+
+// =============================================================================
+// Full Access risk acknowledgment
+// =============================================================================
+
+/**
+ * Full Access executes dangerous commands without any confirmation, so
+ * entering the tier requires an explicit risk acknowledgment. The dialog
+ * mirrors the Codex/Claude wording: one session-scoped grant, one remembered
+ * grant, and a cancel that keeps the previous tier.
+ */
+export const FULL_ACCESS_RISK_TITLE = "Enable full access?";
+
+export const FULL_ACCESS_RISK_MESSAGE =
+	"When Step runs with full access, it can edit any file on your computer and run commands with network, without your approval. Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.";
+
+/** Dialog options in display order; the selected label maps back to a choice. */
+export const FULL_ACCESS_RISK_OPTIONS = ["Yes, continue anyway", "Yes, and don't ask again", "Cancel"] as const;
+
+export type FullAccessRiskChoice = "session" | "always" | "cancel";
+
+/** Map a selected option label (or a dismissed dialog) to a risk choice. */
+export function parseFullAccessRiskChoice(selected: string | undefined): FullAccessRiskChoice {
+	if (selected === FULL_ACCESS_RISK_OPTIONS[0]) return "session";
+	if (selected === FULL_ACCESS_RISK_OPTIONS[1]) return "always";
+	return "cancel";
 }

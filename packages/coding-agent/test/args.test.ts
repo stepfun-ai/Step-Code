@@ -396,17 +396,26 @@ describe("parseArgs", () => {
 		test("supports equals syntax and repeated per-tool overrides", () => {
 			expect(
 				parseArgs([
-					"--approval-mode=strict",
+					"--approval-mode=confirm",
 					"--non-interactive-approval=deny",
 					"--tool-override",
 					"write_file=deny",
 					"--tool-override=run_command=confirm",
 				]),
 			).toMatchObject({
-				approvalMode: "strict",
+				approvalMode: "confirm",
 				nonInteractiveApproval: "deny",
 				toolOverride: { write_file: "deny", run_command: "confirm" },
 				toolOverrides: { write_file: "deny", run_command: "confirm" },
+			});
+		});
+
+		test("rejects the retired strict approval mode", () => {
+			const result = parseArgs(["--approval-mode", "strict"]);
+			expect(result.approvalMode).toBeUndefined();
+			expect(result.diagnostics).toContainEqual({
+				type: "error",
+				message: 'Invalid approval mode "strict". Valid values: confirm, auto',
 			});
 		});
 
@@ -414,7 +423,7 @@ describe("parseArgs", () => {
 			const result = parseArgs(["--approval-mode", "wat", "--tool-override", "bash=wat"]);
 			expect(result.messages).toEqual([]);
 			expect(result.diagnostics).toEqual([
-				{ type: "error", message: 'Invalid approval mode "wat". Valid values: confirm, auto, strict' },
+				{ type: "error", message: 'Invalid approval mode "wat". Valid values: confirm, auto' },
 				{ type: "error", message: 'Invalid --tool-override "bash=wat". Expected <tool=allow|confirm|deny>' },
 			]);
 		});

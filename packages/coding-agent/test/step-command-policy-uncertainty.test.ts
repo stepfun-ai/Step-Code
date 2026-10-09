@@ -6,17 +6,17 @@ describe("incomplete command analysis requires an explicit decision", () => {
 	it.each(['[ -n "$PATH" ]', 'export PATH="$PATH"', `export FOO="\${BAR:-safe}"`])(
 		"keeps ordinary prefixes eligible for unattended execution: %s",
 		async (commandPrefix) => {
-			for (const initialPreset of ["bypass", "autopilot"] as const) {
-				const controller = new StepPermissionController({
-					env: {},
-					initialPreset,
-					shellContext: () => ({ commandPrefix }),
-				});
-				const input = { command: "printf safe" };
-				expect(controller.decide("run_command", input)).toMatchObject({ action: "allow", hazardous: false });
-				const event: ToolCallEvent = { type: "tool_call", toolName: "run_command", toolCallId: "prefix", input };
-				expect(await controller.handleToolCall(event, { hasUI: false } as ExtensionContext)).toBeUndefined();
-			}
+			// Only the automatic tiers run ordinary confirmations unattended; Ask
+			// confirms every mutating call by design.
+			const controller = new StepPermissionController({
+				env: {},
+				initialPreset: "approve-for-me",
+				shellContext: () => ({ commandPrefix }),
+			});
+			const input = { command: "printf safe" };
+			expect(controller.decide("run_command", input)).toMatchObject({ action: "allow", hazardous: false });
+			const event: ToolCallEvent = { type: "tool_call", toolName: "run_command", toolCallId: "prefix", input };
+			expect(await controller.handleToolCall(event, { hasUI: false } as ExtensionContext)).toBeUndefined();
 		},
 	);
 
@@ -28,7 +28,7 @@ describe("incomplete command analysis requires an explicit decision", () => {
 	])("checks the executed prefix for $toolName input $input", async ({ toolName, input }) => {
 		const controller = new StepPermissionController({
 			env: {},
-			initialPreset: "bypass",
+			initialPreset: "approve-for-me",
 			nonInteractiveApproval: "allow",
 			shellContext: () => ({ commandPrefix: "rm -rf ./build" }),
 		});
@@ -43,7 +43,7 @@ describe("incomplete command analysis requires an explicit decision", () => {
 	it("omits the prefix only for the background tool that omits it during execution", () => {
 		const controller = new StepPermissionController({
 			env: {},
-			initialPreset: "bypass",
+			initialPreset: "approve-for-me",
 			shellContext: () => ({ commandPrefix: "rm -rf ./build" }),
 		});
 		expect(controller.decide("run_command", { command: ":", run_in_background: true })).toMatchObject({
@@ -75,7 +75,7 @@ describe("incomplete command analysis requires an explicit decision", () => {
 		'local -I value="$VALUE"',
 		"readarray -C 'rm -rf ./build; #' -c 1 <<< ok",
 	])("does not turn an incomplete analysis into unattended permission: %s", async (command) => {
-		for (const initialPreset of ["bypass", "autopilot"] as const) {
+		for (const initialPreset of ["ask", "approve-for-me"] as const) {
 			const controller = new StepPermissionController({
 				env: {},
 				initialPreset,
@@ -109,21 +109,20 @@ describe("incomplete command analysis requires an explicit decision", () => {
 		}
 	});
 
-	it("permits uncertain input only after explicit approval and keeps strict/deny precedence", async () => {
+	it("permits uncertain input only after explicit approval and keeps deny precedence", async () => {
 		const input = { command: 'bash -c "$SCRIPT"' };
 		const event: ToolCallEvent = { type: "tool_call", toolName: "run_command", toolCallId: "review", input };
 		const confirm = vi.fn(async () => true);
 		const context = { hasUI: true, ui: { confirm } } as unknown as ExtensionContext;
-		const controller = new StepPermissionController({ env: {}, initialPreset: "bypass" });
+		const controller = new StepPermissionController({ env: {}, initialPreset: "approve-for-me" });
 		expect(await controller.handleToolCall(event, context)).toBeUndefined();
 		expect(confirm).toHaveBeenCalledOnce();
-		for (const options of [
-			{ initialPreset: "read-only" as const },
-			{ initialPreset: "bypass" as const, toolOverrides: { run_command: "deny" as const } },
-		]) {
-			const denied = new StepPermissionController({ env: {}, ...options });
-			expect(await denied.handleToolCall(event, context)).toMatchObject({ block: true, terminate: true });
-		}
+		const denied = new StepPermissionController({
+			env: {},
+			initialPreset: "approve-for-me",
+			toolOverrides: { run_command: "deny" },
+		});
+		expect(await denied.handleToolCall(event, context)).toMatchObject({ block: true, terminate: true });
 		expect(confirm).toHaveBeenCalledOnce();
 	});
 });

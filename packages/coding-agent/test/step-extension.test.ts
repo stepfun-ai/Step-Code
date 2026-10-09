@@ -8,10 +8,13 @@ import type {
 import { createStepExtension, stepExtension } from "../src/features/step.ts";
 import { STEP_INIT_PROMPT } from "../src/step/init-prompt.ts";
 
-function commandContext(isIdle: boolean): ExtensionCommandContext {
+function commandContext(
+	isIdle: boolean,
+	select?: (title: string, options: string[]) => Promise<string | undefined>,
+): ExtensionCommandContext {
 	return {
 		isIdle: () => isIdle,
-		ui: { notify: vi.fn(), setStatus: vi.fn() },
+		ui: { notify: vi.fn(), setStatus: vi.fn(), select: select ?? (async () => undefined) },
 	} as unknown as ExtensionCommandContext;
 }
 
@@ -22,7 +25,7 @@ describe("Step extension", () => {
 	])("uses the real shell settings for approval: $name", async ({ shellPath, prefix }) => {
 		const on = vi.fn();
 		createStepExtension({
-			permission: { env: {}, initialPreset: "bypass", nonInteractiveApproval: "allow" },
+			permission: { env: {}, initialPreset: "approve-for-me", nonInteractiveApproval: "allow" },
 			stepSettings: () => ({
 				getStepSettings: () => ({}),
 				setEffectiveStepSettings: vi.fn(),
@@ -134,7 +137,7 @@ describe("Step extension", () => {
 		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
 			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 		};
-		await command.handler("bypass", commandContext(true));
+		await command.handler("approve-for-me", commandContext(true));
 
 		const inputHandler = on.mock.calls.find(([name]) => name === "input")?.[1] as (
 			event: { text: string },
@@ -147,7 +150,11 @@ describe("Step extension", () => {
 			{ command: "/permissions", recognized: true },
 			undefined,
 		);
-		expect(track).toHaveBeenCalledWith("permission_mode_toggled", { mode: "bypass", source: "command" }, undefined);
+		expect(track).toHaveBeenCalledWith(
+			"permission_mode_toggled",
+			{ mode: "approve-for-me", source: "command" },
+			undefined,
+		);
 		expect(track).toHaveBeenCalledWith("slash_command_used", { command: "/unknown", recognized: false }, undefined);
 	});
 
@@ -180,7 +187,7 @@ describe("Step extension", () => {
 		const setEffectiveStepSettings = vi.fn();
 		const settings = {
 			getStepSettings: () => ({
-				permissionPreset: "bypass" as const,
+				permissionPreset: "approve-for-me" as const,
 				approvalMode: "auto" as const,
 				nonInteractiveApproval: "allow" as const,
 				autoResume: false,
@@ -205,16 +212,16 @@ describe("Step extension", () => {
 		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
 			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 		};
-		await command.handler("autopilot", commandContext(true));
+		await command.handler("approve-for-me", commandContext(true));
 		expect(setEffectiveStepSettings).toHaveBeenCalledWith({
-			permissionPreset: "autopilot",
+			permissionPreset: "approve-for-me",
 			approvalMode: "auto",
 			nonInteractiveApproval: "allow",
-			autoResume: true,
+			autoResume: false,
 		});
 	});
 
-	test.each(["bypass", "autopilot"] as const)(
+	test.each(["ask", "approve-for-me"] as const)(
 		"keeps recursive forced removal gated through the %s tool-call hook",
 		async (initialPreset) => {
 			const on = vi.fn();
@@ -265,8 +272,87 @@ describe("Step extension", () => {
 		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
 
 		// A named preset is a deliberate choice and still persists.
-		await command.handler("read-only", commandContext(true));
-		expect(setEffectiveStepSettings).toHaveBeenCalledWith(expect.objectContaining({ permissionPreset: "read-only" }));
+		await command.handler("approve-for-me", commandContext(true));
+		expect(setEffectiveStepSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ permissionPreset: "approve-for-me" }),
+		);
+	});
+
+	test("requires the Full Access risk acknowledgment before /permissions enables it", async () => {
+		const on = vi.fn();
+		const registerCommand = vi.fn();
+		const setEffectiveStepSettings = vi.fn();
+		const select = vi.fn(async (): Promise<string | undefined> => undefined);
+		createStepExtension({
+			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings }),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		const notify = vi.fn();
+		const dismissed = {
+			isIdle: () => true,
+			ui: { notify, setStatus: vi.fn(), select },
+		} as unknown as ExtensionCommandContext;
+
+		// A dismissed dialog keeps the previous tier and persists nothing.
+		await command.handler("full-access", dismissed);
+		expect(select).toHaveBeenCalledWith(expect.stringContaining("Enable full access?"), [
+			"Yes, continue anyway",
+			"Yes, and don't ask again",
+			"Cancel",
+		]);
+		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith("Full access was not enabled.", "warning");
+
+		// A session-scoped grant enables the tier and runs dangerous commands.
+		select.mockImplementation(async () => "Yes, continue anyway");
+		await command.handler("full-access", commandContext(true, select));
+		expect(setEffectiveStepSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ permissionPreset: "full-access" }),
+		);
+		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		expect(
+			await toolHandler(
+				{
+					type: "tool_call",
+					toolName: "run_command",
+					toolCallId: "full-access-removal",
+					input: { command: "rm -rf ./build" },
+				},
+				{ hasUI: false },
+			),
+		).toBeUndefined();
+	});
+
+	test("remembers the Full Access acknowledgment when the user asks it to", async () => {
+		const on = vi.fn();
+		const registerCommand = vi.fn();
+		const setEffectiveStepSettings = vi.fn();
+		const select = vi.fn(async () => "Yes, and don't ask again");
+		createStepExtension({
+			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings }),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		await command.handler("full-access", commandContext(true, select));
+		expect(setEffectiveStepSettings).toHaveBeenCalledWith(expect.objectContaining({ fullAccessAcknowledged: true }));
 	});
 
 	test("keeps explicit environment policy ahead of persisted Step settings", async () => {
@@ -276,7 +362,7 @@ describe("Step extension", () => {
 			const on = vi.fn();
 			const settings = {
 				getStepSettings: () => ({
-					permissionPreset: "autopilot" as const,
+					permissionPreset: "approve-for-me" as const,
 					approvalMode: "auto" as const,
 					nonInteractiveApproval: "allow" as const,
 					autoResume: true,
@@ -302,14 +388,14 @@ describe("Step extension", () => {
 		}
 	});
 
-	test("keeps an explicit false auto-resume value ahead of persisted autopilot", () => {
+	test("keeps an explicit false auto-resume value ahead of persisted auto-resume", () => {
 		const on = vi.fn();
 		const setStatus = vi.fn();
 		createStepExtension({
 			permission: { autoResume: false },
 			stepSettings: () => ({
 				getStepSettings: () => ({
-					permissionPreset: "autopilot",
+					permissionPreset: "approve-for-me",
 					approvalMode: "auto",
 					nonInteractiveApproval: "allow",
 					autoResume: true,
@@ -335,12 +421,12 @@ describe("Step extension", () => {
 				setAutoRetryEnabled: vi.fn(),
 			},
 		);
-		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Bypass");
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Approve for Me");
 	});
 
 	test("rehydrates project policy after the trust probe", async () => {
 		const on = vi.fn();
-		let persisted: "ask" | "autopilot" = "ask";
+		let persisted: "ask" | "approve-for-me" = "ask";
 		const settings = {
 			getStepSettings: () =>
 				persisted === "ask"
@@ -351,7 +437,7 @@ describe("Step extension", () => {
 							autoResume: false,
 						}
 					: {
-							permissionPreset: "autopilot" as const,
+							permissionPreset: "approve-for-me" as const,
 							approvalMode: "auto" as const,
 							nonInteractiveApproval: "allow" as const,
 							autoResume: true,
@@ -381,7 +467,7 @@ describe("Step extension", () => {
 			block: true,
 			terminate: true,
 		});
-		persisted = "autopilot";
+		persisted = "approve-for-me";
 		sessionStart(
 			{ type: "session_start", reason: "new" },
 			{

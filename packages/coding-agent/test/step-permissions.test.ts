@@ -4,7 +4,9 @@ import {
 	AUTO_RESUME_PROMPT,
 	containsDangerousLifecycleCommand,
 	decideStepToolCall,
+	FULL_ACCESS_RISK_OPTIONS,
 	isDangerousCommand,
+	parseFullAccessRiskChoice,
 	resolveInitialStepPermissionPreset,
 	resolveInitialStepPermissionState,
 	STEP_PERMISSION_PRESETS,
@@ -14,14 +16,14 @@ import {
 } from "../src/step/permissions.ts";
 
 describe("Step permission presets", () => {
-	it("exposes the four stable presets in cycle order", () => {
-		expect(STEP_PERMISSION_PRESETS.map((preset) => preset.id)).toEqual(["ask", "read-only", "bypass", "autopilot"]);
+	it("exposes the three stable presets in cycle order", () => {
+		expect(STEP_PERMISSION_PRESETS.map((preset) => preset.id)).toEqual(["ask", "approve-for-me", "full-access"]);
 		const controller = new StepPermissionController({ env: {} });
-		expect(controller.getState().preset).toBe("bypass");
-		expect(controller.cycle().preset).toBe("autopilot");
+		expect(controller.getState().preset).toBe("approve-for-me");
+		expect(controller.cycle().preset).toBe("full-access");
 		expect(controller.cycle().preset).toBe("ask");
-		expect(controller.cycle().preset).toBe("read-only");
-		expect(controller.cycle().preset).toBe("bypass");
+		expect(controller.cycle().preset).toBe("approve-for-me");
+		expect(controller.nextPresetId()).toBe("full-access");
 		expect(
 			new StepPermissionController({
 				env: { STEP_PERMISSION_PRESET: "confirm" },
@@ -31,7 +33,20 @@ describe("Step permission presets", () => {
 			new StepPermissionController({
 				env: { STEP_PERMISSION_PRESET: "strict" },
 			}).getState().preset,
-		).toBe("read-only");
+		).toBe("ask");
+	});
+
+	it("normalizes retired preset ids onto the remaining tiers", () => {
+		// Bypass and Autopilot collapse into Approve for Me; Read Only degrades to Ask.
+		for (const legacy of ["bypass", "auto", "autopilot", "bypasspermissions"]) {
+			expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: legacy } })).toBe("approve-for-me");
+		}
+		for (const legacy of ["read-only", "readonly", "strict"]) {
+			expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: legacy } })).toBe("ask");
+		}
+		for (const alias of ["full-access", "fullaccess", "full", "yolo", "never-ask"]) {
+			expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: alias } })).toBe("full-access");
+		}
 	});
 
 	it("resolves explicit preset and autopilot environment settings", () => {
@@ -39,13 +54,25 @@ describe("Step permission presets", () => {
 			resolveInitialStepPermissionPreset({
 				env: { STEP_PERMISSION_PRESET: "read-only" },
 			}),
-		).toBe("read-only");
+		).toBe("ask");
 		expect(
 			resolveInitialStepPermissionPreset({
 				env: { STEP_PERMISSION_MODE: "auto" },
 			}),
-		).toBe("bypass");
-		expect(resolveInitialStepPermissionPreset({ env: { STEP_AUTOPILOT: "1" } })).toBe("autopilot");
+		).toBe("approve-for-me");
+		expect(resolveInitialStepPermissionPreset({ env: { STEP_AUTOPILOT: "1" } })).toBe("approve-for-me");
+	});
+
+	it("keeps the legacy autopilot id carrying auto-resume", () => {
+		expect(
+			resolveInitialStepPermissionState({
+				env: { STEP_PERMISSION_PRESET: "autopilot" },
+			}),
+		).toMatchObject({ preset: "approve-for-me", mode: "auto", autoResume: true });
+		expect(resolveInitialStepPermissionState({ env: { STEP_AUTOPILOT: "1" } })).toMatchObject({
+			preset: "approve-for-me",
+			autoResume: true,
+		});
 	});
 
 	it("resolves the old Step approval triple and per-tool overrides", () => {
@@ -57,7 +84,7 @@ describe("Step permission presets", () => {
 				toolOverrides: { write_file: "deny" },
 			}),
 		).toMatchObject({
-			preset: "autopilot",
+			preset: "approve-for-me",
 			mode: "auto",
 			nonInteractiveApproval: "allow",
 			autoResume: true,
@@ -77,7 +104,7 @@ describe("Step permission presets", () => {
 					STEP_PERMISSION_MODE: "strict",
 				},
 			}),
-		).toMatchObject({ preset: "autopilot", mode: "auto", autoResume: true });
+		).toMatchObject({ preset: "approve-for-me", mode: "auto", autoResume: true });
 		expect(
 			resolveInitialStepPermissionState({
 				env: {
@@ -85,21 +112,20 @@ describe("Step permission presets", () => {
 					STEP_PERMISSION_PRESET: "autopilot",
 				},
 			}),
-		).toMatchObject({ preset: "read-only", mode: "strict", autoResume: false });
+		).toMatchObject({ preset: "ask", mode: "confirm", autoResume: false });
 	});
 
-	it("allows read tools, confirms writes, and blocks writes in read-only mode", () => {
+	it("allows read tools and confirms writes under Ask", () => {
 		const ask = stepPermissionStateForPreset("ask");
 		expect(decideStepToolCall("read_file", { path: "a.txt" }, ask).action).toBe("allow");
 		expect(decideStepToolCall("search_web", { query: "current news" }, ask).action).toBe("allow");
 		expect(decideStepToolCall("write_file", { path: "a.txt", content: "x" }, ask).action).toBe("confirm");
-		const readOnly = stepPermissionStateForPreset("read-only");
-		expect(decideStepToolCall("search_web", { query: "current news" }, readOnly).action).toBe("allow");
-		expect(decideStepToolCall("write_file", { path: "a.txt", content: "x" }, readOnly).action).toBe("deny");
+		const approveForMe = stepPermissionStateForPreset("approve-for-me");
+		expect(decideStepToolCall("write_file", { path: "a.txt", content: "x" }, approveForMe).action).toBe("allow");
 	});
 
-	it("keeps dangerous commands behind confirmation even in bypass/autopilot", () => {
-		for (const preset of ["bypass", "autopilot"] as const) {
+	it("keeps dangerous commands behind confirmation except under Full Access", () => {
+		for (const preset of ["ask", "approve-for-me"] as const) {
 			const decision = decideStepToolCall(
 				"run_command",
 				{ command: "rm -rf /etc" },
@@ -111,14 +137,48 @@ describe("Step permission presets", () => {
 		const fused = decideStepToolCall(
 			"write_file",
 			{ path: "a.txt", content: "x", then_run: "rm -rf /etc" },
-			stepPermissionStateForPreset("bypass"),
+			stepPermissionStateForPreset("approve-for-me"),
 		);
 		expect(fused.action).toBe("confirm");
 		expect(fused.hazardous).toBe(true);
 		expect(fused.reason).toContain("then_run: rm -rf /etc");
+		// Full Access is the only tier that runs detected dangerous commands, and
+		// the only behavioral difference from Approve for Me.
+		const fullAccess = stepPermissionStateForPreset("full-access");
+		expect(fullAccess.skipCommandPolicy).toBe(true);
+		expect(decideStepToolCall("run_command", { command: "rm -rf /etc" }, fullAccess).action).toBe("allow");
+		expect(
+			decideStepToolCall("write_file", { path: "a.txt", content: "x", then_run: "rm -rf /etc" }, fullAccess).action,
+		).toBe("allow");
 		expect(isDangerousCommand("sudo -n reboot")).toBe(true);
 		expect(isDangerousCommand("qemu-system-x86_64 -no-reboot -no-shutdown")).toBe(false);
 		expect(containsDangerousLifecycleCommand("sh -c 'systemctl reboot'")).toBe(true);
+	});
+
+	it("keeps explicit tool denials and unresolved analysis distinct under Full Access", () => {
+		const fullAccess = stepPermissionStateForPreset("full-access");
+		// An explicit per-tool deny is a user-configured block, not a confirmation.
+		expect(
+			decideStepToolCall("run_command", { command: "rm -rf /etc" }, fullAccess, { run_command: "deny" }).action,
+		).toBe("deny");
+		// Incomplete analysis runs too: Full Access asks nothing.
+		expect(decideStepToolCall("run_command", { command: '"$HOME/x" sync' }, fullAccess).action).toBe("allow");
+		// Approve for Me still confirms the same unanalyzable command.
+		expect(
+			decideStepToolCall(
+				"run_command",
+				{ command: '"$HOME/x" sync' },
+				stepPermissionStateForPreset("approve-for-me"),
+			).action,
+		).toBe("confirm");
+	});
+
+	it("parses the Full Access risk dialog choices", () => {
+		expect(parseFullAccessRiskChoice(FULL_ACCESS_RISK_OPTIONS[0])).toBe("session");
+		expect(parseFullAccessRiskChoice(FULL_ACCESS_RISK_OPTIONS[1])).toBe("always");
+		expect(parseFullAccessRiskChoice(FULL_ACCESS_RISK_OPTIONS[2])).toBe("cancel");
+		// A dismissed dialog (undefined) cancels.
+		expect(parseFullAccessRiskChoice(undefined)).toBe("cancel");
 	});
 
 	it.each([true, false])("identifies each approval without changing the decision (approved=%s)", async (approved) => {
@@ -163,7 +223,7 @@ describe("Step permission presets", () => {
 	it("keeps the hazard warning in an identifiable approval prompt", async () => {
 		const controller = new StepPermissionController({
 			env: {},
-			initialPreset: "bypass",
+			initialPreset: "approve-for-me",
 		});
 		const confirm = vi.fn(async () => false);
 		const context = {
@@ -284,19 +344,8 @@ describe("Step permission presets", () => {
 		});
 
 		it("keeps explicit denials terminating even with continue", async () => {
-			const readOnly = new StepPermissionController({
-				initialPreset: "read-only",
-				nonInteractiveDenial: "continue",
-				env: {},
-			});
-			expect(
-				await readOnly.handleToolCall(
-					{ toolName: "write_file", input: { path: "x", content: "y" } } as never,
-					noUI,
-				),
-			).toMatchObject({ block: true, terminate: true });
 			const overridden = new StepPermissionController({
-				initialPreset: "bypass",
+				initialPreset: "approve-for-me",
 				nonInteractiveDenial: "continue",
 				toolOverrides: { run_command: "deny" },
 				env: {},
@@ -354,7 +403,7 @@ describe("Step permission presets", () => {
 
 		it("marks an unselected policy as defaulted", () => {
 			const state = resolveInitialStepPermissionState({ env: {} });
-			expect(state.preset).toBe("bypass");
+			expect(state.preset).toBe("approve-for-me");
 			expect(state.defaulted).toBe(true);
 		});
 
@@ -374,7 +423,7 @@ describe("Step permission presets", () => {
 			expect(result).toBeUndefined();
 		});
 
-		it("keeps the interactive Bypass default when a UI exists", async () => {
+		it("keeps the interactive automatic default when a UI exists", async () => {
 			const controller = new StepPermissionController({ env: {} });
 			const confirm = vi.fn(async () => true);
 			const context = {
@@ -386,10 +435,19 @@ describe("Step permission presets", () => {
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("honors an explicit STEP_PERMISSION_PRESET=bypass", async () => {
+		it("honors an explicit STEP_PERMISSION_PRESET=approve-for-me", async () => {
+			const controller = new StepPermissionController({
+				env: { STEP_PERMISSION_PRESET: "approve-for-me" },
+			});
+			expect(controller.getState().defaulted).toBeUndefined();
+			expect(await controller.handleToolCall(writeCall, noUI)).toBeUndefined();
+		});
+
+		it("honors the legacy STEP_PERMISSION_PRESET=bypass spelling", async () => {
 			const controller = new StepPermissionController({
 				env: { STEP_PERMISSION_PRESET: "bypass" },
 			});
+			expect(controller.getState().preset).toBe("approve-for-me");
 			expect(controller.getState().defaulted).toBeUndefined();
 			expect(await controller.handleToolCall(writeCall, noUI)).toBeUndefined();
 		});
@@ -397,7 +455,7 @@ describe("Step permission presets", () => {
 		it("honors a trusted project preset injected as initialPreset", async () => {
 			const controller = new StepPermissionController({
 				env: {},
-				initialPreset: "bypass",
+				initialPreset: "approve-for-me",
 			});
 			expect(controller.getState().defaulted).toBeUndefined();
 			expect(await controller.handleToolCall(writeCall, noUI)).toBeUndefined();
@@ -415,7 +473,7 @@ describe("Step permission presets", () => {
 		// An explicit `--non-interactive-approval deny` used to be worse than
 		// passing nothing: it cleared the defaulted marker and the mode stayed
 		// `auto`, where the fallback is never consulted, so the call ran.
-		it("honors an explicit non-interactive deny under the bypass default", async () => {
+		it("honors an explicit non-interactive deny under the automatic default", async () => {
 			const controller = new StepPermissionController({
 				env: {},
 				nonInteractiveApproval: "deny",
@@ -424,10 +482,10 @@ describe("Step permission presets", () => {
 			expect(result).toMatchObject({ block: true, terminate: true });
 		});
 
-		it("keeps an explicit deny blocking even with an explicit bypass preset", async () => {
+		it("keeps an explicit deny blocking even with an explicit approve-for-me preset", async () => {
 			const controller = new StepPermissionController({
 				env: {},
-				initialPreset: "bypass",
+				initialPreset: "approve-for-me",
 				nonInteractiveApproval: "deny",
 			});
 			expect(await controller.handleToolCall(writeCall, noUI)).toMatchObject({
@@ -443,13 +501,13 @@ describe("Step permission presets", () => {
 			expect(await controller.handleToolCall(writeCall, noUI)).toBeUndefined();
 		});
 
-		it("keeps read-only mode denying with its own reason", async () => {
+		it("maps the retired strict approval mode onto Ask", async () => {
 			const controller = new StepPermissionController({
-				env: {},
-				approvalMode: "strict",
+				env: { STEP_APPROVAL_MODE: "strict" },
 			});
+			expect(controller.getState()).toMatchObject({ preset: "ask", mode: "confirm" });
 			const result = await controller.handleToolCall(writeCall, noUI);
-			expect((result as { reason: string }).reason).toContain("Read-only mode blocks");
+			expect(result).toMatchObject({ block: true, terminate: true });
 		});
 
 		// A block that ends the run is the only thing a non-interactive caller sees,
@@ -495,8 +553,24 @@ describe("Step permission presets", () => {
 		it("drops the defaulted marker once a preset is chosen", () => {
 			const controller = new StepPermissionController({ env: {} });
 			expect(controller.getState().defaulted).toBe(true);
-			controller.setPreset("bypass");
+			controller.setPreset("approve-for-me");
 			expect(controller.getState().defaulted).toBeUndefined();
+		});
+
+		it("keeps the auto-resume request across preset switches", () => {
+			const controller = new StepPermissionController({ env: { STEP_AUTOPILOT: "1" } });
+			expect(controller.getState()).toMatchObject({ preset: "approve-for-me", autoResume: true });
+			// Ask makes the flag inert but must not forget the request.
+			expect(controller.setPreset("ask")).toMatchObject({ preset: "ask", autoResume: false });
+			expect(controller.setPreset("approve-for-me")).toMatchObject({
+				preset: "approve-for-me",
+				autoResume: true,
+			});
+			expect(controller.setPreset("full-access")).toMatchObject({
+				preset: "full-access",
+				skipCommandPolicy: true,
+				autoResume: true,
+			});
 		});
 	});
 });
@@ -618,11 +692,11 @@ describe("Step autopilot continuation", () => {
 	});
 
 	it("gates edit_file then_run as an embedded run_command call", () => {
-		const bypass = stepPermissionStateForPreset("bypass");
+		const approveForMe = stepPermissionStateForPreset("approve-for-me");
 		const input = { path: "a.txt", search: "a", replace: "b", then_run: "npm test" };
-		expect(decideStepToolCall("edit_file", input, bypass).action).toBe("allow");
+		expect(decideStepToolCall("edit_file", input, approveForMe).action).toBe("allow");
 
-		const denied = decideStepToolCall("edit_file", input, bypass, { run_command: "deny" });
+		const denied = decideStepToolCall("edit_file", input, approveForMe, { run_command: "deny" });
 		expect(denied.action).toBe("deny");
 		expect(denied.reason).toContain("then_run (run_command)");
 
@@ -630,9 +704,13 @@ describe("Step autopilot continuation", () => {
 		expect(ask.action).toBe("confirm");
 		expect(ask.reason).toContain("then_run: npm test");
 
-		const readOnly = stepPermissionStateForPreset("read-only");
-		expect(decideStepToolCall("edit_file", input, readOnly)).toEqual(
-			decideStepToolCall("edit_file", { path: "a.txt", search: "a", replace: "b" }, readOnly),
-		);
+		// Full Access runs the fused call, dangerous verification command included.
+		expect(
+			decideStepToolCall(
+				"edit_file",
+				{ ...input, then_run: "rm -rf ./build" },
+				stepPermissionStateForPreset("full-access"),
+			).action,
+		).toBe("allow");
 	});
 });

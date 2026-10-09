@@ -296,7 +296,7 @@ describe("FooterComponent width handling", () => {
 		});
 
 		const plain = stripAnsi(footer.render(120)[0] ?? "");
-		expect(plain.startsWith("⏵ Bypass (shift+tab)")).toBe(true);
+		expect(plain.startsWith("⏵ Approve for Me (shift+tab)")).toBe(true);
 	});
 
 	it("omits the permission cycle key on a narrow terminal", () => {
@@ -308,7 +308,7 @@ describe("FooterComponent width handling", () => {
 
 		const plain = stripAnsi(footer.render(50)[0] ?? "");
 		expect(plain).not.toContain("shift+tab");
-		expect(plain).toContain("⏵ Bypass");
+		expect(plain).toContain("⏵ Approve for Me");
 	});
 
 	it("omits the permission cycle key when the session has no cycle", () => {
@@ -318,19 +318,19 @@ describe("FooterComponent width handling", () => {
 		expect(stripAnsi(footer.render(120)[0] ?? "")).not.toContain("shift+tab");
 	});
 
-	it("renders the read-only permission status instead of falling back to ask", () => {
-		const session = createSession({ sessionName: "", approvalMode: "strict" });
+	it("renders the full access permission status with its own color", () => {
+		const session = createSession({ sessionName: "", approvalMode: "auto" });
 		const footer = new FooterComponent(
 			session,
-			createFooterData(1, new Map([["step-permission", "Mode: Read Only"]])),
+			createFooterData(1, new Map([["step-permission", "Mode: Full Access"]])),
 			{ presentation: "step" },
 		);
 
 		const [line = ""] = footer.render(120);
 		const plain = stripAnsi(line);
-		expect(plain.startsWith("⏵ Read-only")).toBe(true);
-		expect(plain.startsWith("⏵ Ask")).toBe(false);
-		expect(plain).not.toContain("Mode: Read Only");
+		expect(plain.startsWith("⏵ Full Access")).toBe(true);
+		expect(plain.startsWith("⏵ Approve for Me")).toBe(false);
+		expect(plain).not.toContain("Mode: Full Access");
 	});
 
 	it("does not duplicate the permission status while retaining other statuses", () => {
@@ -340,7 +340,7 @@ describe("FooterComponent width handling", () => {
 			createFooterData(
 				1,
 				new Map([
-					["step-permission", "Mode: Autopilot (auto-resume)"],
+					["step-permission", "Mode: Approve for Me (auto-resume)"],
 					["plan-mode", "plan 1/2"],
 				]),
 			),
@@ -349,8 +349,8 @@ describe("FooterComponent width handling", () => {
 
 		const [line = ""] = footer.render(120);
 		const plain = stripAnsi(line);
-		expect(plain.startsWith("⏵ Autopilot")).toBe(true);
-		expect(plain).not.toContain("Mode: Autopilot");
+		expect(plain.startsWith("⏵ Approve for Me")).toBe(true);
+		expect(plain).not.toContain("Mode: Approve for Me");
 		expect(plain).toContain("plan 1/2");
 	});
 

@@ -5,6 +5,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionFactory,
+	ExtensionUIContext,
 	InlineExtension,
 } from "../core/extensions/types.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
@@ -13,11 +14,17 @@ import { STEP_INIT_PROMPT } from "../step/init-prompt.ts";
 import { createStepMcpExtension } from "../step/mcp.ts";
 import {
 	AUTO_RESUME_PROMPT,
+	FULL_ACCESS_RISK_MESSAGE,
+	FULL_ACCESS_RISK_OPTIONS,
+	FULL_ACCESS_RISK_TITLE,
 	getStepPermissionPreset,
+	normalizeStepPermissionPresetId,
+	parseFullAccessRiskChoice,
 	publishStepPermissionStatus,
 	StepAutoResumeController,
 	StepPermissionController,
 	type StepPermissionControllerOptions,
+	type StepPermissionState,
 } from "../step/permissions.ts";
 import { createStepPluginResourcesExtension } from "../step/plugins.ts";
 import type { StepSettingsManager } from "../step/settings-manager.ts";
@@ -131,6 +138,51 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		let autoResumeAllowed = false;
 		let nativeRetryPreference: boolean | undefined;
 		let nativeRetryOverridden = false;
+		/**
+		 * Session-scoped Full Access grant. The persisted "don't ask again" choice
+		 * lives in Step settings and is consulted alongside this flag.
+		 */
+		let fullAccessAcknowledged = false;
+
+		const isFullAccessAcknowledged = (): boolean =>
+			fullAccessAcknowledged || options.stepSettings?.()?.getStepSettings().fullAccessAcknowledged === true;
+
+		const isFullAccessState = (state: StepPermissionState): boolean => state.skipCommandPolicy === true;
+
+		/**
+		 * Ask the user to accept the Full Access risk. Resolves true for both
+		 * grant options ("always" persists the acknowledgment) and false when the
+		 * dialog is dismissed, so callers keep the previous tier.
+		 */
+		const confirmFullAccessRisk = async (ui: ExtensionUIContext): Promise<boolean> => {
+			const selected = await ui.select(`${FULL_ACCESS_RISK_TITLE}\n\n${FULL_ACCESS_RISK_MESSAGE}`, [
+				...FULL_ACCESS_RISK_OPTIONS,
+			]);
+			const choice = parseFullAccessRiskChoice(selected);
+			if (choice === "cancel") return false;
+			fullAccessAcknowledged = true;
+			if (choice === "always") {
+				try {
+					options.stepSettings?.()?.setEffectiveStepSettings({ fullAccessAcknowledged: true });
+				} catch {
+					// Persisting the acknowledgment must not block the current grant.
+				}
+			}
+			return true;
+		};
+
+		/** Apply a resolved policy state: retry switch, footer, telemetry, persistence. */
+		const applyPermissionState = (
+			ctx: ExtensionContext,
+			state: StepPermissionState,
+			apply: { source: "startup" | "shortcut" | "command"; persist: boolean },
+		): void => {
+			syncNativeRetry(ctx, state.autoResume);
+			publishStepPermissionStatus(ctx.ui, state);
+			trackPermissionMode(options.telemetry, state.preset, apply.source === "startup" ? "command" : apply.source);
+			if (apply.persist) persistPermissionState(options.stepSettings, state);
+			ctx.ui.notify(`Permission mode: ${getStepPermissionPreset(state.preset)?.label ?? state.preset}`, "info");
+		};
 
 		/**
 		 * Let Pi own provider retries. Step's Autopilot only changes the native
@@ -217,11 +269,34 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			// been applied so project-level Step policy is not silently ignored.
 			const persistedOptions = resolvePermissionOptions(options);
 			if (persistedOptions) permissions = new StepPermissionController(persistedOptions);
-			const state = permissions.getState();
+			let state = permissions.getState();
 			// A replacement session gets its own context. The previous session's
-			// shutdown handler restores any temporary Autopilot override before this
+			// shutdown handler restores any temporary auto-resume override before this
 			// callback runs, so this snapshot is the user's real native preference.
 			syncNativeRetry(ctx, state.autoResume, true);
+			// A persisted or env-selected Full Access tier still owes the risk
+			// acknowledgment. Prompt once; without a grant the session falls back to
+			// Approve for Me instead of silently executing dangerous commands.
+			if (isFullAccessState(state) && !isFullAccessAcknowledged()) {
+				if (ctx.hasUI) {
+					void confirmFullAccessRisk(ctx.ui)
+						.then((granted) => {
+							if (!granted) return;
+							const next = permissions.setPreset("full-access");
+							if (next) applyPermissionState(ctx, next, { source: "startup", persist: false });
+						})
+						.catch(() => {
+							// A UI torn down mid-dialog must not surface as an unhandled
+							// rejection; the session stays on Approve for Me.
+						});
+				} else {
+					notify?.(
+						"Full access needs its risk acknowledgment, which requires an interactive session; using Approve for Me.",
+						"warning",
+					);
+				}
+				state = permissions.setPreset("approve-for-me") ?? state;
+			}
 			publishStepPermissionStatus(ctx.ui, state);
 		});
 
@@ -321,18 +396,25 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		const handlePermissionCommand = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			const requested = args.trim().toLowerCase();
 			if (requested === "--cycle" || requested === "cycle") {
+				// Full Access is gated by the risk acknowledgment; a canceled dialog
+				// keeps the current tier instead of moving.
+				const nextPreset = permissions.nextPresetId();
+				if (nextPreset === "full-access" && !isFullAccessAcknowledged()) {
+					const granted = await confirmFullAccessRisk(ctx.ui);
+					if (!granted) {
+						ctx.ui.notify("Full access was not enabled.", "warning");
+						return;
+					}
+				}
 				const state = permissions.cycle();
-				trackPermissionMode(options.telemetry, state.preset, "shortcut");
 				// Deliberately not persisted. The shortcut means "stop asking me right
 				// now, I am watching", but persisting it wrote the whole policy triple
-				// — including `nonInteractiveApproval: "allow"` under Bypass — to
-				// config.toml, so one keypress silently granted every later unattended
-				// `--print` run in that project permission to write and execute. Use
+				// — including `nonInteractiveApproval: "allow"` — to config.toml, so
+				// one keypress silently granted every later unattended `--print` run in
+				// that project permission to write and execute. Use
 				// `/permissions <preset>` for a durable choice.
 				autoResume.reset();
-				syncNativeRetry(ctx, state.autoResume);
-				publishStepPermissionStatus(ctx.ui, state);
-				ctx.ui.notify(`Permission mode: ${getStepPermissionPreset(state.preset)?.label ?? state.preset}`, "info");
+				applyPermissionState(ctx, state, { source: "shortcut", persist: false });
 				return;
 			}
 
@@ -341,17 +423,20 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				const options = permissionsPresetsForSelector();
 				selected = (await ctx.ui.select("Permission mode", options))?.trim().toLowerCase() ?? "";
 			}
+			if (normalizeStepPermissionPresetId(selected) === "full-access" && !isFullAccessAcknowledged()) {
+				const granted = await confirmFullAccessRisk(ctx.ui);
+				if (!granted) {
+					ctx.ui.notify("Full access was not enabled.", "warning");
+					return;
+				}
+			}
 			const state = permissions.setPreset(selected);
 			if (!state) {
-				ctx.ui.notify("Unknown permission mode. Use ask, read-only, bypass, or autopilot.", "warning");
+				ctx.ui.notify("Unknown permission mode. Use ask, approve-for-me, or full-access.", "warning");
 				return;
 			}
 			autoResume.reset();
-			trackPermissionMode(options.telemetry, state.preset, "command");
-			persistPermissionState(options.stepSettings, state);
-			syncNativeRetry(ctx, state.autoResume);
-			publishStepPermissionStatus(ctx.ui, state);
-			ctx.ui.notify(`Permission mode: ${getStepPermissionPreset(state.preset)?.label ?? state.preset}`, "info");
+			applyPermissionState(ctx, state, { source: "command", persist: true });
 		};
 
 		// Keep only the plural product command. The old singular alias was never a
@@ -439,7 +524,7 @@ function persistPermissionState(
 export const stepExtension: ExtensionFactory = createStepExtension();
 
 function permissionsPresetsForSelector(): string[] {
-	return ["ask", "read-only", "bypass", "autopilot"];
+	return ["ask", "approve-for-me", "full-access"];
 }
 
 function trackPermissionMode(

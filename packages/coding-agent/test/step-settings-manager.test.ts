@@ -72,39 +72,39 @@ describe("Step settings manager decorator", () => {
 		const { manager, fixture } = makeManager();
 
 		manager.setStepSettings({ permissionPreset: "ask", autoResume: false });
-		manager.setProjectStepSettings({ permissionPreset: "autopilot" });
+		manager.setProjectStepSettings({ permissionPreset: "approve-for-me" });
 		await manager.flush();
 
 		expect(manager.getStepGlobalSettings()).toEqual({ permissionPreset: "ask", autoResume: false });
-		expect(manager.getStepProjectSettings()).toEqual({ permissionPreset: "autopilot" });
-		expect(manager.getStepSettings()).toEqual({ permissionPreset: "autopilot", autoResume: false });
+		expect(manager.getStepProjectSettings()).toEqual({ permissionPreset: "approve-for-me" });
+		expect(manager.getStepSettings()).toEqual({ permissionPreset: "approve-for-me", autoResume: false });
 		expect(JSON.parse(readFileSync(fixture.paths.global, "utf8"))).toEqual({
 			permissionPreset: "ask",
 			autoResume: false,
 		});
-		expect(JSON.parse(readFileSync(fixture.paths.project, "utf8"))).toEqual({ permissionPreset: "autopilot" });
+		expect(JSON.parse(readFileSync(fixture.paths.project, "utf8"))).toEqual({ permissionPreset: "approve-for-me" });
 		expect(existsSync(join(fixture.projectDir, ".pi", "step-settings.json"))).toBe(false);
 	});
 
 	it("writes effective fields back to the scope currently overriding them", () => {
 		const { manager, fixture } = makeManager();
 		manager.setStepSettings({ permissionPreset: "ask", autoResume: false });
-		manager.setProjectStepSettings({ permissionPreset: "bypass" });
+		manager.setProjectStepSettings({ permissionPreset: "approve-for-me" });
 
-		manager.setEffectiveStepSettings({ permissionPreset: "autopilot", autoResume: true });
+		manager.setEffectiveStepSettings({ permissionPreset: "full-access", autoResume: true });
 
 		expect(JSON.parse(readFileSync(fixture.paths.global, "utf8"))).toEqual({
 			permissionPreset: "ask",
 			autoResume: true,
 		});
 		expect(JSON.parse(readFileSync(fixture.paths.project, "utf8"))).toEqual({
-			permissionPreset: "autopilot",
+			permissionPreset: "full-access",
 		});
 	});
 
 	it("honors project trust for the Step sidecar just like Pi", () => {
 		const fixture = makeRoot();
-		writeFileSync(fixture.paths.project, JSON.stringify({ permissionPreset: "autopilot" }));
+		writeFileSync(fixture.paths.project, JSON.stringify({ permissionPreset: "approve-for-me" }));
 		const { manager } = makeManager(fixture, false);
 
 		expect(manager.getStepProjectSettings()).toEqual({});
@@ -114,7 +114,7 @@ describe("Step settings manager decorator", () => {
 		);
 
 		manager.setProjectTrusted(true);
-		expect(manager.getStepPermissionPreset()).toBe("autopilot");
+		expect(manager.getStepPermissionPreset()).toBe("approve-for-me");
 	});
 
 	it("normalizes legacy aliases and supports clearing a persisted field", () => {
@@ -126,7 +126,7 @@ describe("Step settings manager decorator", () => {
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			permissionPreset: "bypass",
+			permissionPreset: "approve-for-me",
 			autoResume: true,
 			nonInteractiveApproval: "allow",
 		});
@@ -134,6 +134,14 @@ describe("Step settings manager decorator", () => {
 		const persisted = JSON.parse(readFileSync(fixture.paths.global, "utf8"));
 		expect(persisted.autopilot).toBeUndefined();
 		expect(manager.getStepAutoResume()).toBeUndefined();
+	});
+
+	it("keeps the legacy autopilot preset carrying auto-resume", () => {
+		const fixture = makeRoot();
+		writeFileSync(fixture.paths.global, JSON.stringify({ permissionPreset: "autopilot" }));
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({ permissionPreset: "approve-for-me", autoResume: true });
 	});
 
 	it("reads and clears the feedback setting through the Step sidecar", () => {
@@ -167,13 +175,13 @@ describe("Step settings manager decorator", () => {
 		writeFileSync(
 			fixture.paths.global,
 			JSON.stringify({
-				approval: { preset: "autopilot", mode: "auto", nonInteractive: "allow", autoResume: true },
+				approval: { preset: "bypass", mode: "auto", nonInteractive: "allow", autoResume: true },
 			}),
 		);
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			permissionPreset: "autopilot",
+			permissionPreset: "approve-for-me",
 			approvalMode: "auto",
 			nonInteractiveApproval: "allow",
 			autoResume: true,
@@ -195,16 +203,16 @@ describe("Step settings manager decorator", () => {
 			fixture.paths.global,
 			JSON.stringify({
 				permissionPreset: "unknown",
-				permissionMode: "read-only",
+				permissionMode: "bypass",
 				approvalMode: "unknown",
-				approval: { mode: "strict" },
+				approval: { mode: "auto" },
 			}),
 		);
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			permissionPreset: "read-only",
-			approvalMode: "strict",
+			permissionPreset: "approve-for-me",
+			approvalMode: "auto",
 		});
 	});
 
@@ -223,7 +231,7 @@ describe("Step settings manager decorator", () => {
 
 	it("writes effective updates to a project scope selected through a nested legacy alias", () => {
 		const fixture = makeRoot();
-		writeFileSync(fixture.paths.project, JSON.stringify({ tools: { approval: { mode: "strict" } } }));
+		writeFileSync(fixture.paths.project, JSON.stringify({ tools: { approval: { mode: "auto" } } }));
 		const { manager } = makeManager(fixture);
 
 		manager.setEffectiveStepSettings({ approvalMode: "auto" });
@@ -273,11 +281,11 @@ describe("Step settings manager decorator", () => {
 		expect(existsSync(fixture.paths.project)).toBe(false);
 		expect(existsSync(join(fixture.projectDir, ".stepcode"))).toBe(false);
 
-		manager.setProjectStepSettings({ permissionPreset: "read-only" });
+		manager.setProjectStepSettings({ permissionPreset: "full-access" });
 		expect(manager.drainErrors()).toEqual([]);
-		expect(readStepConfig(fixture.paths.project)).toEqual({ permissionPreset: "read-only" });
+		expect(readStepConfig(fixture.paths.project)).toEqual({ permissionPreset: "full-access" });
 		await manager.reload();
-		expect(manager.getStepSettings()).toEqual({ permissionPreset: "read-only" });
+		expect(manager.getStepSettings()).toEqual({ permissionPreset: "full-access" });
 		expect(manager.drainErrors()).toEqual([]);
 	});
 
