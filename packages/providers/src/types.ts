@@ -438,6 +438,11 @@ export interface Context {
 	systemPrompt?: string;
 	messages: Message[];
 	tools?: Tool[];
+	/**
+	 * Harness-provided input token estimate for this exact request, including system prompt and tools.
+	 * Used only for local context budgeting; leaves reported usage and billing unchanged.
+	 */
+	estimatedInputTokens?: number;
 }
 
 /**

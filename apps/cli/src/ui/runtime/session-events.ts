@@ -353,6 +353,27 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			break;
 		}
 
+		case "auto_clm_start": {
+			if (ctx.settingsManager.getShowTerminalProgress()) ctx.ui.terminal.setProgress(true);
+			ctx.autoCompactionEscapeHandler = ctx.defaultEditor.onEscape;
+			ctx.defaultEditor.onEscape = () => ctx.session.abortCompaction();
+			ctx.showStatusIndicator(new CompactionStatusIndicator(ctx.ui, "threshold", ctx.presentation));
+			ctx.redraw.requestRender();
+			break;
+		}
+
+		case "auto_clm_end": {
+			if (ctx.settingsManager.getShowTerminalProgress()) ctx.ui.terminal.setProgress(false);
+			if (ctx.autoCompactionEscapeHandler) {
+				ctx.defaultEditor.onEscape = ctx.autoCompactionEscapeHandler;
+				ctx.autoCompactionEscapeHandler = undefined;
+			}
+			ctx.clearStatusIndicator("compaction");
+			void ctx.flushCompactionQueue({ willRetry: true });
+			ctx.redraw.requestRender();
+			break;
+		}
+
 		case "compaction_end": {
 			if (ctx.settingsManager.getShowTerminalProgress()) {
 				ctx.ui.terminal.setProgress(false);

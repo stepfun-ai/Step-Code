@@ -27,6 +27,22 @@ export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.cost += usage.cost.total;
 }
 
+/** Maintenance requests do not become ordinary task messages; their billing still belongs to the session. */
+export function getAutoClmUsage(entry: SessionEntry): Usage | undefined {
+	if (entry.type !== "custom" || entry.customType !== "step-auto-clm-usage") return undefined;
+	const data = entry.data as { usage?: Usage } | undefined;
+	const usage = data?.usage;
+	if (
+		!usage ||
+		!usage.cost ||
+		![usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.cost.total].every(
+			(value) => Number.isFinite(value) && value >= 0,
+		)
+	)
+		return undefined;
+	return usage;
+}
+
 export interface UsageCostBreakdownEntry {
 	key: string;
 	cost: number;
@@ -49,6 +65,9 @@ export function getUsageCostBreakdown(entries: SessionEntry[]): UsageCostBreakdo
 		} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			key = "Tools/summaries";
 			usage = entry.usage;
+		} else {
+			usage = getAutoClmUsage(entry);
+			if (usage) key = "Tools/summaries";
 		}
 		if (!key || !usage) continue;
 

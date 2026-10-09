@@ -5,8 +5,48 @@ import type { SessionEntry } from "../../../packages/coding-agent/src/core/sessi
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";
+import type { AgentSessionEvent } from "../../../packages/coding-agent/src/core/agent-session.ts";
 
 describe("InteractiveMode compaction events", () => {
+	test("shows automatic CLM progress, supports escape cancellation, and restores the task editor", async () => {
+		const originalEscape = vi.fn();
+		const fakeThis = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			autoCompactionEscapeHandler: undefined as (() => void) | undefined,
+			defaultEditor: { onEscape: originalEscape },
+			settingsManager: { getShowTerminalProgress: () => true },
+			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+			redraw: { requestRender: vi.fn() },
+			presentation: "step" as const,
+			session: { abortCompaction: vi.fn() },
+			showStatusIndicator: vi.fn(), clearStatusIndicator: vi.fn(),
+			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
+		};
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (this: typeof fakeThis, event: AgentSessionEvent) => Promise<void>;
+		initTheme("dark");
+		await handleEvent.call(fakeThis, { type: "auto_clm_start", reason: "soft-threshold" });
+		fakeThis.defaultEditor.onEscape();
+		expect(fakeThis.session.abortCompaction).toHaveBeenCalledTimes(1);
+		expect(fakeThis.showStatusIndicator).toHaveBeenCalledTimes(1);
+		await handleEvent.call(fakeThis, { type: "auto_clm_end", result: { attempted: true, accepted: false, fallback: false, reason: "interrupted", requests: 1 } });
+		expect(fakeThis.defaultEditor.onEscape).toBe(originalEscape);
+		expect(fakeThis.clearStatusIndicator).toHaveBeenCalledWith("compaction");
+		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: true });
+		expect(fakeThis.ui.terminal.setProgress.mock.calls).toEqual([[true], [false]]);
+	});
+	test("forwards terminal input to the active automatic CLM queue so maintenance is interrupted", async () => {
+		const fakeThis = {
+			compactionQueuedMessages: [],
+			session: { isAutoClmCompacting: true, prompt: vi.fn().mockResolvedValue(undefined) },
+			editor: { addToHistory: vi.fn(), setText: vi.fn() },
+			updatePendingMessagesDisplay: vi.fn(), showStatus: vi.fn(), showError: vi.fn(),
+		};
+		const queue = Reflect.get(InteractiveMode.prototype, "queueCompactionMessage") as (this: typeof fakeThis, text: string, mode: "steer" | "followUp") => void;
+		queue.call(fakeThis, "Preserve output order", "steer");
+		expect(fakeThis.session.prompt).toHaveBeenCalledWith("Preserve output order", { streamingBehavior: "steer", images: undefined });
+		expect(fakeThis.compactionQueuedMessages).toEqual([]);
+	});
 	test("uses the cache miss notice setting for compaction and branch summary costs", () => {
 		const usage: Usage = {
 			input: 10,

@@ -4357,6 +4357,16 @@ export class InteractiveMode {
 	}
 
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		if (this.session.isAutoClmCompacting) {
+			this.editor.addToHistory?.(text);
+			this.editor.setText("");
+			void this.session.prompt(text, { streamingBehavior: mode, images }).catch((error) => {
+				this.editor.setText(text);
+				this.showError(error instanceof Error ? error.message : String(error));
+			});
+			this.updatePendingMessagesDisplay();
+			return;
+		}
 		this.compactionQueuedMessages.push({ text, mode, images });
 		this.editor.addToHistory?.(text);
 		this.editor.setText("");

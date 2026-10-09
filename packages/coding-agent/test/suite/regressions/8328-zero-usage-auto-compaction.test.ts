@@ -41,7 +41,7 @@ describe("issue #8328 zero-usage auto-compaction", () => {
 	async function createCompactionHarness(): Promise<Harness> {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 20 }],
-			settings: { compaction: { enabled: true, reserveTokens: 10 } },
+			settings: { compaction: { contextProjection: "off", enabled: true, reserveTokens: 10 } },
 		});
 		harnesses.push(harness);
 		return harness;
