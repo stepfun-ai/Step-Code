@@ -65,8 +65,8 @@ export interface Args {
 	updateCheck?: boolean;
 	tuiMode?: TuiMode;
 	verbose?: boolean;
-	/** Request-time lightweight context projection mode (step.compaction.contextProjection). */
-	contextProjection?: "off" | "lightweight-v1";
+	/** Context projection mode (step.compaction.contextProjection). */
+	contextProjection?: "off" | "lightweight-v1" | "clm-v1";
 	projectTrustOverride?: boolean;
 	/** Step tool approval mode (confirm, auto, or strict). */
 	approvalMode?: StepPermissionMode;
@@ -516,16 +516,19 @@ export function parseArgs(args: string[]): Args {
 			result.verbose = true;
 		} else if (arg === "--context-projection") {
 			const mode = args[i + 1];
-			if (mode === "off" || mode === "lightweight-v1") {
+			if (mode === "off" || mode === "lightweight-v1" || mode === "clm-v1") {
 				result.contextProjection = mode;
 				i++;
 			} else if (mode === undefined || mode.startsWith("-")) {
-				result.diagnostics.push({ type: "error", message: "--context-projection requires off or lightweight-v1" });
+				result.diagnostics.push({
+					type: "error",
+					message: "--context-projection requires off, lightweight-v1, or clm-v1",
+				});
 			} else {
 				i++;
 				result.diagnostics.push({
 					type: "error",
-					message: `Invalid context projection mode "${mode}". Valid values: off, lightweight-v1`,
+					message: `Invalid context projection mode "${mode}". Valid values: off, lightweight-v1, clm-v1`,
 				});
 			}
 		} else if (arg === "--approve" || arg === "-a") {
@@ -692,7 +695,7 @@ ${stepPermissionOptionsText}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
-  --context-projection <mode>    Request-time context projection: off (default) or lightweight-v1
+  --context-projection <mode>    Context projection: clm-v1 (default), lightweight-v1, or off
   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run

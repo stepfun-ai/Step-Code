@@ -66,6 +66,16 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "logout", description: "Sign out from your Step account" },
 	{ name: "new", description: "Start a new session" },
 	{ name: "compact", description: "Manually compact the session context" },
+	{
+		name: "clm",
+		description: "Inspect or enable model-managed working context",
+		argumentHint: "[status|on|off|diff|reset]",
+	},
+	{
+		name: "clm-compact",
+		description: "Ask the model to organize its working context",
+		argumentHint: "[instructions]",
+	},
 	{ name: "resume", description: "Resume a different session" },
 	{
 		name: "reload",

@@ -8,6 +8,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import { type AutoClmSettings, resolveAutoClmSettings } from "./compaction/live-context/auto-options.ts";
 import type { ContextProjectionMode } from "./compaction/projection.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
@@ -15,7 +16,10 @@ export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
-	contextProjection?: ContextProjectionMode; // default: "off" (step.compaction.contextProjection)
+	/** Projection mode: clm-v1 by default when automatic compaction is enabled. */
+	contextProjection?: ContextProjectionMode;
+	/** Host-triggered maintenance inside clm-v1; native compaction remains the fallback. */
+	autoClm?: Partial<AutoClmSettings>;
 }
 
 export interface BranchSummarySettings {
@@ -859,12 +863,28 @@ export class SettingsManager {
 	}
 
 	/**
-	 * Request-time lightweight context projection mode
-	 * (`step.compaction.contextProjection`). Defaults to "off"; unknown values
-	 * are treated as "off" so a bad config can never enable projection.
+	 * Selected context projection mode (`step.compaction.contextProjection`).
+	 * Defaults to CLM when compaction is enabled; explicit modes take precedence.
+	 * Disabling compaction also disables implicit CLM, while an explicit clm-v1
+	 * setting retains manual edits. Invalid values fail closed to "off".
 	 */
 	getContextProjectionMode(): ContextProjectionMode {
-		return this.settings.compaction?.contextProjection === "lightweight-v1" ? "lightweight-v1" : "off";
+		const mode = this.settings.compaction?.contextProjection;
+		if (mode === undefined) return this.getCompactionEnabled() ? "clm-v1" : "off";
+		return mode === "lightweight-v1" || mode === "clm-v1" ? mode : "off";
+	}
+
+	setContextProjectionMode(mode: ContextProjectionMode): void {
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.contextProjection = mode;
+		this.markModified("compaction", "contextProjection");
+		this.save();
+	}
+
+	getAutoClmSettings(): AutoClmSettings {
+		return resolveAutoClmSettings(this.settings.compaction?.autoClm);
 	}
 
 	getCompactionSettings(): {

@@ -1043,10 +1043,21 @@ export class SessionManager {
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		const previousLeaf = this.leafId;
+		const previousFlushed = this.flushed;
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		try {
+			this._persist(entry);
+		} catch (error) {
+			// A failed write must not activate unpersisted goal/context/control state.
+			this.fileEntries.pop();
+			this.byId.delete(entry.id);
+			this.leafId = previousLeaf;
+			this.flushed = previousFlushed;
+			throw error;
+		}
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.

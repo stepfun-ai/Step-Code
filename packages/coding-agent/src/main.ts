@@ -1118,9 +1118,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			projectTrusted,
 			configDirName,
 		});
-		if (parsed.contextProjection !== undefined) {
-			runtimeSettingsManager.applyOverrides({ compaction: { contextProjection: parsed.contextProjection } });
-		}
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,
@@ -1181,6 +1178,11 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		// Resource discovery reloads settings from disk. CLI selection must take precedence afterward.
+		if (parsed.contextProjection !== undefined) {
+			settingsManager.applyOverrides({ compaction: { contextProjection: parsed.contextProjection } });
+		}
+
 		// The Step catalog is discovered from `{base}/v1/models` and has no built-in
 		// baseline. When a Step credential is configured, refresh it from the network
 		// before resolving the initial model, so startup finds the account's models

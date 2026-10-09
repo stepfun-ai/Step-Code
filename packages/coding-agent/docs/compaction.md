@@ -13,7 +13,19 @@ For TypeScript definitions in your project, inspect `node_modules/@step-harness/
 
 ## Overview
 
-Step has two summarization mechanisms:
+[Model-managed working context (CLM)](context-management.md) is the default
+compression mode. At the existing context threshold, Step first asks the model
+to shorten eligible old observations in a validated working view. It keeps the
+canonical history and protects user requirements and current tool groups. If no
+useful edit is accepted, Step falls back to the native summary compaction
+explained below. Provider context overflow goes directly to native recovery.
+
+Use `--context-projection off` or `compaction.contextProjection = "off"` to select
+native compaction explicitly. `/compact` still requests a native summary;
+`/clm-compact` requests an explicit working-context edit. A settled CLM response
+with no queued continuation leaves routine maintenance until the next request.
+
+The native pipeline has two summarization mechanisms:
 
 | Mechanism | Trigger | Purpose |
 |-----------|---------|---------|
