@@ -212,8 +212,9 @@ describe("StepCode config compatibility", () => {
 		expect(manager.getDefaultProvider()).toBe("stepcode-anthropic");
 		expect(manager.getDefaultModel()).toBe("water18-new");
 		expect(manager.getStepSettings()).toEqual({
-			approvalMode: "auto",
-			nonInteractiveApproval: "allow",
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
 			autoResume: false,
 		});
 
@@ -257,6 +258,99 @@ describe("StepCode config compatibility", () => {
 			nonInteractiveApproval: "deny",
 			autoResume: false,
 		});
+	});
+
+	test.each(["bypass", "autopilot", "read-only"])(
+		"resets legacy %s in an injected config before a new selection",
+		async (preset) => {
+			const root = await mkdtemp(join(tmpdir(), "stepcode-permission-migration-"));
+			roots.push(root);
+			const configPath = join(root, "config.json");
+			await writeFile(
+				configPath,
+				JSON.stringify({
+					providers: {
+						test: { api: "openai-completions", baseUrl: "https://example.invalid/v1", models: [{ id: "test" }] },
+					},
+					tools: {
+						approval: {
+							preset,
+							mode: "auto",
+							nonInteractive: "allow",
+							autoResume: true,
+							fullAccessAcknowledged: true,
+						},
+					},
+				}),
+			);
+			const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+			const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, join(root, "agent")), config!);
+			expect(manager.getStepSettings()).toEqual({
+				permissionPreset: "ask",
+				approvalMode: "confirm",
+				nonInteractiveApproval: "deny",
+				autoResume: false,
+			});
+			manager.setEffectiveStepSettings({
+				permissionPreset: "full-access",
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				autoResume: true,
+				fullAccessAcknowledged: true,
+			});
+			const reloaded = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+			const next = decorateStepCodeSettingsManager(createStepSettingsManager(root, join(root, "agent")), reloaded!);
+			expect(next.getStepSettings()).toEqual({
+				permissionPreset: "full-access",
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				autoResume: true,
+				fullAccessAcknowledged: true,
+			});
+		},
+	);
+
+	test("round-trips the Full Access risk acknowledgment through the injected config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const projectDir = join(root, "project");
+		const agentDir = join(root, "agent");
+		await Promise.all([mkdir(projectDir, { recursive: true }), mkdir(agentDir, { recursive: true })]);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					"stepcode-anthropic": {
+						api: "anthropic-messages",
+						baseUrl: "https://config.example/v1",
+						models: [{ id: "water18" }],
+					},
+				},
+				activeModel: "water18",
+				tools: { approval: { preset: "full-access", fullAccessAcknowledged: true } },
+			}),
+		);
+
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(projectDir, agentDir), config!);
+		expect(manager.getStepSettings()).toEqual({
+			permissionPreset: "full-access",
+			fullAccessAcknowledged: true,
+		});
+
+		manager.setEffectiveStepSettings({ fullAccessAcknowledged: false });
+		const saved = JSON.parse(readFileSync(configPath, "utf8")) as {
+			tools: { approval: Record<string, unknown> };
+		};
+		expect(saved.tools.approval).toMatchObject({ fullAccessAcknowledged: false });
+
+		const restarted = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const restartedManager = decorateStepCodeSettingsManager(
+			createStepSettingsManager(projectDir, agentDir),
+			restarted!,
+		);
+		expect(restartedManager.getStepSettings().fullAccessAcknowledged).toBe(false);
 	});
 
 	test("defaults omitted vision metadata to image input and honors an explicit opt-out", async () => {

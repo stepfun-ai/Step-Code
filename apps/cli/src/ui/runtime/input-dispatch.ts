@@ -390,7 +390,7 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			ctx.editor.setText("");
 			return;
 		}
-		if (text === "/quit") {
+		if (text === "/quit" || text === "/exit") {
 			ctx.editor.setText("");
 			await ctx.shutdown();
 			return;
