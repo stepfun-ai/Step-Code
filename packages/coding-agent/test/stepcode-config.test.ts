@@ -259,6 +259,49 @@ describe("StepCode config compatibility", () => {
 		});
 	});
 
+	test("round-trips the Full Access risk acknowledgment through config.toml", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
+		roots.push(root);
+		const projectDir = join(root, "project");
+		const agentDir = join(root, "agent");
+		await Promise.all([mkdir(projectDir, { recursive: true }), mkdir(agentDir, { recursive: true })]);
+		const configPath = join(root, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: {
+					"stepcode-anthropic": {
+						api: "anthropic-messages",
+						baseUrl: "https://config.example/v1",
+						models: [{ id: "water18" }],
+					},
+				},
+				activeModel: "water18",
+				tools: { approval: { preset: "full-access", fullAccessAcknowledged: true } },
+			}),
+		);
+
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(projectDir, agentDir), config!);
+		expect(manager.getStepSettings()).toEqual({
+			permissionPreset: "full-access",
+			fullAccessAcknowledged: true,
+		});
+
+		manager.setEffectiveStepSettings({ fullAccessAcknowledged: false });
+		const saved = JSON.parse(readFileSync(configPath, "utf8")) as {
+			tools: { approval: Record<string, unknown> };
+		};
+		expect(saved.tools.approval).toMatchObject({ fullAccessAcknowledged: false });
+
+		const restarted = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const restartedManager = decorateStepCodeSettingsManager(
+			createStepSettingsManager(projectDir, agentDir),
+			restarted!,
+		);
+		expect(restartedManager.getStepSettings().fullAccessAcknowledged).toBe(false);
+	});
+
 	test("defaults omitted vision metadata to image input and honors an explicit opt-out", async () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
 		roots.push(root);

@@ -257,6 +257,7 @@ describe("Step extension", () => {
 		const on = vi.fn();
 		const registerCommand = vi.fn();
 		const setEffectiveStepSettings = vi.fn();
+		const setStatus = vi.fn();
 		const settings = { getStepSettings: () => ({}), setEffectiveStepSettings };
 		createStepExtension({ stepSettings: () => settings })({
 			registerProvider: vi.fn(),
@@ -268,8 +269,35 @@ describe("Step extension", () => {
 		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
 			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 		};
-		await command.handler("--cycle", commandContext(true));
+		// The default tier is Approve for Me, so the first cycle lands on Full
+		// Access. A canceled dialog keeps the current tier instead of moving.
+		const cancel = vi.fn(async (): Promise<string | undefined> => undefined);
+		const notify = vi.fn();
+		await command.handler("--cycle", {
+			isIdle: () => true,
+			ui: { notify, setStatus, select: cancel },
+		} as unknown as ExtensionCommandContext);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(notify).toHaveBeenCalledWith("Full access was not enabled.", "warning");
+		expect(setStatus).not.toHaveBeenCalledWith("step-permission", expect.stringContaining("Full Access"));
 		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
+
+		// A granted dialog moves the tier to Full Access and still persists nothing.
+		const grant = vi.fn(async () => "Yes, continue anyway — apply full access for this session");
+		const grantContext = commandContext(true, grant);
+		grantContext.ui.setStatus = setStatus;
+		await command.handler("--cycle", grantContext);
+		expect(grant).toHaveBeenCalledOnce();
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access");
+		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
+
+		// Cycling again leaves Full Access for Ask without a dialog.
+		const noPrompt = vi.fn(async (): Promise<string | undefined> => undefined);
+		const cycleContext = commandContext(true, noPrompt);
+		cycleContext.ui.setStatus = setStatus;
+		await command.handler("--cycle", cycleContext);
+		expect(noPrompt).not.toHaveBeenCalled();
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Ask");
 
 		// A named preset is a deliberate choice and still persists.
 		await command.handler("approve-for-me", commandContext(true));
@@ -303,20 +331,37 @@ describe("Step extension", () => {
 
 		// A dismissed dialog keeps the previous tier and persists nothing.
 		await command.handler("full-access", dismissed);
-		expect(select).toHaveBeenCalledWith(expect.stringContaining("Enable full access?"), [
-			"Yes, continue anyway",
-			"Yes, and don't ask again",
-			"Cancel",
-		]);
+		expect(select).toHaveBeenCalledWith(
+			expect.stringContaining("Enable full access?"),
+			expect.arrayContaining([expect.stringContaining("apply full access for this session")]),
+		);
+		expect(select).toHaveBeenCalledWith(
+			expect.stringContaining("Enable full access?"),
+			expect.arrayContaining([expect.stringContaining("remember this choice")]),
+		);
 		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledWith("Full access was not enabled.", "warning");
+		// The tier never moved: a dangerous command still asks.
+		const blockedHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		expect(
+			await blockedHandler(
+				{
+					type: "tool_call",
+					toolName: "run_command",
+					toolCallId: "dismissed-removal",
+					input: { command: "rm -rf ./build" },
+				},
+				{ hasUI: true, ui: { confirm: vi.fn(async () => false) } },
+			),
+		).toMatchObject({ block: true });
 
 		// A session-scoped grant enables the tier and runs dangerous commands.
-		select.mockImplementation(async () => "Yes, continue anyway");
+		select.mockImplementation(async () => "Yes, continue anyway — apply full access for this session");
 		await command.handler("full-access", commandContext(true, select));
-		expect(setEffectiveStepSettings).toHaveBeenCalledWith(
-			expect.objectContaining({ permissionPreset: "full-access" }),
-		);
+		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
 		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
 			event: unknown,
 			ctx: unknown,
@@ -332,13 +377,18 @@ describe("Step extension", () => {
 				{ hasUI: false },
 			),
 		).toBeUndefined();
+
+		// The session-scoped grant suppresses a second prompt for the same tier.
+		select.mockClear();
+		await command.handler("full-access", commandContext(true, select));
+		expect(select).not.toHaveBeenCalled();
 	});
 
 	test("remembers the Full Access acknowledgment when the user asks it to", async () => {
 		const on = vi.fn();
 		const registerCommand = vi.fn();
 		const setEffectiveStepSettings = vi.fn();
-		const select = vi.fn(async () => "Yes, and don't ask again");
+		const select = vi.fn(async () => "Yes, and don't ask again — enable full access and remember this choice");
 		createStepExtension({
 			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings }),
 		})({
@@ -353,6 +403,260 @@ describe("Step extension", () => {
 		};
 		await command.handler("full-access", commandContext(true, select));
 		expect(setEffectiveStepSettings).toHaveBeenCalledWith(expect.objectContaining({ fullAccessAcknowledged: true }));
+	});
+
+	test("prompts at startup for an unacknowledged Full Access tier and applies the grant", async () => {
+		const on = vi.fn();
+		const setStatus = vi.fn();
+		const select = vi.fn(async () => "Yes, continue anyway — apply full access for this session");
+		createStepExtension({
+			permission: { env: {}, initialPreset: "full-access" },
+			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: vi.fn() }),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const sessionStart = on.mock.calls.filter(([name]) => name === "session_start").at(-1)?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => void;
+		sessionStart(
+			{ type: "session_start", reason: "new" },
+			{
+				hasUI: true,
+				ui: { notify: vi.fn(), setStatus, select },
+				autoRetryEnabled: false,
+				setAutoRetryEnabled: vi.fn(),
+			},
+		);
+		// The session starts on Approve for Me while the dialog is pending.
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Approve for Me");
+		await vi.waitFor(() => expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access"));
+
+		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		expect(
+			await toolHandler(
+				{
+					type: "tool_call",
+					toolName: "run_command",
+					toolCallId: "startup-grant",
+					input: { command: "rm -rf ./x" },
+				},
+				{ hasUI: false },
+			),
+		).toBeUndefined();
+	});
+
+	test("keeps Approve for Me when the startup Full Access dialog is dismissed", async () => {
+		const on = vi.fn();
+		const setStatus = vi.fn();
+		const select = vi.fn(async (): Promise<string | undefined> => undefined);
+		createStepExtension({
+			permission: { env: {}, initialPreset: "full-access" },
+			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: vi.fn() }),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const sessionStart = on.mock.calls.filter(([name]) => name === "session_start").at(-1)?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => void;
+		sessionStart(
+			{ type: "session_start", reason: "new" },
+			{
+				hasUI: true,
+				ui: { notify: vi.fn(), setStatus, select },
+				autoRetryEnabled: false,
+				setAutoRetryEnabled: vi.fn(),
+			},
+		);
+		await vi.waitFor(() => expect(select).toHaveBeenCalled());
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(setStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access");
+
+		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		const confirm = vi.fn(async () => false);
+		expect(
+			await toolHandler(
+				{
+					type: "tool_call",
+					toolName: "run_command",
+					toolCallId: "startup-dismiss",
+					input: { command: "rm -rf ./x" },
+				},
+				{ hasUI: true, ui: { confirm } },
+			),
+		).toMatchObject({ block: true });
+		expect(confirm).toHaveBeenCalledOnce();
+	});
+
+	test("clears the session-scoped Full Access grant on shutdown", async () => {
+		const on = vi.fn();
+		const registerCommand = vi.fn();
+		const select = vi.fn(async () => "Yes, continue anyway — apply full access for this session");
+		createStepExtension({
+			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: vi.fn() }),
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand,
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
+			handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+		};
+		await command.handler("full-access", commandContext(true, select));
+		select.mockClear();
+
+		const sessionShutdown = on.mock.calls.filter(([name]) => name === "session_shutdown").at(-1)?.[1] as (
+			event: unknown,
+			ctx: unknown,
+		) => void;
+		sessionShutdown({ type: "session_shutdown", reason: "quit" }, { setAutoRetryEnabled: vi.fn() });
+
+		// The next session owes its own prompt for a session-scoped grant.
+		await command.handler("full-access", commandContext(true, select));
+		expect(select).toHaveBeenCalledOnce();
+	});
+
+	test.each(["session_start", "session_shutdown"] as const)(
+		"ignores a stale risk-dialog answer after %s, including its remembered grant",
+		async (replacement) => {
+			const on = vi.fn();
+			const registerCommand = vi.fn();
+			const persist = vi.fn();
+			createStepExtension({
+				permission: { env: {}, initialPreset: "full-access" },
+				stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: persist }),
+			})({ on, registerCommand, registerProvider: vi.fn(), sendUserMessage: vi.fn() } as unknown as ExtensionAPI);
+			const start = on.mock.calls.filter(([name]) => name === "session_start").at(-1)![1];
+			const shutdown = on.mock.calls.filter(([name]) => name === "session_shutdown").at(-1)![1];
+			let answer!: (value: string) => void;
+			const oldStatus = vi.fn();
+			start(
+				{},
+				{
+					hasUI: true,
+					ui: {
+						notify: vi.fn(),
+						setStatus: oldStatus,
+						select: () =>
+							new Promise<string>((resolve) => {
+								answer = resolve;
+							}),
+					},
+				},
+			);
+			if (replacement === "session_start") {
+				start({}, { hasUI: false, ui: { notify: vi.fn(), setStatus: vi.fn() } });
+			} else {
+				shutdown({}, {});
+			}
+			answer("Yes, and don't ask again — enable full access and remember this choice");
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(persist).not.toHaveBeenCalled();
+			expect(oldStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access");
+			// A stale answer must not even cache the acknowledgment for a later command.
+			const command = registerCommand.mock.calls.find(([name]) => name === "permissions")![1];
+			const select = vi.fn(async () => undefined);
+			await command.handler("full-access", commandContext(true, select));
+			expect(select).toHaveBeenCalledOnce();
+		},
+	);
+
+	test("remembering Full Access through the cycle persists both the tier and acknowledgment", async () => {
+		const registerCommand = vi.fn();
+		const persist = vi.fn();
+		createStepExtension({
+			permission: { env: {} },
+			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: persist }),
+		})({
+			on: vi.fn(),
+			registerCommand,
+			registerProvider: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")![1];
+		await command.handler(
+			"--cycle",
+			commandContext(true, async () => "Yes, and don't ask again — enable full access and remember this choice"),
+		);
+		expect(persist).toHaveBeenCalledWith({
+			permissionPreset: "full-access",
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			fullAccessAcknowledged: true,
+		});
+	});
+
+	test.each([false, true])(
+		"preserves startup unattended denial when Full Access consent is granted=%s",
+		async (granted) => {
+			const on = vi.fn();
+			createStepExtension({
+				permission: { env: {}, initialPreset: "full-access", nonInteractiveApproval: "deny" },
+			})({
+				on,
+				registerCommand: vi.fn(),
+				registerProvider: vi.fn(),
+				sendUserMessage: vi.fn(),
+			} as unknown as ExtensionAPI);
+			const start = on.mock.calls.filter(([name]) => name === "session_start").at(-1)![1];
+			const status = vi.fn();
+			start(
+				{},
+				{
+					hasUI: granted,
+					ui: {
+						notify: vi.fn(),
+						setStatus: status,
+						select: async () => "Yes, continue anyway — apply full access for this session",
+					},
+				},
+			);
+			if (granted)
+				await vi.waitFor(() => expect(status).toHaveBeenCalledWith("step-permission", "Mode: Full Access"));
+			const tool = on.mock.calls.find(([name]) => name === "tool_call")![1];
+			expect(
+				await tool({ toolName: "write_file", input: { path: "file", content: "x" } }, { hasUI: false }),
+			).toMatchObject({ block: true, terminate: true });
+		},
+	);
+
+	test.each(["option", "environment"] as const)("keeps remembered Full Access with %s auto-resume", (source) => {
+		const on = vi.fn();
+		createStepExtension({
+			permission: source === "option" ? { env: {}, autoResume: true } : { env: { STEP_AUTO_RESUME: "1" } },
+			stepSettings: () => ({
+				getStepSettings: () => ({ permissionPreset: "full-access", fullAccessAcknowledged: true }),
+				setEffectiveStepSettings: vi.fn(),
+			}),
+		})({
+			on,
+			registerCommand: vi.fn(),
+			registerProvider: vi.fn(),
+			sendUserMessage: vi.fn(),
+		} as unknown as ExtensionAPI);
+		const start = on.mock.calls.filter(([name]) => name === "session_start").at(-1)![1];
+		const status = vi.fn();
+		start({}, { hasUI: false, ui: { notify: vi.fn(), setStatus: status } });
+		expect(status).toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
 	});
 
 	test("keeps explicit environment policy ahead of persisted Step settings", async () => {

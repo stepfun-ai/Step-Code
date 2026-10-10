@@ -21,12 +21,12 @@ by an older release is still repaired in place at startup.
 
 ## Mandatory command approval
 
-Permission tiers and tool overrides cannot automatically approve commands
-matched by the built-in command rules. In particular, `rm` with both recursive
-and force options requires confirmation for every target, including `./build`
-and `/tmp/cache`. Ask and Approve for Me still ask for each call. Full Access —
-the only tier that runs them — requires the one-time risk acknowledgment, and
-runs without an approval channel cannot execute a dangerous command even with
+Ask and Approve for Me cannot automatically approve commands matched by the
+built-in command rules. In particular, `rm` with both recursive and force
+options requires confirmation for every target, including `./build` and
+`/tmp/cache`. Full Access is the only tier that runs them without confirmation,
+and it requires the one-time risk acknowledgment; a run without an approval
+channel cannot execute a dangerous command under the other tiers even with
 `nonInteractiveApproval = "allow"`.
 
 By default, a run without an approval channel terminates after such a block.
@@ -40,6 +40,19 @@ outside Full Access.
 
 See [command permissions](command-permissions.md) for matching behavior and
 how to extend the built-in rules.
+
+### Full Access confirmation
+
+Select Full Access using `/permissions full-access` or `Shift+Tab`:
+
+- **Yes, continue anyway** enables Full Access for this session without saving the tier.
+- **Yes, and don't ask again** saves Full Access and its risk acknowledgment for future launches.
+- **Cancel** keeps the current tier.
+
+A session-only acknowledgment expires when the session is replaced or closed.
+Without an interactive UI, an unacknowledged Full Access selection falls back to
+Approve for Me. An acknowledged Full Access selection also runs dangerous
+commands unattended. Explicit per-tool `deny` overrides still apply.
 
 ## Environment and shell commands
 

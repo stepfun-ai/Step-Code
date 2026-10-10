@@ -126,7 +126,7 @@ describe("mandatory command approval", () => {
 	});
 
 	describe.each(STEP_PERMISSION_PRESETS)("$id policy", (preset) => {
-		it.each(["run_command", "bash", "powershell"])("cannot auto-approve %s with an allow override", (toolName) => {
+		it.each(["run_command", "bash", "powershell"])("resolves an allow override for %s under its tier", (toolName) => {
 			const decision = decideStepToolCall(
 				toolName,
 				{ command: "rm -rf ./build" },

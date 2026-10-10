@@ -3,7 +3,7 @@
  *
  * Pi owns the canonical settings schema and its global/project merge rules.
  * Step adds a small product-owned namespace in a sidecar file so product
- * policy (for example `ask`/`autopilot`) does not leak into Pi's settings
+ * policy (for example `ask`/`approve-for-me`) does not leak into Pi's settings
  * schema. The returned object is a transparent decorator: every Pi method is
  * still available and is invoked against the original SettingsManager.
  */
@@ -146,11 +146,13 @@ function normalizeSettings(value: JsonObject): StepSettings {
 	const approval = asObject(value.approval);
 	const toolsApproval = asObject(asObject(value.tools)?.approval);
 	const presetCandidates = [value.permissionPreset, value.permissionMode, approval?.preset, toolsApproval?.preset];
+	let winningPresetCandidate: string | undefined;
 	for (const candidate of presetCandidates) {
 		if (typeof candidate !== "string") continue;
 		const preset = getStepPermissionPreset(candidate);
 		if (preset) {
 			result.permissionPreset = preset.id;
+			winningPresetCandidate = candidate;
 			break;
 		}
 	}
@@ -199,15 +201,11 @@ function normalizeSettings(value: JsonObject): StepSettings {
 		}
 	}
 	// The retired `autopilot` preset carried auto-resume inside the preset id.
-	// Keep honoring an old `permissionPreset = "autopilot"` config that has no
-	// explicit autoResume field, so the continuation ladder is not silently lost.
-	if (!autoResumeResolved) {
-		for (const candidate of presetCandidates) {
-			if (typeof candidate === "string" && candidate.trim().toLowerCase() === "autopilot") {
-				result.autoResume = true;
-				break;
-			}
-		}
+	// Keep honoring it when the winning preset candidate was the legacy id and no
+	// explicit autoResume field exists, so the continuation ladder is not
+	// silently lost. A losing lower-priority candidate must not enable it.
+	if (!autoResumeResolved && winningPresetCandidate?.trim().toLowerCase() === "autopilot") {
+		result.autoResume = true;
 	}
 
 	const fullAccessAcknowledgedCandidates = [

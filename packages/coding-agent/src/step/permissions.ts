@@ -276,7 +276,7 @@ function resolveStepPermissionPresetWithProvenance(
 	}
 
 	const mode = env.STEP_PERMISSION_MODE?.trim().toLowerCase();
-	if (mode === "strict" || mode === "read-only" || mode === "readonly") {
+	if (mode === "strict" || mode === "read-only" || mode === "readonly" || mode === "plan") {
 		return { preset: "ask", defaulted: false };
 	}
 	if (mode === "auto" || mode === "bypass" || mode === "bypasspermissions") {
@@ -322,7 +322,12 @@ export function normalizeAutoResume(
  */
 export function resolveAutoResumeRequest(options: StepPermissionControllerOptions = {}): boolean {
 	const env = options.env ?? process.env;
-	return options.autoResume ?? (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME));
+	return (
+		options.autoResume ??
+		(isTruthy(env.STEP_AUTOPILOT) ||
+			isTruthy(env.STEP_AUTO_RESUME) ||
+			resolveStepPermissionPresetWithProvenance(options).legacyAutoResume === true)
+	);
 }
 
 /**
@@ -341,8 +346,7 @@ export function resolveInitialStepPermissionState(options: StepPermissionControl
 	const nonInteractiveApproval: StepNonInteractiveApproval =
 		rawNonInteractive === "allow" || rawNonInteractive === "deny" ? rawNonInteractive : preset.nonInteractiveApproval;
 	const effectiveMode = mode ?? preset.mode;
-	const requestedAutoResume =
-		resolveAutoResumeRequest(options) || presetResolution.legacyAutoResume === true || preset.autoResume;
+	const requestedAutoResume = resolveAutoResumeRequest(options);
 	const autoResume = normalizeAutoResume(effectiveMode, nonInteractiveApproval, requestedAutoResume);
 	const resolved: StepPermissionState = {
 		preset: preset.preset,
@@ -353,7 +357,10 @@ export function resolveInitialStepPermissionState(options: StepPermissionControl
 	};
 	// Approve for Me and Full Access share the (mode, approval, resume) triple,
 	// so skipCommandPolicy must participate in the relabeling match; otherwise a
-	// Full Access state would be renamed to Approve for Me here.
+	// Full Access state with a requested auto-resume (or an explicit unattended
+	// deny) would be renamed to Approve for Me while still skipping the command
+	// policy, and the footer would understate the active tier. The mode-only
+	// fallback keeps the legacy mixed-triple relabeling, still tier-aware.
 	const matchingPreset =
 		STEP_PERMISSION_PRESETS.find(
 			(candidate) =>
@@ -361,7 +368,12 @@ export function resolveInitialStepPermissionState(options: StepPermissionControl
 				candidate.nonInteractiveApproval === resolved.nonInteractiveApproval &&
 				candidate.autoResume === resolved.autoResume &&
 				(candidate.skipCommandPolicy ?? false) === (resolved.skipCommandPolicy ?? false),
-		) ?? STEP_PERMISSION_PRESETS.find((candidate) => candidate.mode === resolved.mode);
+		) ??
+		STEP_PERMISSION_PRESETS.find(
+			(candidate) =>
+				candidate.mode === resolved.mode &&
+				(candidate.skipCommandPolicy ?? false) === (resolved.skipCommandPolicy ?? false),
+		);
 	if (matchingPreset) resolved.preset = matchingPreset.id;
 	// Only a grant counts as configuring the policy. An explicit `deny` asks for
 	// less access, so it must not move the policy out of the defaulted bucket and
@@ -595,7 +607,7 @@ export class StepPermissionController {
 	 * Why a call may not run unattended. Two cases qualify:
 	 *
 	 *   - nothing selected the policy at all, so the call would inherit the
-	 *     interactive Bypass default with nobody watching;
+	 *     interactive Approve for Me default with nobody watching;
 	 *   - the caller explicitly refused unattended approvals.
 	 *
 	 * Feedback issue-287bfff1a5fe7668.
@@ -615,8 +627,7 @@ export class StepPermissionController {
 	 * fallback consulted, because `auto` decides every call as `allow` and
 	 * returns before the fallback is reached. Without this,
 	 * `--non-interactive-approval deny` silently does nothing. Only `auto` needs
-	 * it: `confirm` and `strict` already route through the fallback with their
-	 * own reasons, and demoting `strict` would weaken read-only mode.
+	 * it: `confirm` already routes through the fallback with its own reason.
 	 */
 	private effectiveState(cause: UnattendedCause): StepPermissionState {
 		if (this.state.mode !== "auto" || !(cause.refused || cause.unconfigured)) return this.state;
@@ -818,7 +829,7 @@ export interface StepAutoResumeTelemetry {
 }
 
 /**
- * Bounded, abortable continuation scheduler for Step's autopilot tier.
+ * Bounded, abortable continuation scheduler for Step's auto-resume tier.
  * Pi's own retry loop runs first; this controller handles a final settled
  * transport/model failure and resumes with a context-aware instruction.
  */
@@ -992,7 +1003,11 @@ export const FULL_ACCESS_RISK_MESSAGE =
 	"When Step runs with full access, it can edit any file on your computer and run commands with network, without your approval. Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.";
 
 /** Dialog options in display order; the selected label maps back to a choice. */
-export const FULL_ACCESS_RISK_OPTIONS = ["Yes, continue anyway", "Yes, and don't ask again", "Cancel"] as const;
+export const FULL_ACCESS_RISK_OPTIONS = [
+	"Yes, continue anyway — apply full access for this session",
+	"Yes, and don't ask again — enable full access and remember this choice",
+	"Cancel — go back without enabling full access",
+] as const;
 
 export type FullAccessRiskChoice = "session" | "always" | "cancel";
 

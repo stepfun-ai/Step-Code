@@ -159,11 +159,17 @@ describe("Step command approval through the agent loop", () => {
 	});
 
 	it("full access still honors an explicit tool denial", async () => {
-		const session = await setup({
-			initialPreset: "full-access",
-			nonInteractiveApproval: "allow",
-			toolOverrides: { run_command: "deny" },
-		});
+		const session = await setup(
+			{
+				initialPreset: "full-access",
+				nonInteractiveApproval: "allow",
+				toolOverrides: { run_command: "deny" },
+			},
+			() => ({
+				getStepSettings: () => ({ fullAccessAcknowledged: true }),
+				setEffectiveStepSettings: vi.fn(),
+			}),
+		);
 		await session.session.bindExtensions({ mode: "print" });
 		const marker = prepareRemoval(session, "full-access-denied");
 		await session.session.prompt("Remove the test directory");
@@ -193,27 +199,22 @@ describe("Step command approval through the agent loop", () => {
 		expect(getAssistantTexts(session)).toContain("done");
 	});
 
-	it.each([
-		{
-			name: "explicit deny",
-			permission: { initialPreset: "approve-for-me" as const, toolOverrides: { run_command: "deny" as const } },
-		},
-	] satisfies Array<{ name: string; permission: StepPermissionControllerOptions }>)(
-		"$name blocks the real tool without prompting",
-		async ({ permission }) => {
-			const session = await setup(permission);
-			const confirm = vi.fn(async () => true);
-			await session.session.bindExtensions({
-				mode: "tui",
-				uiContext: { ...session.session.extensionRunner.getUIContext(), confirm },
-			});
-			const marker = prepareRemoval(session, "denied-removal");
-			await session.session.prompt("Remove the test directory");
-			expect(existsSync(marker)).toBe(true);
-			expect(confirm).not.toHaveBeenCalled();
-			expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
-				isError: true,
-			});
-		},
-	);
+	it("an explicit deny blocks the real tool without prompting", async () => {
+		const session = await setup({
+			initialPreset: "approve-for-me",
+			toolOverrides: { run_command: "deny" },
+		});
+		const confirm = vi.fn(async () => true);
+		await session.session.bindExtensions({
+			mode: "tui",
+			uiContext: { ...session.session.extensionRunner.getUIContext(), confirm },
+		});
+		const marker = prepareRemoval(session, "denied-removal");
+		await session.session.prompt("Remove the test directory");
+		expect(existsSync(marker)).toBe(true);
+		expect(confirm).not.toHaveBeenCalled();
+		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+	});
 });

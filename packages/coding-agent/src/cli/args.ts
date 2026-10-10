@@ -68,7 +68,7 @@ export interface Args {
 	/** Request-time lightweight context projection mode (step.compaction.contextProjection). */
 	contextProjection?: "off" | "lightweight-v1";
 	projectTrustOverride?: boolean;
-	/** Step tool approval mode (confirm, auto, or strict). */
+	/** Step tool approval mode (confirm or auto). */
 	approvalMode?: StepPermissionMode;
 	/** Fallback for approval requests when no interactive UI is available. */
 	nonInteractiveApproval?: StepNonInteractiveApproval;

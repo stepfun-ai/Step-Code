@@ -325,12 +325,11 @@ export class FooterComponent implements Component {
 			.trim()
 			.toLowerCase()
 			.replace(/[\s_-]+/gu, "");
+		const effectiveMode = normalizedStatusPreset ?? normalizedRawMode;
 		const mode =
-			normalizedStatusPreset === "fullaccess"
+			effectiveMode === "fullaccess"
 				? { label: "Full Access", paint: error }
-				: normalizedStatusPreset === "approveforme" ||
-						normalizedRawMode === "auto" ||
-						normalizedRawMode === "bypasspermissions"
+				: effectiveMode === "approveforme" || effectiveMode === "auto" || effectiveMode === "bypasspermissions"
 					? { label: "Approve for Me", paint: warning }
 					: { label: "Ask", paint: accent };
 		const displayMode = this.bashMode ? { label: "Shell", paint: (text: string) => theme.fg("error", text) } : mode;

@@ -73,6 +73,51 @@ describe("Step permission presets", () => {
 			preset: "approve-for-me",
 			autoResume: true,
 		});
+		expect(resolveInitialStepPermissionState({ env: { STEP_AUTO_RESUME: "1" } })).toMatchObject({
+			preset: "approve-for-me",
+			autoResume: true,
+		});
+	});
+
+	it("keeps Full Access labeled Full Access when auto-resume or an unattended deny is also set", () => {
+		// Approve for Me and Full Access share the (mode, approval) pair, so the
+		// relabeling must not rename a Full Access state that also requests
+		// auto-resume or refuses unattended approvals.
+		for (const env of [
+			{ STEP_PERMISSION_PRESET: "full-access", STEP_AUTO_RESUME: "1" },
+			{ STEP_PERMISSION_PRESET: "full-access", STEP_NON_INTERACTIVE_APPROVAL: "deny" },
+		]) {
+			const state = resolveInitialStepPermissionState({ env });
+			expect(state).toMatchObject({ preset: "full-access", skipCommandPolicy: true });
+			expect(decideStepToolCall("run_command", { command: "rm -rf /etc" }, state).action).toBe("allow");
+		}
+		expect(
+			resolveInitialStepPermissionState({
+				initialPreset: "full-access",
+				autoResume: true,
+				env: {},
+			}),
+		).toMatchObject({ preset: "full-access", skipCommandPolicy: true, autoResume: true });
+	});
+
+	it("maps the retired plan vocabulary onto Ask", () => {
+		expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: "plan" } })).toBe("ask");
+		expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_MODE: "plan" } })).toBe("ask");
+		expect(resolveInitialStepPermissionState({ env: { STEP_APPROVAL_MODE: "acceptedits" } })).toMatchObject({
+			preset: "ask",
+			mode: "confirm",
+		});
+	});
+
+	it("honors an explicit disabled auto-resume over the legacy autopilot preset", () => {
+		const controller = new StepPermissionController({
+			env: { STEP_PERMISSION_PRESET: "autopilot" },
+			autoResume: false,
+		});
+		expect(controller.getState().autoResume).toBe(false);
+		expect(controller.setPreset("full-access")?.autoResume).toBe(false);
+		const legacy = new StepPermissionController({ env: { STEP_PERMISSION_PRESET: "autopilot" } });
+		expect(legacy.setPreset("full-access")?.autoResume).toBe(true);
 	});
 
 	it("resolves the old Step approval triple and per-tool overrides", () => {

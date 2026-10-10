@@ -144,6 +144,54 @@ describe("Step settings manager decorator", () => {
 		expect(manager.getStepSettings()).toEqual({ permissionPreset: "approve-for-me", autoResume: true });
 	});
 
+	it("persists the Full Access risk acknowledgment in the sidecar", () => {
+		const fixture = makeRoot();
+		writeFileSync(fixture.paths.global, JSON.stringify({ permissionPreset: "full-access" }));
+		const { manager } = makeManager(fixture);
+		expect(manager.getStepSettings().fullAccessAcknowledged).toBeUndefined();
+
+		manager.setStepSettings({ fullAccessAcknowledged: true });
+		expect(manager.getStepSettings()).toEqual({
+			permissionPreset: "full-access",
+			fullAccessAcknowledged: true,
+		});
+		expect(JSON.parse(readFileSync(fixture.paths.global, "utf8"))).toMatchObject({
+			fullAccessAcknowledged: true,
+		});
+
+		manager.setStepSettings({ fullAccessAcknowledged: false });
+		expect(manager.getStepSettings().fullAccessAcknowledged).toBe(false);
+		// Clearing the acknowledgment keeps the selected tier.
+		expect(manager.getStepPermissionPreset()).toBe("full-access");
+	});
+
+	it("reads the Full Access acknowledgment from the legacy approval object", () => {
+		const fixture = makeRoot();
+		writeFileSync(
+			fixture.paths.global,
+			JSON.stringify({ approval: { preset: "full-access", fullAccessAcknowledged: true } }),
+		);
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({
+			permissionPreset: "full-access",
+			fullAccessAcknowledged: true,
+		});
+	});
+
+	it("does not enable auto-resume from a losing legacy autopilot candidate", () => {
+		const fixture = makeRoot();
+		// Within one scope the higher-priority candidate wins the preset; the
+		// losing legacy autopilot spelling must not switch auto-resume on.
+		writeFileSync(
+			fixture.paths.global,
+			JSON.stringify({ permissionPreset: "ask", approval: { preset: "autopilot" } }),
+		);
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({ permissionPreset: "ask" });
+	});
+
 	it("reads and clears the feedback setting through the Step sidecar", () => {
 		const fixture = makeRoot();
 		writeFileSync(fixture.paths.global, JSON.stringify({ feedback: { enabled: false } }));

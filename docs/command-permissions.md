@@ -3,7 +3,7 @@
 Explicit per-tool denial takes precedence. Otherwise, shared command analysis
 returns one of three outcomes:
 
-| Analysis | Ask / Approve for Me | Full Access | Without an approval channel |
+| Analysis | Ask / Approve for Me | Full Access (acknowledged) | Ask / Approve for Me without an approval channel |
 | --- | --- | --- | --- |
 | A built-in dangerous rule matched | Confirm each call | Run without confirmation | Deny |
 | Syntax or executable input could not be fully analyzed | Confirm each call, explaining the uncertainty | Run without confirmation | Deny |
@@ -14,7 +14,7 @@ unanalyzable one; it requires the one-time risk acknowledgment and is the sole
 behavioral difference from Approve for Me. Unresolved analysis is not reported
 as a detected dangerous command.
 `StepToolDecision.analysisIncomplete` distinguishes it from `hazardous`.
-Neither outcome can use an automatic tool override or unattended `allow`.
+Outside Full Access, neither outcome can use an automatic tool override or unattended `allow`.
 Explicit user approval applies only to that call.
 
 Without an approval channel, a deny ends the run by default. The opt-in

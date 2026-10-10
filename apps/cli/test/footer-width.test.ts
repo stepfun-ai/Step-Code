@@ -318,7 +318,7 @@ describe("FooterComponent width handling", () => {
 		expect(stripAnsi(footer.render(120)[0] ?? "")).not.toContain("shift+tab");
 	});
 
-	it("renders the full access permission status with its own color", () => {
+	it("renders the full access permission status", () => {
 		const session = createSession({ sessionName: "", approvalMode: "auto" });
 		const footer = new FooterComponent(
 			session,
@@ -331,6 +331,22 @@ describe("FooterComponent width handling", () => {
 		expect(plain.startsWith("⏵ Full Access")).toBe(true);
 		expect(plain.startsWith("⏵ Approve for Me")).toBe(false);
 		expect(plain).not.toContain("Mode: Full Access");
+	});
+
+	it("prefers the active Ask status over a stale automatic raw mode", () => {
+		const session = createSession({ sessionName: "", approvalMode: "auto" });
+		const footer = new FooterComponent(
+			session,
+			createFooterData(1, new Map([["step-permission", "Mode: Ask"]])),
+			{ presentation: "step" },
+		);
+		expect(stripAnsi(footer.render(120)[0] ?? "").startsWith("⏵ Ask")).toBe(true);
+	});
+
+	it.each(["approve-for-me", "full-access"])("renders the raw %s tier when no status is present", (preset) => {
+		const session = createSession({ sessionName: "", approvalMode: preset });
+		const footer = new FooterComponent(session, createFooterData(1), { presentation: "step" });
+		expect(stripAnsi(footer.render(120)[0] ?? "")).toContain(preset === "full-access" ? "Full Access" : "Approve for Me");
 	});
 
 	it("does not duplicate the permission status while retaining other statuses", () => {

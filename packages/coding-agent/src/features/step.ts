@@ -140,9 +140,18 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		let nativeRetryOverridden = false;
 		/**
 		 * Session-scoped Full Access grant. The persisted "don't ask again" choice
-		 * lives in Step settings and is consulted alongside this flag.
+		 * lives in Step settings and is consulted alongside this flag; the flag is
+		 * cleared on session shutdown so a "this session" grant does not leak into
+		 * a replacement session.
 		 */
 		let fullAccessAcknowledged = false;
+		/**
+		 * Incremented on every session_start. An async risk-dialog grant only
+		 * applies while its generation is current, so a prompt answered after a
+		 * trust re-probe or /new replaced the session cannot flip the new
+		 * session's policy through a stale callback.
+		 */
+		let permissionSessionGeneration = 0;
 
 		const isFullAccessAcknowledged = (): boolean =>
 			fullAccessAcknowledged || options.stepSettings?.()?.getStepSettings().fullAccessAcknowledged === true;
@@ -155,15 +164,23 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		 * dialog is dismissed, so callers keep the previous tier.
 		 */
 		const confirmFullAccessRisk = async (ui: ExtensionUIContext): Promise<boolean> => {
+			const generation = permissionSessionGeneration;
+			if (typeof ui.select !== "function") return false;
 			const selected = await ui.select(`${FULL_ACCESS_RISK_TITLE}\n\n${FULL_ACCESS_RISK_MESSAGE}`, [
 				...FULL_ACCESS_RISK_OPTIONS,
 			]);
+			if (generation !== permissionSessionGeneration) return false;
 			const choice = parseFullAccessRiskChoice(selected);
 			if (choice === "cancel") return false;
 			fullAccessAcknowledged = true;
 			if (choice === "always") {
 				try {
-					options.stepSettings?.()?.setEffectiveStepSettings({ fullAccessAcknowledged: true });
+					options.stepSettings?.()?.setEffectiveStepSettings({
+						permissionPreset: "full-access",
+						approvalMode: "auto",
+						nonInteractiveApproval: "allow",
+						fullAccessAcknowledged: true,
+					});
 				} catch {
 					// Persisting the acknowledgment must not block the current grant.
 				}
@@ -263,6 +280,8 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		});
 
 		pi.on("session_start", (_event, ctx) => {
+			const generation = ++permissionSessionGeneration;
+			fullAccessAcknowledged = false;
 			notify = ctx.ui.notify;
 			// During project-trust probing Pi loads inline extensions while the
 			// project scope is hidden. Rehydrate once the final trust decision has
@@ -278,12 +297,15 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			// acknowledgment. Prompt once; without a grant the session falls back to
 			// Approve for Me instead of silently executing dangerous commands.
 			if (isFullAccessState(state) && !isFullAccessAcknowledged()) {
+				const requestedPermissions = permissions;
 				if (ctx.hasUI) {
 					void confirmFullAccessRisk(ctx.ui)
 						.then((granted) => {
-							if (!granted) return;
-							const next = permissions.setPreset("full-access");
-							if (next) applyPermissionState(ctx, next, { source: "startup", persist: false });
+							// A newer session_start (trust re-probe, /new, reload) owns the
+							// policy now; its own dialog decides the outcome.
+							if (!granted || generation !== permissionSessionGeneration) return;
+							permissions = requestedPermissions;
+							applyPermissionState(ctx, permissions.getState(), { source: "startup", persist: false });
 						})
 						.catch(() => {
 							// A UI torn down mid-dialog must not surface as an unhandled
@@ -295,17 +317,24 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 						"warning",
 					);
 				}
-				state = permissions.setPreset("approve-for-me") ?? state;
+				// Startup fallback changes only the tier, preserving explicit overrides
+				// such as unattended denial and the requested auto-resume preference.
+				permissions = new StepPermissionController({ ...persistedOptions, initialPreset: "approve-for-me" });
+				state = permissions.getState();
 			}
 			publishStepPermissionStatus(ctx.ui, state);
 		});
 
 		pi.on("session_shutdown", (_event, ctx) => {
+			permissionSessionGeneration++;
 			// Timers and UI callbacks are scoped to the old session. Cancel them before
 			// Pi tears down its extension runner, and restore the native retry setting
-			// if Step temporarily enabled it for Autopilot.
+			// if Step temporarily enabled it for auto-resume.
 			autoResumeAllowed = false;
 			autoResume.reset();
+			// A "this session" Full Access grant must not carry into the next
+			// session; only the persisted acknowledgment does.
+			fullAccessAcknowledged = false;
 			if (nativeRetryOverridden && nativeRetryPreference !== undefined && ctx.setAutoRetryEnabled) {
 				try {
 					ctx.setAutoRetryEnabled(nativeRetryPreference);
@@ -394,6 +423,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		});
 
 		const handlePermissionCommand = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
+			const generation = permissionSessionGeneration;
 			const requested = args.trim().toLowerCase();
 			if (requested === "--cycle" || requested === "cycle") {
 				// Full Access is gated by the risk acknowledgment; a canceled dialog
@@ -401,6 +431,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				const nextPreset = permissions.nextPresetId();
 				if (nextPreset === "full-access" && !isFullAccessAcknowledged()) {
 					const granted = await confirmFullAccessRisk(ctx.ui);
+					if (generation !== permissionSessionGeneration) return;
 					if (!granted) {
 						ctx.ui.notify("Full access was not enabled.", "warning");
 						return;
@@ -422,9 +453,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			if (!selected) {
 				const options = permissionsPresetsForSelector();
 				selected = (await ctx.ui.select("Permission mode", options))?.trim().toLowerCase() ?? "";
+				if (!selected || generation !== permissionSessionGeneration) return;
 			}
 			if (normalizeStepPermissionPresetId(selected) === "full-access" && !isFullAccessAcknowledged()) {
 				const granted = await confirmFullAccessRisk(ctx.ui);
+				if (generation !== permissionSessionGeneration) return;
 				if (!granted) {
 					ctx.ui.notify("Full access was not enabled.", "warning");
 					return;
@@ -436,7 +469,12 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				return;
 			}
 			autoResume.reset();
-			applyPermissionState(ctx, state, { source: "command", persist: true });
+			applyPermissionState(ctx, state, {
+				source: "command",
+				persist:
+					state.preset !== "full-access" ||
+					options.stepSettings?.()?.getStepSettings().fullAccessAcknowledged === true,
+			});
 		};
 
 		// Keep only the plural product command. The old singular alias was never a
@@ -482,10 +520,8 @@ function resolvePermissionOptions(options: StepExtensionOptions): StepPermission
 		...explicit,
 		...(explicit?.initialPreset === undefined &&
 		explicit?.approvalMode === undefined &&
-		explicit?.autoResume === undefined &&
 		!hasEnvPreset &&
 		!hasEnvMode &&
-		!hasEnvAutoResume &&
 		persisted.permissionPreset
 			? { initialPreset: persisted.permissionPreset }
 			: {}),
