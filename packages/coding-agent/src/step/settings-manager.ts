@@ -138,7 +138,19 @@ function merge(base: JsonObject, overrides: JsonObject): JsonObject {
 	return result;
 }
 
-function normalizeSettings(value: JsonObject): StepSettings {
+/** Old saved policies must not silently authorize one of the new automatic tiers. */
+export function resetLegacyPermissionSettings(settings: StepSettings, rawPreset?: string, rawMode?: string): void {
+	const preset = rawPreset?.trim().toLowerCase();
+	const retired = ["bypass", "auto", "autopilot", "bypasspermissions", "read-only", "readonly", "strict", "plan"];
+	if (!(preset && retired.includes(preset)) && !(rawPreset === undefined && rawMode !== undefined)) return;
+	settings.permissionPreset = "ask";
+	settings.approvalMode = "confirm";
+	settings.nonInteractiveApproval = "deny";
+	settings.autoResume = false;
+	delete settings.fullAccessAcknowledged;
+}
+
+function normalizeSettings(value: JsonObject, resetLegacy = true): StepSettings {
 	const result: StepSettings = {};
 	// Older Step configs used both a top-level `approval` object and a nested
 	// `tools.approval` object. Keep both candidates in precedence order, but do
@@ -158,11 +170,13 @@ function normalizeSettings(value: JsonObject): StepSettings {
 	}
 
 	const modeCandidates = [value.approvalMode, approval?.mode, toolsApproval?.mode];
+	let winningModeCandidate: string | undefined;
 	for (const candidate of modeCandidates) {
 		if (typeof candidate !== "string") continue;
 		const mode = normalizeStepPermissionMode(candidate);
 		if (mode) {
 			result.approvalMode = mode;
+			winningModeCandidate = candidate;
 			break;
 		}
 	}
@@ -192,20 +206,11 @@ function normalizeSettings(value: JsonObject): StepSettings {
 		toolsApproval?.autoResume,
 		toolsApproval?.autopilot,
 	];
-	let autoResumeResolved = false;
 	for (const candidate of autoResumeCandidates) {
 		if (typeof candidate === "boolean") {
 			result.autoResume = candidate;
-			autoResumeResolved = true;
 			break;
 		}
-	}
-	// The retired `autopilot` preset carried auto-resume inside the preset id.
-	// Keep honoring it when the winning preset candidate was the legacy id and no
-	// explicit autoResume field exists, so the continuation ladder is not
-	// silently lost. A losing lower-priority candidate must not enable it.
-	if (!autoResumeResolved && winningPresetCandidate?.trim().toLowerCase() === "autopilot") {
-		result.autoResume = true;
 	}
 
 	const fullAccessAcknowledgedCandidates = [
@@ -227,7 +232,22 @@ function normalizeSettings(value: JsonObject): StepSettings {
 			break;
 		}
 	}
+	if (resetLegacy) resetLegacyPermissionSettings(result, winningPresetCandidate, winningModeCandidate);
 	return result;
+}
+
+function savedPermissionSelection(value: JsonObject): { preset?: string; mode?: string } {
+	const approval = asObject(value.approval);
+	const nested = asObject(asObject(value.tools)?.approval);
+	const preset = [value.permissionPreset, value.permissionMode, approval?.preset, nested?.preset].find(
+		(candidate): candidate is string =>
+			typeof candidate === "string" && getStepPermissionPreset(candidate) !== undefined,
+	);
+	const mode = [value.approvalMode, approval?.mode, nested?.mode].find(
+		(candidate): candidate is string =>
+			typeof candidate === "string" && normalizeStepPermissionMode(candidate) !== undefined,
+	);
+	return { preset, mode };
 }
 
 const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
@@ -516,10 +536,17 @@ class StepSettingsDecorator {
 		// global canonical field (for example `feedbackEnabled`) survives the raw
 		// object merge and outranks the equivalent project alias
 		// (`feedback.enabled`) during normalization.
-		return {
-			...normalizeSettings(this.store.getGlobal()),
-			...normalizeSettings(this.store.getProject()),
-		};
+		const global = this.store.getGlobal();
+		const project = this.store.getProject();
+		const settings = { ...normalizeSettings(global, false), ...normalizeSettings(project, false) };
+		const localPolicy = savedPermissionSelection(project);
+		const policy =
+			localPolicy.preset !== undefined || localPolicy.mode !== undefined
+				? localPolicy
+				: savedPermissionSelection(global);
+		// A partial project setting must not reactivate a migrated legacy grant.
+		resetLegacyPermissionSettings(settings, policy.preset, policy.mode);
+		return settings;
 	}
 
 	getStepGlobalSettings(): StepSettings {

@@ -37,9 +37,9 @@ describe("Step permission presets", () => {
 	});
 
 	it("normalizes retired preset ids onto the remaining tiers", () => {
-		// Bypass and Autopilot collapse into Approve for Me; Read Only degrades to Ask.
+		// Every retired tier returns to Ask until the user chooses a new tier.
 		for (const legacy of ["bypass", "auto", "autopilot", "bypasspermissions"]) {
-			expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: legacy } })).toBe("approve-for-me");
+			expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: legacy } })).toBe("ask");
 		}
 		for (const legacy of ["read-only", "readonly", "strict"]) {
 			expect(resolveInitialStepPermissionPreset({ env: { STEP_PERMISSION_PRESET: legacy } })).toBe("ask");
@@ -59,19 +59,19 @@ describe("Step permission presets", () => {
 			resolveInitialStepPermissionPreset({
 				env: { STEP_PERMISSION_MODE: "auto" },
 			}),
-		).toBe("approve-for-me");
-		expect(resolveInitialStepPermissionPreset({ env: { STEP_AUTOPILOT: "1" } })).toBe("approve-for-me");
+		).toBe("ask");
+		expect(resolveInitialStepPermissionPreset({ env: { STEP_AUTOPILOT: "1" } })).toBe("ask");
 	});
 
-	it("keeps the legacy autopilot id carrying auto-resume", () => {
+	it("resets legacy autopilot to Ask and enables auto-resume for newly selected automatic tiers", () => {
 		expect(
 			resolveInitialStepPermissionState({
 				env: { STEP_PERMISSION_PRESET: "autopilot" },
 			}),
-		).toMatchObject({ preset: "approve-for-me", mode: "auto", autoResume: true });
+		).toMatchObject({ preset: "ask", mode: "confirm", autoResume: false });
 		expect(resolveInitialStepPermissionState({ env: { STEP_AUTOPILOT: "1" } })).toMatchObject({
-			preset: "approve-for-me",
-			autoResume: true,
+			preset: "ask",
+			autoResume: false,
 		});
 		expect(resolveInitialStepPermissionState({ env: { STEP_AUTO_RESUME: "1" } })).toMatchObject({
 			preset: "approve-for-me",
@@ -109,13 +109,29 @@ describe("Step permission presets", () => {
 		});
 	});
 
-	it("honors an explicit disabled auto-resume over the legacy autopilot preset", () => {
+	it("does not grant unattended writes just because STEP_AUTO_RESUME is enabled", async () => {
+		const controller = new StepPermissionController({ env: { STEP_AUTO_RESUME: "1" } });
+		expect(controller.getState().defaulted).toBe(true);
+		expect(
+			await controller.handleToolCall(
+				{
+					type: "tool_call",
+					toolName: "write_file",
+					toolCallId: "resume-only",
+					input: { path: "x", content: "x" },
+				},
+				{ hasUI: false } as ExtensionContext,
+			),
+		).toMatchObject({ block: true, terminate: true });
+	});
+
+	it("uses automatic tier defaults on deliberate selection after a legacy disabled auto-resume", () => {
 		const controller = new StepPermissionController({
 			env: { STEP_PERMISSION_PRESET: "autopilot" },
 			autoResume: false,
 		});
 		expect(controller.getState().autoResume).toBe(false);
-		expect(controller.setPreset("full-access")?.autoResume).toBe(false);
+		expect(controller.setPreset("full-access")?.autoResume).toBe(true);
 		const legacy = new StepPermissionController({ env: { STEP_PERMISSION_PRESET: "autopilot" } });
 		expect(legacy.setPreset("full-access")?.autoResume).toBe(true);
 	});
@@ -149,7 +165,7 @@ describe("Step permission presets", () => {
 					STEP_PERMISSION_MODE: "strict",
 				},
 			}),
-		).toMatchObject({ preset: "approve-for-me", mode: "auto", autoResume: true });
+		).toMatchObject({ preset: "ask", mode: "confirm", autoResume: false });
 		expect(
 			resolveInitialStepPermissionState({
 				env: {
@@ -488,13 +504,13 @@ describe("Step permission presets", () => {
 			expect(await controller.handleToolCall(writeCall, noUI)).toBeUndefined();
 		});
 
-		it("honors the legacy STEP_PERMISSION_PRESET=bypass spelling", async () => {
+		it("requires a new selection for legacy STEP_PERMISSION_PRESET=bypass", async () => {
 			const controller = new StepPermissionController({
 				env: { STEP_PERMISSION_PRESET: "bypass" },
 			});
-			expect(controller.getState().preset).toBe("approve-for-me");
+			expect(controller.getState().preset).toBe("ask");
 			expect(controller.getState().defaulted).toBeUndefined();
-			expect(await controller.handleToolCall(writeCall, noUI)).toBeUndefined();
+			expect(await controller.handleToolCall(writeCall, noUI)).toMatchObject({ block: true });
 		});
 
 		it("honors a trusted project preset injected as initialPreset", async () => {
@@ -602,8 +618,8 @@ describe("Step permission presets", () => {
 			expect(controller.getState().defaulted).toBeUndefined();
 		});
 
-		it("keeps the auto-resume request across preset switches", () => {
-			const controller = new StepPermissionController({ env: { STEP_AUTOPILOT: "1" } });
+		it("enables auto-resume in both automatic tiers without an environment flag", () => {
+			const controller = new StepPermissionController({ env: {}, initialPreset: "approve-for-me" });
 			expect(controller.getState()).toMatchObject({ preset: "approve-for-me", autoResume: true });
 			// Ask makes the flag inert but must not forget the request.
 			expect(controller.setPreset("ask")).toMatchObject({ preset: "ask", autoResume: false });

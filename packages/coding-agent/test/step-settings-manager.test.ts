@@ -117,7 +117,7 @@ describe("Step settings manager decorator", () => {
 		expect(manager.getStepPermissionPreset()).toBe("approve-for-me");
 	});
 
-	it("normalizes legacy aliases and supports clearing a persisted field", () => {
+	it("resets the legacy approval triple instead of inheriting unattended access", () => {
 		const fixture = makeRoot();
 		writeFileSync(
 			fixture.paths.global,
@@ -126,22 +126,36 @@ describe("Step settings manager decorator", () => {
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			permissionPreset: "approve-for-me",
-			autoResume: true,
-			nonInteractiveApproval: "allow",
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			autoResume: false,
+			nonInteractiveApproval: "deny",
 		});
 		manager.setStepAutoResume(undefined);
 		const persisted = JSON.parse(readFileSync(fixture.paths.global, "utf8"));
 		expect(persisted.autopilot).toBeUndefined();
-		expect(manager.getStepAutoResume()).toBeUndefined();
+		expect(manager.getStepAutoResume()).toBe(false);
 	});
 
-	it("keeps the legacy autopilot preset carrying auto-resume", () => {
+	it.each(["autopilot", "bypass", "read-only"])("resets the saved %s tier to Ask", (preset) => {
 		const fixture = makeRoot();
-		writeFileSync(fixture.paths.global, JSON.stringify({ permissionPreset: "autopilot" }));
+		writeFileSync(
+			fixture.paths.global,
+			JSON.stringify({
+				permissionPreset: preset,
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				autoResume: true,
+			}),
+		);
 		const { manager } = makeManager(fixture);
 
-		expect(manager.getStepSettings()).toEqual({ permissionPreset: "approve-for-me", autoResume: true });
+		expect(manager.getStepSettings()).toEqual({
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
+		});
 	});
 
 	it("persists the Full Access risk acknowledgment in the sidecar", () => {
@@ -163,6 +177,64 @@ describe("Step settings manager decorator", () => {
 		expect(manager.getStepSettings().fullAccessAcknowledged).toBe(false);
 		// Clearing the acknowledgment keeps the selected tier.
 		expect(manager.getStepPermissionPreset()).toBe("full-access");
+	});
+
+	it("remembers a newly chosen automatic tier after resetting old nested permission settings", () => {
+		const fixture = makeRoot();
+		writeFileSync(
+			fixture.paths.global,
+			JSON.stringify({
+				tools: { approval: { preset: "autopilot", mode: "auto", nonInteractive: "allow", autoResume: true } },
+			}),
+		);
+		const { manager } = makeManager(fixture);
+		expect(manager.getStepPermissionPreset()).toBe("ask");
+		manager.setEffectiveStepSettings({
+			permissionPreset: "approve-for-me",
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			autoResume: true,
+		});
+		const restarted = makeManager(fixture).manager;
+		expect(restarted.getStepSettings()).toEqual({
+			permissionPreset: "approve-for-me",
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			autoResume: true,
+		});
+	});
+
+	it("retains the new selection when legacy policy fields were split across scopes", () => {
+		const fixture = makeRoot();
+		writeFileSync(
+			fixture.paths.global,
+			JSON.stringify({
+				permissionPreset: "bypass",
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				autoResume: false,
+			}),
+		);
+		writeFileSync(fixture.paths.project, JSON.stringify({ permissionPreset: "autopilot" }));
+		const { manager } = makeManager(fixture);
+		expect(manager.getStepSettings()).toEqual({
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
+		});
+		manager.setEffectiveStepSettings({
+			permissionPreset: "approve-for-me",
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			autoResume: true,
+		});
+		expect(makeManager(fixture).manager.getStepSettings()).toEqual({
+			permissionPreset: "approve-for-me",
+			approvalMode: "auto",
+			nonInteractiveApproval: "allow",
+			autoResume: true,
+		});
 	});
 
 	it("reads the Full Access acknowledgment from the legacy approval object", () => {
@@ -229,10 +301,10 @@ describe("Step settings manager decorator", () => {
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			permissionPreset: "approve-for-me",
-			approvalMode: "auto",
-			nonInteractiveApproval: "allow",
-			autoResume: true,
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
 		});
 		manager.setStepSettings({
 			permissionPreset: undefined,
@@ -259,21 +331,24 @@ describe("Step settings manager decorator", () => {
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			permissionPreset: "approve-for-me",
-			approvalMode: "auto",
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
 		});
 	});
 
-	it("deep-merges legacy approval objects across global and project scopes", () => {
+	it("does not reactivate a migrated global policy through partial project settings", () => {
 		const fixture = makeRoot();
 		writeFileSync(fixture.paths.global, JSON.stringify({ approval: { mode: "auto", autoResume: true } }));
 		writeFileSync(fixture.paths.project, JSON.stringify({ approval: { nonInteractive: "allow" } }));
 		const { manager } = makeManager(fixture);
 
 		expect(manager.getStepSettings()).toEqual({
-			approvalMode: "auto",
-			nonInteractiveApproval: "allow",
-			autoResume: true,
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
+			autoResume: false,
 		});
 	});
 

@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Replace permission tiers with Ask, Approve for Me (default), and Full Access. Full Access runs dangerous and unanalyzable commands after a session-only or remembered risk acknowledgment. Legacy Bypass/Autopilot presets map to Approve for Me; Read Only maps to Ask, and `--approval-mode strict` is no longer accepted. Auto-resume remains an independent setting.
+- Replace permission tiers with Ask, Approve for Me (default), and Full Access. Full Access runs dangerous and unanalyzable commands after a session-only or remembered risk acknowledgment. Saved legacy permission modes reset to Ask for users to choose again; `--approval-mode strict` is no longer accepted. Both automatic tiers enable bounded model-error continuation by default; Ask does not.
 
 ### Fixed
 

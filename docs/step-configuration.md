@@ -54,6 +54,21 @@ Without an interactive UI, an unacknowledged Full Access selection falls back to
 Approve for Me. An acknowledged Full Access selection also runs dangerous
 commands unattended. Explicit per-tool `deny` overrides still apply.
 
+### Upgrading permission settings and automatic continuation
+
+Saved Bypass, Autopilot, and Read Only policies reset to Ask on upgrade, including
+their old `mode`, unattended-approval and auto-resume fields. Saved policies with
+only the old low-level approval mode also reset to Ask. Select a new tier through
+`/permissions` or `Shift+Tab`; Full Access requires the risk acknowledgment above.
+Once a new tier is saved, later launches retain it.
+
+Both Approve for Me and Full Access enable the bounded model-error continuation
+by default; Ask does not resume automatically. Selecting either automatic tier
+enables continuation even if the old tier had saved `autoResume = false`.
+The existing retry limits and backoff remain unchanged. `STEP_AUTO_RESUME` or an
+explicit `autoResume` config value can override continuation at startup without
+granting extra permissions.
+
 ## Environment and shell commands
 
 `STEP_CODING_AGENT_DIR` selects the agent directory for CLI and SDK callers.

@@ -59,7 +59,7 @@ export const STEP_PERMISSION_PRESETS: readonly StepPermissionPreset[] = [
 			"Routine actions run automatically; only actions detected as potentially unsafe and key decisions ask",
 		mode: "auto",
 		nonInteractiveApproval: "allow",
-		autoResume: false,
+		autoResume: true,
 	},
 	{
 		id: "full-access",
@@ -67,7 +67,7 @@ export const STEP_PERMISSION_PRESETS: readonly StepPermissionPreset[] = [
 		description: "Every action runs without confirmation, including dangerous commands; trusted environments only",
 		mode: "auto",
 		nonInteractiveApproval: "allow",
-		autoResume: false,
+		autoResume: true,
 		skipCommandPolicy: true,
 	},
 ];
@@ -181,13 +181,13 @@ export function normalizeStepPermissionPresetId(value: string | undefined): Step
 		case "approve-for-me":
 		case "approve":
 		case "approveforme":
-		// Legacy Bypass and Autopilot ids collapse into Approve for Me;
-		// auto-resume survives as the independent autoResume flag.
+			return "approve-for-me";
+		// Retired tiers require the user to choose a new permission tier.
 		case "bypass":
 		case "auto":
 		case "autopilot":
 		case "bypasspermissions":
-			return "approve-for-me";
+			return "ask";
 		case "full-access":
 		case "fullaccess":
 		case "full":
@@ -239,19 +239,13 @@ interface ResolvedStepPermissionPreset {
 	preset: StepPermissionPresetId;
 	/** True only for the final fallback, where nothing selected a policy. */
 	defaulted: boolean;
-	/**
-	 * The retired `autopilot` preset id carried auto-resume in the preset
-	 * itself. Keep honoring it so an old `permissionPreset = "autopilot"`
-	 * config does not silently lose the auto-resume behavior.
-	 */
-	legacyAutoResume?: boolean;
 }
 
 function resolveStepPermissionPresetWithProvenance(
 	options: StepPermissionControllerOptions = {},
 ): ResolvedStepPermissionPreset {
 	if (options.initialPreset && getStepPermissionPreset(options.initialPreset)) {
-		return { preset: options.initialPreset, defaulted: false };
+		return { preset: getStepPermissionPreset(options.initialPreset)!.id, defaulted: false };
 	}
 
 	const env = options.env ?? process.env;
@@ -271,7 +265,6 @@ function resolveStepPermissionPresetWithProvenance(
 		return {
 			preset: normalizedExplicitPreset,
 			defaulted: false,
-			...(explicitPreset === "autopilot" ? { legacyAutoResume: true } : {}),
 		};
 	}
 
@@ -280,11 +273,11 @@ function resolveStepPermissionPresetWithProvenance(
 		return { preset: "ask", defaulted: false };
 	}
 	if (mode === "auto" || mode === "bypass" || mode === "bypasspermissions") {
-		return { preset: "approve-for-me", defaulted: false };
+		return { preset: "ask", defaulted: false };
 	}
 	if (mode === "confirm" || mode === "ask") return { preset: "ask", defaulted: false };
-	if (isTruthy(env.STEP_AUTOPILOT) || isTruthy(env.STEP_AUTO_RESUME)) {
-		return { preset: "approve-for-me", defaulted: false };
+	if (isTruthy(env.STEP_AUTOPILOT)) {
+		return { preset: "ask", defaulted: false };
 	}
 	// Default to Approve for Me: routine tools run without approval prompts.
 	// Explicit CLI flags, STEP_* env vars, and any persisted preset are all
@@ -316,18 +309,12 @@ export function normalizeAutoResume(
 }
 
 /**
- * The raw auto-resume request from options, then the environment. Presets no
- * longer carry it: the retired `autopilot` id is normalized by the caller, and
- * persisted `autoResume` arrives as `options.autoResume`.
+ * Both automatic tiers enable model-error continuation by default. Explicit
+ * options or STEP_AUTO_RESUME can disable it; this never selects a permission tier.
  */
 export function resolveAutoResumeRequest(options: StepPermissionControllerOptions = {}): boolean {
 	const env = options.env ?? process.env;
-	return (
-		options.autoResume ??
-		(isTruthy(env.STEP_AUTOPILOT) ||
-			isTruthy(env.STEP_AUTO_RESUME) ||
-			resolveStepPermissionPresetWithProvenance(options).legacyAutoResume === true)
-	);
+	return options.autoResume ?? (env.STEP_AUTO_RESUME?.trim() ? isTruthy(env.STEP_AUTO_RESUME) : true);
 }
 
 /**
@@ -530,16 +517,10 @@ export class StepPermissionController {
 	private toolOverrides: Record<string, StepToolPermissionMode>;
 	private readonly shellContext: () => ShellExecutionContext;
 	private readonly nonInteractiveDenial: StepNonInteractiveDenial;
-	/**
-	 * The raw auto-resume request. It survives Ask, where the flag is inert, so
-	 * switching back to an automatic tier does not silently drop the preference.
-	 */
-	private readonly autoResumeRequest: boolean;
 
 	constructor(options: StepPermissionControllerOptions = {}) {
 		this.shellContext = options.shellContext ?? (() => ({}));
 		this.state = resolveInitialStepPermissionState(options);
-		this.autoResumeRequest = resolveAutoResumeRequest(options);
 		this.toolOverrides = cloneToolOverrides(options.toolOverrides ?? {});
 		this.nonInteractiveDenial = resolveNonInteractiveDenial(options);
 		if (Object.keys(this.toolOverrides).length > 0) this.state.toolOverrides = { ...this.toolOverrides };
@@ -556,10 +537,8 @@ export class StepPermissionController {
 		const preset = getStepPermissionPreset(presetId);
 		if (!preset) return undefined;
 		const next = stepPermissionStateForPreset(preset.id);
-		// Auto-resume is an independent preference, not a preset property: keep
-		// the user's request across preset switches, re-normalized for the tier
-		// being entered (it stays inert under Ask).
-		next.autoResume = normalizeAutoResume(next.mode, next.nonInteractiveApproval, this.autoResumeRequest);
+		// A deliberate tier selection uses its defaults, rather than carrying
+		// the disabled autoResume field saved by an older Ask/Bypass preset.
 		this.state = next;
 		return this.getState();
 	}

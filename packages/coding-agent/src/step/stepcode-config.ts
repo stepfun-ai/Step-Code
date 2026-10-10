@@ -15,7 +15,12 @@ import {
 	type StepPermissionMode,
 	type StepPermissionPresetId,
 } from "./permissions.ts";
-import type { StepSettings, StepSettingsManager, StepSettingsPaths } from "./settings-manager.ts";
+import {
+	resetLegacyPermissionSettings,
+	type StepSettings,
+	type StepSettingsManager,
+	type StepSettingsPaths,
+} from "./settings-manager.ts";
 
 export const STEPCODE_CONFIG_ENV_NAME = "STEPCODE_CONFIG_PATH";
 
@@ -336,20 +341,19 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 	const nonInteractiveApproval =
 		rawNonInteractive === "allow" || rawNonInteractive === "deny" ? rawNonInteractive : undefined;
 	const autoResume = readBoolean(approval?.autoResume ?? approval?.autopilot);
-	// The retired `autopilot` preset carried auto-resume in the preset id; keep
-	// honoring an old config that never wrote the separate flag.
-	const legacyAutopilot = readString(approval?.preset)?.trim().toLowerCase() === "autopilot";
 	const fullAccessAcknowledged = readBoolean(approval?.fullAccessAcknowledged);
 	const feedback = asObject(root.feedback);
 	const feedbackEnabled = readBoolean(feedback?.enabled);
-	return {
+	const settings: StepSettings = {
 		...(preset ? { permissionPreset: preset } : {}),
 		...(mode ? { approvalMode: mode } : {}),
 		...(nonInteractiveApproval ? { nonInteractiveApproval } : {}),
-		...(autoResume !== undefined ? { autoResume } : legacyAutopilot ? { autoResume: true } : {}),
+		...(autoResume !== undefined ? { autoResume } : {}),
 		...(fullAccessAcknowledged !== undefined ? { fullAccessAcknowledged } : {}),
 		...(feedbackEnabled !== undefined ? { feedbackEnabled } : {}),
 	};
+	resetLegacyPermissionSettings(settings, readString(approval?.preset), readString(approval?.mode));
+	return settings;
 }
 
 function writeStepCodeSettings(root: Record<string, unknown>, patch: Partial<StepSettings>): void {

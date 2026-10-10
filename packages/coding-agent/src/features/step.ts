@@ -179,6 +179,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 						permissionPreset: "full-access",
 						approvalMode: "auto",
 						nonInteractiveApproval: "allow",
+						autoResume: true,
 						fullAccessAcknowledged: true,
 					});
 				} catch {

@@ -212,8 +212,9 @@ describe("StepCode config compatibility", () => {
 		expect(manager.getDefaultProvider()).toBe("stepcode-anthropic");
 		expect(manager.getDefaultModel()).toBe("water18-new");
 		expect(manager.getStepSettings()).toEqual({
-			approvalMode: "auto",
-			nonInteractiveApproval: "allow",
+			permissionPreset: "ask",
+			approvalMode: "confirm",
+			nonInteractiveApproval: "deny",
 			autoResume: false,
 		});
 
@@ -259,7 +260,57 @@ describe("StepCode config compatibility", () => {
 		});
 	});
 
-	test("round-trips the Full Access risk acknowledgment through config.toml", async () => {
+	test.each(["bypass", "autopilot", "read-only"])(
+		"resets legacy %s in an injected config before a new selection",
+		async (preset) => {
+			const root = await mkdtemp(join(tmpdir(), "stepcode-permission-migration-"));
+			roots.push(root);
+			const configPath = join(root, "config.json");
+			await writeFile(
+				configPath,
+				JSON.stringify({
+					providers: {
+						test: { api: "openai-completions", baseUrl: "https://example.invalid/v1", models: [{ id: "test" }] },
+					},
+					tools: {
+						approval: {
+							preset,
+							mode: "auto",
+							nonInteractive: "allow",
+							autoResume: true,
+							fullAccessAcknowledged: true,
+						},
+					},
+				}),
+			);
+			const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+			const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, join(root, "agent")), config!);
+			expect(manager.getStepSettings()).toEqual({
+				permissionPreset: "ask",
+				approvalMode: "confirm",
+				nonInteractiveApproval: "deny",
+				autoResume: false,
+			});
+			manager.setEffectiveStepSettings({
+				permissionPreset: "full-access",
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				autoResume: true,
+				fullAccessAcknowledged: true,
+			});
+			const reloaded = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+			const next = decorateStepCodeSettingsManager(createStepSettingsManager(root, join(root, "agent")), reloaded!);
+			expect(next.getStepSettings()).toEqual({
+				permissionPreset: "full-access",
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				autoResume: true,
+				fullAccessAcknowledged: true,
+			});
+		},
+	);
+
+	test("round-trips the Full Access risk acknowledgment through the injected config", async () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-"));
 		roots.push(root);
 		const projectDir = join(root, "project");

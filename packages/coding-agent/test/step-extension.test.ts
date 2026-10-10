@@ -19,6 +19,43 @@ function commandContext(
 }
 
 describe("Step extension", () => {
+	test.each(["ask", "approve-for-me", "full-access"] as const)(
+		"resumes model errors by default only in automatic tiers: %s",
+		async (initialPreset) => {
+			vi.useFakeTimers();
+			try {
+				const on = vi.fn();
+				const sendUserMessage = vi.fn();
+				createStepExtension({
+					permission: { env: {}, initialPreset },
+					stepSettings: () => ({
+						getStepSettings: () => ({ fullAccessAcknowledged: true }),
+						setEffectiveStepSettings: vi.fn(),
+					}),
+				})({ on, sendUserMessage, registerProvider: vi.fn(), registerCommand: vi.fn() } as unknown as ExtensionAPI);
+				const handler = (name: string) => on.mock.calls.filter(([event]) => event === name).at(-1)![1];
+				const ctx = {
+					hasUI: false,
+					ui: { notify: vi.fn(), setStatus: vi.fn() },
+					isIdle: () => true,
+					hasPendingMessages: () => false,
+					autoRetryEnabled: false,
+					setAutoRetryEnabled: vi.fn(),
+				};
+				handler("session_start")({}, ctx);
+				handler("agent_end")({
+					messages: [{ role: "assistant", stopReason: "error", errorMessage: "network down" }],
+				});
+				handler("agent_settled")({}, ctx);
+				await vi.advanceTimersByTimeAsync(5000);
+				expect(sendUserMessage).toHaveBeenCalledTimes(initialPreset === "ask" ? 0 : 1);
+				if (initialPreset !== "ask") expect(ctx.setAutoRetryEnabled).toHaveBeenCalledWith(true);
+				handler("session_shutdown")({}, ctx);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
 	test.each([
 		{ name: "selected non-Bash interpreter", shellPath: process.execPath, prefix: undefined },
 		{ name: "executed command prefix", shellPath: undefined, prefix: "rm -rf ./build" },
@@ -217,7 +254,7 @@ describe("Step extension", () => {
 			permissionPreset: "approve-for-me",
 			approvalMode: "auto",
 			nonInteractiveApproval: "allow",
-			autoResume: false,
+			autoResume: true,
 		});
 	});
 
@@ -288,7 +325,7 @@ describe("Step extension", () => {
 		grantContext.ui.setStatus = setStatus;
 		await command.handler("--cycle", grantContext);
 		expect(grant).toHaveBeenCalledOnce();
-		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access");
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
 		expect(setEffectiveStepSettings).not.toHaveBeenCalled();
 
 		// Cycling again leaves Full Access for Ask without a dialog.
@@ -433,8 +470,10 @@ describe("Step extension", () => {
 			},
 		);
 		// The session starts on Approve for Me while the dialog is pending.
-		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Approve for Me");
-		await vi.waitFor(() => expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access"));
+		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Approve for Me (auto-resume)");
+		await vi.waitFor(() =>
+			expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)"),
+		);
 
 		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
 			event: unknown,
@@ -483,7 +522,7 @@ describe("Step extension", () => {
 		await vi.waitFor(() => expect(select).toHaveBeenCalled());
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(setStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access");
+		expect(setStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
 
 		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
 			event: unknown,
@@ -571,7 +610,7 @@ describe("Step extension", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 			expect(persist).not.toHaveBeenCalled();
-			expect(oldStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access");
+			expect(oldStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
 			// A stale answer must not even cache the acknowledgment for a later command.
 			const command = registerCommand.mock.calls.find(([name]) => name === "permissions")![1];
 			const select = vi.fn(async () => undefined);
@@ -601,6 +640,7 @@ describe("Step extension", () => {
 			permissionPreset: "full-access",
 			approvalMode: "auto",
 			nonInteractiveApproval: "allow",
+			autoResume: true,
 			fullAccessAcknowledged: true,
 		});
 	});
