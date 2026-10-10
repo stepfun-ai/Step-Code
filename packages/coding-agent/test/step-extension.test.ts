@@ -442,10 +442,16 @@ describe("Step extension", () => {
 		expect(setEffectiveStepSettings).toHaveBeenCalledWith(expect.objectContaining({ fullAccessAcknowledged: true }));
 	});
 
-	test("prompts at startup for an unacknowledged Full Access tier and applies the grant", async () => {
+	test.each([true, false])("applies the startup Full Access decision (approved=%s)", async (approved) => {
 		const on = vi.fn();
 		const setStatus = vi.fn();
-		const select = vi.fn(async () => "Yes, continue anyway — apply full access for this session");
+		let answer!: (value: string | undefined) => void;
+		const select = vi.fn(
+			() =>
+				new Promise<string | undefined>((resolve) => {
+					answer = resolve;
+				}),
+		);
 		createStepExtension({
 			permission: { env: {}, initialPreset: "full-access" },
 			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: vi.fn() }),
@@ -471,76 +477,31 @@ describe("Step extension", () => {
 		);
 		// The session starts on Approve for Me while the dialog is pending.
 		expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Approve for Me (auto-resume)");
-		await vi.waitFor(() =>
-			expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)"),
-		);
-
 		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
 			event: unknown,
 			ctx: unknown,
 		) => Promise<unknown>;
-		expect(
-			await toolHandler(
-				{
-					type: "tool_call",
-					toolName: "run_command",
-					toolCallId: "startup-grant",
-					input: { command: "rm -rf ./x" },
-				},
-				{ hasUI: false },
-			),
-		).toBeUndefined();
-	});
-
-	test("keeps Approve for Me when the startup Full Access dialog is dismissed", async () => {
-		const on = vi.fn();
-		const setStatus = vi.fn();
-		const select = vi.fn(async (): Promise<string | undefined> => undefined);
-		createStepExtension({
-			permission: { env: {}, initialPreset: "full-access" },
-			stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: vi.fn() }),
-		})({
-			registerProvider: vi.fn(),
-			on,
-			registerCommand: vi.fn(),
-			sendUserMessage: vi.fn(),
-		} as unknown as ExtensionAPI);
-
-		const sessionStart = on.mock.calls.filter(([name]) => name === "session_start").at(-1)?.[1] as (
-			event: unknown,
-			ctx: unknown,
-		) => void;
-		sessionStart(
-			{ type: "session_start", reason: "new" },
-			{
-				hasUI: true,
-				ui: { notify: vi.fn(), setStatus, select },
-				autoRetryEnabled: false,
-				setAutoRetryEnabled: vi.fn(),
-			},
-		);
-		await vi.waitFor(() => expect(select).toHaveBeenCalled());
+		const event = {
+			type: "tool_call",
+			toolName: "run_command",
+			toolCallId: "startup",
+			input: { command: "rm -rf ./x" },
+		};
+		expect(await toolHandler(event, { hasUI: false })).toMatchObject({ block: true });
+		answer(approved ? "Yes, continue anyway — apply full access for this session" : undefined);
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(setStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
-
-		const toolHandler = on.mock.calls.find(([name]) => name === "tool_call")?.[1] as (
-			event: unknown,
-			ctx: unknown,
-		) => Promise<unknown>;
 		const confirm = vi.fn(async () => false);
-		expect(
-			await toolHandler(
-				{
-					type: "tool_call",
-					toolName: "run_command",
-					toolCallId: "startup-dismiss",
-					input: { command: "rm -rf ./x" },
-				},
-				{ hasUI: true, ui: { confirm } },
-			),
-		).toMatchObject({ block: true });
-		expect(confirm).toHaveBeenCalledOnce();
+		const result = await toolHandler(event, { hasUI: true, ui: { confirm } });
+		if (approved) {
+			expect(setStatus).toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
+			expect(result).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		} else {
+			expect(setStatus).not.toHaveBeenCalledWith("step-permission", "Mode: Full Access (auto-resume)");
+			expect(result).toMatchObject({ block: true });
+			expect(confirm).toHaveBeenCalledOnce();
+		}
 	});
 
 	test("clears the session-scoped Full Access grant on shutdown", async () => {

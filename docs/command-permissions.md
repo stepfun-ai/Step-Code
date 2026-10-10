@@ -1,6 +1,7 @@
 # Command permissions
 
-Explicit per-tool denial takes precedence. Otherwise, shared command analysis
+Explicit per-tool overrides remain effective, including `deny` and `confirm`
+under Full Access. Otherwise, shared command analysis
 returns one of three outcomes:
 
 | Analysis | Ask / Approve for Me | Full Access (acknowledged) | Ask / Approve for Me without an approval channel |

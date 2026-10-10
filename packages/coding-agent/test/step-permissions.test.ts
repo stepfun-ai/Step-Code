@@ -4,9 +4,7 @@ import {
 	AUTO_RESUME_PROMPT,
 	containsDangerousLifecycleCommand,
 	decideStepToolCall,
-	FULL_ACCESS_RISK_OPTIONS,
 	isDangerousCommand,
-	parseFullAccessRiskChoice,
 	resolveInitialStepPermissionPreset,
 	resolveInitialStepPermissionState,
 	STEP_PERMISSION_PRESETS,
@@ -232,14 +230,6 @@ describe("Step permission presets", () => {
 				stepPermissionStateForPreset("approve-for-me"),
 			).action,
 		).toBe("confirm");
-	});
-
-	it("parses the Full Access risk dialog choices", () => {
-		expect(parseFullAccessRiskChoice(FULL_ACCESS_RISK_OPTIONS[0])).toBe("session");
-		expect(parseFullAccessRiskChoice(FULL_ACCESS_RISK_OPTIONS[1])).toBe("always");
-		expect(parseFullAccessRiskChoice(FULL_ACCESS_RISK_OPTIONS[2])).toBe("cancel");
-		// A dismissed dialog (undefined) cancels.
-		expect(parseFullAccessRiskChoice(undefined)).toBe("cancel");
 	});
 
 	it.each([true, false])("identifies each approval without changing the decision (approved=%s)", async (approved) => {

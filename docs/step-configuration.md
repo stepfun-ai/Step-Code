@@ -52,7 +52,7 @@ Select Full Access using `/permissions full-access` or `Shift+Tab`:
 A session-only acknowledgment expires when the session is replaced or closed.
 Without an interactive UI, an unacknowledged Full Access selection falls back to
 Approve for Me. An acknowledged Full Access selection also runs dangerous
-commands unattended. Explicit per-tool `deny` overrides still apply.
+commands unattended. Explicit per-tool `deny` and `confirm` overrides still apply.
 
 ### Upgrading permission settings and automatic continuation
 
