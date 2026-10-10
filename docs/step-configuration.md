@@ -21,12 +21,13 @@ by an older release is still repaired in place at startup.
 
 ## Mandatory command approval
 
-Permission presets and tool overrides cannot automatically approve commands
-matched by the built-in command rules. In particular, `rm` with both recursive
-and force options requires confirmation for every target, including `./build`
-and `/tmp/cache`. Bypass, auto, and autopilot still ask for each call. Read-only
-mode blocks it, and runs without an approval channel cannot execute it even
-with `nonInteractiveApproval = "allow"`.
+Ask and Approve for Me cannot automatically approve commands matched by the
+built-in command rules. In particular, `rm` with both recursive and force
+options requires confirmation for every target, including `./build` and
+`/tmp/cache`. Full Access is the only tier that runs them without confirmation,
+and it requires the one-time risk acknowledgment; a run without an approval
+channel cannot execute a dangerous command under the other tiers even with
+`nonInteractiveApproval = "allow"`.
 
 By default, a run without an approval channel terminates after such a block.
 `--non-interactive-denial continue` (or `STEP_NON_INTERACTIVE_DENIAL=continue`)
@@ -34,11 +35,39 @@ keeps a recoverable confirmation blocked but reports it as a failed tool result,
 so an unattended agent can take a safer route instead of ending the run.
 Unsupported shells and shell-configuration failures still terminate because the
 agent cannot repair the execution environment by retrying. Explicit denials —
-read-only mode and `deny` tool overrides — still terminate, and dangerous
-commands remain blocked.
+`deny` tool overrides — still terminate, and dangerous commands remain blocked
+outside Full Access.
 
 See [command permissions](command-permissions.md) for matching behavior and
 how to extend the built-in rules.
+
+### Full Access confirmation
+
+Select Full Access using `/permissions full-access` or `Shift+Tab`:
+
+- **Yes, continue anyway** enables Full Access for this session without saving the tier.
+- **Yes, and don't ask again** saves Full Access and its risk acknowledgment for future launches.
+- **Cancel** keeps the current tier.
+
+A session-only acknowledgment expires when the session is replaced or closed.
+Without an interactive UI, an unacknowledged Full Access selection falls back to
+Approve for Me. An acknowledged Full Access selection also runs dangerous
+commands unattended. Explicit per-tool `deny` and `confirm` overrides still apply.
+
+### Upgrading permission settings and automatic continuation
+
+Saved Bypass, Autopilot, and Read Only policies reset to Ask on upgrade, including
+their old `mode`, unattended-approval and auto-resume fields. Saved policies with
+only the old low-level approval mode also reset to Ask. Select a new tier through
+`/permissions` or `Shift+Tab`; Full Access requires the risk acknowledgment above.
+Once a new tier is saved, later launches retain it.
+
+Both Approve for Me and Full Access enable the bounded model-error continuation
+by default; Ask does not resume automatically. Selecting either automatic tier
+enables continuation even if the old tier had saved `autoResume = false`.
+The existing retry limits and backoff remain unchanged. `STEP_AUTO_RESUME` or an
+explicit `autoResume` config value can override continuation at startup without
+granting extra permissions.
 
 ## Environment and shell commands
 

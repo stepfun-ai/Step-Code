@@ -184,7 +184,7 @@ When running from the source tree, replace `step` with `pnpm step`\.
 
 ## Security
 
-- Four permission modes \(Ask / Read Only / Bypass / Autopilot\), cycled with `Shift+Tab`; dangerous commands require a separate confirmation dialog in every mode\.
+- Three permission tiers \(Ask / Approve for Me / Full Access\), cycled with `Shift+Tab`; dangerous commands require a separate confirmation dialog in Ask and Approve for Me, and run without one only in Full Access after its risk acknowledgment\.
 
 ## Uninstall
 

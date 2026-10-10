@@ -1,17 +1,21 @@
 # Command permissions
 
-Explicit per-tool denial takes precedence. Otherwise, shared command analysis
+Explicit per-tool overrides remain effective, including `deny` and `confirm`
+under Full Access. Otherwise, shared command analysis
 returns one of three outcomes:
 
-| Analysis | Ask / Bypass / Autopilot | Read-only | Without an approval channel |
+| Analysis | Ask / Approve for Me | Full Access (acknowledged) | Ask / Approve for Me without an approval channel |
 | --- | --- | --- | --- |
-| A built-in dangerous rule matched | Confirm each call | Deny | Deny |
-| Syntax or executable input could not be fully analyzed | Confirm each call, explaining the uncertainty | Deny | Deny |
-| Analysis completed without a rule match | Ordinary preset/tool policy | Ordinary read-only policy | Ordinary unattended policy |
+| A built-in dangerous rule matched | Confirm each call | Run without confirmation | Deny |
+| Syntax or executable input could not be fully analyzed | Confirm each call, explaining the uncertainty | Run without confirmation | Deny |
+| Analysis completed without a rule match | Ordinary tier/tool policy | Run without confirmation | Ordinary unattended policy |
 
-Unresolved analysis is not reported as a detected dangerous command.
+Full Access is the only tier that runs a detected dangerous command or an
+unanalyzable one; it requires the one-time risk acknowledgment and is the sole
+behavioral difference from Approve for Me. Unresolved analysis is not reported
+as a detected dangerous command.
 `StepToolDecision.analysisIncomplete` distinguishes it from `hazardous`.
-Neither outcome can use an automatic tool override or unattended `allow`.
+Outside Full Access, neither outcome can use an automatic tool override or unattended `allow`.
 Explicit user approval applies only to that call.
 
 Without an approval channel, a deny ends the run by default. The opt-in
@@ -20,7 +24,7 @@ env `STEP_NON_INTERACTIVE_DENIAL=continue`) keeps a recoverable confirmation
 blocked but returns it as a failed tool result so the agent can continue.
 Unsupported shells and shell-configuration failures still terminate because a
 model retry cannot repair the execution environment. Explicit per-tool denial
-and read-only mode still terminate, and dangerous commands remain blocked.
+still terminates, and dangerous commands remain blocked outside Full Access.
 
 The product policy in `packages/coding-agent/src/step/permissions.ts` runs through
 the existing `tool_call` hook, before foreground/background execution. Clients

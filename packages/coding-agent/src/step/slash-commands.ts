@@ -71,18 +71,6 @@ export function registerStepPiCommandAdapters(
 
 	registerTrackedCommand(
 		pi,
-		"exit",
-		{
-			description: "Exit the interactive shell",
-			handler: async (_args, ctx) => {
-				ctx.shutdown();
-			},
-		},
-		telemetry,
-	);
-
-	registerTrackedCommand(
-		pi,
 		"theme",
 		{
 			description: "Pick or switch TUI themes",

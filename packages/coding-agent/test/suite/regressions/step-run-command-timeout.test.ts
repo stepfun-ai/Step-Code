@@ -166,7 +166,7 @@ describe("Step run_command timeout recovery through the agent loop", () => {
 				createStepExtension({
 					permission: {
 						env: {},
-						initialPreset: "bypass",
+						initialPreset: "approve-for-me",
 						toolOverrides: { run_command: "deny" },
 					},
 				}),

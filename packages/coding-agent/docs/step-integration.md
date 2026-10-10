@@ -452,8 +452,8 @@ Pi before loading the Step product adapter.
 
 This layer does not reimplement editor key handling, UTF-8 buffering, render
 throttling, selectors, or agent scheduling. Step's permission extension only
-defines the product presets and dangerous-command policy; it invokes Pi's
-native `tool_call` confirmation and `ui.select` flows. Autopilot likewise
+defines the product tiers and dangerous-command policy; it invokes Pi's
+native `tool_call` confirmation and `ui.select` flows. Auto-resume likewise
 toggles Pi's native retry setting and adds only a bounded continuation after a
 settled retryable failure. Changes to the underlying interaction or scheduling
 behavior belong in Pi's shared packages and should be consumed here through

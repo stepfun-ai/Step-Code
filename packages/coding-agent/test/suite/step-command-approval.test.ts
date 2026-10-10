@@ -10,9 +10,8 @@ import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 const modes: Array<{ name: string; permission: StepPermissionControllerOptions }> = [
 	{ name: "ask", permission: { initialPreset: "ask" } },
-	{ name: "bypass", permission: { initialPreset: "bypass" } },
+	{ name: "approve-for-me", permission: { initialPreset: "approve-for-me" } },
 	{ name: "auto", permission: { approvalMode: "auto" } },
-	{ name: "autopilot", permission: { initialPreset: "autopilot" } },
 ];
 
 describe("Step command approval through the agent loop", () => {
@@ -33,12 +32,18 @@ describe("Step command approval through the agent loop", () => {
 		vi.unstubAllEnvs();
 	});
 
-	async function setup(permission: StepPermissionControllerOptions): Promise<Harness> {
+	async function setup(
+		permission: StepPermissionControllerOptions,
+		stepSettings?: () => {
+			getStepSettings: () => Record<string, unknown>;
+			setEffectiveStepSettings: (settings: Record<string, unknown>) => void;
+		},
+	): Promise<Harness> {
 		harness = await createHarness({
 			tools: [],
 			initialActiveToolNames: ["run_command"],
 			extensionFactories: [
-				createStepExtension({ permission: { env: {}, ...permission } }),
+				createStepExtension({ permission: { env: {}, ...permission }, stepSettings }),
 				(pi) => {
 					const tool = createStepToolProfile(sandbox, { agentDir: join(sandbox, "agent") }).find(
 						(candidate) => candidate.name === "run_command",
@@ -113,6 +118,67 @@ describe("Step command approval through the agent loop", () => {
 		});
 	});
 
+	it("full access runs the real deletion unattended without prompting", async () => {
+		// The risk acknowledgment is what admits Full Access to a headless run;
+		// without it the session falls back to Approve for Me (see below).
+		const session = await setup(
+			{
+				initialPreset: "full-access",
+				nonInteractiveApproval: "allow",
+				toolOverrides: { run_command: "allow" },
+			},
+			() => ({
+				getStepSettings: () => ({ fullAccessAcknowledged: true }),
+				setEffectiveStepSettings: vi.fn(),
+			}),
+		);
+		await session.session.bindExtensions({ mode: "print" });
+		const marker = prepareRemoval(session, "full-access-removal");
+		await session.session.prompt("Remove the test directory");
+		expect(existsSync(marker)).toBe(false);
+		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: false,
+		});
+	});
+
+	it("full access falls back to Approve for Me in a headless run without the acknowledgment", async () => {
+		const session = await setup({
+			initialPreset: "full-access",
+			nonInteractiveApproval: "allow",
+			toolOverrides: { run_command: "allow" },
+		});
+		await session.session.bindExtensions({ mode: "print" });
+		const marker = prepareRemoval(session, "full-access-unacknowledged");
+		await session.session.prompt("Remove the test directory");
+		// Approve for Me still confirms the dangerous command, and no approval
+		// channel exists in print mode.
+		expect(existsSync(marker)).toBe(true);
+		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+	});
+
+	it("full access still honors an explicit tool denial", async () => {
+		const session = await setup(
+			{
+				initialPreset: "full-access",
+				nonInteractiveApproval: "allow",
+				toolOverrides: { run_command: "deny" },
+			},
+			() => ({
+				getStepSettings: () => ({ fullAccessAcknowledged: true }),
+				setEffectiveStepSettings: vi.fn(),
+			}),
+		);
+		await session.session.bindExtensions({ mode: "print" });
+		const marker = prepareRemoval(session, "full-access-denied");
+		await session.session.prompt("Remove the test directory");
+		expect(existsSync(marker)).toBe(true);
+		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+	});
+
 	it("continues past a refused unattended deletion when denial recovery is enabled", async () => {
 		const session = await setup({
 			approvalMode: "auto",
@@ -133,25 +199,22 @@ describe("Step command approval through the agent loop", () => {
 		expect(getAssistantTexts(session)).toContain("done");
 	});
 
-	it.each([
-		{ name: "read-only", permission: { initialPreset: "read-only" } },
-		{ name: "explicit deny", permission: { initialPreset: "bypass", toolOverrides: { run_command: "deny" } } },
-	] satisfies Array<{ name: string; permission: StepPermissionControllerOptions }>)(
-		"$name blocks the real tool without prompting",
-		async ({ permission }) => {
-			const session = await setup(permission);
-			const confirm = vi.fn(async () => true);
-			await session.session.bindExtensions({
-				mode: "tui",
-				uiContext: { ...session.session.extensionRunner.getUIContext(), confirm },
-			});
-			const marker = prepareRemoval(session, "denied-removal");
-			await session.session.prompt("Remove the test directory");
-			expect(existsSync(marker)).toBe(true);
-			expect(confirm).not.toHaveBeenCalled();
-			expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
-				isError: true,
-			});
-		},
-	);
+	it("an explicit deny blocks the real tool without prompting", async () => {
+		const session = await setup({
+			initialPreset: "approve-for-me",
+			toolOverrides: { run_command: "deny" },
+		});
+		const confirm = vi.fn(async () => true);
+		await session.session.bindExtensions({
+			mode: "tui",
+			uiContext: { ...session.session.extensionRunner.getUIContext(), confirm },
+		});
+		const marker = prepareRemoval(session, "denied-removal");
+		await session.session.prompt("Remove the test directory");
+		expect(existsSync(marker)).toBe(true);
+		expect(confirm).not.toHaveBeenCalled();
+		expect(session.session.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+	});
 });
