@@ -8,4 +8,5 @@
 
 ### Fixed
 
+- Recognize `/exit` as an alias for `/quit`, including while the agent is running or compacting.
 - Recognize `search_files`, `find_files`, and `list_directory` when selecting default system-prompt file-exploration guidance.
