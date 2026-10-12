@@ -982,3 +982,80 @@ test("resuming a plan preserves dependencies and metadata without mutating archi
 	expect(source.tools.get("task_create")!.executionMode).toBe("sequential");
 	expect(source.tools.get("task_update")!.executionMode).toBe("sequential");
 });
+
+test("context shows current task state without changing canonical messages or task records", async () => {
+	const h = createApi();
+	h.api.getActiveTools = () => ["task_create", "task_update", "task_get", "task_list"];
+	createStepTasksExtension()(h.api);
+	const ctx = createContext([], h.sessionManager);
+	await run(h.tools, "task_create", { subject: "Existing investigation", description: "Preserve findings" }, ctx);
+	await run(h.tools, "task_create", { subject: "Implement and verify", description: "Finish requested work" }, ctx);
+	await run(h.tools, "task_update", { taskId: "2", addBlockedBy: ["1"] }, ctx);
+	const messages = [{ role: "user", content: "Continue the existing request.", timestamp: 1 }];
+	const before = structuredClone(messages);
+	const entries = h.sessionManager.getEntries().length;
+	const first = (await h.emit({ type: "context", messages }, ctx)) as { messages: Array<Record<string, any>> };
+	expect(first?.messages).toHaveLength(2);
+	const parse = (result: typeof first) =>
+		JSON.parse((result.messages.at(-1)!.content as string).split("\n").find((line) => line.startsWith("{"))!);
+	expect(first.messages.at(-1)).toMatchObject({ role: "custom", customType: "step-tasks-state", display: false });
+	expect(parse(first).openTasks).toEqual([
+		expect.objectContaining({ id: "1", subject: "Existing investigation", status: "pending" }),
+		expect.objectContaining({ id: "2", status: "pending", blockedBy: ["1"] }),
+	]);
+	expect(h.sessionManager.getEntries()).toHaveLength(entries);
+	expect(messages).toEqual(before);
+	await run(h.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
+	const updatedEntries = h.sessionManager.getEntries().length;
+	const second = (await h.emit({ type: "context", messages: first.messages }, ctx)) as typeof first;
+	expect(second.messages.filter((m) => m.customType === "step-tasks-state")).toHaveLength(1);
+	expect(parse(second).counts).toMatchObject({ total: 2, completed: 1, pending: 1 });
+	expect(parse(second).openTasks).toEqual([expect.objectContaining({ id: "2", blockedBy: [] })]);
+	expect(h.sessionManager.getEntries()).toHaveLength(updatedEntries);
+});
+
+test("task context follows branch restoration and does not reactivate archived plans", async () => {
+	const h = createApi();
+	h.api.getActiveTools = () => ["task_list", "task_update"];
+	createStepTasksExtension()(h.api);
+	const ctx = createContext([], h.sessionManager);
+	await run(h.tools, "task_create", { subject: "Old plan work", description: "old" }, ctx);
+	const oldLeaf = h.sessionManager.getLeafId()!;
+	await run(h.tools, "task_create", { subject: "New request work", description: "new", newPlan: "New request" }, ctx);
+	const message = [{ role: "user", content: "Only work on this request", timestamp: 1 }];
+	const readState = async () => {
+		const result = (await h.emit({ type: "context", messages: message }, ctx)) as {
+			messages: Array<{ content: string }>;
+		};
+		return JSON.parse(
+			result.messages
+				.at(-1)!
+				.content.split("\n")
+				.find((line) => line.startsWith("{"))!,
+		);
+	};
+	expect((await readState()).openTasks.map((task: { id: string }) => task.id)).toEqual(["2"]);
+	h.sessionManager.branch(oldLeaf);
+	await h.emit({ type: "session_tree" }, ctx);
+	expect((await readState()).openTasks.map((task: { id: string }) => task.id)).toEqual(["1"]);
+	expect((await run(h.tools, "task_list", {}, ctx)) as unknown[]).toHaveLength(1);
+});
+
+test("disabled task tools remove stale task context without adding new instructions", async () => {
+	const h = createApi();
+	createStepTasksExtension()(h.api);
+	const ctx = createContext([], h.sessionManager);
+	await run(h.tools, "task_create", { subject: "Open", description: "work" }, ctx);
+	const keep = { role: "custom", customType: "other-extension", content: "Keep me", timestamp: 1, display: false };
+	const result = (await h.emit(
+		{
+			type: "context",
+			messages: [
+				keep,
+				{ role: "custom", customType: "step-tasks-state", content: "stale", timestamp: 0, display: false },
+			],
+		},
+		ctx,
+	)) as { messages: unknown[] };
+	expect(result?.messages).toEqual([keep]);
+});

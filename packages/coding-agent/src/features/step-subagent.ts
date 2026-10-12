@@ -28,7 +28,7 @@ import {
 	laneMatches,
 } from "./subagent/lane-lifecycle.ts";
 import {
-	laneWidgetLines,
+	renderAgentNotification,
 	renderSubagentResult,
 	SubagentListWidget,
 	subagentListSignature,
@@ -51,7 +51,7 @@ export { routeSubagentRpcLine } from "./subagent/rpc-adapter.ts";
 // moved to ./subagent/execute.ts and is imported above; it was never public.
 
 // TUI render helpers (statusIcon/renderRecordSummary/renderExpandedRecord/
-// renderSubagentResult/laneWidgetLines) moved to ./subagent/rendering.ts and
+// renderSubagentResult/renderAgentNotification) moved to ./subagent/rendering.ts and
 // are imported above; none were public.
 
 // Pure utilities (usage math, sanitizeLabel/normalizeChildTools, the git
@@ -156,7 +156,12 @@ export interface StepSubagentResultRecord extends StepSubagentRunResult {
 	agent: string;
 	agentSource: StepAgentConfig["source"] | "unknown";
 	task: string;
-	status: "running" | "completed" | "failed" | "aborted";
+	/**
+	 * `queued`: not started yet (a later chain step, or a parallel task waiting
+	 * on maxConcurrency). `skipped`: a chain step that never started because an
+	 * earlier step did not complete.
+	 */
+	status: "queued" | "running" | "completed" | "failed" | "aborted" | "skipped";
 	step?: number;
 	worktreePath?: string;
 	worktreeBranch?: string;
@@ -215,7 +220,7 @@ const StepAgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 
 const StepSubscribeSchema = StringEnum(["final", "progress", "none"] as const, {
 	description:
-		'Notification level for background lanes. "final" (default) sends one completion notification, "progress" adds throttled progress updates, "none" is fire-and-forget.',
+		'Notification level for background lanes. "final" (default) sends one completion notification, "progress" adds throttled progress updates, "none" is fire-and-forget. Except with "none", completion, failure, and needs-input notifications wake you automatically, so never sleep or poll to wait for a lane.',
 	default: "final",
 });
 
@@ -518,13 +523,65 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		if (process.env[CHILD_MARKER] === "1") return;
 
 		const lanes = new Map<string, BackgroundAgentLane>();
-		const laneWidgetKey = (id: string): string => `step-agent:${id}`;
+		// Every background lane shares one list widget, built the same way as the
+		// blocking call's list: a row per task with a fixed title and metrics. A
+		// widget per lane, republished on every streamed delta with the child's
+		// live text, reordered the lanes on each publish (the host re-inserts the
+		// key) and changed height as lines wrapped, so the block flickered.
+		//
+		// Lanes stay listed until the whole batch settles, so the header reads
+		// "2/4 complete" rather than shrinking as lanes finish; then it clears and
+		// the transcript's agent-notification entries take over.
+		//
+		// Elapsed is read from the clock at render time. A blocking call gets its
+		// redraws from the working indicator, but background lanes usually run
+		// while the parent sits idle, so a 1s tick keeps the column moving; the
+		// differential renderer only rewrites the cells that changed.
+		const lanesWidgetKey = "step-agent-lanes";
+		const shownLanes = new Set<string>();
+		let lanesWidget: SubagentListWidget | undefined;
+		let lanesPublished: string | undefined;
+		let lanesTicker: ReturnType<typeof setInterval> | undefined;
+		const stopLanesTicker = (): void => {
+			if (lanesTicker) clearInterval(lanesTicker);
+			lanesTicker = undefined;
+		};
 		const updateLaneWidget = (lane: BackgroundAgentLane): void => {
 			if (!lane.ctx.hasUI) return;
+			shownLanes.add(lane.id);
+			// `lanes` iterates in creation order; `shownLanes` in first-update order,
+			// which depends on which child streams first and would shuffle the rows.
+			const batch = [...lanes.values()].filter((entry) => shownLanes.has(entry.id));
 			try {
-				lane.ctx.ui.setWidget(laneWidgetKey(lane.id), laneWidgetLines(lane), {
-					placement: "aboveEditor",
-				});
+				if (batch.every((entry) => entry.status !== "running")) {
+					shownLanes.clear();
+					stopLanesTicker();
+					lanesWidget = undefined;
+					lanesPublished = undefined;
+					lane.ctx.ui.setWidget(lanesWidgetKey, undefined);
+					return;
+				}
+				const details: StepSubagentDetails = {
+					...lane.details,
+					mode: "parallel",
+					results: batch.flatMap((entry) => entry.details.results),
+				};
+				lanesWidget?.setDetails(details);
+				const signature = subagentListSignature(details);
+				if (signature === lanesPublished) return;
+				lanesPublished = signature;
+				lane.ctx.ui.setWidget(
+					lanesWidgetKey,
+					(tui, theme) => {
+						lanesWidget ??= new SubagentListWidget(details, theme, "background agents");
+						if (!lanesTicker) {
+							lanesTicker = setInterval(() => tui.requestRender(), 1_000);
+							lanesTicker.unref?.();
+						}
+						return lanesWidget;
+					},
+					{ placement: "aboveEditor" },
+				);
 			} catch {
 				// A host may tear down its UI while a detached child is finishing.
 			}
@@ -537,6 +594,8 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 				executeSubagent(runParams, signal, onUpdate, ctx, resolved, laneRuntime),
 			updateLaneWidget,
 		});
+
+		pi.registerMessageRenderer("agent-notification", renderAgentNotification);
 
 		pi.registerTool<typeof StepSubagentParamsSchema, StepSubagentDetails>({
 			name: "subagent",
@@ -576,7 +635,19 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 					const monitorHint =
 						lane.subscribe === "none"
 							? "Fire-and-forget lane: no notifications will be sent."
-							: `Lane events arrive automatically as <agent-notification> messages (subscribe: ${lane.subscribe}).`;
+							: [
+									// Without this the parent, told to "wait for the lanes", has no
+									// wait primitive and falls back to `sleep` loops: the lane result
+									// then sits behind a sleep of up to minutes, and each progress
+									// notice landing mid-sleep keeps the loop going.
+									"Do not wait for it with sleep or polling: end your turn, or carry on with other work.",
+									"You are woken automatically with an <agent-notification> when the lane finishes, fails, or needs input.",
+									lane.subscribe === "progress"
+										? "Progress <agent-notification> messages are informational; they need no reply."
+										: "",
+								]
+									.filter(Boolean)
+									.join(" ");
 					return makeToolResult(
 						details,
 						`Started background agent ${lane.id}${lane.alias ? ` (${lane.alias})` : ""}. ${monitorHint}`,

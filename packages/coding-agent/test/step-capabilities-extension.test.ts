@@ -76,6 +76,7 @@ function createApi(): {
 		registerCommand(name: string, command: { handler: (args: string, ctx: ExtensionContext) => unknown }) {
 			commands.set(name, command);
 		},
+		registerMessageRenderer: () => {},
 		registerFlag: () => {},
 		registerShortcut: () => {},
 		on(event: string, handler: (event: never, ctx: ExtensionContext) => unknown) {

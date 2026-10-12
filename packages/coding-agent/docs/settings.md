@@ -7,7 +7,7 @@ Step uses JSON settings files with project settings overriding global settings.
 | `~/.stepcode/agent/settings.json` | Global (all projects) |
 | `.stepcode/settings.json` | Project (current directory) |
 
-Edit directly or use `/settings` for common options. To save startup model defaults interactively, use `/model` and press Ctrl+S on the desired model. To save the startup thinking level, use `/thinking` and press Ctrl+S.
+Edit directly or use `/settings` for common options. To save startup model defaults interactively, use `/model` and press Ctrl+S on the desired model. To save the startup thinking level, use `/effort` and press Enter.
 
 ## Project Trust
 
@@ -29,7 +29,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 |---------|------|---------|-------------|
 | `defaultProvider` | string | - | Startup provider (e.g., `"anthropic"`, `"openai"`; saved with Ctrl+S in `/model`, or edited manually) |
 | `defaultModel` | string | - | Startup model ID (saved with Ctrl+S in `/model`, or edited manually) |
-| `defaultThinkingLevel` | string | - | Startup thinking level (saved with Ctrl+S in `/thinking`, or edited manually): `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
+| `defaultThinkingLevel` | string | - | Startup thinking level (saved with Enter in `/effort`, or edited manually): `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
 | `modelThinkingLevels` | object | - | Per-model startup thinking levels keyed by `"provider/modelId"`; configure from `/settings` → Default thinking level per model or edit manually |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses and compaction or branch-summary usage |
@@ -111,6 +111,8 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
+| `compaction.contextProjection` | string | `"clm-v1"` | CLM working view; `off` selects native compaction, `lightweight-v1` selects deterministic projection |
+| `compaction.autoClm.enabled` | boolean | `true` | Attempt bounded CLM maintenance before native compaction |
 
 ```json
 {
@@ -360,3 +362,19 @@ Project settings (`.stepcode/settings.json`) override global settings. Nested ob
   "compaction": { "enabled": true, "reserveTokens": 8192 }
 }
 ```
+
+### Model-managed context
+
+`compaction.contextProjection` defaults to `clm-v1` when automatic compaction is
+enabled. It also accepts `off` (native compaction) and `lightweight-v1`
+(deterministic request projection); explicit settings remain unchanged.
+Default CLM maintenance inherits native compaction's
+`contextWindow - compaction.reserveTokens` threshold and falls back to native
+compaction if no valid useful edit can be accepted.
+
+`compaction.autoClm.enabled = false` disables automatic CLM maintenance while
+retaining the working view, manual edits, and native compaction.
+`compaction.enabled = false` disables automatic compaction and implicit CLM.
+An explicit `contextProjection = "clm-v1"` retains manual CLM with automatic
+compaction disabled. See [Model-managed working context](context-management.md)
+for commands, maintenance bounds, cache behavior, and recovery.

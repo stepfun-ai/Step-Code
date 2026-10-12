@@ -126,7 +126,7 @@ describe("mandatory command approval", () => {
 	});
 
 	describe.each(STEP_PERMISSION_PRESETS)("$id policy", (preset) => {
-		it.each(["run_command", "bash", "powershell"])("cannot auto-approve %s with an allow override", (toolName) => {
+		it.each(["run_command", "bash", "powershell"])("resolves an allow override for %s under its tier", (toolName) => {
 			const decision = decideStepToolCall(
 				toolName,
 				{ command: "rm -rf ./build" },
@@ -134,8 +134,10 @@ describe("mandatory command approval", () => {
 				{ [toolName]: "allow" },
 			);
 			expect(decision).toMatchObject({
-				action: preset.mode === "strict" ? "deny" : "confirm",
-				hazardous: true,
+				// Full Access is the only tier that lets a detected dangerous
+				// command run; every other tier confirms it.
+				action: preset.skipCommandPolicy ? "allow" : "confirm",
+				...(preset.skipCommandPolicy ? {} : { hazardous: true }),
 			});
 		});
 
@@ -153,7 +155,8 @@ describe("mandatory command approval", () => {
 				input: { command: "rm -rf ./build", run_in_background: true },
 			};
 			const result = await controller.handleToolCall(event, { hasUI: false } as ExtensionContext);
-			expect(result).toMatchObject({ block: true, terminate: true });
+			if (preset.skipCommandPolicy) expect(result).toBeUndefined();
+			else expect(result).toMatchObject({ block: true, terminate: true });
 		});
 
 		it("preserves explicit tool denial without offering approval", async () => {
@@ -189,10 +192,10 @@ describe("mandatory command approval", () => {
 					input: { command: "rm -rf ./build" },
 				};
 				const result = await controller.handleToolCall(event, context);
-				if (preset.mode !== "strict" && approved) expect(result).toBeUndefined();
+				if (preset.skipCommandPolicy || approved) expect(result).toBeUndefined();
 				else expect(result).toMatchObject({ block: true });
 			}
-			expect(confirm).toHaveBeenCalledTimes(preset.mode === "strict" ? 0 : 2);
+			expect(confirm).toHaveBeenCalledTimes(preset.skipCommandPolicy ? 0 : 2);
 		});
 	});
 

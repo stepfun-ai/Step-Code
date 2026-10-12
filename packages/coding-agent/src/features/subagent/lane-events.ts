@@ -18,6 +18,35 @@ export type BackgroundLaneEvent =
 	| "background_progress"
 	| "background_restarted";
 
+/** Events that start a parent turn when the parent is idle. */
+const WAKING_EVENTS: ReadonlySet<BackgroundLaneEvent> = new Set([
+	"background_done",
+	"background_failed",
+	"background_interrupted",
+	"background_needs_input",
+]);
+
+/** `details` on an `<agent-notification>` message; read by its transcript renderer. */
+export interface AgentNotificationDetails {
+	agentId: string;
+	event: BackgroundLaneEvent;
+	status: BackgroundAgentLane["status"];
+	/** Alias when the lane has one, otherwise its id. */
+	label?: string;
+	/** Agent names running in the lane, e.g. ["general"]. */
+	agents?: string[];
+	/** Unescaped body below the headline (output, failure reasons, progress). */
+	detail?: string;
+}
+
+/**
+ * Cap on the lane output a final notification carries. The notification is the
+ * parent's only copy of the result (agent_send can reply or stop, not fetch),
+ * so it matches what a blocking call returns per task instead of a short
+ * preview the parent would have to dig back out of the child's session file.
+ */
+const LANE_OUTPUT_MAX_CHARS = 50_000;
+
 /** Minimum interval between background_progress notifications per lane. */
 const PROGRESS_NOTIFY_INTERVAL_MS = 15_000;
 
@@ -55,6 +84,14 @@ export function notifyLaneEvent(
 					? `Background agent ${label} restarted its child process.`
 					: `Background agent ${label} ${lane.status}.`;
 	const body = detail?.trim() ? `${headline}\n${detail.trim()}` : headline;
+	const details: AgentNotificationDetails = {
+		agentId: lane.id,
+		event,
+		status: lane.status,
+		label,
+		agents: [...new Set(lane.details.results.map((record) => record.agent))],
+		detail: detail?.trim() || undefined,
+	};
 	pi.sendMessage(
 		{
 			customType: "agent-notification",
@@ -66,10 +103,26 @@ export function notifyLaneEvent(
 			content:
 				`<agent-notification agentId="${escapeXmlAttr(lane.id)}" alias="${escapeXmlAttr(label)}" event="${event}" status="${lane.status}">` +
 				`${escapeXmlAttr(body)}</agent-notification>`,
-			display: true,
-			details: { agentId: lane.id, event, status: lane.status },
+			// Progress is for the parent model; the user already watches the lanes
+			// widget, and a transcript entry every 15s per lane buries the session.
+			display: event !== "background_progress",
+			details,
 		},
-		{ deliverAs: "steer" },
+		// A lane usually settles while the parent sits idle, waiting on it. A
+		// steer alone only appends the message then, so the model never reads the
+		// result until the user types again. Terminal and needs-input events wake
+		// the parent with a steer.
+		//
+		// Progress and restart notices must stay out of the steering queue. It
+		// drains one message per turn by default ("one-at-a-time"), and progress
+		// arrives every 15s per lane: while the parent sat in a long tool call
+		// (a 3-minute sleep, say) dozens queued up, the parent read one per turn,
+		// and the lanes' completion notices waited behind that backlog for over
+		// half an hour. A steer also forces another model call after the parent
+		// meant to stop. triggerTurn: false instead lands them as context:
+		// appended at once while idle, or batched in at the end of the running
+		// turn, which is the same boundary a steer would be injected at.
+		WAKING_EVENTS.has(event) ? { deliverAs: "steer", triggerTurn: true } : { triggerTurn: false },
 	);
 }
 
@@ -107,7 +160,7 @@ export function notifyLaneFinal(pi: ExtensionAPI, lane: BackgroundAgentLane): vo
 					.map(({ label, cause }) => `- ${label}: ${truncateText(cause, 400)}`)
 			: [];
 	const detail = [
-		output ? truncateText(output, 2_000) : "",
+		output ? truncateText(output, LANE_OUTPUT_MAX_CHARS) : "",
 		failureReasons.length > 0 ? `Failure reasons:\n${failureReasons.join("\n")}` : "",
 	]
 		.filter(Boolean)

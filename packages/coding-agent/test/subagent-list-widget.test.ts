@@ -141,7 +141,6 @@ test("wide glyphs are measured in display columns, so the metric column survives
 	const widget = new SubagentListWidget(
 		details([
 			record({
-				status: "completed",
 				startedAt: Date.now() - 259_000,
 				usage: { input: 0, output: 5100, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 2 },
 				task: "已获取全部所需数据，多个来源交叉验证一致。以下是查询结果，品种为黄金现货。",
@@ -158,6 +157,23 @@ test("wide glyphs are measured in display columns, so the metric column survives
 		// Both rows must still end in their metric, not in a clipped title.
 		expect(rows[0]).toMatch(/259s · ↓ 5\.1k tokens$/u);
 	}
+});
+
+test("a settled row keeps its final elapsed but drops the token readout", () => {
+	const now = Date.now();
+	const usage = { input: 0, output: 4100, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 3 };
+	const widget = new SubagentListWidget(
+		details([
+			record({ status: "completed", startedAt: now - 65_000, updatedAt: now, usage }),
+			record({ status: "failed", startedAt: now - 30_000, updatedAt: now, usage }),
+			record({ startedAt: now - 199_000, usage }),
+		]),
+		plainTheme,
+	);
+	const rows = widget.render(120).slice(1);
+	expect(rows[0]).toMatch(/ 65s$/u);
+	expect(rows[1]).toMatch(/ 30s$/u);
+	expect(rows[2]).toMatch(/199s · ↓ 4\.1k tokens$/u);
 });
 
 test("the metric column is a fixed width, so rows align regardless of value length", () => {
@@ -243,6 +259,7 @@ function harness(hasUI: boolean): {
 	const api = {
 		registerTool: (tool: { name: string }) => tools.set(tool.name, tool as never),
 		registerCommand: () => {},
+		registerMessageRenderer: () => {},
 		registerFlag: () => {},
 		registerShortcut: () => {},
 		on: () => {},

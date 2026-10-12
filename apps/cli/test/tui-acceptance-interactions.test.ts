@@ -2,7 +2,7 @@
  * TUI 验收交互套件（第 2 层）—— 对应《tui-acceptance-manual.md》F2/F6/F7/K6 项。
  *
  * 验证三件交互级行为（不经真实终端）：
- * - F2 斜杠命令优先级：model/permissions/ultracode/effort/thinking/plan 置顶，其余稳定排序；
+ * - F2 斜杠命令优先级：model/permissions/ultracode/effort/plan 置顶，其余稳定排序；
  * - F7/K6 Ctrl+L 重映射：step 模式 ctrl+l → app.redraw，model.select 让位；
  *   native 模式不受影响；用户显式绑定永远优先。
  */
@@ -26,7 +26,7 @@ import { applyStepKeybindingRemap, InteractiveMode, orderStepSlashCommands } fro
 
 describe("F2. 斜杠命令优先级", () => {
 	test("高频命令置顶，其余保持原有相对顺序", () => {
-		const builtins = ["settings", "model", "tree", "thinking", "effort", "export", "quit"].map((name) => ({
+		const builtins = ["settings", "model", "tree", "effort", "export", "quit"].map((name) => ({
 			name,
 		}));
 		const extensions = ["init", "permissions", "plugin", "plan", "status", "feedback"].map((name) => ({
@@ -35,9 +35,9 @@ describe("F2. 斜杠命令优先级", () => {
 
 		const ordered = orderStepSlashCommands([...builtins, ...extensions]).map((command) => command.name);
 
-		expect(ordered.slice(0, 5)).toEqual(["model", "permissions", "effort", "thinking", "plan"]);
+		expect(ordered.slice(0, 4)).toEqual(["model", "permissions", "effort", "plan"]);
 		// 未入优先级的命令保持传入顺序（稳定排序）
-		expect(ordered.slice(5)).toEqual(["settings", "tree", "export", "quit", "init", "plugin", "status", "feedback"]);
+		expect(ordered.slice(4)).toEqual(["settings", "tree", "export", "quit", "init", "plugin", "status", "feedback"]);
 	});
 
 	test("无优先级命中时原样返回", () => {
@@ -46,12 +46,12 @@ describe("F2. 斜杠命令优先级", () => {
 	});
 
 	test("pins registered Ultracode near the top while keeping Ultraloop in the remaining commands", () => {
-		const names = ["settings", "ultraloop", "model", "permissions", "effort", "thinking", "plan", "ultracode", "quit"];
+		const names = ["settings", "ultraloop", "model", "permissions", "effort", "plan", "ultracode", "quit"];
 		const commands = names.map((name) => ({ name }));
 		const ordered = orderStepSlashCommands(commands).map((command) => command.name);
 
-		expect(ordered.slice(0, 6)).toEqual(["model", "permissions", "ultracode", "effort", "thinking", "plan"]);
-		expect(ordered.slice(6)).toEqual(["settings", "ultraloop", "quit"]);
+		expect(ordered.slice(0, 5)).toEqual(["model", "permissions", "ultracode", "effort", "plan"]);
+		expect(ordered.slice(5)).toEqual(["settings", "ultraloop", "quit"]);
 		expect(commands.map((command) => command.name)).toEqual(names);
 	});
 
@@ -150,10 +150,10 @@ describe("Ultracode discovery from session registration", () => {
 		const suggestions = await provider.getSuggestions(["/"], 0, 1, { signal: new AbortController().signal });
 		const names = suggestions!.items.map((item) => item.value);
 
-		expect(names.slice(0, 6)).toEqual(["model", "permissions", "ultracode", "effort", "thinking", "plan"]);
+		expect(names.slice(0, 5)).toEqual(["model", "permissions", "ultracode", "effort", "plan"]);
 		expect(names.filter((name) => name === "ultracode")).toHaveLength(1);
 		expect(names.filter((name) => name === "ultraloop")).toHaveLength(1);
-		expect(names.indexOf("ultraloop")).toBeGreaterThan(5);
+		expect(names.indexOf("ultraloop")).toBeGreaterThan(4);
 	});
 
 	test("does not add unavailable workflow commands to bare slash completion", async () => {

@@ -3,7 +3,7 @@
  *
  * Pi owns the canonical settings schema and its global/project merge rules.
  * Step adds a small product-owned namespace in a sidecar file so product
- * policy (for example `ask`/`autopilot`) does not leak into Pi's settings
+ * policy (for example `ask`/`approve-for-me`) does not leak into Pi's settings
  * schema. The returned object is a transparent decorator: every Pi method is
  * still available and is invoked against the original SettingsManager.
  */
@@ -33,6 +33,12 @@ export interface StepSettings {
 	nonInteractiveApproval?: StepNonInteractiveApproval;
 	/** Enables the bounded model-error continuation ladder. */
 	autoResume?: boolean;
+	/**
+	 * The user accepted the Full Access risk with "don't ask again". Recorded
+	 * separately from the active preset so leaving Full Access does not force a
+	 * second acknowledgment when it is selected again.
+	 */
+	fullAccessAcknowledged?: boolean;
 	/** Enables the user feedback submission flow. Defaults to enabled. */
 	feedbackEnabled?: boolean;
 }
@@ -132,7 +138,19 @@ function merge(base: JsonObject, overrides: JsonObject): JsonObject {
 	return result;
 }
 
-function normalizeSettings(value: JsonObject): StepSettings {
+/** Old saved policies must not silently authorize one of the new automatic tiers. */
+export function resetLegacyPermissionSettings(settings: StepSettings, rawPreset?: string, rawMode?: string): void {
+	const preset = rawPreset?.trim().toLowerCase();
+	const retired = ["bypass", "auto", "autopilot", "bypasspermissions", "read-only", "readonly", "strict", "plan"];
+	if (!(preset && retired.includes(preset)) && !(rawPreset === undefined && rawMode !== undefined)) return;
+	settings.permissionPreset = "ask";
+	settings.approvalMode = "confirm";
+	settings.nonInteractiveApproval = "deny";
+	settings.autoResume = false;
+	delete settings.fullAccessAcknowledged;
+}
+
+function normalizeSettings(value: JsonObject, resetLegacy = true): StepSettings {
 	const result: StepSettings = {};
 	// Older Step configs used both a top-level `approval` object and a nested
 	// `tools.approval` object. Keep both candidates in precedence order, but do
@@ -140,21 +158,25 @@ function normalizeSettings(value: JsonObject): StepSettings {
 	const approval = asObject(value.approval);
 	const toolsApproval = asObject(asObject(value.tools)?.approval);
 	const presetCandidates = [value.permissionPreset, value.permissionMode, approval?.preset, toolsApproval?.preset];
+	let winningPresetCandidate: string | undefined;
 	for (const candidate of presetCandidates) {
 		if (typeof candidate !== "string") continue;
 		const preset = getStepPermissionPreset(candidate);
 		if (preset) {
 			result.permissionPreset = preset.id;
+			winningPresetCandidate = candidate;
 			break;
 		}
 	}
 
 	const modeCandidates = [value.approvalMode, approval?.mode, toolsApproval?.mode];
+	let winningModeCandidate: string | undefined;
 	for (const candidate of modeCandidates) {
 		if (typeof candidate !== "string") continue;
 		const mode = normalizeStepPermissionMode(candidate);
 		if (mode) {
 			result.approvalMode = mode;
+			winningModeCandidate = candidate;
 			break;
 		}
 	}
@@ -191,6 +213,18 @@ function normalizeSettings(value: JsonObject): StepSettings {
 		}
 	}
 
+	const fullAccessAcknowledgedCandidates = [
+		value.fullAccessAcknowledged,
+		approval?.fullAccessAcknowledged,
+		toolsApproval?.fullAccessAcknowledged,
+	];
+	for (const candidate of fullAccessAcknowledgedCandidates) {
+		if (typeof candidate === "boolean") {
+			result.fullAccessAcknowledged = candidate;
+			break;
+		}
+	}
+
 	const feedbackEnabledCandidates = [value.feedbackEnabled, asObject(value.feedback)?.enabled];
 	for (const candidate of feedbackEnabledCandidates) {
 		if (typeof candidate === "boolean") {
@@ -198,7 +232,22 @@ function normalizeSettings(value: JsonObject): StepSettings {
 			break;
 		}
 	}
+	if (resetLegacy) resetLegacyPermissionSettings(result, winningPresetCandidate, winningModeCandidate);
 	return result;
+}
+
+function savedPermissionSelection(value: JsonObject): { preset?: string; mode?: string } {
+	const approval = asObject(value.approval);
+	const nested = asObject(asObject(value.tools)?.approval);
+	const preset = [value.permissionPreset, value.permissionMode, approval?.preset, nested?.preset].find(
+		(candidate): candidate is string =>
+			typeof candidate === "string" && getStepPermissionPreset(candidate) !== undefined,
+	);
+	const mode = [value.approvalMode, approval?.mode, nested?.mode].find(
+		(candidate): candidate is string =>
+			typeof candidate === "string" && normalizeStepPermissionMode(candidate) !== undefined,
+	);
+	return { preset, mode };
 }
 
 const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
@@ -206,6 +255,7 @@ const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
 	approvalMode: [],
 	nonInteractiveApproval: ["noninteractiveApproval"],
 	autoResume: ["autopilot"],
+	fullAccessAcknowledged: [],
 	feedbackEnabled: [],
 };
 
@@ -229,6 +279,10 @@ const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly
 		["approval", "autopilot"],
 		["tools", "approval", "autoResume"],
 		["tools", "approval", "autopilot"],
+	],
+	fullAccessAcknowledged: [
+		["approval", "fullAccessAcknowledged"],
+		["tools", "approval", "fullAccessAcknowledged"],
 	],
 	feedbackEnabled: [["feedback", "enabled"]],
 };
@@ -260,12 +314,7 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	if (settings.permissionPreset !== undefined && !getStepPermissionPreset(settings.permissionPreset)) {
 		throw new Error(`Invalid Step permission preset: ${String(settings.permissionPreset)}`);
 	}
-	if (
-		settings.approvalMode !== undefined &&
-		settings.approvalMode !== "confirm" &&
-		settings.approvalMode !== "strict" &&
-		settings.approvalMode !== "auto"
-	) {
+	if (settings.approvalMode !== undefined && settings.approvalMode !== "confirm" && settings.approvalMode !== "auto") {
 		throw new Error(`Invalid Step approval mode: ${String(settings.approvalMode)}`);
 	}
 	if (
@@ -277,6 +326,9 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	}
 	if (settings.autoResume !== undefined && typeof settings.autoResume !== "boolean") {
 		throw new Error(`Invalid Step autoResume setting: ${String(settings.autoResume)}`);
+	}
+	if (settings.fullAccessAcknowledged !== undefined && typeof settings.fullAccessAcknowledged !== "boolean") {
+		throw new Error(`Invalid Step fullAccessAcknowledged setting: ${String(settings.fullAccessAcknowledged)}`);
 	}
 	if (settings.feedbackEnabled !== undefined && typeof settings.feedbackEnabled !== "boolean") {
 		throw new Error(`Invalid Step feedbackEnabled setting: ${String(settings.feedbackEnabled)}`);
@@ -484,10 +536,17 @@ class StepSettingsDecorator {
 		// global canonical field (for example `feedbackEnabled`) survives the raw
 		// object merge and outranks the equivalent project alias
 		// (`feedback.enabled`) during normalization.
-		return {
-			...normalizeSettings(this.store.getGlobal()),
-			...normalizeSettings(this.store.getProject()),
-		};
+		const global = this.store.getGlobal();
+		const project = this.store.getProject();
+		const settings = { ...normalizeSettings(global, false), ...normalizeSettings(project, false) };
+		const localPolicy = savedPermissionSelection(project);
+		const policy =
+			localPolicy.preset !== undefined || localPolicy.mode !== undefined
+				? localPolicy
+				: savedPermissionSelection(global);
+		// A partial project setting must not reactivate a migrated legacy grant.
+		resetLegacyPermissionSettings(settings, policy.preset, policy.mode);
+		return settings;
 	}
 
 	getStepGlobalSettings(): StepSettings {
@@ -540,7 +599,7 @@ class StepSettingsDecorator {
 	}
 
 	setStepApprovalMode(mode: StepPermissionMode | undefined): void {
-		if (mode !== undefined && mode !== "confirm" && mode !== "strict" && mode !== "auto") {
+		if (mode !== undefined && mode !== "confirm" && mode !== "auto") {
 			throw new Error(`Invalid Step approval mode: ${String(mode)}`);
 		}
 		this.setEffectiveStepSettings({ approvalMode: mode });

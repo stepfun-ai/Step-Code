@@ -557,7 +557,9 @@ describe("AgentSession compaction characterization", () => {
 		};
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
+			settings: {
+				compaction: { contextProjection: "off", enabled: true, reserveTokens: 400, keepRecentTokens: 1750 },
+			},
 			tools: [terminatingTool],
 			extensionFactories: [
 				(pi) => {
@@ -749,7 +751,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("compacts successful overflow responses without retrying", async () => {
 		const harness = await createHarness({
-			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			settings: { compaction: { contextProjection: "off", enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
 			extensionFactories: [
 				(pi) => {
@@ -817,7 +819,7 @@ describe("AgentSession compaction characterization", () => {
 	});
 
 	it("triggers threshold compaction for error messages using the last successful usage", async () => {
-		const harness = await createHarness();
+		const harness = await createHarness({ settings: { compaction: { contextProjection: "off" } } });
 		harnesses.push(harness);
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 		const successfulAssistant = createAssistant(harness, {

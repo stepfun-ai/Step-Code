@@ -302,10 +302,12 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				keepLatestTaskUpdateResult(ctx.chatContainer, event.toolCallId, component, event.isError);
 				ctx.pendingTools.delete(event.toolCallId);
 				ctx.stepSpinner?.stop(event.toolCallId);
-				// 工具结束不立刻降级动词：瞬时工具（read ~300ms）的动词如果
-				// 立刻换回 Working... 肉眼不可感知。保持最后动作，直到下一
-				// 个工具开始 / 模型思考 / 4s tick 自然过渡——刚完成的动作
-				// 停留显示不算谎言，看不见才是问题。
+				if (ctx.presentation === "step") {
+					ctx.workingOutputTracker.notifyToolEnded();
+					if (ctx.activeStatusIndicator instanceof WorkingStatusIndicator) {
+						ctx.activeStatusIndicator.refreshVerb();
+					}
+				}
 				ctx.redraw.requestRender();
 			}
 			break;
@@ -347,6 +349,27 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				ctx.session.abortCompaction();
 			};
 			ctx.showStatusIndicator(new CompactionStatusIndicator(ctx.ui, event.reason, ctx.presentation));
+			ctx.redraw.requestRender();
+			break;
+		}
+
+		case "auto_clm_start": {
+			if (ctx.settingsManager.getShowTerminalProgress()) ctx.ui.terminal.setProgress(true);
+			ctx.autoCompactionEscapeHandler = ctx.defaultEditor.onEscape;
+			ctx.defaultEditor.onEscape = () => ctx.session.abortCompaction();
+			ctx.showStatusIndicator(new CompactionStatusIndicator(ctx.ui, "threshold", ctx.presentation));
+			ctx.redraw.requestRender();
+			break;
+		}
+
+		case "auto_clm_end": {
+			if (ctx.settingsManager.getShowTerminalProgress()) ctx.ui.terminal.setProgress(false);
+			if (ctx.autoCompactionEscapeHandler) {
+				ctx.defaultEditor.onEscape = ctx.autoCompactionEscapeHandler;
+				ctx.autoCompactionEscapeHandler = undefined;
+			}
+			ctx.clearStatusIndicator("compaction");
+			void ctx.flushCompactionQueue({ willRetry: true });
 			ctx.redraw.requestRender();
 			break;
 		}

@@ -81,7 +81,7 @@ function getLiveLaneSessions(sessionId: string | undefined): StepSubagentRpcSess
 }
 
 function laneStatusFromDetails(details: StepSubagentDetails): BackgroundAgentLane["status"] {
-	if (details.results.some((record) => record.status === "running")) {
+	if (details.results.some((record) => record.status === "running" || record.status === "queued")) {
 		return "running";
 	}
 	if (details.results.some((record) => record.status === "failed")) {

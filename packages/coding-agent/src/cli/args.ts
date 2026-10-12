@@ -65,10 +65,10 @@ export interface Args {
 	updateCheck?: boolean;
 	tuiMode?: TuiMode;
 	verbose?: boolean;
-	/** Request-time lightweight context projection mode (step.compaction.contextProjection). */
-	contextProjection?: "off" | "lightweight-v1";
+	/** Context projection mode (step.compaction.contextProjection). */
+	contextProjection?: "off" | "lightweight-v1" | "clm-v1";
 	projectTrustOverride?: boolean;
-	/** Step tool approval mode (confirm, auto, or strict). */
+	/** Step tool approval mode (confirm or auto). */
 	approvalMode?: StepPermissionMode;
 	/** Fallback for approval requests when no interactive UI is available. */
 	nonInteractiveApproval?: StepNonInteractiveApproval;
@@ -245,15 +245,15 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--approval-mode" || arg.startsWith("--approval-mode=")) {
 			const value = arg === "--approval-mode" ? args[i + 1] : arg.slice("--approval-mode=".length);
 			if (arg === "--approval-mode" && (value === undefined || value.startsWith("-"))) {
-				result.diagnostics.push({ type: "error", message: "--approval-mode requires confirm, auto, or strict" });
+				result.diagnostics.push({ type: "error", message: "--approval-mode requires confirm or auto" });
 			} else {
 				if (arg === "--approval-mode") i++;
-				if (value === "confirm" || value === "auto" || value === "strict") {
+				if (value === "confirm" || value === "auto") {
 					result.approvalMode = value;
 				} else {
 					result.diagnostics.push({
 						type: "error",
-						message: `Invalid approval mode "${value}". Valid values: confirm, auto, strict`,
+						message: `Invalid approval mode "${value}". Valid values: confirm, auto`,
 					});
 				}
 			}
@@ -516,16 +516,19 @@ export function parseArgs(args: string[]): Args {
 			result.verbose = true;
 		} else if (arg === "--context-projection") {
 			const mode = args[i + 1];
-			if (mode === "off" || mode === "lightweight-v1") {
+			if (mode === "off" || mode === "lightweight-v1" || mode === "clm-v1") {
 				result.contextProjection = mode;
 				i++;
 			} else if (mode === undefined || mode.startsWith("-")) {
-				result.diagnostics.push({ type: "error", message: "--context-projection requires off or lightweight-v1" });
+				result.diagnostics.push({
+					type: "error",
+					message: "--context-projection requires off, lightweight-v1, or clm-v1",
+				});
 			} else {
 				i++;
 				result.diagnostics.push({
 					type: "error",
-					message: `Invalid context projection mode "${mode}". Valid values: off, lightweight-v1`,
+					message: `Invalid context projection mode "${mode}". Valid values: off, lightweight-v1, clm-v1`,
 				});
 			}
 		} else if (arg === "--approve" || arg === "-a") {
@@ -595,14 +598,15 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 				"  STEP_BASE_URL                    Step provider API base URL",
 				"  STEPCODE_DEFAULT_THEME           Default interactive theme for step",
 				"  STEPCODE_DISABLE_PI_SERVICES     Disable upstream update/catalog services (enabled by step)",
-				"  STEP_APPROVAL_MODE               Default tool approval mode (confirm|auto|strict)",
+				"  STEP_APPROVAL_MODE               Default tool approval mode (confirm|auto)",
 				"  STEP_NON_INTERACTIVE_APPROVAL    Fallback when no approval UI is available (allow|deny)",
 				"  STEP_NON_INTERACTIVE_DENIAL      Blocked call without a UI (terminate|continue)",
 				"  STEP_AUTOPILOT                   Enable bounded model-error auto-resume",
+				"  STEP_PERMISSION_PRESET           Permission tier (ask|approve-for-me|full-access)",
 			].join("\n")
 		: "";
 	const stepPermissionOptionsText = IS_STEP_ENTRYPOINT
-		? "\n  --approval-mode <mode>           Tool approval mode: confirm, auto, or strict\n  --non-interactive-approval <mode> Fallback without a UI: allow or deny\n  --non-interactive-denial <mode>  Blocked call without a UI: terminate the run or continue\n  --tool-override <tool=mode>       Per-tool override (repeatable; mode: allow, confirm, deny)"
+		? "\n  --approval-mode <mode>           Tool approval mode: confirm or auto\n  --non-interactive-approval <mode> Fallback without a UI: allow or deny\n  --non-interactive-denial <mode>  Blocked call without a UI: terminate the run or continue\n  --tool-override <tool=mode>       Per-tool override (repeatable; mode: allow, confirm, deny)"
 		: "";
 	const stepAuthCommandsText = IS_STEP_ENTRYPOINT
 		? `\n  ${APP_NAME} login                       Sign in with the Step account (OAuth)\n  ${APP_NAME} logout                      Remove the stored Step credential`
@@ -692,7 +696,7 @@ ${stepPermissionOptionsText}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
-  --context-projection <mode>    Request-time context projection: off (default) or lightweight-v1
+  --context-projection <mode>    Context projection: clm-v1 (default), lightweight-v1, or off
   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run

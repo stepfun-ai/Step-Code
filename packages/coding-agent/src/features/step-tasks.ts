@@ -12,6 +12,7 @@ import type { AgentToolResult } from "@step-harness/agent-core";
 import { Type } from "typebox";
 import type { EventBus } from "../core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
+import { withTaskStateContext } from "./step-tasks-context.ts";
 import { parseImportBatch, STEP_TASKS_IMPORT_CHANNEL, type StepTaskImportItem } from "./step-tasks-import.ts";
 import { formatTaskLine, renderTaskCall, renderTaskResult } from "./step-tasks-render.ts";
 
@@ -281,6 +282,16 @@ export function createStepTasksExtension(): ExtensionFactory {
 				owner: task.owner,
 				blockedBy: openBlockers(task),
 			}));
+
+		pi.on("context", (event) => ({
+			messages: withTaskStateContext(
+				event.messages,
+				pi.getActiveTools().some((name) => ["task_create", "task_update", "task_get", "task_list"].includes(name))
+					? { plan: activePlan, tasks: listTasks() }
+					: undefined,
+				Date.now(),
+			),
+		}));
 
 		pi.registerCommand("todos", {
 			description: "Show the session task list",
