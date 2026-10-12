@@ -127,6 +127,20 @@ export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): 
 		const smoke = await verifyBinary(stagedBinary, targetVersion);
 		if (!smoke.ok) throw new Error(smoke.message);
 		await replaceInstallation(installDir, stagedBinary, archiveRoot, binaryName, tempRoot);
+		// Run the installed version's preparation code, never the old updater's
+		// manifest assumptions. Optional resources must not roll back a good Step.
+		try {
+			const child = spawn(path.join(installDir, binaryName), ["mcp", "prepare"], { env, stdio: "inherit" });
+			const code = await waitForChildProcess(child);
+			if (code !== 0)
+				process.stderr.write(
+					"Warning: StepPage is not ready; Step remains usable. Run step mcp prepare to retry.\n",
+				);
+		} catch (error) {
+			process.stderr.write(
+				`Warning: StepPage preparation failed; Step remains usable. ${error instanceof Error ? error.message : String(error)}\n`,
+			);
+		}
 		process.stdout.write(`Updated Step from ${currentVersion} to ${targetVersion}.\n`);
 		return 0;
 	} catch (error) {

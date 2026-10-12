@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -251,7 +251,7 @@ test("install.sh persists PATH via a guarded, env-var-honoring # stepcode block 
 		"written block must self-guard so sourcing it twice does not double-prepend",
 	);
 	assert.ok(
-		rendered.includes('export PATH="%s:%s/bin:$PATH"'),
+		rendered.includes('export PATH="%s:$PATH"') && rendered.includes('export PATH="%s/bin:$PATH"'),
 		"export must use the resolved INSTALL_DIR/AGENT_DIR (honors STEP_INSTALL_DIR/STEP_CODING_AGENT_DIR)",
 	);
 	assert.ok(rendered.includes('fish_add_path "%s" "%s/bin"'), "fish must be configured via fish_add_path");
@@ -264,6 +264,61 @@ const powershellShell = commandAvailable("pwsh", "--version")
 	: commandAvailable("powershell", "-Help")
 		? "powershell"
 		: null;
+
+test(
+	"install.sh persists inherited PATH and preserves malformed user blocks",
+	{ skip: commandAvailable("bash", "--version") ? false : "bash unavailable" },
+	async () => {
+		const source = await readFile(shPath, "utf8");
+		const functions = ["path_hint", "profile_targets", "strip_step_block", "configure_shell_path"].map((name) => {
+			const match = source.match(new RegExp(name + String.raw`\(\) \{[\s\S]*?\n\}`));
+			assert.ok(match, `missing ${name}`);
+			return match[0];
+		});
+		const root = await mkdtemp(join(tmpdir(), "step-installer-path-"));
+		try {
+			const installDir = join(root, "custom-bin");
+			await mkdir(installDir);
+			await writeFile(join(installDir, "step"), "#!/bin/sh\nexit 0\n");
+			await chmod(join(installDir, "step"), 0o755);
+			await writeFile(join(root, ".zshrc"), "export USER_SETTING=keep\n");
+			const script = join(root, "test.sh");
+			await writeFile(script, `set -euo pipefail\n${functions.join("\n")}\nconfigure_shell_path\nconfigure_shell_path\n`);
+			const env = {
+				HOME: root, SHELL: "/bin/zsh", PATH: `${installDir}:/usr/bin:/bin`,
+				INSTALL_DIR: installDir, AGENT_DIR: join(root, "agent"),
+			};
+			const result = spawnSync("bash", [script], {
+				encoding: "utf8",
+				env,
+			});
+			assert.equal(result.status, 0, result.stderr);
+			const profile = await readFile(join(root, ".zshrc"), "utf8");
+			assert.equal(profile.match(/^# stepcode$/gm)?.length, 1);
+			assert.match(profile, /USER_SETTING=keep/);
+			const fresh = spawnSync("/bin/sh", ["-c", '. "$HOME/.zshrc"; . "$HOME/.zshrc"; command -v step'], {
+				encoding: "utf8", env: { HOME: root, PATH: "/usr/bin:/bin" },
+			});
+			assert.equal(fresh.status, 0, fresh.stderr);
+			assert.equal(fresh.stdout.trim(), join(installDir, "step"));
+			const malformed = "# stepcode\nexport USER_SETTING=keep\n";
+			await writeFile(join(root, ".zshrc"), malformed);
+			const preserved = spawnSync("bash", [script], { encoding: "utf8", env });
+			assert.equal(preserved.status, 0, preserved.stderr);
+			assert.equal(await readFile(join(root, ".zshrc"), "utf8"), malformed);
+			assert.match(preserved.stderr, /left it unchanged/);
+			await rm(join(root, ".zshrc"));
+			const unsafe = spawnSync("bash", [script], {
+				encoding: "utf8", env: { ...env, INSTALL_DIR: `${root}/unsafe\\` },
+			});
+			assert.equal(unsafe.status, 0, unsafe.stderr);
+			assert.match(unsafe.stderr, /unsafe to write/);
+			await assert.rejects(readFile(join(root, ".zshrc")), { code: "ENOENT" });
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
 
 test(
 	"Get-MissingPathEntries is idempotent, null-safe, and normalizes case/trailing-backslash (pwsh)",
@@ -387,7 +442,7 @@ ${match[0]}
 printf 'keep1\n\n# stepcode\nexport PATH=x\n# stepcode end\nkeep2\n' > "$1"
 strip_step_block "$1"
 printf '# stepcode\nexport IMPORTANT=keepme\nalias a=b\n' > "$2"
-strip_step_block "$2"
+if strip_step_block "$2"; then exit 1; fi
 printf 'WELL:%s\n' "$(tr '\n' '|' < "$1")"
 printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
 `;

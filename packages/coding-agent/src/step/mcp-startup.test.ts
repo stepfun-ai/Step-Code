@@ -1,14 +1,18 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+
 import { createEventBus } from "../core/event-bus.ts";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../core/extensions/loader.ts";
 import type { ExtensionMode } from "../core/extensions/types.ts";
 import type { StepConfigDocument } from "./config-toml.ts";
+
 import {
 	ambiguousPluginServerNames,
 	bareServerName,
@@ -20,21 +24,53 @@ import {
 	resolveStepMcpServer,
 } from "./mcp.ts";
 
+import type { StepPageReadiness } from "./steppage-provision.ts";
+
 const config = vi.hoisted(() => ({ value: {} as StepConfigDocument }));
+const builtin = vi.hoisted(() => ({ enabled: false, disabledUser: false }));
+const preinstall = vi.hoisted(() => vi.fn<() => Promise<{ installed: []; warnings: string[] }>>());
+const readiness = vi.hoisted(() => vi.fn<(input: { signal?: AbortSignal }) => Promise<StepPageReadiness>>());
 vi.mock("./config-toml.ts", () => ({ readGlobalStepConfig: () => config.value }));
 const pluginMocks = vi.hoisted(() => ({
 	dirs: [] as string[],
 	manifests: new Map<string, unknown>(),
 }));
 vi.mock("./plugins.ts", () => ({
-	defaultStepPluginsDir: () => "/unused-test-plugins",
-	listStepPluginDirectories: async () => pluginMocks.dirs,
-	readStepPluginManifest: async (dir: string) => ({ manifest: pluginMocks.manifests.get(dir), errors: [] }),
-	ensureBuiltinPluginsInstalled: async () => ({ installed: [], warnings: [] }),
+	defaultStepPluginsDir: (_env: unknown, options?: { project?: boolean }) =>
+		options?.project ? "/unused-project-plugins" : "/unused-test-plugins",
+	listStepPluginDirectories: async (root: string) => (builtin.enabled ? [`${root}/steppage`] : pluginMocks.dirs),
+	readStepPluginManifest: async (directory: string) => ({
+		manifest: builtin.enabled
+			? {
+					id: "steppage",
+					provision: { command: "steppage-mcp", installer: "steppageInstaller" },
+					mcpServers: {
+						steppage: {
+							command: "steppage-mcp",
+							cwd: process.cwd(),
+							enabled: !(builtin.disabledUser && directory.startsWith("/unused-test-plugins")),
+						},
+					},
+				}
+			: pluginMocks.manifests.get(directory),
+		errors: [],
+	}),
+	ensureBuiltinPluginsInstalled: preinstall,
 	provisionBuiltinPlugin: async () => undefined,
+}));
+vi.mock("./steppage-provision.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./steppage-provision.ts")>()),
+	ensureStepPageReady: readiness,
 }));
 vi.mock("./mcp-oauth.ts", () => ({ hasStoredMcpOAuthCredential: () => false }));
 const cleanups: Array<() => Promise<void>> = [];
+beforeEach(() => {
+	config.value = {};
+	builtin.enabled = false;
+	builtin.disabledUser = false;
+	preinstall.mockReset().mockResolvedValue({ installed: [], warnings: [] });
+	readiness.mockReset();
+});
 afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 	pluginMocks.dirs = [];
@@ -520,4 +556,132 @@ test("a config.toml http_headers value is sent verbatim, not interpolated", asyn
 	const discovered = await discoverStepMcpServers(process.cwd(), false);
 	const found = discovered.find((server) => server.name === "literal");
 	expect(found?.declaration.http_headers?.Authorization).toBe(literal);
+});
+
+test.skipIf(process.platform === "win32")(
+	"StepPage waits for preparation before spawning while peers remain usable",
+	async () => {
+		vi.stubEnv("STEPCODE_STEPPAGE_INSTALLER_URL", "https://example.invalid/setup.sh");
+		vi.stubEnv("STEP_TEST_SETUP_SECRET", "setup-only");
+		const root = await mkdtemp(join(tmpdir(), "step-mcp-preparation-"));
+		cleanups.push(() => rm(root, { recursive: true, force: true }));
+		const command = join(root, "peer");
+		const started = join(root, "started");
+		await writeFile(
+			command,
+			`#!${process.execPath}
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(started)}, JSON.stringify({
+  setupSecret: process.env.STEP_TEST_SETUP_SECRET ?? null,
+  installerUrl: process.env.STEPCODE_STEPPAGE_INSTALLER_URL ?? null,
+}));
+require("node:readline").createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const result = message.method === "initialize"
+    ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } }
+    : { tools: [{ name: "ready", inputSchema: { type: "object" } }] };
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n");
+});
+`,
+		);
+		await chmod(command, 0o755);
+		let release = (_result: StepPageReadiness) => {};
+		readiness.mockImplementation(
+			() =>
+				new Promise<StepPageReadiness>((resolve) => {
+					release = resolve;
+				}),
+		);
+		builtin.enabled = true;
+		const peer = await slowServer();
+		config.value = { mcp_servers: { peer: { url: peer.url } } };
+		const harness = await setup("tui");
+		await harness.start();
+		await vi.waitFor(() => expect(readiness).toHaveBeenCalledOnce());
+		expect(readiness).toHaveBeenCalledWith(
+			expect.objectContaining({
+				env: expect.objectContaining({
+					STEPCODE_STEPPAGE_INSTALLER_URL: "https://example.invalid/setup.sh",
+					STEP_TEST_SETUP_SECRET: "setup-only",
+				}),
+			}),
+		);
+		peer.release();
+		await vi.waitFor(() => expect(harness.extension.tools.size).toBe(1));
+		await expect(readFile(started)).rejects.toMatchObject({ code: "ENOENT" });
+		expect(getStepMcpStatuses()).toContainEqual({ name: "steppage__steppage", status: "connecting", toolCount: 0 });
+		release({ command, installed: true });
+		await vi.waitFor(() => expect(harness.extension.tools.size).toBe(2));
+		expect(JSON.parse(await readFile(started, "utf8"))).toEqual({ setupSecret: null, installerUrl: null });
+		expect(getStepMcpStatuses()).toContainEqual({ name: "steppage__steppage", status: "connected", toolCount: 1 });
+		expect(harness.notify).not.toHaveBeenCalled();
+	},
+);
+
+test("StepPage preparation failure reports the remedy before spawning a missing command", async () => {
+	builtin.enabled = true;
+	readiness.mockResolvedValue({
+		installed: false,
+		error: "StepPage is not ready: Node.js >= 20 is required. Run step mcp prepare.",
+	});
+	const harness = await setup("print");
+	await harness.start();
+	expect(getStepMcpStatuses()[0]?.status).toBe("failed");
+	expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining("Node.js >= 20"), "warning");
+});
+
+test("an explicit global disable suppresses the builtin server", async () => {
+	builtin.enabled = true;
+	config.value = { mcp_servers: { steppage__steppage: { enabled: false } } };
+	expect(await discoverStepMcpServers(process.cwd(), false)).toEqual([]);
+	expect(readiness).not.toHaveBeenCalled();
+});
+
+test("a custom global StepPage server bypasses automatic preparation", async () => {
+	builtin.enabled = true;
+	const peer = await slowServer();
+	config.value = { mcp_servers: { steppage__steppage: { url: peer.url } } };
+	const harness = await setup("tui");
+	await harness.start();
+	peer.release();
+	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(1));
+	expect(readiness).not.toHaveBeenCalled();
+});
+
+test("a user-level disable cannot be revived by a trusted project's plugin copy", async () => {
+	builtin.enabled = true;
+	builtin.disabledUser = true;
+	expect(await discoverStepMcpServers(process.cwd(), true)).toEqual([]);
+});
+
+test("a global declaration of the default command retains builtin preparation metadata", async () => {
+	builtin.enabled = true;
+	config.value = { mcp_servers: { steppage__steppage: { command: "steppage-mcp", env: { CUSTOM_VALUE: "keep" } } } };
+	const servers = await discoverStepMcpServers(process.cwd(), false);
+	expect(servers).toHaveLength(1);
+	expect(servers[0].provision).toEqual({ command: "steppage-mcp", installer: "steppageInstaller" });
+	expect(servers[0].declaration.env).toEqual({ CUSTOM_VALUE: "keep" });
+	readiness.mockResolvedValue({ installed: false, error: "StepPage is not ready: test prerequisite" });
+	const harness = await setup("print");
+	await harness.start();
+	expect(readiness).toHaveBeenCalledOnce();
+	expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining("test prerequisite"), "warning");
+});
+
+test("shutdown suppresses late warnings from manifest preinstallation", async () => {
+	let release = (_result: { installed: []; warnings: string[] }) => {};
+	preinstall.mockImplementation(
+		() =>
+			new Promise((resolve) => {
+				release = resolve;
+			}),
+	);
+	const harness = await setup("tui");
+	await harness.start();
+	await vi.waitFor(() => expect(preinstall).toHaveBeenCalledOnce());
+	const shutdown = harness.stop();
+	release({ installed: [], warnings: ["late manifest warning"] });
+	await shutdown;
+	expect(harness.notify).not.toHaveBeenCalled();
 });

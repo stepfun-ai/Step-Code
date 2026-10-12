@@ -7,7 +7,8 @@
 import type { AgentToolResult } from "@step-harness/agent-core";
 import type { Component } from "@step-harness/pi-tui";
 import { Container, Markdown, Spacer, Text, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
-import type { ToolRenderResultOptions } from "../../core/extensions/types.ts";
+import type { MessageRenderOptions, ToolRenderResultOptions } from "../../core/extensions/types.ts";
+import type { CustomMessage } from "../../core/messages.ts";
 import type { Theme } from "../../theme/theme.ts";
 import { getMarkdownTheme } from "../../theme/theme.ts";
 import {
@@ -17,8 +18,7 @@ import {
 	type StepSubagentResultRecord,
 	type StepSubagentUsage,
 } from "../step-subagent.ts";
-import { truncateText } from "./lane-events.ts";
-import type { BackgroundAgentLane } from "./lane-lifecycle.ts";
+import { type AgentNotificationDetails, truncateText } from "./lane-events.ts";
 
 const COLLAPSED_OUTPUT_LINES = 8;
 /** Rows the live widget will show before collapsing the rest into a counter. */
@@ -53,14 +53,31 @@ function formatElapsed(record: StepSubagentResultRecord): string {
 function statusIcon(status: StepSubagentResultRecord["status"], theme: Theme): string {
 	if (status === "running") return theme.fg("warning", "~");
 	if (status === "completed") return theme.fg("success", "\u2713");
+	if (status === "queued") return theme.fg("dim", "\u00b7");
+	if (status === "skipped") return theme.fg("dim", "-");
 	return theme.fg("error", "x");
+}
+
+function chainHeading(records: readonly StepSubagentResultRecord[]): string {
+	const index = records.findIndex(
+		(record) => record.status !== "completed" && record.status !== "queued" && record.status !== "skipped",
+	);
+	if (index !== -1) return `${records[index].status} at step ${index + 1}/${records.length}`;
+	const completed = records.filter((record) => record.status === "completed").length;
+	return completed === records.length
+		? `${completed}/${records.length} steps completed`
+		: `queued at step ${completed + 1}/${records.length}`;
 }
 
 function renderRecordSummary(record: StepSubagentResultRecord, theme: Theme): string {
 	const output =
 		record.activeText ||
 		finalOutput(record.messages) ||
-		(record.status === "running" ? "(running...)" : resultText(record));
+		(record.status === "running"
+			? "(running...)"
+			: record.status === "queued" || record.status === "skipped"
+				? `(${record.status})`
+				: resultText(record));
 	const lines = output.split(/\r?\n/u).filter((line) => line.trim().length > 0);
 	const preview = lines.slice(-COLLAPSED_OUTPUT_LINES).join("\n");
 	const omitted = Math.max(0, lines.length - COLLAPSED_OUTPUT_LINES);
@@ -181,10 +198,12 @@ export function subagentListSignature(details: StepSubagentDetails): string {
 export class SubagentListWidget implements Component {
 	private details: StepSubagentDetails;
 	private readonly theme: Theme;
+	private readonly title: string;
 
-	constructor(details: StepSubagentDetails, theme: Theme) {
+	constructor(details: StepSubagentDetails, theme: Theme, title = "subagent") {
 		this.details = details;
 		this.theme = theme;
+		this.title = title;
 	}
 
 	setDetails(details: StepSubagentDetails): void {
@@ -201,17 +220,24 @@ export class SubagentListWidget implements Component {
 		const theme = this.theme;
 		const running = records.filter((record) => record.status === "running").length;
 		const completed = records.filter((record) => record.status === "completed").length;
-		const failed = records.length - running - completed;
+		const queued = records.filter((record) => record.status === "queued").length;
+		const skipped = records.filter((record) => record.status === "skipped").length;
+		const failed = records.length - running - completed - queued - skipped;
 		const summary = [`${completed}/${records.length} complete`];
 		if (running > 0) summary.push(`${running} running`);
+		if (queued > 0) summary.push(`${queued} queued`);
 		if (failed > 0) summary.push(`${failed} failed`);
-		const header = ` ${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", summary.join(", "))}`;
+		if (skipped > 0) summary.push(`${skipped} skipped`);
+		const header = ` ${theme.fg("toolTitle", theme.bold(this.title))} ${theme.fg("accent", summary.join(", "))}`;
 		const lines = [visibleWidth(header) > width ? truncateToWidth(header, width, "\u2026") : header];
 
 		// Right column is sized across all shown rows so the metrics line up.
 		const shown = records.slice(0, WIDGET_MAX_ROWS);
 		const metrics = shown.map((record) => {
-			const tokens = record.usage.output;
+			// Tokens are a liveness readout for a lane still producing output; once
+			// it settles the row keeps only its final elapsed, so finished rows read
+			// as done at a glance instead of as one more counter.
+			const tokens = record.status === "running" ? record.usage.output : 0;
 			// Same shape as the working indicator's "· ↓ 1.2k tokens", so the two
 			// token readouts on screen read as one unit.
 			return `${formatElapsed(record)}${tokens > 0 ? ` \u00b7 \u2193 ${formatTokenCount(tokens)} tokens` : ""}`;
@@ -255,11 +281,14 @@ export function renderSubagentResult(
 		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 	}
 	const running = details.results.filter((record) => record.status === "running").length;
+	const queued = details.results.filter((record) => record.status === "queued").length;
 	const completed = details.results.filter((record) => record.status === "completed").length;
 	const heading =
 		details.mode === "parallel"
-			? `${completed}/${details.results.length} complete${running > 0 ? `, ${running} running` : ""}`
-			: (details.results[0]?.status ?? "done");
+			? `${completed}/${details.results.length} complete${running > 0 ? `, ${running} running` : ""}${queued > 0 ? `, ${queued} queued` : ""}`
+			: details.mode === "chain"
+				? chainHeading(details.results)
+				: (details.results[0]?.status ?? "done");
 	if (options.expanded) {
 		const container = new Container();
 		container.addChild(new Text(`${theme.bold("agent")} ${theme.fg("accent", heading)}`, 0, 0));
@@ -275,24 +304,44 @@ export function renderSubagentResult(
 	return new Text(text, 0, 0);
 }
 
-export function laneWidgetLines(lane: BackgroundAgentLane): string[] {
-	const records = lane.details.results;
-	const lines = [
-		`agent ${lane.id} ${lane.status}`,
-		...records.map((record) => {
-			const live = record.activeTool
-				? ` | ${record.activeTool}`
-				: record.activeText
-					? ` | ${record.activeText.split(/\r?\n/u).at(-1)?.slice(0, 100) ?? ""}`
-					: "";
-			return `${statusIcon(record.status, themeForWidget)} ${record.agent}${live}`;
-		}),
-	];
-	return lines;
-}
+const NOTIFICATION_PREVIEW_LINES = 3;
 
-// Widgets receive the same color callback shape as the native renderer. Keep
-// this tiny fallback local so background lanes can also be shown in test hosts.
-const themeForWidget = {
-	fg: (_color: string, text: string): string => text,
-} as unknown as Theme;
+const NOTIFICATION_STYLE: Record<
+	AgentNotificationDetails["event"],
+	{ icon: string; color: "success" | "error" | "warning" | "dim"; verb: string }
+> = {
+	background_done: { icon: "\u2713", color: "success", verb: "finished" },
+	background_failed: { icon: "x", color: "error", verb: "failed" },
+	background_interrupted: { icon: "x", color: "warning", verb: "interrupted" },
+	background_needs_input: { icon: "?", color: "warning", verb: "needs input" },
+	background_progress: { icon: "~", color: "dim", verb: "progress" },
+	background_restarted: { icon: "~", color: "warning", verb: "restarted its child process" },
+};
+
+/**
+ * Transcript entry for an `<agent-notification>` message: one status line plus
+ * a short preview of the detail, instead of the raw pseudo-XML the parent model
+ * reads. Returns undefined for messages without structured details (sessions
+ * recorded before they were added), which keeps the host's default rendering.
+ */
+export function renderAgentNotification(
+	message: CustomMessage<AgentNotificationDetails>,
+	options: MessageRenderOptions,
+	theme: Theme,
+): Component | undefined {
+	const details = message.details;
+	const style = details?.event ? NOTIFICATION_STYLE[details.event] : undefined;
+	if (!details || !style) return undefined;
+	const label = details.label ?? details.agentId;
+	const agents = details.agents?.length ? ` ${theme.fg("muted", `(${details.agents.join(", ")})`)}` : "";
+	let text = `${theme.fg(style.color, style.icon)} ${theme.fg("toolTitle", theme.bold("background agent"))} ${theme.fg("accent", label)}${agents} ${theme.fg(style.color, style.verb)}`;
+	const lines = (details.detail ?? "").split(/\r?\n/u).filter((line) => line.trim().length > 0);
+	const shown = options.expanded ? lines : lines.slice(0, NOTIFICATION_PREVIEW_LINES);
+	for (const line of shown) {
+		text += `\n  ${theme.fg("dim", options.expanded ? line : truncateText(line, 200).split("\n")[0])}`;
+	}
+	if (shown.length < lines.length) {
+		text += `\n  ${theme.fg("dim", `... ${lines.length - shown.length} more lines (Ctrl+O to expand)`)}`;
+	}
+	return new Text(text, options.outputPad, 0);
+}

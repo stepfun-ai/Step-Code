@@ -29,6 +29,7 @@ import { contentText } from "@step-harness/providers";
 import type {
 	AssistantMessage,
 	AuthResult,
+	Context,
 	ImageContent,
 	Message,
 	Model,
@@ -70,6 +71,13 @@ import {
 	projectContextForRequest,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { AutoClmController, type AutoClmResult } from "./compaction/live-context/auto-compaction.ts";
+import { digestMessages } from "./compaction/live-context/document.ts";
+import {
+	LiveContextManager,
+	type LiveContextOutcome,
+	type LiveContextStatus,
+} from "./compaction/live-context/manager.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -101,7 +109,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
-import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
@@ -117,7 +125,7 @@ import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts"
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { boundToolResultContent } from "./tools/tool-output.ts";
-import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
+import { addUsageToTotals, createUsageTotals, getAutoClmUsage } from "./usage-totals.ts";
 
 export { type ParsedSkillBlock, parseSkillBlock } from "../utils/skill-block.ts";
 
@@ -130,6 +138,9 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 	  }
 	| { type: "agent_settled" }
+	| { type: "live_context"; outcome: LiveContextOutcome }
+	| { type: "auto_clm_start"; reason: "native-threshold" | "soft-threshold" }
+	| { type: "auto_clm_end"; result: AutoClmResult }
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -332,6 +343,21 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _liveContext?: LiveContextManager;
+	private _liveContextStream?: Agent["streamFunction"];
+	private _liveContextBaseStream?: Agent["streamFunction"];
+	private _lastClmRequest?: {
+		sessionId: string;
+		modelKey: string;
+		revision: number;
+		sourceLength: number;
+		sourceDigest: string;
+		context: Context;
+	};
+	private _autoClm?: AutoClmController;
+	private _autoClmAbortController?: AbortController;
+	private _manualClm = false;
+	private _nativeThresholdBoundary?: string;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -405,6 +431,7 @@ export class AgentSession {
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
 		this._installContextProjection();
+		this._installLiveContext();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -416,7 +443,10 @@ export class AgentSession {
 		return this._modelRuntime;
 	}
 
-	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
+	private async _getRequiredRequestAuth(
+		model: Model<any>,
+		signal?: AbortSignal,
+	): Promise<{
 		model: Model<any>;
 		apiKey?: string;
 		headers?: Record<string, string>;
@@ -424,7 +454,7 @@ export class AgentSession {
 	}> {
 		let result: AuthResult | undefined;
 		try {
-			result = await this._modelRuntime.getAuth(model);
+			result = await this._modelRuntime.getAuth(model, { signal });
 		} catch (error) {
 			const cause = error instanceof Error ? error.cause : undefined;
 			if (cause instanceof Error && cause.message === "authHeader requires a resolved API key") {
@@ -453,18 +483,24 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
-	private async _getSummarizationRequestAuth(model: Model<any>): Promise<{
+	private async _getSummarizationRequestAuth(
+		model: Model<any>,
+		signal?: AbortSignal,
+	): Promise<{
 		model: Model<any>;
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
 	}> {
-		if (this.agent.streamFunction === streamSimple) {
-			return this._getRequiredRequestAuth(model);
+		if (
+			this.agent.streamFunction === streamSimple ||
+			(this.agent.streamFunction === this._liveContextStream && this._liveContextBaseStream === streamSimple)
+		) {
+			return this._getRequiredRequestAuth(model, signal);
 		}
 
 		try {
-			const result = await this._modelRuntime.getAuth(model);
+			const result = await this._modelRuntime.getAuth(model, { signal });
 			if (!result) return { model };
 			const requestModel = result.auth.baseUrl ? { ...model, baseUrl: result.auth.baseUrl } : model;
 			return {
@@ -474,6 +510,7 @@ export class AgentSession {
 				env: result.env,
 			};
 		} catch {
+			signal?.throwIfAborted();
 			return { model };
 		}
 	}
@@ -538,15 +575,31 @@ export class AgentSession {
 			const normalizedContent = await normalizeToolResultImages(content, {
 				autoResizeImages: this.settingsManager.getImageAutoResize(),
 			});
+			const details = hookResult?.details ?? result.details;
+			const finalIsError = hookResult?.isError ?? isError;
+			const view = this._getLiveContext()?.boundReadOutput(
+				{ toolName: toolCall.name, args, content: normalizedContent, isError: finalIsError, details },
+				this._cwd,
+			);
+			const finalContent = view?.content ?? normalizedContent;
+			const finalDetails =
+				view && (details == null || (typeof details === "object" && !Array.isArray(details)))
+					? {
+							...(details as Record<string, unknown> | undefined),
+							truncation: undefined,
+							stepTruncated: undefined,
+							liveContextRead: { kind: view.kind },
+						}
+					: details;
 
-			if (!hookResult && normalizedContent === content) {
+			if (!hookResult && finalContent === content) {
 				return undefined;
 			}
 
 			return {
-				content: normalizedContent,
-				details: hookResult?.details,
-				isError: hookResult?.isError ?? isError,
+				content: finalContent,
+				details: finalDetails,
+				isError: finalIsError,
 				usage: hookResult?.usage,
 			};
 		};
@@ -558,8 +611,9 @@ export class AgentSession {
 
 		if (
 			!model ||
+			this._blocksNativeThreshold() ||
 			model.contextWindow <= 0 ||
-			!shouldCompact(estimateContextTokens(context.messages).tokens, model.contextWindow, settings)
+			!shouldCompact(this._workingContextTokens(context), model.contextWindow, settings)
 		) {
 			return context;
 		}
@@ -578,7 +632,16 @@ export class AgentSession {
 				? async (_turn: PrepareNextTurnContext, signal?: AbortSignal) => await this.agent.prepareNextTurn?.(signal)
 				: undefined);
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
-			const context = await this._compactBeforeNextAssistantResponse(turn.context);
+			const previousCompaction = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+			const automatic = await this._runAutomaticClm(turn.context, signal);
+			let context = turn.context;
+			if (!automatic?.attempted) {
+				context = await this._compactBeforeNextAssistantResponse(turn.context);
+			} else if (getLatestCompactionEntry(this.sessionManager.getBranch())?.id !== previousCompaction) {
+				// Only native compaction rebuilds canonical state. Keep parser-resampling
+				// exclusions in the loop context while CLM overlays its existing prefix.
+				context = { ...turn.context, messages: this.agent.state.messages.slice() };
+			}
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.({ ...turn, context }, signal);
 			const nextContext = previousSnapshot?.context ?? context;
 
@@ -599,7 +662,7 @@ export class AgentSession {
 	 * Wrap the agent's `convertToLlm` with request-time lightweight context
 	 * projection. Runs right before each model request, after the base
 	 * AgentMessage -> Message conversion. Controlled by
-	 * `step.compaction.contextProjection` and off by default; the session
+	 * `step.compaction.contextProjection = "lightweight-v1"`; the session
 	 * transcript is never modified, only the outgoing request messages.
 	 */
 	private _installContextProjection(): void {
@@ -640,6 +703,350 @@ export class AgentSession {
 			// convertToLlm must never throw; fall back to the unprojected messages.
 			return llmMessages;
 		}
+	}
+
+	private _getLiveContext(): LiveContextManager | undefined {
+		if (this.settingsManager.getContextProjectionMode() !== "clm-v1") return undefined;
+		this._liveContext ??= new LiveContextManager(this.sessionManager, { directory: this._agentDir });
+		return this._liveContext;
+	}
+
+	private _nativeThresholdKey(): string {
+		const boundary = [...this.sessionManager.getBranch()]
+			.reverse()
+			.find(
+				(entry) =>
+					entry.type === "message" ||
+					entry.type === "compaction" ||
+					entry.type === "branch_summary" ||
+					(entry.type === "custom" && entry.customType === "step-live-context"),
+			);
+		return `${this.sessionId}:${this.model?.provider}/${this.model?.id}:${boundary?.id ?? "root"}:${digestMessages(this.agent.state.messages)}`;
+	}
+
+	private _blocksNativeThreshold(): boolean {
+		return (
+			this.settingsManager.getContextProjectionMode() === "clm-v1" &&
+			this._nativeThresholdBoundary !== undefined &&
+			this._nativeThresholdBoundary === this._nativeThresholdKey()
+		);
+	}
+
+	/** Reuse only a proven unchanged actor prefix; request-local metadata stays historical data. */
+	private _cachedClmContext(context: AgentContext): Context | undefined {
+		const cached = this._lastClmRequest;
+		const live = this._getLiveContext();
+		const canonical = this.agent.state.messages;
+		if (
+			!cached ||
+			!live ||
+			cached.sessionId !== this.sessionId ||
+			cached.modelKey !== `${this.model?.provider}/${this.model?.id}` ||
+			cached.revision !== live.status().revision ||
+			cached.sourceLength > canonical.length ||
+			digestMessages(context.messages) !== digestMessages(canonical) ||
+			digestMessages(canonical.slice(0, cached.sourceLength)) !== cached.sourceDigest
+		)
+			return undefined;
+		const system = (context.systemPrompt ?? "") + live.guidance(this._liveContextGuidanceOptions());
+		const tools = this.agent.state.tools.map(({ name, description, parameters }) => ({
+			name,
+			description,
+			parameters,
+		}));
+		if (
+			cached.context.systemPrompt !== system ||
+			JSON.stringify(cached.context.tools ?? []) !== JSON.stringify(tools)
+		)
+			return undefined;
+		const reused = JSON.parse(JSON.stringify(cached.context)) as Context;
+		delete reused.estimatedInputTokens;
+		reused.messages.push(...convertToLlm(canonical.slice(cached.sourceLength)));
+		return reused;
+	}
+
+	/** Maintenance is a separate model request at a safe boundary, never a recursive task prompt. */
+	private async _runAutomaticClm(
+		context: AgentContext,
+		signal?: AbortSignal,
+		incoming: AgentMessage[] = [],
+	): Promise<AutoClmResult | undefined> {
+		const live = this._getLiveContext();
+		const settings = this.settingsManager.getAutoClmSettings();
+		const model = this.model;
+		const interrupted = () =>
+			this.agent.hasQueuedMessages() ||
+			this.pendingMessageCount > 0 ||
+			this._pendingCustomMessages.length > 0 ||
+			!this.settingsManager.getCompactionEnabled() ||
+			!this.settingsManager.getAutoClmSettings().enabled ||
+			this.settingsManager.getContextProjectionMode() !== "clm-v1" ||
+			this.model?.provider !== model?.provider ||
+			this.model?.id !== model?.id;
+		if (
+			!live ||
+			!model ||
+			!settings.enabled ||
+			!this.settingsManager.getCompactionEnabled() ||
+			this._manualClm ||
+			this._autoClmAbortController ||
+			this._blocksNativeThreshold() ||
+			signal?.aborted ||
+			interrupted()
+		)
+			return undefined;
+		const tokens = this._workingContextTokens({ ...context, messages: [...context.messages, ...incoming] });
+		const native = this.settingsManager.getCompactionSettings();
+		if (
+			tokens < settings.minContextTokens ||
+			tokens >= model.contextWindow ||
+			(!shouldCompact(tokens, model.contextWindow, native) &&
+				(settings.softThresholdRatio === undefined || tokens < model.contextWindow * settings.softThresholdRatio))
+		)
+			return undefined;
+		this._autoClm ??= new AutoClmController(this.sessionManager, live);
+		const controller = new AbortController();
+		this._autoClmAbortController = controller;
+		let result: AutoClmResult;
+		try {
+			result = await this._autoClm.run({
+				context,
+				cachedContext: this._cachedClmContext(context),
+				canonical: this.agent.state.messages,
+				incoming,
+				model,
+				thinkingLevel: this.thinkingLevel,
+				settings,
+				reserveTokens: native.reserveTokens,
+				stream: this.agent.streamFunction,
+				resolveAuth: (maintenanceSignal) => this._getSummarizationRequestAuth(model, maintenanceSignal),
+				onPayload: this.agent.onPayload,
+				onResponse: this.agent.onResponse,
+				controller,
+				signal,
+				isInterrupted: interrupted,
+				currentCanonical: () => this.agent.state.messages,
+				onStart: (reason) => this._emit({ type: "auto_clm_start", reason }),
+			});
+		} catch (error) {
+			live.invalidate();
+			result = {
+				attempted: true,
+				accepted: false,
+				fallback: !signal?.aborted && !controller.signal.aborted && !interrupted(),
+				reason: error instanceof Error ? error.message : String(error),
+				requests: 0,
+			};
+		} finally {
+			this._autoClmAbortController = undefined;
+		}
+		if (!result.attempted) return result;
+		if (result.outcome) this._emit({ type: "live_context", outcome: result.outcome });
+		this._emit({ type: "auto_clm_end", result });
+		if (result.fallback && !signal?.aborted && !interrupted()) {
+			await this._runAutoCompaction("threshold", false);
+		}
+		return result;
+	}
+
+	private _workingContextTokens(context: AgentContext): number {
+		const live = this._getLiveContext();
+		if (!live) return estimateContextTokens(context.messages).tokens;
+		return live.estimate({
+			systemPrompt: context.systemPrompt + live.guidance(this._liveContextGuidanceOptions()),
+			messages: convertToLlm(live.project(context.messages)),
+			tools: context.tools,
+		});
+	}
+
+	private _liveContextGuidanceOptions(): { automaticMaintenance: boolean } {
+		return {
+			automaticMaintenance:
+				this.settingsManager.getCompactionEnabled() &&
+				this.settingsManager.getAutoClmSettings().enabled &&
+				!this._manualClm,
+		};
+	}
+
+	private _installLiveContext(): void {
+		const transform = this.agent.transformContext;
+		this.agent.transformContext = async (raw, signal) => {
+			const live = this._getLiveContext();
+			if (!live) return transform ? transform(raw, signal) : raw;
+			let projected = live.project(raw);
+			try {
+				projected = await live.prepare(raw, this.agent.state.messages);
+			} catch (error) {
+				live.invalidate();
+				this._emit({
+					type: "live_context",
+					outcome: {
+						accepted: false,
+						revision: live.status().revision,
+						reason: `Could not prepare context mirror: ${error instanceof Error ? error.message : String(error)}`,
+					},
+				});
+			}
+			const messages = transform ? await transform(projected, signal) : projected;
+			const notice = live.takeNotice();
+			const guidanceOptions = this._liveContextGuidanceOptions();
+			const pressure = live.budgetNotice(
+				live.estimate({
+					systemPrompt: this.systemPrompt + live.guidance(guidanceOptions),
+					messages: convertToLlm(messages),
+					tools: this.agent.state.tools,
+				}),
+				this.model?.contextWindow ?? 0,
+				guidanceOptions,
+			);
+			return notice || pressure
+				? [...messages, ...(notice ? [notice] : []), ...(pressure ? [pressure] : [])]
+				: messages;
+		};
+		const stream = this.agent.streamFunction;
+		this._liveContextBaseStream = stream;
+		this._liveContextStream = (model, context, options) => {
+			const live = this._getLiveContext();
+			if (!live || this.isCompacting || this._branchSummaryAbortController) return stream(model, context, options);
+			const request = {
+				...context,
+				systemPrompt: (context.systemPrompt ?? "") + live.guidance(this._liveContextGuidanceOptions()),
+			};
+			try {
+				this._lastClmRequest = {
+					sessionId: this.sessionId,
+					modelKey: `${model.provider}/${model.id}`,
+					revision: live.status().revision,
+					sourceLength: this.agent.state.messages.length,
+					sourceDigest: digestMessages(this.agent.state.messages),
+					context: JSON.parse(
+						JSON.stringify({
+							...request,
+							tools: request.tools?.map(({ name, description, parameters }) => ({
+								name,
+								description,
+								parameters,
+							})),
+						}),
+					) as Context,
+				};
+			} catch {
+				// An uncacheable context must not prevent an ordinary model request.
+				this._lastClmRequest = undefined;
+			}
+			return stream(
+				model,
+				{
+					...request,
+					estimatedInputTokens: live.recordRequest(request, `${model.provider}/${model.id}`),
+				},
+				options,
+			);
+		};
+		this.agent.streamFunction = this._liveContextStream;
+	}
+
+	getLiveContextStatus(): LiveContextStatus | undefined {
+		const live = this._getLiveContext();
+		if (!live) return undefined;
+		live.project(this.agent.state.messages);
+		return {
+			...live.status(),
+			tokens: this._workingContextTokens({
+				systemPrompt: this.systemPrompt,
+				messages: this.agent.state.messages,
+				tools: this.agent.state.tools,
+			}),
+		};
+	}
+
+	private async _handleLiveContextCommand(name: string, args: string): Promise<boolean> {
+		if (name !== "clm" && name !== "clm-compact") return false;
+		const ctx = this._extensionRunner.createCommandContext();
+		const action = name === "clm-compact" ? "compact" : args.trim() || "status";
+		if ((action === "on" || action === "off" || action === "reset" || action === "compact") && !this.isIdle) {
+			ctx.ui.notify("Wait for the current run to settle before changing working context.", "warning");
+			return true;
+		}
+		if (action === "on" || action === "off") {
+			this._liveContext?.invalidate();
+			this.settingsManager.applyOverrides({ compaction: { contextProjection: action === "on" ? "clm-v1" : "off" } });
+			ctx.ui.notify(`CLM working context ${action === "on" ? "enabled" : "disabled"} for this session.`, "info");
+			return true;
+		}
+		const live = this._getLiveContext();
+		if (!live) {
+			ctx.ui.notify("CLM is off. Use /clm on or --context-projection clm-v1.", "info");
+			return true;
+		}
+		live.project(this.agent.state.messages);
+		if (action === "compact") {
+			const instructions = name === "clm-compact" ? args.trim() : "";
+			await live.prepare(this.agent.state.messages);
+			const index = readFileSync(live.status().indexPath, "utf8");
+			const recipe = [
+				"Example atomic body replacement in a Python-capable shell (equivalent code in another available runtime is fine):",
+				"from pathlib import Path",
+				"import re",
+				`p = Path(${JSON.stringify(live.status().path)})`,
+				'replacements = {"ID_FROM_INDEX": "Your concise summary preserving exact useful findings"}',
+				'text = p.read_bytes().decode("utf-8")',
+				String.raw`parts = re.split(r"(?m)(^\[\[CTX_TURN [^\n]*\]\]\n)", text)`,
+				"seen = set()",
+				"for i in range(1, len(parts), 2):",
+				'    key = re.search(r" id=([A-Za-z0-9-]+) ", parts[i]).group(1)',
+				"    if key in replacements:",
+				'        assert "protected=false" in parts[i]',
+				String.raw`        parts[i + 1] = replacements[key] + ("\n\n" if i + 2 < len(parts) else "")`,
+				"        seen.add(key)",
+				"assert seen == set(replacements), 'Re-read the index if selected IDs changed'",
+				'p.write_bytes("".join(parts).encode("utf-8"))',
+				"print('Updated', len(seen), 'context blocks')",
+			].join("\n");
+			const previousStop = this.agent.shouldStopAfterTurn;
+			let currentTurn: AssistantMessage | undefined;
+			let acceptedTurn: AssistantMessage | undefined;
+			let acceptedRevision: number | undefined;
+			const stopAfterEdit: NonNullable<Agent["shouldStopAfterTurn"]> = async (turn, signal) => {
+				const previousResult = await previousStop?.(turn, signal);
+				return previousResult === true || turn.message === acceptedTurn;
+			};
+			this.agent.shouldStopAfterTurn = stopAfterEdit;
+			this._manualClm = true;
+			const unsubscribe = this.subscribe((event) => {
+				if (event.type === "turn_end" && event.message.role === "assistant") currentTurn = event.message;
+				if (event.type !== "live_context" || !event.outcome.accepted || acceptedTurn) return;
+				acceptedTurn = currentTurn;
+				acceptedRevision = event.outcome.revision;
+				// The active loop has captured stopAfterEdit; queued user continuations
+				// must use the caller's original policy when they start a new loop.
+				if (this.agent.shouldStopAfterTurn === stopAfterEdit) this.agent.shouldStopAfterTurn = previousStop;
+			});
+			try {
+				await this.prompt(
+					`Organize your working context using the current index below. The conversation is already in context; no preliminary mirror read is needed. Select useful reductions and make one atomic batched edit of ${JSON.stringify(live.status().path)} with ordinary tools. Read and write the current file inside the same tool call, preserving metadata and headers. Retain the user's requirements, exact findings, failed approaches and remaining work. Keep protected messages and tool-call groups intact. Use actual IDs and your own summaries in the example. Once an edit is accepted, finish briefly. If no useful safe edit is available, explain that briefly.${instructions ? ` Additional guidance: ${instructions}` : ""}\n\n${index}\n\n${recipe}`,
+					{ expandPromptTemplates: false },
+				);
+			} finally {
+				this._manualClm = false;
+				unsubscribe();
+				if (this.agent.shouldStopAfterTurn === stopAfterEdit) this.agent.shouldStopAfterTurn = previousStop;
+			}
+			if (acceptedRevision !== undefined)
+				ctx.ui.notify(`Working context revision ${acceptedRevision} accepted.`, "info");
+		} else if (action === "reset") {
+			live.reset();
+			ctx.ui.notify("Working context reset. The next request uses the current session history.", "info");
+		} else if (action === "diff") {
+			ctx.ui.notify(live.diff(), "info");
+		} else if (action === "status") {
+			const status = this.getLiveContextStatus()!;
+			ctx.ui.notify(
+				`CLM revision ${status.revision}; ~${status.tokens} context tokens.\nIndex: ${status.indexPath}\nMirror: ${status.path}\nArchive: ${status.archiveDirectory}`,
+				"info",
+			);
+		} else ctx.ui.notify("Usage: /clm [status|on|off|diff|reset] or /clm-compact [instructions]", "warning");
+		return true;
 	}
 
 	// =========================================================================
@@ -753,6 +1160,7 @@ export class AgentSession {
 			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
 				this._lastAssistantMessage = event.message;
+				this._getLiveContext()?.observeUsage(event.message);
 
 				const assistantMsg = event.message as AssistantMessage;
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
@@ -779,6 +1187,11 @@ export class AgentSession {
 		// handlers queued.
 		if (event.type === "turn_end") {
 			this._flushPendingCustomMessages();
+			const outcome = await this._getLiveContext()?.accept(
+				this.agent.state.messages,
+				signal ?? this._agentRunAbortController?.signal,
+			);
+			if (outcome) this._emit({ type: "live_context", outcome });
 		}
 	};
 
@@ -974,6 +1387,7 @@ export class AgentSession {
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
+		this._liveContext?.dispose();
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
@@ -1097,10 +1511,16 @@ export class AgentSession {
 	/** Whether compaction or branch summarization is currently running */
 	get isCompacting(): boolean {
 		return (
+			this._autoClmAbortController !== undefined ||
 			this._autoCompactionAbortController !== undefined ||
 			this._compactionAbortController !== undefined ||
 			this._branchSummaryAbortController !== undefined
 		);
+	}
+
+	/** Automatic CLM keeps task input in the ordinary queue so user steering can interrupt it. */
+	get isAutoClmCompacting(): boolean {
+		return this._autoClmAbortController !== undefined;
 	}
 
 	/** All messages including custom types like BashExecutionMessage */
@@ -1218,6 +1638,29 @@ export class AgentSession {
 		this._agentRunAbortController = runAbortController;
 		this._isAgentRunActive = true;
 		try {
+			const incoming = Array.isArray(messages) ? messages : [messages];
+			const context = {
+				systemPrompt: this.systemPrompt,
+				messages: this.agent.state.messages,
+				tools: this.agent.state.tools,
+			};
+			const automatic = await this._runAutomaticClm(context, runAbortController.signal, incoming);
+			if (
+				!automatic?.attempted &&
+				!runAbortController.signal.aborted &&
+				!this.agent.hasQueuedMessages() &&
+				this.pendingMessageCount === 0 &&
+				this._getLiveContext() &&
+				this.model &&
+				shouldCompact(
+					this._workingContextTokens({ ...context, messages: [...context.messages, ...incoming] }),
+					this.model.contextWindow,
+					this.settingsManager.getCompactionSettings(),
+				)
+			) {
+				await this._runAutoCompaction("threshold", false);
+			}
+			if (runAbortController.signal.aborted) return;
 			await this.agent.prompt(messages);
 			while (
 				!runAbortController.signal.aborted &&
@@ -1262,6 +1705,20 @@ export class AgentSession {
 				finalError: msg.errorMessage,
 			});
 			this._retryAttempt = 0;
+		}
+
+		// CLM maintains context for a future request. A successful settled answer
+		// needs no extra model call; the next prompt/continuation performs the
+		// same threshold check with its new instructions. Explicit maintenance
+		// commands, recovery and extension-queued continuations retain their path.
+		if (
+			this.settingsManager.getContextProjectionMode() === "clm-v1" &&
+			!this._manualClm &&
+			msg.stopReason === "stop" &&
+			!this.agent.hasQueuedMessages() &&
+			this.pendingMessageCount === 0
+		) {
+			return false;
 		}
 
 		if (await this._checkCompaction(msg)) {
@@ -1376,7 +1833,13 @@ export class AgentSession {
 			// The user's new prompt is sent below, so do not call agent.continue() here.
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
+				// CLM threshold maintenance needs the incoming prompt assembled below.
+				// Real overflow recovery still runs immediately.
+				await this._checkCompaction(
+					lastAssistant,
+					false,
+					!!this._getLiveContext() && this.settingsManager.getAutoClmSettings().enabled && !this._manualClm,
+				);
 			}
 
 			// Build messages array (custom message if any, then user message)
@@ -1450,6 +1913,8 @@ export class AgentSession {
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+
+		if (await this._handleLiveContextCommand(commandName, args)) return true;
 
 		const command = this._extensionRunner.getCommand(commandName);
 		if (!command) return false;
@@ -2090,10 +2555,13 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
 
-			const preparation = prepareCompaction(pathEntries, settings, {
+			let preparation = prepareCompaction(pathEntries, settings, {
 				cwd: this._cwd,
 				skills: this._resourceLoader.getSkills().skills,
 			});
+			const liveCompaction =
+				preparation && this._getLiveContext()?.prepareCompaction(preparation, this.agent.state.messages);
+			if (liveCompaction) preparation = liveCompaction.preparation;
 			if (!preparation) {
 				// Check why we can't compact
 				const lastEntry = pathEntries[pathEntries.length - 1];
@@ -2162,6 +2630,10 @@ export class AgentSession {
 				throw new Error("Compaction cancelled");
 			}
 
+			if (liveCompaction && firstKeptEntryId === liveCompaction.preparation.firstKeptEntryId) {
+				details = { ...(details && typeof details === "object" ? details : {}), liveContext: liveCompaction.tail };
+			}
+			this._liveContext?.invalidate();
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
@@ -2231,6 +2703,7 @@ export class AgentSession {
 	 * Cancel in-progress compaction (manual or auto).
 	 */
 	abortCompaction(): void {
+		this._autoClmAbortController?.abort();
 		this._compactionAbortController?.abort();
 		this._autoCompactionAbortController?.abort();
 	}
@@ -2261,9 +2734,14 @@ export class AgentSession {
 	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @param deferThreshold Wait for incoming instructions before CLM threshold maintenance; overflow is checked immediately
 	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		deferThreshold = false,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return false;
 
@@ -2336,6 +2814,8 @@ export class AgentSession {
 		}
 
 		// Case 3: threshold compaction without retry.
+		if (deferThreshold) return false;
+		if (this._blocksNativeThreshold()) return false;
 		// For error messages or all-zero usage messages, estimate from the last valid response.
 		// This ensures sessions that hit persistent API errors (e.g. 529) or malformed zero-usage
 		// responses can still compact and do not reset context accounting.
@@ -2363,7 +2843,18 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
+		if (this._getLiveContext())
+			contextTokens = this._workingContextTokens({
+				systemPrompt: this.systemPrompt,
+				messages: this.agent.state.messages,
+				tools: this.agent.state.tools,
+			});
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
+			const automatic = await this._runAutomaticClm(
+				{ systemPrompt: this.systemPrompt, messages: this.agent.state.messages, tools: this.agent.state.tools },
+				this._agentRunAbortController?.signal,
+			);
+			if (automatic?.attempted) return this.agent.hasQueuedMessages();
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
@@ -2382,6 +2873,7 @@ export class AgentSession {
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
 		const runSignal = this._agentRunAbortController?.signal;
 		if (runSignal?.aborted) return false;
+		if (reason === "threshold" && this._blocksNativeThreshold()) return false;
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 		let fromExtension = false;
@@ -2397,10 +2889,13 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 
-			const preparation = prepareCompaction(pathEntries, settings, {
+			let preparation = prepareCompaction(pathEntries, settings, {
 				cwd: this._cwd,
 				skills: this._resourceLoader.getSkills().skills,
 			});
+			const liveCompaction =
+				preparation && this._getLiveContext()?.prepareCompaction(preparation, this.agent.state.messages);
+			if (liveCompaction) preparation = liveCompaction.preparation;
 			if (!preparation) {
 				return false;
 			}
@@ -2497,6 +2992,10 @@ export class AgentSession {
 				return false;
 			}
 
+			if (liveCompaction && firstKeptEntryId === liveCompaction.preparation.firstKeptEntryId) {
+				details = { ...(details && typeof details === "object" ? details : {}), liveContext: liveCompaction.tail };
+			}
+			this._liveContext?.invalidate();
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
@@ -2572,6 +3071,8 @@ export class AgentSession {
 			return false;
 		} finally {
 			this._autoCompactionAbortController = undefined;
+			if (reason === "threshold" && this._getLiveContext())
+				this._nativeThresholdBoundary = this._nativeThresholdKey();
 		}
 	}
 
@@ -3428,6 +3929,7 @@ export class AgentSession {
 			}
 
 			// Update agent state
+			this._liveContext?.invalidate();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 
@@ -3482,6 +3984,8 @@ export class AgentSession {
 		const usageTotals = createUsageTotals();
 
 		for (const entry of this.sessionManager.getEntries()) {
+			const maintenanceUsage = getAutoClmUsage(entry);
+			if (maintenanceUsage) addUsageToTotals(usageTotals, maintenanceUsage);
 			if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 				addUsageToTotals(usageTotals, entry.usage);
 			}
@@ -3531,6 +4035,14 @@ export class AgentSession {
 
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
+		if (this._getLiveContext()) {
+			const tokens = this._workingContextTokens({
+				systemPrompt: this.systemPrompt,
+				messages: this.agent.state.messages,
+				tools: this.agent.state.tools,
+			});
+			return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
+		}
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.

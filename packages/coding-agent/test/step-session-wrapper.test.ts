@@ -153,6 +153,38 @@ describe("Step Pi storage wrappers", () => {
 		expect(fork.getSessionDir()).not.toContain(`${join(root, ".pi")}/`);
 	});
 
+	test("keeps colliding project paths out of each other's session listings", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-session-collision-"));
+		roots.push(root);
+		const projectA = join(root, "case", "project-a");
+		const projectASlash = join(root, "case", "project", "a");
+		const agentDir = join(root, ".stepcode", "agent");
+		await Promise.all([mkdir(projectA, { recursive: true }), mkdir(projectASlash, { recursive: true })]);
+		vi.stubEnv("STEP_CODING_AGENT_DIR", agentDir);
+
+		const own = StepSessionManager.create(projectA, { agentDir, newSession: { id: "own" } });
+		const ownPath = await persistHeader(own);
+		await new Promise((r) => setTimeout(r, 10));
+		const foreign = StepSessionManager.create(projectASlash, { agentDir, newSession: { id: "foreign" } });
+		await persistHeader(foreign);
+
+		// Both projects encode to the same default session directory, which the
+		// CLI resolves explicitly when no session dir is configured.
+		const cliSessionDir = own.getSessionDir();
+		expect(cliSessionDir).toBe(foreign.getSessionDir());
+
+		await expect(listStepSessions(projectA, { agentDir, sessionDir: cliSessionDir })).resolves.toMatchObject([
+			{ id: "own" },
+		]);
+		await expect(listStepSessions(projectASlash, { agentDir, sessionDir: cliSessionDir })).resolves.toMatchObject([
+			{ id: "foreign" },
+		]);
+
+		const continued = continueStepSession(projectA, { agentDir, sessionDir: cliSessionDir });
+		expect(continued.getSessionId()).toBe("own");
+		expect(continued.getSessionFile()).toBe(ownPath);
+	});
+
 	test("accepts Pi's positional static-session signatures", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-session-positional-"));
 		roots.push(root);

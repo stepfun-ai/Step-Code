@@ -519,11 +519,14 @@ describe.skipIf(process.platform === "win32")("command policy agrees with harmle
 
 		const hazardous = calls.length > 0 && !analysisIncomplete;
 		expect.soft(isDangerousCommand(command)).toBe(hazardous);
-		for (const preset of ["bypass", "autopilot"] as const) {
+		for (const preset of ["ask", "approve-for-me"] as const) {
+			// Ask confirms every mutating call; the automatic tiers only confirm
+			// hazardous or incompletely analyzed commands.
+			const confirmExpected = hazardous || analysisIncomplete || preset === "ask";
 			expect
 				.soft(decideStepToolCall("run_command", { command }, stepPermissionStateForPreset(preset)))
 				.toMatchObject({
-					action: hazardous || analysisIncomplete ? "confirm" : "allow",
+					action: confirmExpected ? "confirm" : "allow",
 					hazardous,
 					...(analysisIncomplete ? { analysisIncomplete: true } : {}),
 				});

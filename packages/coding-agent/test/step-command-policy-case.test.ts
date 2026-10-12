@@ -36,7 +36,7 @@ describe.each(["darwin", "linux", "win32"] as const)("executable case on %s", (p
 	it.each(mixedCaseCommands)("keeps platform-specific approval for %s", async (command) => {
 		const hazardous = platform !== "linux";
 		expect(analyzeCommandPolicy(command)).toMatchObject({ kind: hazardous ? "matched" : "ordinary" });
-		for (const preset of ["bypass", "autopilot"] as const) {
+		for (const preset of ["ask", "approve-for-me"] as const) {
 			expect(
 				decideStepToolCall("run_command", { command }, stepPermissionStateForPreset(preset), {
 					run_command: "allow",
@@ -122,7 +122,7 @@ describe.skipIf(actualPlatform !== "darwin")("case-insensitive executable lookup
 		expect(result.status, result.stderr).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(readFileSync(callLog, "utf8")).toBe(`${call}\n`);
-		for (const preset of ["bypass", "autopilot"] as const) {
+		for (const preset of ["ask", "approve-for-me"] as const) {
 			expect(decideStepToolCall("run_command", { command }, stepPermissionStateForPreset(preset))).toMatchObject({
 				action: "confirm",
 				hazardous: true,

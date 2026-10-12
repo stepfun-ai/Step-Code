@@ -12,9 +12,8 @@
  *
  *   2) session-standing mode: the user turns on ultraloop for the whole
  *      session via /ultraloop on. A session-scoped system-reminder is
- *      attached to every subsequent turn until /ultraloop off, or the
- *      session ends. Mirrors Claude Code's "Ultracode is on for the session"
- *      opt-in.
+ *      attached when the mode differs from the last state in the active
+ *      context. Unchanged turns reuse it; turning off revokes standing consent.
  *
  * Soft gate only — off-consent workflow calls are journaled via appendEntry,
  * never blocked (no silent behavior; saved-workflow by name and skill-driven
@@ -23,7 +22,14 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../../core/extensions/types.ts";
+import type { SessionEntry } from "../../core/session-manager.ts";
 import { isWorkflowRegistrationEnabled } from "./registration-gate.ts";
+
+const ULTRALOOP_SESSION_MODE_ENTRY = "ultraloop-session-mode";
+
+interface UltraloopSessionModeData {
+	enabled: boolean;
+}
 
 // "ultracode" is Claude Code's name for the same opt-in; users switching
 // between the two products type it interchangeably, so both spellings grant
@@ -64,9 +70,12 @@ export function detectUltraloopBudget(prompt: string): number | undefined {
 	return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-export function buildUltraloopReminder(token: string): string {
+export function buildUltraloopReminder(token: string, workflowAvailable = true): string {
 	const lower = token.toLowerCase();
 	const signal = lower === "ultraloop" || lower === "ultracode" ? `the keyword "${lower}"` : `the phrase "${token}"`;
+	if (!workflowAvailable) {
+		return `<system-reminder>The user included ${signal}, requesting multi-agent orchestration for this turn. The workflow tool is not active in the current tool profile. Explain this limitation instead of attempting to call it; the session switch and find_tools do not expand tool access.</system-reminder>`;
+	}
 	return `<system-reminder>The user included ${signal}, opting this turn into multi-agent orchestration — use the workflow tool to fulfill the request.</system-reminder>`;
 }
 
@@ -74,18 +83,57 @@ export function buildUltraloopSessionReminder(): string {
 	return "<system-reminder>Ultraloop is on for the session — the user has authorized multi-agent orchestration until they turn it off with /ultraloop off. Author and run a workflow for every substantive task by default; the goal is the most exhaustive, correct answer you can produce, and token cost is not a constraint. For multi-phase work (understand → design → implement → review), run several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward orchestrating with workflows and adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits.</system-reminder>";
 }
 
-/** Explain the mode and its current scope without changing the active tool profile. */
-function buildUltraloopDiscovery(activeTools: readonly string[], sessionMode: boolean): string {
-	const route = activeTools.includes("workflow")
-		? "The workflow tool is active; use it when the user requests orchestration."
-		: "The workflow tool is not active in the current tool profile. Explain that limitation; the session switch does not change tool access.";
-	return [
-		"<system-reminder>Ultracode and Ultraloop are names for the same multi-agent workflow capability.",
-		`Current session mode: ${sessionMode ? "on" : "off"}.`,
-		"Interactive controls: /ultracode on, /ultracode off, /ultracode status, /ultracode help; /ultraloop is an alias. For one turn, prefix the task with ultracode: or ultraloop:.",
-		route,
-		"This capability notice is not consent to start a workflow or enable session mode. For questions about these modes, explain the controls; running a workflow is unnecessary.</system-reminder>",
-	].join("\n");
+function buildUltraloopSessionOffReminder(): string {
+	return "<system-reminder>Ultracode session mode is off. Previous session-wide workflow authorization no longer applies. Use workflow only for a new explicit per-turn request, a saved workflow invoked by name, or a skill instruction. Do not carry earlier per-turn authorization forward.</system-reminder>";
+}
+
+interface ReminderRecord {
+	customType: string;
+	content: unknown;
+	details?: unknown;
+}
+
+/** Inspect only runtime-authored entries in the selected context, not user text. */
+function lastSessionMode(records: readonly ReminderRecord[]): boolean | undefined {
+	for (let index = records.length - 1; index >= 0; index--) {
+		const record = records[index]!;
+		if (record.customType !== "ultraloop-opt-in" && record.customType !== "ultraloop-discovery") continue;
+		const details = record.details;
+		if (!details || typeof details !== "object") continue;
+		if ("sessionMode" in details && typeof details.sessionMode === "boolean") return details.sessionMode;
+		// Read reminders from sessions written before transition-based notices.
+		if ("source" in details && details.source === "session") return true;
+		if (record.customType === "ultraloop-discovery" && typeof record.content === "string") {
+			if (record.content.includes("Current session mode: off.")) return false;
+			if (record.content.includes("Current session mode: on.")) return true;
+		}
+	}
+	return undefined;
+}
+
+function persistedSessionMode(entries: readonly SessionEntry[]): boolean | undefined {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== ULTRALOOP_SESSION_MODE_ENTRY) continue;
+		const data = entry.data;
+		if (typeof data === "object" && data !== null && "enabled" in data && typeof data.enabled === "boolean") {
+			return data.enabled;
+		}
+	}
+	return undefined;
+}
+
+function sessionModeReminder(sessionMode: boolean, previous: boolean | undefined) {
+	if (sessionMode ? previous === true : previous !== true) return undefined;
+	const content = sessionMode ? buildUltraloopSessionReminder() : buildUltraloopSessionOffReminder();
+	return {
+		customType: "ultraloop-opt-in",
+		// Standing consent can outlive a tool-profile change. State the constraint
+		// conditionally rather than persisting a snapshot of tool availability.
+		content: `${content}\nIf the workflow tool is not active in the current tool profile, explain the limitation instead of attempting to call it. Consult the current active tools; session mode does not expand tool access.`,
+		display: false,
+		details: { source: "session", sessionMode },
+	};
 }
 
 /**
@@ -122,54 +170,52 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 			if (options.turnState) options.turnState.budgetTotal = value;
 		};
 
-		// Session boundary resets standing mode; each new session starts opted-out.
+		// Session boundaries restore only the latest mode entry from this session;
+		// sessions without a saved mode start opted-out.
 		pi.on("session_start", (_event, ctx) => {
-			sessionMode = false;
+			sessionMode = persistedSessionMode(ctx.sessionManager.getEntries()) ?? false;
 			optedInThisTurn = false;
 			setTurnBudget(undefined);
-			ctx.ui.setStatus("ultracode", undefined);
+			ctx.ui.setStatus("ultracode", sessionMode ? "Ultracode on" : undefined);
 		});
 
-		// Fires after the user submits a prompt, before the agent loop; the returned
-		// message lands in exactly this turn's context (BeforeAgentStartEventResult.message).
-		pi.on("before_agent_start", (event) => {
+		// BeforeAgentStartEventResult.message is appended after the real user input
+		// and retained in session history. Read the selected branch before deciding
+		// whether it needs a new state announcement; do not cache an emitted flag.
+		pi.on("before_agent_start", (event, ctx) => {
 			const token = detectUltraloopOptIn(event.prompt);
 			optedInThisTurn = token !== undefined;
 			setTurnBudget(detectUltraloopBudget(event.prompt));
-			const discovery = buildUltraloopDiscovery(pi.getActiveTools(), sessionMode);
+			const previous = lastSessionMode(
+				ctx.sessionManager.buildContextEntries().filter((entry) => entry.type === "custom_message"),
+			);
+			const modeReminder = sessionModeReminder(sessionMode, previous);
 
 			// Session-standing wins when both signals fire: the LLM already knows
 			// workflow is authorized for the whole session; a per-turn reminder
 			// on top is redundant noise.
-			if (sessionMode) {
-				return {
-					message: {
-						customType: "ultraloop-opt-in",
-						content: `${buildUltraloopSessionReminder()}\n\n${discovery}`,
-						display: false,
-						details: { source: "session" },
-					},
-				};
-			}
-
-			if (token === undefined) {
-				return {
-					message: {
-						customType: "ultraloop-discovery",
-						content: discovery,
-						display: false,
-						details: { source: "discovery" },
-					},
-				};
-			}
+			if (sessionMode || token === undefined) return modeReminder ? { message: modeReminder } : undefined;
 			return {
 				message: {
 					customType: "ultraloop-opt-in",
-					content: `${buildUltraloopReminder(token)}\n\n${discovery}`,
+					content: [modeReminder?.content, buildUltraloopReminder(token, pi.getActiveTools().includes("workflow"))]
+						.filter(Boolean)
+						.join("\n\n"),
 					display: false,
-					details: { source: "turn", token },
+					details: { source: "turn", token, ...(modeReminder ? { sessionMode: false } : {}) },
 				},
 			};
+		});
+
+		// Compaction/live-context edits can remove an earlier announcement, and
+		// commands can toggle the mode during streaming without before_agent_start.
+		// Reconcile against the actual provider context in those cases. This fallback
+		// is request-local: it does not append duplicate entries to session history.
+		pi.on("context", (event) => {
+			const previous = lastSessionMode(event.messages.filter((message) => message.role === "custom"));
+			const message = sessionModeReminder(sessionMode, previous);
+			if (!message) return;
+			return { messages: [...event.messages, { role: "custom" as const, ...message, timestamp: Date.now() }] };
 		});
 
 		// Soft-gate telemetry: journal off-consent workflow calls; never block.
@@ -202,6 +248,9 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 				const token = args.trim().toLowerCase();
 				if (token === "on") {
 					sessionMode = true;
+					pi.appendEntry(ULTRALOOP_SESSION_MODE_ENTRY, {
+						enabled: true,
+					} satisfies UltraloopSessionModeData);
 					ctx.ui.setStatus("ultracode", "Ultracode on");
 					ctx.ui.notify(
 						"Ultracode is on for the session. Multi-agent workflows are authorized until /ultracode off or the session ends.",
@@ -211,6 +260,9 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 				}
 				if (token === "off") {
 					sessionMode = false;
+					pi.appendEntry(ULTRALOOP_SESSION_MODE_ENTRY, {
+						enabled: false,
+					} satisfies UltraloopSessionModeData);
 					ctx.ui.setStatus("ultracode", undefined);
 					ctx.ui.notify("Ultracode session mode is off. Use ultracode: <task> for one-turn opt-in.", "info");
 					return;

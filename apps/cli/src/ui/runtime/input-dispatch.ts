@@ -4,7 +4,7 @@
  * Everything here is relocated VERBATIM from InteractiveMode (only `this.` → `ctx.`). The
  * slash if-ladder ORDER, the per-branch `setText("")` placement (before vs after the
  * awaited command), the per-branch `addToHistory` position, the `stopLogoIntro()`
- * first-in-onSubmit, the exact `/model` vs `/model ` (slice 7) and `/thinking`(10) vs
+ * first-in-onSubmit, the exact `/model` vs `/model ` (slice 7) and
  * `/effort`(8) offsets, the bash `!`/`!!` branch AFTER the slash checks, and the
  * compaction gate BEFORE the streaming gate are all load-bearing and preserved byte for
  * byte.
@@ -291,12 +291,8 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			await ctx.handleModelCommand(searchTerm);
 			return;
 		}
-		if (text === "/thinking" || text.startsWith("/thinking ") || text === "/effort" || text.startsWith("/effort ")) {
-			const searchTerm = text.startsWith("/thinking ")
-				? text.slice(10).trim()
-				: text.startsWith("/effort ")
-					? text.slice(8).trim()
-					: undefined;
+		if (text === "/effort" || text.startsWith("/effort ")) {
+			const searchTerm = text.startsWith("/effort ") ? text.slice(8).trim() : undefined;
 			ctx.editor.setText("");
 			ctx.handleThinkingCommand(searchTerm);
 			return;
@@ -394,7 +390,7 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			ctx.editor.setText("");
 			return;
 		}
-		if (text === "/quit") {
+		if (text === "/quit" || text === "/exit") {
 			ctx.editor.setText("");
 			await ctx.shutdown();
 			return;

@@ -15,5 +15,5 @@ function loadNodeOs(): typeof NodeOs | null {
 const nodeOs = loadNodeOs();
 
 export function getPiUserAgent(): string {
-	return nodeOs ? `step (${nodeOs.platform()} ${nodeOs.release()}; ${nodeOs.arch()})` : "step (browser)";
+	return nodeOs ? `stepcode (${nodeOs.platform()} ${nodeOs.release()}; ${nodeOs.arch()})` : "stepcode (browser)";
 }
