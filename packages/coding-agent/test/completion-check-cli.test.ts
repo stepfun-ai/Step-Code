@@ -59,6 +59,10 @@ function runCli(flags: string[], repository: boolean) {
 	for (const name of ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"]) {
 		if (process.env[name] !== undefined) env[name] = process.env[name];
 	}
+	// --no-tools leaves MCP initialization enabled. Keep this provider fixture
+	// offline by explicitly disabling the built-in server in its isolated config.
+	mkdirSync(join(root, "config"), { recursive: true });
+	writeFileSync(join(root, "config", "config.toml"), "[mcp_servers.steppage__steppage]\nenabled = false\n");
 	const result = spawnSync(
 		process.execPath,
 		[
@@ -99,6 +103,7 @@ describe("real CLI completion-check dispatch with an offline provider", () => {
 		expect(result.calls).toBe(2);
 		expect(result.stdout).toBe("CLI offline final\n");
 		expect(result.stderr).toContain("Completion check incomplete after 1 follow-up(s).");
+		expect(result.stderr).not.toContain("steppage");
 	});
 
 	it("records both tree and commit checks in JSON with the default two follow-ups", () => {

@@ -1,4 +1,4 @@
-import { Agent } from "@step-harness/agent-core";
+import { Agent, type ContextProjectionMode } from "@step-harness/agent-core";
 import {
 	type AssistantMessage,
 	streamSimple,
@@ -66,8 +66,8 @@ function createToolResultMessage(usage: Usage): ToolResultMessage {
 	};
 }
 
-async function createSession() {
-	const settingsManager = SettingsManager.inMemory();
+async function createSession(contextProjection?: ContextProjectionMode) {
+	const settingsManager = SettingsManager.inMemory(contextProjection ? { compaction: { contextProjection } } : {});
 	const sessionManager = SessionManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
 	await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
@@ -97,8 +97,30 @@ function syncAgentMessages(session: AgentSession, sessionManager: SessionManager
 }
 
 describe("AgentSession.getSessionStats", () => {
-	it("exposes the current context usage alongside token totals", async () => {
+	it("estimates the default CLM working context after compaction while retaining historical totals", async () => {
 		const { session, sessionManager } = await createSession();
+		try {
+			sessionManager.appendMessage(createUserMessage("first", 1));
+			sessionManager.appendMessage(createAssistantMessage("response1", 180_000, 2));
+			const keptUserId = sessionManager.appendMessage(createUserMessage("second", 3));
+			sessionManager.appendMessage(createAssistantMessage("response2", 195_000, 4));
+			sessionManager.appendCompaction("summary", keptUserId, 195_000);
+			sessionManager.appendMessage(createUserMessage("third", 5));
+			syncAgentMessages(session, sessionManager);
+
+			const stats = session.getSessionStats();
+			expect(stats.tokens.input).toBe(375_000);
+			expect(stats.contextUsage?.tokens).toBeGreaterThan(0);
+			expect(stats.contextUsage?.tokens).toBeLessThan(10_000);
+			expect(stats.contextUsage?.tokens).toBe(session.getLiveContextStatus()?.tokens);
+			expect(stats.contextUsage?.contextWindow).toBe(model.contextWindow);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("exposes the current context usage alongside token totals", async () => {
+		const { session, sessionManager } = await createSession("off");
 
 		try {
 			sessionManager.appendMessage(createUserMessage("hello", 1));
@@ -116,7 +138,7 @@ describe("AgentSession.getSessionStats", () => {
 	});
 
 	it("reports unknown current context usage immediately after compaction", async () => {
-		const { session, sessionManager } = await createSession();
+		const { session, sessionManager } = await createSession("off");
 
 		try {
 			sessionManager.appendMessage(createUserMessage("first", 1));
@@ -139,7 +161,7 @@ describe("AgentSession.getSessionStats", () => {
 	});
 
 	it("uses post-compaction usage for current context instead of stale kept usage", async () => {
-		const { session, sessionManager } = await createSession();
+		const { session, sessionManager } = await createSession("off");
 
 		try {
 			sessionManager.appendMessage(createUserMessage("first", 1));
@@ -230,6 +252,51 @@ describe("AgentSession.getSessionStats", () => {
 			session.dispose();
 		}
 	});
+	it("counts each automatic CLM request once including rejected and late responses", async () => {
+		const { session, sessionManager } = await createSession();
+		const usage: Usage = {
+			input: 10,
+			output: 20,
+			cacheRead: 30,
+			cacheWrite: 40,
+			totalTokens: 100,
+			cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
+		};
+		try {
+			sessionManager.appendCustomEntry("step-auto-clm-usage", {
+				version: 1,
+				attemptId: "attempt",
+				request: 1,
+				usage,
+				missingUsage: false,
+			});
+			sessionManager.appendCustomEntry("step-auto-clm", {
+				version: 1,
+				attemptId: "attempt",
+				accepted: false,
+				usage,
+			});
+			sessionManager.appendCustomEntry("step-auto-clm-usage", {
+				version: 1,
+				attemptId: "attempt",
+				request: 2,
+				usage,
+				late: true,
+				missingUsage: false,
+			});
+			sessionManager.appendCustomEntry("step-auto-clm-usage", { version: 1, missingUsage: true });
+			const stats = session.getSessionStats();
+			expect(stats.tokens).toEqual({ input: 20, output: 40, cacheRead: 60, cacheWrite: 80, total: 200 });
+			expect(stats.cost).toBe(2);
+			expect(stats.assistantMessages).toBe(0);
+			expect(stats.toolCalls).toBe(0);
+			expect(getUsageCostBreakdown(sessionManager.getEntries())).toEqual([
+				{ key: "Tools/summaries", cost: 2, tokens: 200 },
+			]);
+		} finally {
+			session.dispose();
+		}
+	});
 
 	it("groups tool and summary usage separately from model-attributed usage", () => {
 		const sessionManager = SessionManager.inMemory();
@@ -257,7 +324,7 @@ describe("AgentSession.getSessionStats", () => {
 	});
 
 	it("ignores zero-usage messages when checking for post-compaction context usage", async () => {
-		const { session, sessionManager } = await createSession();
+		const { session, sessionManager } = await createSession("off");
 
 		try {
 			sessionManager.appendMessage(createUserMessage("first", 1));

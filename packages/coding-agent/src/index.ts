@@ -593,6 +593,7 @@ export {
 export { runFeedbackCommand } from "./step/feedback/command.ts";
 export { readFeedbackUsername } from "./step/feedback/context.ts";
 export { STEP_INIT_PROMPT } from "./step/init-prompt.ts";
+export { prepareStepInstallation } from "./step/installation.ts";
 export { maybeUpdateStep, runStepUpdateCommand } from "./step/local-update.ts";
 export {
 	isStepInteractiveLoginStartup,
@@ -673,6 +674,7 @@ export {
 	type StepSettingsManagerCreateOptions,
 	type StepSettingsPaths,
 } from "./step/settings-manager.ts";
+export { ensureStepShellPath } from "./step/shell-path.ts";
 export {
 	flushStderrDevLog,
 	installProcessStderrDevLogCapture,

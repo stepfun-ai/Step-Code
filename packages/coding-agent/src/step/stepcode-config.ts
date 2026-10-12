@@ -15,7 +15,12 @@ import {
 	type StepPermissionMode,
 	type StepPermissionPresetId,
 } from "./permissions.ts";
-import type { StepSettings, StepSettingsManager, StepSettingsPaths } from "./settings-manager.ts";
+import {
+	resetLegacyPermissionSettings,
+	type StepSettings,
+	type StepSettingsManager,
+	type StepSettingsPaths,
+} from "./settings-manager.ts";
 
 export const STEPCODE_CONFIG_ENV_NAME = "STEPCODE_CONFIG_PATH";
 
@@ -336,15 +341,19 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 	const nonInteractiveApproval =
 		rawNonInteractive === "allow" || rawNonInteractive === "deny" ? rawNonInteractive : undefined;
 	const autoResume = readBoolean(approval?.autoResume ?? approval?.autopilot);
+	const fullAccessAcknowledged = readBoolean(approval?.fullAccessAcknowledged);
 	const feedback = asObject(root.feedback);
 	const feedbackEnabled = readBoolean(feedback?.enabled);
-	return {
+	const settings: StepSettings = {
 		...(preset ? { permissionPreset: preset } : {}),
 		...(mode ? { approvalMode: mode } : {}),
 		...(nonInteractiveApproval ? { nonInteractiveApproval } : {}),
 		...(autoResume !== undefined ? { autoResume } : {}),
+		...(fullAccessAcknowledged !== undefined ? { fullAccessAcknowledged } : {}),
 		...(feedbackEnabled !== undefined ? { feedbackEnabled } : {}),
 	};
+	resetLegacyPermissionSettings(settings, readString(approval?.preset), readString(approval?.mode));
+	return settings;
 }
 
 function writeStepCodeSettings(root: Record<string, unknown>, patch: Partial<StepSettings>): void {
@@ -354,6 +363,7 @@ function writeStepCodeSettings(root: Record<string, unknown>, patch: Partial<Ste
 	writeOptionalField(approval, "mode", patch, "approvalMode");
 	writeOptionalField(approval, "nonInteractive", patch, "nonInteractiveApproval");
 	writeOptionalField(approval, "autoResume", patch, "autoResume");
+	writeOptionalField(approval, "fullAccessAcknowledged", patch, "fullAccessAcknowledged");
 	tools.approval = approval;
 	root.tools = tools;
 	if (Object.hasOwn(patch, "feedbackEnabled")) {
@@ -380,12 +390,7 @@ function validateStepSettings(settings: Partial<StepSettings>): void {
 	if (settings.permissionPreset !== undefined && !getStepPermissionPreset(settings.permissionPreset)) {
 		throw new Error(`Invalid Step permission preset: ${String(settings.permissionPreset)}`);
 	}
-	if (
-		settings.approvalMode !== undefined &&
-		settings.approvalMode !== "confirm" &&
-		settings.approvalMode !== "strict" &&
-		settings.approvalMode !== "auto"
-	) {
+	if (settings.approvalMode !== undefined && settings.approvalMode !== "confirm" && settings.approvalMode !== "auto") {
 		throw new Error(`Invalid Step approval mode: ${String(settings.approvalMode)}`);
 	}
 	if (
@@ -397,6 +402,9 @@ function validateStepSettings(settings: Partial<StepSettings>): void {
 	}
 	if (settings.autoResume !== undefined && typeof settings.autoResume !== "boolean") {
 		throw new Error(`Invalid Step autoResume setting: ${String(settings.autoResume)}`);
+	}
+	if (settings.fullAccessAcknowledged !== undefined && typeof settings.fullAccessAcknowledged !== "boolean") {
+		throw new Error(`Invalid Step fullAccessAcknowledged setting: ${String(settings.fullAccessAcknowledged)}`);
 	}
 }
 

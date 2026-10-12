@@ -81,14 +81,45 @@ function makeEmptyResult(agent: string, task: string): StepSubagentResultRecord 
 		agent,
 		agentSource: "unknown",
 		task,
-		status: "running",
+		status: "queued",
 		exitCode: -1,
 		messages: [],
 		stderr: "",
 		usage: emptyUsage(),
-		startedAt: Date.now(),
 		updatedAt: Date.now(),
 	};
+}
+
+function makeSkippedResult(record: StepSubagentResultRecord): StepSubagentResultRecord {
+	return { ...record, status: "skipped", updatedAt: Date.now() };
+}
+
+/**
+ * The parent model only sees `content`, never `details`, so a chain's text must
+ * carry both the outcome and the output that matters: the last completed step
+ * on success, the stopping step's error otherwise. Earlier step bodies stay in
+ * `details.results` instead of piling into the parent's context.
+ */
+function chainResultText(records: readonly StepSubagentResultRecord[]): string {
+	const steps = records.map((record, index) => `${index + 1}. ${record.agent}: ${record.status}`).join("\n");
+	const stopped = records.findIndex((record) => record.status !== "completed");
+	if (stopped === -1) {
+		const last = records.at(-1);
+		if (!last) return "(no output)";
+		return `Chain: ${records.length}/${records.length} steps completed\n${steps}\n\n### Final output (step ${records.length}, ${last.agent})\n\n${resultText(last)}`;
+	}
+	const failed = records[stopped];
+	const sections = [
+		`Chain stopped at step ${stopped + 1}/${records.length} (${failed.agent}: ${failed.status}); the chain did not complete.\n${steps}`,
+		`### Error (step ${stopped + 1}, ${failed.agent})\n\n${resultText(failed)}`,
+	];
+	const previous = stopped > 0 ? records[stopped - 1] : undefined;
+	if (previous) {
+		sections.push(
+			`### Last completed output (step ${stopped}, ${previous.agent})\n\n${truncateText(resultText(previous), 50_000)}`,
+		);
+	}
+	return sections.join("\n\n");
 }
 
 function resultDetailsText(details: StepSubagentDetails): string {
@@ -320,6 +351,16 @@ export async function executeSubagent(
 			return failed;
 		}
 		reportCreated(agent, index);
+		// Flip the queued placeholder before spawning, so the step reads as running
+		// (with a clock) from the moment it is dispatched, not from its first event.
+		records[index] = {
+			...records[index],
+			agentSource: agent.source,
+			status: "running",
+			startedAt: Date.now(),
+			updatedAt: Date.now(),
+		};
+		emit(mode);
 		const baseCwd = path.resolve(ctx.cwd, task.cwd ?? ".");
 		let worktree: StepWorktreeLease | undefined;
 		let childCwd = baseCwd;
@@ -334,7 +375,7 @@ export async function executeSubagent(
 					worktreePath: worktree?.path,
 					worktreeBranch: worktree?.branch,
 				});
-				emit(parallel ? "parallel" : "single");
+				emit(mode);
 			};
 			const child = await options.runner({
 				agent,
@@ -394,7 +435,11 @@ export async function executeSubagent(
 			};
 			const record = await runOne(task, index);
 			previous = finalOutput(record.messages) || resultText(record);
-			if (record.status !== "completed") break;
+			if (record.status !== "completed") {
+				for (let rest = index + 1; rest < chain.length; rest++) records[rest] = makeSkippedResult(records[rest]);
+				emit(mode);
+				break;
+			}
 		}
 	} else await runOne(tasks[0], 0);
 	const finalDetails = buildDetails(mode, discovery, scope, records);
@@ -408,6 +453,7 @@ export async function executeSubagent(
 			`Parallel: ${success}/${records.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
 		);
 	}
+	if (mode === "chain") return makeToolResult(finalDetails, chainResultText(records));
 	const record = records[0];
 	return makeToolResult(finalDetails, record ? resultText(record) : "(no output)");
 }

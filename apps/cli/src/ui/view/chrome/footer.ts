@@ -311,9 +311,10 @@ export class FooterComponent implements Component {
 		const extensionStatuses = this.footerData.getExtensionStatuses();
 		const permissionStatus = extensionStatuses.get("step-permission");
 		const statusPreset = permissionStatus?.match(/^Mode:\s*([^()]+?)(?:\s*\(auto-resume\))?$/u)?.[1]?.trim();
-		// Extension statuses use human-readable labels (for example "Read Only"),
-		// while embedded hosts may expose the corresponding id ("read-only" or
-		// "readOnly"). Normalize the vocabulary before selecting the footer color.
+		// Extension statuses use human-readable labels (for example "Approve for
+		// Me"), while embedded hosts may expose the corresponding id
+		// ("approve-for-me"). Normalize the vocabulary before selecting the footer
+		// color.
 		const normalizedStatusPreset = statusPreset?.toLowerCase().replace(/[\s_-]+/gu, "");
 		const rawMode = String(
 			(this.session as unknown as { approvalMode?: string }).approvalMode ??
@@ -324,18 +325,13 @@ export class FooterComponent implements Component {
 			.trim()
 			.toLowerCase()
 			.replace(/[\s_-]+/gu, "");
+		const effectiveMode = normalizedStatusPreset ?? normalizedRawMode;
 		const mode =
-			normalizedStatusPreset === "autopilot"
-				? { label: "Autopilot", paint: warning }
-				: normalizedStatusPreset === "bypass"
-					? { label: "Bypass", paint: warning }
-					: normalizedRawMode === "auto" || normalizedRawMode === "bypasspermissions"
-						? { label: "Bypass", paint: warning }
-						: normalizedStatusPreset === "readonly" ||
-								normalizedRawMode === "strict" ||
-								normalizedRawMode === "readonly"
-							? { label: "Read-only", paint: muted }
-							: { label: "Ask", paint: accent };
+			effectiveMode === "fullaccess"
+				? { label: "Full Access", paint: error }
+				: effectiveMode === "approveforme" || effectiveMode === "auto" || effectiveMode === "bypasspermissions"
+					? { label: "Approve for Me", paint: warning }
+					: { label: "Ask", paint: accent };
 		const displayMode = this.bashMode ? { label: "Shell", paint: (text: string) => theme.fg("error", text) } : mode;
 		// The permission cycle was reachable but invisible: the footer named the
 		// mode and nothing said how to change it. Feedback issue-b39a464025061aa5.

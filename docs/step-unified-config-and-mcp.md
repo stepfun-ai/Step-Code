@@ -334,7 +334,9 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 theme = "step-dark"
 defaultProvider = "step"
 defaultModel = "step-2"
-permissionPreset = "standard"
+
+[tools.approval]
+preset = "approve-for-me"
 autoResume = true
 
 [telemetry]

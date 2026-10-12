@@ -2,8 +2,13 @@ import { constants as bufferConstants } from "buffer";
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	findMostRecentSession,
+	getDefaultSessionDir,
+	loadEntriesFromFile,
+	SessionManager,
+} from "../../src/core/session-manager.ts";
 
 const HEADER_SCAN_LIMIT_BYTES = 1024 * 1024;
 
@@ -324,6 +329,75 @@ describe("SessionManager custom flat session directory", () => {
 
 		const continuedA = SessionManager.continueRecent(projectA, tempDir);
 		expect(continuedA.getSessionFile()).toBe(sessionA);
+	});
+});
+
+describe("SessionManager default session directory with colliding project paths", () => {
+	let tempDir: string;
+	let agentDir: string;
+	let projectA: string;
+	let projectASlash: string;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `session-collision-${Date.now()}`);
+		agentDir = join(tempDir, "agent");
+		// Both paths encode to the same default session directory name.
+		projectA = join(tempDir, "case", "project-a");
+		projectASlash = join(tempDir, "case", "project", "a");
+		mkdirSync(projectA, { recursive: true });
+		mkdirSync(projectASlash, { recursive: true });
+		vi.stubEnv("STEP_CODING_AGENT_DIR", agentDir);
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	function createDefaultSession(cwd: string, id: string): string {
+		const session = SessionManager.create(cwd, undefined, { id });
+		const file = session.getSessionFile();
+		if (!file) {
+			throw new Error("Expected a persisted session file");
+		}
+		writeFileSync(file, `${JSON.stringify(session.getHeader())}\n`);
+		return file;
+	}
+
+	it("maps colliding project paths onto one default session directory", () => {
+		expect(getDefaultSessionDir(projectA, agentDir)).toBe(getDefaultSessionDir(projectASlash, agentDir));
+	});
+
+	it("lists only the current project's sessions from the shared default directory", async () => {
+		const own = createDefaultSession(projectA, "own");
+		await new Promise((r) => setTimeout(r, 10));
+		const foreign = createDefaultSession(projectASlash, "foreign");
+
+		const listed = await SessionManager.list(projectA);
+		expect(listed.map((session) => session.path)).toEqual([own]);
+
+		const foreignListed = await SessionManager.list(projectASlash);
+		expect(foreignListed.map((session) => session.path)).toEqual([foreign]);
+	});
+
+	it("continues the current project's newest session, not the foreign one", async () => {
+		createDefaultSession(projectA, "own");
+		await new Promise((r) => setTimeout(r, 10));
+		// The colliding project owns the newest file in the shared directory.
+		createDefaultSession(projectASlash, "foreign");
+
+		const continued = SessionManager.continueRecent(projectA);
+		expect(continued.getSessionId()).toBe("own");
+		expect(continued.getCwd()).toBe(projectA);
+	});
+
+	it("creates a new session when the shared directory only holds foreign sessions", async () => {
+		createDefaultSession(projectASlash, "foreign");
+
+		const continued = SessionManager.continueRecent(projectA);
+		expect(continued.getSessionId()).not.toBe("foreign");
+		expect(continued.getCwd()).toBe(projectA);
+		expect(continued.getSessionFile()).toContain(getDefaultSessionDir(projectA, agentDir));
 	});
 });
 

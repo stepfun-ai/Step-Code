@@ -9,7 +9,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, createWriteStream, openSync } from "node:fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +52,7 @@ import { resolvePath } from "../utils/paths.ts";
 import {
 	getShellConfig,
 	getShellEnv,
+	killProcessTree,
 	spawnShellChild,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
@@ -1374,17 +1375,37 @@ async function startBackgroundCommand(
 	const logPath = path.join(os.tmpdir(), `step-run-bg-${process.pid}-${randomUUID().slice(0, 8)}.log`);
 	const logFd = openSync(logPath, "a", 0o600);
 	let child: ChildProcess;
+	const pipeLog = process.platform === "win32";
 	try {
 		child = spawnShellChild(shellConfig, command, {
 			cwd: commandCwd,
 			env: getShellEnv(options.agentDir),
-			stdout: logFd,
-			stderr: logFd,
+			stdout: pipeLog ? "pipe" : logFd,
+			stderr: pipeLog ? "pipe" : logFd,
 		});
-	} finally {
-		// The child holds its own duplicated descriptors after spawn.
+	} catch (error) {
+		closeSync(logFd);
+		throw error;
+	}
+	if (pipeLog) {
+		// MSYS/Git Bash can fail when Windows file descriptors are inherited directly.
+		// Drain pipes into a parent-owned stream; preserve backpressure and close only
+		// after both child output streams have finished.
+		const log = createWriteStream(logPath, { fd: logFd, autoClose: true });
+		log.on("error", () => {
+			if (child.pid !== undefined) killProcessTree(child.pid);
+			child.stdout?.destroy();
+			child.stderr?.destroy();
+		});
+		child.stdout?.pipe(log, { end: false });
+		child.stderr?.pipe(log, { end: false });
+		child.once("close", () => log.end());
+		child.once("error", () => log.destroy());
+	} else {
+		// Unix children hold their own duplicated descriptors after spawn.
 		closeSync(logFd);
 	}
+
 	await new Promise<void>((resolve, reject) => {
 		child.once("spawn", () => resolve());
 		child.once("error", (error) => reject(error));

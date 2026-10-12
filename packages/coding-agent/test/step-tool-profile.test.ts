@@ -106,7 +106,7 @@ describe("Step tool profile", () => {
 		const startedAt = Date.now();
 		const result = await run.execute(
 			"bg-1",
-			{ command: "echo started; sleep 0.4; echo finished", run_in_background: true },
+			{ command: "echo started; echo diagnostic >&2; sleep 0.4; echo finished", run_in_background: true },
 			undefined,
 			undefined,
 			undefined as never,
@@ -127,6 +127,7 @@ describe("Step tool profile", () => {
 			await expect
 				.poll(async () => readFile(details.logPath, "utf8").catch(() => ""), { timeout: 5_000 })
 				.toContain("finished");
+			expect(await readFile(details.logPath, "utf8")).toContain("diagnostic");
 		} finally {
 			await rm(details.logPath, { force: true });
 		}

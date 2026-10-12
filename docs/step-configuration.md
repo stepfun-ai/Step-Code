@@ -21,12 +21,13 @@ by an older release is still repaired in place at startup.
 
 ## Mandatory command approval
 
-Permission presets and tool overrides cannot automatically approve commands
-matched by the built-in command rules. In particular, `rm` with both recursive
-and force options requires confirmation for every target, including `./build`
-and `/tmp/cache`. Bypass, auto, and autopilot still ask for each call. Read-only
-mode blocks it, and runs without an approval channel cannot execute it even
-with `nonInteractiveApproval = "allow"`.
+Ask and Approve for Me cannot automatically approve commands matched by the
+built-in command rules. In particular, `rm` with both recursive and force
+options requires confirmation for every target, including `./build` and
+`/tmp/cache`. Full Access is the only tier that runs them without confirmation,
+and it requires the one-time risk acknowledgment; a run without an approval
+channel cannot execute a dangerous command under the other tiers even with
+`nonInteractiveApproval = "allow"`.
 
 By default, a run without an approval channel terminates after such a block.
 `--non-interactive-denial continue` (or `STEP_NON_INTERACTIVE_DENIAL=continue`)
@@ -34,11 +35,39 @@ keeps a recoverable confirmation blocked but reports it as a failed tool result,
 so an unattended agent can take a safer route instead of ending the run.
 Unsupported shells and shell-configuration failures still terminate because the
 agent cannot repair the execution environment by retrying. Explicit denials —
-read-only mode and `deny` tool overrides — still terminate, and dangerous
-commands remain blocked.
+`deny` tool overrides — still terminate, and dangerous commands remain blocked
+outside Full Access.
 
 See [command permissions](command-permissions.md) for matching behavior and
 how to extend the built-in rules.
+
+### Full Access confirmation
+
+Select Full Access using `/permissions full-access` or `Shift+Tab`:
+
+- **Yes, continue anyway** enables Full Access for this session without saving the tier.
+- **Yes, and don't ask again** saves Full Access and its risk acknowledgment for future launches.
+- **Cancel** keeps the current tier.
+
+A session-only acknowledgment expires when the session is replaced or closed.
+Without an interactive UI, an unacknowledged Full Access selection falls back to
+Approve for Me. An acknowledged Full Access selection also runs dangerous
+commands unattended. Explicit per-tool `deny` and `confirm` overrides still apply.
+
+### Upgrading permission settings and automatic continuation
+
+Saved Bypass, Autopilot, and Read Only policies reset to Ask on upgrade, including
+their old `mode`, unattended-approval and auto-resume fields. Saved policies with
+only the old low-level approval mode also reset to Ask. Select a new tier through
+`/permissions` or `Shift+Tab`; Full Access requires the risk acknowledgment above.
+Once a new tier is saved, later launches retain it.
+
+Both Approve for Me and Full Access enable the bounded model-error continuation
+by default; Ask does not resume automatically. Selecting either automatic tier
+enables continuation even if the old tier had saved `autoResume = false`.
+The existing retry limits and backoff remain unchanged. `STEP_AUTO_RESUME` or an
+explicit `autoResume` config value can override continuation at startup without
+granting extra permissions.
 
 ## Environment and shell commands
 
@@ -140,3 +169,28 @@ requests. Print and RPC sessions still wait for the initial tool catalog before
 accepting work.
 Closing or replacing a session cancels pending MCP connections and prevents their
 late tools or warnings from reaching the new session.
+
+The macOS/Linux installer and `step update` run `step mcp prepare` after
+installing the new binary. This prepares the built-in StepPage executable before
+the installer finishes. StepPage requires Node.js 20 or newer on PATH; Step itself
+does not require a separately installed Node.js. Download or prerequisite failures
+show a warning and leave Step usable.
+
+Before connecting `steppage__steppage`, Step verifies `steppage-mcp --version`
+and repairs a missing or broken managed executable. Existing preinstallation
+markers do not suppress this repair. Healthy executables in `~/.local/bin` can
+be used even when the current shell's PATH lacks that directory. Failed setup is
+retried on the next session; `step mcp prepare` also retries without requiring
+sign-in. The server name combines the plugin ID and its server name with `__`.
+Automatic StepPage installation is supported on macOS/Linux, including WSL.
+
+Preparation preserves credentials, custom server commands, global overrides,
+disabled servers, and intentionally uninstalled plugins. A global declaration
+that still uses the default `steppage-mcp` command without arguments shares the
+built-in executable repair; its environment and other settings remain unchanged.
+Global configuration takes precedence over user plugins, which take precedence
+over trusted project plugins. An explicit disable prevents a lower-priority copy
+from starting. Standalone interactive
+startup also repairs the managed Step PATH block for users upgraded by an older
+updater. The installer checks the shell profile even when the current terminal
+already has Step on PATH. Set `STEP_NO_MODIFY_PATH=1` to manage PATH yourself.

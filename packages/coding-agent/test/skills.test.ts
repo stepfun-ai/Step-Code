@@ -81,7 +81,10 @@ describe("skills", () => {
 			});
 
 			expect(skills).toHaveLength(0);
-			expect(diagnostics.some((d: ResourceDiagnostic) => d.message.includes("description is required"))).toBe(true);
+			const messages = diagnostics.map((d: ResourceDiagnostic) => d.message);
+			expect(messages).toContain(
+				`${join(fixturesDir, "missing-description", "SKILL.md")}: frontmatter is missing "description" — add e.g. description: "..."`,
+			);
 		});
 
 		it("should ignore unknown frontmatter fields", () => {
@@ -125,7 +128,10 @@ describe("skills", () => {
 
 			// no-frontmatter has no description, so it should be skipped
 			expect(skills).toHaveLength(0);
-			expect(diagnostics.some((d: ResourceDiagnostic) => d.message.includes("description is required"))).toBe(true);
+			const messages = diagnostics.map((d: ResourceDiagnostic) => d.message);
+			expect(messages).toContain(
+				`${join(fixturesDir, "no-frontmatter", "SKILL.md")}: frontmatter is missing "description" — add e.g. description: "..."`,
+			);
 		});
 
 		it("should warn and skip skill when YAML frontmatter is invalid", () => {
@@ -135,7 +141,38 @@ describe("skills", () => {
 			});
 
 			expect(skills).toHaveLength(0);
-			expect(diagnostics.some((d: ResourceDiagnostic) => d.message.includes("at line"))).toBe(true);
+			const messages = diagnostics.map((d: ResourceDiagnostic) => d.message);
+			expect(messages).toHaveLength(1);
+			expect(messages[0]).toBe(
+				`${join(fixturesDir, "invalid-yaml", "SKILL.md")}: invalid YAML frontmatter at line 3, column 31: ` +
+					"Flow sequence in block collection must be sufficiently indented and end with a ]",
+			);
+		});
+
+		it("should hint at the unquoted colon in a description", () => {
+			const { skills, diagnostics } = loadSkillsFromDir({
+				dir: join(fixturesDir, "unquoted-colon"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(0);
+			const messages = diagnostics.map((d: ResourceDiagnostic) => d.message);
+			expect(messages).toEqual([
+				`${join(fixturesDir, "unquoted-colon", "SKILL.md")}: invalid YAML frontmatter at line 3, column 14: ` +
+					'Nested mappings are not allowed in compact mappings — description contains an unquoted ":" — ' +
+					"wrap the value in double quotes",
+			]);
+		});
+
+		it("should still load a description whose colon is quoted", () => {
+			const { skills, diagnostics } = loadSkillsFromDir({
+				dir: join(fixturesDir, "quoted-colon"),
+				source: "test",
+			});
+
+			expect(diagnostics).toHaveLength(0);
+			expect(skills).toHaveLength(1);
+			expect(skills[0].description).toBe("Enforce a claim-to-proof workflow: define the evidence, then require it");
 		});
 
 		it("should preserve multiline descriptions from YAML", () => {
@@ -167,8 +204,9 @@ describe("skills", () => {
 			});
 
 			// Should load all skills that have descriptions (even with warnings)
-			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field, nested/child-skill, consecutive-hyphens
-			// NOT: missing-description, no-frontmatter (both missing descriptions)
+			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field, nested/child-skill,
+			// consecutive-hyphens, quoted-colon
+			// NOT: missing-description, no-frontmatter (both missing descriptions), unquoted-colon (invalid YAML)
 			expect(skills.length).toBeGreaterThanOrEqual(6);
 		});
 

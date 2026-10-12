@@ -18,11 +18,11 @@ import {
 	defaultStepPluginsDir,
 	ensureBuiltinPluginsInstalled,
 	listStepPluginDirectories,
-	provisionBuiltinPlugin,
 	provisionInstallCommand,
 	readStepPluginManifest,
 	type StepPluginProvision,
 } from "./plugins.ts";
+import { ensureStepPageReady, isManagedStepPageCommand } from "./steppage-provision.ts";
 import { STEPCODE_VERSION } from "./version.ts";
 
 export { resolveStepMcpEnvironment } from "./mcp-environment.ts";
@@ -121,17 +121,12 @@ export function createStepMcpExtension(): ExtensionFactory {
 				// entire initialization path behind the slowest server.
 				await yieldToEventLoop();
 				if (controller.signal.aborted) return;
-				// Provision the built-in StepPage plugin into a fresh install so its
-				// deploy tools appear without an explicit `/plugin install`. Copying the
-				// manifest is fast and blocks discovery so this session sees it;
-				// installing the MCP executable is fired in the background so a first
-				// launch never waits on the network. A still-missing executable then
-				// surfaces the normal actionable connect-failure remedy below.
+				// The old marker records manifest/uninstall intent only. Executable
+				// readiness is checked for each installed built-in before connecting.
 				try {
 					const preinstalled = await ensureBuiltinPluginsInstalled();
-					for (const plugin of preinstalled.installed) {
-						if (plugin.provision) void provisionBuiltinPlugin(plugin.provision).catch(() => undefined);
-					}
+					if (controller.signal.aborted) return;
+					for (const warning of preinstalled.warnings) ctx.ui.notify(warning, "warning");
 				} catch {
 					// Best-effort: discovery still runs with whatever is already installed.
 				}
@@ -338,15 +333,22 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 	const roots = [defaultStepPluginsDir(process.env)];
 	if (projectTrusted) roots.push(defaultStepPluginsDir(process.env, { cwd, project: true }));
 	const result: DiscoveredServer[] = [];
+	const globalServers = new Map<string, DiscoveredServer>();
 	const seen = new Set<string>();
 	const config = readGlobalStepConfig(process.env);
 	for (const [name, declaration] of Object.entries(config.mcp_servers ?? {})) {
-		if (!isRecord(declaration) || declaration.enabled === false) continue;
+		if (!isRecord(declaration)) continue;
+		if (declaration.enabled === false) {
+			seen.add(name);
+			continue;
+		}
 		if (typeof declaration.command !== "string" && typeof declaration.url !== "string") continue;
 		const normalized = normalizeDeclaration(declaration);
 		if (typeof normalized.command !== "string" && typeof normalized.url !== "string") continue;
 		seen.add(name);
-		result.push({ name, declaration: normalized });
+		const server = { name, declaration: normalized };
+		result.push(server);
+		globalServers.set(name, server);
 	}
 	for (const root of roots) {
 		for (const pluginDir of await listStepPluginDirectories(root)) {
@@ -359,9 +361,24 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 				// `command` here dropped remote servers silently, even though the
 				// global-config path and `normalizeDeclaration` both accept a url —
 				// so the same server worked from config.toml but not from a plugin.
-				if (!isRecord(value) || !hasTransport(value)) continue;
+				if (!isRecord(value)) continue;
 				const name = `${parsed.manifest.id}${PLUGIN_SERVER_SEPARATOR}${serverName}`;
-				if (seen.has(name)) continue;
+				if (seen.has(name)) {
+					const global = globalServers.get(name);
+					if (
+						name === STEPPAGE_SERVER_NAME &&
+						global &&
+						isManagedStepPageCommand(global.declaration, parsed.manifest.provision) &&
+						isManagedStepPageCommand(value, parsed.manifest.provision)
+					)
+						global.provision = parsed.manifest.provision;
+					continue;
+				}
+				if (value.enabled === false) {
+					seen.add(name);
+					continue;
+				}
+				if (!hasTransport(value)) continue;
 				seen.add(name);
 				const discovered: DiscoveredServer = {
 					name,
@@ -541,8 +558,16 @@ export async function connectStepMcpServer(
 	let transport: StdioClientTransport | StreamableHTTPClientTransport;
 	if (input.declaration.command) {
 		const env = resolveStepMcpEnvironment(input.declaration.env);
+		let command = input.declaration.command;
+		if (input.name === STEPPAGE_SERVER_NAME && isManagedStepPageCommand(input.declaration, input.provision)) {
+			// The trusted installer needs host setup variables (proxy/installer URL).
+			// The MCP transport still receives only the restricted server environment.
+			const readiness = await ensureStepPageReady({ env: { ...process.env, ...env }, signal: abortSignal });
+			if (readiness.error) throw new Error(readiness.error);
+			command = readiness.command ?? command;
+		}
 		transport = new StdioClientTransport({
-			command: input.declaration.command,
+			command,
 			args: input.declaration.args,
 			cwd: input.declaration.cwd,
 			env,

@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { delimiter, join, win32 } from "node:path";
 import { type ChildProcess, spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "../step/environment.ts";
@@ -10,100 +10,116 @@ export interface ShellConfig {
 	commandTransport?: "argv" | "stdin";
 }
 
-/**
- * Find bash executable on PATH (cross-platform)
- */
+/** Identify Windows' WSL launcher, including non-default Windows directories. */
 function isLegacyWslBashPath(path: string): boolean {
-	const normalized = path.replace(/\//g, "\\").toLowerCase();
-	return /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
+	const normalized = win32.normalize(path).toLowerCase();
+	const windows = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+	return ["System32", "Sysnative", "SysWOW64"].some(
+		(directory) => normalized === win32.join(windows, directory, "bash.exe").toLowerCase(),
+	);
 }
 
 function getBashShellConfig(shell: string): ShellConfig {
 	return isLegacyWslBashPath(shell) ? { shell, args: ["-s"], commandTransport: "stdin" } : { shell, args: ["-c"] };
 }
 
-function findExecutableOnPath(executable: string): string | null {
-	if (process.platform === "win32") {
-		// Windows: Use 'where' and verify file exists (where can return non-existent paths)
-		try {
-			const result = spawnSync("where", [executable], {
-				encoding: "utf-8",
-				timeout: 5000,
-				windowsHide: true,
-			});
-			if (result.status === 0 && result.stdout) {
-				const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-				if (firstMatch && existsSync(firstMatch)) {
-					return firstMatch;
-				}
-			}
-		} catch {
-			// Ignore errors
-		}
-		return null;
+function isFile(path: string): boolean {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
 	}
+}
 
-	// Unix: Use 'which' and trust its output (handles Termux and special filesystems)
+function resolveExecutable(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
+/** Search every absolute PATH entry lazily, without starting where.exe or searching cwd. */
+function* findWindowsExecutables(executable: string): Generator<string> {
+	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path");
+	const seen = new Set<string>();
+	for (const entry of (pathKey ? (process.env[pathKey] ?? "") : "").split(";")) {
+		const directory = entry.trim().replace(/^"(.*)"$/, "$1");
+		if (!win32.isAbsolute(directory)) continue;
+		const candidate = win32.join(directory, executable);
+		if (!isFile(candidate)) continue;
+		const resolved = resolveExecutable(candidate);
+		const key = resolved.toLowerCase();
+		if (!seen.has(key)) {
+			seen.add(key);
+			yield resolved;
+		}
+	}
+}
+
+function findExecutableOnPath(executable: string): string | null {
+	if (process.platform === "win32") return findWindowsExecutables(executable).next().value ?? null;
+	// Unix: preserve which behavior for Termux and special filesystems.
 	try {
 		const result = spawnSync("which", [executable], { encoding: "utf-8", timeout: 5000 });
-		if (result.status === 0 && result.stdout) {
-			const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-			if (firstMatch) {
-				return firstMatch;
-			}
-		}
+		if (result.status === 0 && result.stdout) return result.stdout.trim().split(/\r?\n/)[0] || null;
 	} catch {
-		// Ignore errors
+		/* Ignore errors. */
 	}
 	return null;
+}
+
+function gitRootFromExecutable(executable: string): string {
+	let root = win32.dirname(win32.dirname(executable));
+	if (/^mingw(?:32|64)$/i.test(win32.basename(root))) root = win32.dirname(root);
+	return root;
+}
+
+/**
+ * Yield Windows Bash candidates in priority order. Lazy so the common case (Git in a
+ * known location) returns after a few stats instead of scanning PATH on every command.
+ */
+function* windowsBashCandidates(): Generator<string> {
+	for (const directory of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
+		if (directory) yield win32.join(directory, "Git", "bin", "bash.exe");
+	}
+	if (process.env.LOCALAPPDATA) yield win32.join(process.env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe");
+	for (const git of findWindowsExecutables("git.exe")) {
+		yield win32.join(gitRootFromExecutable(git), "bin", "bash.exe");
+	}
+	yield* findWindowsExecutables("bash.exe");
 }
 
 /**
  * Resolve shell configuration based on platform and an optional explicit shell path.
  * Resolution order:
  * 1. User-specified shellPath
- * 2. On Windows: Git Bash in known locations, then bash on PATH
+ * 2. On Windows: known Git locations, Git installations on PATH, then native Bash on PATH
  * 3. On Unix: /bin/bash, then bash on PATH, then fallback to sh
  */
 export function getShellConfig(customShellPath?: string): ShellConfig {
 	// 1. Check user-specified shell path
 	if (customShellPath) {
 		if (existsSync(customShellPath)) {
-			return getBashShellConfig(customShellPath);
+			// Preserve explicitly selected legacy WSL launchers before canonicalization.
+			// Their stdin transport is part of the existing shellPath contract.
+			if (isLegacyWslBashPath(customShellPath)) return getBashShellConfig(customShellPath);
+			return getBashShellConfig(process.platform === "win32" ? resolveExecutable(customShellPath) : customShellPath);
 		}
 		throw new Error(`Custom shell path not found: ${customShellPath}`);
 	}
 
 	if (process.platform === "win32") {
-		// 2. Try Git Bash in known locations
-		const paths: string[] = [];
-		const programFiles = process.env.ProgramFiles;
-		if (programFiles) {
-			paths.push(`${programFiles}\\Git\\bin\\bash.exe`);
+		for (const candidate of windowsBashCandidates()) {
+			if (!isFile(candidate)) continue;
+			const resolved = resolveExecutable(candidate);
+			if (!isLegacyWslBashPath(resolved)) return getBashShellConfig(resolved);
 		}
-		const programFilesX86 = process.env["ProgramFiles(x86)"];
-		if (programFilesX86) {
-			paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
-		}
-
-		for (const path of paths) {
-			if (existsSync(path)) {
-				return getBashShellConfig(path);
-			}
-		}
-
-		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
-		const bashOnPath = findExecutableOnPath("bash.exe");
-		if (bashOnPath) {
-			return getBashShellConfig(bashOnPath);
-		}
-
 		throw new Error(
-			`No bash shell found. Options:\n` +
-				`  1. Install Git for Windows: https://git-scm.com/download/win\n` +
-				`  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
-				"  3. Set shellPath in config.toml\n\n" +
-				`Searched Git Bash in:\n${paths.map((p) => `  ${p}`).join("\n")}`,
+			"No native Bash shell found on Windows. Install Git for Windows, add Git or a native Bash to PATH, " +
+				"or set shellPath to your Bash executable. WSL bash.exe is not selected automatically: " +
+				"it runs Linux commands with a different toolchain. To use WSL, start Step inside WSL " +
+				"or explicitly configure shellPath to the WSL bash.exe launcher.",
 		);
 	}
 
@@ -151,6 +167,29 @@ export function getShellEnv(agentDir?: string): NodeJS.ProcessEnv {
 	};
 }
 
+/** Add Git's own tools for non-login Bash without loading user startup scripts. */
+export function withGitBashPath(shell: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	if (process.platform !== "win32" || win32.basename(shell).toLowerCase() !== "bash.exe") return env;
+	let root = win32.dirname(win32.dirname(shell));
+	if (win32.basename(root).toLowerCase() === "usr") root = win32.dirname(root);
+	const usrBin = win32.join(root, "usr", "bin");
+	if (!isFile(win32.join(root, "cmd", "git.exe")) || !isFile(win32.join(usrBin, "bash.exe"))) return env;
+	const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+	const entries = [win32.join(root, "bin"), usrBin, ...(env[pathKey] ?? "").split(";")];
+	const seen = new Set<string>();
+	return {
+		...env,
+		[pathKey]: entries
+			.filter((entry) => {
+				const key = win32.normalize(entry).toLowerCase();
+				if (!entry || seen.has(key)) return false;
+				seen.add(key);
+				return true;
+			})
+			.join(";"),
+	};
+}
+
 /**
  * Spawn a shell child from a resolved ShellConfig, centralizing the command
  * transport (argv vs stdin) so call sites do not re-derive it. Callers own the
@@ -166,7 +205,7 @@ export function spawnShellChild(
 	const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
 		cwd: options.cwd,
 		detached: process.platform !== "win32",
-		env: options.env,
+		env: withGitBashPath(shellConfig.shell, options.env),
 		stdio: [commandFromStdin ? "pipe" : "ignore", options.stdout, options.stderr],
 		windowsHide: true,
 	});

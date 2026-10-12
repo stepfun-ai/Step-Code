@@ -4,7 +4,7 @@
  */
 
 import { execSync, spawnSync } from "child_process";
-import { getShellConfig } from "../utils/shell.ts";
+import { getShellConfig, withGitBashPath } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
@@ -157,6 +157,7 @@ function executeWithConfiguredShell(command: string): { executed: boolean; value
 		const result = spawnSync(shell, commandFromStdin ? args : [...args, command], {
 			encoding: "utf-8",
 			input: commandFromStdin ? command : undefined,
+			env: withGitBashPath(shell, process.env),
 			timeout: 10000,
 			stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "ignore"],
 			shell: false,

@@ -122,9 +122,7 @@ describe("InteractiveMode startup input", () => {
 	});
 
 	it.each([
-		["/thinking", undefined],
 		["/effort", undefined],
-		["/thinking high", "high"],
 		["/effort high", "high"],
 	])("routes %s through the native thinking command handler", async (input, expectedSearchTerm) => {
 		const context = createSubmitContext();

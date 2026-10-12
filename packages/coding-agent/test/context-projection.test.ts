@@ -2,7 +2,7 @@
  * Tests for request-time lightweight context projection integration:
  * - the coding-agent package re-exports the single pi-agent-core implementation
  * - step.compaction.contextProjection setting + --context-projection CLI flag
- * - AgentSession wires projection into convertToLlm, off by default,
+ * - AgentSession wires lightweight projection into convertToLlm when selected,
  *   emitting telemetry and never mutating the transcript
  */
 
@@ -13,13 +13,13 @@ import {
 } from "@step-harness/agent-core";
 import type { Api, Message, Model, ToolResultMessage, Usage } from "@step-harness/providers/compat";
 import { streamSimple } from "@step-harness/providers/compat";
-import { afterEach, describe, expect, it } from "vitest";
-import { parseArgs } from "../src/cli/args.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseArgs, printHelp } from "../src/cli/args.ts";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { PROJECTION_CUT_MARKER_PREFIX, projectContextForRequest } from "../src/core/compaction/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
+import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-manager.ts";
 import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
@@ -38,22 +38,96 @@ describe("projection single-implementation re-export", () => {
 // ============================================================================
 
 describe("step.compaction.contextProjection setting", () => {
-	it("defaults to off", () => {
+	it("defaults to CLM with automatic compaction enabled", () => {
 		const settings = SettingsManager.inMemory();
+		expect(settings.getContextProjectionMode()).toBe("clm-v1");
+		expect(settings.getCompactionSettings().contextProjection).toBe("clm-v1");
+		expect(settings.getAutoClmSettings().enabled).toBe(true);
+		expect(settings.getGlobalSettings().compaction).toBeUndefined();
+	});
+
+	it("turns implicit CLM off with automatic compaction and restores it when enabled", () => {
+		const settings = SettingsManager.inMemory({ compaction: { enabled: false } });
+		expect(settings.getContextProjectionMode()).toBe("off");
+		settings.setCompactionEnabled(true);
+		expect(settings.getContextProjectionMode()).toBe("clm-v1");
+		settings.setCompactionEnabled(false);
+		expect(settings.getContextProjectionMode()).toBe("off");
+	});
+
+	it.each(["off", "lightweight-v1", "clm-v1"] as const)(
+		"preserves explicit %s when automatic compaction is disabled",
+		(mode) => {
+			const settings = SettingsManager.inMemory({ compaction: { enabled: false, contextProjection: mode } });
+			expect(settings.getContextProjectionMode()).toBe(mode);
+			settings.setCompactionEnabled(true);
+			expect(settings.getContextProjectionMode()).toBe(mode);
+		},
+	);
+
+	it("keeps the CLM working view when only automatic maintenance is disabled", () => {
+		const settings = SettingsManager.inMemory({ compaction: { autoClm: { enabled: false } } });
+		expect(settings.getContextProjectionMode()).toBe("clm-v1");
+		expect(settings.getAutoClmSettings().enabled).toBe(false);
+	});
+
+	it.each(["off", "lightweight-v1", "clm-v1"] as const)("reads %s from config", (mode) => {
+		const settings = SettingsManager.inMemory({ compaction: { contextProjection: mode } });
+		expect(settings.getContextProjectionMode()).toBe(mode);
+		expect(settings.getCompactionSettings().contextProjection).toBe(mode);
+	});
+
+	it.each(["off", "lightweight-v1", "clm-v1"] as const)("applies a %s override", (mode) => {
+		const settings = SettingsManager.inMemory({ compaction: { contextProjection: "lightweight-v1" } });
+		settings.applyOverrides({ compaction: { contextProjection: mode } });
+		expect(settings.getContextProjectionMode()).toBe(mode);
+		expect(settings.getCompactionSettings().contextProjection).toBe(mode);
+	});
+
+	it.each(["experimental-v9", "lightweight-v1,clm-v1", ""])("treats unknown value %j as off", (mode) => {
+		const settings = SettingsManager.inMemory();
+		settings.applyOverrides({ compaction: { contextProjection: mode as never } });
 		expect(settings.getContextProjectionMode()).toBe("off");
 		expect(settings.getCompactionSettings().contextProjection).toBe("off");
 	});
 
-	it("reads lightweight-v1 from config", () => {
-		const settings = SettingsManager.inMemory();
-		settings.applyOverrides({ compaction: { contextProjection: "lightweight-v1" } });
-		expect(settings.getContextProjectionMode()).toBe("lightweight-v1");
+	it("persists one mode at a time, including resetting to off", async () => {
+		const storage = new InMemorySettingsStorage();
+		const settings = SettingsManager.fromStorage(storage);
+
+		for (const mode of ["clm-v1", "lightweight-v1", "off"] as const) {
+			settings.setContextProjectionMode(mode);
+			expect(settings.getContextProjectionMode()).toBe(mode);
+			expect(settings.getCompactionSettings().contextProjection).toBe(mode);
+			await settings.flush();
+
+			const reloaded = SettingsManager.fromStorage(storage);
+			expect(reloaded.getContextProjectionMode()).toBe(mode);
+			expect(reloaded.getGlobalSettings()).toEqual({ compaction: { contextProjection: mode } });
+		}
+		expect(settings.drainErrors()).toEqual([]);
 	});
 
-	it("treats unknown values as off", () => {
-		const settings = SettingsManager.inMemory();
-		settings.applyOverrides({ compaction: { contextProjection: "experimental-v9" as never } });
-		expect(settings.getContextProjectionMode()).toBe("off");
+	it("persists only the mode while preserving external changes to other settings", async () => {
+		const storage = new InMemorySettingsStorage();
+		storage.withLock("global", () => JSON.stringify({ compaction: { enabled: false, keepRecentTokens: 1000 } }));
+		const settings = SettingsManager.fromStorage(storage);
+		const externalSettings = {
+			theme: "light",
+			compaction: { enabled: true, reserveTokens: 8000, keepRecentTokens: 2000 },
+		};
+		storage.withLock("global", () => JSON.stringify(externalSettings));
+		settings.applyOverrides({ compaction: { enabled: false, keepRecentTokens: 9999 } });
+
+		settings.setContextProjectionMode("clm-v1");
+		await settings.flush();
+
+		const reloaded = SettingsManager.fromStorage(storage);
+		expect(reloaded.getGlobalSettings()).toEqual({
+			...externalSettings,
+			compaction: { ...externalSettings.compaction, contextProjection: "clm-v1" },
+		});
+		expect(settings.drainErrors()).toEqual([]);
 	});
 });
 
@@ -62,27 +136,64 @@ describe("step.compaction.contextProjection setting", () => {
 // ============================================================================
 
 describe("--context-projection flag", () => {
-	it("parses lightweight-v1", () => {
-		const result = parseArgs(["--context-projection", "lightweight-v1"]);
-		expect(result.contextProjection).toBe("lightweight-v1");
+	it.each(["off", "lightweight-v1", "clm-v1"] as const)("parses %s", (mode) => {
+		const result = parseArgs(["--context-projection", mode]);
+		expect(result.contextProjection).toBe(mode);
 		expect(result.diagnostics).toEqual([]);
 	});
 
-	it("parses off", () => {
-		const result = parseArgs(["--context-projection", "off"]);
-		expect(result.contextProjection).toBe("off");
+	it("leaves the mode unset when the flag is absent", () => {
+		expect(parseArgs([]).contextProjection).toBeUndefined();
 	});
 
-	it("rejects invalid modes", () => {
-		const result = parseArgs(["--context-projection", "bogus"]);
+	it.each([
+		["lightweight-v1", "clm-v1"],
+		["clm-v1", "lightweight-v1"],
+		["clm-v1", "off"],
+	])("replaces %s with %s when the flag is repeated", (initialMode, finalMode) => {
+		const result = parseArgs(["--context-projection", initialMode, "--context-projection", finalMode]);
+		expect(result.contextProjection).toBe(finalMode);
+		expect(result.diagnostics).toEqual([]);
+	});
+
+	it.each(["bogus", "lightweight-v1,clm-v1", ""])("rejects invalid mode %j", (mode) => {
+		const result = parseArgs(["--context-projection", mode]);
 		expect(result.contextProjection).toBeUndefined();
-		expect(result.diagnostics.some((d) => d.type === "error" && d.message.includes("bogus"))).toBe(true);
+		expect(result.diagnostics).toEqual([
+			{
+				type: "error",
+				message: `Invalid context projection mode "${mode}". Valid values: off, lightweight-v1, clm-v1`,
+			},
+		]);
 	});
 
 	it("requires a value", () => {
 		const result = parseArgs(["--context-projection"]);
 		expect(result.contextProjection).toBeUndefined();
-		expect(result.diagnostics.some((d) => d.type === "error")).toBe(true);
+		expect(result.diagnostics).toEqual([
+			{ type: "error", message: "--context-projection requires off, lightweight-v1, or clm-v1" },
+		]);
+	});
+
+	it("reports a missing value without consuming the next flag", () => {
+		const result = parseArgs(["--context-projection", "--verbose"]);
+		expect(result.contextProjection).toBeUndefined();
+		expect(result.verbose).toBe(true);
+		expect(result.diagnostics).toEqual([
+			{ type: "error", message: "--context-projection requires off, lightweight-v1, or clm-v1" },
+		]);
+	});
+
+	it("lists all modes and the default in help", () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			printHelp();
+			const help = log.mock.calls.flat().join("\n");
+			const option = help.split("\n").find((line) => line.includes("--context-projection <mode>"));
+			expect(option).toContain("clm-v1 (default), lightweight-v1, or off");
+		} finally {
+			log.mockRestore();
+		}
 	});
 });
 
@@ -204,8 +315,8 @@ describe("AgentSession projection wiring", () => {
 		return { session, events };
 	}
 
-	it("does not project when the flag is off (default)", async () => {
-		const { session: s } = await createSession();
+	it("does not project when the flag is explicitly off", async () => {
+		const { session: s } = await createSession("off");
 		const agentMessages = buildAgentMessages();
 		const llmMessages = await s.agent.convertToLlm(agentMessages);
 		const serialized = JSON.stringify(llmMessages);
