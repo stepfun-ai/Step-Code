@@ -2,7 +2,7 @@
  * Shared command layer (S3 first-party set: auth / models / session / config).
  *
  * Backs both subcommands and in-UI slash commands from one definition. The 30+
- * pure-UI slash commands (/compact, /thinking, /copy, /export, ...) are not
+ * pure-UI slash commands (/compact, /effort, /copy, /export, ...) are not
  * commands and do not belong here.
  */
 

@@ -9,7 +9,7 @@
 // ============================================================================
 
 /** Feature-flag values for `step.compaction.contextProjection`. */
-export type ContextProjectionMode = "off" | "lightweight-v1";
+export type ContextProjectionMode = "off" | "lightweight-v1" | "clm-v1";
 
 /** Why a projection run did not rewrite anything. */
 export type ProjectionSkippedReason =

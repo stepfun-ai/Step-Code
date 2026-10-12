@@ -81,7 +81,7 @@ describe("compaction integrity", () => {
 	async function seedSession(layout: Layout, previousSummary = true): Promise<Harness> {
 		const harness = await createHarness({
 			settings: {
-				compaction: { keepRecentTokens: 20 },
+				compaction: { contextProjection: "off", keepRecentTokens: 20 },
 				retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 },
 			},
 		});

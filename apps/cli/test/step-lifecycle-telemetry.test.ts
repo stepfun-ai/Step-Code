@@ -132,26 +132,30 @@ describe("internal CLI lifecycle telemetry wiring", () => {
 	it.each([
 		{
 			name: "approved prompt", preset: "ask", hasUI: true, approved: true,
-			mode: "confirm", outcome: "ok", approval: "allow-once",
+			mode: "confirm", outcome: "ok", approval: "allow-once", toolOverrides: undefined,
 		},
 		{
 			name: "rejected prompt", preset: "ask", hasUI: true, approved: false,
-			mode: "confirm", outcome: "denied", approval: "deny",
+			mode: "confirm", outcome: "denied", approval: "deny", toolOverrides: undefined,
 		},
 		{
-			name: "policy denial", preset: "read-only", hasUI: true, approved: true,
+			// The retired Read Only tier degrades to Ask rather than to a tier that
+			// would silently execute writes, so a policy denial now comes from an
+			// explicit per-tool override instead of a preset.
+			name: "policy denial", preset: "ask", hasUI: true, approved: true,
 			mode: "deny", outcome: "denied", approval: undefined,
+			toolOverrides: { write_file: "deny" },
 		},
 		{
 			name: "unattended denial", preset: "ask", hasUI: false, approved: false,
-			mode: "confirm", outcome: "denied", approval: undefined,
+			mode: "confirm", outcome: "denied", approval: undefined, toolOverrides: undefined,
 		},
 		{
-			name: "unattended allow", preset: "bypass", hasUI: false, approved: false,
-			mode: "allow", outcome: "ok", approval: undefined,
+			name: "unattended allow", preset: "approve-for-me", hasUI: false, approved: false,
+			mode: "allow", outcome: "ok", approval: undefined, toolOverrides: undefined,
 		},
-	] as const)("records the real permission path: $name", async ({ preset, hasUI, approved, mode, outcome, approval }) => {
-		const { harness, execute } = await setup({ initialPreset: preset });
+	] as const)("records the real permission path: $name", async ({ preset, hasUI, approved, mode, outcome, approval, toolOverrides }) => {
+		const { harness, execute } = await setup({ initialPreset: preset, ...(toolOverrides ? { toolOverrides } : {}) });
 		const confirm = vi.fn(async () => approved);
 		await harness.session.bindExtensions({
 			mode: hasUI ? "tui" : "print",
@@ -179,7 +183,7 @@ describe("internal CLI lifecycle telemetry wiring", () => {
 	});
 
 	it("preserves then_run availability checks without inventing a permission decision", async () => {
-		const { harness, execute } = await setup({ initialPreset: "bypass" });
+		const { harness, execute } = await setup({ initialPreset: "approve-for-me" });
 		await harness.session.bindExtensions({ mode: "print" });
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("write_file", { then_run: "printf safe" }), { stopReason: "toolUse" }),
@@ -265,7 +269,7 @@ describe("internal CLI lifecycle telemetry wiring", () => {
 			throw new Error("reporter unavailable");
 		};
 		const { harness, execute } = await setup(
-			{ initialPreset: "bypass" },
+			{ initialPreset: "approve-for-me" },
 			{ track: unavailable, setContext: unavailable },
 		);
 		await harness.session.bindExtensions({ mode: "print" });

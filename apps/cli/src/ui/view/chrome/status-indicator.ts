@@ -14,12 +14,7 @@ export interface WorkingOutputSnapshot {
 	elapsedSeconds: number;
 	outputTokens: number;
 	phase: "thinking" | undefined;
-	/**
-	 * False from the moment a tool starts until the model emits new prose
-	 * (text delta) or thinking. While false the rotation must NOT demote the
-	 * verb to "Working..." — a short tool's verb would otherwise be visible
-	 * for a random 0-4s slice of the tick phase, i.e. not at all.
-	 */
+	/** Whether the working status may fall back from its last tool action. */
 	idleVerbAllowed: boolean;
 }
 
@@ -38,9 +33,15 @@ export class WorkingOutputTracker {
 		this.idleVerbAllowed = true;
 	}
 
-	/** A tool started: hold its verb until the model produces new output. */
+	/** Keep the tool action visible while execution is active. */
 	notifyToolStarted(): void {
 		this.idleVerbAllowed = false;
+	}
+
+	/** Release the completed action without waiting for the next model response. */
+	notifyToolEnded(): void {
+		this.idleVerbAllowed = true;
+		this.phase = undefined;
 	}
 
 	update(event: AssistantMessageEvent): void {
@@ -261,9 +262,7 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			this.setMessage(toolVerb);
 			return;
 		}
-		// 工具已结束但模型还没有新输出：保持当前动词（工具动词黏性），
-		// 否则瞬时工具的动词只在一个随机 0-4s 的 tick 相位切片里可见。
-		// 黏性期间残留的 thinking 相位也不得覆盖（read 常紧跟 thinking 发起）。
+		// Tool completion releases this hold even if the next model request is slow.
 		if (!snapshot.idleVerbAllowed) return;
 		if (snapshot.phase === "thinking") {
 			this.setMessage("Thinking...");

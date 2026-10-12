@@ -118,4 +118,20 @@ describe("resolveConfigValue", () => {
 			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 		}
 	});
+
+	test("runs Windows commands with the Git Bash child environment", () => {
+		if (process.platform === "win32") return;
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		vi.spyOn(shellModule, "getShellConfig").mockReturnValue({ shell: "/bin/bash", args: ["-c"] });
+		const withGitBashPath = vi
+			.spyOn(shellModule, "withGitBashPath")
+			.mockImplementation((_shell, env) => ({ ...env, STEP_TEST_GIT_BASH_ENV: "git-bash" }));
+		try {
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			expect(resolveConfigValueUncached("!echo $STEP_TEST_GIT_BASH_ENV")).toBe("git-bash");
+			expect(withGitBashPath).toHaveBeenCalledWith("/bin/bash", process.env);
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+		}
+	});
 });

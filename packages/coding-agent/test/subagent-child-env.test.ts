@@ -62,6 +62,7 @@ function registeredTools(factory: (pi: ExtensionAPI) => void): string[] {
 	factory({
 		registerTool: (tool: ToolDefinition) => tools.push(tool.name),
 		registerCommand: () => {},
+		registerMessageRenderer: () => {},
 		registerFlag: () => {},
 		registerShortcut: () => {},
 		on: () => {},

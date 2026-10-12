@@ -414,7 +414,7 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 });
 
 describe("InteractiveMode.createBaseAutocompleteProvider", () => {
-	test("offers the same thinking-level completions for /thinking and /effort", async () => {
+	test("offers thinking-level completions for /effort", async () => {
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: [];
@@ -456,12 +456,11 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			provider.getSuggestions([line], 0, line.length, {
 				signal: new AbortController().signal,
 			});
-		const thinkingCompletions = await getCompletions("/thinking h");
 		const effortCompletions = await getCompletions("/effort h");
 
-		expect(thinkingCompletions?.items.map((item) => item.value)).toEqual(["high"]);
-		expect(effortCompletions).toEqual(thinkingCompletions);
-		expect(getAvailableThinkingLevels).toHaveBeenCalledTimes(2);
+		expect(effortCompletions?.items.map((item) => item.value)).toEqual(["high"]);
+		expect(await getCompletions("/thinking h")).toBeNull();
+		expect(getAvailableThinkingLevels).toHaveBeenCalledOnce();
 	});
 
 	test("matches model command arguments across provider/model order", async () => {

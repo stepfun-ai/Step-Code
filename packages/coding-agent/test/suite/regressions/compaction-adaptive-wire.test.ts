@@ -50,7 +50,7 @@ it("keeps Harbor adaptive main and compaction wire budgets separate without a th
 	const h = await createHarness({
 		modelsJson,
 		settings: {
-			compaction: { enabled: true, reserveTokens: 851968, keepRecentTokens: 20000 },
+			compaction: { contextProjection: "off", enabled: true, reserveTokens: 851968, keepRecentTokens: 20000 },
 			retry: { enabled: false },
 		},
 	});

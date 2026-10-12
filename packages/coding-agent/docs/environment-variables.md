@@ -8,6 +8,10 @@ Step reads the variables below. Configuration shared across launches belongs in
 | `STEP_CODING_AGENT_DIR` | Override the agent directory; default is `~/.stepcode/agent` |
 | `STEP_CODING_AGENT_SESSION_DIR` | Override session storage; `--session-dir` takes precedence |
 | `STEP_CODING_AGENT_PLAN_DIR` | Directory for newly selected native Markdown plan paths; defaults to `<cwd>/.stepcode/plans` |
+| `STEP_PERMISSION_PRESET` | Permission tier: `ask`, `approve-for-me`, or `full-access`. Retired `bypass`/`autopilot`/`read-only` tiers reset to `ask` so the user can choose again; `full-access` requires risk acknowledgment |
+| `STEP_APPROVAL_MODE` | Low-level approval mode: `confirm` or `auto` (retired `strict` maps to `confirm`) |
+| `STEP_AUTO_RESUME` | Model-error continuation override (`1` enables, `0` disables). Enabled by default in Approve for Me and Full Access, inactive in Ask. Does not grant permissions |
+| `STEP_AUTOPILOT` | Retired tier selector; resets to Ask. Select a new tier instead |
 | `STEP_API_KEY` | StepFun API credential |
 | `STEP_BASE_URL` | Override the StepFun API endpoint |
 | `STEP_PROVIDER`, `STEP_MODEL` | Default provider and model selection |

@@ -31,7 +31,7 @@ describe("Step incomplete stream recovery", () => {
 		};
 		const harness = await createHarness({
 			tools: [writeTool],
-			extensionFactories: [createStepExtension({ permission: { initialPreset: "bypass" } })],
+			extensionFactories: [createStepExtension({ permission: { initialPreset: "approve-for-me" } })],
 			settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } },
 		});
 		harnesses.push(harness);

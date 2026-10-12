@@ -57,6 +57,10 @@ step --help
 
 Upgrade later with `step update`\.
 
+On macOS/Linux/WSL, installation and upgrades also prepare StepPage, which requires
+Node.js 20 or newer on PATH. If StepPage setup fails, Step remains usable and retries
+on the next session. Run `step mcp prepare` to retry setup manually.
+
 ## Sign in to the Step provider
 
 The default Step Code entrypoint exposes one built-in model provider: **Step (StepFun)**. The profiles below select the Step service region and billing method; they are not separate providers.
@@ -180,7 +184,7 @@ When running from the source tree, replace `step` with `pnpm step`\.
 
 ## Security
 
-- Four permission modes \(Ask / Read Only / Bypass / Autopilot\), cycled with `Shift+Tab`; dangerous commands require a separate confirmation dialog in every mode\.
+- Three permission tiers \(Ask / Approve for Me / Full Access\), cycled with `Shift+Tab`; dangerous commands require a separate confirmation dialog in Ask and Approve for Me, and run without one only in Full Access after its risk acknowledgment\.
 
 ## Uninstall
 

@@ -114,6 +114,12 @@ function isMessageArray(value: Context | readonly Message[]): value is readonly 
 export function estimateContextTokens(context: Context | readonly Message[]): ContextUsageEstimate {
 	if (isMessageArray(context)) return estimateMessages(context);
 
+	const estimatedInputTokens = context.estimatedInputTokens;
+	if (typeof estimatedInputTokens === "number" && Number.isFinite(estimatedInputTokens) && estimatedInputTokens >= 0) {
+		const tokens = Math.ceil(estimatedInputTokens);
+		return { tokens, usageTokens: 0, trailingTokens: tokens, lastUsageIndex: null };
+	}
+
 	const estimate = estimateMessages(context.messages);
 	if (estimate.lastUsageIndex !== null) {
 		const addedNames = new Set(

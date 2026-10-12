@@ -94,11 +94,76 @@ Use this skill.
 			{
 				type: "warning",
 				code: "invalid_metadata",
-				message: "description is required",
+				message: `${join(root, "user/broken/SKILL.md")}: frontmatter is missing "description" — add e.g. description: "..."`,
 				path: join(root, "user/broken/SKILL.md"),
 				source: { type: "user" },
 			},
 		]);
+	});
+
+	it("reports a single-line diagnostic for an unquoted colon in the description", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		await env.createDir("user/search-first", { recursive: true });
+		await env.writeFile(
+			"user/search-first/SKILL.md",
+			"---\nname: search-first\ndescription: Search the web: before guessing\n---\nUse this skill.",
+		);
+
+		const { skills, diagnostics } = await loadSkills(env, "user");
+
+		expect(skills).toEqual([]);
+		expect(diagnostics).toEqual([
+			{
+				type: "warning",
+				code: "parse_failed",
+				message:
+					`${join(root, "user/search-first/SKILL.md")}: invalid YAML frontmatter at line 3, column 14: ` +
+					'Nested mappings are not allowed in compact mappings — description contains an unquoted ":" — ' +
+					"wrap the value in double quotes",
+				path: join(root, "user/search-first/SKILL.md"),
+			},
+		]);
+	});
+
+	it("loads a description whose colon is quoted", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		await env.createDir("user/search-first", { recursive: true });
+		await env.writeFile(
+			"user/search-first/SKILL.md",
+			'---\nname: search-first\ndescription: "Search the web: before guessing"\n---\nUse this skill.',
+		);
+
+		const { skills, diagnostics } = await loadSkills(env, "user");
+
+		expect(diagnostics).toEqual([]);
+		expect(skills.map((skill) => skill.description)).toEqual(["Search the web: before guessing"]);
+	});
+
+	it.each([
+		"description: # note: later\nother: [unclosed",
+		"description: |\n  description: harmless: text\nother: [unclosed",
+	])("omits quoting hints for valid description syntax: %s", async (yaml) => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		await env.createDir("user/example", { recursive: true });
+		await env.writeFile("user/example/SKILL.md", `---\nname: example\n${yaml}\n---`);
+		const { diagnostics } = await loadSkills(env, "user");
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].code).toBe("parse_failed");
+		expect(diagnostics[0].message).not.toContain("wrap the value");
+	});
+
+	it("escapes terminal control characters in parser reasons", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		await env.createDir("user/example", { recursive: true });
+		await env.writeFile("user/example/SKILL.md", '---\nname: example\ndescription: "bad\\\u001b[31m"\n---');
+		const { diagnostics } = await loadSkills(env, "user");
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).not.toContain("\u001b");
+		expect(diagnostics[0].message).toContain("\\u001b");
 	});
 
 	it("loads direct markdown children only from the root directory", async () => {
