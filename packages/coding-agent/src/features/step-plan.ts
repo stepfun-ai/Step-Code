@@ -55,11 +55,18 @@ function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
 }
 
+const publishedPlanModes = new WeakMap<object, boolean>();
+export function getStepPlanMode(manager: object): string {
+	const value = publishedPlanModes.get(manager);
+	return value === undefined ? "Unknown" : value ? "Plan" : "Default";
+}
+
 /**
  * Status-bar chip: "Planning (user|agent|unknown)" while plan mode is on,
  * cleared (normal) otherwise.
  */
 function updateStatus(ctx: ExtensionContext, enabled: boolean, planSource: StepPlanSource | undefined): void {
+	publishedPlanModes.set(ctx.sessionManager, enabled);
 	if (enabled) {
 		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `Planning (${planSource ?? "unknown"})`));
 	} else {

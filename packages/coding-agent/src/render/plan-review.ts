@@ -25,20 +25,27 @@ import type { ToolRenderResultOptions } from "../core/extensions/types.ts";
 import { getMarkdownTheme, type Theme } from "../theme/theme.ts";
 import { formatKeyText } from "./keybinding-hints.ts";
 
-/** How the review ended, as recorded on the tool result for the transcript. */
-export type PlanReviewOutcome = "approved" | "feedback" | "dismissed";
+/** How review ended or was handed off, as recorded on the tool result. */
+export type PlanReviewOutcome = "approved" | "feedback" | "dismissed" | "external_approval_required";
 
 /**
  * Tool-result details for exit_plan_mode.
  *
  * The dialog is an inline component that is torn down the moment it closes, so
  * the plan it displayed leaves no trace on screen. Carrying the reviewed text
- * here lets the tool row render it back into the transcript.
+ * here lets the tool row render it back into the transcript. Headless and RPC
+ * results carry the same snapshot for callers to approve externally.
  */
 export interface PlanReviewDetails {
 	planFilePath: string;
 	planContents: string;
 	outcome: PlanReviewOutcome;
+	/** Who owns the approval decision, independent of whether approval has occurred. */
+	approvalSource?: "user" | "external";
+	/** SHA-256 (hex) of the exact planContents encoded as UTF-8, without normalization. */
+	planHash?: string;
+	/** Whether plan mode is inactive after this result; this does not itself grant approval. */
+	planModeExited?: boolean;
 	/** The note the user typed, for the "feedback" outcome. */
 	feedback?: string;
 }
@@ -243,7 +250,10 @@ function isPlanReviewDetails(value: unknown): value is PlanReviewDetails {
 	return (
 		typeof candidate.planFilePath === "string" &&
 		typeof candidate.planContents === "string" &&
-		(candidate.outcome === "approved" || candidate.outcome === "feedback" || candidate.outcome === "dismissed")
+		(candidate.outcome === "approved" ||
+			candidate.outcome === "feedback" ||
+			candidate.outcome === "dismissed" ||
+			candidate.outcome === "external_approval_required")
 	);
 }
 
@@ -254,6 +264,7 @@ const OUTCOME_SUMMARIES: Record<
 	approved: { marker: "✓", color: "success", text: "Plan approved" },
 	feedback: { marker: "✎", color: "warning", text: "Changes requested" },
 	dismissed: { marker: "•", color: "muted", text: "Review dismissed — still planning" },
+	external_approval_required: { marker: "•", color: "warning", text: "External approval required" },
 };
 
 /**

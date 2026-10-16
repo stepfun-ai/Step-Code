@@ -7,6 +7,7 @@ import {
 	type StepTelemetryReporter,
 	trackStepTelemetry,
 } from "../../step/telemetry.ts";
+import { acquireWorkflowAdmission, type WorkflowAdmissionLease } from "./admission.ts";
 import { createDefaultWorkflowAgentRunner, normalizeWorkflowAgentValue } from "./agent-runner.ts";
 import {
 	clampWorkflowAgentLimit,
@@ -29,9 +30,10 @@ import {
 } from "./hoh.ts";
 import { type WorkflowJournal, workflowHash, workflowJsonValue } from "./journal.ts";
 import { WorkflowProgressStore } from "./progress.ts";
-import { validateWorkflowSchema } from "./schema.ts";
+import { isSafeParseSchema, validateWorkflowSchema } from "./schema.ts";
 import {
 	checkWorkflowPathAccess,
+	classifyWorkflowToolEffect,
 	isWorkflowPathInside,
 	resolveWorkflowToolProfile,
 	type WorkflowAcl,
@@ -43,9 +45,11 @@ import type {
 	WorkflowAgentOptions,
 	WorkflowAgentRunner,
 	WorkflowAgentRunResult,
+	WorkflowJournalEntry,
 	WorkflowProgress,
 	WorkflowProgressAgent,
 	WorkflowRunResult,
+	WorkflowTaskFailure,
 	WorkflowUsage,
 } from "./types.ts";
 import { emptyWorkflowUsage, mergeWorkflowUsage, workflowUsageTokens } from "./types.ts";
@@ -69,8 +73,12 @@ export interface WorkflowRuntimeOptions {
 	telemetry?: StepTelemetryReporter;
 	budgetTotal?: number | null;
 	maxConcurrency?: number;
+	/** Trusted host/provider ceiling, never a model-authored override. */
+	providerConcurrencyLimit?: number;
 	maxAgents?: number;
 	agentTimeoutMs?: number;
+	/** Grace for an injected runner to settle after cancellation. Production children exit within 10s. */
+	runnerCleanupTimeoutMs?: number;
 	context?: ExtensionContext;
 	nestedWorkflow?: (name: string, args: unknown, parent: WorkflowRuntime, depth: number) => Promise<unknown>;
 	signal?: AbortSignal;
@@ -103,6 +111,7 @@ export class WorkflowRuntime {
 	readonly name: string;
 	readonly budget: WorkflowBudget;
 	readonly semaphore: WorkflowSemaphore;
+	private readonly concurrency: NonNullable<WorkflowProgress["concurrency"]>;
 	private readonly journal: WorkflowJournal;
 	private readonly progress: WorkflowProgressStore;
 	private readonly onProgress?: WorkflowRuntimeOptions["onProgress"];
@@ -115,9 +124,23 @@ export class WorkflowRuntime {
 	private readonly signal?: AbortSignal;
 	private readonly maxAgents: number;
 	private readonly agentTimeoutMs: number;
+	private readonly runnerCleanupTimeoutMs: number;
+	private readonly controller = new AbortController();
+	private readonly pendingOperations = new Set<Promise<unknown>>();
+	private readonly nodeErrors = new WeakSet<object>();
+	private readonly nestedTaskFailures: WorkflowTaskFailure[] = [];
+	private readonly recordedFailures = new Set<number>();
+	private admission?: WorkflowAdmissionLease;
+	private lifecycle: "idle" | "running" | "closing" | "closed" = "idle";
 	private sequence = 0;
 	private agentCount = 0;
 	private cacheHits = 0;
+	/**
+	 * Set once a live call in this run may have changed the environment. Cached
+	 * results recorded against the previous environment are then stale unless the
+	 * call never touched it.
+	 */
+	private environmentChanged = false;
 	private phases: Array<{ title: string; detail?: string }> = [];
 	private startedAt = 0;
 	private activeWriterId: string | undefined;
@@ -132,13 +155,20 @@ export class WorkflowRuntime {
 		this.journal = options.journal;
 		this.onProgress = options.onProgress;
 		this.budget = new WorkflowBudget(options.budgetTotal);
-		this.semaphore = new WorkflowSemaphore(clampWorkflowConcurrency(options.maxConcurrency));
+		const ceiling = clampWorkflowConcurrency(options.providerConcurrencyLimit);
+		const limit = Math.min(ceiling, clampWorkflowConcurrency(options.maxConcurrency));
+		this.concurrency = { requested: options.maxConcurrency, ceiling, limit, cap: limit };
+		this.semaphore = new WorkflowSemaphore(limit);
 		this.maxAgents = clampWorkflowAgentLimit(options.maxAgents);
 		this.agentTimeoutMs = clampAgentTimeout(options.agentTimeoutMs);
+		this.runnerCleanupTimeoutMs = options.runnerCleanupTimeoutMs ?? 12_000;
 		this.runner = options.runner ?? createDefaultWorkflowAgentRunner();
 		this.telemetry = options.telemetry;
 		this.context = options.context;
-		this.signal = options.signal;
+		this.signal = AbortSignal.any([
+			this.controller.signal,
+			...[options.signal, options.context?.signal].filter((signal): signal is AbortSignal => signal !== undefined),
+		]);
 		this.nestedWorkflow = options.nestedWorkflow;
 		this.now = options.now ?? Date.now;
 		this.vmExecutor = options.vmExecutor ?? runInQuickJs;
@@ -149,6 +179,7 @@ export class WorkflowRuntime {
 			runId: this.runId,
 			name: this.name,
 			status: "running",
+			concurrency: { ...this.concurrency },
 			startedAt,
 			updatedAt: startedAt,
 			agents: [],
@@ -161,17 +192,25 @@ export class WorkflowRuntime {
 	}
 
 	async runScript(script: string, args: unknown, vmOptions: WorkflowVmOptions = {}): Promise<WorkflowRunResult> {
-		await this.journal.initialize(script);
-		await this.updateProgress({ status: "running", message: "Workflow started" });
-		this.track("workflow_started", { phase_count: 0 });
+		if (this.lifecycle !== "idle") throw new Error("Workflow run is already started or closed");
+		this.lifecycle = "running";
+		this.admission ??= acquireWorkflowAdmission(this.concurrency.ceiling);
 		try {
+			await this.journal.initialize(script);
+			await this.updateProgress({ status: "running", message: "Workflow started" });
+			this.track("workflow_started", { phase_count: 0 });
 			if (this.signal?.aborted || this.context?.signal?.aborted) {
 				throw new Error("Workflow operation was aborted");
 			}
 			const vmResult = await this.vmExecutor(script, args, this.host(0), {
 				...vmOptions,
+				signal: this.signal,
 				filename: vmOptions.filename ?? this.journal.paths.scriptPath,
 			});
+			if (this.pendingOperations.size > 0)
+				throw new Error(
+					"Workflow script returned with unawaited agent calls or workflow/iterate operations; await the complete operation",
+				);
 			if (this.signal?.aborted || this.context?.signal?.aborted) {
 				// A swallowing script (parallel()/pipeline() null-on-error) can absorb the abort
 				// thrown by semaphore.acquire()/the runner and return normally; recheck here so a
@@ -187,23 +226,58 @@ export class WorkflowRuntime {
 				throw new WorkflowBudgetExceeded(budgetTotal, this.budget.spent(), 0);
 			}
 			const finishedAt = this.readNow();
+			const snapshot = this.progress.current();
+			const failures = snapshot.agents.filter((agent) => agent.status === "failed" || agent.status === "aborted");
+			const taskFailures = [...this.nestedTaskFailures, ...(vmResult.taskFailures ?? [])];
+			const status =
+				failures.length === 0 && taskFailures.length === 0
+					? "completed"
+					: snapshot.completedAgents > 0
+						? "partial_failed"
+						: "failed";
 			await this.updateProgress({
-				status: "completed",
+				status,
+				taskFailures,
 				spentTokens: this.budget.spent(),
-				message: "Workflow completed",
-			});
+				message:
+					status !== "completed"
+						? `Workflow finished with ${failures.length} failed nodes and ${taskFailures.length} failed callbacks`
+						: "Workflow completed",
+			}).catch(() => undefined);
 			this.track("workflow_finished", {
-				status: "completed",
+				status,
 				agent_count: this.agentCount,
 				cache_hits: this.cacheHits,
 				spent_tokens: this.budget.spent(),
 			});
-			await Promise.all([this.journal.flush(), this.progress.flush()]);
+			// The computed result is authoritative; a failed final disk write must not turn a
+			// completed run into a thrown error.
+			await Promise.all([this.journal.flush(), this.progress.flush()]).catch(() => undefined);
 			return {
 				schemaVersion: 1,
 				runId: this.runId,
 				name: this.name,
-				status: "completed",
+				status,
+				summary: {
+					total: snapshot.totalAgents,
+					completed: snapshot.completedAgents,
+					failed: failures.length,
+					...(taskFailures.length ? { failedCallbacks: taskFailures.length } : {}),
+				},
+				...(taskFailures.length ? { taskFailures } : {}),
+				timing: {
+					runElapsedMs: finishedAt - this.startedAt,
+					maxNodeExecutionMs: Math.max(
+						0,
+						...snapshot.agents.map((agent) =>
+							agent.startedAt === undefined || agent.finishedAt === undefined
+								? 0
+								: agent.finishedAt - agent.startedAt,
+						),
+					),
+				},
+				failures,
+				concurrency: this.concurrencySnapshot(),
 				value: vmResult.value,
 				meta: vmResult.meta,
 				scriptPath: this.journal.paths.scriptPath,
@@ -221,15 +295,35 @@ export class WorkflowRuntime {
 					: error instanceof WorkflowBudgetExceeded
 						? "budget_exceeded"
 						: "failed";
-			await this.updateProgress({ status, spentTokens: this.budget.spent(), message: errorMessage(error) });
+			this.lifecycle = "closing";
+			try {
+				// A progress write failure must never replace the run's terminal error, and a
+				// run whose disk writes fail must still publish its terminal state.
+				await this.updateProgress({
+					status: "stopping",
+					message: `${errorMessage(error)}; cancelling unfinished nodes`,
+				}).catch(() => undefined);
+			} finally {
+				this.controller.abort(error);
+				await Promise.allSettled([...this.pendingOperations]);
+			}
+			await this.updateProgress({ status, spentTokens: this.budget.spent(), message: errorMessage(error) }).catch(
+				() => undefined,
+			);
 			this.track("workflow_finished", {
 				status,
 				agent_count: this.agentCount,
 				cache_hits: this.cacheHits,
 				spent_tokens: this.budget.spent(),
 			});
-			await Promise.all([this.journal.flush(), this.progress.flush()]);
+			await Promise.all([this.journal.flush(), this.progress.flush()]).catch(() => undefined);
 			throw error;
+		} finally {
+			this.lifecycle = "closed";
+			this.controller.abort();
+			this.semaphore.dispose();
+			this.admission?.release();
+			this.admission = undefined;
 		}
 	}
 
@@ -240,11 +334,41 @@ export class WorkflowRuntime {
 		vmOptions: WorkflowVmOptions = {},
 	): Promise<unknown> {
 		if (depth > 1) throw new Error("Nested workflow depth is limited to one level");
-		const result = await this.vmExecutor(script, args, this.host(depth), vmOptions);
+		const result = await this.vmExecutor(script, args, this.host(depth), { ...vmOptions, signal: this.signal });
+		this.nestedTaskFailures.push(
+			...(result.taskFailures ?? []).map((failure) => ({
+				...failure,
+				script: vmOptions.filename ?? "nested workflow",
+			})),
+		);
 		return result.value;
 	}
 
-	async agent(prompt: string, options: WorkflowAgentOptions = {}): Promise<unknown> {
+	agent(prompt: string, options: WorkflowAgentOptions = {}): Promise<unknown> {
+		return this.trackOperation(() => this.runAgent(prompt, options));
+	}
+
+	private trackOperation<T>(start: () => Promise<T>): Promise<T> {
+		if (this.lifecycle === "closed" || this.lifecycle === "closing")
+			return Promise.reject(new Error("Workflow scope is closed"));
+		this.admission ??= acquireWorkflowAdmission(this.concurrency.ceiling);
+		const pending = Promise.resolve().then(() => {
+			if (this.lifecycle === "closed" || this.lifecycle === "closing") throw new Error("Workflow scope is closed");
+			return start();
+		});
+		this.pendingOperations.add(pending);
+		const settled = (): void => {
+			this.pendingOperations.delete(pending);
+			if (this.lifecycle === "idle" && this.pendingOperations.size === 0) {
+				this.admission?.release();
+				this.admission = undefined;
+			}
+		};
+		void pending.then(settled, settled);
+		return pending;
+	}
+
+	private async runAgent(prompt: string, options: WorkflowAgentOptions): Promise<unknown> {
 		const normalizedPrompt = normalizePrompt(prompt);
 		const normalizedOptions = this.normalizeAgentOptions(options);
 		const seq = this.sequence;
@@ -252,7 +376,9 @@ export class WorkflowRuntime {
 		if (this.agentCount >= this.maxAgents) throw new Error(`Workflow exceeded the ${this.maxAgents}-agent limit`);
 		this.agentCount += 1;
 		const callHash = workflowHash({ prompt: normalizedPrompt, options: serializableOptions(normalizedOptions) });
-		const cached = this.journal.getCached(seq, callHash);
+		// Decide replay before the first await: calls a script issues together all
+		// see the environment as it was before any of their live siblings ran a tool.
+		const cached = this.takeCached(callHash, normalizedOptions);
 		const task = normalizedPrompt.replace(/\s+/gu, " ").slice(0, 200);
 		const label = normalizedOptions.label?.trim() || task;
 		const agentId = `${this.runId}-${seq + 1}`;
@@ -260,7 +386,9 @@ export class WorkflowRuntime {
 		if (cached) {
 			this.cacheHits += 1;
 			await this.journal.append({
-				...cached,
+				...cached.entry,
+				seq,
+				result: cached.result,
 				callId: agentId,
 				prompt: normalizedPrompt,
 				options: workflowJsonValue(serializableOptions(normalizedOptions)),
@@ -272,14 +400,14 @@ export class WorkflowRuntime {
 					...identity,
 					status: "cached",
 					finishedAt: this.readNow(),
-					usageTokens: workflowUsageTokens(cached.usage),
+					usageTokens: workflowUsageTokens(cached.entry.usage),
 				},
 				spentTokens: this.budget.spent(),
 			});
 			this.track("workflow_agent_finished", {
 				status: "cached",
 				cached: true,
-				token_count: workflowUsageTokens(cached.usage),
+				token_count: workflowUsageTokens(cached.entry.usage),
 			});
 			this.track("workflow_resumed", { cache_hits: this.cacheHits });
 			return cached.result;
@@ -288,13 +416,29 @@ export class WorkflowRuntime {
 		const retries = clampRetries(normalizedOptions.retries);
 		const parentSignal = this.signal ?? this.context?.signal;
 		let release: (() => void) | undefined;
+		let releaseShared: (() => void) | undefined;
+		const shared = this.admission!.semaphore;
 		let startedAt: number | undefined;
 		let lastErrors: string[] = [];
 		let totalUsage: WorkflowUsage = emptyWorkflowUsage();
+		let rateLimitRetries = 0;
+		let cleanupIncomplete = false;
+		let timedOut = false;
+		// Only the runner's structured provider classification can indicate congestion.
+		// Error text, agent output, node labels and ids are never classified.
+		let providerFailureKind: WorkflowAgentRunResult["errorKind"];
+		let schemaAttempt = 0;
+		let runnerInvoked = false;
+		let toolActivityObserved = true;
+		let worldAccess = false;
+		let requestEpoch = this.semaphore.epoch;
+		let sharedEpoch = shared.epoch;
 		try {
 			await this.updateProgress({ agent: { ...identity, status: "queued" } });
 			this.validateMounts(normalizedOptions);
 			release = await this.semaphore.acquire(parentSignal);
+			releaseShared = await shared.acquire(parentSignal);
+			if (parentSignal?.aborted) throw new Error("Workflow operation was aborted");
 			// Check after acquiring a slot so queued waves see completed calls' spend.
 			// Already-running calls can still overshoot by one concurrency wave.
 			this.requireRemainingBudget();
@@ -307,6 +451,8 @@ export class WorkflowRuntime {
 				this.activeWriterId = agentId;
 			}
 			startedAt = this.readNow();
+			requestEpoch = this.semaphore.epoch;
+			sharedEpoch = shared.epoch;
 			await this.updateProgress({
 				agent: { ...identity, status: "running", startedAt },
 				totalAgents: this.agentCount,
@@ -316,6 +462,7 @@ export class WorkflowRuntime {
 				phase_length: normalizedOptions.phase?.length ?? 0,
 			});
 			for (let attempt = 1; attempt <= retries; attempt += 1) {
+				schemaAttempt = attempt;
 				if (attempt > 1) {
 					try {
 						this.requireRemainingBudget();
@@ -328,6 +475,7 @@ export class WorkflowRuntime {
 							totalUsage,
 							attempt - 1,
 							errorMessage(error),
+							rateLimitRetries,
 						);
 						throw error;
 					}
@@ -341,26 +489,130 @@ export class WorkflowRuntime {
 				const relayAbort = (): void => attemptController.abort(parentSignal?.reason);
 				if (parentSignal?.aborted) relayAbort();
 				else parentSignal?.addEventListener("abort", relayAbort, { once: true });
+				if (attemptController.signal.aborted)
+					throw attemptController.signal.reason ?? new Error("Workflow operation was aborted");
 				let timeout: ReturnType<typeof setTimeout> | undefined;
+				let runnerPromise: Promise<WorkflowAgentRunResult> | undefined;
+				let cancelAttempt: (() => void) | undefined;
+				let settling: Promise<WorkflowAgentRunResult | undefined> | undefined;
+				// After cancellation the runner gets a bounded grace to settle. Returns its
+				// late result so the usage it reports can still be accounted.
+				const settleRunner = (): Promise<WorkflowAgentRunResult | undefined> => {
+					settling ??= (async () => {
+						if (!runnerPromise || !attemptController.signal.aborted) return undefined;
+						let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+						try {
+							const settled = await Promise.race([
+								runnerPromise.then(
+									(value) => ({ value }),
+									() => ({ value: undefined }),
+								),
+								new Promise<undefined>((resolve) => {
+									cleanupTimer = setTimeout(() => resolve(undefined), this.runnerCleanupTimeoutMs);
+								}),
+							]);
+							if (settled) return settled.value;
+							// An injected runner violated the cancellation contract. Keep its
+							// shared slot reserved until it settles; never admit replacement
+							// work on top of an operation that may still be using the backend.
+							cleanupIncomplete = true;
+							const retainedLease = acquireWorkflowAdmission(this.concurrency.ceiling);
+							const retainedRelease = releaseShared;
+							releaseShared = undefined;
+							const done = (): void => {
+								retainedRelease?.();
+								retainedLease.release();
+							};
+							void runnerPromise.then(done, done);
+							return undefined;
+						} finally {
+							if (cleanupTimer) clearTimeout(cleanupTimer);
+						}
+					})();
+					return settling;
+				};
 				try {
-					const timedOut = new Promise<never>((_resolve, reject) => {
+					const cancelled = new Promise<never>((_resolve, reject) => {
+						cancelAttempt = () =>
+							reject(attemptController.signal.reason ?? new Error("Workflow operation was aborted"));
+						attemptController.signal.addEventListener("abort", cancelAttempt, { once: true });
+						if (attemptController.signal.aborted) cancelAttempt();
 						timeout = setTimeout(() => {
-							attemptController.abort();
-							reject(new Error(`Workflow agent ${label} timed out after ${this.agentTimeoutMs}ms`));
+							timedOut = true;
+							attemptController.abort(
+								new Error(
+									`Workflow agent ${label} timed out after ${this.agentTimeoutMs}ms (execution only; queue time excluded)`,
+								),
+							);
 						}, this.agentTimeoutMs);
 					});
-					raw = await Promise.race([
-						this.runner({
-							prompt: attemptPrompt,
-							options: normalizedOptions,
-							cwd: this.cwd,
-							signal: attemptController.signal,
-							runId: this.runId,
-							agentId,
-						}),
-						timedOut,
-					]);
+					runnerInvoked = true;
+					runnerPromise = this.runner({
+						prompt: attemptPrompt,
+						options: normalizedOptions,
+						cwd: this.cwd,
+						signal: attemptController.signal,
+						runId: this.runId,
+						agentId,
+						onToolExecutionStart: (toolName) => {
+							const effect = classifyWorkflowToolEffect(toolName);
+							if (effect !== "none") worldAccess = true;
+							if (effect === "mutate") this.environmentChanged = true;
+						},
+						onModelRequest: (event) => {
+							if (attemptController.signal.aborted) return;
+							if (event.type === "started") {
+								requestEpoch = this.semaphore.epoch;
+								sharedEpoch = shared.epoch;
+							}
+							if (event.type === "succeeded") {
+								this.semaphore.succeeded(requestEpoch);
+								shared.succeeded(sharedEpoch);
+								// The next request in this turn (a resample after leaked tool-call
+								// markup) has no "started" event of its own.
+								requestEpoch = this.semaphore.epoch;
+								sharedEpoch = shared.epoch;
+							}
+							if (event.type === "rate_limit") {
+								rateLimitRetries++;
+								this.semaphore.throttle(requestEpoch, event.delayMs);
+								shared.throttle(sharedEpoch, event.delayMs);
+								requestEpoch = this.semaphore.epoch;
+								sharedEpoch = shared.epoch;
+							}
+							void this.updateProgress({
+								concurrency: this.concurrencySnapshot(),
+								agent: {
+									...identity,
+									status: "running",
+									startedAt,
+									rateLimitRetries,
+									retry:
+										event.type === "rate_limit"
+											? { attempt: event.attempt, maxRetries: event.maxRetries, delayMs: event.delayMs }
+											: undefined,
+								},
+							}).catch(() => undefined);
+						},
+					});
+					raw = await Promise.race([runnerPromise, cancelled]);
+					if (raw.toolActivityObserved !== true) toolActivityObserved = false;
 				} catch (error: unknown) {
+					// A thrown attempt cannot vouch that every tool start was reported.
+					toolActivityObserved = false;
+					// A timed-out or aborted attempt still spent tokens. The runner reports
+					// them when it settles, after the race has already been decided.
+					const late = await settleRunner();
+					if (late) {
+						const lateUsage = normalizeUsage(late.usage);
+						totalUsage = mergeWorkflowUsage(totalUsage, lateUsage);
+						try {
+							this.budget.consume(lateUsage);
+						} catch (budgetError: unknown) {
+							if (budgetError instanceof WorkflowBudgetExceeded) this.budgetError ??= budgetError;
+						}
+					}
+					if (!attemptController.signal.aborted) providerFailureKind = thrownErrorKind(error);
 					await this.appendFailure(
 						seq,
 						callHash,
@@ -369,11 +621,14 @@ export class WorkflowRuntime {
 						totalUsage,
 						attempt,
 						errorMessage(error),
+						rateLimitRetries,
 					);
 					throw error;
 				} finally {
 					if (timeout) clearTimeout(timeout);
+					if (cancelAttempt) attemptController.signal.removeEventListener("abort", cancelAttempt);
 					parentSignal?.removeEventListener("abort", relayAbort);
+					await settleRunner();
 				}
 				const usage = normalizeUsage(raw.usage);
 				totalUsage = mergeWorkflowUsage(totalUsage, usage);
@@ -389,11 +644,13 @@ export class WorkflowRuntime {
 						totalUsage,
 						attempt,
 						errorMessage(error),
+						rateLimitRetries,
 					);
 					throw error;
 				}
 				if (raw.status === "failed" || raw.status === "aborted") {
 					const failure = raw.errorMessage ?? raw.text ?? `Workflow agent ${label} ${raw.status}`;
+					providerFailureKind = raw.errorKind;
 					await this.appendFailure(
 						seq,
 						callHash,
@@ -402,6 +659,7 @@ export class WorkflowRuntime {
 						totalUsage,
 						attempt,
 						failure,
+						rateLimitRetries,
 					);
 					throw new Error(failure);
 				}
@@ -419,6 +677,7 @@ export class WorkflowRuntime {
 						totalUsage,
 						attempt,
 						lastErrors.join("; "),
+						rateLimitRetries,
 					);
 					throw new WorkflowSchemaError(lastErrors, attempt);
 				}
@@ -435,11 +694,15 @@ export class WorkflowRuntime {
 					usage: totalUsage,
 					attempt,
 					createdAt: this.readNow(),
+					rateLimitRetries,
+					...(toolActivityObserved ? { worldAccess } : {}),
 				});
 				await this.updateProgress({
 					agent: {
 						...identity,
 						status: "completed",
+						rateLimitRetries,
+						retry: undefined,
 						startedAt,
 						finishedAt: this.readNow(),
 						usageTokens: workflowUsageTokens(totalUsage),
@@ -455,29 +718,103 @@ export class WorkflowRuntime {
 			}
 			throw new WorkflowSchemaError(lastErrors, retries);
 		} catch (error: unknown) {
+			const message =
+				errorMessage(error) +
+				(cleanupIncomplete ? "; runner did not settle after cancellation; its shared slot remains reserved" : "");
+			const rateLimited = providerFailureKind === "rate_limit";
+			// Classify before recording anything. A failed journal or progress write must
+			// not replace the node's own error, and the marker has to exist before the
+			// bridge can ask for it, or parallel()/pipeline() reports this node failure a
+			// second time as a callback failure.
+			const propagated = error instanceof Error ? error : new Error(errorMessage(error));
+			this.nodeErrors.add(propagated);
+			// Recording is best effort: the node already failed, and a disk error must not
+			// turn that into a different terminal error for the run.
+			if (!this.recordedFailures.has(seq)) {
+				await this.appendFailure(
+					seq,
+					callHash,
+					normalizedPrompt,
+					normalizedOptions,
+					totalUsage,
+					schemaAttempt,
+					message,
+					rateLimitRetries,
+				);
+			}
+			if (rateLimited) {
+				this.semaphore.throttle(requestEpoch, 1000);
+				shared.throttle(sharedEpoch, 1000);
+			}
 			await this.updateProgress({
+				concurrency: this.concurrencySnapshot(),
 				agent: {
 					...identity,
 					status: parentSignal?.aborted ? "aborted" : "failed",
+					error: {
+						code: rateLimited
+							? rateLimitRetries > 0
+								? "RATE_LIMIT_RETRIES_EXHAUSTED"
+								: "RATE_LIMITED"
+							: error instanceof WorkflowSchemaError
+								? "SCHEMA_VALIDATION_FAILED"
+								: timedOut
+									? "NODE_TIMEOUT"
+									: "NODE_FAILED",
+						message: message.slice(0, 2000),
+						retryable: rateLimited,
+						...(rateLimited ? { retryExhausted: rateLimitRetries > 0 } : {}),
+					},
+					rateLimitRetries,
+					retry: undefined,
 					startedAt,
 					finishedAt: this.readNow(),
 					usageTokens: workflowUsageTokens(totalUsage),
 				},
 				spentTokens: this.budget.spent(),
-			});
+			}).catch(() => undefined);
 			if (error instanceof WorkflowBudgetExceeded)
 				this.track("workflow_budget_exceeded", {
 					spent_tokens: error.spentTokens,
 					requested_tokens: error.requestedTokens,
 				});
-			throw error;
+			throw propagated;
 		} finally {
+			// Without a complete tool report, a live call may have changed anything.
+			if (runnerInvoked && !toolActivityObserved) this.environmentChanged = true;
+			releaseShared?.();
 			release?.();
 			if (this.activeWriterId === agentId) this.activeWriterId = undefined;
 		}
 	}
 
+	/**
+	 * Find a replayable result for this call. Runtime schemas (safeParse objects)
+	 * cannot be hashed, so their calls always run live. A cached result must still
+	 * satisfy the call's schema, and once this run may have changed the
+	 * environment only results that never touched it remain valid.
+	 */
+	private takeCached(
+		callHash: string,
+		options: WorkflowAgentOptions,
+	): { entry: WorkflowJournalEntry; result: unknown } | undefined {
+		if (isSafeParseSchema(options.schema)) return undefined;
+		let result: unknown;
+		const entry = this.journal.getCached(callHash, (candidate) => {
+			if (this.environmentChanged && candidate.worldAccess !== false) return false;
+			if (options.schema === undefined) {
+				result = candidate.result;
+				return true;
+			}
+			const validation = validateWorkflowSchema(options.schema, candidate.result, true);
+			result = validation.value;
+			return validation.valid;
+		});
+		return entry ? { entry, result } : undefined;
+	}
+
 	phase(title: string): void {
+		if (this.lifecycle === "closed") return;
 		const normalized = title.trim().slice(0, 200);
 		if (!normalized) return;
 		this.phases.push({ title: normalized });
@@ -490,6 +827,7 @@ export class WorkflowRuntime {
 	}
 
 	log(message: string): void {
+		if (this.lifecycle === "closed") return;
 		const normalized = message.trim().slice(0, 2_000);
 		if (!normalized) return;
 		void this.updateProgress({ message: normalized }).catch(() => undefined);
@@ -597,20 +935,46 @@ export class WorkflowRuntime {
 	}
 
 	private async updateProgress(patch: Partial<WorkflowProgress> & { agent?: WorkflowProgressAgent }): Promise<void> {
-		const snapshot = await this.progress.update(patch);
-		this.onProgress?.(snapshot);
+		if (this.lifecycle === "closed") return;
+		let snapshot: WorkflowProgress;
+		try {
+			snapshot = await this.progress.update({ ...patch, concurrency: this.concurrencySnapshot() });
+		} catch {
+			// progress.json is a projection. The in-memory state is already updated when a
+			// write fails, and a disk error here must not fail a node whose work finished.
+			snapshot = this.progress.current();
+		}
+		try {
+			this.onProgress?.(snapshot);
+		} catch {
+			// A live-update listener is a consumer of the projection. Its failure must not
+			// change run accounting, or one node failure is reported twice.
+		}
+	}
+
+	private concurrencySnapshot(): NonNullable<WorkflowProgress["concurrency"]> {
+		return {
+			...this.concurrency,
+			cap: Math.min(this.semaphore.max, this.admission?.semaphore.max ?? this.semaphore.max),
+			sharedActive: this.admission?.semaphore.active ?? 0,
+		};
 	}
 
 	private host(depth: number): WorkflowVmHost {
 		return {
+			isNodeFailure: (error) =>
+				error !== null &&
+				typeof error === "object" &&
+				(this.nodeErrors.has(error) ||
+					(error as { __workflowNodeFailure?: boolean }).__workflowNodeFailure === true),
 			agent: (prompt, options) => this.agent(prompt, options as WorkflowAgentOptions),
 			phase: (title) => this.phase(title),
 			log: (message) => this.log(message),
-			iterate: (options) => this.iterate(options),
+			iterate: (options) => this.trackOperation(() => this.iterate(options)),
 			nestedWorkflow: (name, args) => {
 				if (depth >= 1) return Promise.reject(new Error("Nested workflow depth is limited to one level"));
 				if (!this.nestedWorkflow) return Promise.reject(new Error(`Nested workflow "${name}" is not available`));
-				return this.nestedWorkflow(name, args, this, depth);
+				return this.trackOperation(() => this.nestedWorkflow!(name, args, this, depth));
 			},
 			budgetSpent: () => this.budget.spent(),
 			budgetRemaining: () => this.budget.remaining(),
@@ -713,23 +1077,32 @@ export class WorkflowRuntime {
 		usage: WorkflowUsage,
 		attempt: number,
 		error: string,
+		rateLimitRetries = 0,
 	): Promise<void> {
-		await this.journal.append({
-			schemaVersion: 1,
-			seq,
-			callId: `${this.runId}-${seq + 1}`,
-			callHash,
-			prompt,
-			options: workflowJsonValue(serializableOptions(options)),
-			status: "failed",
-			usage,
-			attempt,
-			createdAt: this.readNow(),
-			error: error.slice(0, 2_000),
-		});
+		// Recording a failure is best effort. The node already failed, so a journal
+		// write error must never replace the node's own error, change the run's
+		// terminal status, or skip failure classification.
+		await this.journal
+			.append({
+				schemaVersion: 1,
+				seq,
+				callId: `${this.runId}-${seq + 1}`,
+				callHash,
+				prompt,
+				options: workflowJsonValue(serializableOptions(options)),
+				status: this.signal?.aborted ? "aborted" : "failed",
+				usage,
+				attempt,
+				rateLimitRetries,
+				createdAt: this.readNow(),
+				error: error.slice(0, 2_000),
+			})
+			.catch(() => undefined);
+		this.recordedFailures.add(seq);
 	}
 
 	private track(event: StepTelemetryKnownEventName, properties: Record<string, string | number | boolean>): void {
+		if (this.lifecycle === "closed") return;
 		if (this.telemetry) trackStepTelemetry(this.telemetry, event, properties as StepTelemetryProperties);
 		const record = {
 			schemaVersion: 1 as const,
@@ -840,8 +1213,25 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-export function workflowToolResult<T>(value: T): AgentToolResult<T> {
-	return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], details: value };
+export function workflowToolResult(value: WorkflowRunResult): AgentToolResult<WorkflowRunResult> {
+	return {
+		content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+		details: value,
+		isError: value.status !== "completed",
+	};
 }
 
 export { WorkflowBudgetExceeded };
+
+/** A runner may throw an error that carries the provider's structured kind. */
+function thrownErrorKind(error: unknown): WorkflowAgentRunResult["errorKind"] {
+	if (!error || typeof error !== "object" || !("errorKind" in error)) return undefined;
+	const kind = (error as { errorKind?: unknown }).errorKind;
+	return kind === "rate_limit" ||
+		kind === "quota" ||
+		kind === "auth" ||
+		kind === "transient" ||
+		kind === "invalid_request"
+		? kind
+		: undefined;
+}

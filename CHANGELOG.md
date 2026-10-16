@@ -38,42 +38,99 @@ StepCode 产品级变更记录。底层运行时包的细节继续记录在对�
 
 ### Fixed
 
+- Stop flooding startup with `[Skill conflicts]` when the same skills are installed in both `~/.agents/skills` and `~/.claude/skills`. Byte-identical copies are now skipped silently, and remaining name collisions collapse to one summary line per directory pair; `--verbose` still lists each one.
+
 - Recognize `search_files`, `find_files`, and `list_directory` when selecting default system-prompt file-exploration guidance.
+
 - Fixed Step telemetry never reaching the collector, so no usage reached the events dashboard at all. Three independent breaks each sufficed on their own: `apps/cli/src/observability.ts` was still the public no-op provider, so no reporter existed in the process (not even `first_launch`); `telemetry-runtime.ts` resolved the build channel from `STEP_CLI_BUILD_CHANNEL`, a name no build sets since the rename to `STEPCODE_BUILD_*`, so every release binary resolved `dev`, stamped `channel=dev` on the envelope and left the endpoint unset; and the GitHub binary workflow passed `STEP_CLI_BUILD_*` to a build script that only reads `STEPCODE_BUILD_*`, so its artifacts also fell back to `dev` and the `0.3.1` version fallback. Telemetry now resolves channel and commit through the shared `readStepBuildIdentity`, so the telemetry and feedback envelopes can no longer disagree about which build they came from. A source checkout still only writes its local spool unless `STEPCODE_TELEMETRY_ENDPOINT` is set.
+
 - Fixed the launcher-injected username being dropped from feedback envelopes: `readFeedbackUsername` read only `STEPCODE_USER`, while the shipping launcher sets `STEP_CLI_USER` (the only spelling the previous CLI ever read) and telemetry already accepted it. Feedback reports therefore arrived without the collector's "使用者" dimension while telemetry events kept it.
+
 - Fixed the Step collector URLs being duplicated across three files with no single source of truth; `observer-endpoints.ts` now owns the dev/release origins and the events/feedback/feedback-bundle routes. The release origin keeps its `/stepcliobserserver` path segment — it is a gateway route, not a host, and normalizing it through `URL().origin` would break every route. Adoption policy is unchanged: telemetry adopts the built-in default on release only, feedback on both channels.
+
 - Fixed `/goal clear` leaving the current request thinking after the goal was removed; clearing a goal now interrupts a busy run, including retry backoff and automatic compaction, after persisting the cleared state.
+
 - Fixed `read_file` dropping small in-limit images with `Image omitted: could not be resized below the inline image size limit.` when Photon/WASM failed to load (for example in some Bun compiled binary layouts). The resize path now reads pixel dimensions directly from the PNG/JPEG/GIF/WebP header when Photon is unavailable and passes an image through untouched if it already fits both the pixel and base64 budgets; oversize images still return the same error instead of shipping unbounded bytes.
+
 - Fixed the Unix `curl | sh` installer never placing `photon_rs_bg.wasm` next to the installed binary, so image resizing was disabled on fresh macOS/Linux installs: `read_file` could only pass through images already within the inline budget, and anything larger failed with `could not be resized` until a later `step update` happened to restore the file. `install.sh` now copies the wasm into the install directory, matching `install.ps1` and the `step update` self-update which already ship it.
+
 - Fixed the same `Image omitted` error for in-budget images when Photon loads but throws while decoding that specific image (container variants its decoder rejects, corrupt metadata): the decode-failure path now falls back to the same header-only passthrough as the module-missing path, so an original within the 2000×2000 pixel and 100MB base64 budgets reaches the model untouched while oversize images keep returning the resize error.
 
 - Fixed a signed-in Step session starting with `No models available. Use /login to log into a provider via OAuth or API key.` and `model unknown`. The Step catalog is discovered from `{base}/v1/models` and is not cached between runs, but startup only composed catalogs from cache, so the initial model had nothing to resolve against until something else refreshed (for example opening `/model`). Startup now pulls the Step catalog once, bounded and best-effort, before it picks the model.
+
 - Fixed the Step MCP bridge dropping image blocks from tool results: screenshot-style MCP tools (for example the playwright plugin) now attach real images to the model, resized and capability-downgraded downstream like read_file images, and an image-only result renders a "(see attached image)" note instead of a base64 JSON dump.
+
 - Fixed two silent failure modes around explicit user intent: with `STEP_ENABLE_WORKFLOW` set but the isolated-vm native module unavailable, the session now starts with a warning naming the missing module instead of silently registering no workflow tools; and a failed background lane's `<agent-notification>` now always carries each failed task's error reason instead of only the aggregate output text, which could omit the cause.
+
+- Cancel and drain workflow children before publishing a terminal state, share host admission across concurrent workflows, accept promise arrays in `parallel()`, and distinguish concurrency notices from actual script failures.
+
+- Clamp workflow concurrency to the host ceiling, back off on temporary 429s with an independent retry budget and adaptive admission cap, and report failed nodes in final tool results instead of silently treating partial workflows as successful.
+
+- Report callback errors (including nested workflow errors raised before any agent starts), and queue ordinary subagent batches beyond their concurrency window in the same process-wide admission window as workflow nodes. Subagent batches also honor `STEP_WORKFLOW_CONCURRENCY_LIMIT` and hold each slot until the child process exits.
+
+- Resume workflows by matching each call's prompt and options instead of the journal's sequence prefix, so a failed or reordered node no longer forces every later call to re-run. Once a live call writes files, runs a shell command, or uses an unrecognized tool, cached calls that read the environment re-run as well; cached results are re-validated against the call's schema, and calls with a runtime (safeParse) schema always run live.
+
+- Persist Ultracode on/off state in the current session journal so reopening that session restores its mode without changing global or project settings.
+
+- Stop appending Ultracode capability tutorials on every turn. Announce session-mode transitions after user input, reuse unchanged state, and restore necessary reminders when context is compacted or replaced.
+
 - Fixed a StepCode alias of a built-in catalog model losing that model's thinking contract. A model injected through `STEPCODE_CONFIG_PATH` was rebuilt from the StepCode entry alone, so it carried no `compat` and the Anthropic adapter fell back to the legacy `thinking: {type: "enabled", budget_tokens}` payload. Upstreams that require adaptive thinking reject that with `400 ValidationException: "thinking.type.enabled" is not supported for this model`, so `stepcode-anthropic/claude-opus-5` failed intermittently depending on which gateway backend served the request while every other model kept working. `normalizeModel` now matches the wire model id together with the wire dialect against the built-in catalog and inherits `forceAdaptiveThinking` plus the model's `thinkingLevelMap`; the StepCode entry's own `compat` block is layered over the inherited value, so a key it states wins and its siblings are kept, an alias the catalog does not know is untouched unless it declares the flag itself, and nothing is inherited for a non-Anthropic wire dialect.
+
 - Fixed Step approval dialogs appearing to loop: show distinct call IDs and a static waiting state, settle cancelled or replaced dialogs once, and prevent multiline tool titles from corrupting terminal redraws.
+
 - Fixed `search_files` / `find_files` hard-failing with `ripgrep (rg) is not available and could not be downloaded` (and the fd equivalent) inside evaluation sandboxes that ship without rg/fd and cannot reach GitHub. Both tools now fall back to `git grep` / `git ls-files` when the search path is inside a worktree, and to POSIX `grep` / `find` otherwise; `GrepOperations` gains an optional `search` primitive symmetric to `FindOperations.glob` for remote injectors.
+
 - Fixed the Windows and Unix installers not persisting PATH, so `step` was not runnable in a new shell after `irm .../install.ps1 | iex` (or `curl | sh`). The install dir and managed-tools bin are now added to the user PATH idempotently: `install.ps1` writes `HKCU\Environment` directly (preserving `%VAR%` entries un-expanded, avoiding `setx` truncation) and broadcasts `WM_SETTINGCHANGE`; `install.sh` writes a self-guarded `# stepcode` block to the login-shell rc (zsh/bash/POSIX), configures fish via `fish_add_path`, never truncates an rc on an unterminated marker, and refuses paths with shell-unsafe characters. Both honor `STEP_INSTALL_DIR`/`STEP_CODING_AGENT_DIR` and degrade to a printed advisory when persistence fails.
+
 - Fixed task history and branch restoration, ID reuse across sibling branches, and acceptance of cyclic dependencies.
+
 - Fixed inconsistent plan entry paths and approval of missing or empty plans; plan mode now follows the active session branch.
+
 - Fixed the Step queued-message preview and `update_plan` plan text dropping four characters at every wrap point in narrow terminals.
+
 - Fixed `step --api-key <key>` so the explicit key also authenticates the built-in `search_web` MCP tool.
+
 - Fixed `search_web` failing under StepCode by no longer reading the injected `STEP_API_KEY`; that credential targets the StepCode model gateway, which the fixed search endpoint does not follow.
+
 - Fixed unauthenticated help, version, model-listing, session-export, SDK stdio, and offline invocations opening the interactive login flow.
+
+- Recognize `/exit` as an alias for `/quit`, including while the agent is running or compacting.
+
 - Fixed resuming a session replaying the launch logo animation, which cleared and repainted the whole screen on every frame.
+
 - Fixed the launch logo animation continuing to repaint the whole screen once a new session's first output grows past the viewport.
+
 - Fixed release archives and installers so Pi TUI native helpers and runtime resources are copied from both wrapped Unix archives and root-level Windows archives.
+
 - Fixed GitLab test jobs so workspace package entrypoints are built before child-process tests run, and missing `git`, `fd`, or `rg` dependencies are reported or bootstrapped explicitly.
+
 - Fixed Step authentication selectors to tolerate hosts that do not provide product-specific interactive options.
+
 - Fixed StepCode launches failing when the injected `--session-file` session selector was not recognized by the Step entrypoint.
+
 - Fixed StepCode-launched Step sessions so `STEPCODE_CONFIG_PATH` provider catalogs, active models, API keys, and base URLs are loaded from the injected config file.
+
 - Fixed StepCode-launched model and permission persistence so reads and writes use the injected config file instead of mixing in `.stepcode` settings.
+
 - Fixed StepCode-launched models with omitted reasoning metadata defaulting to `reasoning: true`; explicit `reasoning: false` remains supported.
+
 - Fixed StepCode-launched models with omitted vision metadata registering as text-only, so `read_file` replaced every image with a "current model does not support images" note even on vision-capable models such as `water18-0910`. Omitted capability metadata now defaults to image input; an explicit `supportsVision: false` or a declared `input` list remains authoritative.
+
 - Fixed input, deletion, and menu lag in long sessions, where every keystroke reprocessed all settled messages before the screen could update.
+
 - Fixed `/feedback` leaving the editor above the bottom row when a page was cancelled; every page of the flow now renders over the transcript.
+
 - Fixed `search_files` silently omitting matching files in bracket-prefixed dynamic routes such as `[slug]`, `[...slug]`, and `[[...slug]]`.
+
 - Fixed sessions ending silently when a serving-side tool parser leaks the model's `<tool_call>`/`<function=` markup into assistant text: that turn carries no executable call even though the model meant to act, so the loop now resamples the identical context up to twice before the run can end.
+
+- Let a tool return `isError: true` while keeping its partial output and details, so failed subagent and workflow results reach the model as errors. Finalize a partial assistant message when a provider stream throws, ends without a terminal event, or fails during construction, instead of leaving the turn unfinished.
+
 - Fixed the `--mode json` event stream emitting the first streamed token twice: `message_start` already carried content (e.g. `thinking="The"`) that the following delta repeated, because every provider stream event (and the proxy transport) shared one mutable message whose `content` was appended in place and could be serialized after the producer advanced. The start event now exposes its own empty initial `content`, so deltas alone build the message.
+
+- Classify provider failures structurally (HTTP status, provider error code, transport error) as rate limit, quota, auth, transient, or invalid request. Session retries, the separate 429 retry budget, and workflow congestion control use this classification instead of matching error text, so a 400 that mentions "429" is no longer retried and an exhausted quota returned as 429 is not treated as throttling.
+
 - Fixed piped stdin being trimmed and glued onto the CLI prompt with no separator (`printf '  x  \n' | step -p 'y'` sent the model `xy`): stdin is now preserved verbatim and separated from the CLI message by a single newline, while a whitespace-only pipe is still treated as absent.
+
 - Fixed `--mode json` exiting 0 when the request failed with `stopReason: error`: the exit-code check ran only in text mode, so JSON runs reported success on failure. A failed request (and a hook-terminated tool block) now exits non-zero in both text and JSON modes.
+

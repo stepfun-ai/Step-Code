@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import type { AgentSessionRuntimeHost } from "../../src/core/agent-session-runti
 import * as output from "../../src/core/output-guard.ts";
 import { createStepPlanExtension } from "../../src/features/step-plan.ts";
 import { runPrintMode } from "../../src/modes/print-mode.ts";
+import type { PlanReviewDetails } from "../../src/render/plan-review.ts";
 import { readStepConfig, resolveStepConfigPath } from "../../src/step/config-toml.ts";
 import { createStepToolProfile } from "../../src/step/tool-profile.ts";
 import { initTheme } from "../../src/theme/theme.ts";
@@ -27,7 +29,7 @@ function git(cwd: string, ...args: string[]): string {
 	});
 }
 
-async function setup(external: boolean) {
+async function setup(external: boolean, approvePlan: boolean) {
 	const storage = mkdtempSync(join(tmpdir(), "step-plan-storage-"));
 	roots.push(storage);
 	const harness = await createHarness({
@@ -40,6 +42,24 @@ async function setup(external: boolean) {
 				}
 			},
 			createStepPlanExtension(),
+			(pi) => {
+				if (!approvePlan) return;
+				// This fixture's caller explicitly approves the reviewed snapshot so these
+				// tests can exercise Git completion independently of external approval.
+				pi.on("tool_result", (event) => {
+					if (event.toolName !== "exit_plan_mode" || event.isError) return;
+					const details = event.details as PlanReviewDetails | undefined;
+					if (details?.outcome !== "external_approval_required" || details.planModeExited !== true) return;
+					expect(details.planHash).toBe(createHash("sha256").update(details.planContents, "utf8").digest("hex"));
+					return {
+						content: [
+							...event.content,
+							{ type: "text", text: "The external test caller approved execution of this reviewed plan." },
+						],
+						details: { ...details, outcome: "approved", approvalSource: "external" },
+					};
+				});
+			},
 		],
 	});
 	harnesses.push(harness);
@@ -115,9 +135,9 @@ afterEach(() => {
 });
 
 test.each([false, true])(
-	"native planning keeps Git completion sensitive to plan location (external: %s)",
+	"approved native planning keeps Git completion sensitive to plan location (external: %s)",
 	async (external) => {
-		const { harness, cwd, planPath, run } = await setup(external);
+		const { harness, cwd, planPath, run } = await setup(external, true);
 		expect(await run()).toBe(0);
 		const tools = harness.eventsOfType("tool_execution_end");
 		expect(tools.map((event) => [event.toolName, event.isError])).toEqual([
@@ -129,6 +149,7 @@ test.each([false, true])(
 		expect(getMessageText(tools[0].result)).toContain(planPath);
 		expect(getMessageText(tools[3].result)).toContain("caller must gate approval externally");
 		expect(getMessageText(tools[3].result)).toContain("Check the parser and tests.");
+		expect(tools[3].result.details).toMatchObject({ outcome: "approved", approvalSource: "external" });
 		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
 		expect(existsSync(join(cwd, ".gitignore"))).toBe(false);
 		// Physical absence catches accidental project writes even if Git ignores them.
@@ -165,7 +186,7 @@ test.each([false, true])(
 );
 
 test("external planning preserves project settings, tracked plans and untracked user files", async () => {
-	const { harness, cwd, planPath, run } = await setup(true);
+	const { harness, cwd, planPath, run } = await setup(true, true);
 	git(cwd, "sparse-checkout", "set", "--no-cone", "/package.json", "/.stepcode/");
 	const oldPlanPath = join(cwd, ".stepcode", "plans", `session-${harness.session.sessionId}.md`);
 	const configPath = join(cwd, ".stepcode", "config.toml");
@@ -198,3 +219,26 @@ test("external planning preserves project settings, tracked plans and untracked 
 	expect(getUserTexts(harness)[1]).toContain("unignored untracked files remain");
 	expect(existsSync(join(cwd, ".gitignore"))).toBe(false);
 });
+
+test.each([false, true])(
+	"unapproved native planning does not send Git completion feedback (external: %s)",
+	async (external) => {
+		const { harness, planPath, run } = await setup(external, false);
+		expect(await run()).toBe(0);
+		expect(getUserTexts(harness)).toHaveLength(1);
+		expect(harness.getPendingResponseCount()).toBe(1);
+		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
+		const exit = harness.eventsOfType("tool_execution_end").find((event) => event.toolName === "exit_plan_mode");
+		expect(exit?.result.details).toMatchObject({
+			outcome: "external_approval_required",
+			approvalSource: "external",
+			planModeExited: true,
+		});
+		const completionEvents = stdout
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line))
+			.filter((event) => event.type === "completion_check");
+		expect(completionEvents).toEqual([]);
+	},
+);

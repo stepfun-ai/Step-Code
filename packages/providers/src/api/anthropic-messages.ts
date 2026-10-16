@@ -29,11 +29,12 @@ import type {
 	ToolResultMessage,
 } from "../types.ts";
 import { splitDeferredTools } from "../utils/deferred-tools.ts";
+import { classifyProviderError, ProviderStreamError } from "../utils/error-kind.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
-import { retryProviderRequest } from "../utils/provider-retry.ts";
+import { providerRetryAfterMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
@@ -416,7 +417,7 @@ async function* iterateAnthropicEvents(
 
 	for await (const sse of iterateSseMessages(response.body, signal)) {
 		if (sse.event === "error") {
-			throw new Error(sse.data);
+			throw new ProviderStreamError(sse.data, undefined, sse.data);
 		}
 
 		if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
@@ -733,6 +734,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.retryAfterMs = providerRetryAfterMs(error);
+			const errorKind = output.stopReason === "error" ? classifyProviderError(error) : undefined;
+			if (errorKind) output.errorKind = errorKind;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

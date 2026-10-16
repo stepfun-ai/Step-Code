@@ -13,6 +13,19 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
+test("natural-language agent counts are left to the model, not pattern-matched as consent", () => {
+	// Whether "open 10 subagents" means the Agent tool, a workflow, or a question is
+	// the model's judgment. The harness only recognizes the explicit keyword/phrases.
+	for (const prompt of [
+		"开10个子agent分别审查",
+		"launch 10 subagents",
+		"不要开10个子agent",
+		"开10个子agent要多少钱？",
+	]) {
+		expect(detectUltraloopOptIn(prompt), prompt).toBeUndefined();
+	}
+});
+
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 
 interface Recorded {

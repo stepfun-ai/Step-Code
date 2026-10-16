@@ -363,6 +363,14 @@ function escapeXml(str: string): string {
 		.replace(/'/g, "&apos;");
 }
 
+function hasSameContent(a: string, b: string): boolean {
+	try {
+		return readFileSync(a).equals(readFileSync(b));
+	} catch {
+		return false;
+	}
+}
+
 export interface LoadSkillsOptions {
 	/** Working directory for project-local skills. */
 	cwd: string;
@@ -406,6 +414,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 			const existing = skillMap.get(skill.name);
 			if (existing) {
+				// Tools that install one skill for several agents (e.g. ~/.agents/skills and
+				// ~/.claude/skills) often copy instead of symlink. An identical copy changes
+				// nothing about what gets loaded, so skip it as silently as a symlink.
+				if (hasSameContent(existing.filePath, skill.filePath)) {
+					continue;
+				}
 				collisionDiagnostics.push({
 					type: "collision",
 					message: `name "${skill.name}" collision`,

@@ -4,7 +4,7 @@ import type { ToolRenderContext, ToolRenderResultOptions } from "../../core/exte
 import { keyHint } from "../../render/keybinding-hints.ts";
 import type { Theme } from "../../theme/theme.ts";
 import type { WorkflowRequest } from "./step-workflow.ts";
-import type { WorkflowProgress, WorkflowProgressAgent, WorkflowRunResult } from "./types.ts";
+import type { WorkflowProgress, WorkflowProgressAgent, WorkflowRunResult, WorkflowTaskFailure } from "./types.ts";
 
 const COLLAPSED_AGENTS = 8;
 const AGENT_ORDER: Record<WorkflowProgressAgent["status"], number> = {
@@ -28,16 +28,38 @@ function singleLine(text: string): string {
 function progressSummary(progress: WorkflowProgress): string {
 	const counts = { running: 0, queued: 0, completed: 0, failed: 0, aborted: 0, cached: 0 };
 	for (const agent of progress.agents) counts[agent.status] += 1;
+	const retrying = progress.agents.filter((agent) => agent.status === "running" && agent.retry).length;
 	return [
 		progress.status.replace(/_/gu, " "),
-		`${counts.running} running`,
+		...(progress.concurrency
+			? [`cap ${progress.concurrency.cap}/${progress.concurrency.limit} (ceiling ${progress.concurrency.ceiling})`]
+			: []),
+		`${counts.running - retrying} running`,
+		...(retrying ? [`${retrying} retrying`] : []),
 		`${counts.queued} queued`,
 		`${progress.completedAgents}/${progress.totalAgents} completed`,
+		...(progress.taskFailures?.length ? [`${progress.taskFailures.length} callback errors`] : []),
 		...(counts.cached ? [`${counts.cached} cached`] : []),
 		...(counts.failed ? [`${counts.failed} failed`] : []),
 		...(counts.aborted ? [`${counts.aborted} aborted`] : []),
 		`${progress.spentTokens} tokens`,
 	].join(" · ");
+}
+
+function concurrencyNotice(concurrency: WorkflowProgress["concurrency"]): string | undefined {
+	return concurrency?.requested !== undefined && concurrency.requested > concurrency.limit
+		? `Notice: requested concurrency ${concurrency.requested} was limited to ${concurrency.limit} by the host ceiling (CPU count or configured provider limit); tasks will queue normally.`
+		: undefined;
+}
+
+/**
+ * A nested failure's index refers to the child script's array, so the script is the
+ * only thing that tells a reader which list to inspect.
+ */
+function taskFailureLine(failure: WorkflowTaskFailure): string {
+	const stage = failure.stage !== undefined ? `.${failure.stage}` : "";
+	const script = failure.script ? `${singleLine(failure.script)} ` : "";
+	return `${script}${failure.primitive}[${failure.index}${stage}]: ${singleLine(failure.message)}`;
 }
 
 function visibleAgents(progress: WorkflowProgress, expanded: boolean): WorkflowProgressAgent[] {
@@ -51,19 +73,23 @@ function visibleAgents(progress: WorkflowProgress, expanded: boolean): WorkflowP
 function agentSummary(agent: WorkflowProgressAgent): string {
 	const label = singleLine(agent.label);
 	const task = agent.task ? singleLine(agent.task) : "";
-	return `${agent.status} ${label}${task && task !== label ? `: ${task}` : ""}`;
+	return `${agent.retry ? `retrying 429 (${agent.retry.attempt}/${agent.retry.maxRetries}, ${agent.retry.delayMs}ms)` : agent.status} ${label}${task && task !== label ? `: ${task}` : ""}${agent.error ? ` — ${singleLine(agent.error.message)}` : ""}`;
 }
 
 /** Text remains useful to RPC/headless consumers; details carry the complete snapshot. */
 export function workflowProgressResult(progress: WorkflowProgress): AgentToolResult<WorkflowProgress> {
 	const agents = visibleAgents(progress, false);
 	const hidden = progress.agents.length - agents.length;
+	const notice = concurrencyNotice(progress.concurrency);
 	return {
 		content: [
 			{
 				type: "text",
 				text: [
 					progressSummary(progress),
+					...(notice ? [notice] : []),
+					...(progress.taskFailures ?? []).slice(0, 3).map((failure) => taskFailureLine(failure)),
+					...(progress.status !== "running" && progress.message ? [singleLine(progress.message)] : []),
 					...(progress.currentPhase ? [`Phase: ${singleLine(progress.currentPhase)}`] : []),
 					...agents.map(agentSummary),
 					...(hidden ? [`${hidden} more agents`] : []),
@@ -98,10 +124,21 @@ export function renderWorkflowResult(
 			const bodyWidth = Math.max(1, width - 4);
 			const rows: string[] = [];
 			let expandable = false;
+			const notice = concurrencyNotice(progress?.concurrency ?? completed?.concurrency);
+			if (notice) rows.push(...wrapTextWithAnsi(theme.fg("muted", notice), bodyWidth));
 			if (progress) {
 				const color =
-					progress.status === "running" ? "accent" : progress.status === "completed" ? "success" : "error";
+					progress.status === "running"
+						? "accent"
+						: progress.status === "stopping"
+							? "warning"
+							: progress.status === "completed"
+								? "success"
+								: "error";
 				rows.push(...wrapTextWithAnsi(theme.fg(color, progressSummary(progress)), bodyWidth));
+				for (const failure of (progress.taskFailures ?? []).slice(0, options.expanded ? undefined : 3)) {
+					rows.push(...wrapTextWithAnsi(theme.fg("error", taskFailureLine(failure)), bodyWidth));
+				}
 				if (progress.currentPhase) {
 					rows.push(
 						...wrapTextWithAnsi(theme.fg("muted", `Phase: ${singleLine(progress.currentPhase)}`), bodyWidth),
@@ -118,14 +155,23 @@ export function renderWorkflowResult(
 				const hidden = progress.agents.length - agents.length;
 				if (hidden) rows.push(theme.fg("muted", `${hidden} more agents`));
 				expandable = progress.agents.length > 0;
-				if (progress.status === "running" && progress.message && progress.message !== "Workflow started") {
-					rows.push(truncateToWidth(theme.fg("dim", singleLine(progress.message)), bodyWidth));
+				if (
+					progress.message &&
+					progress.message !== "Workflow started" &&
+					progress.message !== "Workflow completed"
+				) {
+					rows.push(
+						...wrapTextWithAnsi(
+							theme.fg(progress.status === "failed" ? "error" : "muted", singleLine(progress.message)),
+							bodyWidth,
+						),
+					);
 				}
 			} else if (completed) {
 				rows.push(
 					...wrapTextWithAnsi(
 						theme.fg(
-							"success",
+							completed.status === "completed" ? "success" : "error",
 							`${completed.status} · ${completed.agentCalls} agent calls · ${completed.spentTokens} tokens`,
 						),
 						bodyWidth,

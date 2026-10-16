@@ -119,6 +119,8 @@ export type StepLoginStep =
 			readonly authUrl: string;
 	  }
 	| { readonly kind: "saving"; readonly choice: StepLoginChoice }
+	| { readonly kind: "checkingPlan"; readonly choice: StepLoginChoice }
+	| { readonly kind: "planRequired"; readonly choice: StepLoginChoice }
 	| { readonly kind: "done" }
 	| { readonly kind: "exit" };
 
@@ -134,6 +136,8 @@ export type StepLoginEvent =
 	| { readonly type: "backspace" }
 	| { readonly type: "back" }
 	| { readonly type: "saved" }
+	| { readonly type: "checkPlan" }
+	| { readonly type: "planRequired" }
 	| { readonly type: "fail"; readonly message: string }
 	| { readonly type: "quit" };
 
@@ -174,8 +178,25 @@ export function reduceStepLogin(step: StepLoginStep, event: StepLoginEvent): Ste
 			if (event.type === "fail") return { kind: "pickMode", error: event.message };
 			return step;
 		case "saving":
+			if (event.type === "checkPlan") return { kind: "checkingPlan", choice: step.choice };
 			if (event.type === "saved") return { kind: "done" };
 			if (event.type === "fail") return { kind: "pickMode", error: event.message };
+			return step;
+		case "checkingPlan":
+			if (event.type === "planRequired") return { kind: "planRequired", choice: step.choice };
+			if (event.type === "saved") return { kind: "done" };
+			if (event.type === "back") return { kind: "pickMode", error: null };
+			return step;
+		case "planRequired":
+			if (event.type === "choose")
+				return {
+					kind: "apiKeyEntry",
+					choice: step.choice === "step_plan_oversea" ? "platform_oversea" : "platform_cn",
+					value: "",
+					error: null,
+				};
+			if (event.type === "checkPlan") return { kind: "checkingPlan", choice: step.choice };
+			if (event.type === "back") return { kind: "pickMode", error: null };
 			return step;
 		case "done":
 		case "exit":

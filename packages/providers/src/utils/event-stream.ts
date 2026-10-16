@@ -47,7 +47,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		}
 	}
 
-	async *[Symbol.asyncIterator](): AsyncIterator<T> {
+	async *[Symbol.asyncIterator](): AsyncGenerator<T> {
 		while (true) {
 			if (this.queue.length > 0) {
 				yield this.queue.shift()!;

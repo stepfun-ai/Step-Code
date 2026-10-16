@@ -441,6 +441,18 @@ function createExtensionAPI(
 			runtime.setActiveTools(toolNames);
 		},
 
+		setUnavailableTools(toolNames: readonly string[]): void {
+			assertActive();
+			if (!Array.isArray(toolNames) || toolNames.some((name) => typeof name !== "string" || !name.trim())) {
+				throw new Error("Unavailable tools must be an array of nonempty tool names.");
+			}
+			const names = new Set(toolNames);
+			const previous = extension.unavailableTools;
+			if ((previous?.size ?? 0) === names.size && [...names].every((name) => previous?.has(name) === true)) return;
+			extension.unavailableTools = names;
+			runtime.refreshTools();
+		},
+
 		getCommands() {
 			assertActive();
 			return runtime.getCommands();

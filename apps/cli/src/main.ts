@@ -13,6 +13,7 @@ import {
 	ambiguousPluginServerNames,
 	applyStepCodeConfigDefaults,
 	buildStepSystemPromptAppendix,
+	checkStepPlanBeforeInteractive,
 	configureHttpDispatcher,
 	createStepCode,
 	createStepCodeProviderInlineExtension,
@@ -43,6 +44,7 @@ import {
 	migrateLegacyStepCredential,
 	needsStepLoginBeforeInteractive,
 	normalizeStepSessionSelectorArgs,
+	PlanUsageController,
 	parseStepUpdateCommand,
 	prepareMain,
 	prepareStepInstallation,
@@ -50,6 +52,7 @@ import {
 	readGlobalStepConfig,
 	readOrCreateStepDeviceId,
 	readStoredCredential,
+	resolvePlanUsageAccount,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepConfigRoot,
@@ -67,6 +70,7 @@ import {
 	STEP_PROVIDER_ID,
 	STEPCODE_VERSION,
 	type StepSettingsManager,
+	scanUsageOverview,
 	setStderrDevLogStorageRootDirectory,
 	stopThemeWatcher,
 	syncStepLoginProfileEndpoint,
@@ -81,7 +85,15 @@ import { createStepExtensionFactories } from "#bootstrap/extensions";
 import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
 import { InteractiveMode, runPrintMode, runRpcMode } from "#modes/index";
 import { createSdkStdioMode } from "#modes/sdk-stdio";
-import { selectConfig, selectSession, showFirstTimeSetup, showStartupInput, showStartupSelector } from "#ui/index";
+import {
+	selectConfig,
+	selectSession,
+	showFirstTimeSetup,
+	showStartupInput,
+	showStartupSelector,
+	showUsagePanel,
+	usagePresentationRows,
+} from "#ui/index";
 import { observability } from "./observability.ts";
 
 /**
@@ -159,6 +171,14 @@ const telemetryIdentityReady = initializeTelemetryIdentity();
 configureHttpDispatcher();
 
 let currentStepSettingsManager: StepSettingsManager | undefined;
+let usageRuntime: Parameters<typeof createStepCode>[0] | undefined;
+const usageAccount = new PlanUsageController(() =>
+	resolvePlanUsageAccount(
+		getStepAuthPath(),
+		process.env,
+		process.argv.some((arg) => arg === "--api-key" || arg.startsWith("--api-key=")),
+	),
+);
 const hasExplicitStepCredential =
 	process.argv.slice(2).some((arg) => arg === "--api-key" || arg.startsWith("--api-key=")) ||
 	Boolean(process.env.STEP_API_KEY?.trim());
@@ -187,6 +207,34 @@ const stepMainOptions: MainOptions = {
 	extensionFactories: createStepExtensionFactories({
 		telemetry: telemetryReporter,
 		stepSettings: () => currentStepSettingsManager,
+		usageHost: {
+			account: usageAccount,
+			resources: () => {
+				const loader = usageRuntime?.session.resourceLoader;
+				return {
+					agents: loader?.getAgentsFiles().agentsFiles.map((file) => file.path) ?? [],
+					skills:
+						loader?.getSkills().skills.map((skill) => ({ name: skill.name, filePath: skill.filePath })) ?? [],
+				};
+			},
+			scan: (cwd, scope, signal) =>
+				scanUsageOverview(
+					[
+						join(resolveStepAgentDir(), "sessions"),
+						...(usageRuntime ? [usageRuntime.session.sessionManager.getSessionDir()] : []),
+					],
+					join(resolveStepStorageRoot(), "cache", "usage"),
+					cwd,
+					scope,
+					signal,
+				),
+			present: showUsagePanel,
+			output: (ctx, model) => {
+				const text = usagePresentationRows(model).join("\n");
+				if (ctx.mode === "rpc") ctx.ui.notify(text, "info");
+				else process.stderr.write(`${text}\n`);
+			},
+		},
 		feedbackIdentity: readCurrentFeedbackIdentity,
 		permission: {
 			approvalMode: stepPermissionArgs.approvalMode,
@@ -208,7 +256,10 @@ const stepMainOptions: MainOptions = {
 	defaultTheme: getStepDefaultTheme(),
 	defaultProvider: stepCodeConfig?.defaultProvider ?? stepPersistedDefaults.provider ?? STEP_DEFAULT_PROVIDER,
 	defaultModel: stepCodeConfig?.defaultModel ?? stepPersistedDefaults.model ?? STEP_DEFAULT_MODEL,
-	runtimeHostFactory: createStepCode,
+	runtimeHostFactory: (runtime) => {
+		usageRuntime = runtime;
+		return createStepCode(runtime);
+	},
 	stdioModeFactory: sdkStdio ? createSdkStdioMode({ writeFrame: rawStdoutWrite }) : undefined,
 	interactiveModeOptions: {
 		showChangelog: false,
@@ -218,6 +269,7 @@ const stepMainOptions: MainOptions = {
 		stepLogin: (host) =>
 			runStepLogin({
 				authPath: getStepAuthPath(),
+				planUsage: usageAccount,
 				createHost: () => host,
 				themeName: getStepDefaultTheme(),
 			}),
@@ -572,6 +624,7 @@ try {
 			} else {
 				const outcome = await runStepLogin({
 					authPath: getStepAuthPath(),
+					planUsage: usageAccount,
 					themeName: getStepDefaultTheme(),
 					noBrowser: loginArgs.includes("--no-browser"),
 				});
@@ -579,8 +632,9 @@ try {
 					syncStepLoginProfileEndpoint(getStepAuthPath());
 					process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
 					if (outcome.credentialsPath) process.stdout.write(`Credential written: ${outcome.credentialsPath}\n`);
+					if (outcome.warning) process.stderr.write(`${outcome.warning}\n`);
 				} else {
-					process.stderr.write("Sign-in cancelled. No credential was written.\n");
+					process.stderr.write("Sign-in cancelled.\n");
 					process.exitCode = 1;
 				}
 			}
@@ -623,41 +677,57 @@ try {
 				let shouldLaunchMain = true;
 				const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
 				if (
-					parsedInteractiveArgs.completionReview &&
-					!parsedInteractiveArgs.completionCheck &&
-					!parsedInteractiveArgs.help &&
-					!parsedInteractiveArgs.version
-				) {
-					throw new Error("--completion-review requires --completion-check git-committed");
-				}
-				if (
-					parsedInteractiveArgs.completionCheck &&
+					(parsedInteractiveArgs.completionCheck || parsedInteractiveArgs.completionReview) &&
 					!parsedInteractiveArgs.help &&
 					!parsedInteractiveArgs.version &&
 					resolveAppMode(parsedInteractiveArgs, process.stdin.isTTY, process.stdout.isTTY) === "interactive"
 				) {
-					throw new Error("--completion-check requires print or JSON mode; use --print or --mode json.");
+					const flag = parsedInteractiveArgs.completionCheck ? "--completion-check" : "--completion-review";
+					throw new Error(`${flag} requires print or JSON mode; use --print or --mode json.`);
 				}
 				const interactiveStartup = isStepInteractiveLoginStartup({
 					stdinIsTTY: process.stdin.isTTY,
 					stdoutIsTTY: process.stdout.isTTY,
 					args: parsedInteractiveArgs,
 				});
+				const selectedProvider =
+					parsedInteractiveArgs.provider ??
+					(parsedInteractiveArgs.model?.includes("/")
+						? parsedInteractiveArgs.model.split("/", 1)[0]
+						: undefined) ??
+					process.env.STEP_PROVIDER ??
+					process.env.STEP_MODEL_PROVIDER ??
+					stepCodeConfig?.defaultProvider ??
+					stepPersistedDefaults.provider ??
+					STEP_DEFAULT_PROVIDER;
 				if (
-					!hasConfiguredStepCodeCredential(stepCodeConfig) &&
-					needsStepLoginBeforeInteractive({
+					interactiveStartup &&
+					selectedProvider === STEP_PROVIDER_ID &&
+					!hasExplicitStepCredential &&
+					!hasConfiguredStepCodeCredential(stepCodeConfig)
+				) {
+					const missingCredential = needsStepLoginBeforeInteractive({
 						authPath: getStepAuthPath(),
 						interactive: interactiveStartup,
-					})
-				) {
-					const outcome = await runStepLogin({
-						authPath: getStepAuthPath(),
-						themeName: getStepDefaultTheme(),
 					});
-					if (outcome.kind === "exit") {
-						shouldLaunchMain = false;
-					} else {
-						syncStepLoginProfileEndpoint(getStepAuthPath());
+					const check = missingCredential
+						? {}
+						: await checkStepPlanBeforeInteractive({
+								authPath: getStepAuthPath(),
+								interactive: interactiveStartup,
+								planUsage: usageAccount,
+							});
+					if (check.warning) process.stderr.write(`${check.warning}\n`);
+					if (missingCredential || check.requiredPlan) {
+						const outcome = await runStepLogin({
+							authPath: getStepAuthPath(),
+							planUsage: usageAccount,
+							requiredPlan: check.requiredPlan,
+							themeName: getStepDefaultTheme(),
+						});
+						if (outcome.warning) process.stderr.write(`${outcome.warning}\n`);
+						if (outcome.kind === "exit") shouldLaunchMain = false;
+						else syncStepLoginProfileEndpoint(getStepAuthPath());
 					}
 				}
 				if (shouldLaunchMain) {

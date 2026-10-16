@@ -858,6 +858,13 @@ export interface MessageEndEvent {
 	message: AgentMessage;
 }
 
+/** Local provenance emitted after the finalized assistant message is persisted. */
+export interface UsageRecordedEvent {
+	type: "usage_recorded";
+	entryId: string;
+	provenance: import("../request-provenance.ts").RequestUsageProvenance;
+}
+
 /** Fired when a tool starts executing */
 export interface ToolExecutionStartEvent {
 	type: "tool_execution_start";
@@ -1166,6 +1173,7 @@ export type ExtensionEvent =
 	| MessageStartEvent
 	| MessageUpdateEvent
 	| MessageEndEvent
+	| UsageRecordedEvent
 	| ToolExecutionStartEvent
 	| ToolExecutionUpdateEvent
 	| ToolExecutionEndEvent
@@ -1354,6 +1362,7 @@ export interface ExtensionAPI {
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
 	on(event: "message_update", handler: ExtensionHandler<MessageUpdateEvent>): void;
 	on(event: "message_end", handler: ExtensionHandler<MessageEndEvent, MessageEndEventResult>): void;
+	on(event: "usage_recorded", handler: ExtensionHandler<UsageRecordedEvent>): void;
 	on(event: "tool_execution_start", handler: ExtensionHandler<ToolExecutionStartEvent>): void;
 	on(event: "tool_execution_update", handler: ExtensionHandler<ToolExecutionUpdateEvent>): void;
 	on(event: "tool_execution_end", handler: ExtensionHandler<ToolExecutionEndEvent>): void;
@@ -1476,6 +1485,13 @@ export interface ExtensionAPI {
 
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
+	/**
+	 * Declare tools unavailable for this extension's current runtime. Contributions
+	 * combine across extensions; an empty list clears only this extension's list.
+	 * Availability filters discovery and model tools, not execution permission checks.
+	 * Valid during extension loading; reset when the extension is reloaded.
+	 */
+	setUnavailableTools(toolNames: readonly string[]): void;
 
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
@@ -1842,6 +1858,8 @@ export interface Extension {
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
+	/** Session-local availability contribution owned by this extension instance. */
+	unavailableTools?: ReadonlySet<string>;
 	messageRenderers: Map<string, MessageRenderer>;
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;

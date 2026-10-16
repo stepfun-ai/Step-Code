@@ -104,16 +104,26 @@ describe("Step provider extension", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 256_000,
 				maxTokens: 256_000,
+				compat: { supportsDeveloperRole: true, supportsReasoningEffort: false },
 			},
 		];
 		const config = createStepProviderConfig({ models, env: {} });
 
 		expect(config.models?.[0]?.api).toBe("openai-completions");
 		expect(config.models?.[0]?.input).toEqual(["text", "image"]);
+		expect(config.models?.[0]?.compat).toEqual({ supportsDeveloperRole: false, supportsReasoningEffort: false });
 		expect(models[0]).not.toHaveProperty("api");
+		expect(models[0]?.compat.supportsDeveloperRole).toBe(true);
 	});
 
-	it("routes a stored Step login to the chat completions endpoint exactly once", async () => {
+	it.each([
+		"https://api.stepfun.com/step_plan",
+		"https://api.stepfun.com",
+		"https://api.stepfun.ai/step_plan",
+		"https://api.stepfun.ai",
+		"https://step-proxy.example",
+	])("sends system instructions to the Step chat endpoint at %s", async (apiBaseUrl) => {
+		const baseUrl = stepOpenAiBaseUrl(apiBaseUrl);
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory({
 				[STEP_PROVIDER_ID]: {
@@ -129,6 +139,7 @@ describe("Step provider extension", () => {
 		runtime.registerProvider(
 			STEP_PROVIDER_ID,
 			createStepProviderConfig({
+				apiBaseUrl,
 				env: {},
 				models: [
 					{
@@ -146,25 +157,32 @@ describe("Step provider extension", () => {
 		const model = runtime.getModel(STEP_PROVIDER_ID, "step-3.7-flash");
 		expect(model).toMatchObject({
 			api: "openai-completions",
-			baseUrl: "https://api.stepfun.com/step_plan/v1",
+			baseUrl,
+			compat: { supportsDeveloperRole: false },
 		});
 
 		let requestUrl: string | undefined;
 		let requestHeaders: Headers | undefined;
+		let requestMessages: unknown;
 		const response = await runtime.completeSimple(
 			model!,
-			{ messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+			{ systemPrompt: "You are StepCode.", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
 			{
 				fetch: async (input, init) => {
 					requestUrl = String(input);
 					requestHeaders = new Headers(init?.headers);
+					requestMessages = JSON.parse(String(init?.body)).messages;
 					return new Response(null, { status: 401 });
 				},
 			},
 		);
 
-		expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/chat/completions");
+		expect(requestUrl).toBe(`${baseUrl}/chat/completions`);
 		expect(requestHeaders?.get("authorization")).toBe("Bearer step-key");
+		expect(requestMessages).toEqual([
+			{ role: "system", content: "You are StepCode." },
+			{ role: "user", content: "hello" },
+		]);
 		expect(response.errorMessage).toContain("401");
 	});
 
@@ -183,6 +201,8 @@ describe("Step provider extension", () => {
 								{
 									id: "step-3.7-flash",
 									api: "anthropic-messages",
+									reasoning: true,
+									compat: { supportsDeveloperRole: true, supportsReasoningEffort: false },
 									// The dialect is already correct, but an old proxy host must
 									// not survive as a model-level override.
 									baseUrl: "https://models-proxy.example/v1/messages",
@@ -208,19 +228,26 @@ describe("Step provider extension", () => {
 			runtime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig({ env: {} }));
 			const model = runtime.getModel(STEP_PROVIDER_ID, "step-3.7-flash");
 			expect(model?.baseUrl).toBe("https://api.stepfun.com/step_plan/v1");
+			expect(model?.compat).toMatchObject({ supportsDeveloperRole: false, supportsReasoningEffort: false });
 
 			let requestUrl: string | undefined;
+			let requestMessages: unknown;
 			await runtime.completeSimple(
 				model!,
-				{ messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+				{ systemPrompt: "You are StepCode.", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
 				{
-					fetch: async (input) => {
+					fetch: async (input, init) => {
 						requestUrl = String(input);
+						requestMessages = JSON.parse(String(init?.body)).messages;
 						return new Response(null, { status: 404 });
 					},
 				},
 			);
 			expect(requestUrl).toBe("https://api.stepfun.com/step_plan/v1/chat/completions");
+			expect(requestMessages).toEqual([
+				{ role: "system", content: "You are StepCode." },
+				{ role: "user", content: "hello" },
+			]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -498,6 +525,9 @@ describe("Step dynamic model discovery", () => {
 				input: ["text"],
 			}),
 		]);
+		for (const model of models) {
+			expect(model.compat).toMatchObject({ supportsDeveloperRole: false });
+		}
 	});
 
 	it("returns no models when unauthenticated or offline", async () => {
