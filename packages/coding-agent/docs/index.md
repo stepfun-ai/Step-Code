@@ -33,6 +33,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 ## Start here
 
 - [Quickstart](quickstart.md) - install, authenticate, and run a first session.
+- [Account usage and local activity](account-usage.md) - Overview, Account and local Status.
 - [Using Step](usage.md) - interactive mode, slash commands, context files, and CLI reference.
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
 - [llama.cpp](llama-cpp.md) - run a local router and manage models with `/llama`.

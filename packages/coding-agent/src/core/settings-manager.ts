@@ -36,6 +36,7 @@ export interface ProviderRetrySettings {
 export interface RetrySettings {
 	enabled?: boolean; // default: true
 	maxRetries?: number; // default: 3
+	rateLimitMaxRetries?: number; // default: 3; independent of transient and schema retries
 	baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
 	provider?: ProviderRetrySettings;
 }
@@ -925,10 +926,15 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getRetrySettings(): { enabled: boolean; maxRetries: number; baseDelayMs: number } {
+	getRetrySettings(): { enabled: boolean; maxRetries: number; rateLimitMaxRetries: number; baseDelayMs: number } {
+		const rateLimitMaxRetries = this.settings.retry?.rateLimitMaxRetries;
 		return {
 			enabled: this.getRetryEnabled(),
 			maxRetries: this.settings.retry?.maxRetries ?? 3,
+			rateLimitMaxRetries:
+				rateLimitMaxRetries === undefined || !Number.isFinite(rateLimitMaxRetries)
+					? 3
+					: Math.max(0, Math.min(20, Math.floor(rateLimitMaxRetries))),
 			baseDelayMs: this.settings.retry?.baseDelayMs ?? 2000,
 		};
 	}

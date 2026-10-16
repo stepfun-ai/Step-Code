@@ -180,7 +180,9 @@ alt screen 进入时（`tui-alt-screen.ts:316-318`）：`\x1b[?1049h` + 关 auto
 - fullscreen 模式改用布局根：transcript 滚动视图（grow）+ dock（`interactive-mode.ts:1102-1126`）。
 - 挂载后 `setFocus(editor)`，`ui.start()`，再 `applyFromSettings()` 上主题（`interactive-mode.ts:1138-1157`）。
 
-焦点与 overlay：对话框统一 `ui.showOverlay(component, options)` + `ui.setFocus(component)`，关闭时回焦编辑器（`interactive-mode.ts:3113-3131`、`3350-3360`）。overlay 的焦点恢复（被 overlay 内部组件抢走再还回）由 `TuiBase` 的状态机保证（`tui.ts:525-588`）。
+选择器与自定义面板有两种挂载方式。`/settings` 通过 `showSelector` 替换 `editorContainer` 内的编辑器；`/usage` 与 `/status` 使用 `ctx.ui.custom` 默认的 inline 模式，采用相同的输入区域和终端全宽，底栏保留在面板下方。关闭时恢复编辑器、未提交草稿与键盘焦点；异步更新和关闭回调随面板释放。
+
+只有显式选择 overlay 的对话框才通过 `ui.showOverlay(component, options)` 叠加到现有内容上。overlay 的焦点恢复（被 overlay 内部组件抢走再还回）由 `TuiBase` 的状态机保证（`tui.ts:525-588`）；普通命令面板不应为了展示内容而默认居中覆盖聊天记录。
 
 ### 7.2 事件 → 组件树 → 重绘
 

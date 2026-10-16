@@ -37,6 +37,7 @@ const STEPPAGE_DEPLOY_TOOL_NAME = "page_deploy";
 const STEPPAGE_MANAGEMENT_URL = "https://platform.stepfun.com/sites";
 
 interface ConnectedServer {
+	pluginId?: string;
 	readonly name: string;
 	readonly client: Client;
 	readonly transport: StdioClientTransport | StreamableHTTPClientTransport;
@@ -71,6 +72,7 @@ interface ServerDeclaration {
 }
 
 interface DiscoveredServer {
+	pluginId?: string;
 	name: string;
 	declaration: ServerDeclaration;
 	provision?: StepPluginProvision;
@@ -83,6 +85,19 @@ export interface StepMcpStatus {
 }
 
 let currentMcpStatuses: StepMcpStatus[] = [];
+const currentMcpToolOwners = new WeakMap<object, Map<string, string>>();
+export function getStepMcpToolOwner(toolName: string, session: object): string | undefined {
+	return currentMcpToolOwners.get(session)?.get(toolName);
+}
+function publishMcpToolOwners(
+	owners: Map<string, string>,
+	server: ConnectedServer,
+	tools: McpTool[],
+	previous: McpTool[] = [],
+): void {
+	for (const tool of previous) owners.delete(remoteToolName(server, tool));
+	if (server.pluginId) for (const tool of tools) owners.set(remoteToolName(server, tool), server.pluginId);
+}
 
 export function getStepMcpStatuses(): StepMcpStatus[] {
 	return currentMcpStatuses.map((status) => ({ ...status }));
@@ -105,6 +120,7 @@ export function formatStepMcpStatuses(statuses: readonly StepMcpStatus[] = curre
 export function createStepMcpExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		let servers: ConnectedServer[] = [];
+		let owners = new Map<string, string>();
 		let startup: Promise<void> | undefined;
 		let cancellation: AbortController | undefined;
 		let statuses: StepMcpStatus[] = [];
@@ -115,6 +131,9 @@ export function createStepMcpExtension(): ExtensionFactory {
 			cancellation = controller;
 			statuses = [];
 			currentMcpStatuses = statuses;
+			owners = new Map<string, string>();
+			if (ctx.sessionManager) currentMcpToolOwners.set(ctx.sessionManager, owners);
+			const sessionOwners = owners;
 			startup = (async () => {
 				// Finish mounting the interactive session before doing discovery or
 				// spawning processes. Awaiting Promise.all in session_start kept the
@@ -169,6 +188,7 @@ export function createStepMcpExtension(): ExtensionFactory {
 										pi.registerTools(remoteTools, {
 											remove: server.tools.map((tool) => remoteToolName(server, tool)),
 										});
+										publishMcpToolOwners(sessionOwners, server, tools, server.tools);
 										server.tools = tools;
 										statuses[index] = { name: item.name, status: "connected", toolCount: tools.length };
 									} catch (error) {
@@ -189,6 +209,7 @@ export function createStepMcpExtension(): ExtensionFactory {
 						};
 						try {
 							const server = await connectStepMcpServer(item, controller.signal, onToolsChanged);
+							server.pluginId = item.pluginId;
 							connected = server;
 							const remoteTools = server.tools.map((tool) => createRemoteTool(server, tool));
 							// Publishing a server's catalog refreshes the registry and the
@@ -197,12 +218,14 @@ export function createStepMcpExtension(): ExtensionFactory {
 							await yieldToEventLoop();
 							server.signal.throwIfAborted();
 							pi.registerTools(remoteTools);
+							publishMcpToolOwners(sessionOwners, server, server.tools);
 							published = true;
 							servers.push(server);
 							server.signal.addEventListener(
 								"abort",
 								() => {
 									published = false;
+									publishMcpToolOwners(sessionOwners, server, [], server.tools);
 									if (controller.signal.aborted) return;
 									pi.registerTools([], { remove: server.tools.map((tool) => remoteToolName(server, tool)) });
 									statuses[index] = { name: item.name, status: "failed", toolCount: 0 };
@@ -251,6 +274,7 @@ export function createStepMcpExtension(): ExtensionFactory {
 			cancellation?.abort();
 			await startup;
 			const closing = servers;
+			for (const server of closing) publishMcpToolOwners(owners, server, [], server.tools);
 			servers = [];
 			startup = undefined;
 			if (currentMcpStatuses === statuses) currentMcpStatuses = [];
@@ -370,8 +394,10 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 						global &&
 						isManagedStepPageCommand(global.declaration, parsed.manifest.provision) &&
 						isManagedStepPageCommand(value, parsed.manifest.provision)
-					)
+					) {
 						global.provision = parsed.manifest.provision;
+						global.pluginId = parsed.manifest.id;
+					}
 					continue;
 				}
 				if (value.enabled === false) {
@@ -381,6 +407,7 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 				if (!hasTransport(value)) continue;
 				seen.add(name);
 				const discovered: DiscoveredServer = {
+					pluginId: parsed.manifest.id,
 					name,
 					declaration: anchorPluginServerCwd(
 						pluginDir,

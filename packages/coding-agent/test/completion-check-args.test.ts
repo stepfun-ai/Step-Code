@@ -70,9 +70,25 @@ describe("completion-check CLI options", () => {
 		]);
 	});
 
-	it("requires the check when requesting review", () => {
-		expect(parseArgs(["--completion-review", "-p", "task"]).diagnostics).toEqual([
-			{ type: "error", message: "--completion-review requires --completion-check git-committed" },
+	it.each([["-p"], ["--mode", "json"], []])("accepts standalone review without a Git budget: %j", (...flags) => {
+		const parsed = parseArgs(["--completion-review", ...flags, "first", "second"]);
+		expect(parsed.completionReview).toBe(true);
+		expect(parsed.completionCheck).toBeUndefined();
+		expect(parsed.completionCheckAttempts).toBeUndefined();
+		expect(parsed.messages).toEqual(["first", "second"]);
+		expect(parsed.unknownFlags.size).toBe(0);
+		expect(parsed.diagnostics).toEqual([]);
+	});
+
+	it("does not let standalone review configure a Git follow-up budget", () => {
+		expect(parseArgs(["-p", "--completion-review", "--completion-check-attempts=2"]).diagnostics).toEqual([
+			{ type: "error", message: "--completion-check-attempts requires --completion-check git-committed" },
+		]);
+	});
+
+	it.each([["--mode", "rpc"], ["--sdk-stdio"]])("rejects standalone review in incompatible mode %j", (...flags) => {
+		expect(parseArgs(["--completion-review", ...flags]).diagnostics).toEqual([
+			{ type: "error", message: "--completion-review is only supported in print or JSON mode" },
 		]);
 	});
 
@@ -127,7 +143,9 @@ describe("completion-check CLI options", () => {
 			expect(help).toContain("--completion-check-attempts <n>");
 			expect(help).toContain("1..3 (default: 2)");
 			expect(help).toContain("--completion-review");
+			expect(help).toContain("One print/json task self-review; no Git required");
 			expect(help).toContain("shares its follow-up budget");
+			expect(help).not.toContain("requires git-committed");
 		} finally {
 			log.mockRestore();
 		}

@@ -971,6 +971,11 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	if ((parsed.completionCheck || parsed.completionReview) && !parsed.help && appMode === "interactive") {
+		const flag = parsed.completionCheck ? "--completion-check" : "--completion-review";
+		console.error(chalk.red(`Error: ${flag} requires print or JSON mode; use --print or --mode json.`));
+		return { kind: "completed", exitCode: 1 };
+	}
 	// A bare --resume opens the interactive session selector (createSessionManager checks
 	// parsed.resume before parsed.continue). Without a terminal it can never receive a
 	// selection and would hang until killed, so reject it before the picker opens.
@@ -1432,6 +1437,9 @@ async function dispatchAppMode(
 	} else {
 		const exitCode = await runPrintMode(runtimeHost, {
 			mode: toPrintOutputMode(appMode),
+			completionCheck: prep.parsed.completionCheck,
+			completionCheckAttempts: prep.parsed.completionCheckAttempts,
+			completionReview: prep.parsed.completionReview,
 			messages: prep.parsed.messages,
 			initialMessage: prep.initialMessage,
 			initialImages: prep.initialImages,

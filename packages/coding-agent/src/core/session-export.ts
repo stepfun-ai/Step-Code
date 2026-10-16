@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
 import { CURRENT_SESSION_VERSION, type SessionHeader, type SessionManager } from "./session-manager.ts";
+import { createUsageLineage } from "./usage-lineage.ts";
 
 /** Write the current session branch and optional trailing export-only entries as JSONL. */
 export function exportSessionToJsonl(
@@ -36,6 +37,15 @@ export function exportSessionToJsonl(
 	for (const entry of createTrailingEntries?.(parentId, timestamp) ?? []) {
 		lines.push(JSON.stringify(entry));
 	}
+	for (const entry of createUsageLineage(
+		sessionManager.getHeader(),
+		sessionManager.getEntries(),
+		sessionManager.getBranch(),
+		header.id,
+		timestamp,
+		parentId,
+	))
+		lines.push(JSON.stringify(entry));
 
 	writeFileSync(filePath, `${lines.join("\n")}\n`);
 	return filePath;

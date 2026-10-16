@@ -49,7 +49,7 @@ export interface Args {
 	completionCheck?: "git-committed";
 	/** Maximum completion follow-up prompts, 1..3 (default 2). */
 	completionCheckAttempts?: number;
-	/** Opt-in self-review sharing the completion-check follow-up budget. */
+	/** One opt-in task self-review; shares the Git follow-up budget when enabled. */
 	completionReview?: boolean;
 	export?: string;
 	noSkills?: boolean;
@@ -578,10 +578,10 @@ export function parseArgs(args: string[]): Args {
 			message: "--completion-check-attempts requires --completion-check git-committed",
 		});
 	}
-	if (result.completionReview && !result.completionCheck) {
+	if (result.completionReview && !result.completionCheck && (result.mode === "rpc" || result.sdkStdio)) {
 		result.diagnostics.push({
 			type: "error",
-			message: "--completion-review requires --completion-check git-committed",
+			message: "--completion-review is only supported in print or JSON mode",
 		});
 	}
 
@@ -665,7 +665,8 @@ ${stepPermissionOptionsText}
   --print, -p                    Non-interactive mode: process prompt and exit
   --completion-check <check>     Opt-in print/json completion check: git-committed
   --completion-check-attempts <n> Maximum same-session follow-ups: 1..3 (default: 2)
-  --completion-review           Opt-in self-review; requires git-committed and shares its follow-up budget
+  --completion-review           One print/json task self-review; no Git required
+                                 With git-committed, shares its follow-up budget
   --continue, -c                 Continue previous session
   --resume, -r [path|id]         Resume a session: with a path/id resume it directly, without opens a selector
   --session <path|id>            Use specific session file or partial UUID

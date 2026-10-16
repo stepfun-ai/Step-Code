@@ -66,6 +66,8 @@ export interface ModelRequestObserver {
 }
 
 export interface ObserveModelRequestStreamOptions {
+	/** Local, best-effort terminal hook; independent of optional remote observers. */
+	readonly onTerminal?: (message: AssistantMessage) => void;
 	/** Timestamp captured immediately before the provider stream is requested. */
 	readonly startedAt?: number;
 	/** Session identity forwarded to the observer, when available. */
@@ -140,11 +142,11 @@ export function observeModelRequestStream(
 	observer: ModelRequestObserver | undefined,
 	options: ObserveModelRequestStreamOptions = {},
 ): AssistantMessageEventStream {
-	if (!observer) return source;
+	if (!observer && !options.onTerminal) return source;
 
 	const startedAt = options.startedAt ?? Date.now();
 	const started = createStartedRequest(model, options, startedAt);
-	notifyStarted(observer, started);
+	if (observer) notifyStarted(observer, started);
 
 	// Always use Pi's public factory instead of cloning `source.constructor`.
 	// ModelRuntime normally returns an AssistantMessageEventStream, but lazy and
@@ -159,6 +161,12 @@ export function observeModelRequestStream(
 	const finish = (message: AssistantMessage, unexpectedError?: unknown): void => {
 		if (settled) return;
 		settled = true;
+		try {
+			options.onTerminal?.(message);
+		} catch {
+			/* Local diagnostics cannot change streaming. */
+		}
+		if (!observer) return;
 		const completedAt = Date.now();
 		const statusCode = readStatusCode(options.getStatusCode);
 		const effectiveModel = readModel(model, options.getModel);

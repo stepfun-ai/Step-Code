@@ -1,6 +1,13 @@
 import path from "node:path";
 import type { ThinkingLevel } from "@step-harness/agent-core";
-import { finalOutput, isFailed, resultText, runStepSubagentProcess } from "../step-subagent.ts";
+import {
+	finalOutput,
+	isFailed,
+	providerErrorKind,
+	resultText,
+	runStepSubagentProcess,
+	type StepSubagentRunResult,
+} from "../step-subagent.ts";
 import { discoverStepAgents, formatStepAgentCatalog, resolveStepAgent } from "../step-subagent-agents.ts";
 import { WORKFLOW_SESSION_ID_PREFIX } from "../subagent/helpers.ts";
 import { resolveWorkflowToolProfile } from "./tool-profile.ts";
@@ -43,6 +50,18 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 			signal: input.signal,
 			sessionId: `${WORKFLOW_SESSION_ID_PREFIX}${input.runId}-${input.agentId}`,
 			keepAlive: false,
+			onModelRequest: input.onModelRequest,
+			// The child reports tool_execution_start before the tool's permission check
+			// and execution, so the parent learns about a write before it happens.
+			...(input.onToolExecutionStart
+				? {
+						onUpdate: (update: StepSubagentRunResult) => {
+							if (update.lastEvent === "tool_execution_start") {
+								input.onToolExecutionStart?.(update.activeTool ?? "tool");
+							}
+						},
+					}
+				: {}),
 			workflowAcl: {
 				baseCwd: input.cwd,
 				...(input.options.readOnly ? { readOnly: input.options.readOnly } : {}),
@@ -51,11 +70,15 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 		});
 		const usage = usageFromSubagent(result.usage);
 		if (isFailed(result)) {
+			const errorKind = providerErrorKind(result);
 			return {
+				...(errorKind ? { errorKind } : {}),
 				text: resultText(result),
 				usage,
 				status: result.stopReason === "aborted" ? "aborted" : "failed",
 				errorMessage: result.errorMessage ?? result.stderr,
+				// A killed or crashed child can lose a tool event in its unread output.
+				toolActivityObserved: result.exitCode === 0 && result.stopReason !== "aborted",
 				...(result.model ? { model: result.model } : {}),
 			};
 		}
@@ -64,6 +87,7 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 			text,
 			usage,
 			status: "completed",
+			toolActivityObserved: true,
 			...(result.model ? { model: result.model } : {}),
 		};
 	};

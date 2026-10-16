@@ -135,6 +135,18 @@ describe("exit_plan_mode tool row", () => {
 		}
 	});
 
+	it("renders an external approval handoff without implying approval or clipping the plan", () => {
+		const component = createRow({ ...dismissed, outcome: "external_approval_required", planModeExited: true });
+		const out = rows(component);
+		expect(out.some((row) => row.includes("External approval required"))).toBe(true);
+		expect(out.some((row) => row.includes("Plan approved"))).toBe(false);
+		expect(out.some((row) => row.includes("# Plan: tank game"))).toBe(true);
+		expect(out.some((row) => row.includes("Delete the directory."))).toBe(true);
+		expect(out.some((row) => row.includes("to expand"))).toBe(false);
+		component.setExpanded(true);
+		expect(rows(component)).toEqual(out);
+	});
+
 	it("reports the approved and feedback outcomes too", () => {
 		const approved = rows(createRow({ ...dismissed, outcome: "approved" }));
 		expect(approved.some((row) => row.includes("Plan approved"))).toBe(true);

@@ -43,6 +43,8 @@ import {
 import { registerStepStreamRecovery } from "./step-stream-recovery.ts";
 
 export interface StepExtensionOptions {
+	/** Local usage services and presentation supplied by the product host. */
+	usageHost?: import("../step/usage/commands.ts").StepUsageHost;
 	/** Initial Step policy, normally populated from CLI/runtime options. */
 	permission?: StepPermissionControllerOptions;
 	/** Optional Step settings decorator used to restore and persist policy. */
@@ -122,7 +124,14 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		// The same plugins also contribute skills and commands, which the resource
 		// loader reads from agent/project directories rather than the plugin root.
 		createStepPluginResourcesExtension()(pi);
-		registerStepPiCommandAdapters(pi, options.telemetry, options.stepSettings, options.feedbackIdentity);
+		registerStepPiCommandAdapters(
+			pi,
+			options.telemetry,
+			options.stepSettings,
+			options.feedbackIdentity,
+			options.usageHost,
+			() => getStepPermissionPreset(permissions.getState().preset)?.label ?? "Unknown",
+		);
 		const builtInSlashCommands = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		// Extension commands are wrapped at registration time below. Inputs that
 		// reach Pi's normal prompt path are the remaining (usually unknown) slash
@@ -222,14 +231,14 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				nativeRetryOverridden = false;
 			}
 			if (autoResume) {
-				if (ctx.autoRetryEnabled !== true) {
-					if (!nativeRetryOverridden) nativeRetryOverridden = true;
-					try {
-						ctx.setAutoRetryEnabled(true);
-					} catch {
-						// Retry is a product convenience. A host that cannot persist settings
-						// must still be able to execute the current turn.
-					}
+				// Do not persist an unchanged default just because a session started.
+				if (ctx.autoRetryEnabled === true) return;
+				nativeRetryOverridden = true;
+				try {
+					ctx.setAutoRetryEnabled(true);
+				} catch {
+					// Retry is a product convenience. A host that cannot persist settings
+					// must still be able to execute the current turn.
 				}
 			} else if (nativeRetryOverridden) {
 				try {

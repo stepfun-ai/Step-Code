@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import {
 	createStepSubagentExtension,
@@ -20,6 +20,31 @@ interface SentMessage {
 	deliverAs?: string;
 	triggerTurn?: boolean;
 }
+
+test("RPC forwards 429 retry and recovery signals without treating errors as successes", () => {
+	const progress: unknown[] = [];
+	const events = [
+		{
+			type: "auto_retry_start",
+			reason: "rate_limit",
+			attempt: 2,
+			maxAttempts: 3,
+			delayMs: 2000,
+			errorMessage: "429 concurrency reached",
+		},
+		{ type: "message_end", message: { role: "assistant", stopReason: "error" } },
+		{ type: "turn_start" },
+		{ type: "message_end", message: { role: "assistant", stopReason: "toolUse" } },
+		{ type: "message_end", message: { role: "toolResult" } },
+	];
+	for (const event of events)
+		routeSubagentRpcLine(JSON.stringify(event), { onModelRequest: (value) => progress.push(value) });
+	expect(progress).toEqual([
+		{ type: "rate_limit", attempt: 2, maxRetries: 3, delayMs: 2000, message: "429 concurrency reached" },
+		{ type: "started" },
+		{ type: "succeeded" },
+	]);
+});
 
 function textResult(value: string): StepSubagentRunResult {
 	return {
@@ -202,6 +227,49 @@ test("accepts the descriptive general-purpose name as an alias for the built-in 
 	expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("alias output") });
 });
 
+test("a ten-task batch starts eight and queues two on a ten-core host", async () => {
+	const cpu = os.cpus()[0]!;
+	const spy = vi.spyOn(os, "cpus").mockReturnValue(Array(10).fill(cpu));
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	try {
+		const { api, tools } = createApi();
+		let calls = 0;
+		const counts: Array<{ running: number; queued: number }> = [];
+		createStepSubagentExtension({
+			agentDir: "/tmp/step-agent-test",
+			runner: async () => {
+				calls++;
+				await gate;
+				return textResult("ok");
+			},
+		})(api);
+		const result = tools.get("subagent")!.execute(
+			"ten",
+			{ tasks: Array.from({ length: 10 }, () => ({ agent: "general", task: "test" })) } as never,
+			undefined,
+			(update) => {
+				const records = (update.details as { results: Array<{ status: string }> }).results;
+				counts.push({
+					running: records.filter((r) => r.status === "running").length,
+					queued: records.filter((r) => r.status === "queued").length,
+				});
+			},
+			createContext("/workspace"),
+		);
+		await waitFor(() => calls === 8);
+		expect(counts).toContainEqual({ running: 8, queued: 2 });
+		release();
+		await result;
+		expect(calls).toBe(10);
+	} finally {
+		release();
+		spy.mockRestore();
+	}
+});
+
 test("an exact custom agent name takes precedence over a descriptive alias", () => {
 	const custom: StepAgentConfig = {
 		name: "general-purpose",
@@ -254,6 +322,7 @@ test.each(["single", "parallel"])(
 				);
 			expect(confirmations).toBe(1);
 			expect(runs).toBe(0);
+			expect(result.isError).toBe(true);
 			expect(result.content[0]).toMatchObject({
 				type: "text",
 				text: "Canceled: project-local agents not approved.",

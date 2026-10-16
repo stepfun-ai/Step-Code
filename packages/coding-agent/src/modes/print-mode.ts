@@ -71,6 +71,19 @@ function getTerminatingBlock(event: AgentSessionEvent): TerminatingBlock | undef
 	return { toolName: event.toolName, reason: reason || "no reason given" };
 }
 
+/** A successful plan handoff is not approval to send automatic execution prompts. */
+function requiresExternalPlanApproval(event: AgentSessionEvent): boolean {
+	if (event.type !== "tool_execution_end" || event.isError || event.toolName !== "exit_plan_mode") return false;
+	const result: unknown = event.result;
+	if (typeof result !== "object" || result === null) return false;
+	const details = (result as { details?: unknown }).details;
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		(details as { outcome?: unknown }).outcome === "external_approval_required"
+	);
+}
+
 function getAssistantFailure(message: AgentMessage | undefined): AssistantMessage | undefined {
 	if (message?.role !== "assistant") return undefined;
 	const assistant = message as AssistantMessage;
@@ -106,6 +119,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	// Sticky across native retries and runtime rebinds: the completion check
 	// must never resume past a terminal denial, assistant error, or abort.
 	let assistantFailure: AssistantMessage | undefined;
+	// Sticky for automatic feedback, including after explicit caller messages.
+	let externalApprovalRequired = false;
+	// Only a handoff from the latest prompt excuses missing final output.
+	let latestPromptHasExternalHandoff = false;
 	const completionAbort = new AbortController();
 	let completionAttempts: number | undefined;
 	let reviewRequested = false;
@@ -155,6 +172,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		unsubscribe = session.subscribe((event) => {
 			const block = getTerminatingBlock(event);
 			if (block) terminatingBlocks.push(block);
+			if (requiresExternalPlanApproval(event)) {
+				externalApprovalRequired = true;
+				latestPromptHasExternalHandoff = true;
+			}
 			if (event.type === "message_end") assistantFailure ??= getAssistantFailure(event.message);
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(toJsonEvent(event))}\n`);
@@ -200,14 +221,15 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	try {
 		completionAttempts = getCompletionCheckAttempts(options);
 		if (completionAttempts !== undefined && mode !== "text" && mode !== "json") {
-			throw new Error("--completion-check is only supported in print or JSON mode");
+			const flag = options.completionCheck ? "--completion-check" : "--completion-review";
+			throw new Error(`${flag} is only supported in print or JSON mode`);
 		}
 		const completionSession = session;
 		const completionCwd = runtimeHost.cwd;
 		const checkGit =
-			completionAttempts === undefined
-				? undefined
-				: await createGitCompletionCheck(completionCwd, completionAbort.signal);
+			options.completionCheck === "git-committed"
+				? await createGitCompletionCheck(completionCwd, completionAbort.signal)
+				: undefined;
 
 		if (mode === "json") {
 			const header = session.sessionManager.getHeader();
@@ -236,7 +258,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		}
 
 		const terminalOutcome = () => disposed || terminatingBlocks.length > 0 || assistantFailure !== undefined;
-		if (initialMessage && !(checkGit && terminalOutcome())) {
+		// A plan handoff suppresses automatic feedback, not explicit caller input.
+		const automaticCompletionBlocked = () => terminalOutcome() || externalApprovalRequired;
+		if (initialMessage && !(completionAttempts !== undefined && terminalOutcome())) {
+			latestPromptHasExternalHandoff = false;
 			await session.prompt(initialMessage, { images: initialImages });
 			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
 		}
@@ -244,20 +269,21 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		// Keep all explicit user messages in order; the completion budget is for
 		// the entire invocation, not a fresh budget after each user message.
 		for (const message of messages) {
-			if (checkGit && terminalOutcome()) break;
+			if (completionAttempts !== undefined && terminalOutcome()) break;
+			latestPromptHasExternalHandoff = false;
 			await session.prompt(message);
 			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
 		}
 
-		if (checkGit && completionAttempts !== undefined) {
+		if (completionAttempts !== undefined) {
 			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
-			for (let attempt = 0; attempt <= completionAttempts && !terminalOutcome(); attempt++) {
+			for (let attempt = 0; attempt <= completionAttempts && !automaticCompletionBlocked(); attempt++) {
 				// Extension commands may explicitly replace the runtime. Keep normal
 				// rebinding intact, but never carry automatic feedback to a new session.
 				if (session !== completionSession || runtimeHost.cwd !== completionCwd) break;
-				let git: GitCompletionState;
+				let git: GitCompletionState | undefined;
 				try {
-					git = await checkGit();
+					git = await checkGit?.();
 				} catch (error) {
 					console.error(error instanceof Error ? error.message : "Completion check: Git state unavailable.");
 					if (mode === "json") {
@@ -269,26 +295,26 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 					// infrastructure error after the model has already run.
 					break;
 				}
-				if (terminalOutcome() || session !== completionSession || runtimeHost.cwd !== completionCwd) break;
+				if (automaticCompletionBlocked() || session !== completionSession || runtimeHost.cwd !== completionCwd)
+					break;
 				const hasFinalText = hasFinalAssistantText(session.state.messages.at(-1));
 				const requestReview = options.completionReview === true && !reviewRequested;
 				const passed =
-					git.hasNewCommit &&
-					git.hasCommittedChanges &&
-					!git.trackedDirty &&
-					!git.untrackedFiles &&
+					(!git || (git.hasNewCommit && git.hasCommittedChanges && !git.trackedDirty && !git.untrackedFiles)) &&
 					hasFinalText &&
 					!requestReview;
 				const willFollowUp = !passed && attempt < completionAttempts;
 				if (willFollowUp && requestReview) reviewRequested = true;
 				const completionEvent = {
 					type: "completion_check",
-					check: "git-committed",
+					check: options.completionCheck ?? "task-review",
 					attempt,
 					maxAttempts: completionAttempts,
 					...git,
 					hasFinalText,
-					status: passed ? "passed" : willFollowUp ? "follow_up" : "exhausted",
+					// Standalone review records completion of the bounded follow-up,
+					// never a judgment that the task itself passed verification.
+					status: passed ? (checkGit ? "passed" : "completed") : willFollowUp ? "follow_up" : "exhausted",
 					willFollowUp,
 					...(options.completionReview
 						? {
@@ -306,7 +332,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 					break;
 				}
 				// Backpressure may yield to a signal or a runtime replacement.
-				if (terminalOutcome() || session !== completionSession || runtimeHost.cwd !== completionCwd) break;
+				if (automaticCompletionBlocked() || session !== completionSession || runtimeHost.cwd !== completionCwd)
+					break;
 				const feedback = completionCheckFeedback(git, hasFinalText, requestReview);
 				// A requested prompt can still fail preflight or be intercepted by an
 				// extension. A user-message event is evidence of delivery to this session,
@@ -331,6 +358,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 						})
 					: undefined;
 				try {
+					latestPromptHasExternalHandoff = false;
 					await session.prompt(feedback, { expandPromptTemplates: false });
 				} finally {
 					unsubscribeReview?.();
@@ -369,7 +397,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			if (assistantFailure) {
 				console.error(assistantFailure.errorMessage || `Request ${assistantFailure.stopReason}`);
 				exitCode = 1;
-			} else {
+			} else if (!latestPromptHasExternalHandoff) {
 				console.error("Completion check incomplete: no final answer text after bounded follow-up.");
 				exitCode = 2;
 			}

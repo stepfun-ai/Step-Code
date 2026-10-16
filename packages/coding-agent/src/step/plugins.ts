@@ -711,11 +711,18 @@ function provisionedServerEnvironments(manifest: StepPluginManifest): Array<Reco
  * `commands/` directories are used when present. This mirrors how
  * `readPluginManifestAtPath` fills those fields in for Claude-style manifests.
  */
+const pluginSkillOwners = new WeakMap<object, Map<string, string>>();
+export function getStepPluginSkillOwner(filePath: string, session: object): string | undefined {
+	for (const [root, owner] of pluginSkillOwners.get(session) ?? []) if (isPathContained(root, filePath)) return owner;
+	return undefined;
+}
+
 export async function discoverStepPluginResourcePaths(input: {
 	userDir?: string;
 	projectDir?: string;
 	/** Project plugins are read only when the project is trusted, as MCP discovery does. */
 	projectTrusted?: boolean;
+	onSkillOwner?: (root: string, owner: string) => void;
 }): Promise<{ skillPaths: string[]; promptPaths: string[]; warnings: string[] }> {
 	const warnings: string[] = [];
 	const seenByKind = { skills: new Set<string>(), commands: new Set<string>() };
@@ -757,6 +764,7 @@ export async function discoverStepPluginResourcePaths(input: {
 					if (seenByKind[key].has(canonical)) continue;
 					seenByKind[key].add(canonical);
 					collected[key].push(canonical);
+					if (key === "skills") input.onSkillOwner?.(await fs.realpath(canonical), manifest.id);
 				}
 			}
 		}
@@ -1178,15 +1186,20 @@ interface InteractivePluginOptions extends StepPluginCommandOptions {
  * thrown: a broken plugin must not cost the session its other resources.
  */
 export function createStepPluginResourcesExtension(): ExtensionFactory {
+	let generation = 0;
 	return (pi: ExtensionAPI): void => {
 		pi.on("resources_discover", async (_event, ctx) => {
 			const projectDir = defaultStepPluginsDir(process.env, { cwd: ctx.cwd, project: true });
+			const attempt = ++generation,
+				owners = new Map<string, string>();
 			try {
 				const discovered = await discoverStepPluginResourcePaths({
 					projectDir,
 					projectTrusted: ctx.isProjectTrusted(),
+					onSkillOwner: (root, owner) => owners.set(root, owner),
 					userDir: defaultStepPluginsDir(process.env),
 				});
+				if (attempt === generation && ctx.sessionManager) pluginSkillOwners.set(ctx.sessionManager, owners);
 				// Surface a malformed declaration once, on the channel the loader
 				// already uses for resource diagnostics, rather than throwing: the
 				// rest of the plugins' resources must still load.

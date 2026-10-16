@@ -5,7 +5,9 @@
 
 import {
 	type AssistantMessage,
+	type AssistantMessageEvent,
 	type Context,
+	classifyProviderError,
 	EventStream,
 	type ToolResultMessage,
 	validateToolArguments,
@@ -47,9 +49,10 @@ export function agentLoop(
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	).then(
+		(messages) => stream.end(messages),
+		(error) => stream.fail(error),
+	);
 
 	return stream;
 }
@@ -86,9 +89,10 @@ export function agentLoopContinue(
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	).then(
+		(messages) => stream.end(messages),
+		(error) => stream.fail(error),
+	);
 
 	return stream;
 }
@@ -143,8 +147,27 @@ export async function runAgentLoopContinue(
 	return newMessages;
 }
 
-function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-	return new EventStream<AgentEvent, AgentMessage[]>(
+class AgentLoopStream extends EventStream<AgentEvent, AgentMessage[]> {
+	private failed = false;
+	private failure: unknown;
+	fail(error: unknown): void {
+		this.failed = true;
+		this.failure = error;
+		this.end([]);
+	}
+	override async *[Symbol.asyncIterator](): AsyncGenerator<AgentEvent> {
+		yield* super[Symbol.asyncIterator]();
+		if (this.failed) throw this.failure;
+	}
+	override async result(): Promise<AgentMessage[]> {
+		const result = await super.result();
+		if (this.failed) throw this.failure;
+		return result;
+	}
+}
+
+function createAgentStream(): AgentLoopStream {
+	return new AgentLoopStream(
 		(event: AgentEvent) => event.type === "agent_end",
 		(event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
 	);
@@ -338,19 +361,21 @@ async function streamAssistantResponse(
 		tools: context.tools,
 	};
 
-	// Resolve API key (important for expiring tokens)
-	const resolvedApiKey =
-		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
-
-	const response = await streamFunction(config.model, llmContext, {
-		...config,
-		apiKey: resolvedApiKey,
+	const response = normalizeProviderStream(
+		async () => {
+			// Auth refresh and stream construction can throw before the first event.
+			const resolvedApiKey =
+				(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
+			return streamFunction(config.model, llmContext, { ...config, apiKey: resolvedApiKey, signal });
+		},
+		config.model,
 		signal,
-	});
+	);
 
 	let partialMessage: AssistantMessage | null = null;
 	let addedPartial = false;
-
+	// Consumer/persistence errors must escape. Only the producer normalizes
+	// provider exceptions, so a failed message_end cannot emit a second terminal.
 	for await (const event of response) {
 		switch (event.type) {
 			case "start":
@@ -382,7 +407,10 @@ async function streamAssistantResponse(
 
 			case "done":
 			case "error": {
-				const finalMessage = await response.result();
+				// The terminal event already carries the final message. Do not wait on
+				// result() here: a provider that closes or rejects immediately after
+				// emitting the terminal event may leave that promise unresolved.
+				const finalMessage = event.type === "done" ? event.message : event.error;
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -396,16 +424,63 @@ async function streamAssistantResponse(
 			}
 		}
 	}
+	throw new Error("Provider stream ended without a terminal event");
+}
 
-	const finalMessage = await response.result();
-	if (addedPartial) {
-		context.messages[context.messages.length - 1] = finalMessage;
-	} else {
-		context.messages.push(finalMessage);
-		await emit({ type: "message_start", message: { ...finalMessage } });
+async function* normalizeProviderStream(
+	createStream: () => ReturnType<StreamFn>,
+	model: AgentLoopConfig["model"],
+	signal: AbortSignal | undefined,
+): AsyncGenerator<AssistantMessageEvent> {
+	let partial: AssistantMessage | null = null;
+	let terminal = false;
+	let truncated = false;
+	try {
+		const response = await createStream();
+		for await (const event of response) {
+			if ("partial" in event) partial = event.partial;
+			terminal = event.type === "done" || event.type === "error";
+			yield event;
+			if (terminal) return;
+		}
+		truncated = true;
+		throw new Error("The model response ended before completion");
+	} catch (error) {
+		if (terminal) throw error;
+		const message = interruptedResponse(partial, model, signal, error);
+		// A stream that closed without a terminal event is a dropped connection.
+		const errorKind = signal?.aborted ? undefined : truncated ? "transient" : classifyProviderError(error);
+		if (errorKind) message.errorKind = errorKind;
+		yield { type: "error", reason: signal?.aborted ? "aborted" : "error", error: message };
 	}
-	await emit({ type: "message_end", message: finalMessage });
-	return finalMessage;
+}
+
+function interruptedResponse(
+	partialMessage: AssistantMessage | null,
+	model: AgentLoopConfig["model"],
+	signal: AbortSignal | undefined,
+	error: unknown,
+): AssistantMessage {
+	return {
+		...(partialMessage ?? {
+			role: "assistant",
+			content: [],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		}),
+		stopReason: signal?.aborted ? "aborted" : "error",
+		errorMessage: error instanceof Error ? error.message : String(error),
+	};
 }
 
 /**
@@ -736,7 +811,7 @@ async function executePreparedToolCall(
 		);
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
-		return { result, isError: false };
+		return { result, isError: result.isError === true };
 	} catch (error) {
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);

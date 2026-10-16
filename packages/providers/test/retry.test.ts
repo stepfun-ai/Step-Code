@@ -68,6 +68,20 @@ describe("provider retry classification", () => {
 		).toBe(true);
 	});
 
+	it("retries the agent loop's truncated-stream finalization", () => {
+		// agent-core finalizes a partial assistant message with this text when a
+		// provider stream closes before its terminal event. A truncated stream is
+		// transient, so the session retry owner must treat it as retryable.
+		expect(
+			isRetryableAssistantError(
+				fauxAssistantMessage("", {
+					stopReason: "error",
+					errorMessage: "The model response ended before completion",
+				}),
+			),
+		).toBe(true);
+	});
+
 	it("keeps provider limit errors non-retryable", () => {
 		expect(
 			isRetryableAssistantError(

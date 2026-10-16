@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ThinkingLevel } from "@step-harness/agent-core";
 import { Text } from "@step-harness/pi-tui";
-import { type Message, StringEnum, type Usage } from "@step-harness/providers";
+import { type Message, type ProviderErrorKind, StringEnum, type Usage } from "@step-harness/providers";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
@@ -34,6 +34,7 @@ import {
 	subagentListSignature,
 } from "./subagent/rendering.ts";
 import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
+import { clampWorkflowConcurrency } from "./workflow/budget.ts";
 
 // Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
 // here to keep this module's public surface stable.
@@ -69,8 +70,7 @@ export {
 	WORKFLOW_SESSION_ID_PREFIX,
 } from "./subagent/helpers.ts";
 
-const MAX_PARALLEL_TASKS = 8;
-const DEFAULT_CONCURRENCY = 4;
+const MAX_PARALLEL_TASKS = 1000;
 export const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
 export const CHILD_MARKER = "STEPCODE_SUBAGENT_CHILD";
@@ -106,6 +106,9 @@ export interface StepSubagentRunResult {
 }
 
 export interface StepSubagentRunInput {
+	onModelRequest?: (event: import("../core/rate-limit.ts").ModelRequestProgress) => void;
+	parentCwd?: string;
+	parentSessionId?: string;
 	agent: StepAgentConfig;
 	task: string;
 	cwd: string;
@@ -124,6 +127,12 @@ export interface StepSubagentRunInput {
 	sessionId?: string;
 	/** Keep the rpc child alive after the turn settles so replies reuse it. */
 	keepAlive?: boolean;
+	/**
+	 * Resolve only after a non-keep-alive child has exited, so a caller holding a
+	 * shared admission slot keeps it until the process has actually stopped.
+	 * Workflow calls (workflowAcl) always wait.
+	 */
+	awaitExit?: boolean;
 	/**
 	 * Abandon the turn after this many ms with no output from the child.
 	 * Defaults to `resolveSubagentTurnIdleTimeoutMs()`; `0` disables the watchdog.
@@ -187,9 +196,9 @@ export interface StepSubagentExtensionOptions {
 	configDirName?: string;
 	/** Include the built-in general/explore/review/planner roles. */
 	includeBuiltinAgents?: boolean;
-	/** Maximum number of tasks accepted in one parallel call. */
+	/** Maximum batch size accepted in one parallel call; excess tasks queue instead of running. */
 	maxParallelTasks?: number;
-	/** Number of child processes allowed to run at once. */
+	/** Number of child processes allowed to run at once; tasks beyond this stay queued. */
 	maxConcurrency?: number;
 	/** Optional isolated git worktree implementation. */
 	worktreeManager?: StepWorktreeManager;
@@ -292,6 +301,25 @@ function usageFromMessage(message: Message, usage: StepSubagentUsage): void {
 	usage.cacheWrite += messageUsage.cacheWrite || 0;
 	usage.contextTokens = messageUsage.totalTokens || usage.contextTokens;
 	usage.cost += messageUsage.cost?.total || 0;
+}
+
+/**
+ * The provider's structured failure class, only while the run's terminal error is
+ * still the child's own model failure. A local failure (idle timeout, abort,
+ * process exit) that replaced it has no provider kind.
+ */
+export function providerErrorKind(
+	result: Pick<StepSubagentRunResult, "messages" | "stopReason" | "errorMessage">,
+): ProviderErrorKind | undefined {
+	if (result.stopReason !== "error") return undefined;
+	for (let index = result.messages.length - 1; index >= 0; index--) {
+		const message = result.messages[index];
+		if (!isAssistantMessage(message)) continue;
+		return message.stopReason === "error" && message.errorMessage === result.errorMessage
+			? message.errorKind
+			: undefined;
+	}
+	return undefined;
 }
 
 export function isFailed(result: Pick<StepSubagentRunResult, "exitCode" | "stopReason">): boolean {
@@ -409,15 +437,34 @@ const spawnedSubagentSessions = new Set<string>();
 export async function runStepSubagentProcess(input: StepSubagentRunInput): Promise<StepSubagentRunResult> {
 	const sessionId = input.sessionId?.trim() || `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`;
 	const live = getLiveSubagentSession(sessionId);
-	if (live) return live.runTurn(input);
+	if (live) {
+		const result = await live.runTurn(input);
+		if ((input.workflowAcl || input.awaitExit) && !input.keepAlive) await live.exited;
+		return result;
+	}
 	if (spawnedSubagentSessions.has(sessionId)) input.onChildRespawn?.();
 	spawnedSubagentSessions.add(sessionId);
 	const session = await createSubagentRpcSession(input, sessionId);
-	return session.runTurn(input);
+	const result = await session.runTurn(input);
+	// A workflow node or admitted subagent owns its child through process exit, not
+	// just agent_settled. This keeps its shared admission slot until cancellation
+	// has actually stopped the child, and lets queued work start without orphaned requests.
+	if ((input.workflowAcl || input.awaitExit) && !input.keepAlive) await session.exited;
+	return result;
 }
 
-export function makeToolResult(details: StepSubagentDetails, text: string): AgentToolResult<StepSubagentDetails> {
-	return { content: [{ type: "text", text }], details };
+export function makeToolResult(
+	details: StepSubagentDetails,
+	text: string,
+	isError = false,
+): AgentToolResult<StepSubagentDetails> {
+	return {
+		content: [{ type: "text", text }],
+		details,
+		...(isError || details.results.some((record) => record.status === "failed" || record.status === "aborted")
+			? { isError: true }
+			: {}),
+	};
 }
 
 const AgentSendTargetSchema = Type.Object({
@@ -509,7 +556,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		maxParallelTasks: Math.max(1, Math.min(MAX_PARALLEL_TASKS, options.maxParallelTasks ?? MAX_PARALLEL_TASKS)),
 		maxConcurrency: Math.max(
 			1,
-			Math.min(options.maxConcurrency ?? DEFAULT_CONCURRENCY, options.maxParallelTasks ?? MAX_PARALLEL_TASKS),
+			Math.min(clampWorkflowConcurrency(options.maxConcurrency), options.maxParallelTasks ?? MAX_PARALLEL_TASKS),
 		),
 		telemetry: options.telemetry,
 		worktreeManager: options.worktreeManager ?? {

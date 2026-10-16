@@ -138,6 +138,37 @@ describe("skill loading regressions", () => {
 		expect(winner(apiResult.skills)).toBe(winner(loader.getSkills().skills));
 	});
 
+	it("identical copies of a skill are skipped without a collision diagnostic", () => {
+		const { root } = fixture();
+		const agentsPath = putSkill(join(root, ".agents", "skills", "audit-skill"));
+		putSkill(join(root, ".claude", "skills", "audit-skill"));
+		putSkill(join(root, ".claude", "skills", "other-skill"), "other-skill");
+		const result = loadSkills({
+			cwd: root,
+			agentDir: join(root, "agent"),
+			skillPaths: [join(root, ".agents", "skills"), join(root, ".claude", "skills")],
+			includeDefaults: false,
+		});
+		expect(result.skills.find((s) => s.name === "audit-skill")?.filePath).toBe(agentsPath);
+		expect(result.skills.map((s) => s.name).sort()).toEqual(["audit-skill", "other-skill"]);
+		expect(result.diagnostics.filter((d) => d.type === "collision")).toEqual([]);
+	});
+
+	it("differing copies of a skill still report a collision", () => {
+		const { root } = fixture();
+		const agentsPath = putSkill(join(root, ".agents", "skills", "audit-skill"), "audit-skill", "AGENTS");
+		const claudePath = putSkill(join(root, ".claude", "skills", "audit-skill"), "audit-skill", "CLAUDE");
+		const result = loadSkills({
+			cwd: root,
+			agentDir: join(root, "agent"),
+			skillPaths: [join(root, ".agents", "skills"), join(root, ".claude", "skills")],
+			includeDefaults: false,
+		});
+		const collisions = result.diagnostics.filter((d) => d.type === "collision");
+		expect(collisions).toHaveLength(1);
+		expect(collisions[0]?.collision).toMatchObject({ winnerPath: agentsPath, loserPath: claudePath });
+	});
+
 	it("both loaders should accept the same UTF-8 BOM skill file", async () => {
 		const { root, agentDir } = fixture();
 		const skillsDir = join(agentDir, "skills");

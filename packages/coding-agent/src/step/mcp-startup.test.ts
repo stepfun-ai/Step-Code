@@ -597,6 +597,13 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
 		const peer = await slowServer();
 		config.value = { mcp_servers: { peer: { url: peer.url } } };
 		const harness = await setup("tui");
+		let published = () => {};
+		const pageToolsPublished = new Promise<void>((resolve) => {
+			published = resolve;
+		});
+		harness.runtime.refreshTools = () => {
+			if (harness.extension.tools.size === 2) published();
+		};
 		await harness.start();
 		await vi.waitFor(() => expect(readiness).toHaveBeenCalledOnce());
 		expect(readiness).toHaveBeenCalledWith(
@@ -612,7 +619,10 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
 		await expect(readFile(started)).rejects.toMatchObject({ code: "ENOENT" });
 		expect(getStepMcpStatuses()).toContainEqual({ name: "steppage__steppage", status: "connecting", toolCount: 0 });
 		release({ command, installed: true });
-		await vi.waitFor(() => expect(harness.extension.tools.size).toBe(2));
+		// Real stdio startup can exceed waitFor's default one-second budget under
+		// load. Await publication within this test's unchanged overall timeout.
+		await pageToolsPublished;
+		expect(harness.extension.tools.size).toBe(2);
 		expect(JSON.parse(await readFile(started, "utf8"))).toEqual({ setupSecret: null, installerUrl: null });
 		expect(getStepMcpStatuses()).toContainEqual({ name: "steppage__steppage", status: "connected", toolCount: 1 });
 		expect(harness.notify).not.toHaveBeenCalled();
