@@ -2,7 +2,6 @@ import os from "node:os";
 import { emptyWorkflowUsage, mergeWorkflowUsage, type WorkflowUsage, workflowUsageTokens } from "./types.ts";
 
 const DEFAULT_MAX_CONCURRENCY = 16;
-const HARD_MAX_CONCURRENCY = 32;
 const DEFAULT_MAX_AGENTS = 1000;
 
 /** Raised when a workflow cannot afford another completed agent call. */
@@ -75,7 +74,16 @@ export function defaultWorkflowConcurrency(cpuCount = os.cpus().length): number 
 export function clampWorkflowConcurrency(value: number | undefined, cpuCount = os.cpus().length): number {
 	const fallback = defaultWorkflowConcurrency(cpuCount);
 	if (value === undefined || !Number.isFinite(value)) return fallback;
-	return Math.max(1, Math.min(HARD_MAX_CONCURRENCY, Math.floor(value)));
+	return Math.max(1, Math.min(fallback, Math.floor(value)));
+}
+
+/** Empty optional environment values mean no configured provider override. */
+export function configuredWorkflowConcurrencyLimit(
+	raw = process.env.STEP_WORKFLOW_CONCURRENCY_LIMIT,
+): number | undefined {
+	if (raw === undefined || raw.trim() === "") return undefined;
+	const value = Number(raw);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 export function clampWorkflowAgentLimit(value: number | undefined): number {
@@ -83,9 +91,27 @@ export function clampWorkflowAgentLimit(value: number | undefined): number {
 	return Math.max(1, Math.min(DEFAULT_MAX_AGENTS, Math.floor(value)));
 }
 
+/**
+ * Upper bound for an admission cooldown caused by a 429.
+ *
+ * A server's `Retry-After` can be hours, or a far-future HTTP date, and the node's
+ * own retry deliberately honors it verbatim. The admission window is shared by every
+ * workflow in the process and its queue time is excluded from node timeouts, so an
+ * unbounded cooldown would stall unrelated workflows indefinitely with no error and
+ * no timeout. The adaptive cap reduction below is what actually protects the provider;
+ * this bound only decides how long the window pauses before probing again.
+ */
+const MAX_THROTTLE_COOLDOWN_MS = 30_000;
+
 /** FIFO semaphore used by agent() so VM scripts cannot fan out unbounded work. */
 export class WorkflowSemaphore {
-	private readonly limit: number;
+	private limit: number;
+	private ceiling: number;
+	private disposed = false;
+	private generation = 0;
+	private successes = 0;
+	private cooldownUntil = 0;
+	private wakeup?: ReturnType<typeof setTimeout>;
 	private activeCount = 0;
 	private peakCount = 0;
 	private readonly waiters: Array<{
@@ -96,7 +122,64 @@ export class WorkflowSemaphore {
 	}> = [];
 
 	constructor(limit: number) {
-		this.limit = clampWorkflowConcurrency(limit, limit + 2);
+		this.limit = Math.max(1, Math.floor(limit));
+		this.ceiling = this.limit;
+	}
+
+	get epoch(): number {
+		return this.generation;
+	}
+
+	setCeiling(ceiling: number): void {
+		if (ceiling === this.ceiling) return;
+		const wasAtCeiling = this.limit === this.ceiling;
+		this.ceiling = ceiling;
+		this.limit = wasAtCeiling ? ceiling : Math.min(this.limit, ceiling);
+		this.generation++;
+		this.successes = 0;
+		this.drain();
+	}
+
+	throttle(epoch: number, delayMs: number): void {
+		if (this.disposed) return;
+		this.successes = 0;
+		if (epoch === this.generation) {
+			this.limit = Math.max(1, Math.floor(this.limit * 0.75));
+			this.generation++;
+		}
+		const cooldownMs = Number.isFinite(delayMs) ? Math.max(0, Math.min(MAX_THROTTLE_COOLDOWN_MS, delayMs)) : 0;
+		this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + cooldownMs);
+		this.scheduleDrain();
+	}
+
+	succeeded(epoch: number): void {
+		if (this.disposed) return;
+		if (epoch !== this.generation) return;
+		if (++this.successes >= 4 && this.waiters.length > 0 && this.limit < this.ceiling) {
+			this.limit++;
+			this.successes = 0;
+			this.drain();
+		}
+	}
+
+	private scheduleDrain(): void {
+		if (this.wakeup) clearTimeout(this.wakeup);
+		this.wakeup = setTimeout(
+			() => {
+				this.wakeup = undefined;
+				this.drain();
+			},
+			Math.min(2_147_483_647, Math.max(0, this.cooldownUntil - Date.now())),
+		);
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		if (this.wakeup) clearTimeout(this.wakeup);
+		for (const waiter of this.waiters.splice(0)) {
+			if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+			waiter.reject(new Error("Workflow admission is closed"));
+		}
 	}
 
 	get active(): number {
@@ -111,9 +194,21 @@ export class WorkflowSemaphore {
 		return this.limit;
 	}
 
+	/** True while congestion has lowered the cap or a cooldown is still pending. */
+	get throttled(): boolean {
+		return this.limit < this.ceiling || Date.now() < this.cooldownUntil;
+	}
+
+	/** Stop the cooldown timer while no run is attached; cap and cooldown are kept. */
+	park(): void {
+		if (this.wakeup) clearTimeout(this.wakeup);
+		this.wakeup = undefined;
+	}
+
 	async acquire(signal?: AbortSignal): Promise<() => void> {
+		if (this.disposed) throw new Error("Workflow admission is closed");
 		if (signal?.aborted) throw new Error("Workflow operation was aborted");
-		if (this.activeCount < this.limit) {
+		if (this.activeCount < this.limit && Date.now() >= this.cooldownUntil && this.waiters.length === 0) {
 			this.activeCount += 1;
 			this.peakCount = Math.max(this.peakCount, this.activeCount);
 			return this.makeRelease();
@@ -121,6 +216,7 @@ export class WorkflowSemaphore {
 		return new Promise<() => void>((resolve, reject) => {
 			const waiter: (typeof this.waiters)[number] = { resolve, reject, signal };
 			this.waiters.push(waiter);
+			if (!this.wakeup && Date.now() < this.cooldownUntil) this.scheduleDrain();
 			if (signal) {
 				const onAbort = (): void => {
 					const index = this.waiters.indexOf(waiter);
@@ -145,6 +241,11 @@ export class WorkflowSemaphore {
 	}
 
 	private drain(): void {
+		if (this.disposed) return;
+		if (Date.now() < this.cooldownUntil) {
+			this.scheduleDrain();
+			return;
+		}
 		while (this.activeCount < this.limit && this.waiters.length > 0) {
 			const waiter = this.waiters.shift();
 			if (!waiter) return;

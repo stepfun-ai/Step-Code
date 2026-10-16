@@ -117,4 +117,49 @@ describe("Step login onboarding", () => {
 		expect(rows.map(stripAnsi).join("")).toContain(authUrl);
 		expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
 	});
+
+	it.each(["step_plan", "step_plan_oversea"] as const)(
+		"renders and navigates missing-plan actions for %s",
+		(choice) => {
+			const selected: string[] = [];
+			let retries = 0;
+			let purchases = 0;
+			let changed = 0;
+			let quit = 0;
+			const view = new StepOnboardingView(resolveStepLoginProfiles(), {
+				onChoose: (profile) => selected.push(profile),
+				onSubmitApiKey: () => {},
+				onType: () => {},
+				onBackspace: () => {},
+				onBack: () => {
+					changed++;
+				},
+				onQuit: () => {
+					quit++;
+				},
+				onRetryPlan: () => {
+					retries++;
+				},
+				onOpenPlan: () => {
+					purchases++;
+				},
+				requestRender: () => {},
+			});
+			view.setStep({ kind: "planRequired", choice });
+			for (const width of [12, 40, 80, 160]) {
+				const rows = view.render(width);
+				expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+				expect(rows.map(stripAnsi).join("")).toContain(
+					`https://platform.stepfun.${choice === "step_plan" ? "com" : "ai"}/step-plan`,
+				);
+			}
+			view.handleInput("\r");
+			expect(selected).toEqual([choice === "step_plan" ? "platform_cn" : "platform_oversea"]);
+			view.handleInput("2");
+			view.handleInput("3");
+			view.handleInput("4");
+			view.handleInput("\x1b");
+			expect([purchases, retries, changed, quit]).toEqual([1, 1, 1, 1]);
+		},
+	);
 });

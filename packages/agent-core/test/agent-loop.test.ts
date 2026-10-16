@@ -1,6 +1,7 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
+	type AssistantMessageEventStream,
 	EventStream,
 	type Message,
 	type Model,
@@ -8,7 +9,7 @@ import {
 } from "@step-harness/providers";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { agentLoop, agentLoopContinue } from "../src/agent-loop.ts";
+import { agentLoop, agentLoopContinue, runAgentLoop } from "../src/agent-loop.ts";
 import { setDefaultStreamFn } from "../src/index.ts";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "../src/types.ts";
 
@@ -162,6 +163,145 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("turn_end");
 		expect(eventTypes).toContain("agent_end");
 	});
+
+	it("finalizes a partial assistant when the provider stream throws", async () => {
+		const partial = createAssistantMessage([{ type: "text", text: "partial response" }], "pending");
+		const streamFn = () =>
+			({
+				async *[Symbol.asyncIterator]() {
+					yield { type: "start", partial } satisfies AssistantMessageEvent;
+					throw new Error("connection terminated");
+				},
+				result: () => new Promise<AssistantMessage>(() => {}),
+			}) as unknown as AssistantMessageEventStream;
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop(
+			[createUserMessage("Hello")],
+			{ systemPrompt: "", messages: [], tools: [] },
+			{ model: createModel(), convertToLlm: identityConverter },
+			undefined,
+			streamFn,
+		);
+		for await (const event of stream) events.push(event);
+
+		const assistantEnd = events.find((event) => event.type === "message_end" && event.message.role === "assistant");
+		expect(assistantEnd).toMatchObject({
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "connection terminated" },
+		});
+		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
+	it.each([
+		["a 429 thrown by the provider", Object.assign(new Error("slow down"), { status: 429 }), "rate_limit"],
+		["a stream that closes without a terminal event", undefined, "transient"],
+		["an error with no structured signal", new Error("429 in the text only"), undefined],
+	])("classifies %s structurally", async (_name, thrown, errorKind) => {
+		const streamFn = () =>
+			({
+				async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+					if (thrown) throw thrown;
+					yield* [];
+				},
+				result: () => new Promise<AssistantMessage>(() => {}),
+			}) as unknown as AssistantMessageEventStream;
+		const stream = agentLoop(
+			[createUserMessage("Hello")],
+			{ systemPrompt: "", messages: [], tools: [] },
+			{ model: createModel(), convertToLlm: identityConverter },
+			undefined,
+			streamFn,
+		);
+		for await (const _event of stream) {
+			/* consume */
+		}
+		const last = (await stream.result()).at(-1) as AssistantMessage;
+		expect(last.stopReason).toBe("error");
+		expect(last.errorKind).toBe(errorKind);
+	});
+
+	it("finalizes synchronous provider construction failures", async () => {
+		const stream = agentLoop(
+			[createUserMessage("Hello")],
+			{ systemPrompt: "", messages: [], tools: [] },
+			{ model: createModel(), convertToLlm: identityConverter },
+			undefined,
+			() => {
+				throw new Error("provider construction failed");
+			},
+		);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+		expect(
+			events.filter((event) => event.type === "message_end" && event.message.role === "assistant"),
+		).toMatchObject([{ message: { stopReason: "error", errorMessage: "provider construction failed" } }]);
+		expect(events.at(-1)?.type).toBe("agent_end");
+		expect((await stream.result()).at(-1)).toMatchObject({ stopReason: "error" });
+	});
+
+	it.each(["new", "continue"])(
+		"%s loop surfaces conversion failures instead of leaving consumers hanging",
+		async (mode) => {
+			const failure = new Error("conversion failed");
+			const context = { systemPrompt: "", messages: [createUserMessage("Hello")], tools: [] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: () => {
+					throw failure;
+				},
+			};
+			const streamFn = () => new MockAssistantStream();
+			const stream =
+				mode === "new"
+					? agentLoop([], context, config, undefined, streamFn)
+					: agentLoopContinue(context, config, undefined, streamFn);
+			await expect(
+				(async () => {
+					for await (const _event of stream) {
+						/* consume */
+					}
+				})(),
+			).rejects.toBe(failure);
+			await expect(stream.result()).rejects.toBe(failure);
+		},
+	);
+
+	it.each(["message_update", "message_end"])(
+		"does not turn %s listener failures into provider errors",
+		async (failAt) => {
+			const failure = new Error("listener failed: 503");
+			const partial = createAssistantMessage([{ type: "text", text: "partial" }], "pending");
+			const final = createAssistantMessage([{ type: "text", text: "complete final content" }]);
+			const events: AgentEvent[] = [];
+			await expect(
+				runAgentLoop(
+					[createUserMessage("Hello")],
+					{ systemPrompt: "", messages: [], tools: [] },
+					{ model: createModel(), convertToLlm: identityConverter },
+					(event) => {
+						events.push(event);
+						if (
+							(event.type === "message_update" && failAt === "message_update") ||
+							(event.type === "message_end" && failAt === "message_end" && event.message.role === "assistant")
+						)
+							throw failure;
+					},
+					undefined,
+					() => {
+						const response = new MockAssistantStream();
+						response.push({ type: "start", partial });
+						response.push({ type: "text_delta", contentIndex: 0, delta: "partial", partial });
+						response.push({ type: "done", reason: "stop", message: final });
+						return response;
+					},
+				),
+			).rejects.toBe(failure);
+			const ends = events.filter((event) => event.type === "message_end" && event.message.role === "assistant");
+			expect(ends).toHaveLength(failAt === "message_end" ? 1 : 0);
+			if (ends.length) expect(ends[0]).toMatchObject({ message: final });
+		},
+	);
 
 	it("should handle custom message types via convertToLlm", async () => {
 		// Create a custom message type
@@ -366,6 +506,59 @@ describe("agentLoop with AgentMessage", () => {
 		const messages = await stream.result();
 		const toolResult = messages.find((message) => message.role === "toolResult");
 		expect(toolResult?.role === "toolResult" ? toolResult.usage : undefined).toEqual(patchedToolUsage);
+	});
+
+	it("preserves explicit tool failure details in events and the next model context", async () => {
+		const details = { status: "partial_failed", completed: 12, failed: 10 };
+		const tool: AgentTool = {
+			name: "workflow",
+			label: "Workflow",
+			description: "Run nodes",
+			parameters: Type.Object({}),
+			execute: async () => ({ isError: true, details, content: [{ type: "text", text: "10 nodes failed: 429" }] }),
+		};
+		let calls = 0;
+		const stream = agentLoop(
+			[createUserMessage("run")],
+			{ systemPrompt: "", messages: [], tools: [tool] },
+			{ model: createModel(), convertToLlm: identityConverter },
+			undefined,
+			(_model, context) => {
+				const response = new MockAssistantStream();
+				if (calls++ === 0) {
+					response.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantMessage(
+							[{ type: "toolCall", id: "wf", name: "workflow", arguments: {} }],
+							"toolUse",
+						),
+					});
+				} else {
+					expect(context.messages.at(-1)).toMatchObject({
+						role: "toolResult",
+						isError: true,
+						content: [{ text: "10 nodes failed: 429" }],
+					});
+					response.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage([{ type: "text", text: "partial failure" }]),
+					});
+				}
+				return response;
+			},
+		);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+		expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+			isError: true,
+			result: { details },
+		});
+		expect((await stream.result()).find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+			details,
+		});
 	});
 
 	it("should not execute tool calls from a length-truncated assistant message", async () => {

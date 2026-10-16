@@ -833,6 +833,59 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).not.toContain("commit");
 	});
 
+	test("summarizes collisions in Step presentation unless verbose", () => {
+		for (const verbose of [false, true]) {
+			const fakeThis = createShowLoadedResourcesThis({
+				quietStartup: false,
+				tuiStyle: "step",
+				verbose,
+				skillDiagnostics: [{ type: "collision", message: 'name "commit" collision' }],
+			});
+			const formatOptions: unknown[] = [];
+			fakeThis.formatDiagnostics = (_diagnostics: unknown, _sourceInfos: unknown, opts: unknown) => {
+				formatOptions.push(opts);
+				return "diagnostics";
+			};
+
+			(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+				force: false,
+				showDiagnosticsWhenQuiet: true,
+			});
+
+			expect(formatOptions).toEqual([{ summarizeCollisions: !verbose }]);
+		}
+	});
+
+	test("collision summary collapses shadowed skills into one line per directory pair", () => {
+		const collision = (name: string, loserPath: string, winnerPath: string) => ({
+			type: "collision" as const,
+			message: `name "${name}" collision`,
+			path: loserPath,
+			collision: { resourceType: "skill" as const, name, winnerPath, loserPath },
+		});
+		const fakeThis: any = {
+			formatDisplayPath: (p: string) => p,
+		};
+		fakeThis.formatCollisionSummary = (collisions: unknown) =>
+			(InteractiveMode as any).prototype.formatCollisionSummary.call(fakeThis, collisions);
+
+		const output = (InteractiveMode as any).prototype.formatDiagnostics.call(
+			fakeThis,
+			[
+				collision("oo", "/u/.claude/skills/oo/SKILL.md", "/u/.agents/skills/oo/SKILL.md"),
+				collision("wrangler", "/u/.claude/skills/wrangler/SKILL.md", "/u/.agents/skills/wrangler/SKILL.md"),
+				{ type: "warning", message: "skill path does not exist" },
+			],
+			new Map(),
+			{ summarizeCollisions: true },
+		);
+
+		expect(output).toContain("2 skills in /u/.claude/skills skipped (same name already loaded from /u/.agents/skills)");
+		expect(output).toContain("--verbose");
+		expect(output).toContain("skill path does not exist");
+		expect(output).not.toContain("collision:");
+	});
+
 	test("shows full resource listing on verbose startup even when tool output is collapsed", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: true,

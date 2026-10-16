@@ -1557,6 +1557,29 @@ pi.registerCommand("deploy", {
 });
 ```
 
+### pi.setUnavailableTools(names)
+
+Declare tool names unavailable for this extension's current runtime. This works during extension loading and after startup, and also applies to matching tools registered later.
+
+```typescript
+export default function (pi: ExtensionAPI) {
+  pi.setUnavailableTools(["remote_lookup"]);
+
+  pi.registerCommand("enable-remote-lookup", {
+    handler: async () => {
+      // Clear this extension's declaration after its prerequisite is satisfied.
+      pi.setUnavailableTools([]);
+    },
+  });
+}
+```
+
+Declarations combine across extensions: clearing one list cannot release another extension's restriction or override `--exclude-tools`. Unavailable tools are omitted from `getAllTools()`, the model's active tools, and the default generated prompt. Explicit system-prompt replacements remain owned by the extension that supplies them.
+
+The requested active selection is retained while availability changes. Releasing a restriction restores a tool only if it is selected; an explicit `setActiveTools()` call can change that selection while the tool is unavailable. Declarations belong to the loaded extension instance, so failed loads do not apply them and reload rebuilds them from the new instances. Refresh and reload preserve selections for previously registered tools; genuinely new tool registrations become active by default within the CLI allowlist. Captured APIs from a replaced or disposed runtime reject further changes.
+
+Use this for tools whose prerequisites or session policy make them unavailable. Tools that require conditional confirmation can stay available. Availability controls discovery and selection; keep execution-time permission checks in the tool or `tool_call` hook. A failed tool call does not automatically change availability.
+
 ### pi.getCommands()
 
 Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands, prompt templates, and skill commands.
@@ -1676,7 +1699,7 @@ const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
-Manage active tools. This works for both built-in tools and dynamically registered tools. `pi.getActiveTools()` returns the active tool names as `string[]`; `pi.getAllTools()` returns metadata for all configured tools.
+Manage active tools. This works for both built-in tools and dynamically registered tools. `pi.getActiveTools()` returns the active tool names as `string[]`; `pi.getAllTools()` returns metadata for configured tools that remain available after CLI selectors and extension availability declarations.
 
 ```typescript
 const active = pi.getActiveTools(); // ["read", "bash", ...]

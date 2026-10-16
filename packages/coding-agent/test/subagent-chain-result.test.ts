@@ -1,5 +1,6 @@
+import os from "node:os";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
 import type {
 	StepSubagentDetails,
@@ -8,6 +9,19 @@ import type {
 	SubagentParams,
 } from "../src/features/step-subagent.ts";
 import { executeSubagent } from "../src/features/subagent/execute.ts";
+import { acquireWorkflowAdmission, resetWorkflowAdmission } from "../src/features/workflow/admission.ts";
+
+beforeEach(() => {
+	// These tests exercise a four-slot window, independent of the CI host's CPU count.
+	vi.spyOn(os, "cpus").mockReturnValue(Array(6).fill(os.cpus()[0]!));
+	vi.stubEnv("STEP_WORKFLOW_CONCURRENCY_LIMIT", "");
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
+	resetWorkflowAdmission();
+});
 
 // Deterministic runner outcome keyed by the step's task text.
 type Outcome = { text: string; exitCode?: number; stopReason?: string; errorMessage?: string };
@@ -56,8 +70,9 @@ const ctx = {
 async function run(
 	params: SubagentParams,
 	respond: (input: StepSubagentRunInput, index: number) => Outcome,
-	options: { maxConcurrency?: number } = {},
+	options: { maxConcurrency?: number; runnerDelayMs?: number } = {},
 ): Promise<{
+	peakActive: number;
 	result: AgentToolResult<StepSubagentDetails>;
 	tasks: string[];
 	partialModes: StepSubagentDetails["mode"][];
@@ -66,6 +81,8 @@ async function run(
 	const tasks: string[] = [];
 	const partialModes: StepSubagentDetails["mode"][] = [];
 	const partialStatuses: string[][] = [];
+	let active = 0;
+	let peakActive = 0;
 	const result = await executeSubagent(
 		params,
 		undefined,
@@ -87,11 +104,18 @@ async function run(
 				tasks.push(input.task);
 				const partial = runResult({ text: "" });
 				input.onUpdate?.({ ...partial, exitCode: -1, messages: [] });
-				return runResult(respond(input, index));
+				active++;
+				peakActive = Math.max(peakActive, active);
+				try {
+					if (options.runnerDelayMs) await new Promise((resolve) => setTimeout(resolve, options.runnerDelayMs));
+					return runResult(respond(input, index));
+				} finally {
+					active--;
+				}
 			},
 		},
 	);
-	return { result, tasks, partialModes, partialStatuses };
+	return { result, tasks, partialModes, partialStatuses, peakActive };
 }
 
 function contentText(result: AgentToolResult<StepSubagentDetails>): string {
@@ -217,4 +241,67 @@ test("parallel tasks beyond maxConcurrency wait as queued", async () => {
 
 	expect(partialStatuses).toContainEqual(["running", "queued"]);
 	expect(partialStatuses.at(-1)).toEqual(["completed", "completed"]);
+});
+
+test("parallel subagents wait for slots in the window shared with workflows", async () => {
+	const workflow = acquireWorkflowAdmission(2);
+	const held = [await workflow.semaphore.acquire(), await workflow.semaphore.acquire()];
+	let started = 0;
+	const running = run(
+		{
+			tasks: [
+				{ agent: "explore", task: "a" },
+				{ agent: "explore", task: "b" },
+			],
+		} as SubagentParams,
+		(input) => {
+			started++;
+			return { text: `OUT_${input.task}` };
+		},
+	);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(started).toBe(0);
+	for (const release of held) release();
+	const { result } = await running;
+	expect(contentText(result)).toContain("Parallel: 2/2 succeeded");
+	expect(started).toBe(2);
+	workflow.release();
+});
+
+test("a 429 inside a parallel subagent lowers the shared window", async () => {
+	const workflow = acquireWorkflowAdmission(4);
+	await run({ tasks: [{ agent: "explore", task: "a" }] } as SubagentParams, (input) => {
+		input.onModelRequest?.({ type: "started" });
+		input.onModelRequest?.({ type: "rate_limit", attempt: 1, maxRetries: 3, delayMs: 0, message: "429" });
+		return { text: "ok" };
+	});
+	expect(workflow.semaphore.max).toBe(3);
+	workflow.release();
+});
+
+test("parallel subagents honor the configured provider concurrency limit", async () => {
+	vi.stubEnv("STEP_WORKFLOW_CONCURRENCY_LIMIT", "1");
+	const tasks = ["a", "b", "c"].map((task) => ({ agent: "explore", task }));
+	const { result, peakActive } = await run({ tasks } as SubagentParams, () => ({ text: "ok" }), {
+		runnerDelayMs: 10,
+	});
+	expect(contentText(result)).toContain("Parallel: 3/3 succeeded");
+	expect(peakActive).toBe(1);
+
+	vi.unstubAllEnvs();
+	const unlimited = await run({ tasks } as SubagentParams, () => ({ text: "ok" }), { runnerDelayMs: 10 });
+	expect(unlimited.peakActive).toBeGreaterThan(1);
+});
+
+test("admitted parallel subagents ask the runner to hold their slot until the child exits", async () => {
+	const seen: Array<boolean | undefined> = [];
+	await run({ tasks: [{ agent: "explore", task: "a" }] } as SubagentParams, (input) => {
+		seen.push(input.awaitExit);
+		return { text: "ok" };
+	});
+	await run({ agent: "explore", task: "single" } as SubagentParams, (input) => {
+		seen.push(input.awaitExit);
+		return { text: "ok" };
+	});
+	expect(seen).toEqual([true, undefined]);
 });

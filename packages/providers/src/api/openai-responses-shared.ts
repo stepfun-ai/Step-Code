@@ -28,6 +28,7 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.ts";
+import { ProviderStreamError } from "../utils/error-kind.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
@@ -740,7 +741,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			finalizeResponse(event.response);
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+			throw new ProviderStreamError(`Error Code ${event.code}: ${event.message}`, event.code ?? undefined);
 		} else if (event.type === "response.failed") {
 			sawTerminalResponseEvent = true;
 			output.rawStopReason = event.response?.status;
@@ -751,7 +752,7 @@ export async function processResponsesStream<TApi extends Api>(
 				: details?.reason
 					? `incomplete: ${details.reason}`
 					: "Unknown error (no error details in response)";
-			throw new Error(msg);
+			throw new ProviderStreamError(msg, error?.code ?? undefined);
 		}
 	}
 	if (!sawTerminalResponseEvent) {

@@ -193,14 +193,36 @@ describe("completion-check option validation for direct print-mode callers", () 
 		expect(() => getCompletionCheckAttempts({ completionCheckAttempts: 2 })).toThrow("requires --completion-check");
 	});
 
-	it("rejects review without an enabled check", () => {
-		expect(() => getCompletionCheckAttempts({ completionReview: true })).toThrow(
-			"--completion-review requires --completion-check git-committed",
+	it("allows exactly one standalone review without a Git check", () => {
+		expect(getCompletionCheckAttempts({ completionReview: true })).toBe(1);
+	});
+
+	it("rejects an attempts override for standalone review", () => {
+		expect(() => getCompletionCheckAttempts({ completionReview: true, completionCheckAttempts: 2 })).toThrow(
+			"--completion-check-attempts requires --completion-check git-committed",
 		);
 	});
 });
 
 describe("completion self-review feedback", () => {
+	it("reviews the visible task without requiring Git or a commit", () => {
+		const feedback = completionCheckFeedback(undefined, true, true);
+		for (const requirement of [
+			"original visible task",
+			"task coverage",
+			"public interfaces and types",
+			"boundary cases",
+			"final diff",
+			"after the last edit",
+			"run any missing verification",
+			"Preserve unrelated user changes and respect permission denials.",
+		])
+			expect(feedback).toContain(requirement);
+		expect(feedback).not.toMatch(/commit|Git|score|passed/i);
+		expect(feedback).not.toContain("Completion check:");
+		expect(completionCheckFeedback(undefined, false, true)).toContain("final answer text is missing");
+	});
+
 	it("reviews visible requirements without inventing a missing Git condition", () => {
 		const feedback = completionCheckFeedback(
 			{ hasNewCommit: true, hasCommittedChanges: true, trackedDirty: false, untrackedFiles: false },

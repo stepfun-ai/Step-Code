@@ -6,6 +6,7 @@
  * through {@link StepPlanModeController}, so the tools stay stateless.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
@@ -56,7 +57,7 @@ function controlResult(text: string, terminate = false): AgentToolResult<PlanRev
 }
 
 /**
- * A reviewed outcome, carrying the plan for the transcript.
+ * A review or external-approval handoff, carrying the plan for the transcript.
  *
  * The dialog is torn down as soon as it closes, taking the plan it drew with
  * it; renderPlanReviewResult puts it back on the tool row.
@@ -165,30 +166,36 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					`Cannot review the plan at ${planFilePath}: ${error instanceof Error ? error.message : String(error)}. Provide a readable, nonempty regular file containing your proposal with write_file, then call exit_plan_mode again.`,
 				);
 			}
+			const planHash = createHash("sha256").update(planContents, "utf8").digest("hex");
+			const reviewed = (outcome: PlanReviewOutcome, feedback?: string): PlanReviewDetails => ({
+				planFilePath,
+				planContents,
+				planHash,
+				planModeExited: !planMode.isPlanModeActive(),
+				approvalSource: ctx.mode === "rpc" || !ctx.hasUI ? "external" : "user",
+				outcome,
+				...(feedback === undefined ? {} : { feedback }),
+			});
 			if (ctx.mode === "rpc") {
 				// An rpc child has a dialog bridge (hasUI is true) but no real user
 				// behind it, so its extension_ui_request select can be auto-cancelled
-				// to "Stay", leaving the child idle in plan mode forever. Auto-approve
-				// the exit instead and hand the approval to the caller.
+				// to "Stay", leaving the child idle in plan mode forever. Exit plan mode
+				// and hand approval to the caller.
 				planMode.exitPlanMode("auto_rpc", ctx);
 				ctx.ui.notify("rpc child auto-approved plan mode exit — user oversight was not gated", "warning");
-				return controlResult(
+				return reviewedResult(
 					`Cannot gate approval in rpc child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
+					reviewed("external_approval_required"),
 				);
 			}
 			if (!ctx.hasUI) {
 				planMode.exitPlanMode("auto_headless", ctx);
-				return controlResult(
+				return reviewedResult(
 					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally.`,
+					reviewed("external_approval_required"),
 				);
 			}
 			const review = await reviewPlanInteractively(ctx, planFilePath, planContents);
-			const reviewed = (outcome: PlanReviewOutcome, feedback?: string): PlanReviewDetails => ({
-				planFilePath,
-				planContents,
-				outcome,
-				...(feedback === undefined ? {} : { feedback }),
-			});
 			if (review?.action === "execute") {
 				planMode.exitPlanMode("approved", ctx);
 				return reviewedResult(

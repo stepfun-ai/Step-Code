@@ -40,7 +40,7 @@ interface SafeParseSchema {
 	safeParse(input: unknown): { success: boolean; data?: unknown; error?: unknown };
 }
 
-function isSafeParseSchema(value: unknown): value is SafeParseSchema {
+export function isSafeParseSchema(value: unknown): value is SafeParseSchema {
 	return !!value && typeof value === "object" && typeof (value as { safeParse?: unknown }).safeParse === "function";
 }
 

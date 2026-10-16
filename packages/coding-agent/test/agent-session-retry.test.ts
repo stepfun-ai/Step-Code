@@ -25,6 +25,8 @@ class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMe
 	}
 }
 
+const THROTTLED = { errorMessage: "429 concurrency reached", errorKind: "rate_limit" } as const;
+
 function createAssistantMessage(text: string, overrides?: Partial<AssistantMessage>): AssistantMessage {
 	return {
 		role: "assistant",
@@ -71,25 +73,50 @@ describe("AgentSession retry", () => {
 	async function createSession(options?: {
 		failCount?: number;
 		maxRetries?: number;
+		rateLimitMaxRetries?: number;
+		errors?: Array<string | Pick<AssistantMessage, "errorMessage" | "errorKind">>;
+		toolBeforeFailure?: boolean;
 		delayAssistantMessageEndMs?: number;
 	}) {
 		const failCount = options?.failCount ?? 1;
 		const maxRetries = options?.maxRetries ?? 3;
 		const delayAssistantMessageEndMs = options?.delayAssistantMessageEndMs ?? 0;
 		let callCount = 0;
+		let toolExecutions = 0;
+		const tool: AgentTool = {
+			name: "write_once",
+			label: "Write",
+			description: "Record a side effect",
+			parameters: Type.Object({}),
+			execute: async () => {
+				toolExecutions++;
+				return { content: [{ type: "text", text: "written" }], details: null };
+			},
+		};
 
 		const model = stepModel();
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: "Test", tools: options?.toolBeforeFailure ? [tool] : [] },
 			streamFn: () => {
 				callCount++;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
-					if (callCount <= failCount) {
+					if (options?.toolBeforeFailure && callCount === 1) {
+						const message = createAssistantMessage("", {
+							content: [{ type: "toolCall", id: "write-1", name: "write_once", arguments: {} }],
+							stopReason: "toolUse",
+						});
+						stream.push({ type: "done", reason: "toolUse", message });
+						return;
+					}
+					const failureIndex = callCount - (options?.toolBeforeFailure ? 1 : 0);
+					if (options?.errors ? failureIndex <= options.errors.length : failureIndex <= failCount) {
+						const failure = options?.errors?.[failureIndex - 1] ?? "overloaded_error";
 						const msg = createAssistantMessage("", {
 							stopReason: "error",
-							errorMessage: "overloaded_error",
+							...(typeof failure === "string" ? { errorMessage: failure } : failure),
+							retryAfterMs: 0,
 						});
 						stream.push({ type: "start", partial: msg });
 						stream.push({ type: "error", reason: "error", error: msg });
@@ -108,7 +135,9 @@ describe("AgentSession retry", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = await createModelRegistry(authStorage, tempDir);
 		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
-		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries, baseDelayMs: 1 } });
+		settingsManager.applyOverrides({
+			retry: { enabled: true, maxRetries, rateLimitMaxRetries: options?.rateLimitMaxRetries, baseDelayMs: 1 },
+		});
 
 		session = new AgentSession({
 			agent,
@@ -117,6 +146,7 @@ describe("AgentSession retry", () => {
 			cwd: tempDir,
 			modelRuntime: getModelRuntime(modelRegistry),
 			resourceLoader: createTestResourceLoader(),
+			...(options?.toolBeforeFailure ? { baseToolsOverride: { write_once: tool } } : {}),
 		});
 
 		if (delayAssistantMessageEndMs > 0) {
@@ -130,7 +160,7 @@ describe("AgentSession retry", () => {
 			};
 		}
 
-		return { session, getCallCount: () => callCount };
+		return { session, getCallCount: () => callCount, getToolExecutions: () => toolExecutions };
 	}
 
 	it("retries after a transient error and succeeds", async () => {
@@ -146,6 +176,67 @@ describe("AgentSession retry", () => {
 		expect(created.getCallCount()).toBe(2);
 		expect(events).toEqual(["start:1", "end:success=true"]);
 		expect(created.session.isRetrying).toBe(false);
+	});
+
+	it("uses independent rate-limit and transient retry budgets, resetting after success", async () => {
+		const created = await createSession({
+			maxRetries: 1,
+			rateLimitMaxRetries: 2,
+			errors: [
+				"503 overloaded_error",
+				{ errorMessage: "429 concurrency reached, current: 9, limit: 8", errorKind: "rate_limit" },
+				{ errorMessage: "opaque gateway text", errorKind: "rate_limit" },
+			],
+		});
+		const retries: unknown[] = [];
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") retries.push(event);
+		});
+		await created.session.prompt("Test");
+		expect(created.getCallCount()).toBe(4);
+		expect(retries).toMatchObject([
+			{ attempt: 1, maxAttempts: 1 },
+			{ attempt: 1, maxAttempts: 2, reason: "rate_limit", delayMs: 0 },
+			{ attempt: 2, maxAttempts: 2, reason: "rate_limit", delayMs: 0 },
+		]);
+		expect(created.session.retryAttempt).toBe(0);
+	});
+
+	it("stops rate-limit retries at their own limit", async () => {
+		const created = await createSession({
+			maxRetries: 10,
+			rateLimitMaxRetries: 1,
+			errors: [THROTTLED, THROTTLED, THROTTLED],
+		});
+		await created.session.prompt("Test");
+		expect(created.getCallCount()).toBe(2);
+	});
+
+	it.each(["429 insufficient_quota", '429: {"type":"FreeUsageLimitError"}', "503 service unavailable"])(
+		"does not retry a provider-classified quota error even when its text reads %s",
+		async (errorMessage) => {
+			const created = await createSession({ errors: [{ errorMessage, errorKind: "quota" }] });
+			await created.session.prompt("Test");
+			expect(created.getCallCount()).toBe(1);
+		},
+	);
+
+	it("cancels a scheduled 429 retry without making another request", async () => {
+		const created = await createSession({ errors: [THROTTLED] });
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") created.session.abortRetry();
+		});
+		await created.session.prompt("Test");
+		expect(created.getCallCount()).toBe(1);
+		expect(created.session.retryAttempt).toBe(0);
+	});
+
+	it("retries only the failed model request after a completed side effect", async () => {
+		const created = await createSession({ toolBeforeFailure: true, errors: [THROTTLED] });
+		await created.session.prompt("Write then summarize");
+		expect(created.getCallCount()).toBe(3);
+		expect(created.getToolExecutions()).toBe(1);
+		expect(created.session.messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
 	});
 
 	it("exhausts max retries and emits failure", async () => {

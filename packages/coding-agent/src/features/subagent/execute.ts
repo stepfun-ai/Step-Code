@@ -39,6 +39,12 @@ import {
 	type StepAgentDiscoveryResult,
 	type StepAgentScope,
 } from "../step-subagent-agents.ts";
+import { acquireWorkflowAdmission } from "../workflow/admission.ts";
+import {
+	clampWorkflowConcurrency,
+	configuredWorkflowConcurrencyLimit,
+	type WorkflowSemaphore,
+} from "../workflow/budget.ts";
 import { truncateText } from "./lane-events.ts";
 import type { StepSubagentLaneRuntime } from "./lane-lifecycle.ts";
 
@@ -258,6 +264,8 @@ export async function executeSubagent(
 	},
 	laneRuntime?: StepSubagentLaneRuntime,
 ): Promise<AgentToolResult<StepSubagentDetails>> {
+	const parentCwd = ctx.cwd,
+		parentSessionId = ctx.sessionManager?.getSessionId?.();
 	const scope = params.agentScope ?? "user";
 	const discovery = await discoverStepAgents(ctx.cwd, {
 		agentDir: options.agentDir,
@@ -279,6 +287,7 @@ export async function executeSubagent(
 		return makeToolResult(
 			details,
 			`Invalid parameters. Provide exactly one mode. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
+			true,
 		);
 	}
 	if (parallel && parallel.length > options.maxParallelTasks) {
@@ -286,13 +295,14 @@ export async function executeSubagent(
 		return makeToolResult(
 			details,
 			`Too many parallel tasks (${parallel.length}); maximum is ${options.maxParallelTasks}.`,
+			true,
 		);
 	}
 	const tasks = parallel ?? chain ?? [single!];
 	const mode: StepSubagentDetails["mode"] = chain ? "chain" : parallel ? "parallel" : "single";
 	if (!(await confirmProjectAgents(ctx, params, discovery, tasks))) {
 		const details = buildDetails(mode, discovery, scope, []);
-		return makeToolResult(details, "Canceled: project-local agents not approved.");
+		return makeToolResult(details, "Canceled: project-local agents not approved.", true);
 	}
 
 	const records = tasks.map((task) => makeEmptyResult(task.agent, task.task));
@@ -337,7 +347,11 @@ export async function executeSubagent(
 		);
 	};
 
-	const runOne = async (task: StepSubagentTaskInput, index: number): Promise<StepSubagentResultRecord> => {
+	const runOne = async (
+		task: StepSubagentTaskInput,
+		index: number,
+		admission?: WorkflowSemaphore,
+	): Promise<StepSubagentResultRecord> => {
 		const agent = resolveStepAgent(discovery.agents, task.agent);
 		if (!agent) {
 			const failed = makeFailureResult(
@@ -351,6 +365,33 @@ export async function executeSubagent(
 			return failed;
 		}
 		reportCreated(agent, index);
+		// A parallel batch shares the process-wide window with workflow nodes, so the
+		// two together never exceed the host ceiling. The task stays queued until admitted.
+		let releaseSlot: (() => void) | undefined;
+		if (admission) {
+			try {
+				releaseSlot = await admission.acquire(signal);
+			} catch (error) {
+				const aborted = resultRecord(
+					agent.name,
+					task.task,
+					{
+						messages: [],
+						stderr: "",
+						exitCode: 1,
+						usage: emptyUsage(),
+						stopReason: "aborted",
+						errorMessage: error instanceof Error ? error.message : String(error),
+					},
+					{ agentSource: agent.source },
+				);
+				records[index] = aborted;
+				emit(mode);
+				reportFinished(aborted, index);
+				return aborted;
+			}
+		}
+		let requestEpoch = admission?.epoch ?? 0;
 		// Flip the queued placeholder before spawning, so the step reads as running
 		// (with a clock) from the moment it is dispatched, not from its first event.
 		records[index] = {
@@ -378,6 +419,8 @@ export async function executeSubagent(
 				emit(mode);
 			};
 			const child = await options.runner({
+				parentCwd,
+				parentSessionId,
 				agent,
 				task: task.task,
 				cwd: childCwd,
@@ -393,6 +436,18 @@ export async function executeSubagent(
 						: `${laneRuntime.sessionId}-${index}`
 					: `subagent-${randomUUID()}`,
 				keepAlive: laneRuntime?.keepAlive === true,
+				// An admitted child keeps its shared slot until its process has exited.
+				...(admission ? { awaitExit: true } : {}),
+				...(admission
+					? {
+							onModelRequest: (event) => {
+								if (event.type === "started") requestEpoch = admission.epoch;
+								else if (event.type === "succeeded") admission.succeeded(requestEpoch);
+								else admission.throttle(requestEpoch, event.delayMs);
+								if (event.type !== "started") requestEpoch = admission.epoch;
+							},
+						}
+					: {}),
 			});
 			const completed = resultRecord(agent.name, task.task, child, {
 				agentSource: agent.source,
@@ -412,6 +467,8 @@ export async function executeSubagent(
 			emit(mode);
 			reportFinished(failed, index);
 			return failed;
+		} finally {
+			releaseSlot?.();
 		}
 	};
 
@@ -422,8 +479,16 @@ export async function executeSubagent(
 	// records are already seeded by makeEmptyResult, so this renders every lane
 	// at 0s, including ones still queued behind maxConcurrency.
 	emit(mode);
-	if (parallel) await mapWithConcurrency(parallel, options.maxConcurrency, runOne);
-	else if (chain) {
+	if (parallel) {
+		// The configured provider limit caps subagent batches the same way it caps workflows.
+		const ceiling = Math.min(options.maxConcurrency, clampWorkflowConcurrency(configuredWorkflowConcurrencyLimit()));
+		const lease = acquireWorkflowAdmission(ceiling);
+		try {
+			await mapWithConcurrency(parallel, ceiling, (task, index) => runOne(task, index, lease.semaphore));
+		} finally {
+			lease.release();
+		}
+	} else if (chain) {
 		let previous = "";
 		for (let index = 0; index < chain.length; index++) {
 			const task = {

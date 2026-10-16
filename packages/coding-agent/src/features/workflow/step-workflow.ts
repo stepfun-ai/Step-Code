@@ -10,6 +10,7 @@ import type {
 import { resolveStepStorageRoot } from "../../step/storage-root.ts";
 import type { StepTelemetryReporter } from "../../step/telemetry.ts";
 import { createDefaultWorkflowAgentRunner } from "./agent-runner.ts";
+import { configuredWorkflowConcurrencyLimit } from "./budget.ts";
 import { createWorkflowRunPaths, newWorkflowRunId, resolveWorkflowRoot, WorkflowJournal } from "./journal.ts";
 import { formatWorkflowStatus, listSavedWorkflows, listWorkflowRuns } from "./progress.ts";
 import { resolveWorkflowRegistration } from "./registration-gate.ts";
@@ -30,7 +31,9 @@ export const WorkflowParams = Type.Object({
 	scriptPath: Type.Optional(Type.String({ description: "Path to a JavaScript workflow script" })),
 	name: Type.Optional(Type.String({ description: "Saved workflow name" })),
 	args: Type.Optional(Type.Unknown({ description: "JSON arguments exposed as the script's args value" })),
-	resumeFromRunId: Type.Optional(Type.String({ description: "Resume the matching cached journal prefix" })),
+	resumeFromRunId: Type.Optional(
+		Type.String({ description: "Replay completed calls with unchanged prompt and options from this run" }),
+	),
 	budget: Type.Optional(Type.Integer({ minimum: 0, description: "Optional input+output token budget" })),
 	maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, maximum: 32 })),
 	agentTimeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 3_600_000 })),
@@ -174,7 +177,7 @@ Mechanics:
 - agent(prompt, {schema}) forces structured JSON output and retries schema mismatches up to 3 attempts, feeding validation errors back; failed attempts still consume budget.
 - Give agent() a short descriptive label; the live tool row shows running/queued counts, assigned tasks, phases, and terminal states while the workflow executes.
 - Budgets fail closed once spend crosses the limit; budget.total is null when unlimited, so guard adaptive waves with budget.total && budget.remaining() > estimate. A "+500k"-style token target in the user's current message becomes the run's default budget; an explicit budget parameter overrides it.
-- Resume: resumeFromRunId with the same script and args is a 100% cache hit on the unchanged prefix; after the first callHash mismatch, everything after it re-runs live. The tool result includes runId and the persisted scriptPath (.stepcode/workflows/runs/<runId>/script.js) — edit that file and re-invoke with scriptPath to iterate without resending the source.
+- Resume: resumeFromRunId replays completed calls whose callHash (prompt and options) is unchanged, in any order; changed, new, and previously failed calls run live. Once a live call in the resumed run writes files, runs a shell command, or uses an unrecognized tool, only cached calls that used no file, shell, or network tools still replay. The tool result includes runId and the persisted scriptPath (.stepcode/workflows/runs/<runId>/script.js) — edit that file and re-invoke with scriptPath to iterate without resending the source.
 - Determinism: Date, new Date(), and Math.random() throw inside the VM. Pass timestamps via args; vary prompts by index, not randomness.
 - iterate({spec, ...}) runs a read-only Planner → single-writer Developer → independent read-only QA loop with schema-guarded evidence and stops on coverage target, stagnation, max iterations, empty objective, or budget. Use it for spec-driven build loops; hand-roll agent() with readOnly/writable mounts when roles or stop conditions differ.
 - args takes real JSON values, not JSON-encoded strings, and is exposed as the script's args global.
@@ -191,7 +194,7 @@ Mechanics:
 				"parallel(tasks) is a barrier: it awaits every task function before returning; a task that throws resolves to null in the result array, so .filter(Boolean) the results.",
 				"Pass schema to agent() whenever a later stage consumes the result; mismatches are retried up to 3 attempts with validation errors appended, then the call fails.",
 				"Budgets fail closed; budget.total is null when unlimited, so guard adaptive extra waves with budget.total && budget.remaining() > estimate. A \"+500k\"-style token target in the user's message sets the run's default budget; an explicit budget parameter overrides it.",
-				"Resume with resumeFromRunId plus the identical script and args to replay the cached journal prefix; the first changed call and everything after it re-run live. The tool result's scriptPath points at the persisted script copy — edit it and re-invoke with scriptPath to iterate.",
+				"Resume with resumeFromRunId to replay completed calls whose prompt and options are unchanged, in any order; changed, new, and previously failed calls run live, and after a live call writes or runs a shell command, cached calls that read the environment run live too. The tool result's scriptPath points at the persisted script copy — edit it and re-invoke with scriptPath to iterate.",
 				"The VM throws on Date, new Date(), and Math.random() and exposes no process, require, or network; pass timestamps through args and vary prompts by index.",
 				"Use iterate({spec, ...}) for the Planner → single-writer Developer → independent QA loop with built-in coverage, stagnation, max-iteration, empty-objective, and budget stops; hand-roll agent() with readOnly/writable mounts when roles or stop conditions differ.",
 			],
@@ -228,6 +231,7 @@ Mechanics:
 						telemetry: options.telemetry,
 						budgetTotal: request.budget ?? options.turnState?.budgetTotal ?? options.budgetTotal,
 						maxConcurrency: request.maxConcurrency ?? options.maxConcurrency,
+						providerConcurrencyLimit: configuredWorkflowConcurrencyLimit(),
 						maxAgents: options.maxAgents,
 						agentTimeoutMs: request.agentTimeoutMs ?? options.agentTimeoutMs,
 						context: { ...ctx, signal: controller.signal },
@@ -247,6 +251,7 @@ Mechanics:
 					});
 					return workflowToolResult(result);
 				} finally {
+					controller.abort();
 					activeRuns.delete(controller);
 					if (signal) signal.removeEventListener("abort", abort);
 				}

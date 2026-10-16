@@ -81,8 +81,8 @@ export async function readJsonLines<T>(filePath: string): Promise<T[]> {
 		try {
 			values.push(JSON.parse(line) as T);
 		} catch {
-			// A partial final line can be left by a killed process. Stop here so a
-			// later run can only resume the verified contiguous prefix.
+			// A partial final line can be left by a killed process; nothing after it
+			// is trusted.
 			break;
 		}
 	}
@@ -100,12 +100,18 @@ export async function writeWorkflowFileAtomic(filePath: string, content: string)
 	}
 }
 
-/** Append-only run journal with conservative prefix-only resume semantics. */
+/**
+ * Append-only run journal. Resume replays a completed call whose prompt and
+ * options hash matches, independent of its position: a failed, inserted, or
+ * reordered call (pipeline stages finish in nondeterministic order) only re-runs
+ * itself. Identical calls are consumed in their original order, so N identical
+ * calls replay at most N cached results. The runtime decides which entries stay
+ * eligible once the resumed run has changed the workspace.
+ */
 export class WorkflowJournal {
 	readonly paths: WorkflowRunPaths;
-	private readonly entries = new Map<number, WorkflowJournalEntry>();
+	private readonly cached = new Map<string, WorkflowJournalEntry[]>();
 	private appendQueue: Promise<void> = Promise.resolve();
-	private resumeEnabled = false;
 	private initialized = false;
 
 	constructor(paths: WorkflowRunPaths, resumeFrom?: WorkflowRunPaths) {
@@ -129,28 +135,33 @@ export class WorkflowJournal {
 		}
 		const source = resumeFrom?.journalPath ?? this.resumeFromPath;
 		if (source) {
-			const previous = await readJsonLines<WorkflowJournalEntry>(source);
+			const previous = (await readJsonLines<WorkflowJournalEntry>(source)).filter(isJournalEntry);
+			previous.sort((left, right) => left.seq - right.seq);
 			for (const entry of previous) {
-				if (isJournalEntry(entry)) this.entries.set(entry.seq, entry);
+				const queue = this.cached.get(entry.callHash);
+				if (queue) queue.push(entry);
+				else this.cached.set(entry.callHash, [entry]);
 			}
-			this.resumeEnabled = this.entries.size > 0;
 		}
 		this.initialized = true;
 	}
 
-	/** Return a cached result only while every prior call has matched. */
-	getCached(seq: number, callHash: string): WorkflowJournalEntry | undefined {
-		if (!this.resumeEnabled) return undefined;
-		const entry = this.entries.get(seq);
-		if (!entry || entry.callHash !== callHash || (entry.status !== "completed" && entry.status !== "cached")) {
-			this.resumeEnabled = false;
-			return undefined;
-		}
-		return entry;
+	/**
+	 * Take the earliest unused completed result recorded for this exact call that
+	 * `accept` allows. A rejected entry stays available to later calls.
+	 */
+	getCached(
+		callHash: string,
+		accept: (entry: WorkflowJournalEntry) => boolean = () => true,
+	): WorkflowJournalEntry | undefined {
+		const queue = this.cached.get(callHash);
+		if (!queue) return undefined;
+		const index = queue.findIndex(accept);
+		if (index < 0) return undefined;
+		return queue.splice(index, 1)[0];
 	}
 
 	async append(entry: WorkflowJournalEntry): Promise<void> {
-		this.entries.set(entry.seq, entry);
 		const line = `${JSON.stringify(entry)}\n`;
 		await this.enqueue(async () => {
 			await mkdir(path.dirname(this.paths.journalPath), { recursive: true });

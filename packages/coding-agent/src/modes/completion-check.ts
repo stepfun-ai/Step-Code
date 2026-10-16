@@ -5,7 +5,7 @@ export interface CompletionCheckOptions {
 	completionCheck?: "git-committed";
 	/** Maximum additional prompts, 1..3 (default 2). */
 	completionCheckAttempts?: number;
-	/** Request one self-review within the completion follow-up budget (default off). */
+	/** Request one task self-review; shares the Git follow-up budget when enabled (default off). */
 	completionReview?: boolean;
 }
 
@@ -18,13 +18,10 @@ export interface GitCompletionState {
 
 export function getCompletionCheckAttempts(options: CompletionCheckOptions): number | undefined {
 	if (options.completionCheck === undefined) {
-		if (options.completionReview) {
-			throw new Error("--completion-review requires --completion-check git-committed");
-		}
 		if (options.completionCheckAttempts !== undefined) {
 			throw new Error("--completion-check-attempts requires --completion-check git-committed");
 		}
-		return undefined;
+		return options.completionReview ? 1 : undefined;
 	}
 	if (options.completionCheck !== "git-committed") {
 		throw new Error("--completion-check must be git-committed");
@@ -136,12 +133,18 @@ export async function createGitCompletionCheck(
 	return check;
 }
 
-export function completionCheckFeedback(git: GitCompletionState, hasFinalText: boolean, review = false): string {
+export function completionCheckFeedback(
+	git: GitCompletionState | undefined,
+	hasFinalText: boolean,
+	review = false,
+): string {
 	const missing: string[] = [];
-	if (!git.hasNewCommit) missing.push("no new commit since the starting HEAD");
-	if (!git.hasCommittedChanges) missing.push("no committed tree changes from the starting HEAD");
-	if (git.trackedDirty) missing.push("tracked changes remain");
-	if (git.untrackedFiles) missing.push("unignored untracked files remain");
+	if (git) {
+		if (!git.hasNewCommit) missing.push("no new commit since the starting HEAD");
+		if (!git.hasCommittedChanges) missing.push("no committed tree changes from the starting HEAD");
+		if (git.trackedDirty) missing.push("tracked changes remain");
+		if (git.untrackedFiles) missing.push("unignored untracked files remain");
+	}
 	if (!hasFinalText) missing.push("final answer text is missing");
 	if (review) {
 		return (
@@ -149,7 +152,9 @@ export function completionCheckFeedback(git: GitCompletionState, hasFinalText: b
 			"Final self-review: Compare your work with the original visible task. " +
 			"Check task coverage, public interfaces and types, boundary cases, and the final diff. " +
 			"Confirm relevant tests and checks were run after the last edit; run any missing verification. " +
-			"Fix issues you find, commit any remaining task changes, then provide a brief final answer. " +
+			(git
+				? "Fix issues you find, commit any remaining task changes, then provide a brief final answer. "
+				: "Fix issues you find, then provide a brief final answer. ") +
 			"Preserve unrelated user changes and respect permission denials."
 		);
 	}

@@ -56,33 +56,37 @@ describe("Step extension", () => {
 			}
 		},
 	);
-	test("does not persist retry when automatic mode finds it already enabled", () => {
-		const on = vi.fn();
-		createStepExtension({
-			permission: { env: {}, initialPreset: "approve-for-me" },
-			stepSettings: () => ({
-				getStepSettings: () => ({}),
-				setEffectiveStepSettings: vi.fn(),
-			}),
-		})({
-			on,
-			sendUserMessage: vi.fn(),
-			registerProvider: vi.fn(),
-			registerCommand: vi.fn(),
-		} as unknown as ExtensionAPI);
-		const sessionStart = on.mock.calls.find(([event]) => event === "session_start")![1];
-		const setAutoRetryEnabled = vi.fn();
-		sessionStart(
-			{},
-			{
+	test.each(["approve-for-me", "full-access"] as const)(
+		"does not persist an already enabled native retry preference at startup: %s",
+		(initialPreset) => {
+			const on = vi.fn();
+			const setAutoRetryEnabled = vi.fn();
+			createStepExtension({
+				permission: { env: {}, initialPreset },
+				stepSettings: () => ({
+					getStepSettings: () => ({ fullAccessAcknowledged: true }),
+					setEffectiveStepSettings: vi.fn(),
+				}),
+			})({
+				on,
+				registerProvider: vi.fn(),
+				registerCommand: vi.fn(),
+				sendUserMessage: vi.fn(),
+			} as unknown as ExtensionAPI);
+			const handler = (name: string) => on.mock.calls.filter(([event]) => event === name).at(-1)![1];
+			const ctx = {
 				hasUI: false,
 				ui: { notify: vi.fn(), setStatus: vi.fn() },
+				isIdle: () => true,
+				hasPendingMessages: () => false,
 				autoRetryEnabled: true,
 				setAutoRetryEnabled,
-			},
-		);
-		expect(setAutoRetryEnabled).not.toHaveBeenCalled();
-	});
+			};
+			handler("session_start")({}, ctx);
+			handler("session_shutdown")({}, ctx);
+			expect(setAutoRetryEnabled).not.toHaveBeenCalled();
+		},
+	);
 	test.each([
 		{ name: "selected non-Bash interpreter", shellPath: process.execPath, prefix: undefined },
 		{ name: "executed command prefix", shellPath: undefined, prefix: "rm -rf ./build" },

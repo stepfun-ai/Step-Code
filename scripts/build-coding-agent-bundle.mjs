@@ -204,6 +204,7 @@ const mainResult = await build({
 });
 
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/utils/image-resize.js");
+const activityOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/step/usage/activity.js");
 
 // The image-resize worker is reached through a worker URL, so the main bundle
 // cannot follow it. Emit a self-contained worker file beside the code that
@@ -219,8 +220,10 @@ const lazyResult = await build({
 });
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
+const activityResult = await build({ ...commonBuildOptions(), entryNames: "[name]", entryPoints: { "activity-worker": join(codingAgentDistDir, "step", "usage", "activity-worker.js") }, outdir: dirname(activityOutput), splitting: false });
+validateExternalImports([activityResult.metafile]);
 chmodSync(join(bundleDir, "step.js"), 0o755);
 
-const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size;
-const mib = outputBytes([mainResult.metafile, lazyResult.metafile]) / (1024 * 1024);
+const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs), ...Object.keys(activityResult.metafile.outputs)]).size;
+const mib = outputBytes([mainResult.metafile, lazyResult.metafile, activityResult.metafile]) / (1024 * 1024);
 console.log(`Built ${relative(repoRoot, bundleDir)} (${files} files, ${mib.toFixed(1)} MiB)`);

@@ -10,7 +10,7 @@ import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { getUsageCostBreakdown } from "../src/core/usage-totals.ts";
+import { collectSessionUsage, getUsageCostBreakdown } from "../src/core/usage-totals.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestResourceLoader, stepModel } from "./utilities.ts";
 
@@ -321,6 +321,38 @@ describe("AgentSession.getSessionStats", () => {
 			{ key: "Tools/summaries", cost: 6, tokens: 300 },
 			{ key: `${model.provider}/${model.id}`, cost: 0.5, tokens: 100 },
 		]);
+	});
+
+	it("shares validated increments across session stats, Account, and the cost breakdown", async () => {
+		const { session, sessionManager } = await createSession();
+		try {
+			const usage: Usage = {
+				...createUsage(10),
+				output: 2,
+				cacheRead: 3,
+				cacheWrite: 4,
+				totalTokens: 999,
+				cost: { ...createUsage(0).cost, total: 0.5 },
+			};
+			sessionManager.appendMessage({ ...createAssistantMessage("valid", 0, 1), usage });
+			sessionManager.appendCustomEntry("step-auto-clm-usage", { usage });
+			sessionManager.appendCustomEntry("step-auto-clm-result", { usage });
+			sessionManager.appendMessage({ ...createAssistantMessage("invalid", 0, 2), usage: { ...usage, input: -1 } });
+			sessionManager.appendMessage({
+				...createAssistantMessage("missing cost", 0, 3),
+				usage: { ...usage, cost: undefined } as unknown as Usage,
+			});
+			const stats = session.getSessionStats(),
+				account = collectSessionUsage(sessionManager.getEntries()),
+				breakdown = getUsageCostBreakdown(sessionManager.getEntries());
+			expect(stats.tokens).toEqual({ input: 30, output: 6, cacheRead: 9, cacheWrite: 12, total: 57 });
+			expect(stats.cost).toBe(1);
+			expect(account).toMatchObject({ input: 51, total: 57, invalid: 1, missing: 0, cacheHit: 9 / 51 });
+			expect(breakdown.reduce((sum, row) => sum + row.tokens, 0)).toBe(stats.tokens.total);
+			expect(breakdown.reduce((sum, row) => sum + row.cost, 0)).toBe(stats.cost);
+		} finally {
+			session.dispose();
+		}
 	});
 
 	it("ignores zero-usage messages when checking for post-compaction context usage", async () => {

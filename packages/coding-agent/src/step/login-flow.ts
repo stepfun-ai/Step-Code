@@ -20,6 +20,8 @@ import {
 	type StepLoginStep,
 } from "./onboarding.ts";
 import { StepOnboardingView } from "./onboarding-view.ts";
+import { PlanUsageController, resolvePlanUsageAccount } from "./usage/account.ts";
+import type { AccountUsageState } from "./usage/types.ts";
 import { resolveStepCodeVersion } from "./version.ts";
 
 export interface StepLoginHost {
@@ -36,6 +38,7 @@ export interface StepLoginOutcome {
 	readonly kind: "completed" | "exit";
 	readonly profile?: StepLoginProfile;
 	readonly credentialsPath?: string;
+	readonly warning?: string;
 }
 
 export interface RunStepLoginOptions {
@@ -49,6 +52,48 @@ export interface RunStepLoginOptions {
 	 * containers, where a launcher may "succeed" without a window ever appearing.
 	 */
 	readonly noBrowser?: boolean;
+	/** Reuse the process account controller, including identity-scoped caching. */
+	readonly planUsage?: PlanUsageController;
+	/** A confirmed missing plan discovered during interactive startup. */
+	readonly requiredPlan?: "step_plan" | "step_plan_oversea";
+}
+
+/** Model discovery can return fallback models even when the account has no plan. */
+export function getMissingStepPlanProfile(state: AccountUsageState): "step_plan" | "step_plan_oversea" | undefined {
+	const { snapshot, account } = state;
+	if (state.status !== "ready" || !snapshot || !account.eligible) return undefined;
+	if (account.profile !== "step_plan" && account.profile !== "step_plan_oversea") return undefined;
+	return snapshot.plan.state === "known" &&
+		snapshot.plan.family === "none" &&
+		snapshot.plan.subscription === null &&
+		snapshot.quota.state === "known" &&
+		!snapshot.quota.allowed &&
+		snapshot.quota.reason === "no_active_subscription" &&
+		snapshot.quota.credit_buckets?.length === 0
+		? account.profile
+		: undefined;
+}
+
+export function stepPlanCheckWarning(state: AccountUsageState): string | undefined {
+	return state.account.eligible &&
+		(state.status === "error" ||
+			state.status === "stale" ||
+			(state.snapshot?.plan.state === "unavailable" && !state.snapshot.quota.allowed))
+		? `Could not verify Step Plan availability. ${state.message ?? "Retry with /usage account when online."}`
+		: undefined;
+}
+
+export async function checkStepPlanBeforeInteractive(input: {
+	readonly authPath: string;
+	readonly interactive: boolean;
+	readonly planUsage: PlanUsageController;
+	readonly env?: Record<string, string | undefined>;
+}): Promise<{ requiredPlan?: "step_plan" | "step_plan_oversea"; warning?: string }> {
+	if (!input.interactive || (input.env ?? process.env).STEP_API_KEY?.trim()) return {};
+	const profile = readStepLoginProfile(input.authPath);
+	if (profile !== "step_plan" && profile !== "step_plan_oversea") return {};
+	const state = await input.planUsage.query();
+	return { requiredPlan: getMissingStepPlanProfile(state), warning: stepPlanCheckWarning(state) };
 }
 
 export async function writeStepLoginCredential(input: {
@@ -174,10 +219,16 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		initTheme(themeName, false);
 	}
 
-	let step: StepLoginStep = INITIAL_STEP_LOGIN_STEP;
+	let step: StepLoginStep = options.requiredPlan
+		? { kind: "planRequired", choice: options.requiredPlan }
+		: INITIAL_STEP_LOGIN_STEP;
+	const planUsage = options.planUsage ?? new PlanUsageController(() => resolvePlanUsageAccount(authPath, options.env));
 	let browserAbort: AbortController | undefined;
-	let savedProfile: StepLoginProfile | undefined;
-	let savedPath: string | undefined;
+	let savedProfile = options.requiredPlan
+		? profiles.find((profile) => profile.id === options.requiredPlan)
+		: undefined;
+	let savedPath = options.requiredPlan ? authPath : undefined;
+	let warning: string | undefined;
 	let settle: ((outcome: StepLoginOutcome) => void) | undefined;
 	const finished = new Promise<StepLoginOutcome>((resolve) => {
 		settle = resolve;
@@ -190,6 +241,13 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		onBackspace: () => dispatch({ type: "backspace" }),
 		onBack: () => dispatch({ type: "back" }),
 		onQuit: () => dispatch({ type: "quit" }),
+		onRetryPlan: () => dispatch({ type: "checkPlan" }),
+		onOpenPlan: () => {
+			if (step.kind !== "planRequired" || options.noBrowser) return;
+			const choice = step.choice;
+			const profile = profiles.find((candidate) => candidate.id === choice);
+			if (profile) openBrowser(`${profile.authBaseUrl}/step-plan`);
+		},
 		requestRender: () => host.requestRender(),
 	});
 
@@ -197,6 +255,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		const previous = step;
 		step = reduceStepLogin(previous, event);
 		if (step === previous) return;
+		if (previous.kind === "checkingPlan") planUsage.cancel();
 		view.setStep(step);
 		host.requestRender();
 		void runEffects(previous, step, event);
@@ -216,10 +275,23 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 			await persist(next.choice, apiKey, event.type === "credential" ? event.uid : undefined);
 			return;
 		}
+		if (next.kind === "checkingPlan") {
+			const account = await planUsage.query(true);
+			// Esc, cancellation, or a replacement login owns the view now.
+			if (step !== next) return;
+			warning = stepPlanCheckWarning(account);
+			dispatch({ type: getMissingStepPlanProfile(account) ? "planRequired" : "saved" });
+			return;
+		}
 		if (isStepLoginSettled(next)) {
 			settle?.(
 				next.kind === "done"
-					? { kind: "completed", profile: savedProfile, credentialsPath: savedPath }
+					? {
+							kind: "completed",
+							profile: savedProfile,
+							credentialsPath: savedPath,
+							...(warning ? { warning } : {}),
+						}
 					: { kind: "exit" },
 			);
 		}
@@ -265,6 +337,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 	}
 
 	async function persist(choice: StepLoginProfileId, apiKey: string, uid?: string): Promise<void> {
+		const saving = step;
 		try {
 			const profile = profiles.find((candidate) => candidate.id === choice);
 			if (!profile) throw new Error(`Unknown Step login profile: ${choice}`);
@@ -275,11 +348,14 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				...(uid ? { uid } : {}),
 				obtainedAt: (options.now ?? (() => new Date()))().toISOString(),
 			});
+			if (step !== saving) return;
 			savedProfile = profile;
 			savedPath = authPath;
+			warning = undefined;
 			syncStepLoginProfileEndpoint(authPath, options.env ?? process.env);
-			dispatch({ type: "saved" });
+			dispatch({ type: profile.credentialSource === "browser" ? "checkPlan" : "saved" });
 		} catch (error) {
+			if (step !== saving) return;
 			dispatch({
 				type: "fail",
 				message: `Could not save credentials: ${error instanceof Error ? error.message : String(error)}`,
@@ -287,6 +363,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		}
 	}
 
+	view.setStep(step);
 	host.addChild(view);
 	host.setFocus(view);
 	try {
@@ -294,6 +371,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		return await finished;
 	} finally {
 		browserAbort?.abort();
+		planUsage.cancel();
 		await host.stop();
 		host.clearScreen?.();
 	}

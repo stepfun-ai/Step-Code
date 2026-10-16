@@ -106,6 +106,19 @@ describe("Step login command routing", () => {
 		expect(showWarning).toHaveBeenCalledWith("Wait for the active turn to finish before signing in");
 	});
 
+	it("shows a quota-check warning after reloading a completed login", async () => {
+		const warning = "Could not verify Step Plan availability. Retry with /usage account.";
+		const showWarning = vi.fn();
+		const reload = vi.fn(async () => {});
+		await handleLoginCommand.call({
+			options: { stepLogin: vi.fn(async () => ({ kind: "completed", warning })) },
+			createStepLoginHost: () => ({}), handleReloadCommand: reload,
+			showWarning, showStatus: vi.fn(), showError: vi.fn(),
+		});
+		expect(reload).toHaveBeenCalledOnce();
+		expect(showWarning).toHaveBeenCalledWith(warning);
+	});
+
 	it("does not reopen the Step login panel when already signed in", async () => {
 		const root = await mkdtemp(join(tmpdir(), "interactive-step-login-auth-"));
 		const stepLogin = vi.fn(async () => ({ kind: "exit" as const }));

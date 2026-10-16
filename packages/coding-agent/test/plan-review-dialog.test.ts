@@ -260,6 +260,25 @@ describe("plan review dialog", () => {
 			}
 		});
 
+		test.each([false, true])(
+			"external approval stays pending and shows the whole plan (expanded: %s)",
+			(expanded) => {
+				const handoff: PlanReviewDetails = {
+					...details("external_approval_required"),
+					planContents: PLAN_LINES.join("\n"),
+					planModeExited: true,
+				};
+				const component = renderPlanReviewResult(result(handoff), { expanded, isPartial: false }, theme);
+				const out = lines(component);
+				expect(out[0]).toContain("External approval required");
+				expect(out[0]).toContain("/tmp/plan.md");
+				expect(component.render(80)[0]).toContain(colorPrefix("warning"));
+				expect(out.some((row) => row.includes("Plan approved"))).toBe(false);
+				expect(out.some((row) => row.includes("line 1 of the plan"))).toBe(true);
+				expect(out.some((row) => row.includes("line 40 of the plan"))).toBe(true);
+			},
+		);
+
 		test("feedback: the user's note is shown under the summary", () => {
 			const out = lines(
 				renderPlanReviewResult(
