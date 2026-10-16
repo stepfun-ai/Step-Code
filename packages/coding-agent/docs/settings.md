@@ -137,6 +137,7 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 |---------|------|---------|-------------|
 | `retry.enabled` | boolean | `true` | Enable automatic agent-level retry on transient errors |
 | `retry.maxRetries` | number | `3` | Maximum agent-level retry attempts |
+| `retry.rateLimitMaxRetries` | number | `3` | Independent 429 retry budget per model request (0 disables, maximum 20); does not consume schema or other transient retries |
 | `retry.baseDelayMs` | number | `2000` | Base delay for agent-level exponential backoff (2s, 4s, 8s) |
 | `retry.provider.timeoutMs` | number | SDK default | Provider/SDK request timeout in milliseconds |
 | `retry.provider.maxRetries` | number | `0` | Provider/SDK retry attempts |
@@ -145,6 +146,26 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 When a provider requests a retry delay longer than `retry.provider.maxRetryDelayMs`, the request fails immediately with an informative error instead of waiting silently. Set it to `0` to disable the limit.
 
 Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explicitly needed. Setting it above `0` can make SDK/provider retries handle out-of-usage-limit errors before Step sees them, which may block the agent until the provider quota resets in some circumstances.
+
+Temporary 429/concurrency errors retry the current model request, preserving completed tool calls. They honor `Retry-After` when available; otherwise delays grow from 1 second to at most 30 seconds with jitter. Cancellation interrupts the wait. Explicit billing/quota exhaustion is not retried. `retry.enabled: false` disables both session retry budgets.
+
+### Workflow concurrency and failures
+
+The harness does not pattern-match requests such as `开10个子agent` / `launch 10 subagents`; the model decides whether they call for the `subagent` tool's parallel mode or a workflow, and whether the message is a request at all. The `subagent` tool accepts batches larger than its concurrent window (up to 1000 by default) and queues the excess. Its children and workflow nodes take slots from the same process-wide admission window, so running both at once cannot exceed the host ceiling, and a 429 seen by either lowers it for both.
+
+The workflow ceiling is `max(1, min(16, CPU count - 2))`. Model-authored `maxConcurrency` can only lower this ceiling. Set `STEP_WORKFLOW_CONCURRENCY_LIMIT=8` to impose a lower trusted provider limit (for example, a backend allowing eight simultaneous requests). The effective ceiling is the minimum of the machine and configured limits; the final result reports requested, effective, and current concurrency.
+
+Rate limits are recognized from the provider's structured classification (HTTP 429 or a rate-limit error code), never from text: error messages, agent output, and node labels that mention "429" or "rate limit" are not treated as congestion, and a 429 whose error code reports exhausted quota or billing (`insufficient_quota`, `GoUsageLimitError`, HTTP 402) is terminal. Temporary 429s reduce the admission cap by 25% (minimum one), once per congestion epoch. New nodes wait during backoff; running nodes keep their slots and retry their current request. Four successful responses allow a one-slot recovery when work is queued. Concurrent workflows share a process-wide host window, in addition to each run's lower limit. This conservatively covers all model overrides; it is not a cross-process/account-wide quota lock.
+
+A node's own retry honors the server's `Retry-After` verbatim, however large, including when the provider's own `maxRetryDelayMs` cap rejected the wait. The admission cooldown that follows a 429 is capped at 30 seconds, because that window is process-wide and its queue time is excluded from node timeouts: an unbounded server delay would otherwise stall unrelated workflows with no error and no timeout. The cap reduction above, not the cooldown length, is what protects the provider.
+
+`parallel()` accepts both lazy functions (`parallel(items.map(x => () => agent(String(x))))`) and eager promises (`parallel(items.map(x => agent(String(x))))`). Always await or return the operation. Invalid entries reject the batch. A script error or an early return with unfinished calls cancels running and queued nodes and waits for cleanup before publishing the terminal state; production child processes retain their shared slots until they exit. The UI shows concurrency clamping as a Notice, and script failure/cancellation separately.
+
+Node timeouts cover model requests, tool execution, and retries **after admission**, not time waiting in either queue. Tokens a node reports after it is cancelled or timed out (within the cleanup grace) are still charged to the budget. The deadline is armed per schema attempt, so a node retried for schema mismatches can take up to three times `agentTimeoutMs`. For experiments that report sleep durations or random choices, generate, capture and print all required values in one command, then require structured output with `agent(..., {schema})`. An empty sleep output is not evidence of the chosen duration. See [Workflow experiments](workflow-experiments.md).
+
+Failed nodes are retained in the journal and final `failures` list even if the script catches errors or filters `parallel()`'s null results. Final status is `partial_failed` for mixed outcomes and `failed` when all nodes fail; both are error tool results with successful output preserved. `summary.completed` counts successful/cached nodes, not attempted calls. Request retry counts (`rateLimitRetries`) are separate from schema `attempt`.
+
+A callback that catches an agent-node failure and rethrows a **new** error is counted twice, as one failed node and one callback failure, because the node-failure marker travels with the original error object. Rethrow the caught error itself to keep a single count. The shared admission window covers concurrent workflows. When the last one finishes, a window that was never throttled is discarded; a window that was lowered or is cooling down after a 429 is remembered for 60 seconds, so back-to-back workflows do not restart at the full ceiling straight after a 429. After that it starts fresh.
 
 ```json
 {

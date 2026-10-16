@@ -119,6 +119,8 @@ interface Usage {
 
 The exported pi-ai `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done`/`error` messages replace it with a completion reason before step persists the assistant message, so `"pending"` should never appear in session JSONL.
 
+Session totals and the cost breakdown use the shared [`usage-totals.ts`](../src/core/usage-totals.ts) ledger. It includes assistant, tool, compaction, branch-summary and incremental `step-auto-clm-usage` records; cumulative maintenance summaries are excluded. Token increments must contain nonnegative safe integers and must not overflow the accumulated total. A missing/invalid cost does not hide valid tokens. `SessionStats.tokens.input` excludes caches, which are reported separately; the [Account summary](account-usage.md) combines them into complete input.
+
 ### Extended Message Types (from pi-coding-agent)
 
 ```typescript

@@ -119,7 +119,7 @@ interface StepModelMeta {
 function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: StepModelMeta): StepModelConfig {
 	const contextWindow = meta?.contextWindow ?? STEP_MODEL_DEFAULTS.contextWindow;
 	const hasEfforts = (meta?.efforts?.length ?? 0) > 0;
-	return {
+	return normalizeStepModelConfig({
 		id,
 		name,
 		api: STEP_MODEL_API,
@@ -135,7 +135,7 @@ function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: Step
 		// When the list endpoint reports supported efforts (e.g. step_plan), carry
 		// them so `/effort` is correct without a per-model lookup.
 		...(hasEfforts ? { thinkingLevelMap: stepThinkingLevelMap(meta!.efforts!) } : {}),
-	};
+	});
 }
 
 /**
@@ -246,22 +246,29 @@ export function resolveStepProviderOptions(options: StepProviderOptions = {}): R
 /**
  * A model entry may omit its dialect. Default it to the shared Step wire
  * dialect (OpenAI Chat Completions) so a bare custom entry streams correctly.
+ * Step chat endpoints require the system role even for reasoning models.
  */
 export function normalizeStepModelConfig(model: StepModelConfig): StepModelConfig {
 	return {
 		...model,
 		api: model.api ?? STEP_MODEL_API,
 		input: [...model.input],
+		compat: { ...model.compat, supportsDeveloperRole: false },
 	};
 }
 
 /**
  * Every Step model uses the active profile's OpenAI endpoint and dialect.
- * Restore both so a stale models.json overlay (e.g. an old proxy host or the
- * legacy Anthropic dialect) cannot misroute a Step model.
+ * Restore these and the system-role requirement so a stale models.json overlay
+ * cannot misroute a Step model or send an unsupported developer role.
  */
 export function normalizeStepModel(model: Model<Api>, openaiBaseUrl: string): Model<Api> {
-	return { ...model, api: STEP_MODEL_API, baseUrl: openaiBaseUrl };
+	return {
+		...model,
+		api: STEP_MODEL_API,
+		baseUrl: openaiBaseUrl,
+		compat: { ...model.compat, supportsDeveloperRole: false },
+	};
 }
 
 /** Cloud login has one path: init, open the supplied URL, poll, store the existing API key. */
@@ -442,7 +449,7 @@ export async function fetchStepModels(
 	context: RefreshModelsContext,
 	resolved: ResolvedStepProviderOptions,
 ): Promise<StepModelConfig[]> {
-	const baseline = (): StepModelConfig[] => resolved.models.map((model) => ({ ...model, input: [...model.input] }));
+	const baseline = (): StepModelConfig[] => resolved.models.map(normalizeStepModelConfig);
 	if (!context.allowNetwork || context.signal.aborted) return baseline();
 	const token = readStepBearerToken(context.credential);
 	if (!token) return baseline();

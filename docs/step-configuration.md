@@ -19,6 +19,29 @@ and `auth.json` keep their own formats — they hold model definitions and
 credentials, not settings — and a stale Step endpoint recorded in `models.json`
 by an older release is still repaired in place at startup.
 
+## Step Plan login and API-key fallback
+
+Browser sign-in checks the selected region's `/step_plan/v1/usage` endpoint
+after saving the credential. An empty interactive launch also checks a stored
+Step Plan login before opening the session. The model list is not proof of an
+active subscription: it can contain fallback models for an account without a
+plan.
+
+When the usage response confirms there is no active subscription or usable
+top-up credit, the login screen offers an API key, the subscription page,
+checking again after purchase, or another account / login method. The API-key
+option opens the existing Platform key-entry screen for the same region and
+only replaces the credential when the key is submitted. Canceling preserves
+the stored Plan credential. Mainland and overseas profiles follow the same
+flow and keep their own endpoints.
+
+An active plan with exhausted quota remains a Plan login. A top-up-only account
+with usable credit can also continue. Network failures, missing usage endpoints,
+invalid responses, and uncertain account state produce a warning instead of
+being classified as a missing subscription. Explicit API keys, Platform logins,
+other selected providers, and non-interactive commands skip the startup Plan
+check. No additional model request is made for this check.
+
 ## Mandatory command approval
 
 Ask and Approve for Me cannot automatically approve commands matched by the

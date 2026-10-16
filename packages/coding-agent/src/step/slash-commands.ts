@@ -26,6 +26,7 @@ import { formatStepMcpStatuses } from "./mcp.ts";
 import { registerStepPluginCommand } from "./plugins.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
+import { registerStepUsageCommands, type StepUsageHost } from "./usage/commands.ts";
 
 /**
  * Register Step's product command spellings that have a direct Pi action.
@@ -40,7 +41,24 @@ export function registerStepPiCommandAdapters(
 	telemetry?: StepTelemetryReporter,
 	stepSettings?: () => { getStepSettings(): { feedbackEnabled?: boolean } } | undefined,
 	feedbackIdentity?: () => FeedbackIdentity,
+	usageHost?: StepUsageHost,
+	permissions: () => string = () => "Unknown",
 ): void {
+	const usage = usageHost ? registerStepUsageCommands(pi, usageHost, permissions) : undefined;
+	if (usage)
+		registerTrackedCommand(
+			pi,
+			"usage",
+			{
+				description: "Show local activity or personal account quota",
+				getArgumentCompletions: (prefix) =>
+					["overview", "account", "--refresh", "account --refresh"]
+						.filter((value) => value.startsWith(prefix))
+						.map((value) => ({ value, label: value })),
+				handler: usage.usage,
+			},
+			telemetry,
+		);
 	registerStepPluginCommand(pi, { telemetry });
 	registerTrackedCommand(
 		pi,
@@ -92,8 +110,9 @@ export function registerStepPiCommandAdapters(
 		"status",
 		{
 			description: "Show current session and model status",
-			handler: async (_args, ctx) => {
-				ctx.ui.notify(formatStepStatus(ctx), "info");
+			handler: async (args, ctx) => {
+				if (usage) await usage.status(args, ctx);
+				else ctx.ui.notify(formatStepStatus(ctx), "info");
 			},
 		},
 		telemetry,

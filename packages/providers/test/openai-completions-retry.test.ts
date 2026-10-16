@@ -89,6 +89,18 @@ describe("openai-completions provider retries", () => {
 		expect(mockState.requestOptions).toEqual([expect.objectContaining({ maxRetries: 0 })]);
 	});
 
+	it("preserves 429 Retry-After for the session retry owner", async () => {
+		mockState.requestErrors = [
+			Object.assign(new Error("429 concurrency reached"), {
+				status: 429,
+				headers: new Headers({ "retry-after": "2" }),
+			}),
+		];
+		const result = await consume();
+		expect(result).toMatchObject({ stopReason: "error", errorKind: "rate_limit", retryAfterMs: 2000 });
+		expect(mockState.requestOptions).toHaveLength(1);
+	});
+
 	it("honors provider retries while keeping SDK retries disabled", async () => {
 		vi.useFakeTimers();
 		mockState.requestErrors = [

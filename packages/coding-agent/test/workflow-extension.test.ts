@@ -5,6 +5,7 @@ import type { AgentToolResult } from "@step-harness/agent-core";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { registerWorkflowChildAcl, WORKFLOW_ACL_ENV } from "../src/features/workflow/acl-extension.ts";
+import { workflowProgressResult } from "../src/features/workflow/rendering.ts";
 import {
 	createStepWorkflowExtension,
 	resolveWorkflowScript,
@@ -14,6 +15,58 @@ import type { WorkflowAgentRunResult, WorkflowProgress, WorkflowRunResult } from
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 const cleanups: string[] = [];
+
+test("concurrency clamping is a notice, independent of workflow failure state", () => {
+	const progress: WorkflowProgress = {
+		schemaVersion: 1,
+		runId: "notice",
+		name: "notice",
+		status: "running",
+		startedAt: 0,
+		updatedAt: 0,
+		agents: [],
+		completedAgents: 0,
+		totalAgents: 15,
+		spentTokens: 0,
+		concurrency: { requested: 15, ceiling: 8, limit: 8, cap: 8 },
+	};
+	const output = workflowProgressResult(progress);
+	expect(output.details.status).toBe("running");
+	expect(output.isError).not.toBe(true);
+	expect(output.content).toMatchObject([
+		{ text: expect.stringContaining("Notice: requested concurrency 15 was limited to 8") },
+	]);
+	const failure = workflowProgressResult({ ...progress, status: "failed", message: "parallel() invalid entry" });
+	expect(failure.content).toMatchObject([{ text: expect.stringContaining("parallel() invalid entry") }]);
+});
+
+test("nested callback failures name their script in the text channels", () => {
+	const progress: WorkflowProgress = {
+		schemaVersion: 1,
+		runId: "nested",
+		name: "nested",
+		status: "partial_failed",
+		startedAt: 0,
+		updatedAt: 0,
+		agents: [],
+		completedAgents: 1,
+		totalAgents: 1,
+		spentTokens: 0,
+		taskFailures: [
+			{
+				script: "child.js",
+				primitive: "parallel",
+				index: 1,
+				message: "ReferenceError: d is not defined",
+			},
+		],
+	};
+	const output = workflowProgressResult(progress);
+	expect(output.details?.status).toBe("partial_failed");
+	expect(output.content).toMatchObject([
+		{ text: expect.stringContaining("child.js parallel[1]: ReferenceError: d is not defined") },
+	]);
+});
 
 afterEach(async () => {
 	vi.unstubAllEnvs();

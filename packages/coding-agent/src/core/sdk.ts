@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@step-harness/agent-core";
 import type { AssistantMessageEventStream, ModelsSimpleStreamOptions } from "@step-harness/providers";
@@ -17,6 +18,7 @@ import {
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import { rememberRequestUsage } from "./request-provenance.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -334,6 +336,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			const usageProvenance = {
+				requestId: randomUUID(),
+				sessionId: options?.sessionId ?? sessionManager.getSessionId(),
+				sourceLeafId: sessionManager.getLeafId(),
+				reasoningAtDispatch: options?.reasoning ?? "off",
+				requestedProvider: model.provider,
+				requestedModel: model.id,
+			};
 			const startedAt = Date.now();
 			let statusCode = 0;
 			// ModelRuntime can replace the model's base URL after resolving auth
@@ -384,6 +394,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				throw error;
 			}
 			return observeModelRequestStream(model, stream, modelRequestObserver, {
+				onTerminal: (message) => rememberRequestUsage(message, usageProvenance),
 				startedAt,
 				sessionId: options?.sessionId,
 				getStatusCode: () => statusCode,

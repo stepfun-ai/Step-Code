@@ -26,6 +26,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import { createUsageLineage } from "./usage-lineage.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -1423,6 +1424,8 @@ export class SessionManager {
 	 * Returns the new session file path, or undefined if not persisting.
 	 */
 	createBranchedSession(leafId: string): string | undefined {
+		const usageSourceHeader = this.getHeader(),
+			usageSourceEntries = this.getEntries();
 		const previousSessionFile = this.sessionFile;
 		const path = this.getBranch(leafId);
 		if (path.length === 0) {
@@ -1482,7 +1485,15 @@ export class SessionManager {
 				parentId = labelEntry.id;
 			}
 
-			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+			const lineage = createUsageLineage(
+				usageSourceHeader,
+				usageSourceEntries,
+				pathWithoutLabels,
+				newSessionId,
+				timestamp,
+				parentId,
+			);
+			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries, ...lineage];
 			this.sessionId = newSessionId;
 			this.sessionFile = newSessionFile;
 			this._buildIndex();
@@ -1643,6 +1654,16 @@ export class SessionManager {
 				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
 			}
 		}
+		const copied = sourceEntries.filter((entry): entry is SessionEntry => entry.type !== "session");
+		for (const entry of createUsageLineage(
+			sourceHeader,
+			copied,
+			copied,
+			newSessionId,
+			timestamp,
+			copied.at(-1)?.id ?? null,
+		))
+			appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
 
 		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
 	}

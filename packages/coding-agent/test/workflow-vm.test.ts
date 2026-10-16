@@ -111,6 +111,34 @@ test("parallel() starts every task before its barrier", async () => {
 	expect(probe.peak()).toBe(3);
 });
 
+test("parallel accepts eager promises and mixed lazy tasks without losing results", async () => {
+	const probe = concurrencyProbe();
+	const result = await runInQuickJs(
+		'return await parallel([agent("a"), () => agent("b"), agent("c")]);',
+		null,
+		probe.host,
+	);
+	expect(result.value).toEqual(["a", "b", "c"]);
+	expect(probe.peak()).toBe(3);
+});
+
+test("parallel validates the entire batch before invoking lazy tasks", async () => {
+	const { host, calls } = createHost();
+	await expect(runInQuickJs('return parallel([() => agent("must-not-start"), 42]);', null, host)).rejects.toThrow(
+		"functions or promises",
+	);
+	expect(calls.agents).toEqual([]);
+});
+
+test("cancellation interrupts a guest waiting forever without host calls", async () => {
+	const { host } = createHost();
+	const controller = new AbortController();
+	const run = runInQuickJs("await new Promise(() => {});", null, host, { signal: controller.signal });
+	const rejected = expect(run).rejects.toThrow("aborted");
+	controller.abort();
+	await rejected;
+});
+
 test("pipeline() runs item chains concurrently and passes (prev, item, index) to stages", async () => {
 	const probe = concurrencyProbe();
 	const result = await runInQuickJs(
@@ -144,6 +172,10 @@ test("a throwing stage or task resolves to null instead of rejecting the wave", 
 		host,
 	);
 	expect(result.value).toEqual({ piped: [11, null, 31], waved: ["ok", null, "also-ok"] });
+	expect(result.taskFailures).toEqual([
+		{ primitive: "pipeline", index: 1, stage: 0, message: "Error: boom" },
+		{ primitive: "parallel", index: 1, message: "Error: boom" },
+	]);
 });
 
 test("parallel() and pipeline() reject batches above the 4096-entry cap", async () => {
@@ -312,26 +344,27 @@ test("keeps a fan-out branch whose host call outlasts the timeout budget", async
 test.each([
 	["a single call", `agent("a"); return "early";`],
 	["a parallel wave", `parallel([() => agent("a"), () => agent("b")]); return "early";`],
-])("discards %s the script never awaited", async (_label, script) => {
+])("rejects and releases %s the script never awaited", async (_label, script) => {
 	const { host } = createHost({
 		agent: async (prompt) => {
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			return prompt;
 		},
 	});
-	// The run returns while those calls are still in flight. Their deferred
+	// The run fails while those calls are still in flight. Their deferred
 	// promises have to be released before the context goes away, or QuickJS aborts
 	// the shared WebAssembly instance; the settlements that land afterwards must
 	// leave the disposed context alone rather than raise an unhandled rejection.
-	const result = await runInQuickJs(script, null, host, { timeoutMs: 5_000 });
-	expect(result.value).toBe("early");
+	await expect(runInQuickJs(script, null, host, { timeoutMs: 5_000 })).rejects.toThrow("unawaited");
 	// Give the abandoned calls time to settle: a use-after-free would surface here.
 	await new Promise((resolve) => setTimeout(resolve, 150));
 });
 
 test("keeps working after a run that abandoned host calls", async () => {
 	const { host } = createHost();
-	await runInQuickJs(`agent("a"); return "early";`, null, host, { timeoutMs: 5_000 });
+	await expect(runInQuickJs(`agent("a"); return "early";`, null, host, { timeoutMs: 5_000 })).rejects.toThrow(
+		"unawaited",
+	);
 	await new Promise((resolve) => setTimeout(resolve, 50));
 	// The WebAssembly module is cached process-wide, so a botched teardown would
 	// poison every later run rather than just the one that caused it.

@@ -25,3 +25,5 @@ export {
 	showStartupSelector,
 	startStartupTui,
 } from "./startup-ui.ts";
+
+export { showUsagePanel, usagePresentationRows } from "./view/dialogs/usage-panel.ts";

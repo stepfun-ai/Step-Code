@@ -278,21 +278,29 @@ editor refocus/disposal callback is cancelled before mounting. This prevents
 an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
 refocused editor to open the next dialog.
 
-### Fused verification (`then_run`)
+### Fused commands (`then_run`)
 
-`edit_file` and `write_file` accept an optional `then_run` shell command. It
-runs only after the mutation succeeds (including a no-op), from the initial
-working directory like `run_command` without `cwd`, with the same timeout and
-output cap. Its output and exit status are appended to the mutation receipt
-and recorded in `details.thenRun`. A failing check does not mark the call as
-an error, because the file change has already been applied. Empty or
-whitespace-only values are ignored.
+`edit_file` and `write_file` accept an optional `then_run` shell command. After
+an edit succeeds (including a no-op), the command uses the same execution path
+as `run_command` without `cwd`: the initial working directory, the host's
+configured timeout or the default 120 seconds, and the same output cap and
+full-output retention. Use a separate `run_command` when a check needs custom
+`cwd`, `timeout_ms`, `max_output_chars`, or background execution. Empty or
+whitespace-only `then_run` values are ignored.
 
-The Step extension gates `then_run` as an embedded `run_command` call: the
-permission decision is the stricter of the mutation and the command
-(including `run_command` overrides and dangerous-command analysis), the
-confirmation reason names the command, workflow path ACLs check it, and the
-call is blocked when `run_command` is not active in the session. SDK
+The command output and exit status are appended to the mutation receipt and
+recorded in `details.thenRun`. When inline output is shortened, its full-log
+reference remains visible and is available in `details.thenRun.fullOutputPath`;
+read that log instead of rerunning the command to recover its output. A failing
+or timed-out check does not mark the combined call as an error or roll back the
+file change. Caller cancellation still propagates with the mutation receipt.
+
+The Step extension gates `then_run` as an embedded `run_command` call before
+performing either action: the permission decision is the stricter of the
+mutation and the command (including `run_command` overrides and
+dangerous-command analysis), the confirmation reason names the command,
+workflow path ACLs check it, and the call is blocked when `run_command` is not
+active in the session. A denied combined call does not apply the edit. SDK
 `acceptEdits` does not auto-approve an edit carrying `then_run`. SDK
 `PreToolUse` hooks and third-party `tool_call` handlers see it as
 `input.then_run`; embedders that skip the Step extension must gate it

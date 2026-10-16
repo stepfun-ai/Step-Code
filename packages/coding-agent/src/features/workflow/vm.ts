@@ -44,7 +44,7 @@ import type {
 	QuickJSRuntime,
 	QuickJSWASMModule,
 } from "quickjs-emscripten-core";
-import type { WorkflowJsonSchema, WorkflowMeta } from "./types.ts";
+import type { WorkflowJsonSchema, WorkflowMeta, WorkflowTaskFailure } from "./types.ts";
 
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const DEFAULT_MEMORY_LIMIT_MB = 64;
@@ -52,6 +52,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 
 /** Host primitives the guest prelude exposes as `agent`, `phase`, `log`, `iterate`, `workflow` and `budget`. */
 export interface WorkflowVmHost {
+	/** True only for failures already recorded as agent-node failures by the owner. */
+	isNodeFailure?(error: unknown): boolean;
 	agent(prompt: string, options: Record<string, unknown>): Promise<unknown>;
 	phase(title: string): void;
 	log(message: string): void;
@@ -63,6 +65,7 @@ export interface WorkflowVmHost {
 }
 
 export interface WorkflowVmOptions {
+	signal?: AbortSignal;
 	filename?: string;
 	memoryLimitMb?: number;
 	timeoutMs?: number;
@@ -72,6 +75,7 @@ export interface WorkflowVmOptions {
 export interface WorkflowVmResult {
 	value: unknown;
 	meta: WorkflowMeta;
+	taskFailures?: WorkflowTaskFailure[];
 }
 
 /**
@@ -118,6 +122,7 @@ export async function runInQuickJs(
 	const sourceBytes = Buffer.byteLength(script, "utf8");
 	if (sourceBytes > MAX_SCRIPT_BYTES) throw new Error(`Workflow script exceeds ${MAX_SCRIPT_BYTES} bytes`);
 	const quickjs = await loadQuickJsModule();
+	if (options.signal?.aborted) throw new Error("Workflow operation was aborted");
 	const timeoutMs = clampTimeout(options.timeoutMs);
 	const runtime = quickjs.newRuntime();
 	runtime.setMemoryLimit(clampMemory(options.memoryLimitMb) * 1024 * 1024);
@@ -159,6 +164,8 @@ export async function runInQuickJs(
 	const timeoutPromise = new Promise<never>((_resolve, reject) => {
 		rejectTimeout = reject;
 	});
+	const onAbort = (): void => rejectTimeout?.(new Error("Workflow operation was aborted"));
+	options.signal?.addEventListener("abort", onAbort, { once: true });
 	const timeoutError = (): Error => new Error(`Workflow script timed out after ${timeoutMs}ms`);
 	const checkTimeout = (): void => {
 		if (hostCalls.pending > 0) {
@@ -210,8 +217,11 @@ export async function runInQuickJs(
 		}
 		const json = context.getString(settled.value);
 		settled.value.dispose();
+		if (hostCalls.pending > 0)
+			throw new Error("Workflow script returned with unawaited agent calls or workflow/iterate operations");
 		return readResult(json);
 	} finally {
+		options.signal?.removeEventListener("abort", onAbort);
 		if (timeout) clearTimeout(timeout);
 		hostCalls.onSettled = undefined;
 		hostCalls.refreshDeadline = undefined;
@@ -253,8 +263,12 @@ function readResult(json: string): WorkflowVmResult {
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		return { value: parsed ?? null, meta: {} };
 	}
-	const record = parsed as { value?: unknown; meta?: unknown };
-	return { value: record.value ?? null, meta: normalizeMeta(record.meta) };
+	const record = parsed as { value?: unknown; meta?: unknown; taskFailures?: WorkflowTaskFailure[] };
+	return {
+		value: record.value ?? null,
+		meta: normalizeMeta(record.meta),
+		...(record.taskFailures?.length ? { taskFailures: record.taskFailures } : {}),
+	};
 }
 
 /**
@@ -267,11 +281,12 @@ function toHostError(context: QuickJSContext, handle: QuickJSHandle, override?: 
 	handle.dispose();
 	if (override) return override;
 	if (dumped && typeof dumped === "object") {
-		const record = dumped as { name?: unknown; message?: unknown; stack?: unknown };
+		const record = dumped as { name?: unknown; message?: unknown; stack?: unknown; __workflowNodeFailure?: boolean };
 		const message = typeof record.message === "string" ? record.message : JSON.stringify(dumped);
 		const error = new Error(message);
 		if (typeof record.name === "string") error.name = record.name;
 		if (typeof record.stack === "string") error.stack = `${record.name ?? "Error"}: ${message}\n${record.stack}`;
+		if (record.__workflowNodeFailure === true) Object.assign(error, { __workflowNodeFailure: true });
 		return error;
 	}
 	return new Error(typeof dumped === "string" ? dumped : String(dumped));
@@ -295,7 +310,10 @@ function installHostBridge(
 			hostCalls.live.add(deferred);
 			hostCalls.pending += 1;
 			void Promise.resolve()
-				.then(() => operation(values))
+				.then(() => {
+					if (hostCalls.closed) throw new Error("Workflow scope is closed");
+					return operation(values);
+				})
 				.then(
 					(result) => {
 						// The run may already have returned without awaiting this call; the
@@ -309,6 +327,7 @@ function installHostBridge(
 						if (hostCalls.closed) return;
 						const message = error instanceof Error ? error.message : String(error);
 						const encoded = context.newError(message);
+						if (host.isNodeFailure?.(error)) context.setProp(encoded, "__workflowNodeFailure", context.true);
 						deferred.reject(encoded);
 						encoded.dispose();
 					},
@@ -427,16 +446,26 @@ for (const name of [
 }
 const __workflow_encode = (value) => JSON.stringify(value === undefined ? null : value);
 const __workflow_decode = (json) => (typeof json === "string" ? JSON.parse(json) : null);
+const __workflow_task_failures = [];
 globalThis.args = __workflow_decode(__workflow_args_raw);
 globalThis.agent = async (prompt, options = {}) => __workflow_decode(await __workflow_agent_ref(String(prompt === undefined ? "" : prompt), __workflow_encode(options)));
 globalThis.iterate = async (options) => __workflow_decode(await __workflow_iterate_ref(__workflow_encode(options || {})));
 globalThis.workflow = async (name, options = null) => __workflow_decode(await __workflow_nested_ref(String(name === undefined ? "" : name), __workflow_encode(options)));
 globalThis.parallel = async (tasks) => {
-  if (!Array.isArray(tasks)) throw new TypeError("parallel() requires an array of task functions");
+  if (!Array.isArray(tasks)) throw new TypeError("parallel() requires an array of functions or promises");
   if (tasks.length > 4096) throw new RangeError("parallel() accepts at most 4096 tasks");
-  return Promise.all(tasks.map(async (task) => {
-    if (typeof task !== "function") throw new TypeError("parallel() entries must be functions");
-    try { return await task(); } catch { return null; }
+  // Validate the whole batch before invoking any lazy task. Eager agent()
+  // promises are already scheduled; their cancellation belongs to the run scope.
+  for (const task of tasks) {
+    if (typeof task !== "function" && !(task !== null && typeof task === "object" && typeof task.then === "function")) {
+      throw new TypeError("parallel() entries must be functions or promises; use parallel(items.map(item => () => agent(String(item))))");
+    }
+  }
+  return Promise.all(tasks.map(async (task, index) => {
+    try { return await (typeof task === "function" ? task() : task); } catch (error) {
+      if (!error || error.__workflowNodeFailure !== true) __workflow_task_failures.push({primitive: "parallel", index, message: String(error).slice(0, 2000)});
+      return null;
+    }
   }));
 };
 globalThis.pipeline = async (items, ...stages) => {
@@ -447,8 +476,11 @@ globalThis.pipeline = async (items, ...stages) => {
   }
   return Promise.all(items.map(async (item, index) => {
     let value = item;
-    for (const stage of stages) {
-      try { value = await stage(value, item, index); } catch { return null; }
+    for (let stage = 0; stage < stages.length; stage++) {
+      try { value = await stages[stage](value, item, index); } catch (error) {
+        if (!error || error.__workflowNodeFailure !== true) __workflow_task_failures.push({primitive: "pipeline", index, stage, message: String(error).slice(0, 2000)});
+        return null;
+      }
     }
     return value;
   }));
@@ -467,6 +499,7 @@ const __workflow_main = Object.getPrototypeOf(async function() {}).constructor($
 return __workflow_main().then((__workflow_value) => JSON.stringify({
   value: __workflow_value === undefined ? null : __workflow_value,
   meta: globalThis.__workflow_meta || {},
+  taskFailures: __workflow_task_failures,
 }));
 })()
 `;

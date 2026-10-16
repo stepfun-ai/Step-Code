@@ -28,6 +28,7 @@ export interface StepExtensionFactoryDeps {
 	feedbackIdentity: StepExtensionOptions["feedbackIdentity"];
 	/** Initial Step permission policy parsed from CLI/runtime options. */
 	permission: StepExtensionOptions["permission"];
+	usageHost?: StepExtensionOptions["usageHost"];
 	/** Optional StepCode provider extension, present only when configured. */
 	stepCodeProviderExtension: InlineExtension | undefined;
 }
@@ -45,6 +46,7 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 			stepSettings: deps.stepSettings,
 			feedbackIdentity: deps.feedbackIdentity,
 			permission: deps.permission,
+			usageHost: deps.usageHost,
 			traceHeaderPolicy: deps.traceHeaderPolicy,
 		}),
 		createStepCapabilitiesExtensionInline({ telemetry: deps.telemetry }),

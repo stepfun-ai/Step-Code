@@ -1,0 +1,4 @@
+# Fixed internal review pool for every repository path, including this file.
+# Keep the enforced approval roster aligned with these four owners.
+# CODEOWNERS routes reviews; GitHub rules enforce the approval count.
+* @liuedcson @MelodyVAR @Uking-xxx @ZouR-Ma

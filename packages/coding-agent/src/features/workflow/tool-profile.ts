@@ -132,6 +132,20 @@ const WRITE_TOOL_NAMES = new Set(["write_file", "edit_file", "write", "edit"]);
 const READ_TOOL_NAMES = new Set(["read_file", "find_files", "search_files", "list_directory", "read"]);
 const EXECUTE_TOOL_NAMES = new Set(["run_command", "bash", "powershell"]);
 const NON_FILESYSTEM_TOOL_NAMES = new Set(["clarify_user", "find_tools"]);
+const NETWORK_READ_TOOL_NAMES = new Set(["search_web"]);
+
+export type WorkflowToolEffect = "none" | "read" | "mutate";
+
+/**
+ * Classify a tool's effect on the environment for resume decisions. Shell
+ * commands and unrecognized tools (MCP, nested agents) count as mutating
+ * because their effects cannot be established from the tool name.
+ */
+export function classifyWorkflowToolEffect(toolName: string): WorkflowToolEffect {
+	if (NON_FILESYSTEM_TOOL_NAMES.has(toolName)) return "none";
+	if (READ_TOOL_NAMES.has(toolName) || NETWORK_READ_TOOL_NAMES.has(toolName)) return "read";
+	return "mutate";
+}
 
 /**
  * Inspect a child tool call before it crosses the workflow ACL boundary.

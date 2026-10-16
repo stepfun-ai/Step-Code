@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	CHILD_MARKER,
 	cloneUsage,
@@ -37,6 +38,7 @@ const MAX_STDERR_CHARS = 32_000;
  * Step-specific needs-input nag are protocol frames, not session events.
  */
 export interface SubagentRpcLineHandlers {
+	onModelRequest?: StepSubagentRunInput["onModelRequest"];
 	/** `{"type":"response"}` command acks, correlated by `id`. */
 	onResponse?: (response: { id?: string; command?: string; success?: boolean; error?: string }) => void;
 	/** `{"type":"extension_ui_request"}` dialogs; blocking ones must be answered or the child hangs. */
@@ -83,6 +85,31 @@ export function routeSubagentRpcLine(line: string, handlers: SubagentRpcLineHand
 		handlers.onNeedsInput?.(typeof parsed.message === "string" ? parsed.message : "");
 		return;
 	}
+	if (
+		type === "auto_retry_start" &&
+		parsed.reason === "rate_limit" &&
+		typeof parsed.attempt === "number" &&
+		typeof parsed.maxAttempts === "number" &&
+		typeof parsed.delayMs === "number" &&
+		Number.isFinite(parsed.delayMs) &&
+		parsed.delayMs >= 0
+	) {
+		handlers.onModelRequest?.({
+			type: "rate_limit",
+			attempt: parsed.attempt,
+			maxRetries: parsed.maxAttempts,
+			delayMs: parsed.delayMs,
+			message: String(parsed.errorMessage ?? "429 rate limited"),
+		});
+	}
+	// turn_start precedes the provider request. message_start may arrive only
+	// after HTTP headers (or an error), too late to tag a congestion epoch.
+	if (type === "turn_start") handlers.onModelRequest?.({ type: "started" });
+	if (isRecordValue(parsed.message) && parsed.message.role === "assistant") {
+		if (type === "message_end" && ["stop", "length", "toolUse"].includes(String(parsed.message.stopReason))) {
+			handlers.onModelRequest?.({ type: "succeeded" });
+		}
+	}
 	handlers.onEvent?.(line, parsed);
 }
 
@@ -100,6 +127,8 @@ interface SubagentRpcTurn {
 
 /** A live `--mode rpc` child bound to one subagent session id. */
 export interface StepSubagentRpcSession {
+	/** Resolves only once the OS child has exited (including forced shutdown). */
+	readonly exited: Promise<void>;
 	readonly sessionId: string;
 	/** True while the child can still accept stdin commands. */
 	isAlive(): boolean;
@@ -171,6 +200,8 @@ export function buildSubagentChildEnv(input: StepSubagentRunInput): NodeJS.Proce
 	return {
 		...process.env,
 		[CHILD_MARKER]: "1",
+		STEPCODE_USAGE_PARENT_CWD: input.parentCwd ?? input.workflowAcl?.baseCwd,
+		STEPCODE_USAGE_PARENT_SESSION_ID: input.parentSessionId,
 		STEP_DISABLE_WORKFLOW: "1",
 		STEP_DISABLE_CRON: "1",
 		STEP_DISABLE_GOAL: "1",
@@ -205,6 +236,13 @@ export async function createSubagentRpcSession(
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
+	// `close` can be held open by inherited descendant pipes after OS exit.
+	// Reuse the bounded-idle stdio drain used by our other child processes.
+	const exitStatus = waitForChildProcess(child);
+	const exited = exitStatus.then(
+		() => undefined,
+		() => undefined,
+	);
 
 	let stdoutBuffer = "";
 	let turn: SubagentRpcTurn | undefined;
@@ -341,6 +379,7 @@ export async function createSubagentRpcSession(
 			},
 			onExtensionError: (message) => appendStderr(`extension_error: ${message}\n`),
 			onNeedsInput: (message) => turn?.input.onNeedsInput?.(message),
+			onModelRequest: (event) => turn?.input.onModelRequest?.(event),
 			onEvent: (eventLine, event) => {
 				const active = turn;
 				if (!active) return;
@@ -388,7 +427,7 @@ export async function createSubagentRpcSession(
 		});
 		void rm(tempDir, { recursive: true, force: true });
 	});
-	child.once("close", (code) => {
+	const finishExitedChild = (code: number | null): void => {
 		childExited = true;
 		dropFromRegistry();
 		clearIdleWatchdog();
@@ -409,7 +448,13 @@ export async function createSubagentRpcSession(
 			}
 		});
 		void rm(tempDir, { recursive: true, force: true });
+	};
+	child.once("exit", () => {
+		childExited = true;
+		dropFromRegistry();
 	});
+	child.once("close", finishExitedChild);
+	void exitStatus.then(finishExitedChild, () => undefined);
 
 	const runTurn = (turnInput: StepSubagentRunInput): Promise<StepSubagentRunResult> => {
 		if (turn) {
@@ -484,6 +529,7 @@ export async function createSubagentRpcSession(
 	};
 
 	const handle: StepSubagentRpcSession = {
+		exited,
 		sessionId,
 		isAlive: () => !childExited && !stdinEnded,
 		isTurnActive: () => turn !== undefined,

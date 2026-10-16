@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { getPlanFilePath } from "../src/features/plan-mode-tools.ts";
 import { createStepPlanExtension } from "../src/features/step-plan.ts";
 import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
+import type { PlanReviewDetails } from "../src/render/plan-review.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
 
 // Preserve real file I/O while making the ESM read export spyable for EACCES tests.
@@ -500,30 +502,46 @@ test("plan telemetry carries the source dim across enter, update, and exit", asy
 // rpc children
 // ---------------------------------------------------------------------------
 
-test("rpc-mode exit_plan_mode auto-approves without the UI select", async () => {
+test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (hasUI: %s)", async (hasUI) => {
 	const cwd = makeWorkspace();
 	const { telemetry, events } = createTelemetryRecorder();
 	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
+	const originalTools = harness.activeTools();
 	createStepPlanExtension({ telemetry })(harness.api);
-	// rpc children have a dialog bridge (hasUI true) but no real user.
-	const context = harness.ctx({ mode: "rpc" });
+	// RPC can expose a dialog bridge (hasUI true), but approval still belongs to its caller.
+	const context = harness.ctx({ mode: "rpc", hasUI });
 
 	await runTool(harness, "enter_plan_mode", {}, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
-	writeFileSync(planPath, "# The plan\n1. Do the thing\n");
+	const planContents = "# The plan\n1. Do the thing\n";
+	writeFileSync(planPath, planContents);
 
 	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
 		content: Array<{ type: string; text: string }>;
+		details?: PlanReviewDetails;
+		terminate?: boolean;
 	};
-	const text = result.content[0]!.text;
-	expect(text).toContain("Cannot gate approval in rpc child context.");
-	expect(text).toContain(planPath);
-	expect(text).toContain("caller should approve externally");
+	expect(result.content).toEqual([
+		{
+			type: "text",
+			text: `Cannot gate approval in rpc child context. Plan file at ${planPath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
+		},
+	]);
+	expect(result.details).toEqual({
+		outcome: "external_approval_required",
+		approvalSource: "external",
+		planFilePath: planPath,
+		planContents,
+		planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
+		planModeExited: true,
+	});
+	expect(result.terminate).toBe(false);
 	expect(harness.customCalls()).toBe(0);
+	expect(harness.userMessages).toEqual([]);
 
 	// Plan mode actually exited: tools restored, chip cleared, state persisted off.
-	expect(harness.activeTools()).toContain("write_file");
+	expect(harness.activeTools()).toEqual(originalTools);
 	expect(harness.statuses.get("plan-mode")).toBeUndefined();
 	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
 	expect(
@@ -562,41 +580,46 @@ test("tui-mode exit_plan_mode still gates through the review dialog", async () =
 	expect(result.content[0]!.text).toContain("do not call exit_plan_mode again");
 });
 
-test("only a dismissed review ends the turn; approval and notes let the agent keep going", async () => {
-	const cwd = makeWorkspace();
-	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
-	const cases = [
-		{ keys: [REVIEW_KEYS.enter], terminate: false, outcome: "approved" },
-		{
-			keys: [REVIEW_KEYS.down, ...typeReview("use canvas"), REVIEW_KEYS.enter],
-			terminate: false,
-			outcome: "feedback",
-			feedback: "use canvas",
-		},
-		{ keys: [REVIEW_KEYS.escape], terminate: true, outcome: "dismissed" },
-	];
-	for (const { keys, terminate, outcome, feedback } of cases) {
+test.each([
+	{ keys: [REVIEW_KEYS.enter], terminate: false, outcome: "approved" },
+	{
+		keys: [REVIEW_KEYS.down, ...typeReview("use canvas"), REVIEW_KEYS.enter],
+		terminate: false,
+		outcome: "feedback",
+		feedback: "use canvas",
+	},
+	{ keys: [REVIEW_KEYS.escape], terminate: true, outcome: "dismissed" },
+	{ keys: [], terminate: true, outcome: "dismissed" },
+])(
+	"interactive $outcome reports its exit state and termination (keys: $keys)",
+	async ({ keys, terminate, outcome, feedback }) => {
+		const cwd = makeWorkspace();
+		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+		const planContents = "# The plan\n";
 		const harness = createHarness({ cwd, review: keys });
 		createStepPlanExtension()(harness.api);
 		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
 		mkdirSync(path.dirname(planPath), { recursive: true });
-		writeFileSync(planPath, "# The plan\n");
+		writeFileSync(planPath, planContents);
 
 		const result = (await runTool(harness, "exit_plan_mode", {}, harness.ctx())) as {
 			terminate?: boolean;
-			details?: unknown;
+			details?: PlanReviewDetails;
 		};
 		expect(result.terminate).toBe(terminate);
-		// Every reviewed outcome carries the plan so the tool row can replay it
-		// after the dialog — the only place it was drawn — has been torn down.
+		// Every reviewed outcome carries the complete snapshot after the dialog closes.
 		expect(result.details).toEqual({
 			planFilePath: planPath,
-			planContents: "# The plan\n",
+			planContents,
+			planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
+			planModeExited: outcome === "approved",
+			approvalSource: "user",
 			outcome,
 			...(feedback === undefined ? {} : { feedback }),
 		});
-	}
-});
+		expect(result.details?.planModeExited).toBe(!lastPlanEntry(harness).enabled);
+	},
+);
 
 // ---------------------------------------------------------------------------
 // Shared entry and branch-local restoration
@@ -1075,17 +1098,35 @@ test.each(["session_start", "session_tree"] as const)(
 // Proposal validation and caller-owned approval
 // ---------------------------------------------------------------------------
 
-for (const mode of ["tui", "print", "rpc"] as const) {
+for (const { mode, hasUI } of [
+	{ mode: "tui", hasUI: true },
+	{ mode: "print", hasUI: false },
+	{ mode: "rpc", hasUI: true },
+	{ mode: "rpc", hasUI: false },
+] as const) {
+	test(`exit_plan_mode without active planning has no handoff in ${mode} (hasUI: ${hasUI})`, async () => {
+		const harness = createHarness({ cwd: makeWorkspace() });
+		createStepPlanExtension()(harness.api);
+		expect(await runTool(harness, "exit_plan_mode", {}, harness.ctx({ mode, hasUI }))).toEqual({
+			content: [{ type: "text", text: "Not in plan mode." }],
+			details: undefined,
+			terminate: false,
+		});
+		expect(harness.appended).toEqual([]);
+		expect(harness.customCalls()).toBe(0);
+	});
+
 	test.each(["missing", "empty", "whitespace", "directory", "unreadable"])(
-		`exit_plan_mode refuses %s proposal files in ${mode} before approval or exit`,
+		`exit_plan_mode refuses %s proposal files in ${mode} (hasUI: ${hasUI}) before approval or exit`,
 		async (invalid) => {
 			const cwd = makeWorkspace();
 			const { telemetry, events } = createTelemetryRecorder();
 			const select = vi.fn(async () => "Execute the plan");
 			const harness = createHarness({ cwd, select });
 			createStepPlanExtension({ telemetry })(harness.api);
-			const context = harness.ctx({ mode, hasUI: mode !== "print" });
+			const context = harness.ctx({ mode, hasUI });
 			await runTool(harness, "enter_plan_mode", {}, context);
+			const planningTools = harness.activeTools();
 			const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 			mkdirSync(path.dirname(planPath), { recursive: true });
 			if (invalid === "directory") mkdirSync(planPath);
@@ -1100,7 +1141,13 @@ for (const mode of ["tui", "print", "rpc"] as const) {
 
 			const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
 				content: Array<{ text: string }>;
+				details?: PlanReviewDetails;
+				terminate?: boolean;
 			};
+			expect(result.details).toBeUndefined();
+			expect(result.terminate).toBe(false);
+			expect(harness.customCalls()).toBe(0);
+			expect(harness.activeTools()).toEqual(planningTools);
 			expect(select).not.toHaveBeenCalled();
 			expect(result.content[0].text).toContain(planPath);
 			expect(result.content[0].text).toContain("exit_plan_mode");
@@ -1209,7 +1256,7 @@ test("the review dialog shows the whole plan, however long", async () => {
 	expect(rendered).not.toContain("truncated");
 });
 
-test("a valid headless proposal exits with external approval and the whole plan", async () => {
+test("a valid headless proposal exits requiring external approval with the whole plan", async () => {
 	const cwd = makeWorkspace();
 	const { telemetry, events } = createTelemetryRecorder();
 	const select = vi.fn(async () => "Execute the plan");
@@ -1220,14 +1267,36 @@ test("a valid headless proposal exits with external approval and the whole plan"
 	await runTool(harness, "enter_plan_mode", {}, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
-	writeFileSync(planPath, `${"p".repeat(2000)}tail of the plan`);
+	const planContents = `${"p".repeat(2000)}tail of the plan`;
+	writeFileSync(planPath, planContents);
 
-	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { content: Array<{ text: string }> };
-	expect(result.content[0].text).toContain("caller must gate approval externally");
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		content: Array<{ text: string }>;
+		details?: PlanReviewDetails;
+		terminate?: boolean;
+	};
+	expect(result.content).toEqual([
+		{
+			type: "text",
+			text: `Plan mode exited. Plan file kept at ${planPath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally.`,
+		},
+	]);
+	expect(result.details).toEqual({
+		outcome: "external_approval_required",
+		approvalSource: "external",
+		planFilePath: planPath,
+		planContents,
+		planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
+		planModeExited: true,
+	});
+	expect(result.terminate).toBe(false);
 	// A caller that has to gate approval externally cannot do it on a clipped plan.
 	expect(result.content[0].text).toContain("tail of the plan");
 	expect(result.content[0].text).not.toContain("truncated");
 	expect(select).not.toHaveBeenCalled();
+	expect(harness.customCalls()).toBe(0);
+	expect(harness.userMessages).toEqual([]);
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
 	expect(lastPlanEntry(harness).enabled).toBe(false);
 	expect(harness.activeTools()).toEqual(originalTools);
 	expect(events.at(-1)).toEqual({
@@ -1235,6 +1304,39 @@ test("a valid headless proposal exits with external approval and the whole plan"
 		properties: { source: "agent", outcome: "auto_headless" },
 	});
 });
+
+test.each(["tui", "print", "rpc"] as const)(
+	"%s plan hashes bind the complete UTF-8 content without normalization",
+	async (mode) => {
+		const cwd = makeWorkspace();
+		const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
+		createStepPlanExtension()(harness.api);
+		const context = harness.ctx({ mode, hasUI: mode !== "print" });
+		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+		mkdirSync(path.dirname(planPath), { recursive: true });
+		const proposal = `\uFEFF# Plan — café 🧪\r\n\r\n${"detail ".repeat(1000)}\r\nlast line \t\r\n`;
+		const variants = [
+			proposal,
+			proposal.replace("last line", "changed tail"),
+			proposal.trim(),
+			proposal.replaceAll("\r\n", "\n"),
+		];
+		const hashes: string[] = [];
+
+		for (const planContents of variants) {
+			await runTool(harness, "enter_plan_mode", {}, context);
+			writeFileSync(planPath, planContents);
+			const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { details?: PlanReviewDetails };
+			expect(result.details).toMatchObject({
+				planContents,
+				planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
+				planModeExited: true,
+			});
+			hashes.push(result.details!.planHash!);
+		}
+		expect(new Set(hashes).size).toBe(variants.length);
+	},
+);
 
 test("enter_plan_mode describes writing a proposal rather than tracking todos", () => {
 	const harness = createHarness();

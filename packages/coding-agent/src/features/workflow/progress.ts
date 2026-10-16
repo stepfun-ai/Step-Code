@@ -40,7 +40,11 @@ export class WorkflowProgressStore {
 		// updates arrive while this snapshot is waiting for its disk write.
 		const snapshot = this.current();
 		const serialized = `${JSON.stringify(snapshot, null, 2)}\n`;
-		this.writeQueue = this.writeQueue.then(() => writeWorkflowFileAtomic(this.path, serialized));
+		// A failed write must not poison the queue: the next update has to be able to
+		// persist, or one transient disk error freezes progress.json forever.
+		this.writeQueue = this.writeQueue
+			.catch(() => undefined)
+			.then(() => writeWorkflowFileAtomic(this.path, serialized));
 		await this.writeQueue;
 		return snapshot;
 	}

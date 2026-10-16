@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { retryProviderRequest } from "../src/utils/provider-retry.ts";
+import { providerRetryAfterMs, retryProviderRequest } from "../src/utils/provider-retry.ts";
 
 function providerError(status: number | undefined, headers?: Record<string, string>): Error {
 	return Object.assign(new Error(`Provider error: ${status}`), {
@@ -9,6 +9,25 @@ function providerError(status: number | undefined, headers?: Record<string, stri
 }
 
 describe("provider request retries", () => {
+	it("parses retry hints without accepting invalid numbers or leaking headers", () => {
+		expect(providerRetryAfterMs(providerError(429, { "retry-after-ms": "250", "retry-after": "10" }))).toBe(250);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after": "Thu, 01 Jan 1970 00:00:10 GMT" }), 1000)).toBe(
+			9000,
+		);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after": "invalid" }))).toBeUndefined();
+		expect(providerRetryAfterMs(providerError(429, { "retry-after-ms": "Infinity" }))).toBeUndefined();
+		// Zero and past values are an immediate retry, never a negative or undefined wait.
+		expect(providerRetryAfterMs(providerError(429, { "retry-after": "0" }))).toBe(0);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after": "-10" }))).toBe(0);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after-ms": "-50" }))).toBe(0);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" }), 5000)).toBe(
+			0,
+		);
+		// An empty or non-numeric retry-after-ms must fall back to retry-after, not read as zero.
+		expect(providerRetryAfterMs(providerError(429, { "retry-after-ms": "", "retry-after": "7" }))).toBe(7000);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after-ms": "  ", "retry-after": "7" }))).toBe(7000);
+		expect(providerRetryAfterMs(providerError(429, { "retry-after-ms": "soon", "retry-after": "7" }))).toBe(7000);
+	});
 	afterEach(() => {
 		vi.useRealTimers();
 	});
@@ -44,6 +63,19 @@ describe("provider request retries", () => {
 			"Server requested 277403s retry delay (max: 1s)",
 		);
 		expect(request).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the server's 429 delay when the cap rejects it, but not for other statuses", async () => {
+		const capped = async (status: number): Promise<unknown> => {
+			const request = vi
+				.fn<() => Promise<string>>()
+				.mockRejectedValue(providerError(status, { "retry-after": "120" }));
+			return retryProviderRequest(request, { maxRetries: 1, maxRetryDelayMs: 1000 }).catch(
+				(error: unknown) => error,
+			);
+		};
+		expect(providerRetryAfterMs(await capped(429))).toBe(120_000);
+		expect(providerRetryAfterMs(await capped(503))).toBeUndefined();
 	});
 
 	it("allows disabling the provider-requested retry delay cap", async () => {
