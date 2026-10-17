@@ -205,6 +205,7 @@ const mainResult = await build({
 
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/utils/image-resize.js");
 const activityOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/step/usage/activity.js");
+const sessionIndexOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/core/session-index/client.js");
 
 // The image-resize worker is reached through a worker URL, so the main bundle
 // cannot follow it. Emit a self-contained worker file beside the code that
@@ -222,8 +223,19 @@ const lazyResult = await build({
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
 const activityResult = await build({ ...commonBuildOptions(), entryNames: "[name]", entryPoints: { "activity-worker": join(codingAgentDistDir, "step", "usage", "activity-worker.js") }, outdir: dirname(activityOutput), splitting: false });
 validateExternalImports([activityResult.metafile]);
+// The session index worker owns its SQLite connection; emit it beside the client that resolves its URL.
+const sessionIndexResult = await build({
+	...commonBuildOptions(),
+	entryNames: "[name]",
+	entryPoints: {
+		"session-index-worker": join(codingAgentDistDir, "core", "session-index", "session-index-worker.js"),
+	},
+	outdir: dirname(sessionIndexOutput),
+	splitting: false,
+});
+validateExternalImports([sessionIndexResult.metafile]);
 chmodSync(join(bundleDir, "step.js"), 0o755);
 
-const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs), ...Object.keys(activityResult.metafile.outputs)]).size;
-const mib = outputBytes([mainResult.metafile, lazyResult.metafile, activityResult.metafile]) / (1024 * 1024);
+const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs), ...Object.keys(activityResult.metafile.outputs), ...Object.keys(sessionIndexResult.metafile.outputs)]).size;
+const mib = outputBytes([mainResult.metafile, lazyResult.metafile, activityResult.metafile, sessionIndexResult.metafile]) / (1024 * 1024);
 console.log(`Built ${relative(repoRoot, bundleDir)} (${files} files, ${mib.toFixed(1)} MiB)`);

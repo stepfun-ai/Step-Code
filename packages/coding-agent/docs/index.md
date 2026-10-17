@@ -66,6 +66,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 
 - [Environment variables](environment-variables.md) - Step process configuration and session metadata available to bash tools.
 - [Session format](session-format.md) - JSONL session file format, entry types, and SessionManager API.
+- [Session index](session-index.md) - derived SQLite index for session lists and full-text search.
 
 ## Platform setup
 

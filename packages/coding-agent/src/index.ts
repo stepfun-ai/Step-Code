@@ -311,7 +311,12 @@ export {
 } from "./core/sdk.ts";
 export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
-export type { SessionListProgress } from "./core/session-manager.ts";
+export * from "./core/session-index/index.ts";
+export type {
+	SessionFilePersistedEvent,
+	SessionFilePersistedListener,
+	SessionListProgress,
+} from "./core/session-manager.ts";
 export {
 	type BranchSummaryEntry,
 	buildContextEntries,
@@ -542,6 +547,17 @@ export { type RenderDiffOptions, renderDiff } from "./render/diff.ts";
 export { DynamicBorder } from "./render/dynamic-border.ts";
 export { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./render/keybinding-hints.ts";
 export { truncateToVisualLines, type VisualTruncateResult } from "./render/visual-truncate.ts";
+export {
+	createSessionSearchService,
+	parseSearchQueryParams,
+	parseSessionListParams,
+	SESSION_SEARCH_METHODS,
+	type SessionListItemWire,
+	type SessionListPageWire,
+	type SessionSearchMethod,
+	SessionSearchRequestError,
+	type SessionSearchService,
+} from "./server/session-search-service.ts";
 export {
 	getLegacyStepAuthPath,
 	getStepAuthPath,

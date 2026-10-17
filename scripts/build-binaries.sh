@@ -259,9 +259,9 @@ for platform in "${PLATFORMS[@]}"; do
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
     # standalone binary before step starts (see #7684).
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig '--env=STEPCODE_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/stepcode.js ./src/utils/image-resize-worker.ts ./src/step/usage/activity-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
+        bun build --compile --no-compile-autoload-bunfig '--env=STEPCODE_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/stepcode.js ./src/utils/image-resize-worker.ts ./src/step/usage/activity-worker.ts ./src/core/session-index/session-index-worker.ts --outfile "$OUTPUT_DIR/$platform/step.exe"
     else
-        bun build --compile --no-compile-autoload-bunfig '--env=STEPCODE_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/stepcode.js ./src/utils/image-resize-worker.ts ./src/step/usage/activity-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
+        bun build --compile --no-compile-autoload-bunfig '--env=STEPCODE_BUILD_*' --target="$bun_target" ../../apps/cli/dist/bun/stepcode.js ./src/utils/image-resize-worker.ts ./src/step/usage/activity-worker.ts ./src/core/session-index/session-index-worker.ts --outfile "$OUTPUT_DIR/$platform/step"
     fi
 done
 

@@ -7,7 +7,7 @@
 // very first side effect (before the coding-agent barrel is evaluated) so
 // config.ts resolves the Step storage namespace regardless of launcher name.
 import "#bootstrap/environment";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
 	ambiguousPluginServerNames,
@@ -30,6 +30,7 @@ import {
 	getStepAuthPath,
 	getStepDefaultTheme,
 	getStepLoginStatus,
+	getStepSessionDirOverride,
 	hasConfiguredStepCodeCredential,
 	installProcessStderrDevLogCapture,
 	isStepConfigCommand,
@@ -60,6 +61,7 @@ import {
 	resolveStepStorageRoot,
 	restoreStdout,
 	runFeedbackCommand,
+	runSessionIndexCommand,
 	runStepConfigCommand,
 	runStepLogin,
 	runStepMcpImportPrompt,
@@ -353,6 +355,7 @@ const isTopLevelLogin = topLevelStepCommand === "login";
 const isTopLevelLoginStatus = isTopLevelLogin && process.argv[3] === "status";
 const isTopLevelLogout = topLevelStepCommand === "logout";
 const isTopLevelFeedback = topLevelStepCommand === "feedback";
+const isTopLevelSessionIndex = topLevelStepCommand === "session-index";
 const topLevelAuthHelp = process.argv.slice(3).some((arg) => arg === "--help" || arg === "-h");
 
 let telemetryExitReason: "normal" | "error" = "normal";
@@ -659,6 +662,14 @@ try {
 				}
 			}
 		}
+	} else if (isTopLevelSessionIndex) {
+		const sessionDirOverride = getStepSessionDirOverride(process.env);
+		const exitCode = await runSessionIndexCommand(process.argv.slice(3), {
+			agentDir: resolveStepAgentDir(),
+			...(sessionDirOverride ? { extraRoots: [resolve(sessionDirOverride)] } : {}),
+		});
+		if (exitCode !== 0) process.exitCode = exitCode;
+		forceOneShotExit = true;
 	} else if (isTopLevelFeedback) {
 		const feedbackSettingsManager =
 			currentStepSettingsManager ?? createStepSettingsManager(process.cwd(), resolveStepAgentDir());

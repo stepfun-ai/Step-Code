@@ -84,6 +84,10 @@
         {
           "title": "Session Format",
           "path": "session-format.md"
+        },
+        {
+          "title": "Session Index",
+          "path": "session-index.md"
         }
       ]
     },

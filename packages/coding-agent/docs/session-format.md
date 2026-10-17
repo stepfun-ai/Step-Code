@@ -438,3 +438,4 @@ Key methods for working with sessions programmatically.
 - `getSessionId()` - Session UUID
 - `getSessionFile()` - Session file path (undefined for in-memory)
 - `isPersisted()` - Whether session is saved to disk
+- `setFilePersistedListener(listener)` - Observe `create` / `append` / `rewrite` writes, e.g. for the [session index](session-index.md)
