@@ -29,6 +29,8 @@ The session index is a derived SQLite database for session lists and full-text s
 
 v1 files without entry ids are indexed with ids `L<physical line>`. Files are migrated to v3 in memory only.
 
+Child-agent sessions (subagent lanes, workflow agents) are indexed with `sessions.origin = 'subagent'` but are excluded from every search and list, including the short-query window and degraded mode. A session is a child when its header has `origin: "subagent"` or its id starts with `subagent-` / `workflow-` (`isChildAgentSession`); sessions written before the header marker carry only the prefix. Schema minor 2 added the column and marked existing rows by prefix.
+
 ## Updates
 
 | Trigger | Behavior |

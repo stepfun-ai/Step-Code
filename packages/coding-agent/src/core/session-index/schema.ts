@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { CHILD_SESSION_ORIGIN, SUBAGENT_SESSION_ID_PREFIX, WORKFLOW_SESSION_ID_PREFIX } from "../child-session.ts";
 import { PROJECTOR_VERSION } from "./projector.ts";
 
 /**
@@ -20,7 +21,7 @@ export const SCHEMA_MAJOR = 1;
  * Additive migration number within a major, stored in `user_version`. Older
  * files are migrated in place; newer files are used through known columns only.
  */
-export const SCHEMA_MINOR = 1;
+export const SCHEMA_MINOR = 2;
 /** Changing the tokenizer or FTS columns rebuilds only the FTS tables from `entries`. */
 export const FTS_DEFINITION = "trigram:v1";
 export const SESSION_INDEX_FILE_NAME = `session-search.v${SCHEMA_MAJOR}.db`;
@@ -84,6 +85,7 @@ CREATE TABLE sessions (
 	session_id TEXT NOT NULL,
 	cwd TEXT NOT NULL,
 	parent_session TEXT,
+	origin TEXT,
 	name TEXT,
 	first_message TEXT,
 	created_at INTEGER NOT NULL,
@@ -263,6 +265,19 @@ function upgradeSchema(db: DatabaseSync, userVersion: number): void {
 	db.exec("BEGIN IMMEDIATE");
 	try {
 		// Minor migrations go here in order, each guarded by `userVersion < N`.
+		if (userVersion < 2) {
+			// Rows written before the column existed predate the header marker, so the id prefix is all they carry.
+			db.exec("ALTER TABLE sessions ADD COLUMN origin TEXT");
+			db.prepare(
+				"UPDATE sessions SET origin = ? WHERE substr(session_id, 1, ?) = ? OR substr(session_id, 1, ?) = ?",
+			).run(
+				CHILD_SESSION_ORIGIN,
+				SUBAGENT_SESSION_ID_PREFIX.length,
+				SUBAGENT_SESSION_ID_PREFIX,
+				WORKFLOW_SESSION_ID_PREFIX.length,
+				WORKFLOW_SESSION_ID_PREFIX,
+			);
+		}
 		if (ftsDefinition !== FTS_DEFINITION) {
 			// Rebuild from `entries` without rereading JSONL.
 			db.exec(DROP_FTS);

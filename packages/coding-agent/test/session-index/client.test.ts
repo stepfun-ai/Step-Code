@@ -98,6 +98,8 @@ describe("openSessionIndex", () => {
 		foreign.exec("CREATE TABLE other(x)");
 		foreign.close();
 		writeSession(join(sessionDir, "a.jsonl"), "a", "scan fallback text");
+		// The scan skips child-agent sessions as the index does.
+		writeSession(join(sessionDir, "child.jsonl"), "subagent-1", "scan fallback text");
 
 		index = await openSessionIndex({ agentDir });
 		const status = await index.status();

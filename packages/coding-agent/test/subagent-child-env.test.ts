@@ -2,10 +2,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { isChildAgentSession } from "../src/core/child-session.ts";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepCronExtension } from "../src/features/step-cron.ts";
 import { createStepGoalExtension } from "../src/features/step-schedule.ts";
-import { CHILD_MARKER, type StepSubagentRunInput } from "../src/features/step-subagent.ts";
+import { CHILD_MARKER, childSessionHeader, type StepSubagentRunInput } from "../src/features/step-subagent.ts";
 import type { StepAgentConfig } from "../src/features/step-subagent-agents.ts";
 import { liveSubagentSessions } from "../src/features/subagent/lane-lifecycle.ts";
 import {
@@ -95,6 +97,22 @@ test("every rpc child is stripped of scheduling authority", () => {
 
 	expect(registeredTools(createStepCronExtension())).toEqual([]);
 	expect(registeredTools(createStepGoalExtension())).toEqual([]);
+});
+
+test("a child stamps its session header from the child env; a user session stays unmarked", async () => {
+	const env = buildSubagentChildEnv(runInput({ parentSessionId: "parent-1" }));
+	expect(childSessionHeader(env)).toEqual({ origin: "subagent", parentSessionId: "parent-1" });
+	expect(childSessionHeader({})).toEqual({});
+
+	const dir = await workspace();
+	const child = SessionManager.create(dir, dir, { id: "any-id", ...childSessionHeader(env) });
+	expect(child.getHeader()).toMatchObject({ origin: "subagent", parentSessionId: "parent-1" });
+	// The header alone marks it, whatever the id.
+	expect(isChildAgentSession({ id: "any-id", origin: child.getHeader()?.origin })).toBe(true);
+	const user = SessionManager.create(dir, dir, { id: "user-id", ...childSessionHeader({}) });
+	expect(user.getHeader()).not.toHaveProperty("origin");
+	expect(isChildAgentSession({ id: "user-id" })).toBe(false);
+	expect(isChildAgentSession({ id: "workflow-run-agent" })).toBe(true);
 });
 
 test("a workflow ACL is forwarded, and a stale inherited one is cleared", () => {

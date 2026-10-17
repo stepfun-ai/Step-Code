@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { CHILD_SESSION_ORIGIN, isChildAgentSession } from "../child-session.ts";
 import type { SessionHeader } from "../session-manager.ts";
 import {
 	createSessionSummary,
@@ -52,6 +53,13 @@ export const SHORT_QUERY_MAX_SESSIONS = 200;
 export const SHORT_QUERY_MAX_HITS = 50;
 const SNIPPET_CONTEXT_CHARS = 48;
 const FTS_SNIPPET_TOKENS = 32;
+/**
+ * Child-agent sessions (`origin` set) stay indexed but are never searched or
+ * listed: they belong to a tool call, not to the user, and one fan-out can add
+ * a dozen of them, enough to crowd real sessions out of a page or the
+ * short-query window.
+ */
+const USER_SESSION = "s.origin IS NULL";
 /** Known files re-checked before each search or list. */
 export const REFRESH_RECENT_FILES = 20;
 
@@ -435,9 +443,9 @@ export class SessionIndexStore {
 			});
 			const sessionRow = this.db
 				.prepare(
-					`INSERT INTO sessions(path, session_id, cwd, name, parent_session, created_at, modified_at,
+					`INSERT INTO sessions(path, session_id, cwd, name, parent_session, origin, created_at, modified_at,
 						last_activity_at, message_count, first_message)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING sid`,
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING sid`,
 				)
 				.get(
 					path,
@@ -445,6 +453,7 @@ export class SessionIndexStore {
 					typeof header.cwd === "string" ? header.cwd : "",
 					parsed.summary.name ?? null,
 					typeof header.parentSession === "string" ? header.parentSession : null,
+					isChildAgentSession(header) ? CHILD_SESSION_ORIGIN : null,
 					Number.isNaN(createdAt) ? Math.trunc(fp.mtimeMs) : createdAt,
 					resolveSessionModifiedTime(header, parsed.summary.lastActivityTime, Math.trunc(fp.mtimeMs)),
 					parsed.summary.lastActivityTime ?? null,
@@ -692,7 +701,7 @@ export class SessionIndexStore {
 
 		if (!query.entryTypes) {
 			const params: SQLInputValue[] = [SNIPPET_MATCH_START, SNIPPET_MATCH_END, match];
-			let where = "sessions_fts MATCH ?";
+			let where = `sessions_fts MATCH ? AND ${USER_SESSION}`;
 			if (query.cwd !== undefined) {
 				where += " AND s.cwd = ?";
 				params.push(query.cwd);
@@ -725,7 +734,7 @@ export class SessionIndexStore {
 		}
 
 		const params: SQLInputValue[] = [SNIPPET_MATCH_START, SNIPPET_MATCH_END, match];
-		let where = "entries_fts MATCH ?";
+		let where = `entries_fts MATCH ? AND ${USER_SESSION}`;
 		if (query.cwd !== undefined) {
 			where += " AND s.cwd = ?";
 			params.push(query.cwd);
@@ -773,7 +782,7 @@ export class SessionIndexStore {
 		const limit = Math.min(requestedLimit, SHORT_QUERY_MAX_HITS);
 		const since = query.since ?? (query.cwd === undefined ? now - SHORT_QUERY_DEFAULT_WINDOW_MS : undefined);
 		const candidateParams: SQLInputValue[] = [];
-		const candidateWhere: string[] = [];
+		const candidateWhere: string[] = ["origin IS NULL"];
 		if (query.cwd !== undefined) {
 			candidateWhere.push("cwd = ?");
 			candidateParams.push(query.cwd);
@@ -850,7 +859,7 @@ export class SessionIndexStore {
 	listSessions(query: SessionListQuery): SessionListPage {
 		const limit = Math.max(1, Math.floor(query.limit));
 		const params: SQLInputValue[] = [];
-		const where: string[] = [];
+		const where: string[] = ["origin IS NULL"];
 		if (query.cwd !== undefined) {
 			where.push("cwd = ?");
 			params.push(query.cwd);
@@ -865,7 +874,7 @@ export class SessionIndexStore {
 		const rows = this.db
 			.prepare(
 				`SELECT sid, path, session_id, cwd, name, parent_session, created_at, modified_at, message_count, first_message
-				FROM sessions ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+				FROM sessions WHERE ${where.join(" AND ")}
 				ORDER BY modified_at DESC, sid DESC LIMIT ?`,
 			)
 			.all(...params);

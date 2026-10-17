@@ -6,7 +6,7 @@ import type { SessionInfo, SessionListProgress } from "@step-harness/coding-agen
 import {
 	canonicalizePath as _canonicalizePath,
 	DynamicBorder,
-	isChildAgentSessionId,
+	isChildAgentSession,
 	KeybindingsManager,
 	keyHint,
 	keyText,
@@ -954,7 +954,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			// a respawned child still reattaches to its own transcript.
 			const sessions = (
 				await (scope === "current" ? this.currentSessionsLoader(onProgress) : this.allSessionsLoader(onProgress))
-			).filter((session) => !isChildAgentSessionId(session.id));
+			).filter((session) => !isChildAgentSession(session));
 
 			if (scope === "current") {
 				this.currentSessions = sessions;

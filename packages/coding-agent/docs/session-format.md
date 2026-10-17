@@ -202,6 +202,12 @@ For sessions with a parent (created via `/fork`, `/clone`, or `newSession({ pare
 {"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","parentSession":"/path/to/original/session.jsonl"}
 ```
 
+A session created by a child agent (a subagent lane or workflow agent, spawned with `STEPCODE_SUBAGENT_CHILD=1`) carries `origin: "subagent"` and, when known, the id of the session that spawned it. Session lists, the resume picker, and session search skip these sessions (`isChildAgentSession`, which also recognizes the `subagent-` / `workflow-` id prefixes of older child sessions):
+
+```json
+{"type":"session","version":3,"id":"subagent-uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","origin":"subagent","parentSessionId":"uuid"}
+```
+
 ### SessionMessageEntry
 
 A message in the conversation. The `message` field contains an `AgentMessage`.
@@ -401,7 +407,7 @@ Key methods for working with sessions programmatically.
 - `SessionManager.listAll(onProgress?)` - List all sessions across all projects
 
 ### Instance Methods - Session Management
-- `newSession(options?)` - Start a new session (options: `{ parentSession?: string }`)
+- `newSession(options?)` - Start a new session (options: `{ id?, parentSession?, origin?, parentSessionId? }`)
 - `setSessionFile(path)` - Switch to a different session file
 - `createBranchedSession(leafId)` - Extract branch to new session file
 

@@ -19,6 +19,7 @@ import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { CHILD_SESSION_ORIGIN } from "./child-session.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -37,12 +38,19 @@ export interface SessionHeader {
 	id: string;
 	timestamp: string;
 	cwd: string;
+	/** Path of the session this one was forked or continued from. */
 	parentSession?: string;
+	/** Set by a child agent (subagent lane or workflow agent) on the session it creates. */
+	origin?: typeof CHILD_SESSION_ORIGIN;
+	/** Id of the session whose agent spawned this child, when known. */
+	parentSessionId?: string;
 }
 
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
+	origin?: typeof CHILD_SESSION_ORIGIN;
+	parentSessionId?: string;
 }
 
 export interface SessionEntryBase {
@@ -182,6 +190,8 @@ export interface SessionInfo {
 	name?: string;
 	/** Path to the parent session (if this session was forked). */
 	parentSessionPath?: string;
+	/** Header `origin`; `isChildAgentSession` tells child-agent sessions apart. */
+	origin?: typeof CHILD_SESSION_ORIGIN;
 	created: Date;
 	modified: Date;
 	messageCount: number;
@@ -705,6 +715,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			cwd,
 			name: summary.name,
 			parentSessionPath,
+			...(header.origin === CHILD_SESSION_ORIGIN ? { origin: header.origin } : {}),
 			created: new Date(header.timestamp),
 			modified: new Date(resolveSessionModifiedTime(header, summary.lastActivityTime, stats.mtime.getTime())),
 			messageCount: summary.messageCount,
@@ -893,6 +904,8 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: options?.parentSession,
+			...(options?.origin ? { origin: options.origin } : {}),
+			...(options?.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();

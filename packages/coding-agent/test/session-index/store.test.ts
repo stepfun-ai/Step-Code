@@ -86,6 +86,43 @@ describe("SessionIndexStore", () => {
 		expect(store.syncFile(path)).toBe("skipped");
 	});
 
+	it("indexes child-agent sessions but never searches or lists them", () => {
+		const childHeader = (id: string, origin?: string) =>
+			`${JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-09-30T00:00:00.000Z", cwd: "/work/app", ...(origin ? { origin } : {}) })}\n`;
+		writeFileSync(file("user"), header("s1") + message("user", "quokka in the user session"));
+		// Marked by the header, by the subagent id prefix, and by the workflow id prefix.
+		writeFileSync(file("marked"), childHeader("c1", "subagent") + message("user", "quokka you are a subagent"));
+		writeFileSync(file("lane"), childHeader("subagent-1") + message("user", "quokka lane task"));
+		writeFileSync(file("flow"), childHeader("workflow-r-a") + message("user", "quokka workflow task"));
+		for (const name of ["user", "marked", "lane", "flow"]) expect(store.syncFile(file(name))).toBe("indexed");
+
+		const sessionsOf = (hits: SessionIndexHit[]) => [...new Set(hits.map((hit) => hit.sessionId))];
+		expect(sessionsOf(store.search({ text: "quokka", limit: 20 }))).toEqual(["s1"]);
+		expect(sessionsOf(store.search({ text: "you are a subagent", limit: 20 }))).toEqual([]);
+		// Below the trigram minimum: the LIKE path and its recent-session window.
+		expect(sessionsOf(store.search({ text: "qu", cwd: "/work/app", limit: 20 }, NOW))).toEqual(["s1"]);
+		expect(store.listSessions({ limit: 10 }).sessions.map((session) => session.id)).toEqual(["s1"]);
+		expect(store.counts().indexed).toBe(4);
+	});
+
+	it("migrates a minor-1 file by marking child sessions from their id prefix", () => {
+		writeFileSync(file("user"), header("s1") + message("user", "quokka user"));
+		writeFileSync(file("lane"), header("subagent-1") + message("user", "quokka lane"));
+		store.syncFile(file("user"));
+		store.syncFile(file("lane"));
+		store.close();
+		const raw = new DatabaseSync(dbPath);
+		raw.exec("ALTER TABLE sessions DROP COLUMN origin");
+		raw.exec("PRAGMA user_version = 1");
+		raw.close();
+
+		store = new SessionIndexStore(openIndexDatabase(DatabaseSync, dbPath).db);
+		expect([...new Set(store.search({ text: "quokka", limit: 10 }).map((hit) => hit.sessionId))]).toEqual(["s1"]);
+		const check = new DatabaseSync(dbPath, { readOnly: true });
+		expect(check.prepare("PRAGMA user_version").get()?.user_version).toBe(SCHEMA_MINOR);
+		check.close();
+	});
+
 	it("appends new lines without rebuilding and keeps list fields current", () => {
 		const path = file("a");
 		writeFileSync(path, header("s1") + message("user", "first question"));

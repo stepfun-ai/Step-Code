@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { isChildAgentSession } from "../child-session.ts";
 import { type SessionInfo, SessionManager } from "../session-manager.ts";
 import { textSnippet } from "./store.ts";
 import type {
@@ -44,8 +45,9 @@ export class JsonlScanSessionIndex implements SessionIndex {
 			sessions.push(...(await SessionManager.listAll(directory)));
 		}
 		const seen = new Set<string>();
+		// Child-agent sessions are skipped, as in the index's queries.
 		return sessions
-			.filter((session) => !seen.has(session.path) && seen.add(session.path))
+			.filter((session) => !isChildAgentSession(session) && !seen.has(session.path) && seen.add(session.path))
 			.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	}
 

@@ -14,7 +14,9 @@ import { Text } from "@step-harness/pi-tui";
 import { type Message, type ProviderErrorKind, StringEnum, type Usage } from "@step-harness/providers";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
+import { CHILD_SESSION_ORIGIN } from "../core/child-session.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
+import type { NewSessionOptions } from "../core/session-manager.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
@@ -74,6 +76,19 @@ const MAX_PARALLEL_TASKS = 1000;
 export const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
 export const CHILD_MARKER = "STEPCODE_SUBAGENT_CHILD";
+
+/**
+ * Header fields a child agent process stamps on the session it creates, so the
+ * session is recognisable as a child's without relying on its id. Empty outside
+ * a child process. The env comes from `buildSubagentChildEnv`.
+ */
+export function childSessionHeader(
+	env: NodeJS.ProcessEnv = process.env,
+): Pick<NewSessionOptions, "origin" | "parentSessionId"> {
+	if (env[CHILD_MARKER] !== "1") return {};
+	const parentSessionId = env.STEPCODE_USAGE_PARENT_SESSION_ID?.trim();
+	return { origin: CHILD_SESSION_ORIGIN, ...(parentSessionId ? { parentSessionId } : {}) };
+}
 
 export interface StepSubagentUsage {
 	input: number;
