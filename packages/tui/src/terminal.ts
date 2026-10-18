@@ -499,7 +499,8 @@ export class ProcessTerminal implements Terminal {
 
 	setTitle(title: string): void {
 		// OSC 0;title BEL - set terminal window title
-		process.stdout.write(`\x1b]0;${title}\x07`);
+		const safeTitle = title.replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+		process.stdout.write(`\x1b]0;${safeTitle}\x07`);
 	}
 
 	setProgress(active: boolean): void {

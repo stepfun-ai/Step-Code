@@ -1271,13 +1271,13 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Update terminal title with session name and cwd.
+	 * Show the session name, or product and cwd when unnamed.
 	 */
 	updateTerminalTitle(): void {
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(sessionName);
 		} else {
 			this.ui.terminal.setTitle(`${APP_TITLE} - ${cwdBasename}`);
 		}

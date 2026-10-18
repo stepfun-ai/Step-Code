@@ -311,6 +311,12 @@ Session metadata (e.g., user-defined display name). Set via `/name`, `--name` / 
 
 The session name is displayed in the session selector (`/resume`) instead of the first message when set.
 
+Interactive sessions without a `session_info` entry are automatically named by the built-in `session-title` Pi extension. On the first nonempty prompt, it persists a sanitized prompt fragment (at most 36 Unicode code points) via `pi.setSessionName()`. A separate, nonblocking request to the active model then generates a short task title in the user's language. This request contains at most 4,000 prompt characters, no history or tools, a 128-token output limit, and a 15-second timeout. It is an additional provider request and may incur provider charges; its usage is not included in transcript totals.
+
+Manual names, including explicitly cleared names, take precedence. Metadata changes, session replacement, reload, and shutdown cancel pending generation; stale responses cannot rename a replacement session. Failure retains the prompt fragment. Named sessions are not renamed on follow-ups or resume. Noninteractive modes do not generate titles.
+
+The existing `session_info_changed` UI path updates the terminal title using OSC 0, with control characters removed from dynamic title text. Named sessions display only their name; unnamed sessions retain the product and directory fallback. This protocol is used by Apple Terminal, iTerm2, Ghostty, and other compatible terminals; visibility depends on the terminal's tab/window title settings. No terminal-specific notification protocol, bell, or completion status is added. The terminal referred to as `otty` has not been identified or independently tested.
+
 ## Tree Structure
 
 Entries form a tree:

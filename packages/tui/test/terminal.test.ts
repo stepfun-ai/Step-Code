@@ -225,6 +225,23 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 	});
 });
 
+describe("ProcessTerminal title", () => {
+	it("writes OSC 0 without allowing title text to terminate or inject control sequences", () => {
+		const writes: string[] = [];
+		const previousWrite = process.stdout.write;
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			writes.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+		try {
+			new ProcessTerminal().setTitle("Fix\nlogin\x07\x1b]2;injected\x9c");
+			assert.deepEqual(writes, ["\x1b]0;Fix login]2;injected\x07"]);
+		} finally {
+			process.stdout.write = previousWrite;
+		}
+	});
+});
+
 describe("ProcessTerminal progress", () => {
 	it("writes a valid OSC 9;4 clear sequence", () => {
 		const terminal = new ProcessTerminal();
