@@ -125,6 +125,38 @@ describe("step login state storage", () => {
 		expect(getStepLoginStatePath({ STEPCODE_LOGIN_STATE_PATH: "/explicit.json" })).toBe("/explicit.json");
 	});
 
+	it("reports whether the session was actually removed", async () => {
+		await saveStepLoginState(stored(), env);
+		expect(await clearStepLoginState(env)).toBe(true);
+		expect(readStepLoginState(env)).toBeUndefined();
+		// Nothing left to remove is still a successful removal.
+		expect(await clearStepLoginState(env)).toBe(true);
+
+		await saveStepLoginState(stored(), env);
+		const release = acquireSettingsLockSync(getStepLoginStatePath(env));
+		try {
+			expect(await clearStepLoginState(env)).toBe(false);
+		} finally {
+			release();
+		}
+		expect(readStepLoginState(env)).toBeDefined();
+	});
+
+	it("reports whether the session was actually written", async () => {
+		expect(await saveStepLoginState(stored(), env)).toBe(true);
+		expect(readStepLoginState(env)).toBeDefined();
+
+		// Another process holds the lock: the caller must be able to tell that
+		// nothing was written, or a sign-in would report success with a stale
+		// session still on disk.
+		const release = acquireSettingsLockSync(getStepLoginStatePath(env));
+		try {
+			expect(await saveStepLoginState(stored({ refreshToken: refreshToken() }), env)).toBe(false);
+		} finally {
+			release();
+		}
+	});
+
 	it("drops the previous session when a new sign-in is persisted", async () => {
 		const envA = { STEPCODE_LOGIN_STATE_PATH: join(dir, "a.json") };
 		const envB = { STEPCODE_LOGIN_STATE_PATH: join(dir, "b.json") };

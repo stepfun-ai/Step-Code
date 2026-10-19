@@ -13,7 +13,7 @@ import type { Credential } from "@step-harness/providers";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
 import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } from "./environment.ts";
-import { clearStepLoginState, getStepLoginStatePath } from "./login-state.ts";
+import { clearStepLoginState } from "./login-state.ts";
 
 /** Current Pi-shaped credential path under the StepCode agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
@@ -144,8 +144,9 @@ export async function logoutStepCredentials(
 	const legacyPath = normalize(options.legacyPath ?? getLegacyStepAuthPath());
 	// The account session is a separate file with a separate lifetime, so it is
 	// cleared here too — but only the session, never anything else on disk.
-	const removedLoginState = existsSync(getStepLoginStatePath(env));
-	await clearStepLoginState(env);
+	// The result is the actual outcome: reporting a removal that did not happen
+	// would leave a long-lived refresh token behind while claiming success.
+	const removedLoginState = await clearStepLoginState(env);
 	let removedNative = false;
 	let removedLegacy = false;
 

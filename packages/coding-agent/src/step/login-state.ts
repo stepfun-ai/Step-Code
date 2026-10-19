@@ -137,7 +137,31 @@ export function buildStepLoginState(
 }
 
 /**
- * Persist the session.
+ * Acquire the cross-process session lock.
+ *
+ * Returns undefined when another process holds it: letting that process win is
+ * safe because every writer re-reads before committing. Anything else — a
+ * read-only directory, a permission problem — is a real failure and must
+ * surface, because silently skipping would report a successful sign-in or
+ * sign-out while the file on disk says otherwise.
+ */
+function acquireSessionLock(path: string): (() => void) | undefined {
+	try {
+		return acquireSettingsLockSync(path);
+	} catch (error) {
+		if (isLockContention(error)) return undefined;
+		throw error;
+	}
+}
+
+function isLockContention(error: unknown): boolean {
+	return (
+		typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ELOCKED"
+	);
+}
+
+/**
+ * Persist the session, returning whether it was written.
  *
  * Takes the cross-process lock, so a sign-in that lands while another process
  * is committing a refresh cannot be overwritten by that refresh's result.
@@ -148,18 +172,13 @@ export function buildStepLoginState(
 export async function saveStepLoginState(
 	state: StepLoginState,
 	env: Record<string, string | undefined> = process.env,
-): Promise<void> {
+): Promise<boolean> {
 	const path = await ensureLoginStateFile(env);
-	let release: (() => void) | undefined;
-	try {
-		release = acquireSettingsLockSync(path);
-	} catch {
-		// Another process holds it. It re-reads before committing, so letting it
-		// win is safe and avoids interleaved writes.
-		return;
-	}
+	const release = acquireSessionLock(path);
+	if (!release) return false;
 	try {
 		await writeLoginStateFile(state, env);
+		return true;
 	} finally {
 		release();
 	}
@@ -195,27 +214,23 @@ async function ensureLoginStateFile(env: Record<string, string | undefined>): Pr
 }
 
 /**
- * Drop the session. The API key in `auth.json` is deliberately left alone.
+ * Drop the session, returning whether it is gone.
  *
- * Takes the lock so a sign-out cannot land between a committer's re-read and
- * its write, which would resurrect a session the user just signed out of.
+ * Takes the lock so a sign-out cannot land between a committer's re-read and its
+ * write, which would resurrect a session the user just signed out of.
  *
- * Errors other than "already gone" are surfaced: reporting a successful sign-out
- * while a long-lived refresh token is still on disk is worse than failing.
+ * Only lock contention is tolerated: any other failure is surfaced, because
+ * reporting a successful sign-out while a long-lived refresh token is still on
+ * disk is worse than failing.
  */
-export async function clearStepLoginState(env: Record<string, string | undefined> = process.env): Promise<void> {
+export async function clearStepLoginState(env: Record<string, string | undefined> = process.env): Promise<boolean> {
 	const path = getStepLoginStatePath(env);
-	if (!existsSync(path)) return;
-	let release: (() => void) | undefined;
-	try {
-		release = acquireSettingsLockSync(path);
-	} catch {
-		// Not lockable: another process owns it, so removing it could delete a
-		// session that was just written. Leave it for that process to settle.
-		return;
-	}
+	if (!existsSync(path)) return true;
+	const release = acquireSessionLock(path);
+	if (!release) return false;
 	try {
 		await rm(path, { force: true });
+		return true;
 	} finally {
 		release();
 	}
@@ -237,12 +252,10 @@ async function discardLoginState(
 ): Promise<boolean> {
 	const path = getStepLoginStatePath(env);
 	if (!existsSync(path)) return false;
-	let release: (() => void) | undefined;
-	try {
-		release = acquireSettingsLockSync(path);
-	} catch {
-		// Not lockable: it either vanished or another process owns it. Leaving it
-		// is safer than deleting something that may already have been replaced.
+	const release = acquireSessionLock(path);
+	if (!release) {
+		// Another process owns it. Leaving the session is safer than deleting
+		// something that may already have been replaced.
 		return false;
 	}
 	try {
@@ -416,10 +429,8 @@ async function refreshAndCommit(
 	}
 
 	if (!existsSync(path)) return { kind: "unchanged" };
-	let release: (() => void) | undefined;
-	try {
-		release = acquireSettingsLockSync(path);
-	} catch {
+	const release = acquireSessionLock(path);
+	if (!release) {
 		// Another process is committing; it re-reads the same way, so letting it
 		// win is safe and avoids a second write.
 		return { kind: "unchanged" };
@@ -431,6 +442,7 @@ async function refreshAndCommit(
 			return { kind: "unchanged", ...(latest ? { state: latest } : {}) };
 		}
 		const { refreshExpiresAt: _inherited, ...rest } = latest;
+		const refreshExpiresAt = readJwtExpiresAt(refreshed.refreshToken);
 		const committed: StepLoginState = {
 			...rest,
 			accessToken: refreshed.accessToken,
@@ -439,9 +451,7 @@ async function refreshAndCommit(
 			// Recomputed rather than inherited from the token being replaced: the
 			// response carries a refresh token, and once rotation starts its
 			// deadline is the previous token's, which would discard a live session.
-			...(readJwtExpiresAt(refreshed.refreshToken) === undefined
-				? {}
-				: { refreshExpiresAt: readJwtExpiresAt(refreshed.refreshToken) }),
+			...(refreshExpiresAt === undefined ? {} : { refreshExpiresAt }),
 		};
 		await writeLoginStateFile(committed, env);
 		return { kind: "refreshed", state: committed };

@@ -391,25 +391,31 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				obtainedAt: (options.now ?? (() => new Date()))().toISOString(),
 			});
 			// The account session is a separate file on purpose: it expires and
-			// refreshes on its own, and losing it must never cost the API key.
+			// refreshes on its own, and losing it must never cost the API key. Every
+			// failure here is a warning, never a failed sign-in — the key is already
+			// written by this point.
 			//
 			// Any previous session is dropped first. Signing in again — as another
 			// account, or with a profile that carries no session at all — must not
 			// leave the old account's session behind, or a host would read an
 			// identity that does not match the API key just written.
-			await clearStepLoginState(options.env ?? process.env);
-			if (login) {
-				try {
-					await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env);
-				} catch (error) {
-					loginWarning = `Signed in, but the account session could not be saved: ${
-						error instanceof Error ? error.message : String(error)
-					}. Account features will ask you to sign in again.`;
+			try {
+				const cleared = await clearStepLoginState(options.env ?? process.env);
+				let written = true;
+				if (login)
+					written = await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env);
+				if (!cleared || !written) {
+					loginWarning =
+						"Signed in, but the account session could not be written. Account features may use a previous session.";
+				} else if (loginError) {
+					// The backend sent a session that could not be used. The API key is
+					// unaffected; only account features are unavailable.
+					loginWarning = `Signed in, but the account session was rejected by the server (${loginError}).`;
 				}
-			} else if (loginError) {
-				// The backend sent a session that could not be used. The API key is
-				// unaffected; only account features are unavailable.
-				loginWarning = `Signed in, but the account session was rejected by the server (${loginError}).`;
+			} catch (error) {
+				loginWarning = `Signed in, but the account session could not be saved: ${
+					error instanceof Error ? error.message : String(error)
+				}. Account features will ask you to sign in again.`;
 			}
 			if (step !== saving) return;
 			savedProfile = profile;
