@@ -262,12 +262,13 @@ describe("Step permission presets", () => {
 			expect(confirm).toHaveBeenCalledWith(
 				expect.stringMatching(new RegExp(`run_command.*${toolCallId.slice(-8)}`, "u")),
 				expect.stringContaining(toolCallId),
-				{ signal, overlay: true },
+				{ signal, overlay: true, mirror: true },
 			);
 		}
 		expect(confirm).toHaveBeenCalledWith(expect.any(String), expect.stringContaining("separately"), {
 			signal,
 			overlay: true,
+			mirror: true,
 		});
 	});
 

@@ -66,6 +66,7 @@ import type {
 	UserBashEvent,
 	UserBashEventResult,
 } from "./types.ts";
+import { UIDecisions } from "./ui-decisions.ts";
 
 // Extension shortcuts compete with canonical keybinding ids from keybindings.json.
 // Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
@@ -300,6 +301,7 @@ export class ExtensionRunner {
 	private staleMessage: string | undefined;
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
+	private readonly uiDecisions = new UIDecisions();
 
 	constructor(
 		extensions: Extension[],
@@ -445,8 +447,27 @@ export class ExtensionRunner {
 	private wrapUIPromptContext(ui: ExtensionUIContext): ExtensionUIContext {
 		return {
 			...ui,
-			select: (title, options, opts) => this.withUIPrompt("select", title, () => ui.select(title, options, opts)),
-			confirm: (title, message, opts) => this.withUIPrompt("confirm", title, () => ui.confirm(title, message, opts)),
+			onDecision: (listener) => this.uiDecisions.subscribe(listener),
+			select: (title, options, opts) =>
+				this.withUIPrompt("select", title, () =>
+					opts?.mirror
+						? this.uiDecisions.run(
+								{ kind: "select", title, options },
+								(signal) => ui.select(title, options, { ...opts, signal }),
+								opts.signal,
+							)
+						: ui.select(title, options, opts),
+				),
+			confirm: (title, message, opts) =>
+				this.withUIPrompt("confirm", title, async () =>
+					opts?.mirror
+						? (await this.uiDecisions.run(
+								{ kind: "confirm", title, message, options: ["Yes", "No"] },
+								async (signal) => ((await ui.confirm(title, message, { ...opts, signal })) ? "Yes" : "No"),
+								opts.signal,
+							)) === "Yes"
+						: ui.confirm(title, message, opts),
+				),
 			input: (title, placeholder, opts) =>
 				this.withUIPrompt("input", title, () => ui.input(title, placeholder, opts)),
 			editor: (title, prefill) => this.withUIPrompt("editor", title, () => ui.editor(title, prefill)),
@@ -607,6 +628,7 @@ export class ExtensionRunner {
 		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 	): void {
 		if (!this.staleMessage) {
+			this.uiDecisions.close();
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
 		}
