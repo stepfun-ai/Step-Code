@@ -78,6 +78,9 @@ export interface RefreshStepLoginStateInput {
 export async function refreshStepLoginState(input: RefreshStepLoginStateInput): Promise<StepCliLoginState> {
 	const base = parseAuthBaseUrl(input.authBaseUrl);
 	const controller = new AbortController();
+	// A caller that already gave up must not leave the request running: the
+	// abort event has fired before the listener exists, so it is checked here.
+	if (input.signal?.aborted) controller.abort(input.signal.reason);
 	const timer = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
 	const onAbort = () => controller.abort();
 	input.signal?.addEventListener("abort", onAbort, { once: true });

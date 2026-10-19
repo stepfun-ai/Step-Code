@@ -16,7 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { StepCliLoginState } from "@step-harness/providers/step-provider";
 import { refreshStepLoginState, StepLoginRefreshError } from "@step-harness/providers/step-provider";
 import { acquireSettingsLockSync } from "../core/settings-manager.ts";
@@ -50,7 +50,14 @@ export interface StepLoginState {
 
 /** Where the session lives. Overridable so hosts can isolate their resources. */
 export function getStepLoginStatePath(env: Record<string, string | undefined> = process.env): string {
-	return env.STEPCODE_LOGIN_STATE_PATH?.trim() || join(resolveStepConfigRoot(env), LOGIN_STATE_FILE_NAME);
+	const explicit = env.STEPCODE_LOGIN_STATE_PATH?.trim();
+	if (explicit) return explicit;
+	// Follow the credential path: a host that isolates `auth.json` isolates the
+	// session too. Falling back to the shared default would let two isolated
+	// instances overwrite each other's identity.
+	const authPath = env.STEPCODE_AUTH_PATH?.trim();
+	if (authPath) return join(dirname(resolve(authPath)), LOGIN_STATE_FILE_NAME);
+	return join(resolveStepConfigRoot(env), LOGIN_STATE_FILE_NAME);
 }
 
 /**
@@ -123,6 +130,9 @@ export function buildStepLoginState(
 /**
  * Persist the session.
  *
+ * Takes the cross-process lock, so a sign-in that lands while another process
+ * is committing a refresh cannot be overwritten by that refresh's result.
+ *
  * Written atomically and owner-only: it holds a long-lived refresh token, so a
  * partially written or world-readable file is a credential leak.
  */
@@ -130,6 +140,24 @@ export async function saveStepLoginState(
 	state: StepLoginState,
 	env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
+	const path = await ensureLoginStateFile(env);
+	let release: (() => void) | undefined;
+	try {
+		release = acquireSettingsLockSync(path);
+	} catch {
+		// Another process holds it. It re-reads before committing, so letting it
+		// win is safe and avoids interleaved writes.
+		return;
+	}
+	try {
+		await writeLoginStateFile(state, env);
+	} finally {
+		release();
+	}
+}
+
+/** Write without locking; callers must already hold the lock. */
+async function writeLoginStateFile(state: StepLoginState, env: Record<string, string | undefined>): Promise<void> {
 	const path = getStepLoginStatePath(env);
 	await mkdir(dirname(path), { recursive: true });
 	// A fixed name would let two concurrent writers in one process share a
@@ -147,9 +175,41 @@ export async function saveStepLoginState(
 	await chmod(path, 0o600);
 }
 
-/** Drop the session. The API key in `auth.json` is deliberately left alone. */
+/** The lock needs a file to lock, so create an inert one when there is none. */
+async function ensureLoginStateFile(env: Record<string, string | undefined>): Promise<string> {
+	const path = getStepLoginStatePath(env);
+	if (!existsSync(path)) {
+		await mkdir(dirname(path), { recursive: true });
+		await writeFile(path, "", { encoding: "utf8", mode: 0o600 });
+	}
+	return path;
+}
+
+/**
+ * Drop the session. The API key in `auth.json` is deliberately left alone.
+ *
+ * Takes the lock so a sign-out cannot land between a committer's re-read and
+ * its write, which would resurrect a session the user just signed out of.
+ *
+ * Errors other than "already gone" are surfaced: reporting a successful sign-out
+ * while a long-lived refresh token is still on disk is worse than failing.
+ */
 export async function clearStepLoginState(env: Record<string, string | undefined> = process.env): Promise<void> {
-	await rm(getStepLoginStatePath(env), { force: true }).catch(() => {});
+	const path = getStepLoginStatePath(env);
+	if (!existsSync(path)) return;
+	let release: (() => void) | undefined;
+	try {
+		release = acquireSettingsLockSync(path);
+	} catch {
+		// Not lockable: another process owns it, so removing it could delete a
+		// session that was just written. Leave it for that process to settle.
+		return;
+	}
+	try {
+		await rm(path, { force: true });
+	} finally {
+		release();
+	}
 }
 
 /**
@@ -344,14 +404,21 @@ async function refreshAndCommit(
 		if (!latest || latest.refreshToken !== before.refreshToken) {
 			return { kind: "unchanged", ...(latest ? { state: latest } : {}) };
 		}
-		const next: StepLoginState = {
-			...latest,
+		const { refreshExpiresAt: _inherited, ...rest } = latest;
+		const committed: StepLoginState = {
+			...rest,
 			accessToken: refreshed.accessToken,
 			refreshToken: refreshed.refreshToken,
 			accessExpiresAt: Math.floor(Date.now() / 1000) + (refreshed.expiresIn ?? DEFAULT_ACCESS_TOKEN_TTL_SEC),
+			// Recomputed rather than inherited from the token being replaced: the
+			// response carries a refresh token, and once rotation starts its
+			// deadline is the previous token's, which would discard a live session.
+			...(readJwtExpiresAt(refreshed.refreshToken) === undefined
+				? {}
+				: { refreshExpiresAt: readJwtExpiresAt(refreshed.refreshToken) }),
 		};
-		await saveStepLoginState(next, env);
-		return { kind: "refreshed", state: next };
+		await writeLoginStateFile(committed, env);
+		return { kind: "refreshed", state: committed };
 	} finally {
 		release();
 	}

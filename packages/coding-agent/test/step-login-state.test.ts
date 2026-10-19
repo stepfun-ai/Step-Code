@@ -42,6 +42,11 @@ function loginState(overrides: Partial<StepCliLoginState> = {}): StepCliLoginSta
 	};
 }
 
+/** A successful Connect-RPC envelope from passport. */
+function ok(body: unknown): Response {
+	return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+}
+
 function stored(overrides: Partial<StepLoginState> = {}): StepLoginState {
 	return {
 		version: 1,
@@ -101,6 +106,25 @@ describe("step login state storage", () => {
 		// Reading a future shape as the current one would either pass by luck or
 		// silently drop the session.
 		expect(readStepLoginState(env)).toBeUndefined();
+	});
+
+	it("derives the session path from the credential path when only that is set", async () => {
+		// A host that isolates auth.json must isolate the session too, or two
+		// instances would overwrite each other's identity.
+		const authPath = join(dir, "nested", "auth.json");
+		expect(getStepLoginStatePath({ STEPCODE_AUTH_PATH: authPath })).toBe(join(dir, "nested", "step-login.json"));
+		expect(getStepLoginStatePath({ STEPCODE_LOGIN_STATE_PATH: "/explicit.json" })).toBe("/explicit.json");
+	});
+
+	it("drops the previous session when a new sign-in is persisted", async () => {
+		const envA = { STEPCODE_LOGIN_STATE_PATH: join(dir, "a.json") };
+		const envB = { STEPCODE_LOGIN_STATE_PATH: join(dir, "b.json") };
+		await saveStepLoginState(stored({ refreshToken: refreshToken() }), envA);
+		await saveStepLoginState(stored({ refreshToken: refreshToken(), profile: "step_plan_oversea" }), envB);
+		// A stale session from another account must never outlive the new sign-in.
+		await clearStepLoginState(envA);
+		expect(readStepLoginState(envA)).toBeUndefined();
+		expect(readStepLoginState(envB)).toMatchObject({ profile: "step_plan_oversea" });
 	});
 
 	it("keeps the api key out of this file's business: clearing only removes the session", async () => {
@@ -258,6 +282,30 @@ describe("getStepLoginToken", () => {
 
 		expect(await getStepLoginToken({ env })).toEqual({ status: "missing" });
 		expect(readStepLoginState(env)).toBeUndefined();
+	});
+
+	it("recomputes the refresh deadline from the token the server returned", async () => {
+		// The refresh token is not rotated today. Once it is, inheriting the old
+		// deadline would discard a session the server still considers live.
+		const shortLived = stored({
+			accessExpiresAt: Math.floor(Date.now() / 1000) + 60,
+			accessToken: accessToken(60),
+			refreshExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+		});
+		await saveStepLoginState(shortLived, env);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				ok({
+					accessToken: { raw: accessToken(1800), duration: 1800, mode: 2 },
+					refreshToken: { raw: refreshToken(30 * 24 * 60 * 60) },
+				}),
+			),
+		);
+
+		expect((await getStepLoginToken({ env })).status).toBe("ready");
+		const committed = readStepLoginState(env);
+		expect(committed?.refreshExpiresAt).toBeGreaterThan(shortLived.refreshExpiresAt!);
 	});
 
 	it("keeps a session that was replaced while an unredeemable refresh was running", async () => {

@@ -65,6 +65,8 @@ export type StepCliLoginPoll =
 			readonly apiKey: string;
 			readonly uid?: string;
 			readonly login?: StepCliLoginState;
+			/** Why a delivered session could not be used; the API key is still valid. */
+			readonly loginError?: string;
 	  }
 	| { readonly state: "failed"; readonly reason: StepCliLoginFailureReason };
 
@@ -218,12 +220,13 @@ export async function pollStepCliLogin(input: PollStepCliLoginInput): Promise<St
 	const apiKey = readString(credential as Record<string, unknown>, "api_key");
 	if (!apiKey) throw protocolError("poll", "ready response did not contain an api_key");
 	const uid = readBoundedUid(readString(payload, "uid"));
-	const login = readLoginState(credential as Record<string, unknown>);
+	const session = readLoginState(credential as Record<string, unknown>);
 	return {
 		state: "ready",
 		apiKey,
 		...(uid ? { uid } : {}),
-		...(login ? { login } : {}),
+		...(session.state ? { login: session.state } : {}),
+		...(session.error ? { loginError: session.error } : {}),
 	};
 }
 
@@ -231,20 +234,20 @@ export async function pollStepCliLogin(input: PollStepCliLoginInput): Promise<St
  * Read the optional account session.
  *
  * Absent on backends that predate it, which is the api-key-only behaviour the
- * CLI has always had, and the only case that is tolerated: the backend ships
- * first and CLI users upgrade selectively, so a missing field must not fail a
- * sign-in.
- *
- * Present but unusable is a contract violation and fails the poll, exactly like
- * a missing api_key. Tolerating it would mean a renamed or dropped field
- * silently costs every CLI its account session with nothing to show for it.
+ * CLI has always had. Present but unusable is reported rather than thrown: the
+ * API key is already in hand and must still be delivered, because a session
+ * problem must never cost the user their key. It is surfaced as a diagnostic so
+ * contract drift stays visible instead of silently dropping the session.
  */
-function readLoginState(credential: Record<string, unknown>): StepCliLoginState | undefined {
+function readLoginState(credential: Record<string, unknown>): { state?: StepCliLoginState; error?: string } {
 	const raw = credential.login;
-	if (raw === undefined || raw === null) return undefined;
+	if (raw === undefined || raw === null) return {};
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		return { error: "the login field was not an object" };
+	}
 	const parsed = parseStepLoginState(raw);
-	if (!parsed) throw protocolError("poll", "login field is not a usable account session");
-	return parsed;
+	if (!parsed) return { error: "the login field was missing a required token, device id or app id" };
+	return { state: parsed };
 }
 
 /**

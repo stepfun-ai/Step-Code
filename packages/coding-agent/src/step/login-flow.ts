@@ -11,7 +11,7 @@ import {
 import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import { resolveStepAgentDir } from "./environment.ts";
-import { buildStepLoginState, saveStepLoginState } from "./login-state.ts";
+import { buildStepLoginState, clearStepLoginState, saveStepLoginState } from "./login-state.ts";
 import {
 	INITIAL_STEP_LOGIN_STEP,
 	isStepLoginSettled,
@@ -70,6 +70,12 @@ export interface RunStepLoginOptions {
  */
 function readLoginState(value: unknown): StepCliLoginState | undefined {
 	return parseStepCliLoginState(value);
+}
+
+/** Both warnings matter; showing only one hides why account features are gone. */
+function combineWarnings(...warnings: Array<string | undefined>): string | undefined {
+	const present = warnings.filter((warning): warning is string => Boolean(warning));
+	return present.length > 0 ? present.join("\n") : undefined;
 }
 
 /** Model discovery can return fallback models even when the account has no plan. */ export function getMissingStepPlanProfile(
@@ -294,6 +300,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				apiKey,
 				event.type === "credential" ? event.uid : undefined,
 				event.type === "credential" ? event.login : undefined,
+				event.type === "credential" ? event.loginError : undefined,
 			);
 			return;
 		}
@@ -304,7 +311,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 			// A failed account-session save is reported alongside the plan check,
 			// not replaced by it: only the browser path can carry a session, and
 			// that is exactly the path that runs this check.
-			warning = stepPlanCheckWarning(account) ?? loginWarning;
+			warning = combineWarnings(stepPlanCheckWarning(account), loginWarning);
 			dispatch({ type: getMissingStepPlanProfile(account) ? "planRequired" : "saved" });
 			return;
 		}
@@ -357,6 +364,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				// Absent on backends that predate the account session; the login
 				// then completes with the API key alone, as it always has.
 				login: readLoginState(credential.login),
+				loginError: typeof credential.loginError === "string" ? credential.loginError : undefined,
 			});
 		} catch (error) {
 			if (!controller.signal.aborted)
@@ -369,6 +377,7 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		apiKey: string,
 		uid?: string,
 		login?: StepCliLoginState,
+		loginError?: string,
 	): Promise<void> {
 		const saving = step;
 		try {
@@ -383,6 +392,12 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 			});
 			// The account session is a separate file on purpose: it expires and
 			// refreshes on its own, and losing it must never cost the API key.
+			//
+			// Any previous session is dropped first. Signing in again — as another
+			// account, or with a profile that carries no session at all — must not
+			// leave the old account's session behind, or a host would read an
+			// identity that does not match the API key just written.
+			await clearStepLoginState(options.env ?? process.env);
 			if (login) {
 				try {
 					await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env);
@@ -391,6 +406,10 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 						error instanceof Error ? error.message : String(error)
 					}. Account features will ask you to sign in again.`;
 				}
+			} else if (loginError) {
+				// The backend sent a session that could not be used. The API key is
+				// unaffected; only account features are unavailable.
+				loginWarning = `Signed in, but the account session was rejected by the server (${loginError}).`;
 			}
 			if (step !== saving) return;
 			savedProfile = profile;

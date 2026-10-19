@@ -133,8 +133,10 @@ export type StepLoginEvent =
 			readonly type: "credential";
 			readonly apiKey: string;
 			readonly uid?: string;
-			/** Account session, when the backend delivered one. */
+			/** Account session, when the backend delivered a usable one. */
 			readonly login?: StepCliLoginState;
+			/** Why a delivered session was unusable; the API key is still valid. */
+			readonly loginError?: string;
 	  }
 	| { readonly type: "type"; readonly text: string }
 	| { readonly type: "backspace" }

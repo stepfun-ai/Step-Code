@@ -378,4 +378,35 @@ describe("Step Plan login availability", () => {
 			await login;
 		}
 	});
+
+	it("still signs in when the backend sends an unusable account session", async () => {
+		// The API key is already in hand, so a broken session field must not cost
+		// the user their sign-in — only account features become unavailable.
+		const loginStatePath = join(root, "step-login.json");
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: { access_token: "a", refresh_token: "b" },
+			loginError: "the login field was missing a required token, device id or app id",
+		};
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			await expect(login).resolves.toMatchObject({
+				kind: "completed",
+				warning: expect.stringContaining("account session was rejected"),
+			});
+			await expect(readFile(loginStatePath, "utf8")).rejects.toThrow();
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
 });

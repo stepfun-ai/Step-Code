@@ -265,7 +265,12 @@ function adaptOAuth(config: ExtensionOAuthConfig): OAuthAuth {
 				onSelect: (prompt) => callbacks.prompt({ type: "select", ...prompt }),
 				signal: callbacks.signal,
 			});
-			return { ...credential, type: "oauth" };
+			// A login flow may ride an account session along on the credential so
+			// the product layer can store it separately. It must not reach
+			// `auth.json`: credentials are persisted verbatim, and a copy there
+			// would never be refreshed.
+			const { login: _accountSession, ...credentialFields } = credential;
+			return { ...credentialFields, type: "oauth" };
 		},
 		refresh: async (credential, signal) => ({ ...(await config.refreshToken(credential, signal)), type: "oauth" }),
 		toAuth: async (credential) => ({ apiKey: config.getApiKey(credential) }),

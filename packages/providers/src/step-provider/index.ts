@@ -315,9 +315,10 @@ export async function loginStepOAuth(
 				refresh: STEP_STATIC_REFRESH_TOKEN,
 				expires: Number.MAX_SAFE_INTEGER,
 				...(ready.uid ? { uid: ready.uid } : {}),
-				// Rides along as an extra field: the API key stays the credential,
-				// and hosts that need an identity read this beside it.
+				// Rides along as extra fields: the API key stays the credential, and
+				// hosts that need an identity read these beside it.
 				...(ready.login ? { login: ready.login } : {}),
+				...(ready.loginError ? { loginError: ready.loginError } : {}),
 			};
 		},
 	);

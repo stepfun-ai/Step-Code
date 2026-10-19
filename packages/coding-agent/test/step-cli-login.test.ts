@@ -304,13 +304,13 @@ describe("Step CLI login poll", () => {
 		).resolves.toEqual({ state: "ready", apiKey: "sk-step" });
 	});
 
-	it("rejects a login field it cannot refresh rather than storing it half-formed", async () => {
+	it("degrades to api-key-only when a login field is unusable", async () => {
+		// A session problem must never cost the user their key: the key is already
+		// in hand, so the unusable session is reported and dropped instead.
 		for (const login of [
 			{ access_token: "a", refresh_token: "b", device_id: "d" },
 			{ access_token: "a", refresh_token: "b", app_id: "10300" },
 			{ access_token: "a", device_id: "d", app_id: "10300" },
-			{ refresh_token: "b", device_id: "d", app_id: "10300" },
-			{ access_token: "a", refresh_token: "b", device_id: "", app_id: "10300" },
 			"not-an-object",
 		]) {
 			await expect(
@@ -320,7 +320,7 @@ describe("Step CLI login poll", () => {
 					flowId: "flow-1",
 					fetch: async () => json({ status: 0, state: "ready", credential: { api_key: "sk-step", login } }),
 				}),
-			).rejects.toMatchObject({ kind: "protocol" });
+			).resolves.toMatchObject({ state: "ready", apiKey: "sk-step", loginError: expect.any(String) });
 		}
 	});
 
