@@ -26,7 +26,6 @@ import {
 	wrapTextWithAnsi,
 } from "@step-harness/pi-tui";
 import { RenderLineCache } from "./render-line-cache.ts";
-import { stepErrorHint } from "./step-error-hints.ts";
 import { prependAfterTerminalSequences } from "./step-message.ts";
 import type { StepToolSpinnerState } from "./step-spinner.ts";
 
@@ -768,12 +767,6 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		const body = this.buildStepBodyLines(resultLines, bodyWidth);
-		// 错误呈现三要素收尾：what（✗ 标题行）/ why（错误文本）之后补 how——
-		// 一行可执行的恢复建议，让失败不只是被报告，还能被处理。
-		if (!this.isPartial && this.result?.isError) {
-			const hint = stepErrorHint(this.getTextOutput());
-			body.push(clampStepLine(`    ${theme.fg("muted", `↳ ${hint}`)}`, safeWidth));
-		}
 		const lines = [...header, ...body];
 		this.appendImages(lines, safeWidth);
 		return lines.length > 0 ? [...lines, ""] : [];
