@@ -2,7 +2,10 @@ import type { AssistantMessage, Model } from "@step-harness/providers";
 import { describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import sessionTitleExtension from "../src/features/session-title.ts";
+import sessionTitleExtension, {
+	buildSessionTitleSource,
+	regenerateSessionTitle,
+} from "../src/features/session-title.ts";
 
 const model: Model<"openai-completions"> = {
 	id: "test-model",
@@ -54,7 +57,12 @@ function setup(mode: ExtensionContext["mode"] = "tui") {
 		setSessionName,
 		getSessionName: () => sessionManager.getSessionName(),
 	} as unknown as ExtensionAPI);
-	const ctx = { mode, sessionManager, modelRegistry: { complete }, model } as unknown as ExtensionContext;
+	const ctx = {
+		mode,
+		sessionManager,
+		modelRegistry: { completeSimple: complete },
+		model,
+	} as unknown as ExtensionContext;
 	return {
 		ctx,
 		complete,
@@ -76,7 +84,7 @@ describe("Pi session title extension", () => {
 		expect(
 			h.emit("before_agent_start", { prompt: "Fix login timeout in the authentication service" }),
 		).toBeUndefined();
-		expect(h.sessionManager.getSessionName()).toBe("Fix login timeout in the authenticat");
+		expect(h.sessionManager.getSessionName()).toBe("Fix login timeout in the authe");
 		expect(h.complete).toHaveBeenCalledOnce();
 		h.resolve(response('"Fix login timeout"'));
 		await vi.waitFor(() => expect(h.sessionManager.getSessionName()).toBe("Fix login timeout"));
@@ -91,12 +99,14 @@ describe("Pi session title extension", () => {
 		const [, context, options] = h.complete.mock.calls[0] as [
 			unknown,
 			{ messages: { content: string }[]; tools?: unknown },
-			{ maxTokens: number; signal: AbortSignal },
+			{ maxTokens: number; signal: AbortSignal; reasoning?: unknown },
 		];
 		expect(context.messages).toHaveLength(1);
-		expect(context.messages[0].content).toHaveLength(4000);
+		expect(context.messages[0].content).toHaveLength(2000);
 		expect(context.tools).toBeUndefined();
-		expect(options.maxTokens).toBe(128);
+		expect(options.maxTokens).toBe(256);
+		// Thinking off: no reasoning level is requested for the title call.
+		expect(options).not.toHaveProperty("reasoning");
 		h.emit("session_shutdown");
 		expect(options.signal.aborted).toBe(true);
 	});
@@ -195,12 +205,111 @@ describe("Pi session title extension", () => {
 		h.emit("before_agent_start", { prompt: "\x07Fix\nlogin\x9c" });
 		expect(h.sessionManager.getSessionName()).toBe("Fix login");
 		h.resolve(response(`\x07${"\u{20000}".repeat(40)}\x9c`));
-		await vi.waitFor(() => expect(h.sessionManager.getSessionName()).toBe("\u{20000}".repeat(36)));
+		await vi.waitFor(() => expect(h.sessionManager.getSessionName()).toBe("\u{20000}".repeat(15)));
 	});
 
 	test("does nothing for an empty text prompt", () => {
 		const h = setup();
 		h.emit("before_agent_start", { prompt: "\n\t" });
 		expect(h.complete).not.toHaveBeenCalled();
+	});
+	test("limits Chinese titles to 15 characters and strips trailing punctuation", async () => {
+		const h = setup();
+		h.emit("before_agent_start", { prompt: "修复登录接口超时" });
+		h.resolve(response("排查并修复登录接口在高并发下的超时问题。\n第二行说明"));
+		await vi.waitFor(() => expect(h.sessionManager.getSessionName()).toBe("排查并修复登录接口在高并发下的"));
+	});
+
+	test("keeps short titles whole after removing trailing punctuation", async () => {
+		const h = setup();
+		h.emit("before_agent_start", { prompt: "修复登录接口超时" });
+		h.resolve(response("登录接口超时排查。"));
+		await vi.waitFor(() => expect(h.sessionManager.getSessionName()).toBe("登录接口超时排查"));
+	});
+});
+
+function userMessage(text: string) {
+	return { role: "user" as const, content: text, timestamp: 0 };
+}
+
+describe("session title regeneration", () => {
+	function regenerateTarget(reply: () => Promise<AssistantMessage>) {
+		const sessionManager = SessionManager.inMemory();
+		const completeSimple = vi.fn(reply);
+		const target = {
+			model: model as Model<any> | undefined,
+			modelRuntime: { completeSimple },
+			sessionManager,
+			setSessionName: (name: string) => sessionManager.appendSessionInfo(name),
+		};
+		return { target, sessionManager, completeSimple };
+	}
+
+	test("builds the source from the original request and the latest conversation", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		sessionManager.appendMessage(response("已定位到连接池配置"));
+		sessionManager.appendMessage(userMessage("x".repeat(9000)));
+		const source = buildSessionTitleSource(sessionManager.getBranch()) ?? "";
+		expect(source.startsWith("Original request:\n修复登录接口超时\n\nRecent conversation:\n")).toBe(true);
+		expect(source.length).toBe(8000);
+		expect(source.endsWith("x")).toBe(true);
+		expect(buildSessionTitleSource([])).toBeUndefined();
+	});
+
+	test("renames from the conversation without reasoning", async () => {
+		const h = regenerateTarget(async () => response("登录接口超时修复"));
+		h.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		h.sessionManager.appendSessionInfo("修复登录接口超时");
+		await expect(regenerateSessionTitle(h.target)).resolves.toEqual({ status: "renamed", title: "登录接口超时修复" });
+		expect(h.sessionManager.getSessionName()).toBe("登录接口超时修复");
+		const [, , options] = h.completeSimple.mock.calls[0] as unknown as [unknown, unknown, Record<string, unknown>];
+		expect(options).not.toHaveProperty("reasoning");
+	});
+
+	test("reports unchanged, empty, missing model, and failed generations", async () => {
+		const same = regenerateTarget(async () => response("登录接口超时修复"));
+		same.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		same.sessionManager.appendSessionInfo("登录接口超时修复");
+		await expect(regenerateSessionTitle(same.target)).resolves.toEqual({
+			status: "unchanged",
+			title: "登录接口超时修复",
+		});
+
+		const empty = regenerateTarget(async () => response("unused"));
+		await expect(regenerateSessionTitle(empty.target)).resolves.toEqual({ status: "empty" });
+		expect(empty.completeSimple).not.toHaveBeenCalled();
+
+		const noModel = regenerateTarget(async () => response("unused"));
+		noModel.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		await expect(regenerateSessionTitle({ ...noModel.target, model: undefined })).resolves.toEqual({
+			status: "no-model",
+		});
+
+		const failed = regenerateTarget(async () => {
+			throw new Error("Provider unavailable");
+		});
+		failed.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		await expect(regenerateSessionTitle(failed.target)).resolves.toEqual({ status: "failed" });
+
+		const errored = regenerateTarget(async () => response("Ignored", "error"));
+		errored.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		await expect(regenerateSessionTitle(errored.target)).resolves.toEqual({ status: "failed" });
+	});
+
+	test("does not overwrite a name changed while the request runs", async () => {
+		let resolve: (value: AssistantMessage) => void = () => {};
+		const h = regenerateTarget(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		h.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		const pending = regenerateSessionTitle(h.target);
+		h.sessionManager.appendSessionInfo("人工标题");
+		resolve(response("生成的标题"));
+		await expect(pending).resolves.toEqual({ status: "superseded" });
+		expect(h.sessionManager.getSessionName()).toBe("人工标题");
 	});
 });

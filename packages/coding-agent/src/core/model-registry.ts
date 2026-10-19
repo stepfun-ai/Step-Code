@@ -7,6 +7,7 @@ import type {
 	ModelsApiStreamOptions,
 	ModelsRefreshOptions,
 	ModelsRefreshResult,
+	ModelsSimpleStreamOptions,
 	Provider,
 	ProviderHeaders,
 } from "@step-harness/providers";
@@ -106,6 +107,11 @@ export class ModelRegistry {
 		options?: ModelsApiStreamOptions<TApi>,
 	): Promise<AssistantMessage> {
 		return this.runtime.complete(model, context, options);
+	}
+
+	/** Provider-neutral completion; omitted `reasoning` requests the model's thinking-off mode. */
+	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
+		return this.runtime.completeSimple(model, context, options);
 	}
 
 	getProviderDisplayName(provider: string): string {

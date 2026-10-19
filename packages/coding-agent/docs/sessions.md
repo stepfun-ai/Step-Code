@@ -25,7 +25,7 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 |---------|-------------|
 | `/resume` | Browse and select previous sessions |
 | `/new` | Start a new session |
-| `/name <name>` | Set the current session display name |
+| `/name <name>` | Set the current session display name; `/name` alone regenerates it |
 | `/session` | Show session info |
 | `/tree` | Navigate the current session tree |
 | `/fork` | Create a new session from a previous user message |
@@ -56,6 +56,8 @@ Use `/name <name>` to set a human-readable session name:
 ```text
 /name Refactor auth module
 ```
+
+An unnamed interactive session gets a short title from its first prompt. Run `/name` without an argument to regenerate the title from the original request and the latest conversation. See [session format](session-format.md#sessioninfoentry) for limits.
 
 Set the name at startup with `--name` or `-n`:
 

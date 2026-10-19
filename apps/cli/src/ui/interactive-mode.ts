@@ -90,6 +90,7 @@ import {
 	rawKeyHint,
 	readStepLoginCredential,
 	readStepLoginProfile,
+	regenerateSessionTitle,
 	resolveModelScopeFromModels,
 	resolveStepLoginProfiles,
 	type SessionEntry,
@@ -6457,14 +6458,7 @@ export class InteractiveMode {
 	handleNameCommand(text: string): void {
 		const name = text.replace(/^\/name\s*/, "").trim();
 		if (!name) {
-			const currentName = this.sessionManager.getSessionName();
-			if (currentName) {
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
-			} else {
-				this.showWarning("Usage: /name <name>");
-			}
-			this.redraw.requestRender();
+			void this.regenerateSessionName();
 			return;
 		}
 
@@ -6476,6 +6470,37 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
 		this.redraw.requestRender();
+	}
+
+	/** `/name` without an argument: regenerate from the conversation (OpenCode `/rename` semantics). */
+	private async regenerateSessionName(): Promise<void> {
+		const session = this.session;
+		const currentName = this.sessionManager.getSessionName();
+		this.showStatus(
+			currentName ? `Generating session name (current: ${currentName})...` : "Generating session name...",
+		);
+		const result = await regenerateSessionTitle(session);
+		// The user may have switched sessions while the request ran.
+		if (this.session !== session) return;
+		switch (result.status) {
+			case "renamed":
+				this.showStatus(`Session name set: ${result.title}`);
+				break;
+			case "unchanged":
+				this.showStatus(`Session name unchanged: ${result.title}`);
+				break;
+			case "empty":
+				this.showWarning("Nothing to name yet. Send a message first, or use /name <name>");
+				break;
+			case "no-model":
+				this.showWarning("No model selected. Use /name <name> to set a name manually");
+				break;
+			case "failed":
+				this.showWarning("Could not generate a session name. Use /name <name> to set one manually");
+				break;
+			case "superseded":
+				break;
+		}
 	}
 
 	handleSessionCommand(): void {
