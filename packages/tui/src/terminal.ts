@@ -40,6 +40,16 @@ export function isAppleTerminalSession(): boolean {
 	return process.platform === "darwin" && process.env.TERM_PROGRAM === "Apple_Terminal";
 }
 
+/**
+ * Terminals verified to render OSC 9;4 as per-tab progress. Others may treat
+ * OSC 9 as a desktop notification, and multiplexers drop it, so stay off there.
+ */
+export function supportsTerminalProgress(env: NodeJS.ProcessEnv = process.env): boolean {
+	if (env.TMUX || env.STY) return false;
+	const termProgram = env.TERM_PROGRAM?.toLowerCase();
+	return termProgram === "otty" || termProgram === "ghostty";
+}
+
 export function normalizeNativeShiftEnterInput(
 	data: string,
 	shouldDetectNativeShiftEnter: boolean,

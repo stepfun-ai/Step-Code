@@ -315,7 +315,7 @@ Interactive sessions without a `session_info` entry are automatically named by t
 
 Manual names, including explicitly cleared names, take precedence. Metadata changes, session replacement, reload, and shutdown cancel pending generation; stale responses cannot rename a replacement session. Failure retains the prompt fragment. Named sessions are not renamed on follow-ups or resume. Noninteractive modes do not generate titles.
 
-The existing `session_info_changed` UI path updates the terminal title using OSC 0, with control characters removed from dynamic title text. Named sessions display only their name; unnamed sessions retain the product and directory fallback. This protocol is used by Apple Terminal, iTerm2, Ghostty, and other compatible terminals; visibility depends on the terminal's tab/window title settings. No terminal-specific notification protocol, bell, or completion status is added. The terminal referred to as `otty` has not been identified or independently tested.
+The existing `session_info_changed` UI path updates the terminal title using OSC 0, with control characters removed from dynamic title text. Named sessions display only their name; unnamed sessions retain the product and directory fallback. This protocol is used by Apple Terminal, iTerm2, Ghostty, Otty, and other compatible terminals; visibility depends on the terminal's tab/window title settings. Per-tab busy state is a separate OSC 9;4 indicator controlled by `terminal.showTerminalProgress` (see [settings](settings.md)); no notification, bell, or completion status is added.
 
 ## Tree Structure
 

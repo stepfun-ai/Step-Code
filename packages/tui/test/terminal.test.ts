@@ -6,7 +6,25 @@ import {
 	normalizeNativeShiftEnterInput,
 	ProcessTerminal,
 	resolveEscapeTimeoutMs,
+	supportsTerminalProgress,
 } from "../src/terminal.ts";
+
+describe("supportsTerminalProgress", () => {
+	it("enables OSC 9;4 for terminals verified to render tab progress", () => {
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "otty" }), true);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "ghostty" }), true);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "Ghostty" }), true);
+	});
+
+	it("stays off for unknown terminals and multiplexers", () => {
+		assert.equal(supportsTerminalProgress({}), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "Apple_Terminal" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "iTerm.app" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "tmux" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "otty", TMUX: "/tmp/tmux-1/default,1,0" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "ghostty", STY: "1234.pts-0" }), false);
+	});
+});
 
 describe("resolveEscapeTimeoutMs", () => {
 	it("defaults to 100ms over SSH", () => {

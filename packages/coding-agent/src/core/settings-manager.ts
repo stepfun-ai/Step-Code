@@ -1,5 +1,6 @@
 import type { ThinkingLevel } from "@step-harness/agent-core";
 import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@step-harness/pi-tui";
+import { supportsTerminalProgress } from "@step-harness/pi-tui";
 import type { Transport } from "@step-harness/providers";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -48,7 +49,7 @@ export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
 	clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
-	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
+	showTerminalProgress?: boolean; // default: auto, on in Otty and Ghostty (OSC 9;4 terminal progress indicators)
 	hyperlinks?: boolean | "auto";
 	images?: "kitty" | "iterm2" | "auto" | false;
 	trueColor?: boolean | "auto";
@@ -1235,7 +1236,7 @@ export class SettingsManager {
 	}
 
 	getShowTerminalProgress(): boolean {
-		return this.settings.terminal?.showTerminalProgress ?? false;
+		return this.settings.terminal?.showTerminalProgress ?? supportsTerminalProgress();
 	}
 
 	setShowTerminalProgress(enabled: boolean): void {

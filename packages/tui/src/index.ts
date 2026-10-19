@@ -77,7 +77,7 @@ export { type RenderLatexOptions, renderLatex } from "./latex.ts";
 // Input buffering for batch splitting
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.ts";
 // Terminal interface and implementations
-export { ProcessTerminal, type Terminal } from "./terminal.ts";
+export { ProcessTerminal, supportsTerminalProgress, type Terminal } from "./terminal.ts";
 // Terminal colors
 export {
 	parseOsc11BackgroundColor,
