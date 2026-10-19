@@ -2,6 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as settingsManager from "../src/core/settings-manager.ts";
+import { acquireSettingsLockSync } from "../src/core/settings-manager.ts";
 import { loginStepOAuth } from "../src/features/step-provider/index.ts";
 import {
 	checkStepPlanBeforeInteractive,
@@ -9,6 +11,7 @@ import {
 	runStepLogin,
 	writeStepLoginCredential,
 } from "../src/step/login-flow.ts";
+import { readStepLoginState, saveStepLoginState } from "../src/step/login-state.ts";
 import type { StepLoginProfileId } from "../src/step/onboarding.ts";
 import type { StepOnboardingView } from "../src/step/onboarding-view.ts";
 import { PlanUsageController, resolvePlanUsageAccount } from "../src/step/usage/account.ts";
@@ -405,6 +408,83 @@ describe("Step Plan login availability", () => {
 			await expect(readFile(loginStatePath, "utf8")).rejects.toThrow();
 			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
 		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("completes the sign-in with a warning when the account session cannot be locked at all", async () => {
+		// Regression: a non-contention lock failure (read-only directory,
+		// permissions) used to escape `persist` and report the whole sign-in as
+		// "Could not save credentials" although the API key was already written.
+		const loginStatePath = join(root, "step-login.json");
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: { accessToken: "access-jwt", refreshToken: "refresh-jwt", deviceId: "device-1", appId: "10300" },
+			loginError: "ignored when a session is present but not stored",
+		};
+		vi.spyOn(settingsManager, "acquireSettingsLockSync").mockImplementation(() => {
+			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+		});
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			const outcome = await login;
+			expect(outcome.kind).toBe("completed");
+			expect(outcome.warning).toContain("could not be saved: permission denied");
+			// The server's reason is kept next to the local failure, not replaced by it.
+			expect(outcome.warning).toContain("The server rejected the account session");
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("warns that the previous session survives when another process holds it", async () => {
+		const loginStatePath = join(root, "step-login.json");
+		const env = { STEPCODE_LOGIN_STATE_PATH: loginStatePath };
+		await saveStepLoginState(
+			{
+				version: 1,
+				profile: "step_plan",
+				appId: "10300",
+				deviceId: "old-device",
+				accessToken: "old-access",
+				refreshToken: "old-refresh",
+				accessExpiresAt: Math.floor(Date.now() / 1000) + 1800,
+			},
+			env,
+		);
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: { accessToken: "access-jwt", refreshToken: "refresh-jwt", deviceId: "device-1", appId: "10300" },
+		};
+		const release = acquireSettingsLockSync(loginStatePath);
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			env,
+		);
+		try {
+			view.handleInput("1");
+			const outcome = await login;
+			expect(outcome.kind).toBe("completed");
+			expect(outcome.warning).toContain("could not be written");
+			expect(outcome.warning).toContain("previous account session may still be on disk");
+			expect(readStepLoginState(env)?.refreshToken).toBe("old-refresh");
+		} finally {
+			release();
 			view.handleInput("\x03");
 			await login;
 		}

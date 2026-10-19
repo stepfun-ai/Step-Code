@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import * as settingsManager from "../src/core/settings-manager.ts";
+import { acquireSettingsLockSync } from "../src/core/settings-manager.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../src/features/step-provider/index.ts";
 import {
 	getLegacyStepAuthPath,
@@ -10,6 +12,7 @@ import {
 	logoutStepCredentials,
 	migrateLegacyStepCredential,
 } from "../src/step/auth.ts";
+import { getStepLoginStatePath, readStepLoginState, saveStepLoginState } from "../src/step/login-state.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -229,6 +232,74 @@ describe("Step credential compatibility", () => {
 		expect(result.removedLegacy).toBe(true);
 		expect(JSON.parse(await readFile(fallbackPath, "utf8"))).toEqual({
 			openai: { type: "api_key", key: "unrelated" },
+		});
+	});
+
+	describe("account session on logout", () => {
+		async function signedInFixture() {
+			const directory = await mkdtemp(join(tmpdir(), "step-auth-session-"));
+			temporaryDirectories.push(directory);
+			const nativePath = join(directory, "auth.json");
+			const legacyPath = join(directory, "legacy-auth.json");
+			const env = { STEPCODE_LOGIN_STATE_PATH: join(directory, "step-login.json") };
+			await AuthStorage.create(nativePath).modify(STEP_PROVIDER_ID, async () => ({
+				type: "oauth",
+				access: "access",
+				refresh: STEP_STATIC_REFRESH_TOKEN,
+				expires: Number.MAX_SAFE_INTEGER,
+			}));
+			await saveStepLoginState(
+				{
+					version: 1,
+					profile: "step_plan",
+					appId: "10300",
+					deviceId: "device-1",
+					accessToken: "access-jwt",
+					refreshToken: "refresh-jwt",
+					accessExpiresAt: Math.floor(Date.now() / 1000) + 1800,
+				},
+				env,
+			);
+			return { nativePath, legacyPath, env };
+		}
+
+		test("removes the session together with the api key", async () => {
+			const { nativePath, legacyPath, env } = await signedInFixture();
+
+			const result = await logoutStepCredentials({ nativePath, legacyPath, env });
+
+			expect(result).toMatchObject({ removedNative: true, removedLoginState: true });
+			expect(readStepLoginState(env)).toBeUndefined();
+		});
+
+		test("still removes the api key and reports a session held by another process", async () => {
+			const { nativePath, legacyPath, env } = await signedInFixture();
+			const release = acquireSettingsLockSync(getStepLoginStatePath(env));
+			try {
+				const result = await logoutStepCredentials({ nativePath, legacyPath, env });
+
+				expect(result).toMatchObject({ removedNative: true, removedLoginState: false });
+				expect(readStepLoginState(env)).toBeDefined();
+			} finally {
+				release();
+			}
+			expect(await AuthStorage.create(nativePath).read(STEP_PROVIDER_ID)).toBeUndefined();
+		});
+
+		test("still removes the api key when the session cannot be locked at all", async () => {
+			const { nativePath, legacyPath, env } = await signedInFixture();
+			vi.spyOn(settingsManager, "acquireSettingsLockSync").mockImplementation(() => {
+				throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+			});
+			try {
+				const result = await logoutStepCredentials({ nativePath, legacyPath, env });
+
+				expect(result).toMatchObject({ removedNative: true, removedLoginState: false });
+				expect(readStepLoginState(env)).toBeDefined();
+			} finally {
+				vi.restoreAllMocks();
+			}
+			expect(await AuthStorage.create(nativePath).read(STEP_PROVIDER_ID)).toBeUndefined();
 		});
 	});
 });

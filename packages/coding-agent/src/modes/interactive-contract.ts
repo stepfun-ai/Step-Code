@@ -75,7 +75,12 @@ export interface InteractiveModeOptions {
 	/** Shared Step onboarding flow used by the Step-only login surfaces. */
 	stepLogin?: (host: StepLoginHost) => Promise<StepLoginOutcome>;
 	/** Shared Step logout flow used by the Step-only TUI command. */
-	stepLogout?: () => Promise<{ removed: boolean; remainingSource?: string | null }>;
+	stepLogout?: () => Promise<{
+		removed: boolean;
+		remainingSource?: string | null;
+		/** False when an account session could not be removed and is still on disk. */
+		accountSessionRemoved?: boolean;
+	}>;
 	/**
 	 * One-time offer to migrate another agent's MCP servers.
 	 *

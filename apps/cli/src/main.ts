@@ -282,15 +282,11 @@ const stepMainOptions: MainOptions = {
 				legacyPath: getLegacyStepAuthPath(),
 			});
 			syncStepLoginProfileEndpoint(getStepAuthPath());
-			if (!report.removedLoginState) {
-				// The API key is gone either way; only the account session survives,
-				// and it holds a long-lived refresh token.
-				process.stderr.write(
-					"Note: the account session could not be removed and is still on disk. Run `step logout` again.\n",
-				);
-			}
 			return {
 				removed: report.removedNative || report.removedLegacy,
+				// The terminal belongs to the TUI here, so the host reports this
+				// instead of writing to stderr underneath it.
+				accountSessionRemoved: report.removedLoginState,
 				remainingSource: report.remainingSource ? "the environment (STEP_API_KEY)" : null,
 			};
 		},
@@ -402,18 +398,16 @@ try {
 				nativePath: getStepAuthPath(),
 				legacyPath: getLegacyStepAuthPath(),
 			});
-			if (report.removedLoginState) {
+			if (report.removedNative || report.removedLegacy) {
 				process.stdout.write("Signed out of Step.\n");
 				process.stdout.write(`Removed: ${report.nativePath}\n`);
 			} else {
+				process.stdout.write(`No stored Step credential at ${report.nativePath}\n`);
+			}
+			if (!report.removedLoginState) {
 				process.stderr.write(
 					"Note: the account session could not be removed and is still on disk. Run `step logout` again.\n",
 				);
-			}
-			if (report.removedNative || report.removedLegacy) {
-				process.stdout.write(`Removed: ${report.nativePath}\n`);
-			} else {
-				process.stdout.write(`No stored Step credential at ${report.nativePath}\n`);
 			}
 			if (report.remainingSource) {
 				process.stderr.write("Note: STEP_API_KEY is still set, so requests will keep working.\n");

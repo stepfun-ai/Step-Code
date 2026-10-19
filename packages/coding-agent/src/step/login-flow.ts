@@ -399,25 +399,33 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 			// account, or with a profile that carries no session at all — must not
 			// leave the old account's session behind, or a host would read an
 			// identity that does not match the API key just written.
+			const rejected = loginError ? `The server rejected the account session (${loginError}).` : undefined;
+			const staleSession = "A previous account session may still be on disk and could be used by account features.";
+			let cleared = false;
 			try {
-				const cleared = await clearStepLoginState(options.env ?? process.env);
+				cleared = await clearStepLoginState(options.env ?? process.env);
 				const written = login
 					? await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env)
 					: true;
 				// A written session has already replaced whatever was there, so an
 				// unsuccessful clear is irrelevant in that case. Only a session that
 				// was neither written nor cleared leaves the old account's behind.
-				const stale = login ? !written : !cleared;
+				const replaced = cleared || (login !== undefined && written);
 				loginWarning = combineWarnings(
-					stale
-						? "Signed in, but a previous account session may still be on disk. Account features may use it."
+					login && !written
+						? "Signed in, but the account session could not be written. Account features will ask you to sign in again."
 						: undefined,
-					loginError ? `The server rejected the account session (${loginError}).` : undefined,
+					replaced ? undefined : staleSession,
+					rejected,
 				);
 			} catch (error) {
-				loginWarning = `Signed in, but the account session could not be saved: ${
-					error instanceof Error ? error.message : String(error)
-				}. Account features will ask you to sign in again.`;
+				loginWarning = combineWarnings(
+					`Signed in, but the account session could not be saved: ${
+						error instanceof Error ? error.message : String(error)
+					}.`,
+					cleared ? "Account features will ask you to sign in again." : staleSession,
+					rejected,
+				);
 			}
 			if (step !== saving) return;
 			savedProfile = profile;

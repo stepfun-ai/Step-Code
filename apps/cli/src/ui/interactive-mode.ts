@@ -5737,6 +5737,9 @@ export class InteractiveMode {
 			const report = await this.options.stepLogout?.();
 			if (!report) return;
 			this.showStatus(report.removed ? "Signed out of Step." : "No stored Step credential.");
+			if (report.accountSessionRemoved === false) {
+				this.showWarning("The account session could not be removed and is still on disk. Run /logout again.");
+			}
 			if (report.remainingSource) {
 				this.showWarning(`An API key is still active from ${report.remainingSource}.`);
 			}
