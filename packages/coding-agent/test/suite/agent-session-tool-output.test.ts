@@ -8,6 +8,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "../../src/core/tools/truncate.ts";
 import { createStepExtension } from "../../src/features/step.ts";
+import * as stepMcp from "../../src/step/mcp.ts";
 import { createStepToolProfile } from "../../src/step/tool-profile.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
@@ -238,6 +239,8 @@ describe("AgentSession final tool output", () => {
 
 	it("keeps the tail and exit status of a failed command that bash already truncated", async () => {
 		if (process.platform === "win32") return;
+		// PR #260: output retention must not wait for unrelated MCP discovery or StepPage installation.
+		vi.spyOn(stepMcp, "createStepMcpExtension").mockReturnValue(() => {});
 		const sandbox = mkdtempSync(join(tmpdir(), "step-tool-output-bash-"));
 		vi.stubEnv("STEP_CODING_AGENT_DIR", join(sandbox, "agent"));
 		try {
