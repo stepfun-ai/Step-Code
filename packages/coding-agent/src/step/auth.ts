@@ -126,7 +126,7 @@ export async function migrateLegacyStepCredential(
 export interface StepLogoutResult {
 	removedNative: boolean;
 	removedLegacy: boolean;
-	/** True when a stored account session was removed. */
+	/** True when no account session remains on disk. */
 	removedLoginState: boolean;
 	nativePath: string;
 	legacyPath: string;
@@ -142,11 +142,6 @@ export async function logoutStepCredentials(
 	const env = options.env ?? process.env;
 	const nativePath = normalize(options.nativePath ?? getStepAuthPath());
 	const legacyPath = normalize(options.legacyPath ?? getLegacyStepAuthPath());
-	// The account session is a separate file with a separate lifetime, so it is
-	// cleared here too — but only the session, never anything else on disk.
-	// The result is the actual outcome: reporting a removal that did not happen
-	// would leave a long-lived refresh token behind while claiming success.
-	const removedLoginState = await clearStepLoginState(env);
 	let removedNative = false;
 	let removedLegacy = false;
 
@@ -180,6 +175,12 @@ export async function logoutStepCredentials(
 			removedLegacy = true;
 		}
 	}
+
+	// The account session is cleared last, and its failure never stops the API key
+	// from being removed. Whether anything is left on disk is reported, because a
+	// sign-out that claims success while a long-lived refresh token survives is
+	// worse than one that says otherwise.
+	const removedLoginState = await clearStepLoginState(env).catch(() => false);
 
 	return {
 		removedNative,

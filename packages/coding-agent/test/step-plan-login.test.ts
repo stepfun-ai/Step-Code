@@ -400,7 +400,7 @@ describe("Step Plan login availability", () => {
 			view.handleInput("1");
 			await expect(login).resolves.toMatchObject({
 				kind: "completed",
-				warning: expect.stringContaining("account session was rejected"),
+				warning: expect.stringContaining("server rejected the account session"),
 			});
 			await expect(readFile(loginStatePath, "utf8")).rejects.toThrow();
 			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });

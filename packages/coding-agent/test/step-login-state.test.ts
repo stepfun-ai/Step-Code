@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as settingsManager from "../src/core/settings-manager.ts";
 import { acquireSettingsLockSync } from "../src/core/settings-manager.ts";
 import type { StepCliLoginState } from "../src/features/step-provider/index.ts";
 import {
@@ -463,6 +464,29 @@ describe("getStepLoginToken", () => {
 		expect((await getStepLoginToken({ env })).status).toBe("ready");
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(readStepLoginState(env)).toBeDefined();
+	});
+
+	it("reports expired even when removing the dead session fails outright", async () => {
+		// A filesystem failure while discarding must not surface as a transient
+		// error: the fallback would hand out a token the server just rejected.
+		await saveStepLoginState(
+			stored({ accessExpiresAt: Math.floor(Date.now() / 1000) + 60, accessToken: accessToken(60) }),
+			env,
+		);
+		vi.spyOn(settingsManager, "acquireSettingsLockSync").mockImplementation(() => {
+			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+		});
+		try {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					ok({ accessToken: { raw: "anon", duration: 1800, mode: 1 }, refreshToken: { raw: refreshToken() } }),
+				),
+			);
+			expect(await getStepLoginToken({ env })).toMatchObject({ status: "expired" });
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("reports expired rather than ready when a dead session cannot be removed", async () => {

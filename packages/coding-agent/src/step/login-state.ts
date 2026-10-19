@@ -237,6 +237,21 @@ export async function clearStepLoginState(env: Record<string, string | undefined
 }
 
 /**
+ * Discard without letting a filesystem failure change the caller's outcome.
+ *
+ * A session that cannot be removed is still a session the server has rejected,
+ * so the caller must hear "expired" rather than have the error surface as a
+ * transient one — which would fall back to handing out the dead token.
+ */
+async function discardQuietly(env: Record<string, string | undefined>, expectedRefreshToken: string): Promise<boolean> {
+	try {
+		return await discardLoginState(env, expectedRefreshToken);
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Delete the session, but only while it is still the one that was examined.
  *
  * A sign-in with another account, or a sign-out, can land while a refresh is in
@@ -303,7 +318,9 @@ export async function getStepLoginToken(options: StepLoginTokenOptions = {}): Pr
 	// A refresh token past its own expiry cannot be renewed at all, so there is
 	// nothing to wait for: drop it now rather than let every caller rediscover it.
 	if (isRefreshTokenExpired(current, Date.now())) {
-		await discardLoginState(env, current.refreshToken);
+		// Whether the file could actually be removed, the session is finished: the
+		// caller gets an explicit outcome instead of an exception.
+		await discardQuietly(env, current.refreshToken);
 		return { status: "expired", reason: "the account session has expired" };
 	}
 	if (!needsRefresh(current, Date.now())) return ready(current);
@@ -416,7 +433,7 @@ async function refreshAndCommit(
 			// The session is positively dead. Whether it could be removed decides
 			// what is left on disk — but a session that was *replaced* while the
 			// request ran must survive, so that case is reported as a no-op.
-			const removed = await discardLoginState(env, before.refreshToken);
+			const removed = await discardQuietly(env, before.refreshToken);
 			if (!removed) {
 				const replacement = readStepLoginState(env);
 				if (replacement && replacement.refreshToken !== before.refreshToken) {

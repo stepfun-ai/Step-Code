@@ -401,17 +401,19 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 			// identity that does not match the API key just written.
 			try {
 				const cleared = await clearStepLoginState(options.env ?? process.env);
-				let written = true;
-				if (login)
-					written = await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env);
-				if (!cleared || !written) {
-					loginWarning =
-						"Signed in, but the account session could not be written. Account features may use a previous session.";
-				} else if (loginError) {
-					// The backend sent a session that could not be used. The API key is
-					// unaffected; only account features are unavailable.
-					loginWarning = `Signed in, but the account session was rejected by the server (${loginError}).`;
-				}
+				const written = login
+					? await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env)
+					: true;
+				// A written session has already replaced whatever was there, so an
+				// unsuccessful clear is irrelevant in that case. Only a session that
+				// was neither written nor cleared leaves the old account's behind.
+				const stale = login ? !written : !cleared;
+				loginWarning = combineWarnings(
+					stale
+						? "Signed in, but a previous account session may still be on disk. Account features may use it."
+						: undefined,
+					loginError ? `The server rejected the account session (${loginError}).` : undefined,
+				);
 			} catch (error) {
 				loginWarning = `Signed in, but the account session could not be saved: ${
 					error instanceof Error ? error.message : String(error)
