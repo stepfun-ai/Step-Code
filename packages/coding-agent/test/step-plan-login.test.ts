@@ -18,13 +18,11 @@ import * as browser from "../src/utils/open-browser.ts";
 
 vi.mock("../src/features/step-provider/index.ts", async (original) => ({
 	...(await original<typeof import("../src/features/step-provider/index.ts")>()),
-	loginStepOAuth: vi.fn(async () => ({
-		access: "plan-key",
-		refresh: "static",
-		expires: Number.MAX_SAFE_INTEGER,
-		uid: "123",
-	})),
+	loginStepOAuth: vi.fn(async () => oauthResult.current),
 }));
+
+/** What the mocked sign-in returns; swapped per test. */
+const oauthResult = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 
 function snapshot(family: "none" | "coding" | "token" = "none"): PlanUsageSnapshot {
 	return {
@@ -74,6 +72,12 @@ describe("Step Plan login availability", () => {
 		authPath = join(root, "auth.json");
 		vi.mocked(loginStepOAuth).mockClear();
 		vi.spyOn(browser, "openBrowser").mockImplementation(() => {});
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+		};
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();
@@ -82,12 +86,16 @@ describe("Step Plan login availability", () => {
 	function controller(fetcher: typeof fetch) {
 		return new PlanUsageController(() => resolvePlanUsageAccount(authPath, {}), fetcher, Date.now, 100);
 	}
-	function start(planUsage: PlanUsageController, requiredPlan?: "step_plan" | "step_plan_oversea") {
+	function start(
+		planUsage: PlanUsageController,
+		requiredPlan?: "step_plan" | "step_plan_oversea",
+		env: Record<string, string | undefined> = {},
+	) {
 		let view!: StepOnboardingView;
 		const stop = vi.fn();
 		const login = runStepLogin({
 			authPath,
-			env: {},
+			env,
 			noBrowser: true,
 			planUsage,
 			requiredPlan,
@@ -303,6 +311,68 @@ describe("Step Plan login availability", () => {
 				warning: expect.stringContaining("Could not verify Step Plan availability"),
 			});
 			expect(readStepLoginCredential(authPath)).toMatchObject({ access: "plan-key", profile: "step_plan_oversea" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("stores the account session beside the api key after a browser sign-in", async () => {
+		// Regression: the session rode along on the credential event but was
+		// never handed to `persist`, so nothing reached the disk and the whole
+		// account-session feature was silently absent.
+		const loginStatePath = join(root, "step-login.json");
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: {
+				accessToken: "access-jwt",
+				refreshToken: "refresh-jwt",
+				deviceId: "device-1",
+				appId: "10300",
+				expiresIn: 1800,
+			},
+		};
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			// Isolate the account session; an empty env resolves to the real home.
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			await expect(login).resolves.toMatchObject({ kind: "completed" });
+			const stored = JSON.parse(await readFile(loginStatePath, "utf8")) as Record<string, unknown>;
+			expect(stored).toMatchObject({
+				profile: "step_plan",
+				appId: "10300",
+				deviceId: "device-1",
+				accessToken: "access-jwt",
+				refreshToken: "refresh-jwt",
+			});
+			expect(stored.accessExpiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
+			// The api key is unaffected by the session being stored.
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("completes the sign-in when the backend sends no account session", async () => {
+		const loginStatePath = join(root, "step-login.json");
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			await expect(login).resolves.toMatchObject({ kind: "completed" });
+			await expect(readFile(loginStatePath, "utf8")).rejects.toThrow();
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
 		} finally {
 			view.handleInput("\x03");
 			await login;

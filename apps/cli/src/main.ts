@@ -603,6 +603,18 @@ try {
 								? "credential is invalid or expired"
 								: "could not check credential validity (network error)";
 					process.stdout.write(`Validity: ${validity}.\n`);
+					// The account session is reported next to the key, never instead
+					// of it: a user who only ever had a key still has a working key.
+					const accountSession = status.session;
+					if (accountSession && accountSession.state !== "missing") {
+						const detail =
+							accountSession.state === "expired"
+								? "expired; account features will ask you to sign in again"
+								: accountSession.state === "expiring"
+									? "expiring; it refreshes on next use"
+									: "active";
+						process.stdout.write(`Account session: ${detail}.\n`);
+					}
 					if (status.validity === "invalid") process.exitCode = 1;
 				}
 			}

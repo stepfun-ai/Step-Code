@@ -1,5 +1,6 @@
 import { readStoredCredential } from "../core/auth-storage.ts";
 import { createStepProviderConfig } from "../features/step-provider/index.ts";
+import { readStepLoginState, STEP_LOGIN_REFRESH_MARGIN_SEC } from "./login-state.ts";
 import { resolveStepLoginProfiles, type StepLoginProfileId } from "./onboarding.ts";
 
 export type StepLoginMethod = "step_plan" | "step_plan_oversea" | "api_key" | null;
@@ -13,6 +14,21 @@ export interface StepLoginStatus {
 	readonly account?: string;
 	readonly validity: StepCredentialValidity;
 	readonly error?: string;
+	/**
+	 * Account session state, when one was ever stored.
+	 *
+	 * Reported separately from `validity`, which only describes the API key: a
+	 * user who signed in before the session existed has a working key and no
+	 * session, and that is not a fault.
+	 */
+	readonly session?: StepLoginSessionStatus;
+}
+
+/** Whether a usable account session is on disk right now. */
+export interface StepLoginSessionStatus {
+	readonly state: "ready" | "expiring" | "expired" | "missing";
+	/** Unix seconds when the session can no longer be renewed. */
+	readonly refreshExpiresAt?: number;
 }
 
 export interface StepLoginStatusOptions {
@@ -34,7 +50,9 @@ export async function getStepLoginStatus(options: StepLoginStatusOptions): Promi
 	const access = envKey ?? storedAccess;
 	const loginMethod: StepLoginMethod =
 		envKey || storedApiKey ? "api_key" : access ? planLoginMethod(storedProfileId) : null;
-	if (!access || !loginMethod) return { loggedIn: false, loginMethod: null, validity: "missing" };
+	if (!access || !loginMethod) {
+		return { loggedIn: false, loginMethod: null, validity: "missing", session: describeStepLoginSession(env) };
+	}
 
 	const accountValue = envKey ? undefined : (stored?.uid ?? stored?.profile);
 	const account = typeof accountValue === "string" && accountValue.trim() ? accountValue.trim() : undefined;
@@ -48,6 +66,7 @@ export async function getStepLoginStatus(options: StepLoginStatusOptions): Promi
 		loginMethod,
 		...(profile ? { profile: profile.id } : {}),
 		...(account ? { account } : {}),
+		session: describeStepLoginSession(env),
 	} as const;
 	const baseUrl =
 		options.apiBaseUrl ??
@@ -80,4 +99,26 @@ export async function getStepLoginStatus(options: StepLoginStatusOptions): Promi
 /** Browser-login profiles differ only by region; an unknown profile is mainland. */
 function planLoginMethod(profileId: string): StepLoginMethod {
 	return profileId === "step_plan_oversea" ? "step_plan_oversea" : "step_plan";
+}
+
+/**
+ * Describe the account session without touching the network.
+ *
+ * Reported next to — never instead of — the API key's validity, so a user who
+ * only ever had a key still sees a clean status.
+ */
+function describeStepLoginSession(env: Record<string, string | undefined>): StepLoginSessionStatus {
+	const state = readStepLoginState(env);
+	if (!state) return { state: "missing" };
+	const nowSec = Math.floor(Date.now() / 1000);
+	if (state.refreshExpiresAt !== undefined && state.refreshExpiresAt <= nowSec) {
+		return { state: "expired", refreshExpiresAt: state.refreshExpiresAt };
+	}
+	// Mirrors the refresh margin so the reported state matches what the next use
+	// will actually do.
+	if (state.accessExpiresAt - STEP_LOGIN_REFRESH_MARGIN_SEC <= nowSec) return { state: "expiring" };
+	return {
+		state: "ready",
+		...(state.refreshExpiresAt === undefined ? {} : { refreshExpiresAt: state.refreshExpiresAt }),
+	};
 }

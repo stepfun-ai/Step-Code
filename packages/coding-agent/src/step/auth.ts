@@ -13,6 +13,7 @@ import type { Credential } from "@step-harness/providers";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
 import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } from "./environment.ts";
+import { clearStepLoginState, getStepLoginStatePath } from "./login-state.ts";
 
 /** Current Pi-shaped credential path under the StepCode agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
@@ -125,6 +126,8 @@ export async function migrateLegacyStepCredential(
 export interface StepLogoutResult {
 	removedNative: boolean;
 	removedLegacy: boolean;
+	/** True when a stored account session was removed. */
+	removedLoginState: boolean;
 	nativePath: string;
 	legacyPath: string;
 	remainingSource: "environment" | null;
@@ -136,8 +139,13 @@ export async function logoutStepCredentials(
 		env?: Record<string, string | undefined>;
 	} = {},
 ): Promise<StepLogoutResult> {
+	const env = options.env ?? process.env;
 	const nativePath = normalize(options.nativePath ?? getStepAuthPath());
 	const legacyPath = normalize(options.legacyPath ?? getLegacyStepAuthPath());
+	// The account session is a separate file with a separate lifetime, so it is
+	// cleared here too — but only the session, never anything else on disk.
+	const removedLoginState = existsSync(getStepLoginStatePath(env));
+	await clearStepLoginState(env);
 	let removedNative = false;
 	let removedLegacy = false;
 
@@ -172,10 +180,10 @@ export async function logoutStepCredentials(
 		}
 	}
 
-	const env = options.env ?? process.env;
 	return {
 		removedNative,
 		removedLegacy,
+		removedLoginState,
 		nativePath,
 		legacyPath,
 		remainingSource: env.STEP_API_KEY?.trim() ? "environment" : null,
