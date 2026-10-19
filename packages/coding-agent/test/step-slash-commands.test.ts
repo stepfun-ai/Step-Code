@@ -10,6 +10,7 @@ import { createStepExtension } from "../src/features/step.ts";
 import { formatStepStatus, registerStepPiCommandAdapters } from "../src/step/slash-commands.ts";
 import { resolveStderrDevLogPath } from "../src/step/stderr-dev-log.ts";
 import { initTheme, type Theme, theme } from "../src/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -114,8 +115,168 @@ describe("Step Pi slash command adapters", () => {
 	test("registers product adapters without replacing Pi's native commands", () => {
 		const { commands } = registerCommands();
 
-		expect([...commands.keys()]).toEqual(expect.arrayContaining(["plugin", "clear", "theme", "status"]));
+		expect([...commands.keys()]).toEqual(expect.arrayContaining(["plugin", "clear", "theme", "status", "btw"]));
 		expect(commands.has("effort")).toBe(false);
+	});
+
+	test("/btw answers out of band and never touches the session", async () => {
+		const registerCommand = vi.fn();
+		const commands = new Map<string, RegisteredCommand>();
+		registerCommand.mockImplementation((name: string, command: RegisteredCommand) => {
+			commands.set(name, command);
+		});
+		const sendMessage = vi.fn();
+		registerStepPiCommandAdapters({
+			registerCommand,
+			registerProvider: vi.fn(),
+			setThinkingLevel: vi.fn(),
+			sendMessage,
+			on: vi.fn(),
+		} as unknown as ExtensionAPI);
+
+		const assistant = (text: string) => ({
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text }],
+			timestamp: 1,
+			api: "anthropic-messages",
+			provider: "step",
+			model: "m",
+			usage: {},
+			stopReason: "stop",
+		});
+		const complete = vi.fn().mockResolvedValue(assistant("four minutes"));
+		const notify = vi.fn();
+		// The branch ends on an assistant message with an unanswered tool call:
+		// the fork must drop it or providers reject the request.
+		const branch = [
+			{ type: "message", message: { role: "user", content: [{ type: "text", text: "ship it" }], timestamp: 1 } },
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }],
+					timestamp: 2,
+					api: "anthropic-messages",
+					provider: "step",
+					model: "m",
+					usage: {},
+					stopReason: "toolUse",
+				},
+			},
+		];
+		let panel: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+		const context = (custom?: unknown) =>
+			({
+				ui: { notify, custom },
+				hasUI: true,
+				mode: "tui",
+				model: { provider: "step", id: "m" },
+				modelRegistry: { complete },
+				getSystemPrompt: () => "SYSTEM",
+				sessionManager: { buildContextEntries: () => branch },
+			}) as unknown as ExtensionCommandContext;
+
+		const custom = vi.fn(
+			async (factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: unknown) => void) => unknown) => {
+				panel = factory({ requestRender: vi.fn() }, theme, {}, vi.fn()) as typeof panel;
+				// complete() resolves on a microtask; let it land before reading the panel.
+				await Promise.resolve();
+				await Promise.resolve();
+				return undefined;
+			},
+		);
+
+		await getCommand(commands, "btw").handler("  eta on the deploy?  ", context(custom));
+
+		// Nothing is appended to the session: no custom message, no agent turn.
+		expect(sendMessage).not.toHaveBeenCalled();
+		expect(complete).toHaveBeenCalledOnce();
+		const [, sent] = complete.mock.calls[0] as [unknown, { systemPrompt: string; messages: unknown[] }];
+		expect(sent.systemPrompt).toBe("SYSTEM");
+		// The dangling tool call is gone; the question is the last message.
+		expect(sent.messages).toHaveLength(2);
+		expect(JSON.stringify(sent.messages.at(-1))).toContain("eta on the deploy?");
+		expect(JSON.stringify(sent.messages.at(-1))).toContain("side question");
+		expect(panel?.render(60).join("\n")).toContain("four minutes");
+
+		// The answer is remembered for the next side question, not for the main turn.
+		complete.mockClear();
+		complete.mockResolvedValue(assistant("still four"));
+		await getCommand(commands, "btw").handler("and now?", context(custom));
+		const [, second] = complete.mock.calls[0] as [unknown, { messages: unknown[] }];
+		expect(JSON.stringify(second.messages)).toContain("four minutes");
+		expect(panel?.render(60).join("\n")).toContain("1 earlier /btw");
+
+		// `x` drops the history, so the following side question starts clean.
+		panel?.handleInput("x");
+		complete.mockClear();
+		await getCommand(commands, "btw").handler("third", context(custom));
+		const [, third] = complete.mock.calls[0] as [unknown, { messages: unknown[] }];
+		expect(JSON.stringify(third.messages)).not.toContain("four minutes");
+	});
+
+	test("/btw spins while waiting and releases the frame clock on close", async () => {
+		const { BtwPanel } = await import("../src/render/btw-panel.ts");
+		vi.useFakeTimers();
+		try {
+			const requestRender = vi.fn();
+			const panel = new BtwPanel({
+				question: "eta?",
+				theme,
+				history: [],
+				tui: { requestRender } as never,
+				onClose: vi.fn(),
+			});
+			const frameOf = (): string => {
+				const line = stripAnsi(panel.render(40).join("\n"))
+					.split("\n")
+					.find((row) => row.includes("Answering"));
+				return line?.trim().charAt(0) ?? "";
+			};
+
+			// A frame sits beside the label before any answer arrives, and it advances
+			// on the Loader's clock rather than only on repaint.
+			const first = frameOf();
+			expect(first).toMatch(/[\u2807\u280b\u280f\u2819\u2826\u2827\u2834\u2838\u2839\u283c]/u);
+			vi.advanceTimersByTime(80);
+			expect(frameOf()).not.toBe(first);
+			expect(requestRender).toHaveBeenCalled();
+
+			// finish() and dispose() must each clear the interval, or every /btw
+			// leaks a timer that keeps requesting renders forever.
+			panel.finish();
+			expect(stripAnsi(panel.render(40).join("\n"))).not.toContain("Answering");
+			panel.dispose();
+			requestRender.mockClear();
+			vi.advanceTimersByTime(1000);
+			expect(requestRender).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("/btw rejects an empty question and a session with no model", async () => {
+		const { commands } = registerCommands();
+		const notify = vi.fn();
+		const complete = vi.fn();
+		const base = {
+			ui: { notify },
+			hasUI: true,
+			mode: "tui",
+			modelRegistry: { complete },
+			getSystemPrompt: () => "",
+			sessionManager: { buildContextEntries: () => [] },
+		};
+
+		await getCommand(commands, "btw").handler("   ", {
+			...base,
+			model: { provider: "step", id: "m" },
+		} as unknown as ExtensionCommandContext);
+		expect(notify).toHaveBeenLastCalledWith("Usage: /btw <question>", "warning");
+
+		await getCommand(commands, "btw").handler("anything", base as unknown as ExtensionCommandContext);
+		expect(notify).toHaveBeenLastCalledWith("/btw needs a model. Pick one with /model.", "warning");
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	test("routes /clear to Pi's session replacement action", async () => {
