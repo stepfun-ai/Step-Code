@@ -32,6 +32,15 @@ export const STEP_LOGIN_REFRESH_MARGIN_SEC = 5 * 60;
 /** Fallback when neither the server nor the token states a lifetime. */
 const DEFAULT_ACCESS_TOKEN_TTL_SEC = 30 * 60;
 
+/**
+ * Clock slack applied before a refresh token is considered expired.
+ *
+ * Its deadline is read from a server-issued token, so a machine whose clock runs
+ * fast would otherwise discard a session the server still accepts. The cost of
+ * waiting is one refresh attempt the server answers honestly.
+ */
+const REFRESH_EXPIRY_SKEW_SEC = 60 * 60;
+
 const LOGIN_STATE_FILE_NAME = "step-login.json";
 
 export interface StepLoginState {
@@ -289,7 +298,7 @@ export async function getStepLoginToken(options: StepLoginTokenOptions = {}): Pr
 	try {
 		const result = await refreshAndCommit(env, options);
 		if (result.kind === "refreshed") return ready(result.state);
-		if (result.kind === "discarded") {
+		if (result.kind === "discarded" || result.kind === "dead") {
 			return { status: "expired", reason: "the account session is no longer signed in" };
 		}
 		const latest = result.state ?? readStepLoginState(env);
@@ -317,7 +326,12 @@ function describe(error: unknown): string {
 }
 
 function isRefreshTokenExpired(state: StepLoginState, nowMs: number): boolean {
-	return state.refreshExpiresAt !== undefined && state.refreshExpiresAt <= Math.floor(nowMs / 1000);
+	// The deadline comes from a server-issued token, so a local clock that runs
+	// fast would otherwise retire a session the server still honours. Waiting out
+	// the skew costs at most one failed refresh, which the server answers
+	// honestly anyway.
+	if (state.refreshExpiresAt === undefined) return false;
+	return state.refreshExpiresAt + REFRESH_EXPIRY_SKEW_SEC <= Math.floor(nowMs / 1000);
 }
 
 function ready(state: StepLoginState): StepLoginTokenOutcome {
@@ -344,6 +358,8 @@ function needsRefresh(state: StepLoginState, nowMs: number): boolean {
 type RefreshCommitResult =
 	| { readonly kind: "refreshed"; readonly state: StepLoginState }
 	| { readonly kind: "discarded" }
+	/** Positively dead but could not be removed; the caller must not use it. */
+	| { readonly kind: "dead"; readonly state?: StepLoginState }
 	| { readonly kind: "unchanged"; readonly state?: StepLoginState };
 
 /**
@@ -384,7 +400,17 @@ async function refreshAndCommit(
 		});
 	} catch (error) {
 		if (error instanceof StepLoginRefreshError && error.failure === "unredeemable") {
-			return (await discardLoginState(env, before.refreshToken)) ? { kind: "discarded" } : { kind: "unchanged" };
+			// The session is positively dead. Whether it could be removed decides
+			// what is left on disk — but a session that was *replaced* while the
+			// request ran must survive, so that case is reported as a no-op.
+			const removed = await discardLoginState(env, before.refreshToken);
+			if (!removed) {
+				const replacement = readStepLoginState(env);
+				if (replacement && replacement.refreshToken !== before.refreshToken) {
+					return { kind: "unchanged", state: replacement };
+				}
+			}
+			return removed ? { kind: "discarded" } : { kind: "dead" };
 		}
 		throw error;
 	}

@@ -42,6 +42,15 @@ function loginState(overrides: Partial<StepCliLoginState> = {}): StepCliLoginSta
 	};
 }
 
+/** A signed-in refresh response. */
+function signedIn(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return {
+		accessToken: { raw: accessToken(1800), duration: 1800, mode: 2 },
+		refreshToken: { raw: refreshToken() },
+		...overrides,
+	};
+}
+
 /** A successful Connect-RPC envelope from passport. */
 function ok(body: unknown): Response {
 	return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -392,7 +401,8 @@ describe("getStepLoginToken", () => {
 			stored({
 				accessExpiresAt: Math.floor(Date.now() / 1000) + 60,
 				accessToken: accessToken(60),
-				refreshExpiresAt: Math.floor(Date.now() / 1000) - 1,
+				// Past the clock skew, so a fast machine cannot keep it alive.
+				refreshExpiresAt: Math.floor(Date.now() / 1000) - 2 * 60 * 60,
 			}),
 			env,
 		);
@@ -402,5 +412,47 @@ describe("getStepLoginToken", () => {
 		expect((await getStepLoginToken({ env })).status).toBe("expired");
 		expect(fetchSpy).not.toHaveBeenCalled();
 		expect(readStepLoginState(env)).toBeUndefined();
+	});
+
+	it("keeps a session whose refresh token only looks expired to a fast clock", async () => {
+		// The deadline is server-issued; a machine running fast must not retire a
+		// session the server still honours.
+		await saveStepLoginState(
+			stored({
+				accessExpiresAt: Math.floor(Date.now() / 1000) + 60,
+				accessToken: accessToken(60),
+				refreshExpiresAt: Math.floor(Date.now() / 1000) - 60,
+			}),
+			env,
+		);
+		const fetchSpy = vi.fn(async () => ok(signedIn()));
+		vi.stubGlobal("fetch", fetchSpy);
+
+		expect((await getStepLoginToken({ env })).status).toBe("ready");
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(readStepLoginState(env)).toBeDefined();
+	});
+
+	it("reports expired rather than ready when a dead session cannot be removed", async () => {
+		await saveStepLoginState(
+			stored({ accessExpiresAt: Math.floor(Date.now() / 1000) + 60, accessToken: accessToken(60) }),
+			env,
+		);
+		const path = getStepLoginStatePath(env);
+		// Hold the lock so the discard cannot proceed, then have the server say the
+		// session is anonymous. Falling back to the stored token would hand out a
+		// credential the server just rejected.
+		const release = acquireSettingsLockSync(path);
+		try {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					ok({ accessToken: { raw: "anon", duration: 1800, mode: 1 }, refreshToken: { raw: refreshToken() } }),
+				),
+			);
+			expect(await getStepLoginToken({ env })).toMatchObject({ status: "expired" });
+		} finally {
+			release();
+		}
 	});
 });
