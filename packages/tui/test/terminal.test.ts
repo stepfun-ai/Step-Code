@@ -261,7 +261,7 @@ describe("ProcessTerminal title", () => {
 });
 
 describe("ProcessTerminal progress", () => {
-	it("writes a valid OSC 9;4 clear sequence", () => {
+	it("does not emit OSC 9 when progress was never activated", () => {
 		const terminal = new ProcessTerminal();
 		const writes: string[] = [];
 		const previousWrite = process.stdout.write;
@@ -273,9 +273,43 @@ describe("ProcessTerminal progress", () => {
 
 		try {
 			terminal.setProgress(false);
-			assert.deepEqual(writes, ["\x1b]9;4;0\x07"]);
+			terminal.setProgress(false);
+			assert.deepEqual(writes, []);
 		} finally {
 			process.stdout.write = previousWrite;
+		}
+	});
+
+	it("clears active progress once and stops its keepalive", () => {
+		const terminal = new ProcessTerminal();
+		const writes: string[] = [];
+		const previousWrite = process.stdout.write;
+		mock.timers.enable({ apis: ["setInterval"] });
+
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			writes.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			terminal.setProgress(true);
+			mock.timers.tick(1000);
+			assert.deepEqual(writes, ["\x1b]9;4;3\x07", "\x1b]9;4;3\x07"]);
+
+			terminal.setProgress(false);
+			terminal.setProgress(false);
+			mock.timers.tick(3000);
+			assert.deepEqual(writes, ["\x1b]9;4;3\x07", "\x1b]9;4;3\x07", "\x1b]9;4;0\x07"]);
+
+			// A later operation can activate and clear its own indicator.
+			terminal.setProgress(true);
+			terminal.setProgress(false);
+			mock.timers.tick(3000);
+			assert.deepEqual(writes.slice(3), ["\x1b]9;4;3\x07", "\x1b]9;4;0\x07"]);
+		} finally {
+			terminal.setProgress(false);
+			process.stdout.write = previousWrite;
+			mock.timers.reset();
 		}
 	});
 });

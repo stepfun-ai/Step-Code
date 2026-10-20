@@ -522,9 +522,8 @@ export class ProcessTerminal implements Terminal {
 					process.stdout.write(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 				}, TERMINAL_PROGRESS_KEEPALIVE_MS);
 			}
-		} else {
-			this.clearProgressInterval();
-			// OSC 9;4;0 - clear progress
+		} else if (this.clearProgressInterval()) {
+			// Only clear an indicator we activated: other terminals may interpret OSC 9 as a notification.
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 	}
