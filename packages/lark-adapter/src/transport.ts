@@ -13,6 +13,8 @@ export interface LarkTransportOptions {
 // SDK diagnostics can contain request credentials and must never reach the terminal.
 const silentLogger = { error() {}, warn() {}, info() {}, debug() {}, trace() {} };
 
+const STARTUP_TIMEOUT_MS = 15_000;
+
 /** Single-use socket; owns input routing only, never an agent or transcript. */
 export class LarkTransport {
 	private readonly gate: LarkInboundGate;
@@ -20,6 +22,7 @@ export class LarkTransport {
 	private readonly dispatcher: EventDispatcher;
 	private closed = false;
 	private started = false;
+	private settleStartup?: (error?: Error) => void;
 
 	constructor(options: LarkTransportOptions) {
 		this.gate = new LarkInboundGate(options.botId);
@@ -56,9 +59,11 @@ export class LarkTransport {
 			domain: LARK_OPEN_HOSTS[options.credentials.brand],
 			logger: silentLogger,
 			loggerLevel: LoggerLevel.error,
-			handshakeTimeoutMs: 15_000,
+			handshakeTimeoutMs: STARTUP_TIMEOUT_MS,
 			onReady: () => {
-				if (!this.closed) options.onState("connected");
+				if (this.closed || !this.started) return;
+				this.settleStartup?.();
+				options.onState("connected");
 			},
 			onReconnected: () => {
 				if (!this.closed) options.onState("connected");
@@ -67,7 +72,9 @@ export class LarkTransport {
 				if (!this.closed) options.onState("degraded");
 			},
 			onError: () => {
-				if (!this.closed) options.onState("degraded");
+				if (this.closed) return;
+				if (this.settleStartup) this.close();
+				else options.onState("degraded");
 			},
 		});
 	}
@@ -76,20 +83,32 @@ export class LarkTransport {
 		return this.gate.chatId;
 	}
 
+	/** Resolves only after onReady; initial error, timeout or close rejects and releases the socket. */
 	async start(): Promise<void> {
 		if (this.closed || this.started) throw new Error("Lark transport cannot be restarted");
 		this.started = true;
+		const startup = new Promise<void>((resolve, reject) => {
+			const timeout = setTimeout(() => this.close(), STARTUP_TIMEOUT_MS);
+			this.settleStartup = (error) => {
+				clearTimeout(timeout);
+				this.settleStartup = undefined;
+				if (error) reject(error);
+				else resolve();
+			};
+		});
+		// SDK start() only launches reconnect work. Its return value is not handshake evidence.
 		try {
-			await this.socket.start({ eventDispatcher: this.dispatcher });
+			void Promise.resolve(this.socket.start({ eventDispatcher: this.dispatcher })).catch(() => this.close());
 		} catch {
 			this.close();
-			throw new Error("Lark transport failed to start");
 		}
+		return startup;
 	}
 
 	close(): void {
 		if (this.closed) return;
 		this.closed = true;
+		this.settleStartup?.(new Error("Lark transport failed to start"));
 		this.gate.close();
 		this.socket.close({ force: true });
 	}

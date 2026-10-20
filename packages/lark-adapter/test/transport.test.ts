@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LarkTransport } from "../src/transport.ts";
 
 const sdk = vi.hoisted(() => ({
@@ -29,7 +29,8 @@ describe("Lark transport lifecycle", () => {
 		vi.clearAllMocks();
 		sdk.start.mockResolvedValue();
 	});
-	it("reports connected only after the WebSocket handshake succeeds", async () => {
+	afterEach(() => vi.useRealTimers());
+	it("reports connected and resolves startup only after the WebSocket handshake succeeds", async () => {
 		const state = vi.fn();
 		const transport = new LarkTransport({
 			credentials: { appId: "cli_0123456789abcdef", appSecret: "fixture", brand: "feishu" },
@@ -38,9 +39,14 @@ describe("Lark transport lifecycle", () => {
 			onCardAction: vi.fn(),
 			onState: state,
 		});
-		await transport.start();
+		const ready = vi.fn();
+		const startup = transport.start().then(ready);
+		await Promise.resolve();
+		expect(ready).not.toHaveBeenCalled();
 		expect(state).not.toHaveBeenCalled();
 		(sdk.options.onReady as () => void)();
+		await startup;
+		expect(ready).toHaveBeenCalledTimes(1);
 		expect(state).toHaveBeenCalledExactlyOnceWith("connected");
 		transport.close();
 	});
@@ -56,7 +62,10 @@ describe("Lark transport lifecycle", () => {
 			onCardAction: action,
 			onState: state,
 		});
-		await transport.start();
+		const startup = transport.start();
+		(sdk.options.onReady as () => void)();
+		await startup;
+		state.mockClear();
 		const event = {
 			sender: { sender_id: { open_id: "user" } },
 			message: {
@@ -89,6 +98,49 @@ describe("Lark transport lifecycle", () => {
 		expect(state).not.toHaveBeenCalled();
 		expect(sdk.close).toHaveBeenCalledExactlyOnceWith({ force: true });
 		await expect(transport.start()).rejects.toThrow("cannot be restarted");
+	});
+
+	it.each(["error", "timeout", "close"])("settles %s during startup and suppresses late success", async (failure) => {
+		vi.useFakeTimers();
+		const state = vi.fn();
+		const transport = new LarkTransport({
+			credentials: { appId: "cli_0123456789abcdef", appSecret: "fixture", brand: "feishu" },
+			botId: "bot",
+			onMessage: vi.fn(),
+			onCardAction: vi.fn(),
+			onState: state,
+		});
+		const rejected = expect(transport.start()).rejects.toThrow("Lark transport failed to start");
+		if (failure === "error") (sdk.options.onError as () => void)();
+		else if (failure === "timeout") await vi.advanceTimersByTimeAsync(15_000);
+		else transport.close();
+		await rejected;
+		(sdk.options.onReady as () => void)();
+		(sdk.options.onReconnected as () => void)();
+		expect(state).not.toHaveBeenCalled();
+		expect(sdk.close).toHaveBeenCalledExactlyOnceWith({ force: true });
+		expect(vi.getTimerCount()).toBe(0);
+		await expect(transport.start()).rejects.toThrow("cannot be restarted");
+	});
+
+	it("clears the startup deadline and keeps an established connection on a health error", async () => {
+		vi.useFakeTimers();
+		const state = vi.fn();
+		const transport = new LarkTransport({
+			credentials: { appId: "cli_0123456789abcdef", appSecret: "fixture", brand: "feishu" },
+			botId: "bot",
+			onMessage: vi.fn(),
+			onCardAction: vi.fn(),
+			onState: state,
+		});
+		const startup = transport.start();
+		(sdk.options.onReady as () => void)();
+		await startup;
+		expect(vi.getTimerCount()).toBe(0);
+		(sdk.options.onError as () => void)();
+		expect(state).toHaveBeenLastCalledWith("degraded");
+		expect(sdk.close).not.toHaveBeenCalled();
+		transport.close();
 	});
 
 	it("closes a failed startup without exposing the SDK error or allowing a retry", async () => {

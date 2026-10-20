@@ -55,14 +55,48 @@ describe("single-session Lark input", () => {
 		expect(gate.accept(event, now)).toMatchObject({ action: "accept", message: { text: "ask @_user_2" } });
 	});
 
-	it("deduplicates within a bounded window and can release all state", () => {
+	it("deduplicates throughout the freshness window and can release all state", () => {
 		const gate = new LarkInboundGate("bot");
 		gate.accept(message(), now);
-		expect(gate.accept(message(), now + 100).action).toBe("ignore");
-		expect(gate.accept(message(), now + 60_001).action).toBe("accept");
+		for (const elapsed of [100, 61_000, 599_999, 600_000]) {
+			expect(gate.accept(message(), now + elapsed)).toEqual({ action: "ignore", reason: "duplicate" });
+		}
+		expect(gate.accept(message(), now + 600_001)).toEqual({ action: "ignore", reason: "stale" });
 		gate.close();
-		expect(gate.accept(message("new", "c2"), now + 60_002).action).toBe("ignore");
+		expect(gate.accept(message("new", "c2"), now).action).toBe("ignore");
 		expect(gate.chatId).toBeUndefined();
+	});
+
+	it("fails closed at capacity without evicting live IDs, and releases expired entries", () => {
+		const gate = new LarkInboundGate("bot");
+		for (let index = 0; index < 4096; index++) {
+			expect(gate.accept(message(`m${index}`), now).action).toBe("accept");
+		}
+		expect(gate.accept(message("overflow"), now)).toEqual({ action: "ignore", reason: "rate-limit" });
+		expect(gate.accept(message("m0"), now + 61_000)).toEqual({ action: "ignore", reason: "duplicate" });
+		const fresh = { message: { ...message("fresh").message, create_time: String(now + 600_001) } };
+		expect(gate.accept(fresh, now + 600_001).action).toBe("accept");
+	});
+
+	it("bounds future clock skew and retains IDs until their timestamp expires", () => {
+		const future = { message: { ...message().message, create_time: String(now + 30_000) } };
+		const gate = new LarkInboundGate("bot");
+		expect(gate.accept(future, now).action).toBe("accept");
+		expect(gate.accept(future, now + 630_000)).toEqual({ action: "ignore", reason: "duplicate" });
+		expect(gate.accept(future, now + 630_001)).toEqual({ action: "ignore", reason: "stale" });
+		const invalid = new LarkInboundGate("bot");
+		expect(invalid.accept({ message: { ...future.message, create_time: String(now + 30_001) } }, now)).toEqual({
+			action: "ignore",
+			reason: "stale",
+		});
+		expect(invalid.chatId).toBeUndefined();
+	});
+
+	it("applies the same freshness and deduplication rules to second timestamps", () => {
+		const gate = new LarkInboundGate("bot");
+		const event = { message: { ...message().message, create_time: String(now / 1000) } };
+		expect(gate.accept(event, now).action).toBe("accept");
+		expect(gate.accept(event, now + 600_000)).toEqual({ action: "ignore", reason: "duplicate" });
 	});
 
 	it("parses image, file and rich text references without downloading", () => {

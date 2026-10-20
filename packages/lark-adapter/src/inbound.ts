@@ -12,6 +12,10 @@ function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+const MESSAGE_MAX_AGE_MS = 600_000;
+const MAX_CLOCK_SKEW_MS = 30_000;
+const MAX_SEEN_MESSAGES = 4096;
+
 /** Input-only state, not a session or transcript. Invalid events cannot claim the chat binding. */
 export class LarkInboundGate {
 	private readonly botId: string;
@@ -41,10 +45,12 @@ export class LarkInboundGate {
 			return { action: "ignore", reason: "malformed" };
 		}
 		const timestamp = Number(message.create_time);
+		const createdAt = timestamp < 1e12 ? timestamp * 1000 : timestamp;
 		if (
-			!Number.isFinite(timestamp) ||
-			timestamp <= 0 ||
-			now - (timestamp < 1e12 ? timestamp * 1000 : timestamp) > 600_000
+			!Number.isFinite(createdAt) ||
+			createdAt <= 0 ||
+			now - createdAt > MESSAGE_MAX_AGE_MS ||
+			createdAt - now > MAX_CLOCK_SKEW_MS
 		) {
 			return { action: "ignore", reason: "stale" };
 		}
@@ -93,10 +99,11 @@ export class LarkInboundGate {
 		text = text.trim();
 		if (!text && !imageKeys.length && !files.length) return { action: "ignore", reason: "empty" };
 		if (this.boundChat && this.boundChat !== chatId) return { action: "ignore", reason: "other-chat" };
-		for (const [key, firstSeen] of this.seen) if (now - firstSeen > 60_000) this.seen.delete(key);
+		// Retain IDs for their entire eligibility window; never evict a live ID to admit new work.
+		for (const [key, expiresAt] of this.seen) if (now > expiresAt) this.seen.delete(key);
 		if (this.seen.has(id)) return { action: "ignore", reason: "duplicate" };
-		if (this.seen.size >= 4096) return { action: "ignore", reason: "rate-limit" };
-		this.seen.set(id, now);
+		if (this.seen.size >= MAX_SEEN_MESSAGES) return { action: "ignore", reason: "rate-limit" };
+		this.seen.set(id, createdAt + MESSAGE_MAX_AGE_MS);
 		this.boundChat = chatId;
 		return { action: "accept", message: { id, chatId, text, imageKeys, files } };
 	}

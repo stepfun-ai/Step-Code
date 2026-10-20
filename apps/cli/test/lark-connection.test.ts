@@ -117,6 +117,36 @@ describe("current-session Lark connection", () => {
 		await harness.command("off");
 	});
 
+	it("disconnects during startup without announcing late success", async () => {
+		let ready: () => void = () => {};
+		fixture.start.mockReturnValueOnce(new Promise<void>((resolve) => { ready = resolve; }));
+		const harness = setup();
+		await harness.command("lark");
+		await vi.waitFor(() => expect(fixture.start).toHaveBeenCalled());
+		await harness.command("off");
+		ready();
+		await Promise.resolve();
+		expect(harness.notify).not.toHaveBeenCalledWith(expect.stringContaining("connect · lark · connected"));
+		expect(harness.status).toHaveBeenLastCalledWith("lark", undefined);
+		await harness.command("lark");
+		await vi.waitFor(() => expect(harness.notify).toHaveBeenCalledWith("connect · lark · connected · @Step · session-fixture"));
+		await harness.command("off");
+	});
+
+	it("cleans up a failed handshake and permits a new connection", async () => {
+		fixture.start.mockRejectedValueOnce(new Error("fixture handshake failed"));
+		const harness = setup();
+		await harness.command("lark");
+		await vi.waitFor(() => expect(harness.notify).toHaveBeenCalledWith("Lark connection failed during WebSocket handshake. Retry /connect lark.", "warning"));
+		expect(fixture.stop).toHaveBeenCalledTimes(1);
+		expect(fixture.close).toHaveBeenCalledTimes(1);
+		expect(harness.status).toHaveBeenLastCalledWith("lark", undefined);
+		await harness.command("lark");
+		await vi.waitFor(() => expect(harness.notify).toHaveBeenCalledWith("connect · lark · connected · @Step · session-fixture"));
+		expect(fixture.begin).toHaveBeenCalledTimes(2);
+		await harness.command("off");
+	});
+
 	it("submits accepted input without a reaction API and rejects input during a dialog", async () => {
 		const harness = setup();
 		await harness.command("lark");

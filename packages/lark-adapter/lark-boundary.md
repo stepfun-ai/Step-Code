@@ -13,9 +13,12 @@ cancellation. Keep returned credentials in memory only.
 ## Transport
 
 `LarkTransport` requires credentials and the bot's verified open ID. Its host
-supplies message, card-action and health callbacks. `start()` initiates the
-connection; only the handshake callback reports connected. The first valid input
-binds the chat. Group inputs require a bot mention. Card actions must carry the
+supplies message, card-action and health callbacks. `start()` resolves only after
+`onReady` confirms the initial handshake, not when the SDK's `start()` returns.
+An initial error, a 15-second startup deadline or `close()` rejects startup and
+forcefully closes the socket; the host can retry with a new transport. After a
+successful handshake, health errors report degraded state without closing it.
+The first valid input binds the chat. Group inputs require a bot mention. Card actions must carry the
 bound chat ID, token and option; the host must additionally validate the token
 against `LarkDecisions` and the current UI request.
 
@@ -28,6 +31,12 @@ the public close and health callback APIs required for safe teardown. No private
 SDK fields or compatibility casts are used.
 
 ## Current Limits
+
+Messages must be at most ten minutes old, with at most 30 seconds of future clock
+skew. Accepted message IDs remain deduplicated through their timestamp's entire
+ten-minute eligibility window (including its inclusive endpoint). The gate holds
+at most 4096 live IDs and rejects new messages at capacity rather than evicting
+IDs that could still be redelivered. Expired entries are released on valid input.
 
 `LarkApi` discovers the bot identity, sends/updates cards and downloads attachment
 resources with cancellation and a streaming 20 MiB limit. Private temporary files
