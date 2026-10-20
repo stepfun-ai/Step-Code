@@ -146,7 +146,6 @@ import { type AuthEvent, type AuthPrompt, clampThinkingLevel, type ImageContent 
 import type { AssistantMessage, Message, Model, Usage } from "@step-harness/providers/compat";
 import chalk from "chalk";
 import { spawn } from "child_process";
-import { nameCommand } from "#commands/name";
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -164,7 +163,6 @@ import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
 import { PastedImageRegistry, resolvePastedImages } from "./runtime/pasted-images.ts";
 import { createRedraw, type Redraw } from "./runtime/redraw.ts";
 import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
-import { handleNameCommand } from "./runtime/session-name.ts";
 import {
 	keepLatestTaskUpdateResult,
 	registerTaskUpdateCall,
@@ -601,7 +599,6 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	unsubscribe?: () => void;
-	nameRequest?: AbortController;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !) and whether the
@@ -855,14 +852,11 @@ export class InteractiveMode {
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
 		// Define commands for autocomplete
-		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((builtin) => {
-			const command = builtin.name === nameCommand.name ? nameCommand : builtin;
-			return {
-				name: command.name,
-				description: command.description,
-				...(command.argumentHint && { argumentHint: command.argumentHint }),
-			};
-		});
+		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
+			name: command.name,
+			description: command.description,
+			...(command.argumentHint && { argumentHint: command.argumentHint }),
+		}));
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
@@ -2702,7 +2696,6 @@ export class InteractiveMode {
 	}
 
 	private resetExtensionUI(): void {
-		this.nameRequest?.abort();
 		this.withExtensionDialogsBlocked(() => {
 			this.hideExtensionSelector();
 			this.hideExtensionInput();
@@ -3939,7 +3932,6 @@ export class InteractiveMode {
 	async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.nameRequest?.abort();
 
 		// Turn off focus reporting we enabled for the clipboard-image hint, so the
 		// terminal does not keep sending \x1b[I / \x1b[O to the parent shell.
@@ -6464,7 +6456,27 @@ export class InteractiveMode {
 	}
 
 	handleNameCommand(text: string): void {
-		void handleNameCommand(this, text);
+		const name = text.replace(/^\/name\s*/, "").trim();
+		if (!name) {
+			const currentName = this.sessionManager.getSessionName();
+			if (currentName) {
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
+			} else {
+				this.showWarning("Usage: /name <name>");
+			}
+			this.redraw.requestRender();
+			return;
+		}
+
+		this.session.setSessionName(name);
+		const sessionName = this.sessionManager.getSessionName();
+		if (sessionName !== name) {
+			this.showWarning(`Session name was normalized from ${JSON.stringify(name)} to ${JSON.stringify(sessionName)}`);
+		}
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
+		this.redraw.requestRender();
 	}
 
 	handleSessionCommand(): void {
@@ -6807,7 +6819,6 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
-		this.nameRequest?.abort();
 		this.withExtensionDialogsBlocked(() => {
 			this.stepWelcome?.dispose();
 			this.stepSpinner?.dispose();

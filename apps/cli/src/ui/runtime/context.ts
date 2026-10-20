@@ -103,7 +103,6 @@ export interface RuntimeContext {
 	readonly toolOutputExpanded: boolean;
 	readonly isInitialized: boolean;
 	unsubscribe?: () => void;
-	nameRequest?: AbortController;
 	// host-owned session-continuity invariants — reassigned scalars shared by reference (ctx IS the host)
 	streamingComponent: AssistantMessageComponent | undefined;
 	streamingMessage: AssistantMessage | undefined;

@@ -459,7 +459,6 @@ export {
 	createUsageTotals,
 	getUsageCostBreakdown,
 } from "./core/usage-totals.ts";
-export { type RegenerateSessionTitleResult, regenerateSessionTitle } from "./features/session-title.ts";
 export {
 	createStepExtension,
 	createStepExtensionInline,

@@ -42,11 +42,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 		description: "Import and resume a session from a JSONL file",
 	},
 	{ name: "copy", description: "Copy last agent message to clipboard" },
-	{
-		name: "name",
-		description: "Set session display name",
-		argumentHint: "<name>",
-	},
+	{ name: "name", description: "Set session display name" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{
