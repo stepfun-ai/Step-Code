@@ -90,7 +90,6 @@ import {
 	rawKeyHint,
 	readStepLoginCredential,
 	readStepLoginProfile,
-	regenerateSessionTitle,
 	resolveModelScopeFromModels,
 	resolveStepLoginProfiles,
 	type SessionEntry,
@@ -147,6 +146,7 @@ import { type AuthEvent, type AuthPrompt, clampThinkingLevel, type ImageContent 
 import type { AssistantMessage, Message, Model, Usage } from "@step-harness/providers/compat";
 import chalk from "chalk";
 import { spawn } from "child_process";
+import { nameCommand } from "#commands/name";
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -164,6 +164,7 @@ import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
 import { PastedImageRegistry, resolvePastedImages } from "./runtime/pasted-images.ts";
 import { createRedraw, type Redraw } from "./runtime/redraw.ts";
 import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
+import { handleNameCommand } from "./runtime/session-name.ts";
 import {
 	keepLatestTaskUpdateResult,
 	registerTaskUpdateCall,
@@ -600,6 +601,7 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	unsubscribe?: () => void;
+	nameRequest?: AbortController;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !) and whether the
@@ -853,11 +855,14 @@ export class InteractiveMode {
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
 		// Define commands for autocomplete
-		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
-			name: command.name,
-			description: command.description,
-			...(command.argumentHint && { argumentHint: command.argumentHint }),
-		}));
+		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((builtin) => {
+			const command = builtin.name === nameCommand.name ? nameCommand : builtin;
+			return {
+				name: command.name,
+				description: command.description,
+				...(command.argumentHint && { argumentHint: command.argumentHint }),
+			};
+		});
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
@@ -2697,6 +2702,7 @@ export class InteractiveMode {
 	}
 
 	private resetExtensionUI(): void {
+		this.nameRequest?.abort();
 		this.withExtensionDialogsBlocked(() => {
 			this.hideExtensionSelector();
 			this.hideExtensionInput();
@@ -3933,6 +3939,7 @@ export class InteractiveMode {
 	async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.nameRequest?.abort();
 
 		// Turn off focus reporting we enabled for the clipboard-image hint, so the
 		// terminal does not keep sending \x1b[I / \x1b[O to the parent shell.
@@ -4796,6 +4803,7 @@ export class InteractiveMode {
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
+						this.ui.terminal.setProgress(enabled && (this.session.isStreaming || this.session.isCompacting));
 					},
 					onStatusTipsChange: (enabled) => {
 						this.settingsManager.setStatusTips(enabled);
@@ -6456,51 +6464,7 @@ export class InteractiveMode {
 	}
 
 	handleNameCommand(text: string): void {
-		const name = text.replace(/^\/name\s*/, "").trim();
-		if (!name) {
-			void this.regenerateSessionName();
-			return;
-		}
-
-		this.session.setSessionName(name);
-		const sessionName = this.sessionManager.getSessionName();
-		if (sessionName !== name) {
-			this.showWarning(`Session name was normalized from ${JSON.stringify(name)} to ${JSON.stringify(sessionName)}`);
-		}
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
-		this.redraw.requestRender();
-	}
-
-	/** `/name` without an argument: regenerate from the conversation (OpenCode `/rename` semantics). */
-	private async regenerateSessionName(): Promise<void> {
-		const session = this.session;
-		const currentName = this.sessionManager.getSessionName();
-		this.showStatus(
-			currentName ? `Generating session name (current: ${currentName})...` : "Generating session name...",
-		);
-		const result = await regenerateSessionTitle(session);
-		// The user may have switched sessions while the request ran.
-		if (this.session !== session) return;
-		switch (result.status) {
-			case "renamed":
-				this.showStatus(`Session name set: ${result.title}`);
-				break;
-			case "unchanged":
-				this.showStatus(`Session name unchanged: ${result.title}`);
-				break;
-			case "empty":
-				this.showWarning("Nothing to name yet. Send a message first, or use /name <name>");
-				break;
-			case "no-model":
-				this.showWarning("No model selected. Use /name <name> to set a name manually");
-				break;
-			case "failed":
-				this.showWarning("Could not generate a session name. Use /name <name> to set one manually");
-				break;
-			case "superseded":
-				break;
-		}
+		void handleNameCommand(this, text);
 	}
 
 	handleSessionCommand(): void {
@@ -6843,6 +6807,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
+		this.nameRequest?.abort();
 		this.withExtensionDialogsBlocked(() => {
 			this.stepWelcome?.dispose();
 			this.stepSpinner?.dispose();
@@ -6851,9 +6816,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			this.hideExtensionSelector();
 			this.hideExtensionInput();
 			this.disposeActiveSelector();
-			if (this.settingsManager.getShowTerminalProgress()) {
-				this.ui.terminal.setProgress(false);
-			}
+			this.ui.terminal.setProgress(false);
 			this.themeController.disableAutoSync();
 			this.clearExtensionTerminalInputListeners();
 			this.footer.dispose();

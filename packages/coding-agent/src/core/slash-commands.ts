@@ -44,8 +44,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "copy", description: "Copy last agent message to clipboard" },
 	{
 		name: "name",
-		description: "Set session display name, or regenerate it from the conversation",
-		argumentHint: "[name]",
+		description: "Set session display name",
+		argumentHint: "<name>",
 	},
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },

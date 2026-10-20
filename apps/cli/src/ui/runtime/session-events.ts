@@ -17,7 +17,8 @@
  * event; the intentional double-invalidate in compaction_end; the retry handler restored
  * TWICE (agent_start defensive @ retryEscapeHandler + auto_retry_end); the lazy init guard
  * before the first event; getShowTerminalProgress read LIVE (never snapshotted) at
- * turn_start/compaction_start/compaction_end; per-case requestRender placement 1:1 with no
+ * turn_start/compaction_start; completion always clears progress even when disabled;
+ * per-case requestRender placement 1:1 with no
  * coalescing; message_end updateContent(false) before undefining streamingComponent;
  * agent_end removeChild before undefine. The subscribe/unsubscribe pair is owned by the
  * composition root and moved in lockstep with rebindCurrentSession.
@@ -314,9 +315,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 		}
 
 		case "agent_end":
-			if (ctx.settingsManager.getShowTerminalProgress()) {
-				ctx.ui.terminal.setProgress(false);
-			}
+			ctx.ui.terminal.setProgress(false);
 			ctx.clearStatusIndicator("working");
 			// Turn-done marker: only for normally-ended turns (aborted/error
 			// turns already show an error line in the transcript); stays
@@ -363,7 +362,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 		}
 
 		case "auto_clm_end": {
-			if (ctx.settingsManager.getShowTerminalProgress()) ctx.ui.terminal.setProgress(false);
+			ctx.ui.terminal.setProgress(false);
 			if (ctx.autoCompactionEscapeHandler) {
 				ctx.defaultEditor.onEscape = ctx.autoCompactionEscapeHandler;
 				ctx.autoCompactionEscapeHandler = undefined;
@@ -375,9 +374,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 		}
 
 		case "compaction_end": {
-			if (ctx.settingsManager.getShowTerminalProgress()) {
-				ctx.ui.terminal.setProgress(false);
-			}
+			ctx.ui.terminal.setProgress(false);
 			if (ctx.autoCompactionEscapeHandler) {
 				ctx.defaultEditor.onEscape = ctx.autoCompactionEscapeHandler;
 				ctx.autoCompactionEscapeHandler = undefined;

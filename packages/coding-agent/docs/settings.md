@@ -206,6 +206,8 @@ A callback that catches an agent-node failure and rethrows a **new** error is co
 | `images.autoResize` | boolean | `true` | Resize images to 2000x2000 max. Applies to `@file` attachments, `read`, and images returned by tools |
 | `images.blockImages` | boolean | `false` | Block all images from being sent to LLM |
 
+Changing terminal progress in `/settings` applies immediately. Disabling it clears any active indicator and stops its keepalive; agent and compaction completion always clear progress even if the setting changed during the operation.
+
 ### Shell
 
 | Setting | Type | Default | Description |

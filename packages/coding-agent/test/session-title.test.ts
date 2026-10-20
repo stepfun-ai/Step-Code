@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model } from "@step-harness/providers";
+import type { Api, AssistantMessage, Model } from "@step-harness/providers";
 import { describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -237,7 +237,7 @@ describe("session title regeneration", () => {
 		const sessionManager = SessionManager.inMemory();
 		const completeSimple = vi.fn(reply);
 		const target = {
-			model: model as Model<any> | undefined,
+			model: model as Model<Api> | undefined,
 			modelRuntime: { completeSimple },
 			sessionManager,
 			setSessionName: (name: string) => sessionManager.appendSessionInfo(name),
@@ -311,5 +311,25 @@ describe("session title regeneration", () => {
 		resolve(response("生成的标题"));
 		await expect(pending).resolves.toEqual({ status: "superseded" });
 		expect(h.sessionManager.getSessionName()).toBe("人工标题");
+	});
+
+	test("propagates cancellation and discards a response even when the provider ignores abort", async () => {
+		let resolve: (value: AssistantMessage) => void = () => {};
+		const h = regenerateTarget(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		h.sessionManager.appendMessage(userMessage("修复登录接口超时"));
+		h.sessionManager.appendSessionInfo("原名称");
+		const controller = new AbortController();
+		const pending = regenerateSessionTitle(h.target, controller.signal);
+		const [, , options] = h.completeSimple.mock.calls[0] as unknown as [unknown, unknown, { signal: AbortSignal }];
+		controller.abort();
+		expect(options.signal.aborted).toBe(true);
+		resolve(response("迟到名称"));
+		await expect(pending).resolves.toEqual({ status: "superseded" });
+		expect(h.sessionManager.getSessionName()).toBe("原名称");
 	});
 });
