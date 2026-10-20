@@ -4202,6 +4202,7 @@ export class InteractiveMode {
 				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
 				this.showStatus(msg);
 			} else {
+				this.settingsManager.recordRecentModel(result.model.provider, result.model.id);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				const thinkingStr =
@@ -4895,6 +4896,7 @@ export class InteractiveMode {
 		if (model) {
 			try {
 				await this.session.setModel(model, { persist: false });
+				this.settingsManager.recordRecentModel(model.provider, model.id);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
@@ -5038,6 +5040,7 @@ export class InteractiveMode {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
 				try {
 					await this.session.setModel(model, { persist });
+					this.settingsManager.recordRecentModel(model.provider, model.id);
 					this.updateAvailableProviderCount();
 					this.footer.invalidate();
 					this.updateEditorBorderColor();
@@ -5064,6 +5067,7 @@ export class InteractiveMode {
 				initialSearchInput,
 				(model) => selectModel(model, true),
 				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
+				this.settingsManager.getRecentModels(),
 			);
 			return {
 				component: selector,

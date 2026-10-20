@@ -209,6 +209,7 @@ export {
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";
 export type { ToolRenderContext } from "./core/extensions/types.ts";
+export type { UIDecisionRequest } from "./core/extensions/ui-decisions.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { FooterDataProvider } from "./core/footer-data-provider.ts";

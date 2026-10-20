@@ -102,6 +102,7 @@ export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
+	recentModels?: { provider: string; id: string }[];
 	defaultThinkingLevel?: ThinkingLevel;
 	modelThinkingLevels?: Record<string, ThinkingLevel>; // per-model default thinking level overrides keyed by "provider/modelId"
 	transport?: TransportSetting; // default: "auto"
@@ -192,6 +193,23 @@ function parseTimeoutSetting(value: unknown, settingName: string): number | unde
 }
 
 export type SettingsScope = "global" | "project";
+
+function normalizeRecentModels(value: unknown): { provider: string; id: string }[] {
+	if (!Array.isArray(value)) return [];
+	const result: { provider: string; id: string }[] = [];
+	const seen = new Set<string>();
+	for (const entry of value) {
+		if (!isMergeableObject(entry)) continue;
+		const { provider, id } = entry;
+		if (typeof provider !== "string" || !provider.trim() || typeof id !== "string" || !id.trim()) continue;
+		const key = `${provider}\0${id}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push({ provider, id });
+		if (result.length === 10) break;
+	}
+	return result;
+}
 
 export interface SettingsManagerCreateOptions {
 	projectTrusted?: boolean;
@@ -736,6 +754,26 @@ export class SettingsManager {
 
 	getDefaultModel(): string | undefined {
 		return this.settings.defaultModel;
+	}
+
+	getRecentModels(): { provider: string; id: string }[] {
+		return normalizeRecentModels(this.globalSettings.recentModels);
+	}
+
+	recordRecentModel(provider: string, id: string): void {
+		const model = { provider, id };
+		this.globalSettings.recentModels = normalizeRecentModels([model, ...this.getRecentModels()]);
+		if (this.globalSettingsLoadError) return;
+		this.enqueueWrite("global", () => {
+			this.storage.withLock("global", (current) => {
+				const settings = current
+					? SettingsManager.migrateSettings(JSON.parse(stripBom(current)) as Record<string, unknown>)
+					: {};
+				// Merge under the lock so another session's selections are not lost.
+				settings.recentModels = normalizeRecentModels([model, ...normalizeRecentModels(settings.recentModels)]);
+				return JSON.stringify(settings, null, 2);
+			});
+		});
 	}
 
 	setDefaultProvider(provider: string): void {

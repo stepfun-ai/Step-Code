@@ -28,6 +28,7 @@
 			"@step-harness/contracts": ["./packages/contracts/src/in-process/index.ts"],
 			"@step-harness/contracts/wire": ["./packages/contracts/src/wire/index.ts"],
 			"@step-harness/config": ["./packages/config/src/index.ts"],
+			"@step-harness/lark-adapter": ["./packages/lark-adapter/src/index.ts"],
 			"@earendil-works/pi-telemetry": ["./packages/telemetry/src/index.ts"],
 			"@earendil-works/pi-telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
 			"@earendil-works/pi-ai": ["./packages/providers/src/index.ts"],

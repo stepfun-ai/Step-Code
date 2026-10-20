@@ -443,4 +443,27 @@ describe("FooterComponent width handling", () => {
 			}
 		}
 	});
+	it.each([20, 60, 80, 120])("renders Lark on its own row above the unchanged operational footer at %i columns", (width) => {
+		const statuses = new Map([["lark", "lark · connected · @周旭的飞书 CLI"]]);
+		const footer = new FooterComponent(createSession({ sessionName: "", modelId: "model-".repeat(30) }), createFooterData(1, statuses), { presentation: "step" });
+		const lines = footer.render(width);
+		expect(lines).toHaveLength(2);
+		expect(stripAnsi(lines[0])).toContain("lark · connected");
+		expect(stripAnsi(lines[1])).not.toContain("lark");
+		const plain = stripAnsi(lines.join("\n"));
+		expect(plain).toContain("lark · connected");
+		expect(plain.match(/lark/gu)).toHaveLength(1);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		statuses.delete("lark");
+		expect(footer.render(width)).toEqual([lines[1]]);
+	});
+	it("shows the complete connected bot and session identity in a wide footer", () => {
+		const identity = "lark · connected · @周旭的飞书 CLI · 825d3cc5-3761-4e92-8cfc-56ab2969d262";
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1, new Map([["lark", identity]])), { presentation: "step" });
+		const lines = footer.render(180);
+		expect(stripAnsi(lines[0])).toBe(identity);
+		expect(stripAnsi(lines[1])).toContain("⏵ Ask");
+		expect(stripAnsi(lines[1])).toContain("test-model");
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(180);
+	});
 });

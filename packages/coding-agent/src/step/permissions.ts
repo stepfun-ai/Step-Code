@@ -647,7 +647,7 @@ export class StepPermissionController {
 		const approved = await context.ui.confirm(
 			`${decision.hazardous ? "Dangerous" : "Approve"} ${event.toolName} [${event.toolCallId.slice(-8)}]`,
 			`Call: ${event.toolCallId}\n${decision.reason}\n\n${summarizeToolInput(event.toolName, input)}\n\nBatch calls may ask separately\nbefore approved tools begin running.`,
-			{ signal: context.signal, overlay: true },
+			{ signal: context.signal, overlay: true, mirror: true },
 		);
 		if (approved) return undefined;
 		return { block: true, reason: `Tool call denied: ${event.toolName}` };

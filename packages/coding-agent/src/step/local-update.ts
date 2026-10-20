@@ -120,8 +120,8 @@ export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): 
 		await mkdir(extractDir);
 		const extractCode = await extractArchive(archivePath, extractDir);
 		if (extractCode !== 0) throw new Error("could not extract the release archive");
-		const archiveRoot = await findArchiveRoot(extractDir);
 		const binaryName = process.platform === "win32" ? "step.exe" : "step";
+		const archiveRoot = await findArchiveRoot(extractDir, binaryName);
 		const stagedBinary = await findFile(archiveRoot, binaryName);
 		if (!stagedBinary) throw new Error("release archive does not contain the Step binary");
 		const smoke = await verifyBinary(stagedBinary, targetVersion);
@@ -536,10 +536,19 @@ async function extractArchive(archivePath: string, extractDir: string): Promise<
 	return waitForChildProcess(spawnProcess("tar", ["-xzf", archivePath, "-C", extractDir], { stdio: "inherit" }));
 }
 
-async function findArchiveRoot(extractDir: string): Promise<string> {
+/**
+ * Resolve the directory that holds the Step binary and the resources listed in
+ * STEP_UPDATE_TARGETS. Release archives come in two shapes: Unix archives wrap
+ * everything in a single top-level directory (e.g. `step/`), while Windows
+ * zips place the files at the archive root. Decide by where the binary sits,
+ * not by which subdirectory happens to sort first.
+ */
+export async function findArchiveRoot(extractDir: string, binaryName: string): Promise<string> {
 	const entries = await readdir(extractDir, { withFileTypes: true });
-	const directory = entries.find((entry) => entry.isDirectory());
-	return directory ? path.join(extractDir, directory.name) : extractDir;
+	if (entries.some((entry) => entry.isFile() && entry.name === binaryName)) return extractDir;
+	const directories = entries.filter((entry) => entry.isDirectory());
+	if (directories.length === 1) return path.join(extractDir, directories[0].name);
+	return extractDir;
 }
 
 async function findFile(root: string, fileName: string): Promise<string | undefined> {

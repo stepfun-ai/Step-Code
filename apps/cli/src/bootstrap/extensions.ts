@@ -17,6 +17,7 @@ import {
 	type StepTelemetryReporter,
 	type TraceHeaderPolicy,
 } from "@step-harness/coding-agent";
+import { createLarkConnectionExtension } from "#ui/index";
 
 export interface StepExtensionFactoryDeps {
 	/** Shared telemetry runtime handed to every Step extension. */
@@ -52,6 +53,7 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 		createStepCapabilitiesExtensionInline({ telemetry: deps.telemetry }),
 		createStepCronExtension({ telemetry: deps.telemetry }),
 		createStepGoalExtension({ telemetry: deps.telemetry }),
+		{ name: "connect-lark", factory: createLarkConnectionExtension(), hidden: true },
 		...(deps.stepCodeProviderExtension ? [deps.stepCodeProviderExtension] : []),
 	];
 }

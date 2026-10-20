@@ -66,6 +66,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private scopedModels: ReadonlyArray<ScopedModelItem>;
 	private defaultModel?: DefaultModelReference;
 	private scope: ModelScope = "all";
+	private readonly recentModels: ReadonlyArray<DefaultModelReference>;
+	private recentModelCount = 0;
 	private scopeText?: Text;
 	private scopeHintText?: Text;
 	private readonly refreshAbortController = new AbortController();
@@ -82,6 +84,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		initialSearchInput?: string,
 		onSelectAsDefault?: (model: Model<any>) => void,
 		defaultModel?: DefaultModelReference,
+		recentModels: ReadonlyArray<DefaultModelReference> = [],
 	) {
 		super();
 
@@ -90,6 +93,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.modelRuntime = modelRuntime;
 		this.scopedModels = scopedModels;
 		this.defaultModel = defaultModel;
+		this.recentModels = recentModels;
 		this.scope = scopedModels.length > 0 ? "scoped" : "all";
 		this.onSelectCallback = onSelect;
 		this.onSelectAsDefaultCallback = onSelectAsDefault;
@@ -166,7 +170,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			id: scoped.model.id,
 			model: scoped.model,
 		}));
-		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
+		this.updateActiveModels();
 		this.filteredModels = this.activeModels;
 		const currentIndex = this.filteredModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
 		this.selectedIndex =
@@ -259,7 +263,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private setScope(scope: ModelScope): void {
 		if (this.scope === scope) return;
 		this.scope = scope;
-		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
+		this.updateActiveModels();
 		const currentIndex = this.activeModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
 		this.selectedIndex = currentIndex >= 0 ? currentIndex : 0;
 		this.filterModels(this.searchInput.getValue());
@@ -269,13 +273,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private filterModels(query: string): void {
+		query = query.trim();
 		if (query) {
-			const filtered = fuzzyFilter(this.activeModels, query, (item) => {
+			const models = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
+			const filtered = fuzzyFilter(models, query, (item) => {
 				const defaultText = this.isDefaultModel(item.model) ? " default" : "";
 				return `${getModelSelectorSearchText({ id: item.id, provider: item.provider, name: item.model.name })}${defaultText}`;
 			});
 			if (this.isDefaultSearch(query)) {
-				const defaultItems = this.activeModels.filter((item) => this.isDefaultModel(item.model));
+				const defaultItems = models.filter((item) => this.isDefaultModel(item.model));
 				const defaultKeys = new Set(defaultItems.map((item) => `${item.provider}\0${item.id}`));
 				this.filteredModels = [
 					...defaultItems,
@@ -294,6 +300,22 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.updateList();
 	}
 
+	private updateActiveModels(): void {
+		const models = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
+		const available = new Map(models.map((item) => [`${item.provider}\0${item.id}`, item]));
+		const recent: ModelItem[] = [];
+		for (const reference of this.recentModels) {
+			const key = `${reference.provider}\0${reference.id}`;
+			const item = available.get(key);
+			if (!item) continue;
+			recent.push(item);
+			available.delete(key);
+			if (recent.length === 10) break;
+		}
+		this.recentModelCount = recent.length;
+		this.activeModels = [...recent, ...models.filter((item) => available.has(`${item.provider}\0${item.id}`))];
+	}
+
 	private updateList(): void {
 		this.listContainer.clear();
 
@@ -303,11 +325,18 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			Math.min(this.selectedIndex - Math.floor(maxVisible / 2), this.filteredModels.length - maxVisible),
 		);
 		const endIndex = Math.min(startIndex + maxVisible, this.filteredModels.length);
+		const showSections = !this.searchInput.getValue().trim() && this.recentModelCount > 0;
 
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.filteredModels[i];
 			if (!item) continue;
+			if (showSections && (i === startIndex || i === this.recentModelCount)) {
+				if (i > startIndex) this.listContainer.addChild(new Spacer(1));
+				const heading =
+					i < this.recentModelCount ? "Recent" : this.scope === "scoped" ? "Scoped models" : "All models";
+				this.listContainer.addChild(new Text(theme.bold(theme.fg("accent", `  ${heading}`)), 0, 0));
+			}
 
 			const isSelected = i === this.selectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);

@@ -1,0 +1,11 @@
+{
+	"name": "@step-harness/lark-adapter",
+	"version": "0.84.4",
+	"private": true,
+	"type": "module",
+	"description": "Abortable Feishu/Lark pairing and single-chat transport without agent or UI dependencies",
+	"exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+	"scripts": { "build": "tsgo -p tsconfig.build.json", "test": "vitest --run" },
+	"dependencies": { "@larksuiteoapi/node-sdk": "1.76.0" },
+	"devDependencies": { "@types/node": "22.19.19", "vitest": "4.1.9" }
+}
