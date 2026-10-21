@@ -1213,9 +1213,19 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** Prepended to a completed run that never called agent(); a log-only script is valid but rarely intended. */
+export const NO_AGENTS_WARNING =
+	"Warning: this workflow completed without calling any agents. phase() only labels milestones; agent(), parallel(), and pipeline() do the work.";
+
 export function workflowToolResult(value: WorkflowRunResult): AgentToolResult<WorkflowRunResult> {
+	const text = JSON.stringify(value, null, 2);
 	return {
-		content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+		content: [
+			{
+				type: "text",
+				text: value.status === "completed" && value.agentCalls === 0 ? `${NO_AGENTS_WARNING}\n${text}` : text,
+			},
+		],
 		details: value,
 		isError: value.status !== "completed",
 	};

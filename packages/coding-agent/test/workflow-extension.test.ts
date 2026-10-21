@@ -248,6 +248,17 @@ test("workflow script resolution rejects ambiguous, oversized, and escaping sour
 	await expect(resolveWorkflowScript(cwd, { name: "escape" }, homeRoot)).rejects.toThrow("was not found");
 });
 
+test("workflow script resolution rejects phase() with a callback for inline and path sources", async () => {
+	const cwd = await workspace();
+	const homeRoot = await workspace("step-workflow-home-");
+	const misuse = `log("start");\nphase("Review", async () => { await agent("review"); });\n`;
+	await writeFile(path.join(cwd, "misuse.js"), misuse);
+	await expect(resolveWorkflowScript(cwd, { script: misuse }, homeRoot)).rejects.toThrow(
+		"Workflow script line 2: phase(title) takes one string",
+	);
+	await expect(resolveWorkflowScript(cwd, { scriptPath: "misuse.js" }, homeRoot)).rejects.toThrow("line 2");
+});
+
 test("the turn-state budget applies unless an explicit budget parameter overrides it", async () => {
 	vi.stubEnv("STEP_DISABLE_WORKFLOW", "");
 	const cwd = await workspace();

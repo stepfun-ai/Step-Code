@@ -82,6 +82,13 @@ calls can overshoot the limit by one concurrency wave; the gate stops new calls
 and retries, not tokens already being generated. Workflow journals and progress
 files remain the source for replay and inspection.
 
+`phase(title)` takes one string and only labels a milestone; work runs through
+`agent()`, `parallel()`, and `pipeline()`. A script that passes `phase()` a second
+argument, such as a callback, is rejected before the run starts, with its line
+number, and the VM rejects the same misuse when the call cannot be seen
+statically. A run that completes without calling any agent returns a warning at
+the top of its result instead of silently reporting success.
+
 The foreground workflow tool streams progress snapshots while it runs. The tool
 row shows running and queued counts, completed/total agents, failures, cache
 hits, cancellations, token spend, and the current phase. Each accepted agent
