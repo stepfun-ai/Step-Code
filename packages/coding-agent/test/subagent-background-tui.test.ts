@@ -190,7 +190,6 @@ test("progress notifications reach the model but stay out of the transcript", ()
 	expect(sent[1].details).toMatchObject({
 		agentId: "b727337a",
 		event: "background_done",
-		label: "b727337a",
 		agents: ["general"],
 		detail: "all done",
 	});

@@ -390,12 +390,11 @@ export function buildStepSystemPromptAppendix(
 		sections.push(
 			[
 				"# Delegation",
-				"- Use subagent to delegate work that benefits from an isolated context: broad exploration whose intermediate output does not belong in this transcript, independent parallel tasks, or long-running background work.",
-				"- Background lanes are event-driven; never poll for status. Lane events (done, failed, interrupted, needs-input, progress, restarted) arrive automatically as <agent-notification> messages at the start of a later turn. Wait for them and keep working in the meantime. Failure notifications carry each failed task's reason; restarted means a dead child was respawned and resumed its transcript.",
-				"- Use agent_send to message an existing lane; the lane keeps its full transcript, so replies continue the conversation instead of starting over.",
-				'- agent_send with action:"reply" and interrupt:false queues the prompt to run after the lane\'s current turn; interrupt:true steers the lane immediately; action:"stop" interrupts the lane and ends it.',
-				"- Address one lane with to.agent_id or to.alias; fan out with to.group or to.all.",
-				'- The default subscribe:"final" sends one completion notification per lane. Use subscribe:"progress" only when throttled progress matters (for example a long review or audit lane); subscribe:"none" is fire-and-forget.',
+				"- Use subagent to delegate work that benefits from an isolated context: broad exploration whose intermediate output does not belong in this transcript, independent parallel tasks, or long-running work.",
+				"- Run in the foreground (the default) whenever your next step needs the result; the call returns it directly. Set run_in_background:true only for independent work you can continue without.",
+				"- A background call returns a lane_id at once. Each lane sends one <agent-notification> when it ends, at the start of a later turn; it carries the outcome, output, failure reasons, and child session paths. After starting a lane, do not sleep, poll, or call agent_send status to wait for it: end your turn or keep working on something else.",
+				'- agent_send manages a lane by lane_id. action:"reply" continues a single-agent lane\'s transcript (interrupt:false queues after its current turn; interrupt:true steers immediately); parallel and chain lanes cannot take replies, so start a new subagent call for follow-up work. action:"stop" ends the lane. action:"status" answers a specific question about a lane (state, usage, session paths, recent output); omit lane_id to list lanes.',
+				'- The default subscribe:"final" sends only the ending notification. Use subscribe:"progress" only when throttled progress matters, for example a long review or audit lane.',
 				"- Do not delegate small single-step edits; the overhead outweighs the isolation.",
 			].join("\n"),
 		);

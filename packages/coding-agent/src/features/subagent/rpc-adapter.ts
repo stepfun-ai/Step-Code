@@ -10,10 +10,12 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { waitForChildProcess } from "../../utils/child-process.ts";
+import { trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.ts";
 import {
 	CHILD_MARKER,
 	cloneUsage,
@@ -40,9 +42,15 @@ const MAX_STDERR_CHARS = 32_000;
 export interface SubagentRpcLineHandlers {
 	onModelRequest?: StepSubagentRunInput["onModelRequest"];
 	/** `{"type":"response"}` command acks, correlated by `id`. */
-	onResponse?: (response: { id?: string; command?: string; success?: boolean; error?: string }) => void;
+	onResponse?: (response: {
+		id?: string;
+		command?: string;
+		success?: boolean;
+		error?: string;
+		data?: Record<string, unknown>;
+	}) => void;
 	/** `{"type":"extension_ui_request"}` dialogs; blocking ones must be answered or the child hangs. */
-	onUiRequest?: (request: { id: string; method: string }) => void;
+	onUiRequest?: (request: { id: string; method: string; title?: string }) => void;
 	/** `{"type":"extension_error"}` diagnostics. */
 	onExtensionError?: (message: string) => void;
 	/** `{"type":"progress-report"}`: the child wants the parent's attention (needs-input nag). */
@@ -68,12 +76,17 @@ export function routeSubagentRpcLine(line: string, handlers: SubagentRpcLineHand
 			command: typeof parsed.command === "string" ? parsed.command : undefined,
 			success: typeof parsed.success === "boolean" ? parsed.success : undefined,
 			error: typeof parsed.error === "string" ? parsed.error : undefined,
+			...(isRecordValue(parsed.data) ? { data: parsed.data } : {}),
 		});
 		return;
 	}
 	if (type === "extension_ui_request") {
 		if (typeof parsed.id === "string" && typeof parsed.method === "string") {
-			handlers.onUiRequest?.({ id: parsed.id, method: parsed.method });
+			handlers.onUiRequest?.({
+				id: parsed.id,
+				method: parsed.method,
+				...(typeof parsed.title === "string" ? { title: parsed.title } : {}),
+			});
 		}
 		return;
 	}
@@ -140,6 +153,11 @@ export interface StepSubagentRpcSession {
 	runTurn(input: StepSubagentRunInput): Promise<StepSubagentRunResult>;
 	/** Abort the current run and end stdin so the child exits. */
 	stop(): void;
+	/**
+	 * Last resort for session shutdown: SIGKILL the child and remove its
+	 * temporary directory synchronously, so neither outlives the parent.
+	 */
+	terminate(): void;
 }
 
 /** Blocking dialog methods that hang the child until answered. */
@@ -147,6 +165,8 @@ const RPC_UI_DIALOG_METHODS: ReadonlySet<string> = new Set(["select", "confirm",
 const CHILD_EXIT_SIGTERM_MS = 5_000;
 const CHILD_EXIT_SIGKILL_MS = 10_000;
 const ABORT_SETTLE_GRACE_MS = 5_000;
+/** Cancelled dialog titles kept per turn for the lane notification. */
+const MAX_CANCELLED_PROMPTS = 20;
 /**
  * Backstop for a child that stays alive but stops talking. A turn otherwise
  * settles only on `agent_settled`, a failed prompt ack, or child exit, so a
@@ -236,6 +256,10 @@ export async function createSubagentRpcSession(
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
+	// Registered with the host's process-exit sweep, so a signal or emergency
+	// exit that skips session shutdown still kills the child.
+	const childPid = child.pid;
+	if (childPid) trackDetachedChildPid(childPid);
 	// `close` can be held open by inherited descendant pipes after OS exit.
 	// Reuse the bounded-idle stdio drain used by our other child processes.
 	const exitStatus = waitForChildProcess(child);
@@ -250,15 +274,44 @@ export async function createSubagentRpcSession(
 	let processError: string | undefined;
 	let stdinEnded = false;
 	let childExited = false;
+	let sessionFile: string | undefined;
+	const stateRequestId = randomUUID();
 	const pendingCommandAcks = new Map<string, string>();
 	const exitTimers: Array<ReturnType<typeof setTimeout>> = [];
 	const turnIdleTimeoutMs = input.turnIdleTimeoutMs ?? resolveSubagentTurnIdleTimeoutMs();
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	let wallTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const clearIdleWatchdog = (): void => {
 		if (!idleTimer) return;
 		clearTimeout(idleTimer);
 		idleTimer = undefined;
+	};
+
+	const clearWallClock = (): void => {
+		if (!wallTimer) return;
+		clearTimeout(wallTimer);
+		wallTimer = undefined;
+	};
+
+	/** Start the turn's wall-clock limit. Unlike the idle watchdog, output never resets it. */
+	const armWallClock = (limitMs: number | undefined): void => {
+		clearWallClock();
+		if (!limitMs || limitMs <= 0 || !turn) return;
+		const active = turn;
+		wallTimer = setTimeout(() => {
+			if (turn !== active) return;
+			send({ type: "abort", id: randomUUID() });
+			settleTurn((current) => {
+				current.exitCode = 1;
+				current.stopReason = "error";
+				current.errorMessage = `Subagent timed out: the turn exceeded its ${Math.round(limitMs / 1000)}s time limit and was stopped`;
+				// A child still mid-run cannot take the next reply; a later reply
+				// respawns it with the same session id and resumes the transcript.
+				closeStdin();
+			});
+		}, limitMs);
+		wallTimer.unref?.();
 	};
 
 	/** (Re)start the idle budget for the in-flight turn. No-op when disabled. */
@@ -340,9 +393,12 @@ export async function createSubagentRpcSession(
 		if (!active) return;
 		turn = undefined;
 		clearIdleWatchdog();
+		clearWallClock();
 		active.cleanup?.();
 		finalize(active.current, active.aborted);
 		active.current.updatedAt = Date.now();
+		if (sessionFile) active.current.sessionFile = sessionFile;
+		active.current.sessionId = sessionId;
 		if (!active.input.keepAlive) closeStdin();
 		active.current.pendingReply = active.input.keepAlive === true && !childExited && !stdinEnded;
 		active.resolve({
@@ -357,6 +413,12 @@ export async function createSubagentRpcSession(
 			onResponse: (response) => {
 				const commandType = response.id ? pendingCommandAcks.get(response.id) : undefined;
 				if (response.id) pendingCommandAcks.delete(response.id);
+				if (response.id === stateRequestId) {
+					// The session-file probe is best effort; a failure only omits the path.
+					const file = response.data?.sessionFile;
+					if (response.success !== false && typeof file === "string" && file) sessionFile = file;
+					return;
+				}
 				if (response.success !== false) return;
 				const failure = `rpc ${response.command ?? commandType ?? "command"} failed: ${response.error ?? "unknown error"}`;
 				if (turn && response.id === turn.promptId) {
@@ -375,6 +437,13 @@ export async function createSubagentRpcSession(
 				// and the child would hang forever (there is no default timeout).
 				if (RPC_UI_DIALOG_METHODS.has(request.method)) {
 					send({ type: "extension_ui_response", id: request.id, cancelled: true });
+					if (turn) {
+						turn.current.cancelledPrompts ??= [];
+						const cancelled = turn.current.cancelledPrompts;
+						if (cancelled.length < MAX_CANCELLED_PROMPTS) {
+							cancelled.push(`${request.method}: ${(request.title ?? "(untitled)").slice(0, 200)}`);
+						}
+					}
 				}
 			},
 			onExtensionError: (message) => appendStderr(`extension_error: ${message}\n`),
@@ -417,8 +486,10 @@ export async function createSubagentRpcSession(
 	child.once("error", (error) => {
 		processError = error.message;
 		childExited = true;
+		if (childPid) untrackDetachedChildPid(childPid);
 		dropFromRegistry();
 		clearIdleWatchdog();
+		clearWallClock();
 		for (const timer of exitTimers) clearTimeout(timer);
 		settleTurn((current) => {
 			current.exitCode = 1;
@@ -429,8 +500,10 @@ export async function createSubagentRpcSession(
 	});
 	const finishExitedChild = (code: number | null): void => {
 		childExited = true;
+		if (childPid) untrackDetachedChildPid(childPid);
 		dropFromRegistry();
 		clearIdleWatchdog();
+		clearWallClock();
 		for (const timer of exitTimers) clearTimeout(timer);
 		if (stdoutBuffer.trim()) handleLine(stdoutBuffer.trim());
 		stdoutBuffer = "";
@@ -524,7 +597,9 @@ export async function createSubagentRpcSession(
 				});
 				return;
 			}
+			if (!sessionFile) send({ type: "get_state", id: stateRequestId });
 			armIdleWatchdog();
+			armWallClock(turnInput.turnTimeoutMs);
 		});
 	};
 
@@ -539,6 +614,21 @@ export async function createSubagentRpcSession(
 			if (turn) turn.aborted = true;
 			send({ type: "abort", id: randomUUID() });
 			closeStdin();
+		},
+		terminate: () => {
+			handle.stop();
+			if (!childExited && child.exitCode === null && child.signalCode === null) {
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					// Already gone; the exit handlers settle the rest.
+				}
+			}
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				// Best effort: the directory lives under the OS temp root.
+			}
 		},
 	};
 	liveSubagentSessions.set(sessionId, handle);

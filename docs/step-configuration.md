@@ -120,6 +120,27 @@ Step screens pass the Step agent directory; generic TUI callers default to the
 system temporary directory. Rendering equivalence tests select the uncached
 renderer through a test-process argument.
 
+### Background subagents
+
+The `[subagent]` table controls background subagent lanes:
+
+```toml
+[subagent]
+background = true                  # false runs run_in_background calls in the foreground
+background_timeout_seconds = 3600  # default per-turn wall-clock limit of a lane
+```
+
+A trusted project's `config.toml` overrides the global values.
+`background_timeout_seconds` must be an integer from 60 to 7,200; any other
+value is reported as a settings warning and ignored, so the 3,600-second default
+applies. A call's own `timeout_seconds` takes precedence. When
+`STEPCODE_CONFIG_PATH` selects a StepCode JSON config, the same settings live
+under `subagent.background` and `subagent.backgroundTimeoutSeconds`.
+`STEP_DISABLE_SUBAGENT_BACKGROUND=1` disables background lanes regardless of the
+file. Print and JSON runs never start lanes. See the [orchestration
+lifecycle](orchestration-lifecycle.md#background-subagent-lanes) for lane
+behavior.
+
 ### Plan file storage
 
 Native Markdown plans default to

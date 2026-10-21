@@ -41,9 +41,40 @@ export interface StepSettings {
 	fullAccessAcknowledged?: boolean;
 	/** Enables the user feedback submission flow. Defaults to enabled. */
 	feedbackEnabled?: boolean;
+	/** `[subagent] background`: `false` runs `run_in_background` subagent calls in the foreground. */
+	subagentBackground?: boolean;
+	/** `[subagent] background_timeout_seconds`: default per-turn wall-clock limit of a background lane. */
+	subagentBackgroundTimeoutSeconds?: number;
 }
 
 type JsonObject = Record<string, unknown>;
+
+/** Bounds and default for the per-turn wall-clock limit of a background subagent lane. */
+export const SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS = 60;
+export const SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS = 7_200;
+export const SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS = 3_600;
+
+/** Whether `value` is an accepted `[subagent] background_timeout_seconds`: an integer within the bounds. */
+export function isValidSubagentBackgroundTimeout(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isInteger(value) &&
+		value >= SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS &&
+		value <= SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS
+	);
+}
+
+/** Message for a configured timeout that is ignored because it is out of bounds or not an integer. */
+export function invalidSubagentBackgroundTimeoutMessage(value: unknown): string {
+	return `[subagent] background_timeout_seconds must be an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS}; ignoring ${JSON.stringify(value)} and using ${SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS}`;
+}
+
+/** The raw configured timeout values, from the flat key and the `[subagent]` table. */
+function rawSubagentTimeouts(value: JsonObject): unknown[] {
+	return [value.subagentBackgroundTimeoutSeconds, asObject(value.subagent)?.background_timeout_seconds].filter(
+		(candidate) => candidate !== undefined,
+	);
+}
 
 export interface StepSettingsPaths {
 	global: string;
@@ -232,6 +263,15 @@ function normalizeSettings(value: JsonObject, resetLegacy = true): StepSettings 
 			break;
 		}
 	}
+	const subagent = asObject(value.subagent);
+	const subagentBackground = [value.subagentBackground, subagent?.background].find(
+		(candidate): candidate is boolean => typeof candidate === "boolean",
+	);
+	if (subagentBackground !== undefined) result.subagentBackground = subagentBackground;
+	const subagentTimeout = [value.subagentBackgroundTimeoutSeconds, subagent?.background_timeout_seconds].find(
+		isValidSubagentBackgroundTimeout,
+	);
+	if (subagentTimeout !== undefined) result.subagentBackgroundTimeoutSeconds = subagentTimeout;
 	if (resetLegacy) resetLegacyPermissionSettings(result, winningPresetCandidate, winningModeCandidate);
 	return result;
 }
@@ -257,6 +297,8 @@ const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
 	autoResume: ["autopilot"],
 	fullAccessAcknowledged: [],
 	feedbackEnabled: [],
+	subagentBackground: [],
+	subagentBackgroundTimeoutSeconds: [],
 };
 
 const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly string[])[]> = {
@@ -285,6 +327,8 @@ const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly
 		["tools", "approval", "fullAccessAcknowledged"],
 	],
 	feedbackEnabled: [["feedback", "enabled"]],
+	subagentBackground: [["subagent", "background"]],
+	subagentBackgroundTimeoutSeconds: [["subagent", "background_timeout_seconds"]],
 };
 
 function deleteNestedAlias(root: JsonObject, path: readonly string[]): void {
@@ -332,6 +376,17 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	}
 	if (settings.feedbackEnabled !== undefined && typeof settings.feedbackEnabled !== "boolean") {
 		throw new Error(`Invalid Step feedbackEnabled setting: ${String(settings.feedbackEnabled)}`);
+	}
+	if (settings.subagentBackground !== undefined && typeof settings.subagentBackground !== "boolean") {
+		throw new Error(`Invalid Step subagentBackground setting: ${String(settings.subagentBackground)}`);
+	}
+	if (
+		settings.subagentBackgroundTimeoutSeconds !== undefined &&
+		!isValidSubagentBackgroundTimeout(settings.subagentBackgroundTimeoutSeconds)
+	) {
+		throw new Error(
+			`Invalid Step subagentBackgroundTimeoutSeconds setting: ${String(settings.subagentBackgroundTimeoutSeconds)} (expected an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS})`,
+		);
 	}
 	const normalized = { ...settings };
 	if (settings.permissionPreset !== undefined) {
@@ -438,7 +493,12 @@ class StepSettingsStore {
 			});
 			return {};
 		}
-		return result.value ?? {};
+		const value = result.value ?? {};
+		for (const timeout of rawSubagentTimeouts(value)) {
+			if (isValidSubagentBackgroundTimeout(timeout)) continue;
+			this.errors.push({ scope, path, error: new Error(invalidSubagentBackgroundTimeoutMessage(timeout)) });
+		}
+		return value;
 	}
 
 	private hasNestedPath(root: JsonObject, path: readonly string[]): boolean {

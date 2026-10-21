@@ -208,3 +208,26 @@ test("streaming output keeps resetting the idle budget", async () => {
 		process.argv[1] = originalArgv1;
 	}
 }, 20_000);
+
+test("the wall-clock limit ends a turn even while the child keeps streaming", async () => {
+	const script = await fakeChild(`
+		setInterval(() => {
+			process.stdout.write(JSON.stringify({ type: "progress-report", message: "still busy" }) + "\\n");
+		}, 100);`);
+	const originalArgv1 = process.argv[1];
+	process.argv[1] = script;
+	try {
+		const input = runInput({ turnIdleTimeoutMs: 400, turnTimeoutMs: 700, keepAlive: true });
+		const session = await createSubagentRpcSession(input, "wall-clock-turn-test");
+		const result = await session.runTurn(input);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toMatch(/timed out: the turn exceeded its 1s time limit/u);
+		expect(result.sessionId).toBe("wall-clock-turn-test");
+		// The busy child is ended, so a later reply respawns it from the transcript.
+		expect(session.isAlive()).toBe(false);
+		session.terminate();
+		await session.exited;
+	} finally {
+		process.argv[1] = originalArgv1;
+	}
+}, 20_000);

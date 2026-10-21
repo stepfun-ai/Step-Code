@@ -18,16 +18,28 @@ import { CHILD_SESSION_ORIGIN } from "../core/child-session.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import type { NewSessionOptions } from "../core/session-manager.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
+import {
+	isValidSubagentBackgroundTimeout,
+	SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS,
+	SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS,
+	SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
+} from "../step/settings-manager.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
-import { executeSubagent } from "./subagent/execute.ts";
-import { allocateStepWorktree, cloneUsage, isRecordValue, SUBAGENT_SESSION_ID_PREFIX } from "./subagent/helpers.ts";
+import { executeSubagent, prepareSubagentRun, runPreparedSubagent } from "./subagent/execute.ts";
+import {
+	allocateStepWorktree,
+	cloneUsage,
+	emptyUsage,
+	isRecordValue,
+	SUBAGENT_SESSION_ID_PREFIX,
+} from "./subagent/helpers.ts";
 import {
 	type BackgroundAgentLane,
 	controlResult,
 	createLaneLifecycle,
 	getLiveSubagentSession,
-	laneMatches,
+	MAX_RETAINED_FINISHED_LANES,
 } from "./subagent/lane-lifecycle.ts";
 import {
 	renderAgentNotification,
@@ -118,6 +130,12 @@ export interface StepSubagentRunResult {
 	updatedAt?: number;
 	/** True when a keep-alive rpc child is still running and can accept replies. */
 	pendingReply?: boolean;
+	/** Child session id (`--session-id`); the transcript stays on disk after the child exits. */
+	sessionId?: string;
+	/** Child session JSONL path, when the child reported it. */
+	sessionFile?: string;
+	/** Titles of blocking dialogs the child raised and that were auto-cancelled (nobody can answer them). */
+	cancelledPrompts?: string[];
 }
 
 export interface StepSubagentRunInput {
@@ -153,6 +171,11 @@ export interface StepSubagentRunInput {
 	 * Defaults to `resolveSubagentTurnIdleTimeoutMs()`; `0` disables the watchdog.
 	 */
 	turnIdleTimeoutMs?: number;
+	/**
+	 * Wall-clock limit for one turn in ms; output does not reset it. The turn
+	 * fails when it is reached. Omitted or `0` means no limit (foreground calls).
+	 */
+	turnTimeoutMs?: number;
 	/** Workflow-owned path ACL passed to the child-side tool_call hook. */
 	workflowAcl?: {
 		baseCwd: string;
@@ -221,54 +244,88 @@ export interface StepSubagentExtensionOptions {
 	runner?: StepSubagentRunner;
 	/** Optional process reporter; telemetry never owns child execution. */
 	telemetry?: StepTelemetryReporter;
+	/**
+	 * Host-supplied background-lane settings (normally `[subagent]` in
+	 * `config.toml`), read on every call so a reload takes effect.
+	 */
+	backgroundSettings?: () => StepSubagentBackgroundSettings | undefined;
+}
+
+export interface StepSubagentBackgroundSettings {
+	/** `false` runs every `run_in_background` call in the foreground. */
+	enabled?: boolean;
+	/** Default per-turn wall-clock limit for background lanes, in seconds. */
+	timeoutSeconds?: number;
 }
 
 // Keep the model-facing contract identical to Pi's subagent example. Step
 // adapts discovery, process invocation, storage, telemetry, and theme only.
-export const StepTaskItem = Type.Object({
-	agent: Type.String({ description: "Name of the agent to invoke" }),
-	task: Type.String({ description: "Task to delegate to the agent" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-});
+export const StepTaskItem = Type.Object(
+	{
+		agent: Type.String({ description: "Name of the agent to invoke" }),
+		task: Type.String({ description: "Task to delegate to the agent" }),
+		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	},
+	{ additionalProperties: false },
+);
 
-export const StepChainItem = Type.Object({
-	agent: Type.String({ description: "Name of the agent to invoke" }),
-	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-});
+export const StepChainItem = Type.Object(
+	{
+		agent: Type.String({ description: "Name of the agent to invoke" }),
+		task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
+		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	},
+	{ additionalProperties: false },
+);
 
 const StepAgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
 	default: "user",
 });
 
-const StepSubscribeSchema = StringEnum(["final", "progress", "none"] as const, {
+const StepSubscribeSchema = StringEnum(["final", "progress"] as const, {
 	description:
-		'Notification level for background lanes. "final" (default) sends one completion notification, "progress" adds throttled progress updates, "none" is fire-and-forget. Except with "none", completion, failure, and needs-input notifications wake you automatically, so never sleep or poll to wait for a lane.',
+		'Notification level for a background lane. "final" (default) sends one notification when the lane ends; "progress" adds throttled progress updates that need no reply.',
 	default: "final",
 });
 
-const StepSubagentParamsSchema = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
-	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
-	tasks: Type.Optional(Type.Array(StepTaskItem, { description: "Array of {agent, task} for parallel execution" })),
-	chain: Type.Optional(Type.Array(StepChainItem, { description: "Array of {agent, task} for sequential execution" })),
-	agentScope: Type.Optional(StepAgentScopeSchema),
-	confirmProjectAgents: Type.Optional(
-		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
-	),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
-	subscribe: Type.Optional(StepSubscribeSchema),
-});
+const StepSubagentParamsSchema = Type.Object(
+	{
+		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
+		task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
+		tasks: Type.Optional(Type.Array(StepTaskItem, { description: "Array of {agent, task} for parallel execution" })),
+		chain: Type.Optional(
+			Type.Array(StepChainItem, { description: "Array of {agent, task} for sequential execution" }),
+		),
+		agentScope: Type.Optional(StepAgentScopeSchema),
+		confirmProjectAgents: Type.Optional(
+			Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
+		),
+		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+		run_in_background: Type.Optional(
+			Type.Boolean({
+				description:
+					"Run the call as a background lane and return its lane_id immediately. Default false: the call blocks and returns the result. Use the foreground when your next step needs the result; use the background only for independent work you can continue without. A finished lane wakes you with one <agent-notification>; never sleep or poll for it.",
+				default: false,
+			}),
+		),
+		timeout_seconds: Type.Optional(
+			Type.Number({
+				description: `Background lanes only: wall-clock limit for each turn of the lane, in seconds (${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS}-${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS}). The turn fails when it is reached. Defaults to the configured limit (${SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS}s unless changed).`,
+				minimum: SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
+				maximum: SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS,
+			}),
+		),
+		subscribe: Type.Optional(StepSubscribeSchema),
+	},
+	{ additionalProperties: false },
+);
 
 type PublicSubagentParams = Static<typeof StepSubagentParamsSchema>;
 
-/** Internal controls retained for Step's background-lane implementation. They
- * are intentionally absent from the model-facing Pi schema. */
+/** Internal controls for embedded Step callers. They are intentionally absent
+ * from the model-facing schema. */
 interface StepSubagentRuntimeParams {
-	run_in_background?: boolean;
-	alias?: string;
-	group?: string;
 	isolateWorkspace?: boolean;
 	worktreeName?: string;
 	retainWorktree?: boolean;
@@ -457,10 +514,25 @@ export async function runStepSubagentProcess(input: StepSubagentRunInput): Promi
 		if ((input.workflowAcl || input.awaitExit) && !input.keepAlive) await live.exited;
 		return result;
 	}
+	// A run cancelled before its child existed (session shutdown, a stopped lane)
+	// must not spawn one: a keep-alive child would outlive the cancellation.
+	if (input.signal?.aborted) {
+		return {
+			messages: [],
+			stderr: "",
+			exitCode: 0,
+			usage: emptyUsage(),
+			stopReason: "aborted",
+			errorMessage: "Subagent was aborted",
+			sessionId,
+		};
+	}
 	if (spawnedSubagentSessions.has(sessionId)) input.onChildRespawn?.();
 	spawnedSubagentSessions.add(sessionId);
 	const session = await createSubagentRpcSession(input, sessionId);
 	const result = await session.runTurn(input);
+	// Cancelled while the child was starting: a keep-alive child would stay up with nobody to stop it.
+	if (input.signal?.aborted && input.keepAlive) session.stop();
 	// A workflow node or admitted subagent owns its child through process exit, not
 	// just agent_settled. This keeps its shared admission slot until cancellation
 	// has actually stopped the child, and lets queued work start without orphaned requests.
@@ -482,26 +554,83 @@ export function makeToolResult(
 	};
 }
 
-const AgentSendTargetSchema = Type.Object({
-	agent_id: Type.Optional(Type.String({ description: "Background agent id" })),
-	alias: Type.Optional(Type.String({ description: "Background agent alias" })),
-	group: Type.Optional(Type.String({ description: "Background agent group (fans out to every member)" })),
-	all: Type.Optional(Type.Boolean({ description: "Address every background agent" })),
-});
-
-const AgentSendSchema = Type.Object({
-	to: AgentSendTargetSchema,
-	action: StringEnum(["reply", "stop"] as const, {
-		description: '"reply" sends prompt to the lane\'s ongoing transcript; "stop" interrupts and ends the lane.',
-	}),
-	prompt: Type.Optional(Type.String({ description: 'Message to deliver for action:"reply"' })),
-	interrupt: Type.Optional(
-		Type.Boolean({
+const AgentSendSchema = Type.Object(
+	{
+		lane_id: Type.Optional(
+			Type.String({
+				description:
+					'Lane id returned by subagent with run_in_background:true (for example "lane_1a2b3c4d"). Required for reply and stop; omit with status to list every lane.',
+			}),
+		),
+		action: StringEnum(["reply", "stop", "status"] as const, {
 			description:
-				'With action:"reply": true steers the lane immediately, false (default) queues the prompt to run after the lane\'s current turn.',
+				'"reply" sends prompt into a single-agent lane\'s ongoing transcript; "stop" interrupts the lane and ends it; "status" returns the lane\'s state, usage, child session paths, and the tail of its last output.',
 		}),
-	),
-});
+		prompt: Type.Optional(Type.String({ description: 'Message to deliver for action:"reply"' })),
+		interrupt: Type.Optional(
+			Type.Boolean({
+				description:
+					'With action:"reply": true steers the lane immediately, false (default) queues the prompt to run after the lane\'s current turn.',
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
+
+/** Environment switch that runs every `run_in_background` call in the foreground. */
+export const SUBAGENT_BACKGROUND_DISABLE_ENV = "STEP_DISABLE_SUBAGENT_BACKGROUND";
+
+function envFlagEnabled(value: string | undefined): boolean {
+	return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "on";
+}
+
+/**
+ * Why a `run_in_background` call must run in the foreground, or undefined when
+ * it may detach. print and json runs end with their single prompt, so a lane
+ * would be stopped before it could report; tui, rpc, and SDK hosts stay up.
+ */
+function backgroundUnavailableReason(
+	ctx: ExtensionContext,
+	settings: StepSubagentBackgroundSettings | undefined,
+): string | undefined {
+	if (ctx.mode === "print" || ctx.mode === "json") {
+		return "Background execution is not available in this run mode; ran in the foreground.";
+	}
+	if (envFlagEnabled(process.env[SUBAGENT_BACKGROUND_DISABLE_ENV]) || settings?.enabled === false) {
+		return "Background execution is disabled by configuration; ran in the foreground.";
+	}
+	return undefined;
+}
+
+/**
+ * Per-turn wall-clock limit: the call's value, else the configured default,
+ * else 3600s. The schema already bounds the call's value; an out-of-bounds
+ * configured value is rejected by settings validation and reported at load,
+ * so it falls back to the default here instead of being silently clamped.
+ */
+export function resolveBackgroundTimeoutMs(requested: number | undefined, configured: number | undefined): number {
+	if (typeof requested === "number" && Number.isFinite(requested)) {
+		const seconds = Math.min(
+			SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS,
+			Math.max(SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS, requested),
+		);
+		return Math.round(seconds) * 1000;
+	}
+	const seconds = isValidSubagentBackgroundTimeout(configured)
+		? configured
+		: SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS;
+	return seconds * 1000;
+}
+
+function prependNotice(
+	result: AgentToolResult<StepSubagentDetails>,
+	notice: string,
+): AgentToolResult<StepSubagentDetails> {
+	const [first, ...rest] = result.content;
+	if (first?.type === "text")
+		return { ...result, content: [{ ...first, text: `${notice}\n\n${first.text}` }, ...rest] };
+	return { ...result, content: [{ type: "text", text: notice }, ...result.content] };
+}
 
 /**
  * Show a live lane list under the editor for the duration of a blocking
@@ -648,13 +777,46 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 				// A host may tear down its UI while a detached child is finishing.
 			}
 		};
-		const { createLane, startLane, stopLane, replyToLane } = createLaneLifecycle({
+		let widgetCtx: ExtensionContext | undefined;
+		const clearLaneWidget = (): void => {
+			shownLanes.clear();
+			stopLanesTicker();
+			lanesWidget = undefined;
+			lanesPublished = undefined;
+			const ctx = widgetCtx;
+			widgetCtx = undefined;
+			if (!ctx?.hasUI) return;
+			try {
+				ctx.ui.setWidget(lanesWidgetKey, undefined);
+			} catch {
+				// The host may already have torn its UI down during shutdown.
+			}
+		};
+		const trackedUpdateLaneWidget = (lane: BackgroundAgentLane): void => {
+			if (lane.ctx.hasUI) widgetCtx = lane.ctx;
+			updateLaneWidget(lane);
+		};
+		const lifecycle = createLaneLifecycle({
 			pi,
 			lanes,
-			agentDir: resolved.agentDir,
-			executeSubagent: (runParams, signal, onUpdate, ctx, laneRuntime) =>
-				executeSubagent(runParams, signal, onUpdate, ctx, resolved, laneRuntime),
-			updateLaneWidget,
+			prepare: (runParams, ctx) => prepareSubagentRun(runParams, ctx, resolved, { requireKnownAgents: true }),
+			run: (prepared, signal, onUpdate, ctx, laneRuntime) =>
+				runPreparedSubagent(prepared, signal, onUpdate, ctx, resolved, laneRuntime),
+			outputDirectory: (ctx) => path.join(ctx.sessionManager?.getSessionDir?.() || resolved.agentDir, "tool-output"),
+			updateLaneWidget: trackedUpdateLaneWidget,
+			clearLaneWidget,
+		});
+
+		// Lanes belong to this session runtime. Quit, signals, /new, /resume,
+		// /fork, and reload all tear the runtime down through session_shutdown;
+		// lanes are stopped rather than carried into the next session.
+		pi.on("session_shutdown", async (event, ctx) => {
+			const running = [...lanes.values()].filter((lane) => lane.status === "running").length;
+			if (running > 0 && event.reason === "quit" && ctx.mode === "tui") {
+				// The terminal UI has already stopped; tell the user why exit pauses.
+				process.stderr.write(`Stopping ${running} background agent${running === 1 ? "" : "s"}...\n`);
+			}
+			await lifecycle.shutdown();
 		});
 
 		pi.registerMessageRenderer("agent-notification", renderAgentNotification);
@@ -665,77 +827,85 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			description: [
 				"Delegate tasks to specialized subagents with isolated context.",
 				"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+				"By default the call blocks until the agents finish and returns their results.",
+				"With run_in_background:true it returns a lane_id at once and later sends one <agent-notification> when the lane ends; manage the lane with agent_send.",
 				formatBuiltinAgentGuidance(),
 				`Default agent scope is "user" (from ${path.join(resolved.agentDir, "agents")}).`,
 				`To enable project-local agents in ${resolved.configDirName}/agents, set agentScope: "both" (or "project").`,
 			].join(" "),
 			parameters: StepSubagentParamsSchema,
 			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
-				// Background lanes remain available to embedded Step callers through
-				// the internal extension API, while ordinary model calls follow Pi's
-				// blocking single/parallel/chain contract.
-				if ((params as SubagentParams).run_in_background) {
-					const backgroundParams = params as SubagentParams;
-					const hasParallelInput = (backgroundParams.tasks?.length ?? 0) > 0;
-					const hasChainInput = (backgroundParams.chain?.length ?? 0) > 0;
-					const hasSingleInput =
-						!hasParallelInput &&
-						!hasChainInput &&
-						Boolean(backgroundParams.agent?.trim() && backgroundParams.task?.trim());
-					// Do not create a detached lane for malformed input. Returning the
-					// normal validation result keeps the error attached to this tool call
-					// instead of emitting a misleading background_done notification.
-					if (Number(hasSingleInput) + Number(hasParallelInput) + Number(hasChainInput) !== 1) {
-						return executeSubagent(backgroundParams, signal, onUpdate, ctx, resolved);
-					}
-					const lane = createLane(backgroundParams, ctx);
-					startLane(lane, backgroundParams);
-					const details: StepSubagentDetails = {
-						...lane.details,
-						results: [...lane.details.results],
-					};
-					const monitorHint =
-						lane.subscribe === "none"
-							? "Fire-and-forget lane: no notifications will be sent."
-							: [
-									// Without this the parent, told to "wait for the lanes", has no
-									// wait primitive and falls back to `sleep` loops: the lane result
-									// then sits behind a sleep of up to minutes, and each progress
-									// notice landing mid-sleep keeps the loop going.
-									"Do not wait for it with sleep or polling: end your turn, or carry on with other work.",
-									"You are woken automatically with an <agent-notification> when the lane finishes, fails, or needs input.",
-									lane.subscribe === "progress"
-										? "Progress <agent-notification> messages are informational; they need no reply."
-										: "",
-								]
-									.filter(Boolean)
-									.join(" ");
+				const callParams = params as SubagentParams;
+				const foreground = (runParams: SubagentParams) =>
+					withSubagentListWidget(toolCallId, ctx, onUpdate, (update) =>
+						executeSubagent(runParams, signal, update, ctx, resolved),
+					);
+				if (!callParams.run_in_background) return foreground(callParams);
+
+				const settings = options.backgroundSettings?.();
+				const unavailable = backgroundUnavailableReason(ctx, settings);
+				if (unavailable) {
+					return prependNotice(await foreground({ ...callParams, run_in_background: false }), unavailable);
+				}
+				// Every check that can reject the call runs before the lane exists, so
+				// a bad call returns an ordinary error and never sends a notification.
+				const preflight = await prepareSubagentRun(callParams, ctx, resolved, { requireKnownAgents: true });
+				if (!preflight.ok) return preflight.result;
+				const lane = lifecycle.launchLane(
+					callParams,
+					ctx,
+					preflight.run,
+					resolveBackgroundTimeoutMs(callParams.timeout_seconds, settings?.timeoutSeconds),
+				);
+				if (typeof lane === "string") {
+					const { mode, scope, discovery } = preflight.run;
 					return makeToolResult(
-						details,
-						`Started background agent ${lane.id}${lane.alias ? ` (${lane.alias})` : ""}. ${monitorHint}`,
+						{
+							mode,
+							agentScope: scope,
+							userAgentsDir: discovery.userAgentsDir,
+							projectAgentsDir: discovery.projectAgentsDir,
+							results: [],
+						},
+						lane,
+						true,
 					);
 				}
-				return withSubagentListWidget(toolCallId, ctx, onUpdate, (update) =>
-					executeSubagent(params as SubagentParams, signal, update, ctx, resolved),
+				const details: StepSubagentDetails = { ...lane.details, results: [...lane.details.results] };
+				return makeToolResult(
+					details,
+					[
+						`Started background lane ${lane.id} (${preflight.run.mode}, ${preflight.run.tasks.length} task${preflight.run.tasks.length === 1 ? "" : "s"}; ${Math.round(lane.turnTimeoutMs / 1000)}s limit per turn).`,
+						// Without this the parent, told to "wait for the lane", has no wait
+						// primitive and falls back to `sleep` loops that delay the result.
+						"Do not wait for it with sleep or polling: end your turn, or carry on with other work.",
+						"You are woken with one <agent-notification> when the lane ends.",
+						lane.subscribe === "progress"
+							? "Progress <agent-notification> messages are informational; they need no reply."
+							: "",
+					]
+						.filter(Boolean)
+						.join(" "),
 				);
 			},
 			renderCall: (params, theme) => {
+				const background = params.run_in_background ? theme.fg("muted", " (background)") : "";
 				if (params.chain && params.chain.length > 0) {
 					return new Text(
-						`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", `chain (${params.chain.length} steps)`)}\n  ${theme.fg("dim", params.chain[0]?.task ?? "...")}`,
+						`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", `chain (${params.chain.length} steps)`)}${background}\n  ${theme.fg("dim", params.chain[0]?.task ?? "...")}`,
 						0,
 						0,
 					);
 				}
 				if (params.tasks && params.tasks.length > 0) {
 					return new Text(
-						`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", `parallel (${params.tasks.length} tasks)`)}\n  ${theme.fg("dim", params.tasks[0]?.task ?? "...")}`,
+						`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", `parallel (${params.tasks.length} tasks)`)}${background}\n  ${theme.fg("dim", params.tasks[0]?.task ?? "...")}`,
 						0,
 						0,
 					);
 				}
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", params.agent ?? "...")}\n  ${theme.fg("dim", params.task ?? "...")}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", params.agent ?? "...")}${background}\n  ${theme.fg("dim", params.task ?? "...")}`,
 					0,
 					0,
 				);
@@ -747,39 +917,52 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			name: "agent_send",
 			label: "Agent send",
 			description: [
-				"Send a message to background agents created by subagent with run_in_background=true.",
-				'action:"reply" delivers prompt into the lane\'s ongoing transcript (interrupt:false queues it after the current turn, interrupt:true steers immediately).',
-				'action:"stop" interrupts the lane and ends its child process.',
-				"Address one lane with to.agent_id or to.alias, or fan out with to.group / to.all.",
+				"Manage a background lane created by subagent with run_in_background:true.",
+				'action:"reply" delivers prompt into a single-agent lane\'s ongoing transcript (interrupt:false queues it after the current turn, interrupt:true steers immediately); parallel and chain lanes cannot take replies.',
+				'action:"stop" interrupts the lane and ends its child processes.',
+				'action:"status" reports the lane\'s state, usage, child session paths, and the tail of its last output; omit lane_id to list every lane. Lanes notify you when they end, so status is for a specific question, not for polling.',
 			].join(" "),
 			parameters: AgentSendSchema,
 			executionMode: "sequential",
 			execute: async (_id, params) => {
-				const to = params.to ?? {};
-				if (!to.agent_id && !to.alias && !to.group && to.all !== true) {
-					return controlResult("agent_send: provide to.agent_id, to.alias, to.group, or to.all");
+				const laneId = params.lane_id?.trim();
+				if (!laneId) {
+					if (params.action !== "status") {
+						return controlResult(`agent_send: lane_id is required for action:"${params.action}"`);
+					}
+					const all = [...lanes.values()];
+					if (all.length === 0) return controlResult("agent_send: this session has no background lanes");
+					return controlResult(
+						all
+							.map((lane) => {
+								const agents = [...new Set(lane.details.results.map((record) => record.agent))];
+								return `${lane.id}: ${lane.status} (${lane.details.mode}${agents.length > 0 ? `; ${agents.join(", ")}` : ""})`;
+							})
+							.join("\n"),
+						all.map((lane) => lane.details),
+					);
 				}
-				const selected = [...lanes.values()].filter((lane) => to.all === true || laneMatches(lane, to));
-				if (selected.length === 0) return controlResult("agent_send: no matching background agents");
+				const lane = lanes.get(laneId);
+				if (!lane) {
+					const known = [...lanes.keys()];
+					return controlResult(
+						`agent_send: no background lane "${laneId}" in this session${known.length > 0 ? `; known lanes: ${known.join(", ")}` : ""}. Only the ${MAX_RETAINED_FINISHED_LANES} most recent finished lanes are kept; an older lane's child session paths are in its notification. Start a new subagent call for further work.`,
+					);
+				}
+				if (params.action === "status") return controlResult(lifecycle.laneStatus(lane), [lane.details]);
 				if (params.action === "reply") {
 					const prompt = params.prompt?.trim();
 					if (!prompt) return controlResult('agent_send: prompt is required for action:"reply"');
-					return controlResult(
-						selected.map((lane) => replyToLane(lane, prompt, params.interrupt === true)).join("\n"),
-						selected.map((lane) => lane.details),
-					);
+					return controlResult(lifecycle.replyToLane(lane, prompt, params.interrupt === true), [lane.details]);
 				}
-				return controlResult(
-					selected.map((lane) => stopLane(lane)).join("\n"),
-					selected.map((lane) => lane.details),
-				);
+				return controlResult(lifecycle.stopLane(lane), [lane.details]);
 			},
 		});
 
-		// S3 (docs/improvement-plan.md): agent_reply/agent_wait/agent_interrupt/
-		// agent_list are hard-deleted. agent_send covers reply (follow_up), steer
-		// (reply + interrupt), and stop (abort); lane lifecycle arrives as
-		// <agent-notification> events instead of wait/list polling.
+		// agent_reply/agent_wait/agent_interrupt/agent_list no longer exist.
+		// agent_send covers reply (follow_up), steer (reply + interrupt), stop,
+		// and a non-blocking status read; a lane's end arrives as one
+		// <agent-notification> instead of wait/list polling.
 	};
 }
 

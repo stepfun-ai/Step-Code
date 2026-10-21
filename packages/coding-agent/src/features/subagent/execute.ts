@@ -48,7 +48,7 @@ import {
 import { truncateText } from "./lane-events.ts";
 import type { StepSubagentLaneRuntime } from "./lane-lifecycle.ts";
 
-interface StepSubagentTaskInput {
+export interface StepSubagentTaskInput {
 	agent: string;
 	task: string;
 	cwd?: string;
@@ -247,25 +247,42 @@ async function confirmProjectAgents(
 	);
 }
 
-export async function executeSubagent(
+export type SubagentExecutionOptions = Required<
+	Pick<
+		StepSubagentExtensionOptions,
+		"agentDir" | "configDirName" | "includeBuiltinAgents" | "maxParallelTasks" | "maxConcurrency"
+	>
+> & {
+	worktreeManager: StepWorktreeManager;
+	runner: StepSubagentRunner;
+	telemetry?: StepTelemetryReporter;
+};
+
+/** A validated, approved call: discovery ran, exactly one mode was selected, and project agents were confirmed. */
+export interface PreparedSubagentRun {
+	mode: StepSubagentDetails["mode"];
+	scope: StepAgentScope;
+	discovery: StepAgentDiscoveryResult;
+	tasks: StepSubagentTaskInput[];
+}
+
+export type SubagentPreflight =
+	| { ok: true; run: PreparedSubagentRun }
+	| { ok: false; result: AgentToolResult<StepSubagentDetails> };
+
+/**
+ * Everything that can reject a call before any child starts: discovery, mode
+ * selection, the batch-size limit, and project-agent confirmation. With
+ * `requireKnownAgents` an unknown agent name is rejected here as well, instead
+ * of surfacing as one failed task; a background lane uses it so a bad call
+ * returns an ordinary error and never creates a lane.
+ */
+export async function prepareSubagentRun(
 	params: SubagentParams,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
 	ctx: ExtensionContext,
-	options: Required<
-		Pick<
-			StepSubagentExtensionOptions,
-			"agentDir" | "configDirName" | "includeBuiltinAgents" | "maxParallelTasks" | "maxConcurrency"
-		>
-	> & {
-		worktreeManager: StepWorktreeManager;
-		runner: StepSubagentRunner;
-		telemetry?: StepTelemetryReporter;
-	},
-	laneRuntime?: StepSubagentLaneRuntime,
-): Promise<AgentToolResult<StepSubagentDetails>> {
-	const parentCwd = ctx.cwd,
-		parentSessionId = ctx.sessionManager?.getSessionId?.();
+	options: SubagentExecutionOptions,
+	preflight: { requireKnownAgents?: boolean } = {},
+): Promise<SubagentPreflight> {
 	const scope = params.agentScope ?? "user";
 	const discovery = await discoverStepAgents(ctx.cwd, {
 		agentDir: options.agentDir,
@@ -284,29 +301,79 @@ export async function executeSubagent(
 	const modeCount = Number(Boolean(single)) + Number(hasParallelInput) + Number(hasChainInput);
 	if (modeCount !== 1) {
 		const details = buildDetails("single", discovery, scope, []);
-		return makeToolResult(
-			details,
-			`Invalid parameters. Provide exactly one mode. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
-			true,
-		);
+		return {
+			ok: false,
+			result: makeToolResult(
+				details,
+				`Invalid parameters. Provide exactly one mode. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
+				true,
+			),
+		};
 	}
 	if (parallel && parallel.length > options.maxParallelTasks) {
 		const details = buildDetails("parallel", discovery, scope, []);
-		return makeToolResult(
-			details,
-			`Too many parallel tasks (${parallel.length}); maximum is ${options.maxParallelTasks}.`,
-			true,
-		);
+		return {
+			ok: false,
+			result: makeToolResult(
+				details,
+				`Too many parallel tasks (${parallel.length}); maximum is ${options.maxParallelTasks}.`,
+				true,
+			),
+		};
 	}
 	const tasks = parallel ?? chain ?? [single!];
 	const mode: StepSubagentDetails["mode"] = chain ? "chain" : parallel ? "parallel" : "single";
+	if (preflight.requireKnownAgents) {
+		const unknown = [
+			...new Set(tasks.filter((task) => !resolveStepAgent(discovery.agents, task.agent)).map((task) => task.agent)),
+		];
+		if (unknown.length > 0) {
+			return {
+				ok: false,
+				result: makeToolResult(
+					buildDetails(mode, discovery, scope, []),
+					`Unknown agent${unknown.length > 1 ? "s" : ""}: ${unknown.map((name) => `"${name}"`).join(", ")}. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
+					true,
+				),
+			};
+		}
+	}
 	if (!(await confirmProjectAgents(ctx, params, discovery, tasks))) {
 		const details = buildDetails(mode, discovery, scope, []);
-		return makeToolResult(details, "Canceled: project-local agents not approved.", true);
+		return { ok: false, result: makeToolResult(details, "Canceled: project-local agents not approved.", true) };
 	}
+	return { ok: true, run: { mode, scope, discovery, tasks } };
+}
+
+export async function executeSubagent(
+	params: SubagentParams,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+	ctx: ExtensionContext,
+	options: SubagentExecutionOptions,
+	laneRuntime?: StepSubagentLaneRuntime,
+): Promise<AgentToolResult<StepSubagentDetails>> {
+	const preflight = await prepareSubagentRun(params, ctx, options);
+	if (!preflight.ok) return preflight.result;
+	return runPreparedSubagent(preflight.run, signal, onUpdate, ctx, options, laneRuntime);
+}
+
+export async function runPreparedSubagent(
+	prepared: PreparedSubagentRun,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+	ctx: ExtensionContext,
+	options: SubagentExecutionOptions,
+	laneRuntime?: StepSubagentLaneRuntime,
+): Promise<AgentToolResult<StepSubagentDetails>> {
+	const parentCwd = ctx.cwd,
+		parentSessionId = ctx.sessionManager?.getSessionId?.();
+	const { mode, scope, discovery, tasks } = prepared;
+	const parallel = mode === "parallel" ? tasks : undefined;
+	const chain = mode === "chain" ? tasks : undefined;
 
 	const records = tasks.map((task) => makeEmptyResult(task.agent, task.task));
-	const execution = parallel ? "background" : "blocking";
+	const execution = laneRuntime ? "background" : "blocking";
 	const createdAt = tasks.map(() => Date.now());
 	const createdTasks = new Set<number>();
 	const reportCreated = (agent: StepAgentConfig, index: number): void => {
@@ -410,8 +477,17 @@ export async function executeSubagent(
 				worktree = await options.worktreeManager.allocate(baseCwd, taskLabel(task, index));
 				childCwd = worktree.path;
 			}
+			const childSessionId = laneRuntime?.sessionId
+				? index === 0
+					? laneRuntime.sessionId
+					: `${laneRuntime.sessionId}-${index}`
+				: `subagent-${randomUUID()}`;
+			const withSession = (result: StepSubagentRunResult): StepSubagentRunResult => ({
+				...result,
+				sessionId: result.sessionId ?? childSessionId,
+			});
 			const update = (partial: StepSubagentRunResult): void => {
-				records[index] = resultRecord(agent.name, task.task, partial, {
+				records[index] = resultRecord(agent.name, task.task, withSession(partial), {
 					agentSource: agent.source,
 					worktreePath: worktree?.path,
 					worktreeBranch: worktree?.branch,
@@ -430,12 +506,9 @@ export async function executeSubagent(
 				onUpdate: update,
 				onNeedsInput: laneRuntime?.onNeedsInput,
 				onChildRespawn: laneRuntime?.onChildRespawn,
-				sessionId: laneRuntime?.sessionId
-					? index === 0
-						? laneRuntime.sessionId
-						: `${laneRuntime.sessionId}-${index}`
-					: `subagent-${randomUUID()}`,
+				sessionId: childSessionId,
 				keepAlive: laneRuntime?.keepAlive === true,
+				...(laneRuntime?.turnTimeoutMs ? { turnTimeoutMs: laneRuntime.turnTimeoutMs } : {}),
 				// An admitted child keeps its shared slot until its process has exited.
 				...(admission ? { awaitExit: true } : {}),
 				...(admission
@@ -449,7 +522,7 @@ export async function executeSubagent(
 						}
 					: {}),
 			});
-			const completed = resultRecord(agent.name, task.task, child, {
+			const completed = resultRecord(agent.name, task.task, withSession(child), {
 				agentSource: agent.source,
 				worktreePath: worktree?.path,
 				worktreeBranch: worktree?.branch,
