@@ -1,11 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LarkApi } from "../src/api.ts";
 
-const sdk = vi.hoisted(() => ({ request: vi.fn() }));
+const sdk = vi.hoisted(() => ({
+	request: vi.fn(),
+	chatCreate: vi.fn(),
+	chatMembersGet: vi.fn(),
+	messageCreate: vi.fn(),
+	messageReply: vi.fn(),
+	messageList: vi.fn(),
+}));
 vi.mock("@larksuiteoapi/node-sdk", () => ({
 	LoggerLevel: { error: 1 },
 	Client: class {
 		request = sdk.request;
+		im = {
+			chat: { create: sdk.chatCreate },
+			chatMembers: {
+				create: vi.fn(),
+				get: sdk.chatMembersGet,
+				getWithIterator: async (...args: unknown[]) => {
+					const first = await (sdk.chatMembersGet as (...a: unknown[]) => Promise<unknown>)(...args);
+					return (async function* () {
+						yield first;
+						for (const more of ((first as { __more?: unknown[] })?.__more ?? []) as unknown[]) yield more;
+					})();
+				},
+			},
+			message: { create: sdk.messageCreate, reply: sdk.messageReply, list: sdk.messageList },
+		};
 	},
 }));
 
@@ -19,7 +41,7 @@ describe("room transport calls", () => {
 	it("creates a private chat with members and bots in one call", async () => {
 		const client = api();
 		try {
-			sdk.request.mockResolvedValueOnce({ code: 0, data: { chat_id: "oc_room" } });
+			sdk.chatCreate.mockResolvedValueOnce({ code: 0, data: { chat_id: "oc_room" } });
 			expect(
 				await client.createChat({
 					name: "room-1",
@@ -29,21 +51,16 @@ describe("room transport calls", () => {
 					dedupeKey: "room-1",
 				}),
 			).toBe("oc_room");
-			expect(sdk.request).toHaveBeenCalledWith(
-				expect.objectContaining({
-					url: "/open-apis/im/v1/chats",
-					method: "POST",
-					params: { user_id_type: "open_id", uuid: "room-1" },
-					data: expect.objectContaining({
-						name: "room-1",
-						chat_type: "private",
-						restricted_mode_setting: { status: false },
-						owner_id: "ou_a",
-						user_id_list: ["ou_a", "ou_b"],
-						bot_id_list: ["cli_peer"],
-					}),
-				}),
-			);
+			const [request] = sdk.chatCreate.mock.calls[0];
+			expect(request.params).toEqual({ user_id_type: "open_id", uuid: "room-1" });
+			expect(request.data).toMatchObject({
+				name: "room-1",
+				chat_type: "private",
+				owner_id: "ou_a",
+				user_id_list: ["ou_a", "ou_b"],
+				bot_id_list: ["cli_peer"],
+			});
+			expect(request.data.restricted_mode_setting.status).toBe(false);
 		} finally {
 			await client.close();
 		}
@@ -52,77 +69,36 @@ describe("room transport calls", () => {
 	it("reports chat creation failure without leaking the response", async () => {
 		const client = api();
 		try {
-			sdk.request.mockResolvedValueOnce({ code: 230002, msg: "Bot/User can NOT be out of the chat." });
+			sdk.chatCreate.mockRejectedValueOnce(new Error("Bot/User can NOT be out of the chat."));
 			await expect(client.createChat({ name: "room" })).rejects.toThrow("Lark chat creation failed");
-			sdk.request.mockResolvedValueOnce({ code: 0, data: {} });
+			sdk.chatCreate.mockResolvedValueOnce({ code: 0, data: {} });
 			await expect(client.createChat({ name: "room" })).rejects.toThrow("Lark chat creation failed");
 		} finally {
 			await client.close();
 		}
 	});
 
-	it("adds people and bots with the matching member id type", async () => {
+	it("lists members with their kind across pages", async () => {
 		const client = api();
 		try {
-			sdk.request.mockResolvedValue({ code: 0 });
-			await client.addChatMembers("oc/1", { openIds: ["ou_a"], appIds: ["cli_peer"] });
-			expect(sdk.request).toHaveBeenNthCalledWith(
-				1,
-				expect.objectContaining({
-					url: "/open-apis/im/v1/chats/oc%2F1/members",
-					params: { member_id_type: "open_id" },
-					data: { id_list: ["ou_a"] },
-				}),
-			);
-			expect(sdk.request).toHaveBeenNthCalledWith(
-				2,
-				expect.objectContaining({ params: { member_id_type: "app_id" }, data: { id_list: ["cli_peer"] } }),
-			);
-			await client.addChatMembers("oc_1", {});
-			expect(sdk.request).toHaveBeenCalledTimes(2);
-		} finally {
-			await client.close();
-		}
-	});
-
-	it("fails member addition when the platform refuses", async () => {
-		const client = api();
-		try {
-			sdk.request.mockResolvedValueOnce({ code: 232019, msg: "concurrent" });
-			await expect(client.addChatMembers("oc_1", { appIds: ["cli_peer"] })).rejects.toThrow(
-				"Lark chat member addition failed",
-			);
-		} finally {
-			await client.close();
-		}
-	});
-
-	it("lists only bot members across pages", async () => {
-		const client = api();
-		try {
-			sdk.request
-				.mockResolvedValueOnce({
-					code: 0,
-					data: {
-						has_more: true,
-						page_token: "next",
-						items: [
-							{ member_id_type: "app", member_id: "ou_bot", app_id: "cli_a", name: "A bot" },
-							{ member_id_type: "user", member_id: "ou_human" },
-						],
-					},
-				})
-				.mockResolvedValueOnce({
-					code: 0,
-					data: { has_more: false, items: [{ app_id: "cli_b", member_id: "ou_bot2", name: "B bot" }] },
-				});
-			expect(await client.listChatBots("oc_1")).toEqual([
-				{ appId: "cli_a", openId: "ou_bot", name: "A bot" },
-				{ appId: "cli_b", openId: "ou_bot2", name: "B bot" },
+			const first = {
+				items: [
+					{ member_id_type: "app", member_id: "ou_bot", name: "A bot" },
+					{ member_id_type: "user", member_id: "ou_human" },
+				],
+			};
+			const second = { items: [{ member_id_type: "app", member_id: "ou_bot2", name: "B bot" }] };
+			sdk.chatMembersGet.mockResolvedValueOnce({ ...first, __more: [second] });
+			expect(await client.listChatMembers("oc_1")).toEqual([
+				{ openId: "ou_bot", memberType: "bot", name: "A bot" },
+				{ openId: "ou_human", memberType: "user", name: "" },
+				{ openId: "ou_bot2", memberType: "bot", name: "B bot" },
 			]);
-			expect(sdk.request).toHaveBeenNthCalledWith(
-				2,
-				expect.objectContaining({ params: expect.objectContaining({ page_token: "next" }) }),
+			expect(sdk.chatMembersGet).toHaveBeenCalledWith(
+				expect.objectContaining({
+					path: { chat_id: "oc_1" },
+					params: expect.objectContaining({ member_id_type: "open_id" }),
+				}),
 			);
 		} finally {
 			await client.close();

@@ -98,6 +98,7 @@ export function liveRoomTransport(
 			sendText: (chatId, text, replyTo) => api.sendText(chatId, text, replyTo),
 			sendCard: (chatId, card, replyTo) => api.sendCard(chatId, card, replyTo),
 			updateCard: (messageId, card) => api.updateCard(messageId, card),
+			listChatMembers: (chatId) => api.listChatMembers(chatId),
 			close: () => api.close(),
 		},
 	};

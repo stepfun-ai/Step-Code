@@ -51,6 +51,11 @@ export class LarkApi {
 	 * `botIds` are application ids (`cli_…`), not open ids. A natural person owns the group when
 	 * `ownerId` is given, which requires a user token.
 	 */
+	/**
+	 * Create a group with the caller already inside and every listed bot invited in the same call.
+	 * `botIds` are application ids (`cli_…`), not open ids. `ownerOpenId` names the person who owns
+	 * the group; the bot's own credentials may set it when that person is the app's owner.
+	 */
 	async createChat(options: {
 		name: string;
 		userOpenIds?: readonly string[];
@@ -59,12 +64,7 @@ export class LarkApi {
 		dedupeKey?: string;
 	}): Promise<string> {
 		try {
-			this.controller.signal.throwIfAborted();
-			const response = await this.client.request<{ code?: number; data?: { chat_id?: string } }>({
-				url: "/open-apis/im/v1/chats",
-				method: "POST",
-				signal: this.controller.signal,
-				timeout: 15_000,
+			const response = await this.client.im.chat.create({
 				params: {
 					user_id_type: "open_id",
 					...(options.dedupeKey ? { uuid: options.dedupeKey } : {}),
@@ -73,88 +73,50 @@ export class LarkApi {
 					name: options.name,
 					chat_mode: "group",
 					chat_type: "private",
-					group_message_type: "chat",
 					// Confidential mode blocks message reads server-side; a room must never enable it.
-					restricted_mode_setting: { status: false },
+					restricted_mode_setting: {
+						status: false,
+						screenshot_has_permission_setting: "all_members",
+						download_has_permission_setting: "all_members",
+						message_has_permission_setting: "all_members",
+					},
 					...(options.ownerOpenId ? { owner_id: options.ownerOpenId } : {}),
 					...(options.userOpenIds?.length ? { user_id_list: [...options.userOpenIds] } : {}),
 					...(options.botIds?.length ? { bot_id_list: [...options.botIds] } : {}),
 				},
 			});
-			this.controller.signal.throwIfAborted();
-			if (response.code !== 0 || typeof response.data?.chat_id !== "string" || !response.data.chat_id)
-				throw new Error("Invalid chat response");
-			return response.data.chat_id;
+			const chatId = response.data?.chat_id;
+			if (!chatId) throw new Error("Invalid chat response");
+			return chatId;
 		} catch {
 			throw new Error("Lark chat creation failed");
 		}
 	}
 
-	/** Add members to an existing chat. `appIds` invites bots; open ids invite people. */
-	async addChatMembers(
-		chatId: string,
-		members: { openIds?: readonly string[]; appIds?: readonly string[] },
-	): Promise<void> {
-		const invite = async (memberIdType: "open_id" | "app_id", idList: readonly string[]) => {
-			this.controller.signal.throwIfAborted();
-			const response = await this.client.request<{ code?: number }>({
-				url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members`,
-				method: "POST",
-				signal: this.controller.signal,
-				timeout: 15_000,
-				params: { member_id_type: memberIdType },
-				data: { id_list: [...idList] },
-			});
-			this.controller.signal.throwIfAborted();
-			if (response.code !== 0) throw new Error("Invalid member response");
-		};
-		try {
-			if (members.openIds?.length) await invite("open_id", members.openIds);
-			if (members.appIds?.length) await invite("app_id", members.appIds);
-		} catch {
-			throw new Error("Lark chat member addition failed");
-		}
-	}
-
 	/**
-	 * Which of the listed bots are actually members. Pair with `createChat`: a successful creation
-	 * call does not prove every invited bot joined.
+	 * Members of a chat, for confirming an invite landed. Needs a chat-read scope the launcher's
+	 * default template does not grant, so callers treat a failure as "cannot verify", not "wrong".
 	 */
-	async listChatBots(chatId: string): Promise<readonly { appId: string; openId: string; name: string }[]> {
+	async listChatMembers(
+		chatId: string,
+	): Promise<readonly { openId: string; memberType: "user" | "bot" | "unknown"; name: string }[]> {
 		try {
-			const bots: { appId: string; openId: string; name: string }[] = [];
-			let pageToken: string | undefined;
-			do {
-				this.controller.signal.throwIfAborted();
-				const response = await this.client.request<{
-					code?: number;
-					data?: {
-						has_more?: boolean;
-						page_token?: string;
-						items?: { member_id_type?: string; member_id?: string; name?: string; app_id?: string }[];
-					};
-				}>({
-					url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members`,
-					method: "GET",
-					signal: this.controller.signal,
-					timeout: 15_000,
-					params: { member_id_type: "open_id", page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
-				});
-				this.controller.signal.throwIfAborted();
-				if (response.code !== 0) throw new Error("Invalid member list response");
-				for (const item of response.data?.items ?? []) {
-					// Member listings label a bot's app id in `app_id`; older shapes only carry the id.
-					if (item.member_id_type !== "app" && !item.app_id) continue;
-					if (typeof item.member_id !== "string" || !item.member_id) continue;
-					bots.push({
-						appId: typeof item.app_id === "string" ? item.app_id : "",
+			const members: { openId: string; memberType: "user" | "bot" | "unknown"; name: string }[] = [];
+			for await (const page of await this.client.im.chatMembers.getWithIterator({
+				params: { member_id_type: "open_id", page_size: 100 },
+				path: { chat_id: chatId },
+			})) {
+				for (const item of page?.items ?? []) {
+					if (!item?.member_id) continue;
+					const type = item.member_id_type;
+					members.push({
 						openId: item.member_id,
-						name: typeof item.name === "string" ? item.name : "",
+						memberType: type === "user" ? "user" : type === "app" ? "bot" : "unknown",
+						name: item.name ?? "",
 					});
 				}
-				pageToken = response.data?.has_more === true ? response.data.page_token : undefined;
-			} while (pageToken);
-			return bots;
+			}
+			return members;
 		} catch {
 			throw new Error("Lark chat member lookup failed");
 		}

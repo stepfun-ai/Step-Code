@@ -48,8 +48,9 @@ export interface RoomTransport {
 	/** Provider-side conversation used for every room message in this session. */
 	api: {
 		sendText(chatId: string, text: string, replyTo?: string): Promise<string>;
-		sendCard(chatId: string, chat: Record<string, unknown>, replyTo?: string): Promise<string>;
+		sendCard(chatId: string, card: Record<string, unknown>, replyTo?: string): Promise<string>;
 		updateCard(messageId: string, card: Record<string, unknown>): Promise<void>;
+		listChatMembers(chatId: string): Promise<readonly { openId: string; memberType: "user" | "bot" | "unknown" }[]>;
 		close(): Promise<void>;
 	};
 }
@@ -300,6 +301,34 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			await createGroup(context, result.value);
 		};
 
+		/**
+		 * Confirm the invite landed. Failure to read members is not evidence of failure: the launcher's
+		 * default template does not grant a chat-read scope, so this stays quiet instead of claiming
+		 * the group is wrong when it cannot see into it.
+		 */
+		const verifyMembers = async (
+			current: ActiveRoom,
+			peer: { appId: string; userOpenId: string },
+			context: ExtensionCommandContext,
+		) => {
+			let members: readonly { openId: string; memberType: "user" | "bot" | "unknown" }[];
+			try {
+				members = await current.transport.api.listChatMembers(current.chatId);
+			} catch {
+				// No chat-read scope on the launcher template: not seeing the group is not proof it is wrong.
+				return;
+			}
+			const hasPeerBot = members.some(
+				(member) => member.memberType === "bot" && member.openId !== current.botOpenId,
+			);
+			const hasPeerUser = members.some(
+				(member) => member.memberType === "user" && member.openId === peer.userOpenId,
+			);
+			if (!hasPeerBot || !hasPeerUser) {
+				context.ui.notify("room · 群已建好，但对方没有完全进群，请在飞书里手动拉一次", "warning");
+			}
+		};
+
 		const createGroup = async (context: ExtensionCommandContext, record: RoomPeerRecord) => {
 			const current = room;
 			const peer = record.peer;
@@ -327,6 +356,7 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			current.chatId = chatId;
 			bindings = new RoomBindingStore();
 			bindings.bind(chatId, context.sessionManager.getSessionId());
+			await verifyMembers(current, peer, context);
 			await rendezvous.retire(current.code, current.secret).catch(() => undefined);
 			context.ui.notify(`room · 群已就绪 · 在群里 @${current.botName} 开始`, "info");
 		};
