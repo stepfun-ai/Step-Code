@@ -11,7 +11,9 @@ import { LarkApi, type LarkCredentials, LarkRegistration, LarkTransport } from "
 import type { RoomInbound, RoomTransport } from "./room-connection.ts";
 
 /** Device-code consent: the person scans a QR, the credentials arrive in memory and nowhere else. */
-export async function authorizeRoomBot(context: ExtensionContext): Promise<LarkCredentials | undefined> {
+export async function authorizeRoomBot(
+	context: ExtensionContext,
+): Promise<{ credentials: LarkCredentials; ownerOpenId: string } | undefined> {
 	const controller = new AbortController();
 	const registration = new LarkRegistration({ version: "room" });
 	try {
@@ -25,7 +27,14 @@ export async function authorizeRoomBot(context: ExtensionContext): Promise<LarkC
 			);
 			return undefined;
 		}
-		return result.credentials;
+		// The consenting person, not their bot, owns the room's group. Without their open id the group
+		// would have to be owned by a machine, which Feishu does not allow for a private group.
+		const ownerOpenId = result.userInfo?.openId;
+		if (!ownerOpenId) {
+			context.ui.notify("room · 授权未返回你的身份，无法建群", "warning");
+			return undefined;
+		}
+		return { credentials: result.credentials, ownerOpenId };
 	} catch {
 		context.ui.notify("room · 授权过程失败，请重试 /room", "warning");
 		return undefined;

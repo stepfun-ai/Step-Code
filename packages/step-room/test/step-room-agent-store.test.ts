@@ -9,6 +9,7 @@ const RECORD = {
 	appSecret: "fixture-secret",
 	botOpenId: "ou_bot",
 	botName: "StepCode 会议室",
+	ownerOpenId: "ou_owner",
 	brand: "feishu" as const,
 	createdAt: "2026-10-22T00:00:00.000Z",
 };

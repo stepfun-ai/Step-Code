@@ -68,7 +68,9 @@ export interface RoomExtensionOptions {
 	/** Where the bot record lives; injected so tests never touch the user's home. */
 	recordDirectory: string;
 	/** Turn a fresh authorization into credentials. Absent means the room command stays off. */
-	authorize?: (context: ExtensionContext) => Promise<LarkCredentials | undefined>;
+	authorize?: (
+		context: ExtensionContext,
+	) => Promise<{ credentials: LarkCredentials; ownerOpenId: string } | undefined>;
 	/** Build the live transport from credentials. Absent in tests that supply no platform. */
 	transport?: (
 		credentials: LarkCredentials,
@@ -86,10 +88,14 @@ interface ActiveRoom {
 	code: string;
 	secret: string;
 	chatId: string;
+	appId: string;
+	/** The person who started the room; they own the group. */
+	ownerOpenId: string;
 	botOpenId: string;
 	botName: string;
 	transport: RoomTransport;
-	peer?: { appId: string; openId: string; name?: string };
+	/** `openId` is the peer's bot; `userOpenId` is the peer himself, and he must be in the group. */
+	peer?: { appId: string; openId: string; userOpenId: string; name?: string };
 	lastSpoken?: string;
 	polling?: NodeJS.Timeout;
 }
@@ -189,11 +195,12 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				context.ui.notify("room · 尚未接入机器人授权，无法发起房间", "warning");
 				return undefined;
 			}
-			const credentials = await options.authorize(context);
-			if (!credentials) {
+			const authorized = await options.authorize(context);
+			if (!authorized) {
 				context.ui.notify("room · 授权未完成", "warning");
 				return undefined;
 			}
+			const { credentials, ownerOpenId } = authorized;
 			const probe = new LarkApi(credentials);
 			try {
 				const identity = await probe.getBotIdentity();
@@ -202,6 +209,7 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 					appSecret: credentials.appSecret,
 					botOpenId: identity.openId,
 					botName: identity.name,
+					ownerOpenId,
 					brand: credentials.brand,
 					createdAt: new Date().toISOString(),
 				};
@@ -256,7 +264,17 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				return;
 			}
 
-			room = { roomId, code, secret, chatId: "", botOpenId: self.openId, botName: self.name, transport };
+			room = {
+				roomId,
+				code,
+				secret,
+				chatId: "",
+				appId: record.appId,
+				ownerOpenId: record.ownerOpenId,
+				botOpenId: self.openId,
+				botName: self.name,
+				transport,
+			};
 			context.ui.notify(`room · @${self.name} · 房间码 ${code} · 2 分钟内有效，念给对方`, "info");
 
 			room.polling = setInterval(() => {
@@ -286,14 +304,20 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			const current = room;
 			const peer = record.peer;
 			if (!current || !peer) return;
-			current.peer = { appId: peer.appId, openId: peer.openId, ...(peer.name ? { name: peer.name } : {}) };
+			current.peer = {
+				appId: peer.appId,
+				openId: peer.openId,
+				userOpenId: peer.userOpenId,
+				...(peer.name ? { name: peer.name } : {}),
+			};
 			let chatId: string;
 			try {
 				chatId = await current.transport.createChat({
 					name: title(current.botName, peer.name),
-					userOpenIds: [peer.openId],
-					botIds: [peer.appId],
-					ownerOpenId: peer.openId,
+					// The starter owns the group and is in it; both bots are invited so either side can speak.
+					userOpenIds: [current.ownerOpenId, peer.userOpenId],
+					botIds: [current.appId, peer.appId],
+					ownerOpenId: current.ownerOpenId,
 					dedupeKey: current.roomId,
 				});
 			} catch {
@@ -322,6 +346,7 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			const claimed = await rendezvous.claim(code, {
 				appId: record.appId,
 				openId: record.botOpenId,
+				userOpenId: record.ownerOpenId,
 				name: self.name,
 			});
 			if (!claimed.ok) {
@@ -335,10 +360,11 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				code,
 				secret: "",
 				chatId: "",
+				appId: record.appId,
+				ownerOpenId: record.ownerOpenId,
 				botOpenId: self.openId,
 				botName: self.name,
 				transport,
-				peer: { appId: "", openId: "" },
 			};
 			context.ui.notify("room · 已登记，等待对方建群后把你拉进群（进群后即可对话）", "info");
 		};

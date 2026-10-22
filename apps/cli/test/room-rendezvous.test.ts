@@ -37,12 +37,13 @@ describe("room rendezvous client", () => {
 		const result = await new RoomRendezvousClient({ baseUrl: BASE }).claim("48291730", {
 			appId: "cli_b",
 			openId: "ou_b",
+			userOpenId: "ou_b_human",
 			name: "B",
 		});
 		expect(result).toEqual({ ok: true, value: { code: "48291730", claimed: true, peer: { app_id: "cli_b", open_id: "ou_b" } } });
 		expect(JSON.parse(String(calls[0].init.body))).toEqual({
 			code: "48291730",
-			identity: { app_id: "cli_b", open_id: "ou_b", name: "B" },
+			identity: { app_id: "cli_b", open_id: "ou_b", user_open_id: "ou_b_human", name: "B" },
 		});
 		vi.unstubAllGlobals();
 	});

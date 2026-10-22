@@ -1,5 +1,5 @@
 import { gunzipSync } from "node:zlib";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LarkRegistration, larkCallbackSetupUrl } from "../src/registration.ts";
 
 describe("Lark device registration", () => {
@@ -211,5 +211,46 @@ describe("Lark device registration", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("Lark registration user identity", () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	const fetchMock = () => vi.spyOn(globalThis, "fetch");
+
+	it("returns the consenting person's open id with the credentials", async () => {
+		const mock = fetchMock();
+		mock.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					client_id: "cli_new",
+					client_secret: "fixture",
+					user_info: { open_id: "ou_owner", tenant_brand: "feishu" },
+				}),
+			),
+		);
+		const registration = new LarkRegistration({ version: "test" });
+		const result = await registration.poll("device", new AbortController().signal);
+		expect(result).toEqual({
+			status: "authorized",
+			credentials: { appId: "cli_new", appSecret: "fixture", brand: "feishu" },
+			userInfo: { openId: "ou_owner" },
+		});
+	});
+
+	it("reports no user info rather than inventing one", async () => {
+		const mock = fetchMock();
+		mock.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({ client_id: "cli_new", client_secret: "fixture", user_info: { tenant_brand: "feishu" } }),
+			),
+		);
+		const registration = new LarkRegistration({ version: "test" });
+		const result = await registration.poll("device", new AbortController().signal);
+		expect(result).toEqual({
+			status: "authorized",
+			credentials: { appId: "cli_new", appSecret: "fixture", brand: "feishu" },
+		});
 	});
 });

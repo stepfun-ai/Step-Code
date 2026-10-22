@@ -15,8 +15,13 @@ export interface LarkPairingCode {
 	pollIntervalSeconds: number;
 }
 
+/** The person who consented: their open id is what makes them, not their bot, the group owner. */
+export interface LarkUserInfo {
+	openId?: string;
+}
+
 export type LarkPairingResult =
-	| { status: "authorized"; credentials: LarkCredentials }
+	| { status: "authorized"; credentials: LarkCredentials; userInfo?: LarkUserInfo }
 	| { status: "pending" | "slow-down" | "denied" | "expired" };
 
 type FormPoster = (url: string, form: Record<string, string>, signal: AbortSignal) => Promise<Record<string, unknown>>;
@@ -125,6 +130,10 @@ export class LarkRegistration {
 		);
 		signal.throwIfAborted();
 		const info = data.user_info;
+		const userOpenId =
+			info && typeof info === "object" && !Array.isArray(info)
+				? (info as Record<string, unknown>).open_id
+				: undefined;
 		if (!this.brandResolved && info && typeof info === "object" && !Array.isArray(info)) {
 			const raw = (info as Record<string, unknown>).tenant_brand;
 			if (typeof raw === "string") {
@@ -144,6 +153,7 @@ export class LarkRegistration {
 			return {
 				status: "authorized",
 				credentials: { appId: data.client_id, appSecret: data.client_secret, brand: this.brand },
+				...(typeof userOpenId === "string" && userOpenId ? { userInfo: { openId: userOpenId } } : {}),
 			};
 		}
 		if (!data.error || data.error === "authorization_pending") return { status: "pending" };

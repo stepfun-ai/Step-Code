@@ -16,7 +16,10 @@ export const ROOM_RENDEZVOUS_BASE_URL = "https://stepcliobserserver-dashboard.st
 
 export interface RoomPeerIdentity {
 	appId: string;
+	/** The peer's bot. */
 	openId: string;
+	/** The peer himself: the group invites both people and both bots. */
+	userOpenId: string;
 	name?: string;
 }
 
@@ -24,6 +27,8 @@ export interface RoomPeerRecord {
 	code: string;
 	claimed: boolean;
 	peer?: RoomPeerIdentity;
+	/** The starter, as recorded when the code was published. */
+	ownerOpenId?: string;
 	createdAt: string;
 	expiresAt: string;
 }
@@ -105,7 +110,12 @@ export class RoomRendezvousClient {
 			method: "POST",
 			body: JSON.stringify({
 				code,
-				identity: { app_id: identity.appId, open_id: identity.openId, name: identity.name },
+				identity: {
+					app_id: identity.appId,
+					open_id: identity.openId,
+					user_open_id: identity.userOpenId,
+					name: identity.name,
+				},
 			}),
 		});
 	}

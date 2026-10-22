@@ -18,6 +18,11 @@ export interface RoomAgentRecord {
 	botName: string;
 	brand: "feishu" | "lark";
 	createdAt: string;
+	/**
+	 * The person this bot belongs to. The room group is owned by them, not by their bot, so this is
+	 * as load bearing as the secret.
+	 */
+	ownerOpenId: string;
 }
 
 export type RoomAgentReadResult =
@@ -43,6 +48,7 @@ export function parseRoomAgentRecord(value: unknown): RoomAgentRecord | undefine
 	const raw = value as Record<string, unknown>;
 	if (!isNonEmptyString(raw.appId) || !isNonEmptyString(raw.appSecret)) return undefined;
 	if (!isNonEmptyString(raw.botOpenId) || !isNonEmptyString(raw.botName)) return undefined;
+	if (!isNonEmptyString(raw.ownerOpenId)) return undefined;
 	const brand = raw.brand === "lark" ? "lark" : raw.brand === "feishu" ? "feishu" : undefined;
 	if (!brand) return undefined;
 	if (!isNonEmptyString(raw.createdAt) || Number.isNaN(Date.parse(raw.createdAt))) return undefined;
@@ -51,6 +57,7 @@ export function parseRoomAgentRecord(value: unknown): RoomAgentRecord | undefine
 		appSecret: raw.appSecret,
 		botOpenId: raw.botOpenId,
 		botName: raw.botName,
+		ownerOpenId: raw.ownerOpenId,
 		brand,
 		createdAt: raw.createdAt,
 	};
