@@ -1,6 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LarkRegistration, larkCallbackSetupUrl } from "../src/registration.ts";
+import { LarkRegistration, larkCallbackSetupUrl, larkRoomSetupUrl } from "../src/registration.ts";
 
 describe("Lark device registration", () => {
 	it.each(["feishu", "lark"] as const)(
@@ -252,5 +252,28 @@ describe("Lark registration user identity", () => {
 			status: "authorized",
 			credentials: { appId: "cli_new", appSecret: "fixture", brand: "feishu" },
 		});
+	});
+});
+
+describe("room launcher link", () => {
+	it("carries the room scopes, events and callback for the person to confirm", () => {
+		const url = new URL(larkRoomSetupUrl({ appId: "cli_fixture", appSecret: "sensitive", brand: "feishu" }));
+		expect(url.pathname).toBe("/page/launcher");
+		expect(url.searchParams.get("clientID")).toBe("cli_fixture");
+		const addons = JSON.parse(gunzipSync(Buffer.from(url.searchParams.get("addons") ?? "", "base64url")).toString());
+		expect(addons).toEqual({
+			scopes: {
+				tenant: [
+					"im:chat:create",
+					"im:message:send_as_bot",
+					"im:message.group_at_msg:readonly",
+					"im:chat:readonly",
+				],
+			},
+			events: { items: ["im.message.receive_v1", "im.chat.member.bot.added_v1"] },
+			callbacks: { items: ["card.action.trigger"] },
+		});
+		// The link is safe to show and to keep in shell history: it never carries the secret.
+		expect(url.href).not.toContain("sensitive");
 	});
 });

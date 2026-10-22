@@ -29,11 +29,53 @@ type FormPoster = (url: string, form: Record<string, string>, signal: AbortSigna
 const ACCOUNTS = { feishu: "https://accounts.feishu.cn", lark: "https://accounts.larksuite.com" };
 export const LARK_OPEN_HOSTS = { feishu: "https://open.feishu.cn", lark: "https://open.larksuite.com" };
 
-/** Official CLI launcher contract; the user must confirm the configuration. */
-export function larkCallbackSetupUrl(credentials: LarkCredentials): string {
-	const addons = gzipSync(JSON.stringify({ callbacks: { items: ["card.action.trigger"] } })).toString("base64url");
-	const params = new URLSearchParams({ clientID: credentials.appId, addons });
+/** Scopes and events a room needs on top of the launcher's default template. */
+export const LARK_ROOM_ADDONS = {
+	scopes: {
+		tenant: ["im:chat:create", "im:message:send_as_bot", "im:message.group_at_msg:readonly", "im:chat:readonly"],
+	},
+	events: ["im.message.receive_v1", "im.chat.member.bot.added_v1"],
+	callbacks: ["card.action.trigger"],
+} as const;
+
+export interface LarkLauncherAddons {
+	scopes?: { tenant?: readonly string[]; user?: readonly string[] };
+	events?: readonly string[];
+	callbacks?: readonly string[];
+}
+
+function encodeAddons(addons: unknown): string {
+	return gzipSync(JSON.stringify(addons)).toString("base64url");
+}
+
+/**
+ * Official CLI launcher contract for configuring an **existing** app; the user confirms the change.
+ *
+ * The launcher reads `addons` from the URL, not from the registration request: scopes, events and
+ * callbacks sent in the request body are ignored. That is why configuration is a second step with a
+ * link the person opens, exactly like the callback setup this product already ships.
+ */
+export function larkAddonsSetupUrl(credentials: LarkCredentials, addons: LarkLauncherAddons): string {
+	const payload: Record<string, unknown> = {};
+	if (addons.scopes) payload.scopes = addons.scopes;
+	if (addons.events?.length) payload.events = { items: addons.events };
+	if (addons.callbacks?.length) payload.callbacks = { items: addons.callbacks };
+	const params = new URLSearchParams({ clientID: credentials.appId, addons: encodeAddons(payload) });
 	return `${LARK_OPEN_HOSTS[credentials.brand]}/page/launcher?${params}`;
+}
+
+/** Prefilled link that lets the person grant this app the room scopes and event subscriptions. */
+export function larkRoomSetupUrl(credentials: LarkCredentials): string {
+	return larkAddonsSetupUrl(credentials, {
+		scopes: LARK_ROOM_ADDONS.scopes,
+		events: LARK_ROOM_ADDONS.events,
+		callbacks: LARK_ROOM_ADDONS.callbacks,
+	});
+}
+
+/** Kept for the existing /connect flow, which only needs the card callback. */
+export function larkCallbackSetupUrl(credentials: LarkCredentials): string {
+	return larkAddonsSetupUrl(credentials, { callbacks: ["card.action.trigger"] });
 }
 
 async function postForm(
