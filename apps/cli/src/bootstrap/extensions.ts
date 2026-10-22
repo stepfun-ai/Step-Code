@@ -7,17 +7,24 @@
  * dependencies (telemetry, settings, identity, permission policy) and passes
  * them in; this module owns the list and its order.
  */
+import { join } from "node:path";
 import {
 	createStepCapabilitiesExtensionInline,
 	createStepCronExtension,
 	createStepExtensionInline,
 	createStepGoalExtension,
 	type InlineExtension,
+	resolveStepStorageRoot,
 	type StepExtensionOptions,
 	type StepTelemetryReporter,
 	type TraceHeaderPolicy,
 } from "@step-harness/coding-agent";
-import { createLarkConnectionExtension } from "#ui/index";
+import { createLarkConnectionExtension, createRoomExtension } from "#ui/index";
+
+/** Room bot credentials live beside the other product-owned state, never in the repository. */
+function roomRecordDirectory(): string {
+	return join(resolveStepStorageRoot(), "lark");
+}
 
 export interface StepExtensionFactoryDeps {
 	/** Shared telemetry runtime handed to every Step extension. */
@@ -67,6 +74,7 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 		createStepCronExtension({ telemetry: deps.telemetry }),
 		createStepGoalExtension({ telemetry: deps.telemetry }),
 		{ name: "connect-lark", factory: createLarkConnectionExtension(), hidden: true },
+		{ name: "room", factory: createRoomExtension({ recordDirectory: roomRecordDirectory() }), hidden: true },
 		...(deps.stepCodeProviderExtension ? [deps.stepCodeProviderExtension] : []),
 	];
 }

@@ -17,6 +17,7 @@ export type { InteractiveModeOptions } from "@step-harness/coding-agent";
 export { selectConfig } from "./config-selector.ts";
 export { InteractiveMode } from "./interactive-mode.ts";
 export { createLarkConnectionExtension } from "./runtime/lark-connection.ts";
+export { createRoomExtension } from "./runtime/room-connection.ts";
 export { selectSession } from "./session-picker.ts";
 export {
 	createStartupTui,
