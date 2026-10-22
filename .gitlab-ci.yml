@@ -1,0 +1,57 @@
+# Desktop installers (macOS dmg, Windows NSIS) for StepCode, built by
+# catalyst/falcon-mobile-pipeline.
+#
+# This file lives only on CI branches: scripts/check-public-boundary.mjs forbids
+# .gitlab-ci.yml in the public tree, exactly as feat/stepcode-web-mvp-gh-build and
+# feat/stepcode-desktop-mvp-build do, and those branches drop
+# `pnpm run check:public-boundary` from `check` for the same reason. Everything
+# this file drives (scripts/package-mac-ci.mjs, scripts/pack-win.cjs, the two job
+# files) is also on the public branch.
+#
+# falcon provides the Run pipeline form (stages/variables.yml) and the job
+# before_script (stages/before_script.yml): it clones the toolchain into
+# ./pipeline, normalises BUILD_PROFILE for desktop (fast → FAST_BUILD=1,
+# SKIP_NOTARIZE=1, CI_ELECTRON_ARCH=arm64; qa → SKIP_NOTARIZE=1, arch=all),
+# and persists that into build/ci/ci.env. The two job files below then only
+# build and collect.
+#
+# falcon's package.yml / publish.yml are deliberately NOT included: they add FE
+# callbacks and TOS uploads which need platform project tokens and Vault
+# credentials. Phase 1 only produces installers; distribution is Phase 3.
+#
+# Run pipeline (CI/CD → Run pipeline):
+#   TASK_TYPE=package
+#   BUILD_PLATFORM=macos | windows   (electron is a legacy alias for macos)
+#   BUILD_PROFILE=fast              (macOS also accepts qa: both arches)
+#   CI_PKG_SKIP_DEPLOYMENT=1
+#   CI_BUILD_NOTIF=0
+#   CI_PIPELINE_REF=main            (only change it to test a falcon branch)
+#
+# TASK_TYPE, BUILD_PLATFORM, BUILD_PROFILE, CI_PKG_SKIP_DEPLOYMENT and
+# CI_BUILD_NOTIF come from stages/variables.yml. Do not redeclare them in a
+# local `variables:` block: that replaces the upstream entry wholesale and drops
+# the values from the Run pipeline dropdown.
+#
+# The default branch's version of this file also runs the CLI/TUI lint, test,
+# tag, package, publish and notify jobs. When merging, keep those jobs and the
+# workflow rules below, and carry these includes with them.
+
+workflow:
+  rules:
+    # Desktop packaging is manual: it starts from Run pipeline and from the
+    # platform's API trigger. A branch push would create a pipeline whose only
+    # jobs are all ruled out, which GitLab reports as failed and which then
+    # blocks the merge request.
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
+
+include:
+  - project: 'catalyst/falcon-mobile-pipeline'
+    ref: main
+    file: 'stages/variables.yml'
+  # Brings the job before_script, the .scripts.initial-env / .scripts.import-ci-env
+  # references and the stages list (package, upload, test, publish).
+  - project: 'catalyst/falcon-mobile-pipeline'
+    ref: main
+    file: 'stages/before_script.yml'
+  - local: '.gitlab-ci.desktop-macos.yml'
+  - local: '.gitlab-ci.desktop-windows.yml'

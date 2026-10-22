@@ -1,0 +1,74 @@
+# macOS installers for StepCode Desktop: `pnpm dist:mac`, one dmg per arch.
+#
+# scripts/package-mac-ci.mjs builds the monorepo, packs with electron-builder and
+# leaves the dmgs in dist-electron/ with the architecture in the file name, which
+# is what falcon's collect_artifacts() looks for. It then copies them into
+# build/ci/ with falcon's <name>-<version>_<build>-macos-<arch>.dmg shape and
+# writes CI_ELECTRON_DMG_*_PATH into build/ci/build_internal.env.
+#
+# Phase 1 is unsigned. falcon's configure_desktop_profile maps the profile:
+#   fast → FAST_BUILD=1, SKIP_NOTARIZE=1, arch=arm64
+#   qa   → SKIP_NOTARIZE=1, arch=all (arm64 + x64)
+# The signed/notarized release profile needs the macOS signing template and Vault
+# credentials, which is Phase 2 — so it is not offered here.
+#
+# ELECTRON_MIRROR / ELECTRON_BUILDER_BINARIES_MIRROR: electron-builder downloads
+# the Electron zip and its nsis/dmg helper bundles itself, over github.com by
+# default. The mirrors keep the mac runner off github.
+stepcode-desktop-package:
+  stage: package
+  image: 'hub.i.basemind.com/fe/mobile/sequoia-xcode-26.0.1:latest'
+  tags:
+    - mobile
+    - online
+    - macos
+    - tart
+  needs: []
+  timeout: 90 minutes
+  # The packaged app is a 170MB dmg and the build takes tens of minutes; a
+  # cancelled job would leave the workspace half-built for the next one.
+  interruptible: false
+  variables:
+    # No submodules in this repo, and falcon's git/gem/npm preparation is
+    # replaced by the explicit pnpm install below (dist:mac does not need gems,
+    # and falcon's npm preparation runs a second install).
+    CI_NEEDS_GIT_PREP: '0'
+    CI_NEEDS_GEM_PREP: '0'
+    CI_NEEDS_NPM_PREP: '0'
+    ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
+    ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+  rules:
+    # Phase 1: fast and qa only, and only from Run pipeline / the platform's API
+    # trigger. release needs a Developer ID and notarization (Phase 2).
+    - if: '$TASK_TYPE == "package" && ($BUILD_PLATFORM == "macos" || $BUILD_PLATFORM == "electron") && ($BUILD_PROFILE == "fast" || $BUILD_PROFILE == "qa") && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
+      when: always
+    - when: never
+  script:
+    - !reference [.scripts, initial-env]
+    - corepack enable
+    - corepack prepare --activate pnpm@9.15.9
+    - bash "${BUILD_SCRIPT_DIR}/common/run_pnpm.sh" install --frozen-lockfile
+    - |
+      set -eo pipefail
+      # Functions only: sourcing does not run electron_build.sh's main(), which
+      # would repeat the install, run proto codegen this repo does not have, and
+      # rewrite an electron-builder config this repo does not use.
+      source "${BUILD_SCRIPT_DIR}/package/electron_build.sh"
+      # profile → --env/--arch/--fast-build/--notarize, then `npm run dist:mac -- …`
+      build_electron_pkg
+      collect_artifacts
+      on_exit
+  after_script:
+    - !reference [.scripts, import-ci-env]
+    - bash "${BUILD_SCRIPT_DIR}/package/archive_job_artifacts.sh"
+  artifacts:
+    name: 'stepcode-desktop-macos-$CI_PIPELINE_IID'
+    paths:
+      - build_archive/
+      - build/ci/ci.env
+      - build/ci/build_internal.env
+      # Phase 1 has no distribution job, so the dmg collect_artifacts() left in
+      # build/ci is the only way to get the installer off the machine.
+      - build/ci/*.dmg
+    expire_in: 2 weeks
+    when: always

@@ -1,0 +1,87 @@
+# Windows installer (NSIS) for StepCode Desktop: `pnpm pack:win`.
+#
+# falcon's windows_build.sh maps the profile to pack-win's flags (fast →
+# --env=sit --no-sign; qa → --env=sit --sign; release → --env=prod --sign) and
+# runs `node scripts/pack-win.cjs`, which leaves dist-electron/
+# StepCode-<version>-win-x64.exe plus latest.yml and channel-artifacts.json.
+# collect_windows_artifacts() then walks that manifest, renames the installer
+# into build/ci/ with the build number in the name, rewrites the paths inside
+# latest.yml to match, and records CI_WIN_EXE_PATH and friends.
+#
+# Only fast (unsigned) is offered: qa and release sign the installer with an EV
+# token from build/tools/win/signing/ and Vault, which is Phase 2. pack-win.cjs
+# itself fails on --sign rather than shipping an unsigned installer under a
+# signed profile's name.
+#
+# The runner is a persistent bare-metal shell machine (Git Bash, pnpm.cmd,
+# cygpath), not a container: there is no image, and pnpm must go through
+# falcon's run_pnpm.sh so node_modules gets Win32 junctions instead of MSYS ones.
+stepcode-desktop-package-windows:
+  stage: package
+  tags:
+    - mobile
+    - online
+    - windows
+    - bare-metal
+  needs: []
+  # One installer run at a time: two Electron/NSIS builds on the same box contend
+  # for disk and the workspace, and the staging directory outside the repo is
+  # per-pipeline but the machine is not.
+  resource_group: stepcode-windows-packer
+  # Cold pnpm install plus two electron-builder passes; well below the project
+  # default of 240 minutes so a hung job still fails while someone is watching.
+  timeout: 150 minutes
+  # after_script does not run for a cancelled job, which would leave the ~1.4GB
+  # staging directory behind for the next run to garbage-collect.
+  interruptible: false
+  variables:
+    # Keep gitignored node_modules (a warm install) but still remove untracked
+    # nested repos, including the ./pipeline clone falcon makes every job.
+    # GitLab's default -ffdx would delete node_modules too.
+    GIT_CLEAN_FLAGS: '-ffd'
+    GIT_DEPTH: '20'
+    # The runner helper's Go net/http has hit TLS handshake timeouts uploading
+    # artifacts from this box after a successful pack.
+    GODEBUG: 'http2client=0'
+    CI_NEEDS_GIT_PREP: '0'
+    CI_NEEDS_GEM_PREP: '0'
+    # Git Bash `pnpm install` writes POSIX-target junctions that electron-builder
+    # then ENOENTs on, so the install goes through run_pnpm.sh below instead of
+    # falcon's preparation.
+    CI_NEEDS_NPM_PREP: '0'
+    ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
+    ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+    # Falcon stages the collected installers outside the workspace by default:
+    # they must survive `git clean` and are ~150MB per installer. Phase 1 has no
+    # distribution job, so the installer has to be a job artifact — point the
+    # staging root inside build/ (gitignored) to make it downloadable. Phase 3's
+    # upload jobs must use the same value if they run on this machine.
+    CI_WIN_STAGING_ROOT: '$CI_PROJECT_DIR/build/desktop-staging'
+  rules:
+    - if: '$TASK_TYPE == "package" && $BUILD_PLATFORM == "windows" && $BUILD_PROFILE == "fast" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
+      when: always
+    - when: never
+  script:
+    - !reference [.scripts, initial-env]
+    # Fails fast before any install: Git Bash path conversion and, for a signed
+    # profile, the EV token. Unsigned here, so only the path probe runs. The
+    # falcon scripts are not mode 755 in git, so invoke them through bash.
+    - bash "${BUILD_SCRIPT_DIR}/package/windows_preflight.sh"
+    - bash "${BUILD_SCRIPT_DIR}/common/run_pnpm.sh" install --frozen-lockfile
+    # resolve_windows_package_args → pack-win flags, then `node scripts/pack-win.cjs`.
+    - bash "${BUILD_SCRIPT_DIR}/package/windows_build.sh"
+  after_script:
+    - !reference [.scripts, import-ci-env]
+    - bash "${BUILD_SCRIPT_DIR}/package/archive_job_artifacts.sh"
+  artifacts:
+    name: 'stepcode-desktop-windows-$CI_PIPELINE_IID'
+    paths:
+      - build_archive/
+      - build/ci/ci.env
+      - build/ci/build_internal.env
+      # The installer and its updater metadata, as falcon's collect step staged
+      # them (renamed with the build number, latest.yml rewritten to match).
+      - build/desktop-staging/
+      - build/ci/channel-artifacts.json
+    expire_in: 2 weeks
+    when: always
