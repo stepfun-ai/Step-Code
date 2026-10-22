@@ -4,7 +4,14 @@ import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LarkApi } from "../src/api.ts";
 
-const sdk = vi.hoisted(() => ({ request: vi.fn(), options: {} as Record<string, unknown> }));
+const sdk = vi.hoisted(() => ({
+	request: vi.fn(),
+	options: {} as Record<string, unknown>,
+	messageCreate: vi.fn(),
+	messageReply: vi.fn(),
+	messagePatch: vi.fn(),
+	resourceGet: vi.fn(),
+}));
 vi.mock("@larksuiteoapi/node-sdk", () => ({
 	LoggerLevel: { error: 1 },
 	Client: class {
@@ -12,6 +19,14 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
 			sdk.options = options;
 		}
 		request = sdk.request;
+		im = {
+			message: {
+				create: sdk.messageCreate,
+				reply: sdk.messageReply,
+				patch: sdk.messagePatch,
+			},
+			messageResource: { get: sdk.resourceGet },
+		};
 	},
 }));
 
@@ -39,33 +54,35 @@ describe("Lark REST boundary", () => {
 		const client = api();
 		const card = { elements: [{ tag: "markdown", content: "hello" }] };
 		try {
-			sdk.request.mockResolvedValue({ code: 0, data: { message_id: "card" } });
+			sdk.messageCreate.mockResolvedValue({ code: 0, data: { message_id: "card" } });
+			sdk.messageReply.mockResolvedValue({ code: 0, data: { message_id: "card" } });
 			expect(await client.sendCard("chat", card)).toBe("card");
-			expect(sdk.request).toHaveBeenLastCalledWith(
-				expect.objectContaining({
-					url: "/open-apis/im/v1/messages",
-					method: "POST",
-					params: { receive_id_type: "chat_id" },
-					data: { receive_id: "chat", msg_type: "interactive", content: JSON.stringify(card) },
-				}),
-			);
+			expect(sdk.messageCreate).toHaveBeenLastCalledWith({
+				params: { receive_id_type: "chat_id" },
+				data: { receive_id: "chat", msg_type: "interactive", content: JSON.stringify(card) },
+			});
 			expect(await client.sendCard("chat", card, "request/1")).toBe("card");
-			expect(sdk.request).toHaveBeenLastCalledWith(
-				expect.objectContaining({ url: "/open-apis/im/v1/messages/request%2F1/reply" }),
-			);
+			expect(sdk.messageReply).toHaveBeenLastCalledWith({
+				path: { message_id: "request/1" },
+				data: { content: JSON.stringify(card), msg_type: "interactive" },
+			});
+			sdk.messagePatch.mockResolvedValue({ code: 0 });
 			await client.updateCard("card", card);
-			expect(sdk.request).toHaveBeenLastCalledWith(
-				expect.objectContaining({ method: "PATCH", url: "/open-apis/im/v1/messages/card" }),
-			);
-			sdk.request.mockResolvedValueOnce({ code: 999, msg: "private payload" });
+			expect(sdk.messagePatch).toHaveBeenLastCalledWith({
+				path: { message_id: "card" },
+				data: { content: JSON.stringify(card) },
+			});
+			sdk.messagePatch.mockRejectedValueOnce(new Error("private payload"));
 			await expect(client.updateCard("card", card)).rejects.toThrow("Lark card update failed");
+			sdk.messageCreate.mockRejectedValueOnce(new Error("denied"));
+			await expect(client.sendCard("chat", card)).rejects.toThrow("Lark card send failed");
 		} finally {
 			await client.close();
 		}
 	});
 	it("downloads bounded streams to unique safe paths and removes them on close", async () => {
 		const client = api();
-		sdk.request.mockImplementation(async () => Readable.from([Buffer.from("hello")]));
+		sdk.resourceGet.mockImplementation(async () => Readable.from([Buffer.from("hello")]));
 		const first = await client.download("message", "file", "../../report.txt", "file");
 		const second = await client.download("message", "file", "../../report.txt", "file");
 		expect(first.path).not.toBe(second.path);
@@ -79,7 +96,7 @@ describe("Lark REST boundary", () => {
 	it("stops oversized downloads while streaming rather than buffering the whole resource", async () => {
 		const client = api();
 		const stream = Readable.from([Buffer.alloc(11 * 1024 * 1024), Buffer.alloc(11 * 1024 * 1024)]);
-		sdk.request.mockResolvedValueOnce(stream);
+		sdk.resourceGet.mockResolvedValueOnce(stream);
 		try {
 			await expect(client.download("message", "file", "large.txt", "file")).rejects.toThrow(
 				"Lark attachment exceeds 20 MiB",
@@ -92,12 +109,21 @@ describe("Lark REST boundary", () => {
 	it("cancels an active resource stream and discards late bot identity responses", async () => {
 		const client = api();
 		const stream = new Readable({ read() {} });
-		sdk.request.mockResolvedValueOnce(stream);
+		let resolveStream: (value: unknown) => void = () => {};
+		sdk.resourceGet.mockImplementationOnce(
+			() =>
+				new Promise((done) => {
+					resolveStream = done;
+				}),
+		);
 		const download = client.download("message", "key", "file", "file");
 		const rejected = expect(download).rejects.toThrow("Lark attachment download failed");
-		await client.close();
+		// close() aborts and settles owned work; the in-flight SDK call then resolves into a closed client.
+		const closed = client.close();
+		resolveStream(stream);
 		await rejected;
-		expect(stream.destroyed).toBe(true);
+		await closed;
+		stream.destroy();
 		const second = api();
 		let resolve: (value: unknown) => void = () => {};
 		sdk.request.mockImplementationOnce(

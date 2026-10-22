@@ -8,6 +8,7 @@ const sdk = vi.hoisted(() => ({
 	messageCreate: vi.fn(),
 	messageReply: vi.fn(),
 	messageList: vi.fn(),
+	messageListIterator: vi.fn(),
 }));
 vi.mock("@larksuiteoapi/node-sdk", () => ({
 	LoggerLevel: { error: 1 },
@@ -26,7 +27,12 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
 					})();
 				},
 			},
-			message: { create: sdk.messageCreate, reply: sdk.messageReply, list: sdk.messageList },
+			message: {
+				create: sdk.messageCreate,
+				reply: sdk.messageReply,
+				list: sdk.messageList,
+				listWithIterator: sdk.messageListIterator,
+			},
 		};
 	},
 }));
@@ -108,21 +114,18 @@ describe("room transport calls", () => {
 	it("sends plain text to a chat or as a reply", async () => {
 		const client = api();
 		try {
-			sdk.request.mockResolvedValue({ code: 0, data: { message_id: "om_1" } });
+			sdk.messageCreate.mockResolvedValue({ code: 0, data: { message_id: "om_1" } });
+			sdk.messageReply.mockResolvedValue({ code: 0, data: { message_id: "om_1" } });
 			expect(await client.sendText("oc_1", "hello")).toBe("om_1");
-			expect(sdk.request).toHaveBeenLastCalledWith(
-				expect.objectContaining({
-					params: { receive_id_type: "chat_id" },
-					data: { receive_id: "oc_1", msg_type: "text", content: JSON.stringify({ text: "hello" }) },
-				}),
-			);
+			expect(sdk.messageCreate).toHaveBeenLastCalledWith({
+				params: { receive_id_type: "chat_id" },
+				data: { receive_id: "oc_1", msg_type: "text", content: JSON.stringify({ text: "hello" }) },
+			});
 			await client.sendText("oc_1", "@_user_1 hi", "om_parent");
-			expect(sdk.request).toHaveBeenLastCalledWith(
-				expect.objectContaining({
-					url: "/open-apis/im/v1/messages/om_parent/reply",
-					params: undefined,
-				}),
-			);
+			expect(sdk.messageReply).toHaveBeenLastCalledWith({
+				path: { message_id: "om_parent" },
+				data: { content: JSON.stringify({ text: "@_user_1 hi" }), msg_type: "text" },
+			});
 		} finally {
 			await client.close();
 		}
@@ -131,23 +134,24 @@ describe("room transport calls", () => {
 	it("reads history in order and decodes only text bodies", async () => {
 		const client = api();
 		try {
-			sdk.request.mockResolvedValueOnce({
-				code: 0,
-				data: {
-					has_more: false,
-					items: [
-						{
-							message_id: "om_1",
-							create_time: "1700000000000",
-							msg_type: "text",
-							sender: { id: "ou_a", sender_type: "user" },
-							body: { content: JSON.stringify({ text: "hi" }) },
-						},
-						{ message_id: "om_2", create_time: "1700000001000", msg_type: "image", body: { content: "{}" } },
-						{ message_id: "", create_time: "1700000002000" },
-					],
-				},
-			});
+			const page = {
+				items: [
+					{
+						message_id: "om_1",
+						create_time: "1700000000000",
+						msg_type: "text",
+						sender: { id: "ou_a", sender_type: "user" },
+						body: { content: JSON.stringify({ text: "hi" }) },
+					},
+					{ message_id: "om_2", create_time: "1700000001000", msg_type: "image", body: { content: "{}" } },
+					{ message_id: "", create_time: "1700000002000" },
+				],
+			};
+			sdk.messageListIterator.mockResolvedValueOnce(
+				(async function* () {
+					yield page;
+				})(),
+			);
 			expect(await client.listMessages("oc_1", { sinceMs: 1_699_999_000_000 })).toEqual([
 				{
 					id: "om_1",
@@ -159,15 +163,13 @@ describe("room transport calls", () => {
 				},
 				{ id: "om_2", createdAt: 1_700_000_001_000, messageType: "image", text: "" },
 			]);
-			expect(sdk.request).toHaveBeenCalledWith(
-				expect.objectContaining({
-					params: expect.objectContaining({
-						container_id: "oc_1",
-						sort_type: "ByCreateTimeAsc",
-						start_time: "1699999000",
-					}),
+			expect(sdk.messageListIterator).toHaveBeenCalledWith({
+				params: expect.objectContaining({
+					container_id: "oc_1",
+					sort_type: "ByCreateTimeAsc",
+					start_time: "1699999000",
 				}),
-			);
+			});
 		} finally {
 			await client.close();
 		}

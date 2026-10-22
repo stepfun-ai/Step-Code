@@ -125,25 +125,19 @@ export class LarkApi {
 	/** Send a plain text message. Mentions use the `<at user_id="ou_…"></at>` form inside `text`. */
 	async sendText(chatId: string, text: string, replyTo?: string): Promise<string> {
 		try {
-			this.controller.signal.throwIfAborted();
-			const response = await this.client.request<{ code?: number; data?: { message_id?: string } }>({
-				url: replyTo
-					? `/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`
-					: "/open-apis/im/v1/messages",
-				method: "POST",
-				signal: this.controller.signal,
-				timeout: 15_000,
-				params: replyTo ? undefined : { receive_id_type: "chat_id" },
-				data: {
-					...(replyTo ? {} : { receive_id: chatId }),
-					msg_type: "text",
-					content: JSON.stringify({ text }),
-				},
-			});
-			this.controller.signal.throwIfAborted();
-			if (response.code !== 0 || typeof response.data?.message_id !== "string" || !response.data.message_id)
-				throw new Error("Invalid message response");
-			return response.data.message_id;
+			const content = JSON.stringify({ text });
+			const response = replyTo
+				? await this.client.im.message.reply({
+						path: { message_id: replyTo },
+						data: { content, msg_type: "text" },
+					})
+				: await this.client.im.message.create({
+						params: { receive_id_type: "chat_id" },
+						data: { receive_id: chatId, msg_type: "text", content },
+					});
+			const messageId = response.data?.message_id;
+			if (!messageId) throw new Error("Invalid message response");
+			return messageId;
 		} catch {
 			throw new Error("Lark message send failed");
 		}
@@ -151,7 +145,7 @@ export class LarkApi {
 
 	/**
 	 * Read chat history newest-last, for filling a gap the event stream reported. Bot identity needs
-	 * the group read scope, so failure here is expected on partially provisioned applications.
+	 * a group-read scope, so failure here is expected on partially provisioned applications.
 	 */
 	async listMessages(
 		chatId: string,
@@ -166,6 +160,7 @@ export class LarkApi {
 			text: string;
 		}[]
 	> {
+		const limit = options.limit ?? 50;
 		try {
 			const messages: {
 				id: string;
@@ -175,56 +170,32 @@ export class LarkApi {
 				messageType: string;
 				text: string;
 			}[] = [];
-			const limit = options.limit ?? 50;
-			let pageToken: string | undefined;
-			do {
-				this.controller.signal.throwIfAborted();
-				const response = await this.client.request<{
-					code?: number;
-					data?: {
-						has_more?: boolean;
-						page_token?: string;
-						items?: {
-							message_id?: string;
-							create_time?: string;
-							msg_type?: string;
-							sender?: { id?: string; sender_type?: string };
-							body?: { content?: string };
-						}[];
-					};
-				}>({
-					url: "/open-apis/im/v1/messages",
-					method: "GET",
-					signal: this.controller.signal,
-					timeout: 15_000,
-					params: {
-						container_id_type: "chat",
-						container_id: chatId,
-						sort_type: "ByCreateTimeAsc",
-						page_size: Math.min(limit, 50),
-						...(options.sinceMs ? { start_time: String(Math.floor(options.sinceMs / 1000)) } : {}),
-						...(pageToken ? { page_token: pageToken } : {}),
-					},
-				});
-				this.controller.signal.throwIfAborted();
-				if (response.code !== 0) throw new Error("Invalid history response");
-				for (const item of response.data?.items ?? []) {
+			// The SDK walks pages for us; collecting the first `limit` is all this boundary adds.
+			for await (const page of await this.client.im.message.listWithIterator({
+				params: {
+					container_id_type: "chat",
+					container_id: chatId,
+					sort_type: "ByCreateTimeAsc",
+					page_size: Math.min(limit, 50),
+					...(options.sinceMs ? { start_time: String(Math.floor(options.sinceMs / 1000)) } : {}),
+				},
+			})) {
+				for (const item of page?.items ?? []) {
 					const id = item.message_id;
 					const createdAt = Number(item.create_time);
-					if (typeof id !== "string" || !id || !Number.isFinite(createdAt)) continue;
+					if (!id || !Number.isFinite(createdAt)) continue;
 					messages.push({
 						id,
 						createdAt,
 						...(item.sender?.id ? { senderOpenId: item.sender.id } : {}),
 						...(item.sender?.sender_type ? { senderType: item.sender.sender_type } : {}),
-						messageType: typeof item.msg_type === "string" ? item.msg_type : "unknown",
+						messageType: item.msg_type ?? "unknown",
 						text: extractText(item.msg_type, item.body?.content),
 					});
 					if (messages.length >= limit) break;
 				}
-				pageToken =
-					messages.length < limit && response.data?.has_more === true ? response.data.page_token : undefined;
-			} while (pageToken);
+				if (messages.length >= limit) break;
+			}
 			return messages;
 		} catch {
 			throw new Error("Lark chat history request failed");
@@ -233,25 +204,19 @@ export class LarkApi {
 
 	async sendCard(chatId: string, card: Record<string, unknown>, replyTo?: string): Promise<string> {
 		try {
-			this.controller.signal.throwIfAborted();
-			const response = await this.client.request<{ code?: number; data?: { message_id?: string } }>({
-				url: replyTo
-					? `/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`
-					: "/open-apis/im/v1/messages",
-				method: "POST",
-				signal: this.controller.signal,
-				timeout: 15_000,
-				params: replyTo ? undefined : { receive_id_type: "chat_id" },
-				data: {
-					...(replyTo ? {} : { receive_id: chatId }),
-					msg_type: "interactive",
-					content: JSON.stringify(card),
-				},
-			});
-			this.controller.signal.throwIfAborted();
-			if (response.code !== 0 || typeof response.data?.message_id !== "string" || !response.data.message_id)
-				throw new Error("Invalid card response");
-			return response.data.message_id;
+			const content = JSON.stringify(card);
+			const response = replyTo
+				? await this.client.im.message.reply({
+						path: { message_id: replyTo },
+						data: { content, msg_type: "interactive" },
+					})
+				: await this.client.im.message.create({
+						params: { receive_id_type: "chat_id" },
+						data: { receive_id: chatId, msg_type: "interactive", content },
+					});
+			const messageId = response.data?.message_id;
+			if (!messageId) throw new Error("Invalid card response");
+			return messageId;
 		} catch {
 			throw new Error("Lark card send failed");
 		}
@@ -259,16 +224,11 @@ export class LarkApi {
 
 	async updateCard(messageId: string, card: Record<string, unknown>): Promise<void> {
 		try {
-			this.controller.signal.throwIfAborted();
-			const response = await this.client.request<{ code?: number }>({
-				url: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
-				method: "PATCH",
-				signal: this.controller.signal,
-				timeout: 15_000,
+			const response = await this.client.im.message.patch({
+				path: { message_id: messageId },
 				data: { content: JSON.stringify(card) },
 			});
-			this.controller.signal.throwIfAborted();
-			if (response.code !== 0) throw new Error("Invalid card response");
+			if (response.code !== undefined && response.code !== 0) throw new Error("Invalid card response");
 		} catch {
 			throw new Error("Lark card update failed");
 		}
@@ -301,14 +261,13 @@ export class LarkApi {
 		const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(30_000)]);
 		try {
 			signal.throwIfAborted();
-			const response = await this.client.request<unknown>({
-				url: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(key)}`,
-				method: "GET",
-				params: { type },
-				responseType: "stream",
-				signal,
-				timeout: 15_000,
-			});
+			// The SDK exposes this typed call but not its stream mode, so the response is the raw stream.
+			const response = await this.client.im.messageResource.get(
+				{ path: { message_id: messageId, file_key: key }, params: { type } },
+				{ ...{ signal, timeout: 15_000, responseType: "stream" } } as Parameters<
+					Client["im"]["messageResource"]["get"]
+				>[1],
+			);
 			if (!(response instanceof Readable)) throw new Error("Invalid resource stream");
 			stream = response;
 			signal.throwIfAborted();
