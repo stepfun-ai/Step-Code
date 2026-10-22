@@ -13,16 +13,26 @@
 # itself fails on --sign rather than shipping an unsigned installer under a
 # signed profile's name.
 #
-# The runner is a persistent bare-metal shell machine (Git Bash, pnpm.cmd,
-# cygpath), not a container: there is no image, and pnpm must go through
-# falcon's run_pnpm.sh so node_modules gets Win32 junctions instead of MSYS ones.
+# Phase 1 runs this on the macOS Tart runner as a cross-build: electron-builder's
+# nsis target is platform independent, and this repo's packer is only
+# electron-builder (no Rust/Tauri installer, no EV token), so no Windows box is
+# needed to produce an unsigned installer. It was built and collected locally on
+# macOS through this exact chain before this job existed.
+#
+# No runner of this project carries [mobile, online, windows, bare-metal] today.
+# Move this job back to that box — tags + drop the image — when signing lands:
+# signtool and the EV USB token only exist on Windows, and only there can the
+# installer be run. pnpm on that box must go through falcon's run_pnpm.sh so
+# node_modules gets Win32 junctions instead of MSYS ones; on macOS it is a pass
+# through to plain pnpm, so the same script line serves both.
 stepcode-desktop-package-windows:
   stage: package
+  image: 'hub.i.basemind.com/fe/mobile/sequoia-xcode-26.0.1:latest'
   tags:
     - mobile
     - online
-    - windows
-    - bare-metal
+    - macos
+    - tart
   needs: []
   # One installer run at a time: two Electron/NSIS builds on the same box contend
   # for disk and the workspace, and the staging directory outside the repo is
@@ -40,8 +50,8 @@ stepcode-desktop-package-windows:
     # GitLab's default -ffdx would delete node_modules too.
     GIT_CLEAN_FLAGS: '-ffd'
     GIT_DEPTH: '20'
-    # The runner helper's Go net/http has hit TLS handshake timeouts uploading
-    # artifacts from this box after a successful pack.
+    # The Windows helper's Go net/http has hit TLS handshake timeouts uploading
+    # artifacts after a successful pack; harmless on the mac runner.
     GODEBUG: 'http2client=0'
     CI_NEEDS_GIT_PREP: '0'
     CI_NEEDS_GEM_PREP: '0'
