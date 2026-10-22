@@ -315,8 +315,9 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				// No chat-read scope on the launcher template: not seeing the group is not proof it is wrong.
 				return;
 			}
-			// Only the peer's bot is checkable: their person is invited through that bot, and their open
-			// id is not ours to inspect.
+			// Warn only when the listing actually proves the peer's bot is absent. An empty listing means
+			// the scope let the call through but not the data, which says nothing either way.
+			if (members.length === 0) return;
 			const hasPeerBot = members.some(
 				(member) => member.memberType === "bot" && member.openId !== current.botOpenId,
 			);
