@@ -111,6 +111,30 @@ describe("room transport calls", () => {
 		}
 	});
 
+	it("reports an unreadable listing as undefined instead of an empty list", async () => {
+		// The SDK's paginated helper resolves a failed request into an empty page rather than throwing.
+		// An empty array would read as "the peer bot is not in the group", which is not what it means.
+		const client = api();
+		try {
+			// A rejected request yields one stub page with no `items` field at all.
+			sdk.chatMembersGet.mockResolvedValueOnce({});
+			expect(await client.listChatMembers("oc_1")).toBeUndefined();
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("keeps a genuinely empty listing distinct from an unreadable one", async () => {
+		const client = api();
+		try {
+			// A genuinely empty group still carries the `items` array the platform always sends.
+			sdk.chatMembersGet.mockResolvedValueOnce({ items: [] });
+			expect(await client.listChatMembers("oc_1")).toEqual([]);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("sends plain text to a chat or as a reply", async () => {
 		const client = api();
 		try {

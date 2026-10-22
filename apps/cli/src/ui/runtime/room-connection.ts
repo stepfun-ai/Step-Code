@@ -51,7 +51,10 @@ export interface RoomTransport {
 		sendText(chatId: string, text: string, replyTo?: string): Promise<string>;
 		sendCard(chatId: string, card: Record<string, unknown>, replyTo?: string): Promise<string>;
 		updateCard(messageId: string, card: Record<string, unknown>): Promise<void>;
-		listChatMembers(chatId: string): Promise<readonly { openId: string; memberType: "user" | "bot" | "unknown" }[]>;
+		/** `undefined` when the tenant cannot read members; never conflated with an empty listing. */
+		listChatMembers(
+			chatId: string,
+		): Promise<readonly { openId: string; memberType: "user" | "bot" | "unknown" }[] | undefined>;
 		close(): Promise<void>;
 	};
 }
@@ -303,21 +306,15 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 		};
 
 		/**
-		 * Confirm the invite landed. Failure to read members is not evidence of failure: the launcher's
-		 * default template does not grant a chat-read scope, so this stays quiet instead of claiming
-		 * the group is wrong when it cannot see into it.
+		 * Confirm the invite landed.
+		 *
+		 * `undefined` means the tenant cannot read members at all — the launcher template grants no
+		 * chat-read scope, so this is the normal case and proves nothing. Only a listing we actually
+		 * received may be read as evidence that the peer's bot is missing.
 		 */
 		const verifyMembers = async (current: ActiveRoom, context: ExtensionCommandContext) => {
-			let members: readonly { openId: string; memberType: "user" | "bot" | "unknown" }[];
-			try {
-				members = await current.transport.api.listChatMembers(current.chatId);
-			} catch {
-				// No chat-read scope on the launcher template: not seeing the group is not proof it is wrong.
-				return;
-			}
-			// Warn only when the listing actually proves the peer's bot is absent. An empty listing means
-			// the scope let the call through but not the data, which says nothing either way.
-			if (members.length === 0) return;
+			const members = await current.transport.api.listChatMembers(current.chatId);
+			if (!members) return;
 			const hasPeerBot = members.some(
 				(member) => member.memberType === "bot" && member.openId !== current.botOpenId,
 			);

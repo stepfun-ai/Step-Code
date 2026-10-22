@@ -7,6 +7,13 @@ import { pipeline } from "node:stream/promises";
 import { Client, LoggerLevel } from "@larksuiteoapi/node-sdk";
 import { LARK_OPEN_HOSTS, type LarkCredentials } from "./registration.ts";
 
+/** One member of a chat, as far as a room cares: who it is and whether it is a person or a bot. */
+export interface ChatMember {
+	openId: string;
+	memberType: "user" | "bot" | "unknown";
+	name: string;
+}
+
 /** In-memory authenticated REST boundary; never forwards SDK diagnostics. */
 export class LarkApi {
 	private readonly client: Client;
@@ -101,19 +108,26 @@ export class LarkApi {
 	}
 
 	/**
-	 * Members of a chat, for confirming an invite landed. Needs a chat-read scope the launcher's
-	 * default template does not grant, so callers treat a failure as "cannot verify", not "wrong".
+	 * Members of a chat, for confirming an invite landed.
+	 *
+	 * Returns `undefined` rather than an empty list when the members cannot be read. The SDK's
+	 * paginated helper neither throws nor surfaces the error here: on a rejected request it yields one
+	 * stub page with no `items` field at all, so `[]` and "no permission" would otherwise look
+	 * identical. The launcher template grants no chat-read scope, making that the normal case.
+	 * Callers must not read an empty result as "the invite failed".
 	 */
-	async listChatMembers(
-		chatId: string,
-	): Promise<readonly { openId: string; memberType: "user" | "bot" | "unknown"; name: string }[]> {
+	async listChatMembers(chatId: string): Promise<readonly ChatMember[] | undefined> {
+		const members: ChatMember[] = [];
+		let sawContent = false;
 		try {
-			const members: { openId: string; memberType: "user" | "bot" | "unknown"; name: string }[] = [];
 			for await (const page of await this.client.im.chatMembers.getWithIterator({
 				params: { member_id_type: "open_id", page_size: 100 },
 				path: { chat_id: chatId },
 			})) {
-				for (const item of page?.items ?? []) {
+				// A successful page always carries an `items` array, even when it is empty.
+				if (!Array.isArray(page?.items)) continue;
+				sawContent = true;
+				for (const item of page.items) {
 					if (!item?.member_id) continue;
 					const type = item.member_id_type;
 					members.push({
@@ -123,10 +137,10 @@ export class LarkApi {
 					});
 				}
 			}
-			return members;
 		} catch {
-			throw new Error("Lark chat member lookup failed");
+			return undefined;
 		}
+		return sawContent ? members : undefined;
 	}
 
 	/** Send a plain text message. Mentions use the `<at user_id="ou_…"></at>` form inside `text`. */
