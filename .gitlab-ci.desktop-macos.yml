@@ -48,16 +48,27 @@ stepcode-desktop-package:
     - corepack enable
     - corepack prepare --activate pnpm@9.15.9
     - bash "${BUILD_SCRIPT_DIR}/common/run_pnpm.sh" install --frozen-lockfile
+    # The falcon toolchain is cloned into <workspace>/pipeline, inside this repo, so
+    # Node resolves our root package.json's "type": "module" for falcon's CommonJS
+    # helpers and `node pipeline/scripts/electron/extract_builder_info.js` dies with
+    # "require is not defined in ES module scope". That helper names the collected
+    # installer, so the artifact came out as "-arm64." with no extension. A
+    # package.json without "type" marks the clone as CommonJS again.
     - |
-      set -eo pipefail
-      # Functions only: sourcing does not run electron_build.sh's main(), which
-      # would repeat the install, run proto codegen this repo does not have, and
-      # rewrite an electron-builder config this repo does not use.
-      source "${BUILD_SCRIPT_DIR}/package/electron_build.sh"
-      # profile → --env/--arch/--fast-build/--notarize, then `npm run dist:mac -- …`
-      build_electron_pkg
-      collect_artifacts
-      on_exit
+      printf '{"type": "commonjs"}\n' > "${PIPELINE_TOOLCHAIN_DIR}/package.json"
+    # bash -c: the tart runner's shell is zsh, and falcon's on_exit uses bash-only
+    # ${!var} indirect expansion ("bad substitution"). stepfun-desktop wraps the
+    # same calls the same way. Sourcing does not run electron_build.sh's main(),
+    # which would repeat the install, run proto codegen this repo does not have,
+    # and rewrite an electron-builder config this repo does not use.
+    - |
+      bash -c '
+        set -eo pipefail
+        source "${BUILD_SCRIPT_DIR}/package/electron_build.sh"
+        build_electron_pkg   # profile -> --env/--arch/--fast-build/--notarize, then `npm run dist:mac -- ...`
+        collect_artifacts    # dmg/zip into build/ci, renamed with the arch
+        on_exit              # CI_ELECTRON_*_PATH into build_internal.env
+      '
   after_script:
     - !reference [.scripts, import-ci-env]
     - bash "${BUILD_SCRIPT_DIR}/package/archive_job_artifacts.sh"
@@ -67,8 +78,11 @@ stepcode-desktop-package:
       - build_archive/
       - build/ci/ci.env
       - build/ci/build_internal.env
-      # Phase 1 has no distribution job, so the dmg collect_artifacts() left in
-      # build/ci is the only way to get the installer off the machine.
+      # Phase 1 has no distribution job, so the installer has to be a job
+      # artifact. dist-electron keeps electron-builder's own name, so a bad
+      # rename on falcon's side cannot lose the dmg entirely.
+      - dist-electron/*.dmg
+      - dist-electron/*.zip
       - build/ci/*.dmg
     expire_in: 2 weeks
     when: always

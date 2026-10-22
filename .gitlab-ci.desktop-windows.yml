@@ -66,6 +66,11 @@ stepcode-desktop-package-windows:
     # Fails fast before any install: Git Bash path conversion and, for a signed
     # profile, the EV token. Unsigned here, so only the path probe runs. The
     # falcon scripts are not mode 755 in git, so invoke them through bash.
+    # Same ESM shadow as on macOS: the falcon clone sits inside this repo, whose
+    # root package.json is "type": "module", so falcon's CommonJS helper that
+    # reads the product name/version fails. Mark the clone as CommonJS.
+    - |
+      printf '{"type": "commonjs"}\n' > "${PIPELINE_TOOLCHAIN_DIR}/package.json"
     - bash "${BUILD_SCRIPT_DIR}/package/windows_preflight.sh"
     - bash "${BUILD_SCRIPT_DIR}/common/run_pnpm.sh" install --frozen-lockfile
     # resolve_windows_package_args → pack-win flags, then `node scripts/pack-win.cjs`.
@@ -83,5 +88,8 @@ stepcode-desktop-package-windows:
       # them (renamed with the build number, latest.yml rewritten to match).
       - build/desktop-staging/
       - build/ci/channel-artifacts.json
+      # electron-builder's own output name, independent of falcon's rename.
+      - dist-electron/*.exe
+      - dist-electron/latest.yml
     expire_in: 2 weeks
     when: always
