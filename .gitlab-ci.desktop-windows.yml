@@ -81,6 +81,11 @@ stepcode-desktop-package-windows:
     # reads the product name/version fails. Mark the clone as CommonJS.
     - |
       printf '{"type": "commonjs"}\n' > "${PIPELINE_TOOLCHAIN_DIR}/package.json"
+    # falcon's scripts are checked out 100644, and windows_preflight.sh and
+    # windows_build.sh invoke their siblings directly (windows_path_probe.sh,
+    # windows_token_check.sh). Git Bash on Windows runs them anyway; a POSIX
+    # runner answers "Permission denied". Mark the clone's scripts executable.
+    - find "${PIPELINE_TOOLCHAIN_DIR}/scripts" -name '*.sh' -exec chmod +x {} +
     - bash "${BUILD_SCRIPT_DIR}/package/windows_preflight.sh"
     - bash "${BUILD_SCRIPT_DIR}/common/run_pnpm.sh" install --frozen-lockfile
     # resolve_windows_package_args → pack-win flags, then `node scripts/pack-win.cjs`.
