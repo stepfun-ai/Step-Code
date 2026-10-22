@@ -157,3 +157,66 @@ describe("Lark transport lifecycle", () => {
 		await expect(transport.start()).rejects.toThrow("cannot be restarted");
 	});
 });
+
+describe("Lark transport bot-added signal", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		sdk.start.mockResolvedValue();
+	});
+	it("reports the chat when this bot is invited into one", async () => {
+		const added = vi.fn();
+		const transport = new LarkTransport({
+			credentials: { appId: "cli_0123456789abcdef", appSecret: "fixture", brand: "feishu" },
+			botId: "bot",
+			onMessage: vi.fn(),
+			onCardAction: vi.fn(),
+			onState: vi.fn(),
+			onBotAdded: added,
+		});
+		const startup = transport.start();
+		await Promise.resolve();
+		(sdk.options.onReady as () => void)();
+		await startup;
+		sdk.handlers["im.chat.member.bot.added_v1"]({ chat_id: "oc_room" });
+		expect(added).toHaveBeenCalledExactlyOnceWith("oc_room");
+		transport.close();
+	});
+
+	it("ignores a malformed bot-added event and any callback after close", async () => {
+		const added = vi.fn();
+		const transport = new LarkTransport({
+			credentials: { appId: "cli_0123456789abcdef", appSecret: "fixture", brand: "feishu" },
+			botId: "bot",
+			onMessage: vi.fn(),
+			onCardAction: vi.fn(),
+			onState: vi.fn(),
+			onBotAdded: added,
+		});
+		const startup = transport.start();
+		await Promise.resolve();
+		(sdk.options.onReady as () => void)();
+		await startup;
+		sdk.handlers["im.chat.member.bot.added_v1"]({ chat_id: "" });
+		sdk.handlers["im.chat.member.bot.added_v1"]({});
+		expect(added).not.toHaveBeenCalled();
+		transport.close();
+		sdk.handlers["im.chat.member.bot.added_v1"]({ chat_id: "oc_late" });
+		expect(added).not.toHaveBeenCalled();
+	});
+
+	it("works with no bot-added handler registered", async () => {
+		const transport = new LarkTransport({
+			credentials: { appId: "cli_0123456789abcdef", appSecret: "fixture", brand: "feishu" },
+			botId: "bot",
+			onMessage: vi.fn(),
+			onCardAction: vi.fn(),
+			onState: vi.fn(),
+		});
+		const startup = transport.start();
+		await Promise.resolve();
+		(sdk.options.onReady as () => void)();
+		await startup;
+		expect(() => sdk.handlers["im.chat.member.bot.added_v1"]({ chat_id: "oc_x" })).not.toThrow();
+		transport.close();
+	});
+});

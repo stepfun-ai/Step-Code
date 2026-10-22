@@ -8,6 +8,11 @@ export interface LarkTransportOptions {
 	onMessage: (message: LarkMessage) => void;
 	onCardAction: (action: { chatId: string; token: string; option: string }) => void;
 	onState: (state: "connected" | "degraded") => void;
+	/**
+	 * Optional: the bot was added to a chat. A joining side has no other way to learn its group id,
+	 * because it is invited rather than created by that bot.
+	 */
+	onBotAdded?: (chatId: string) => void;
 }
 
 // SDK diagnostics can contain request credentials and must never reach the terminal.
@@ -30,6 +35,11 @@ export class LarkTransport {
 			"im.message.receive_v1": (event) => {
 				const result = this.gate.accept(event);
 				if (result.action === "accept") options.onMessage(result.message);
+				return {};
+			},
+			"im.chat.member.bot.added_v1": (event: { chat_id?: unknown }) => {
+				const chatId = event?.chat_id;
+				if (!this.closed && typeof chatId === "string" && chatId) options.onBotAdded?.(chatId);
 				return {};
 			},
 			"card.action.trigger": (event: {

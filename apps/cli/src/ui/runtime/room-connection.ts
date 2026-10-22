@@ -70,7 +70,11 @@ export interface RoomExtensionOptions {
 	/** Turn a fresh authorization into credentials. Absent means the room command stays off. */
 	authorize?: (context: ExtensionContext) => Promise<LarkCredentials | undefined>;
 	/** Build the live transport from credentials. Absent in tests that supply no platform. */
-	transport?: (credentials: LarkCredentials, onMessage: (message: RoomInbound) => void) => RoomTransport;
+	transport?: (
+		credentials: LarkCredentials,
+		onMessage: (message: RoomInbound) => void,
+		onBotAdded: (chatId: string) => void,
+	) => RoomTransport;
 	/** Rendezvous client; defaults to the trial deployment. */
 	rendezvous?: RoomRendezvousClient;
 	/** Title for the group. */
@@ -219,7 +223,9 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				context.ui.notify("room · 传输层未配置", "warning");
 				return undefined;
 			}
-			const transport = options.transport(credentialsOf(record), handleInbound);
+			const transport = options.transport(credentialsOf(record), handleInbound, (chatId) =>
+				adoptChat(chatId, context),
+			);
 			try {
 				await transport.start();
 				return transport;
@@ -334,15 +340,23 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				transport,
 				peer: { appId: "", openId: "" },
 			};
-			context.ui.notify("room · 已登记，等待对方建群后把你拉进群", "info");
+			context.ui.notify("room · 已登记，等待对方建群后把你拉进群（进群后即可对话）", "info");
 		};
 
 		/**
-		 * TODO(room): the joining side learns its group id only by being added to it. Feishu reports
-		 * that through `im.chat.member.bot.added_v1`, which the transport does not subscribe to yet;
-		 * until it does, the joining terminal is bound by the same poll-and-adopt step the starter
-		 * uses. Tracked in docs/agent-room-design.md §7.0.
+		 * The joining side learns its group id only by being added to it: Feishu reports that through
+		 * the bot-added event, and that is the moment this session can start receiving room messages.
 		 */
+		const adoptChat = (chatId: string, context: ExtensionContext) => {
+			const current = room;
+			if (!current) return;
+			if (current.chatId && current.chatId !== chatId) return;
+			current.chatId = chatId;
+			if (!bindings) {
+				bindings = new RoomBindingStore();
+				bindings.bind(chatId, context.sessionManager.getSessionId());
+			}
+		};
 
 		pi.registerCommand("room", {
 			description: "Start or join a room with another person's agent; /room leave to stop",

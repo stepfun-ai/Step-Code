@@ -4,6 +4,13 @@ export interface LarkMessage {
 	text: string;
 	imageKeys: string[];
 	files: { key: string; name: string }[];
+	/** `create_time` in milliseconds, used to order a room's messages. */
+	createdAt: number;
+	/** `user` or `bot`; a room uses this to tell a hand-off from a statement. */
+	senderType?: string;
+	senderOpenId?: string;
+	/** Everyone @-mentioned, so a room can see whether the turn was handed to it. */
+	mentions: { openId?: string; mentionedType?: string }[];
 }
 
 export type LarkInboundResult = { action: "accept"; message: LarkMessage } | { action: "ignore"; reason: string };
@@ -105,7 +112,26 @@ export class LarkInboundGate {
 		if (this.seen.size >= MAX_SEEN_MESSAGES) return { action: "ignore", reason: "rate-limit" };
 		this.seen.set(id, createdAt + MESSAGE_MAX_AGE_MS);
 		this.boundChat = chatId;
-		return { action: "accept", message: { id, chatId, text, imageKeys, files } };
+		return {
+			action: "accept",
+			message: {
+				id,
+				chatId,
+				text,
+				imageKeys,
+				files,
+				createdAt,
+				...(typeof sender.sender_type === "string" ? { senderType: sender.sender_type } : {}),
+				...(typeof sender.open_id === "string" && sender.open_id ? { senderOpenId: sender.open_id } : {}),
+				mentions: mentions.map((mention) => {
+					const id = record(mention.id);
+					return {
+						...(typeof id.open_id === "string" && id.open_id ? { openId: id.open_id } : {}),
+						...(typeof mention.mentioned_type === "string" ? { mentionedType: mention.mentioned_type } : {}),
+					};
+				}),
+			},
+		};
 	}
 
 	close(): void {
