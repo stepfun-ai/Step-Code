@@ -135,6 +135,40 @@ export interface SessionEntry {
 	readonly [key: string]: unknown;
 }
 
+export interface ImportCandidate {
+	readonly id: string;
+	readonly source: "codex" | "claude-code";
+	readonly sessionId: string;
+	readonly title: string;
+	readonly cwd: string;
+	readonly modified: string;
+	readonly archived: boolean;
+	readonly version: string;
+}
+
+export interface ImportPreview extends ImportCandidate {
+	readonly fingerprint: string;
+	readonly messageCount: number;
+	readonly toolCount: number;
+	readonly warnings: readonly { readonly code: string; readonly count: number }[];
+	readonly excerpt: string;
+}
+
+export interface ImportJob {
+	readonly id: string;
+	readonly createdAt: string;
+	readonly status: "running" | "completed" | "cancelled" | "interrupted";
+	readonly total: number;
+	readonly results: readonly {
+		readonly candidateId: string;
+		readonly title?: string;
+		readonly status: "imported" | "skipped" | "failed";
+		readonly sessionId?: string;
+		readonly error?: string;
+		readonly warning?: string;
+	}[];
+}
+
 /** A row of GET /api/v1/sessions. Snapshots are merged into these rows too. */
 export interface SessionSummary {
 	readonly id: string;
@@ -319,7 +353,7 @@ export interface MessageTimelineItem {
 	readonly error?: string;
 }
 
-export type ToolState = "pending" | "completed" | "failed";
+export type ToolState = "pending" | "completed" | "failed" | "unknown";
 
 export interface ThinkingTiming {
 	readonly startedAt: number;
@@ -339,6 +373,7 @@ export interface ThinkingTimelineItem {
 }
 
 export interface ToolTimelineItem {
+	readonly imported?: boolean;
 	readonly itemId: string;
 	readonly kind: "tool";
 	readonly state: ToolState;

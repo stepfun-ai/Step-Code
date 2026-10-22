@@ -343,6 +343,18 @@ export {
 } from "./core/sdk.ts";
 export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
+export type { ImportScanOptions, ImportScanResult } from "./core/session-import/service.ts";
+export { SessionImportError, SessionImportService } from "./core/session-import/service.ts";
+export type {
+	ImportCandidate,
+	ImportJob,
+	ImportPreview,
+	ImportProvenance,
+	ImportResult,
+	ImportSelection,
+	ImportSource,
+	ImportWarning,
+} from "./core/session-import/types.ts";
 export * from "./core/session-index/index.ts";
 export type {
 	SessionFilePersistedEvent,

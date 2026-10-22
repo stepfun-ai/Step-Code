@@ -282,12 +282,21 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					continue;
 				}
 				const result = toolResults.get(String(block.id));
-				const change = fileChange(String(block.name ?? ""), block.arguments, result);
-				const links = childAgents(String(block.name ?? ""), result?.details);
+				const imported = Boolean(entry.imported);
+				const importedUnknown =
+					imported &&
+					(!result ||
+						(result.details &&
+							typeof result.details === "object" &&
+							"importedStatus" in result.details &&
+							result.details.importedStatus === "unknown"));
+				const change = imported ? undefined : fileChange(String(block.name ?? ""), block.arguments, result);
+				const links = imported ? {} : childAgents(String(block.name ?? ""), result?.details);
 				items.push({
 					itemId: `tool-${block.id}`,
 					kind: "tool",
-					state: result?.isError ? "failed" : result ? "completed" : "pending",
+					state: importedUnknown ? "unknown" : result?.isError ? "failed" : result ? "completed" : "pending",
+					...(imported ? { imported: true } : {}),
 					toolName: String(block.name ?? ""),
 					inputSummary: toolInputSummary(block.arguments),
 					outputSummary: result ? compact(contentText(result.content)) : "",
@@ -296,7 +305,7 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					...withArgs(block.arguments),
 					...(change ? { change } : {}),
 					...links,
-					...(block.name === "subagent"
+					...(!imported && block.name === "subagent"
 						? {
 								subagentTasks: subagentTasks(
 									block.arguments,

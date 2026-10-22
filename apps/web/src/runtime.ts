@@ -394,13 +394,17 @@ function modelsMatch(left: { provider: string; id: string }, right: { provider: 
 
 export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 	// Only assistant turns carry usage; other message kinds have none to report.
-	const usage = entry.type === "message" && entry.message.role === "assistant" ? entry.message.usage : undefined;
+	const usage =
+		entry.type === "message" && entry.message.role === "assistant" && !entry.imported
+			? entry.message.usage
+			: undefined;
 	const notification =
 		entry.type === "custom_message" ? projectSubagentNotification(entry.customType, entry.details) : undefined;
 	return {
 		id: entry.id,
 		type: entry.type,
 		timestamp: entry.timestamp,
+		...(entry.imported ? { imported: entry.imported } : {}),
 		...(entry.type === "message" ? { message: entry.message } : {}),
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),

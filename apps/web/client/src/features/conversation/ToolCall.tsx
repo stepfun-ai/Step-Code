@@ -75,7 +75,7 @@ export const ToolRow = memo(function ToolRow({
 	const call = callPath(item.args, cwd);
 	const shown = call.shown;
 	// Only a file opens in the preview; a search or list path is usually a folder.
-	const openable = FILE_KINDS.has(toolKind(item)) ? call.openable : null;
+	const openable = !item.imported && FILE_KINDS.has(toolKind(item)) ? call.openable : null;
 	const copyValue = toolKind(item) === "bash" ? (item.args?.command ?? "") : output;
 	const card = toolKind(item) === "edit" || toolKind(item) === "write";
 	if (!readOnly && item.toolName === "subagent" && item.subagentTasks?.length && item.state !== "failed") {

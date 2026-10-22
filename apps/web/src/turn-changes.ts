@@ -246,7 +246,7 @@ export function turnChanges(entries: readonly SessionEntry[], turnId: string): T
 	const calls = new Map<string, { name: string; path?: string }>();
 	for (const entry of entries.slice(start + 1)) {
 		if (isUserMessage(entry)) break;
-		if (entry.type !== "message") continue;
+		if (entry.type !== "message" || entry.imported) continue;
 		const message = entry.message as {
 			role: string;
 			content?: unknown;

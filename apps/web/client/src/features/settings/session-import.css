@@ -1,0 +1,155 @@
+.session-import-sources {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+}
+
+.session-import-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-block: 16px;
+}
+
+.session-import-toolbar .search-input {
+	flex: 1;
+	min-width: 160px;
+}
+
+.session-import-check {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	cursor: pointer;
+}
+
+.session-import-check input {
+	flex: 0 0 auto;
+	accent-color: var(--ink);
+}
+
+.session-import-check span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.session-import-check strong {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.session-import-check small {
+	display: block;
+	font-size: 12px;
+	color: var(--ink-2);
+	margin-top: 4px;
+}
+
+.session-import-group h2,
+.session-import-preview h2,
+.session-import-job h2 {
+	font-size: 13px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+	margin-block: 16px 8px;
+}
+
+.session-import-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 12px;
+	border-bottom: 1px solid var(--line);
+	padding-block: 12px;
+}
+
+.session-import-target,
+.session-import-report {
+	grid-column: 1 / -1;
+}
+
+.session-import-target {
+	display: flex;
+	align-items: end;
+	gap: 8px;
+}
+
+.session-import-target label {
+	flex: 1;
+	min-width: 0;
+}
+
+.session-import-report {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	font-size: 12px;
+	color: var(--ink-2);
+}
+
+.session-import-preview pre {
+	max-height: 320px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 12px;
+	padding: 12px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 6px;
+}
+
+.session-import-result {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 12px;
+	padding-block: 8px;
+	overflow-wrap: anywhere;
+}
+
+.session-import-error,
+.session-import-errors {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+	.settings-view:has([data-page="migration"]) {
+		grid-template-columns: 56px minmax(0, 1fr);
+	}
+
+	.settings-view:has([data-page="migration"]) .settings-nav {
+		padding-inline: 8px;
+	}
+
+	.settings-view:has([data-page="migration"]) .settings-nav-item,
+	.settings-view:has([data-page="migration"]) .settings-back {
+		justify-content: center;
+		padding-inline: 0;
+	}
+
+	.settings-view:has([data-page="migration"]) .settings-nav-item span,
+	.settings-view:has([data-page="migration"]) .settings-back span {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+
+	.settings-view:has([data-page="migration"]) .settings-nav-title,
+	.settings-view:has([data-page="migration"]) .settings-nav-note {
+		display: none;
+	}
+
+	.settings-content[data-page="migration"] {
+		padding: 24px 16px 48px;
+	}
+
+	.session-import-sources { grid-template-columns: minmax(0, 1fr); }
+	.session-import-toolbar { gap: 8px; }
+}

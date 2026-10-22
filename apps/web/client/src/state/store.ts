@@ -120,7 +120,7 @@ export interface PreviewState {
 }
 
 /** Pages of the settings view, in menu order. */
-export type SettingsPage = "general" | "account" | "appearance" | "models" | "plugins" | "mcp" | "skills";
+export type SettingsPage = "general" | "account" | "appearance" | "models" | "plugins" | "mcp" | "skills" | "migration";
 
 /**
  * What a settings editor edits. `mcp` with a name edits that server, without one

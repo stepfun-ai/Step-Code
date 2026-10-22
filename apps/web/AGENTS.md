@@ -176,6 +176,11 @@ When to add or change one:
 
 - Every route is under `/api/v1/` (plus `/auth/*`, `/healthz`). It must pass the auth cookie and Origin checks in
   `server.ts`; the server listens on `127.0.0.1` only. Never log the launch token or the cookie secret.
+- `/api/v1/session-imports` adapts the coding-agent offline migration service.
+  Scan the Host machine, exclude archives by default, and require previewed
+  fingerprints plus explicit destination directories before importing. Close
+  the importer before the session index. Imported tools never create native
+  child-agent links, revertable file changes or running-state indicators.
 - Adding or changing a route or payload: update `openapi.yaml` in the same change, update `client/src/state/types.ts`,
   and add a unit test.
 - Anything a reloaded page must show again belongs in the session snapshot (e.g. `pendingApprovals`), not only in

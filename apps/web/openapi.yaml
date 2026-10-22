@@ -6,6 +6,117 @@ info:
 servers:
   - url: http://127.0.0.1:3077
 paths:
+  /api/v1/session-imports/scan:
+    post:
+      description: Read-only discovery on the Host machine. Archived directories and child sessions are excluded by default. Symlinks are not traversed.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                codexRoot: { type: string, description: Codex home or sessions directory }
+                claudeRoot: { type: string, description: Claude projects directory }
+                includeArchived: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Candidates with opaque IDs and per-source scan errors
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates, errors]
+                properties:
+                  candidates: { type: array, items: { $ref: "#/components/schemas/ImportCandidate" } }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, message]
+                      properties:
+                        source: { type: string }
+                        message: { type: string }
+        "400": { description: Invalid input }
+  /api/v1/session-imports/preview:
+    post:
+      description: Parse and retain an immutable read-only snapshot for 15 minutes (subject to bounded cache eviction and host restart). Does not create a session, start an agent or invoke a model.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidateId]
+              properties:
+                candidateId: { type: string }
+      responses:
+        "200":
+          description: Snapshot fingerprint, bounded excerpt and compatibility warnings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportPreview" }
+        "400": { description: Unsupported or invalid source }
+        "409": { description: Candidate expired or source changed }
+  /api/v1/session-imports:
+    get:
+      description: List persisted import jobs. Previous-host unfinished jobs are marked interrupted.
+      responses:
+        "200":
+          description: Job history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs: { type: array, items: { $ref: "#/components/schemas/ImportJob" } }
+    post:
+      description: Import the exact retained preview snapshots, not later source changes, as new native sessions. Missing or expired previews require a new preview (409). Submitted snapshots are pinned until settlement. Identical source snapshots are skipped; newly previewed changed snapshots create new copies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selections]
+              properties:
+                selections:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [candidateId, fingerprint, cwd]
+                    properties:
+                      candidateId: { type: string }
+                      fingerprint: { type: string, pattern: "^[a-f0-9]{64}$" }
+                      cwd: { type: string, description: Existing absolute destination project directory }
+      responses:
+        "202":
+          description: Accepted job; poll the job resource for per-session results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportJob" }
+        "400": { description: Invalid selection }
+  /api/v1/session-imports/{jobId}:
+    parameters:
+      - { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      responses:
+        "200":
+          description: Current or persisted job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportJob" }
+        "404": { description: Unknown job }
+    delete:
+      description: Request cancellation between sessions. Already published sessions remain; poll until the job settles.
+      responses:
+        "200":
+          description: Current job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportJob" }
+        "404": { description: Unknown job }
   /api/v1/terminals:
     get:
       description: List Host-owned terminal metadata for a known workspace. Requires the Host cookie and allowed Origin; never starts a shell.
@@ -1586,6 +1697,57 @@ paths:
         "200": { description: Workspace file contents }
 components:
   schemas:
+    ImportCandidate:
+      type: object
+      required: [id, source, sessionId, title, cwd, modified, archived, version]
+      properties:
+        id: { type: string }
+        source: { type: string, enum: [codex, claude-code] }
+        sessionId: { type: string }
+        title: { type: string }
+        cwd: { type: string }
+        modified: { type: string, format: date-time }
+        archived: { type: boolean }
+        version: { type: string }
+    ImportPreview:
+      allOf:
+        - { $ref: "#/components/schemas/ImportCandidate" }
+        - type: object
+          required: [fingerprint, messageCount, toolCount, warnings, excerpt]
+          properties:
+            fingerprint: { type: string }
+            messageCount: { type: integer }
+            toolCount: { type: integer }
+            excerpt: { type: string, maxLength: 12000 }
+            warnings:
+              type: array
+              items:
+                type: object
+                required: [code, count]
+                properties:
+                  code: { type: string }
+                  count: { type: integer }
+    ImportJob:
+      type: object
+      required: [id, createdAt, status, total, results]
+      properties:
+        id: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        status: { type: string, enum: [running, completed, cancelled, interrupted] }
+        total: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            required: [candidateId, status]
+            properties:
+              candidateId: { type: string }
+              title: { type: string }
+              status: { type: string, enum: [imported, skipped, failed] }
+              sessionId: { type: string }
+              path: { type: string }
+              error: { type: string }
+              warning: { type: string, description: "Session publication succeeded, but a secondary notification failed" }
     TerminalInfo:
       type: object
       required: [id, cwd, title, shell, status, cols, rows]

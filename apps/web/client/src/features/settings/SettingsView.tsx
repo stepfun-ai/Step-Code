@@ -16,6 +16,7 @@ import { GeneralPage } from "./GeneralPage";
 import { McpPage } from "./McpPage";
 import { ModelsPage } from "./ModelsPage";
 import { PluginsPage } from "./PluginsPage";
+import { SessionImportPage } from "./SessionImportPage";
 import { SkillsPage } from "./SkillsPage";
 
 interface MenuEntry {
@@ -32,6 +33,7 @@ const MENU: ReadonlyArray<{ readonly title: string; readonly entries: readonly M
 			{ page: "general", label: "settingsGeneral", icon: "sliders" },
 			{ page: "models", label: "settingsModels", icon: "cube" },
 			{ page: "appearance", label: "settingsAppearance", icon: "palette" },
+			{ page: "migration", label: "importTitle", icon: "folder" },
 		],
 	},
 	{
@@ -60,6 +62,8 @@ function pageContent(page: SettingsPage): ReactNode {
 			return <McpPage />;
 		case "skills":
 			return <SkillsPage />;
+		case "migration":
+			return <SessionImportPage />;
 	}
 }
 

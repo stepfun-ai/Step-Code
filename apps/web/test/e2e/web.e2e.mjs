@@ -250,6 +250,111 @@ const tabs = () => $$("#previewTabs .preview-tab").map((tab) => tab.textContent.
 const ALT_META = 1 | 4
 const SHIFT_META = 8 | 4
 
+test("session migration imports reviewed snapshots while sources continue writing", { skip }, async () => {
+  const codexRoot = join(base, "migration-codex")
+  const claudeRoot = join(base, "migration-claude")
+  await mkdir(join(codexRoot, "sessions"), { recursive: true })
+  await mkdir(join(codexRoot, "archived_sessions"), { recursive: true })
+  await mkdir(claudeRoot, { recursive: true })
+  const timestamp = "2026-10-22T00:00:00.000Z"
+  const sourcePath = join(codexRoot, "sessions", "rollout-migration.jsonl")
+  const input = [
+    { type: "session_meta", timestamp, payload: { id: "migration-codex", cwd: workspace, cli_version: "0.163.0-alpha.11", history_mode: "paginated" } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Migration acceptance quokkabridge" }] } },
+    { type: "response_item", timestamp, payload: { type: "function_call", call_id: "migration-tool", name: "exec_command", arguments: '{"cmd":"never execute this historical call"}' } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, input)
+  // An unreadable archive must not even produce a scan/parse failure by default.
+  await writeFile(join(codexRoot, "archived_sessions", "rollout-archive.jsonl"), "{")
+  await writeFile(join(claudeRoot, "migration-claude.jsonl"), [
+    { type: "user", uuid: "cc-user", parentUuid: null, sessionId: "migration-claude", cwd: workspace, timestamp, message: { content: "Claude migration acceptance" } },
+    { type: "assistant", uuid: "cc-assistant", parentUuid: "cc-user", sessionId: "migration-claude", timestamp, message: { content: [{ type: "text", text: "Historical CC reply" }] } },
+  ].map(JSON.stringify).join("\n") + "\n")
+  const scanned = await browser.run(`
+    if ($("#settingsView").hidden) $("#settingsButton").click();
+    await until(() => !$("#settingsView").hidden, "settings");
+    $("[data-settings-page='migration']").click();
+    await until(() => $("#importScan"), "migration page");
+    $("#importCodexRoot").value = ${JSON.stringify(codexRoot)};
+    $("#importCodexRoot").dispatchEvent(new Event("input"));
+    $("#importClaudeRoot").value = ${JSON.stringify(claudeRoot)};
+    $("#importClaudeRoot").dispatchEvent(new Event("input"));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const archived = $("#importIncludeArchived").checked;
+    $("#importScan").click();
+    await until(() => $$(".session-import-row").length === 2, "two active source sessions");
+    return { archived, errors: !!$(".session-import-errors"), sources: $$(".session-import-row").map(row => row.dataset.importSource).sort() };
+  `)
+  assert.deepEqual(scanned, { archived: false, errors: false, sources: ["claude-code", "codex"] })
+  await browser.run(`
+    $("#importSelectAll").click();
+    await until(() => !$("#importReviewSelected").disabled, "review enabled");
+    $("#importReviewSelected").click();
+    await until(() => !$("#importConfirm").disabled, "preview completion");
+    return true;
+  `)
+  await browser.send("Emulation.setDeviceMetricsOverride", {
+    width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
+  })
+  try {
+    const layout = await browser.run(`
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const content = $(".settings-content");
+      const buttons = [$("#importReviewSelected"), $("#importConfirm")].map(node => node.getBoundingClientRect());
+      return {
+        contentWidth: content.getBoundingClientRect().width,
+        overflowing: content.scrollWidth > content.clientWidth,
+        buttonsFit: buttons.every(rect => rect.left >= 0 && rect.right <= innerWidth),
+      };
+    `)
+    assert.ok(layout.contentWidth >= 280, JSON.stringify(layout))
+    assert.equal(layout.overflowing, false)
+    assert.equal(layout.buttonsFit, true)
+  } finally {
+    await browser.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
+    })
+  }
+  const updatedInput = input + [
+    { type: "event_msg", timestamp, payload: { type: "token_count", info: {} } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Unreviewed source append" }] } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, updatedInput)
+  await browser.run(`
+    $("#importConfirm").click();
+    await until(() => $$(".session-import-result").length === 2, "completed imports");
+    const jobs = await (await fetch("/api/v1/session-imports")).json();
+    const job = jobs.jobs.find(job => job.results.length === 2);
+    if (!job || job.results.some(result => result.status !== "imported")) throw new Error(JSON.stringify(jobs));
+    window.migrationJob = job;
+    return true;
+  `)
+  const imported = await browser.run(`
+    const job = window.migrationJob;
+    const sessions = (await (await fetch("/api/v1/sessions")).json()).sessions;
+    const codex = sessions.find(session => job.results.some(result => result.sessionId === session.id) && session.name.startsWith("[codex]"));
+    if (!codex) throw new Error("Codex import missing from native sessions");
+    const snapshot = await (await fetch("/api/v1/sessions/" + codex.id)).json();
+    if (!snapshot.entries.some(entry => entry.imported)) throw new Error("Missing source provenance");
+    if (JSON.stringify(snapshot.entries).includes("Unreviewed source append")) throw new Error("Imported unreviewed content");
+    const result = job.results.find(result => result.sessionId === codex.id);
+    const buttons = $$(".session-import-result button");
+    buttons[job.results.indexOf(result)].click();
+    await until(() => $("#settingsView").hidden, "opened native import");
+    await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "imported history");
+    return { id: codex.id, hasUnknown: !!$("[data-tool-state='unknown']") };
+  `)
+  assert.equal(imported.hasUnknown, true)
+  assert.equal(await readFile(sourcePath, "utf8"), updatedInput)
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "reopened after refresh");`)
+  const search = await browser.run(`
+    const result = await (await fetch("/api/v1/search?q=quokkabridge")).json();
+    return result.hits.some(hit => hit.sessionId === ${JSON.stringify(imported.id)});
+  `)
+  assert.equal(search, true)
+})
+
 let base
 let workspace
 let extra

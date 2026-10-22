@@ -35,6 +35,13 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/codin
 
 Core provides mechanisms that product features compose. Do not put a feature's state machine into tool loading, session storage, or the generic Agent Loop.
 
+`src/core/session-import/` owns offline foreign-session discovery, adapters and
+atomic import jobs. Keep source reads separate from live session opening. Preserve
+import provenance, exclude historical usage/model selection, and project source
+tools as evidence rather than executable calls. See `docs/session-import.md`.
+Keep explicit failed/unknown tool outcomes and supported compaction attachments
+in continuation context; discovery must not truncate a metadata-bearing JSONL record.
+
 ### src/features: concrete features and orchestration
 
 | Feature | Main locations | Contents |

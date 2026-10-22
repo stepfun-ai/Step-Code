@@ -14,6 +14,9 @@ import {
 	resolveStepAgentDir,
 	resolveStepCodeVersion,
 	resolveStepConfigRoot,
+	resolveStepSessionDir,
+	SessionImportError,
+	SessionImportService,
 	SessionSearchRequestError,
 } from "@step-harness/coding-agent";
 import { AccountProfileCache } from "./account.ts";
@@ -256,6 +259,11 @@ async function directoryList(inputPath: string): Promise<unknown> {
 }
 
 const sessionSearch = new WebSessionSearch(resolveStepAgentDir());
+const sessionImports = new SessionImportService({
+	agentDir: resolveStepAgentDir(),
+	sessionRoot: resolveStepSessionDir(),
+	onPersisted: (event) => sessionSearch.notifyPersisted(event),
+});
 const store = new WebSessionStore({ index: sessionSearch });
 const workspaces = new WorkspaceRegistry(join(resolveStepAgentDir(), WORKSPACES_FILE));
 const embeddedBrowser = new WebBrowser([port, launchPort]);
@@ -636,6 +644,62 @@ const server = createServer(async (request, response) => {
 				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
 			}
 		}
+		if (parts[2] === "session-imports") {
+			try {
+				if (parts.length === 3 && method === "GET")
+					return json(response, 200, { jobs: await sessionImports.listJobs() });
+				if (parts.length === 4 && parts[3] === "scan" && method === "POST") {
+					const input = await body(request);
+					for (const key of ["codexRoot", "claudeRoot"])
+						if (input[key] !== undefined && typeof input[key] !== "string")
+							return error(response, 400, `${key} must be a string`);
+					if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean")
+						return error(response, 400, "includeArchived must be a boolean");
+					return json(
+						response,
+						200,
+						await sessionImports.scan({
+							codexRoot: typeof input.codexRoot === "string" ? input.codexRoot : undefined,
+							claudeRoot: typeof input.claudeRoot === "string" ? input.claudeRoot : undefined,
+							includeArchived: input.includeArchived === true,
+						}),
+					);
+				}
+				if (parts.length === 4 && parts[3] === "preview" && method === "POST") {
+					const input = await body(request);
+					if (typeof input.candidateId !== "string") return error(response, 400, "candidateId is required");
+					return json(response, 200, await sessionImports.preview(input.candidateId));
+				}
+				if (parts.length === 3 && method === "POST") {
+					const input = await body(request);
+					if (!Array.isArray(input.selections)) return error(response, 400, "selections are required");
+					const selections: { candidateId: string; fingerprint: string; cwd: string }[] = [];
+					for (const value of input.selections) {
+						if (
+							!value ||
+							typeof value !== "object" ||
+							!("candidateId" in value) ||
+							typeof value.candidateId !== "string" ||
+							!("fingerprint" in value) ||
+							typeof value.fingerprint !== "string" ||
+							!("cwd" in value) ||
+							typeof value.cwd !== "string"
+						)
+							return error(response, 400, "Invalid import selection");
+						selections.push({ candidateId: value.candidateId, fingerprint: value.fingerprint, cwd: value.cwd });
+					}
+					return json(response, 202, await sessionImports.start(selections));
+				}
+				if (parts.length === 4 && method === "GET")
+					return json(response, 200, await sessionImports.getJob(parts[3]));
+				if (parts.length === 4 && method === "DELETE")
+					return json(response, 200, await sessionImports.cancel(parts[3]));
+				return error(response, 404, "Not found");
+			} catch (caught) {
+				if (caught instanceof SessionImportError) return error(response, caught.status, caught.message);
+				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
+			}
+		}
 		if (parts[2] === "settings" && parts[3]) {
 			return await settingsRoute(parts.slice(3).map(decodeURIComponent), method, url, request, response);
 		}
@@ -948,6 +1012,7 @@ const shutdown = async (): Promise<void> => {
 			terminals.stopAll(),
 			(async () => {
 				try {
+					await sessionImports.close();
 					await store.close();
 				} finally {
 					// Flush sessions before stopping their index, even if session teardown fails.
