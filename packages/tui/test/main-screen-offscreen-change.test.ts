@@ -122,14 +122,57 @@ describe("main screen changes above the viewport", () => {
 		harness.tui.stop({ preserveScreen: true });
 	});
 
-	it("falls back to a full redraw when the document length changes above the viewport", async () => {
+	it("repaints the visible rows when the document grows above the viewport", async () => {
 		const harness = createHarness(ROWS);
 		const redrawsBefore = harness.tui.fullRedraws;
 		harness.resetWritten();
 
-		// A transcript append shifts every row under it, so the visible window no longer
-		// maps to the same terminal rows and the clamp would leave the screen stale.
+		// A transcript append shifts every row under it. The terminal scrolls by the
+		// appended line count while the visible window is rewritten, so the screen stays
+		// aligned without a full redraw.
 		harness.transcript.lines = [...harness.transcript.lines, "transcript appended"];
+		harness.tui.renderNow();
+
+		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore);
+		assert.ok(!harness.written().includes(CLEAR_SCROLLBACK));
+		const viewport = await harness.terminal.flushAndGetViewport();
+		assert.strictEqual(viewport[viewport.length - 1], "footer");
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("keeps streaming growth above the viewport out of the full-redraw path", async () => {
+		// The real streaming shape: a running tool row above the viewport ticks at 5 Hz
+		// while the assistant message appends tokens every frame.
+		const harness = createHarness(ROWS);
+		const redrawsBefore = harness.tui.fullRedraws;
+		harness.resetWritten();
+
+		for (let tick = 0; tick < 40; tick++) {
+			harness.status.lines = [`spinner ${tick}`];
+			harness.transcript.lines = [...harness.transcript.lines, `token ${tick}`];
+			harness.tui.renderNow();
+		}
+
+		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore);
+		assert.ok(!harness.written().includes(CLEAR_SCROLLBACK));
+		const viewport = await harness.terminal.flushAndGetViewport();
+		assert.strictEqual(viewport[viewport.length - 1], "footer");
+		const scrollback = harness.terminal.getScrollBuffer();
+		assert.ok(
+			scrollback.some((line) => line.trimEnd() === "transcript 0"),
+			"history stays in scrollback",
+		);
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("falls back to a full redraw when the document shrinks above the viewport", async () => {
+		const harness = createHarness(ROWS);
+		const redrawsBefore = harness.tui.fullRedraws;
+		harness.resetWritten();
+
+		// Rows left the document and the terminal cannot un-scroll, so the clamp point
+		// would leave the rows above it stale.
+		harness.transcript.lines = harness.transcript.lines.slice(0, -1);
 		harness.tui.renderNow();
 
 		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore + 1);

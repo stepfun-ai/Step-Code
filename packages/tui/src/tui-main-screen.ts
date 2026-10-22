@@ -542,14 +542,20 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// destroy and rebuild the user's scrollback several times a second. When the
 		// document kept its length no row moved, so the visible window still maps to the
 		// same terminal rows: keep the stale scrollback and repaint only what is visible.
-		// Any length change can shift rows under the viewport, so that still needs the
-		// full redraw.
+		//
+		// Growth keeps that mapping too. The tail moved down by the appended line count, and
+		// rewriting the visible window feeds exactly that many line feeds through the bottom
+		// row, so the terminal scrolls by the same amount a plain append would. Escalating a
+		// growing document to a full redraw here would clear and rewrite the scrollback on
+		// every streamed frame - the case that made history vanish in fullscreen terminals.
+		// A shrink is different: rows left the document and the terminal cannot un-scroll,
+		// so the rows above the clamp point would stay stale; that still needs the redraw.
 		if (firstChanged < prevViewportTop) {
-			const documentLengthChanged = newLines.length !== this.previousLines.length;
+			const documentShrank = newLines.length < this.previousLines.length;
 			// A kitty image block reaching across the clamp point cannot be repainted from
 			// its middle without corrupting it.
 			const straddlingImage = kittyScanEnabled && this.hasImageLineInRange(firstChanged, prevViewportTop, newLines);
-			if (documentLengthChanged || straddlingImage) {
+			if (documentShrank || straddlingImage) {
 				fullRender(true);
 				return;
 			}
