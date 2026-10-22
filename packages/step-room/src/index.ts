@@ -1,3 +1,5 @@
+export type { RoomAgentReadResult, RoomAgentRecord, RoomAgentStoreOptions } from "./agent-store.ts";
+export { parseRoomAgentRecord, RoomAgentStore } from "./agent-store.ts";
 export type {
 	RoomIgnoreReason,
 	RoomMention,
@@ -14,5 +16,7 @@ export type {
 	RoomResolveResult,
 } from "./binding.ts";
 export { RoomBindingStore } from "./binding.ts";
+export type { RoomCodeClaim, RoomCodeOptions } from "./code.ts";
+export { RoomCodeBook } from "./code.ts";
 export type { RoomEvent, RoomSequencerOptions, RoomSequencerStep } from "./sequence.ts";
 export { RoomSequencer } from "./sequence.ts";
