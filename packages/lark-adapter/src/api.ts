@@ -88,8 +88,15 @@ export class LarkApi {
 			const chatId = response.data?.chat_id;
 			if (!chatId) throw new Error("Invalid chat response");
 			return chatId;
-		} catch {
-			throw new Error("Lark chat creation failed");
+		} catch (error) {
+			// Keep the platform's code: a create failure is either a permission gap or a bad invitee, and
+			// the caller cannot tell which from a generic message. Codes carry no secrets.
+			const data = (error as { response?: { data?: { code?: number; msg?: string } } })?.response?.data;
+			throw new Error(
+				data?.code
+					? `Lark chat creation failed (${data.code}: ${data.msg ?? "no message"})`
+					: "Lark chat creation failed",
+			);
 		}
 	}
 

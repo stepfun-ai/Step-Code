@@ -18,5 +18,7 @@ export type {
 export { RoomBindingStore } from "./binding.ts";
 export type { RoomCodeClaim, RoomCodeOptions } from "./code.ts";
 export { RoomCodeBook } from "./code.ts";
+export type { RoomCommandAction } from "./command.ts";
+export { parseRoomCommand } from "./command.ts";
 export type { RoomEvent, RoomSequencerOptions, RoomSequencerStep } from "./sequence.ts";
 export { RoomSequencer } from "./sequence.ts";

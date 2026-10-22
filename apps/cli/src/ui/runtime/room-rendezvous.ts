@@ -74,7 +74,11 @@ export class RoomRendezvousClient {
 		this.timeoutMs = options.timeoutMs ?? 10_000;
 	}
 
-	private async request<T>(path: string, init: RequestInit): Promise<RendezvousResult<T>> {
+	private async request<T>(
+		path: string,
+		init: RequestInit,
+		decode: (raw: unknown) => T,
+	): Promise<RendezvousResult<T>> {
 		let response: Response;
 		try {
 			response = await fetch(`${this.baseUrl}${path}`, {
@@ -92,47 +96,91 @@ export class RoomRendezvousClient {
 			return { ok: false, failure: classify(response.status, message) };
 		}
 		try {
-			return { ok: true, value: (await response.json()) as T };
+			return { ok: true, value: decode(await response.json()) };
 		} catch {
 			return { ok: false, failure: { kind: "unavailable", status: response.status, message: "malformed response" } };
 		}
 	}
 
 	async publish(code: string, secret: string): Promise<RendezvousResult<RoomPeerRecord>> {
-		return this.request<RoomPeerRecord>("/api/v1/room/publish", {
-			method: "POST",
-			body: JSON.stringify({ code, secret }),
-		});
+		return this.request(
+			"/api/v1/room/publish",
+			{ method: "POST", body: JSON.stringify({ code, secret }) },
+			decodeRoomPeerRecord,
+		);
 	}
 
 	async claim(code: string, identity: RoomPeerIdentity): Promise<RendezvousResult<RoomPeerRecord>> {
-		return this.request<RoomPeerRecord>("/api/v1/room/claim", {
-			method: "POST",
-			body: JSON.stringify({
-				code,
-				identity: {
-					app_id: identity.appId,
-					open_id: identity.openId,
-					user_open_id: identity.userOpenId,
-					name: identity.name,
-				},
-			}),
-		});
+		return this.request(
+			"/api/v1/room/claim",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					code,
+					identity: {
+						app_id: identity.appId,
+						open_id: identity.openId,
+						user_open_id: identity.userOpenId,
+						name: identity.name,
+					},
+				}),
+			},
+			decodeRoomPeerRecord,
+		);
 	}
 
 	async status(code: string, secret: string): Promise<RendezvousResult<RoomPeerRecord>> {
-		return this.request<RoomPeerRecord>(`/api/v1/room/status?code=${encodeURIComponent(code)}`, {
-			method: "GET",
-			headers: { "X-Room-Secret": secret },
-		});
+		return this.request(
+			`/api/v1/room/status?code=${encodeURIComponent(code)}`,
+			{ method: "GET", headers: { "X-Room-Secret": secret } },
+			decodeRoomPeerRecord,
+		);
 	}
 
 	async retire(code: string, secret: string): Promise<RendezvousResult<{ retired: boolean }>> {
-		return this.request<{ retired: boolean }>("/api/v1/room/retire", {
-			method: "POST",
-			body: JSON.stringify({ code, secret }),
-		});
+		return this.request("/api/v1/room/retire", { method: "POST", body: JSON.stringify({ code, secret }) }, (raw) => ({
+			retired: isRecord(raw) && raw.retired === true,
+		}));
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function text(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/**
+ * The service speaks snake_case; this client's types are camelCase. Decoding here is what keeps a
+ * peer's `app_id` from silently arriving as `undefined` and poisoning every later group invite.
+ */
+export function decodeRoomPeerRecord(raw: unknown): RoomPeerRecord {
+	if (!isRecord(raw)) throw new Error("malformed room record");
+	const code = text(raw.code);
+	if (!code) throw new Error("room record has no code");
+	const peerRaw = raw.peer;
+	const peer =
+		isRecord(peerRaw) && text(peerRaw.app_id) && text(peerRaw.open_id) && text(peerRaw.user_open_id)
+			? {
+					appId: text(peerRaw.app_id) as string,
+					openId: text(peerRaw.open_id) as string,
+					userOpenId: text(peerRaw.user_open_id) as string,
+					...(text(peerRaw.name) ? { name: text(peerRaw.name) as string } : {}),
+				}
+			: undefined;
+	const ownerOpenId = text(raw.owner_open_id);
+	const createdAt = text(raw.created_at);
+	const expiresAt = text(raw.expires_at);
+	return {
+		code,
+		claimed: raw.claimed === true,
+		...(peer ? { peer } : {}),
+		...(ownerOpenId ? { ownerOpenId } : {}),
+		createdAt: createdAt ?? "",
+		expiresAt: expiresAt ?? "",
+	};
 }
 
 function describe(error: unknown): string {

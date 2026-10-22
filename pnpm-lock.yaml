@@ -68,6 +68,9 @@ importers:
       '@step-harness/providers':
         specifier: ^0.84.4
         version: link:../../packages/providers
+      '@step-harness/step-room':
+        specifier: workspace:*
+        version: link:../../packages/step-room
       chalk:
         specifier: 5.6.2
         version: 5.6.2

@@ -8,7 +8,11 @@
 
 import type { ExtensionContext } from "@step-harness/coding-agent";
 import { LarkApi, type LarkCredentials, LarkRegistration, LarkTransport } from "@step-harness/lark-adapter";
+import { createLarkPairingView } from "../view/dialogs/lark-pairing.ts";
 import type { RoomInbound, RoomTransport } from "./room-connection.ts";
+
+/** Kept apart from `/connect`'s widget so the two consent flows never overwrite each other. */
+const PAIRING_WIDGET = "room-pairing";
 
 /** Device-code consent: the person scans a QR, the credentials arrive in memory and nowhere else. */
 export async function authorizeRoomBot(
@@ -18,6 +22,8 @@ export async function authorizeRoomBot(
 	const registration = new LarkRegistration({ version: "room" });
 	try {
 		const code = await registration.begin(controller.signal);
+		const pairing = await createLarkPairingView(code, () => process.stdout.rows || 40);
+		context.ui.setWidget(PAIRING_WIDGET, () => pairing);
 		context.ui.notify(`room · 扫码或打开链接创建机器人：${code.verificationUrl}`, "info");
 		const result = await registration.waitForAuthorization(code, controller.signal);
 		if (result.status !== "authorized") {
@@ -38,6 +44,9 @@ export async function authorizeRoomBot(
 	} catch {
 		context.ui.notify("room · 授权过程失败，请重试 /room", "warning");
 		return undefined;
+	} finally {
+		// The QR is a one-shot prompt: leaving it behind would keep a dead link on screen.
+		context.ui.setWidget(PAIRING_WIDGET, undefined);
 	}
 }
 

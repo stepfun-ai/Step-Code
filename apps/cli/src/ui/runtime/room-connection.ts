@@ -18,6 +18,7 @@ import { LarkApi, type LarkCredentials } from "@step-harness/lark-adapter";
 import type { TextContent } from "@step-harness/providers";
 import {
 	decideRoomTurn,
+	parseRoomCommand,
 	type RoomAgentRecord,
 	RoomAgentStore,
 	RoomBindingStore,
@@ -306,11 +307,7 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 		 * default template does not grant a chat-read scope, so this stays quiet instead of claiming
 		 * the group is wrong when it cannot see into it.
 		 */
-		const verifyMembers = async (
-			current: ActiveRoom,
-			peer: { appId: string; userOpenId: string },
-			context: ExtensionCommandContext,
-		) => {
+		const verifyMembers = async (current: ActiveRoom, context: ExtensionCommandContext) => {
 			let members: readonly { openId: string; memberType: "user" | "bot" | "unknown" }[];
 			try {
 				members = await current.transport.api.listChatMembers(current.chatId);
@@ -318,14 +315,13 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				// No chat-read scope on the launcher template: not seeing the group is not proof it is wrong.
 				return;
 			}
+			// Only the peer's bot is checkable: their person is invited through that bot, and their open
+			// id is not ours to inspect.
 			const hasPeerBot = members.some(
 				(member) => member.memberType === "bot" && member.openId !== current.botOpenId,
 			);
-			const hasPeerUser = members.some(
-				(member) => member.memberType === "user" && member.openId === peer.userOpenId,
-			);
-			if (!hasPeerBot || !hasPeerUser) {
-				context.ui.notify("room · 群已建好，但对方没有完全进群，请在飞书里手动拉一次", "warning");
+			if (!hasPeerBot) {
+				context.ui.notify("room · 群已建好，但对方机器人没进群，请在飞书里手动拉一次", "warning");
 			}
 		};
 
@@ -343,20 +339,23 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			try {
 				chatId = await current.transport.createChat({
 					name: title(current.botName, peer.name),
-					// The starter owns the group and is in it; both bots are invited so either side can speak.
-					userOpenIds: [current.ownerOpenId, peer.userOpenId],
+					// Only the starter's own open id is usable here: the peer's open id is scoped to the
+					// peer's app, so passing it back fails with "open_id cross app". Their bot is added by
+					// app id instead, which is tenant-wide, and it brings the conversation to them.
+					userOpenIds: [current.ownerOpenId],
 					botIds: [current.appId, peer.appId],
 					ownerOpenId: current.ownerOpenId,
 					dedupeKey: current.roomId,
 				});
-			} catch {
-				context.ui.notify("room · 建群失败：确认对方机器人存在，且你有建群权限", "warning");
+			} catch (error) {
+				const detail = error instanceof Error ? error.message : String(error);
+				context.ui.notify(`room · 建群失败：${detail}`, "warning");
 				return;
 			}
 			current.chatId = chatId;
 			bindings = new RoomBindingStore();
 			bindings.bind(chatId, context.sessionManager.getSessionId());
-			await verifyMembers(current, peer, context);
+			await verifyMembers(current, context);
 			await rendezvous.retire(current.code, current.secret).catch(() => undefined);
 			context.ui.notify(`room · 群已就绪 · 在群里 @${current.botName} 开始`, "info");
 		};
@@ -421,16 +420,20 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 					context.ui.notify("room · 需要交互式终端", "warning");
 					return;
 				}
-				const value = args.trim();
-				if (value === "leave" || value === "off") {
+				const action = parseRoomCommand(args);
+				if (action.kind === "leave") {
 					await stop(true, context);
+					return;
+				}
+				if (action.kind === "invalid") {
+					context.ui.notify("room · 用法：/room、/room join <房间码>、/room leave", "warning");
 					return;
 				}
 				if (room) {
 					context.ui.notify("room · 已在会议室中，先 /room leave", "warning");
 					return;
 				}
-				if (value) await joinRoom(value, context);
+				if (action.kind === "join") await joinRoom(action.code, context);
 				else await startRoom(context);
 			},
 		});
