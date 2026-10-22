@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { LarkApi } from "../src/api.ts";
+import { BotIdentityError, LarkApi } from "../src/api.ts";
 
 const sdk = vi.hoisted(() => ({
 	request: vi.fn(),
@@ -50,6 +50,26 @@ describe("Lark REST boundary", () => {
 			await client.close();
 		}
 	});
+	it("separates dead credentials from an unreachable platform", async () => {
+		// The distinction decides whether a saved room bot is replaced, so it must not be inferred
+		// from the message. A refusal is an HTTP response; an unreachable host never produces one.
+		const client = api();
+		try {
+			sdk.request.mockRejectedValueOnce(Object.assign(new Error("Unauthorized"), { response: { status: 401 } }));
+			await expect(client.getBotIdentity()).rejects.toMatchObject({ code: "credentials" });
+
+			sdk.request.mockRejectedValueOnce(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }));
+			await expect(client.getBotIdentity()).rejects.toMatchObject({ code: "unreachable" });
+
+			sdk.request.mockResolvedValueOnce({ code: 999, bot: { open_id: "bot" } });
+			const failure = await client.getBotIdentity().catch((error: unknown) => error);
+			expect(failure).toBeInstanceOf(BotIdentityError);
+			expect((failure as BotIdentityError).code).toBe("unusable");
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("sends, replies and updates cards while rejecting API failures", async () => {
 		const client = api();
 		const card = { elements: [{ tag: "markdown", content: "hello" }] };

@@ -14,7 +14,7 @@ import type {
 	ExtensionFactory,
 	MessageEndEvent,
 } from "@step-harness/coding-agent";
-import { LarkApi, type LarkCredentials } from "@step-harness/lark-adapter";
+import { BotIdentityError, LarkApi, type LarkCredentials } from "@step-harness/lark-adapter";
 import type { TextContent } from "@step-harness/providers";
 import {
 	decideRoomTurn,
@@ -180,7 +180,14 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			pi.sendUserMessage(content, { deliverAs: "followUp", expandPromptTemplates: false });
 		};
 
-		/** Reuse the stored bot, or create one and persist it so a second `/room` never makes another. */
+		/**
+		 * The one bot this person keeps for rooms.
+		 *
+		 * A saved bot is reused on every run and only replaced when the platform says its credentials
+		 * no longer work. Any other failure — an unreachable platform, a timeout — leaves the record
+		 * untouched: asking someone to re-authorize because their connection blinked is how a "fixed"
+		 * bot quietly turns into a new app on every flaky day.
+		 */
 		const ensureRecord = async (context: ExtensionCommandContext): Promise<RoomAgentRecord | undefined> => {
 			const existing = await store.read();
 			if (existing.status === "found") {
@@ -188,7 +195,13 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				try {
 					const identity = await probe.getBotIdentity();
 					return { ...existing.record, botOpenId: identity.openId, botName: identity.name };
-				} catch {
+				} catch (error) {
+					const code = error instanceof BotIdentityError ? error.code : "unreachable";
+					// Only a refusal by the platform proves the credentials are dead.
+					if (code === "unreachable") {
+						context.ui.notify("room · 连不上飞书，稍后重试 /room（本机机器人凭证未改动）", "warning");
+						return undefined;
+					}
 					context.ui.notify("room · 已保存的机器人不可用（可能已被删除或重置），需要重新授权", "warning");
 				} finally {
 					await probe.close().catch(() => undefined);

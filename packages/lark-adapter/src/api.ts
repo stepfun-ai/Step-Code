@@ -14,6 +14,23 @@ export interface ChatMember {
 	name: string;
 }
 
+/** Why a bot identity lookup failed, which decides whether a saved bot may be replaced. */
+export type BotIdentityFailure = "credentials" | "unreachable" | "unusable";
+
+export interface BotIdentity {
+	openId: string;
+	name: string;
+}
+
+export class BotIdentityError extends Error {
+	readonly code: BotIdentityFailure;
+	constructor(code: BotIdentityFailure, message: string) {
+		super(message);
+		this.name = "BotIdentityError";
+		this.code = code;
+	}
+}
+
 /** In-memory authenticated REST boundary; never forwards SDK diagnostics. */
 export class LarkApi {
 	private readonly client: Client;
@@ -32,7 +49,14 @@ export class LarkApi {
 		});
 	}
 
-	async getBotIdentity(): Promise<{ openId: string; name: string }> {
+	/**
+	 * This bot's own identity.
+	 *
+	 * Fails in two ways that must not be confused: the credentials no longer work (the app was deleted
+	 * or its secret reset), which is the only reason to replace a saved bot, and the request could not
+	 * reach the platform, which means nothing about the bot. `code` separates them.
+	 */
+	async getBotIdentity(): Promise<BotIdentity> {
 		try {
 			this.controller.signal.throwIfAborted();
 			const response = await this.client.request<{ code?: number; bot?: { open_id?: string; app_name?: string } }>({
@@ -42,14 +66,19 @@ export class LarkApi {
 				timeout: 15_000,
 			});
 			this.controller.signal.throwIfAborted();
-			if (response.code !== 0 || typeof response.bot?.open_id !== "string" || !response.bot.open_id)
-				throw new Error("Invalid bot identity");
+			if (response.code !== 0 || typeof response.bot?.open_id !== "string" || !response.bot.open_id) {
+				throw new BotIdentityError("unusable", "Lark bot identity request failed");
+			}
 			return {
 				openId: response.bot.open_id,
 				name: typeof response.bot.app_name === "string" ? response.bot.app_name : "bot",
 			};
-		} catch {
-			throw new Error("Lark bot identity request failed");
+		} catch (error) {
+			if (error instanceof BotIdentityError) throw error;
+			// An HTTP response means the platform answered and refused; no response means we never got
+			// there. Only the refusal is evidence about the credentials themselves.
+			const answered = (error as { response?: { status?: number } })?.response !== undefined;
+			throw new BotIdentityError(answered ? "credentials" : "unreachable", "Lark bot identity request failed");
 		}
 	}
 

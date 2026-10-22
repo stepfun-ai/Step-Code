@@ -1,4 +1,5 @@
-export { LarkApi } from "./api.ts";
+export type { BotIdentity, BotIdentityFailure, ChatMember } from "./api.ts";
+export { BotIdentityError, LarkApi } from "./api.ts";
 export { LarkDecisions } from "./decisions.ts";
 export type { LarkInboundResult, LarkMessage } from "./inbound.ts";
 export { LarkInboundGate } from "./inbound.ts";
