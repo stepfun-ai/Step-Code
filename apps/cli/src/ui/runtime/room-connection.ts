@@ -24,7 +24,13 @@ import {
 	RoomBindingStore,
 	RoomCodeBook,
 } from "@step-harness/step-room";
-import { describeFailure, newRoomSecret, type RoomPeerRecord, RoomRendezvousClient } from "./room-rendezvous.ts";
+import {
+	describeFailure,
+	newRoomSecret,
+	ROOM_RENDEZVOUS_URL_ENV,
+	type RoomPeerRecord,
+	RoomRendezvousClient,
+} from "./room-rendezvous.ts";
 
 /** How often the waiting side asks the rendezvous service whether anyone joined. */
 const POLL_INTERVAL_MS = 2_000;
@@ -264,6 +270,12 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 
 		/** Start side: show a code, publish it, then wait for the newcomer. */
 		const startRoom = async (context: ExtensionCommandContext) => {
+			// Check the service before doing any work: creating a bot and connecting only to be told the
+			// deployment is missing wastes the person's time and leaves a room that cannot be joined.
+			if (!rendezvous.configured) {
+				context.ui.notify(`room · 未配置房间服务地址，请设置 ${ROOM_RENDEZVOUS_URL_ENV}`, "warning");
+				return;
+			}
 			const record = await ensureRecord(context);
 			if (!record) return;
 			const transport = await connect(record, context);
@@ -373,6 +385,10 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 
 		/** Joining side: publish this bot's identity onto the code the other person read out. */
 		const joinRoom = async (code: string, context: ExtensionCommandContext) => {
+			if (!rendezvous.configured) {
+				context.ui.notify(`room · 未配置房间服务地址，请设置 ${ROOM_RENDEZVOUS_URL_ENV}`, "warning");
+				return;
+			}
 			if (!/^\d{6,12}$/.test(code)) {
 				context.ui.notify("room · 房间码应为 6-12 位数字", "warning");
 				return;

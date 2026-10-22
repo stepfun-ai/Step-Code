@@ -3,6 +3,8 @@ import {
 	decodeRoomPeerRecord,
 	describeFailure,
 	newRoomSecret,
+	resolveRendezvousUrl,
+	ROOM_RENDEZVOUS_URL_ENV,
 	RoomRendezvousClient,
 } from "../src/ui/runtime/room-rendezvous.ts";
 
@@ -133,6 +135,26 @@ describe("room rendezvous client", () => {
 	it("rejects a record without a code instead of returning a half-filled one", () => {
 		expect(() => decodeRoomPeerRecord({ claimed: true })).toThrow();
 		expect(() => decodeRoomPeerRecord(null)).toThrow();
+	});
+
+	it("carries no deployment address of its own", () => {
+		// This source ships publicly; an organisation's endpoint comes from the environment.
+		expect(resolveRendezvousUrl({})).toBeUndefined();
+		expect(resolveRendezvousUrl({ [ROOM_RENDEZVOUS_URL_ENV]: "   " })).toBeUndefined();
+		expect(resolveRendezvousUrl({ [ROOM_RENDEZVOUS_URL_ENV]: " https://rooms.example.test " })).toBe(
+			"https://rooms.example.test",
+		);
+	});
+
+	it("fails clearly instead of guessing when no service is configured", async () => {
+		const result = await new RoomRendezvousClient({}).publish("48291730", "s".repeat(32));
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.failure.kind).toBe("unavailable");
+	});
+
+	it("reports whether a service address is configured", () => {
+		expect(new RoomRendezvousClient({ baseUrl: BASE }).configured).toBe(true);
+		expect(new RoomRendezvousClient({}).configured).toBe(false);
 	});
 
 	it("generates a secret long enough for the service to accept", () => {
