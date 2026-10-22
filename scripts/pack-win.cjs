@@ -138,6 +138,12 @@ if (options.dryRun) {
 }
 
 function main() {
+	// apps/desktop/scripts/package.mjs writes into release/<version>/ and never
+	// removes a previous version's directory, so a warm workspace (this runner
+	// keeps gitignored files across jobs) would otherwise hand falcon a stale
+	// installer of another version.
+	rmSync(releaseDir, { recursive: true, force: true });
+
 	if (options.env === "prod") {
 		console.log("[pack:win] --env=prod has no build-time effect; the app reads its backend from ~/.stepcode at run time");
 	}

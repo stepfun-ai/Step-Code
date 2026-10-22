@@ -65,3 +65,7 @@ pixel-art/
 apps/desktop/release/
 # falcon-mobile-pipeline reads installers from here (scripts/package-mac-ci.mjs, scripts/pack-win.cjs)
 dist-electron/
+# falcon's job before_script / collect_artifacts / after_script write these into the
+# workspace (build/ci/ci.env, build/ci/build_internal.env, build_archive/).
+build/
+build_archive/

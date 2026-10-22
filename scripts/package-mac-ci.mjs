@@ -107,6 +107,11 @@ if (options.dryRun) {
 	process.exit(0);
 }
 
+// apps/desktop/scripts/package.mjs writes into release/<version>/ and never
+// removes a previous version's directory, so a warm workspace would otherwise
+// hand falcon a stale dmg of another version or architecture.
+rmSync(releaseDir, { recursive: true, force: true });
+
 for (const step of steps) {
 	console.log(`[dist:mac] ${step.label}`);
 	const result = spawnSync(step.command, step.args, {
