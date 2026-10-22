@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Build StepCode Desktop installers with electron-builder.
 //
-//   node scripts/package.mjs [--mac] [--win]      (default: both)
+//   node scripts/package.mjs [--mac] [--win] [--arch=all|arm64|x64]   (default: both platforms, all arches)
 //
-//   mac: dmg for arm64 (Apple Silicon) and x64 (Intel)
+//   mac: dmg for arm64 (Apple Silicon) and x64 (Intel), or the one named by --arch
 //   win: NSIS installer for x64
 //
 // Run `pnpm build` at the repo root first: this script packages existing build
@@ -64,9 +64,13 @@ function productVersion() {
 	return value;
 }
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const archArg = argv.find((arg) => arg.startsWith("--arch="))?.slice("--arch=".length) ?? "all";
+const args = new Set(argv.filter((arg) => !arg.startsWith("--arch=")));
 const unknown = [...args].filter((arg) => arg !== "--mac" && arg !== "--win");
 if (unknown.length > 0) throw new Error(`Unknown arguments: ${unknown.join(" ")}`);
+const macArches = { all: [Arch.arm64, Arch.x64], arm64: [Arch.arm64], x64: [Arch.x64] }[archArg];
+if (macArches === undefined) throw new Error(`Unknown architecture: ${archArg}`);
 const wantMac = args.has("--mac") || args.size === 0;
 const wantWin = args.has("--win") || args.size === 0;
 
@@ -261,7 +265,12 @@ stage();
 const artifacts = [];
 if (wantMac) {
 	artifacts.push(
-		...(await build({ projectDir: appStage, config: config(), targets: Platform.MAC.createTarget(["dmg"], Arch.arm64, Arch.x64), publish: "never" })),
+		...(await build({
+			projectDir: appStage,
+			config: config(),
+			targets: Platform.MAC.createTarget(["dmg"], ...macArches),
+			publish: "never",
+		})),
 	);
 }
 if (wantWin) {

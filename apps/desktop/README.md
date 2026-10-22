@@ -97,6 +97,13 @@ Run `pnpm build` at the repo root first, then from the repo root:
 | `pnpm --filter @step-harness/desktop package` | All of the below |
 | `pnpm --filter @step-harness/desktop package:mac` | `StepCode-<version>-mac-arm64.dmg` (Apple Silicon), `StepCode-<version>-mac-x64.dmg` (Intel) |
 | `pnpm --filter @step-harness/desktop package:win` | `StepCode-<version>-win-x64.exe` (NSIS, per-user, install folder selectable) |
+| `node scripts/package.mjs --mac --arch=arm64` | One dmg, for the architecture named (default both) |
+
+The GitLab pipeline (`catalyst/falcon-mobile-pipeline`) does not call these directly. It calls the repo-root entry
+points, which build the monorepo, drive the two commands above, and copy the installers to `dist-electron/`, where
+falcon reads them: `pnpm dist:mac -- --env=<sit|prod> --arch=<all|arm64|x64> [--fast-build] [--notarize]` and
+`pnpm pack:win -- --env=<sit|prod> --no-sign`, the latter also writing `dist-electron/latest.yml` and
+`dist-electron/channel-artifacts.json`. Both accept `--dry-run` to print the plan without building.
 
 `<version>` is the product version shown by `step --version` and the web host, not the workspace package version:
 `STEPCODE_BUILD_VERSION` when set (a release tag such as `v0.2.0` is accepted), otherwise the root `package.json`

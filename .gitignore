@@ -63,3 +63,5 @@ pixel-art/
 
 # StepCode Desktop installers and their staging tree (apps/desktop/scripts/package.mjs)
 apps/desktop/release/
+# falcon-mobile-pipeline reads installers from here (scripts/package-mac-ci.mjs, scripts/pack-win.cjs)
+dist-electron/
