@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RoomSequencer } from "../src/features/step-room/index.ts";
+import { RoomSequencer } from "../src/index.ts";
 
 const T0 = 1_700_000_000_000;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { RoomMessage } from "../src/features/step-room/index.ts";
-import { decideRoomTurn, mentionsPeerBot, shouldHandOff } from "../src/features/step-room/index.ts";
+import type { RoomMessage } from "../src/index.ts";
+import { decideRoomTurn, mentionsPeerBot, shouldHandOff } from "../src/index.ts";
 
 const SELF = "ou_self";
 

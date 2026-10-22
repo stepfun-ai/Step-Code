@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RoomBindingStore } from "../src/features/step-room/index.ts";
+import { RoomBindingStore } from "../src/index.ts";
 
 describe("room binding table", () => {
 	it("routes a bound chat to its session", () => {
