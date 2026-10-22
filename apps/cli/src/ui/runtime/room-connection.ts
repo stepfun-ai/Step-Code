@@ -1,10 +1,10 @@
 /**
  * `/room`: put this session and another person's session in one Feishu group.
  *
- * The command owns the whole lifecycle for one room: discover or create this person's own room
- * bot, publish a short code, accept a newcomer, create the group, and bind it to this session.
- * Inbound messages are arbitrated by `@step-harness/step-room`, which decides whether this agent
- * speaks; this file only moves text and wires events.
+ * The command owns the whole lifecycle for one room: reuse or create this person's own room bot,
+ * publish a short code, wait for the other terminal to claim it, create the group, and bind it to
+ * this session. Inbound messages are arbitrated by `@step-harness/step-room`, which decides whether
+ * this agent speaks; this file only moves text and wires events.
  */
 
 import { randomUUID } from "node:crypto";
@@ -16,7 +16,19 @@ import type {
 } from "@step-harness/coding-agent";
 import { LarkApi, type LarkCredentials } from "@step-harness/lark-adapter";
 import type { TextContent } from "@step-harness/providers";
-import { decideRoomTurn, RoomAgentStore, RoomBindingStore, RoomCodeBook } from "@step-harness/step-room";
+import {
+	decideRoomTurn,
+	type RoomAgentRecord,
+	RoomAgentStore,
+	RoomBindingStore,
+	RoomCodeBook,
+} from "@step-harness/step-room";
+import { describeFailure, newRoomSecret, type RoomPeerRecord, RoomRendezvousClient } from "./room-rendezvous.ts";
+
+/** How often the waiting side asks the rendezvous service whether anyone joined. */
+const POLL_INTERVAL_MS = 2_000;
+const MAX_PEER_TURNS = 4;
+const ROOM_TOOL = "room_send";
 
 /** What the product needs from the platform; kept small so a test can stand in for it. */
 export interface RoomTransport {
@@ -36,21 +48,10 @@ export interface RoomTransport {
 	/** Provider-side conversation used for every room message in this session. */
 	api: {
 		sendText(chatId: string, text: string, replyTo?: string): Promise<string>;
-		sendCard(chatId: string, card: Record<string, unknown>, replyTo?: string): Promise<string>;
+		sendCard(chatId: string, chat: Record<string, unknown>, replyTo?: string): Promise<string>;
 		updateCard(messageId: string, card: Record<string, unknown>): Promise<void>;
 		close(): Promise<void>;
 	};
-}
-
-export interface RoomExtensionOptions {
-	/** Where the bot record lives; injected so tests never touch the user's home. */
-	recordDirectory: string;
-	/** Turn a fresh authorization into credentials. Absent means the room command stays off. */
-	authorize?: (context: ExtensionContext) => Promise<LarkCredentials | undefined>;
-	/** Build the live transport from credentials. Absent in tests that supply no platform. */
-	transport?: (credentials: LarkCredentials, onMessage: (message: RoomInbound) => void) => RoomTransport;
-	/** Home of the newcomer's bot, learned out of band through the rendezvous. */
-	roomName?: (selfName: string) => string;
 }
 
 export interface RoomInbound {
@@ -63,65 +64,77 @@ export interface RoomInbound {
 	mentions: readonly { mentionedType?: string; openId?: string }[];
 }
 
+export interface RoomExtensionOptions {
+	/** Where the bot record lives; injected so tests never touch the user's home. */
+	recordDirectory: string;
+	/** Turn a fresh authorization into credentials. Absent means the room command stays off. */
+	authorize?: (context: ExtensionContext) => Promise<LarkCredentials | undefined>;
+	/** Build the live transport from credentials. Absent in tests that supply no platform. */
+	transport?: (credentials: LarkCredentials, onMessage: (message: RoomInbound) => void) => RoomTransport;
+	/** Rendezvous client; defaults to the trial deployment. */
+	rendezvous?: RoomRendezvousClient;
+	/** Title for the group. */
+	roomName?: (selfName: string, peerName: string | undefined) => string;
+}
+
 interface ActiveRoom {
 	roomId: string;
+	code: string;
+	secret: string;
 	chatId: string;
 	botOpenId: string;
 	botName: string;
 	transport: RoomTransport;
-	code?: string;
-	pendingJoin?: { peerBotId: string; peerOpenId: string; peerName: string; peerAppId?: string };
-	lastSpokenMessage?: string;
-}
-
-const MAX_PEER_TURNS = 4;
-const MONITOR_TOOL = "room_monitor";
-
-/** Card shape kept minimal: one markdown block plus an optional setting line. */
-function card(text: string, subtitle?: string): Record<string, unknown> {
-	return {
-		config: { wide_screen_mode: true, enable_forward: false },
-		elements: [
-			...(subtitle ? [{ tag: "div", text: { tag: "plain_text", content: subtitle } }] : []),
-			{ tag: "div", text: { tag: "lark_md", content: text } },
-		],
-	};
+	peer?: { appId: string; openId: string; name?: string };
+	lastSpoken?: string;
+	polling?: NodeJS.Timeout;
 }
 
 export function createRoomExtension(options: RoomExtensionOptions): ExtensionFactory {
 	const store = new RoomAgentStore({ directory: options.recordDirectory });
+	const rendezvous = options.rendezvous ?? new RoomRendezvousClient();
 	return (pi) => {
 		let room: ActiveRoom | undefined;
 		let codes: RoomCodeBook | undefined;
 		let bindings: RoomBindingStore | undefined;
 		let peerTurns = 0;
 
-		const stop = (notify = true, context?: ExtensionCommandContext) => {
-			room?.code && codes?.revoke(room.roomId);
-			room?.transport.close();
-			void room?.transport.api.close();
+		const title = (self: string, peer: string | undefined) =>
+			options.roomName?.(self, peer) ?? (peer ? `chat with ${peer}` : `room-${room?.roomId.slice(0, 8) ?? "new"}`);
+
+		const stop = async (notify: boolean, context?: ExtensionCommandContext) => {
+			const current = room;
 			room = undefined;
 			peerTurns = 0;
+			if (!current) {
+				if (notify) context?.ui.notify("room · 当前不在会议室", "info");
+				return;
+			}
+			if (current.polling) clearInterval(current.polling);
+			current.transport.close();
+			await current.transport.api.close().catch(() => undefined);
+			if (current.secret) await rendezvous.retire(current.code, current.secret).catch(() => undefined);
+			codes?.revoke(current.roomId);
+			bindings = undefined;
 			if (notify) context?.ui.notify("room · 已离开会议室", "info");
 		};
 
-		/** Speak into the room and hand the turn to the peer when the last input came from a bot. */
+		/** Speak into the room; hand the turn to the peer only when the trigger came from a bot. */
 		const speak = async (text: string, handOffTo: string | undefined) => {
 			const current = room;
-			if (!current) return;
+			if (!current?.chatId) return;
 			const body = handOffTo ? `<at user_id="${handOffTo}"></at> ${text}` : text;
 			try {
-				current.lastSpokenMessage = await current.transport.api.sendCard(current.chatId, card(body));
+				current.lastSpoken = await current.transport.api.sendCard(current.chatId, card(body));
 			} catch {
 				// The room is a projection of the session, never its source of truth.
 			}
 		};
 
-		const handleInbound = (message: RoomInbound, context: ExtensionContext) => {
+		const handleInbound = (message: RoomInbound) => {
 			const current = room;
 			if (!current || !bindings) return;
-			const routed = bindings.resolve(message.chatId);
-			if (routed.action === "drop") {
+			if (bindings.resolve(message.chatId).action === "drop") {
 				// Unbound chat: nobody in this terminal asked for it, and replying would be noise.
 				return;
 			}
@@ -142,7 +155,7 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 			if (!decision.speak) return;
 			peerTurns = decision.addressedBy === "user" ? 0 : peerTurns + 1;
 			// A peer bot is untrusted input: it becomes a user message, never a tool instruction, and
-			// the session's own permission policy still governs whatever it asks for.
+			// this session's own permission policy still governs whatever it asks for.
 			const content: TextContent[] = [
 				{
 					type: "text",
@@ -150,110 +163,211 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				},
 			];
 			pi.sendUserMessage(content, { deliverAs: "followUp", expandPromptTemplates: false });
-			void context;
 		};
 
-		const startRoom = async (args: string, context: ExtensionCommandContext) => {
-			const requestedCode = args.trim();
-			if (requestedCode) {
-				if (!codes) return context.ui.notify("room · 先执行 /room 发起一个房间", "warning");
-				const claim = codes.claim(requestedCode);
-				if (claim.status !== "accepted") {
-					codes.recordFailure(room?.roomId ?? "");
-					return context.ui.notify(`room · 房间码无效（${claim.status}）`, "warning");
-				}
-				return createRoomFor(claim.roomId, context);
-			}
-			const roomId = randomUUID();
-			codes ??= new RoomCodeBook();
-			const code = codes.issue(roomId, 8);
-			context.ui.notify(`room · 房间码 ${code} · 2 分钟内有效，让对方面对面念出`, "info");
-			await createRoomFor(roomId, context, code);
-		};
-
-		const createRoomFor = async (roomId: string, context: ExtensionCommandContext, code?: string) => {
+		/** Reuse the stored bot, or create one and persist it so a second `/room` never makes another. */
+		const ensureRecord = async (context: ExtensionCommandContext): Promise<RoomAgentRecord | undefined> => {
 			const existing = await store.read();
-			let record = existing.status === "found" ? existing.record : undefined;
-			if (existing.status === "invalid") {
-				context.ui.notify(`room · 机器人凭证不可用（${existing.reason}），请重新授权`, "warning");
-			}
-			if (!record) {
-				if (!options.authorize) return context.ui.notify("room · 尚未配置机器人授权，无法发起", "warning");
-				const credentials = await options.authorize(context);
-				if (!credentials) return context.ui.notify("room · 授权未完成", "warning");
-				const probe = new LarkApi(credentials);
+			if (existing.status === "found") {
+				const probe = new LarkApi(credentialsOf(existing.record));
 				try {
 					const identity = await probe.getBotIdentity();
-					record = {
-						appId: credentials.appId,
-						appSecret: credentials.appSecret,
-						botOpenId: identity.openId,
-						botName: identity.name,
-						brand: credentials.brand,
-						createdAt: new Date().toISOString(),
-					};
-					await store.write(record);
+					return { ...existing.record, botOpenId: identity.openId, botName: identity.name };
+				} catch {
+					context.ui.notify("room · 已保存的机器人不可用（可能已被删除或重置），需要重新授权", "warning");
 				} finally {
 					await probe.close().catch(() => undefined);
 				}
+			} else if (existing.status === "invalid") {
+				context.ui.notify(`room · 机器人凭证文件不可用（${existing.reason}），需要重新授权`, "warning");
 			}
-			if (!options.transport) return context.ui.notify("room · 传输层未配置", "warning");
-			const transport = options.transport(
-				{ appId: record.appId, appSecret: record.appSecret, brand: record.brand },
-				(message) => handleInbound(message, context),
-			);
+			if (!options.authorize) {
+				context.ui.notify("room · 尚未接入机器人授权，无法发起房间", "warning");
+				return undefined;
+			}
+			const credentials = await options.authorize(context);
+			if (!credentials) {
+				context.ui.notify("room · 授权未完成", "warning");
+				return undefined;
+			}
+			const probe = new LarkApi(credentials);
+			try {
+				const identity = await probe.getBotIdentity();
+				const record: RoomAgentRecord = {
+					appId: credentials.appId,
+					appSecret: credentials.appSecret,
+					botOpenId: identity.openId,
+					botName: identity.name,
+					brand: credentials.brand,
+					createdAt: new Date().toISOString(),
+				};
+				await store.write(record);
+				return record;
+			} catch {
+				context.ui.notify("room · 机器人身份校验失败，请重试授权", "warning");
+				return undefined;
+			} finally {
+				await probe.close().catch(() => undefined);
+			}
+		};
+
+		const connect = async (
+			record: RoomAgentRecord,
+			context: ExtensionCommandContext,
+		): Promise<RoomTransport | undefined> => {
+			if (!options.transport) {
+				context.ui.notify("room · 传输层未配置", "warning");
+				return undefined;
+			}
+			const transport = options.transport(credentialsOf(record), handleInbound);
 			try {
 				await transport.start();
+				return transport;
 			} catch {
 				transport.close();
-				return context.ui.notify("room · 连接飞书失败，请检查应用是否已发布并开启长连接事件", "warning");
+				context.ui.notify("room · 连接飞书失败：请确认应用已发布，并已开启长连接事件订阅", "warning");
+				return undefined;
 			}
+		};
+
+		/** Start side: show a code, publish it, then wait for the newcomer. */
+		const startRoom = async (context: ExtensionCommandContext) => {
+			const record = await ensureRecord(context);
+			if (!record) return;
+			const transport = await connect(record, context);
+			if (!transport) return;
+
 			const self = await transport.identity();
-			room = { roomId, chatId: "", botOpenId: self.openId, botName: self.name, transport };
-			if (code) room.code = code;
-			const name = options.roomName?.(self.name) ?? `room-${roomId.slice(0, 8)}`;
-			const owner = await pendingPeer(context);
-			if (!owner) {
-				context.ui.notify(`room · 已就绪 @${self.name} · 等待对方加入房间码 ${code ?? ""}`, "info");
+			const roomId = randomUUID();
+			codes = new RoomCodeBook();
+			const code = codes.issue(roomId, 8);
+			const secret = newRoomSecret();
+			const published = await rendezvous.publish(code, secret);
+			if (!published.ok) {
+				transport.close();
+				await transport.api.close().catch(() => undefined);
+				context.ui.notify(`room · ${describeFailure(published.failure)}`, "warning");
 				return;
 			}
-			const chatId = await transport.createChat({
-				name,
-				userOpenIds: [owner.peerOpenId],
-				botIds: owner.peerAppId ? [owner.peerAppId] : [],
-				ownerOpenId: owner.peerOpenId,
-				dedupeKey: roomId,
-			});
-			room.chatId = chatId;
+
+			room = { roomId, code, secret, chatId: "", botOpenId: self.openId, botName: self.name, transport };
+			context.ui.notify(`room · @${self.name} · 房间码 ${code} · 2 分钟内有效，念给对方`, "info");
+
+			room.polling = setInterval(() => {
+				void pollForPeer(context);
+			}, POLL_INTERVAL_MS);
+		};
+
+		const pollForPeer = async (context: ExtensionCommandContext) => {
+			const current = room;
+			if (!current || current.chatId || !current.secret) return;
+			const result = await rendezvous.status(current.code, current.secret);
+			if (!result.ok) {
+				if (result.failure.kind === "not-found" || result.failure.kind === "throttled") {
+					if (current.polling) clearInterval(current.polling);
+					current.polling = undefined;
+					context.ui.notify(`room · ${describeFailure(result.failure)}，请重新 /room`, "warning");
+				}
+				return;
+			}
+			if (!result.value.claimed || !result.value.peer) return;
+			if (current.polling) clearInterval(current.polling);
+			current.polling = undefined;
+			await createGroup(context, result.value);
+		};
+
+		const createGroup = async (context: ExtensionCommandContext, record: RoomPeerRecord) => {
+			const current = room;
+			const peer = record.peer;
+			if (!current || !peer) return;
+			current.peer = { appId: peer.appId, openId: peer.openId, ...(peer.name ? { name: peer.name } : {}) };
+			let chatId: string;
+			try {
+				chatId = await current.transport.createChat({
+					name: title(current.botName, peer.name),
+					userOpenIds: [peer.openId],
+					botIds: [peer.appId],
+					ownerOpenId: peer.openId,
+					dedupeKey: current.roomId,
+				});
+			} catch {
+				context.ui.notify("room · 建群失败：确认对方机器人存在，且你有建群权限", "warning");
+				return;
+			}
+			current.chatId = chatId;
 			bindings = new RoomBindingStore();
 			bindings.bind(chatId, context.sessionManager.getSessionId());
-			codes?.revoke(roomId);
-			context.ui.notify(`room · 群已就绪 · 在群里 @${self.name} 开始对话`, "info");
+			await rendezvous.retire(current.code, current.secret).catch(() => undefined);
+			context.ui.notify(`room · 群已就绪 · 在群里 @${current.botName} 开始`, "info");
+		};
+
+		/** Joining side: publish this bot's identity onto the code the other person read out. */
+		const joinRoom = async (code: string, context: ExtensionCommandContext) => {
+			if (!/^\d{6,12}$/.test(code)) {
+				context.ui.notify("room · 房间码应为 6-12 位数字", "warning");
+				return;
+			}
+			const record = await ensureRecord(context);
+			if (!record) return;
+			const transport = await connect(record, context);
+			if (!transport) return;
+			const self = await transport.identity();
+
+			const claimed = await rendezvous.claim(code, {
+				appId: record.appId,
+				openId: record.botOpenId,
+				name: self.name,
+			});
+			if (!claimed.ok) {
+				transport.close();
+				await transport.api.close().catch(() => undefined);
+				context.ui.notify(`room · ${describeFailure(claimed.failure)}`, "warning");
+				return;
+			}
+			room = {
+				roomId: code,
+				code,
+				secret: "",
+				chatId: "",
+				botOpenId: self.openId,
+				botName: self.name,
+				transport,
+				peer: { appId: "", openId: "" },
+			};
+			context.ui.notify("room · 已登记，等待对方建群后把你拉进群", "info");
 		};
 
 		/**
-		 * The joining side's identity arrives through the rendezvous, which is not part of this
-		 * build. Until it exists the room can start listening but cannot create its group; the
-		 * command says so instead of pretending the room is ready.
+		 * TODO(room): the joining side learns its group id only by being added to it. Feishu reports
+		 * that through `im.chat.member.bot.added_v1`, which the transport does not subscribe to yet;
+		 * until it does, the joining terminal is bound by the same poll-and-adopt step the starter
+		 * uses. Tracked in docs/agent-room-design.md §7.0.
 		 */
-		const pendingPeer = async (_context: ExtensionCommandContext): Promise<ActiveRoom["pendingJoin"] | undefined> =>
-			undefined;
 
 		pi.registerCommand("room", {
-			description: "Join or start a room with another person's agent; /room leave to stop",
+			description: "Start or join a room with another person's agent; /room leave to stop",
 			handler: async (args, context) => {
-				if (context.mode !== "tui") return context.ui.notify("room · 需要交互式终端", "warning");
-				const value = args.trim();
-				if (value === "leave" || value === "off") {
-					stop(true, context);
+				if (context.mode !== "tui") {
+					context.ui.notify("room · 需要交互式终端", "warning");
 					return;
 				}
-				if (room) return context.ui.notify("room · 已在会议室中，先 /room leave", "warning");
-				await startRoom(value, context);
+				const value = args.trim();
+				if (value === "leave" || value === "off") {
+					await stop(true, context);
+					return;
+				}
+				if (room) {
+					context.ui.notify("room · 已在会议室中，先 /room leave", "warning");
+					return;
+				}
+				if (value) await joinRoom(value, context);
+				else await startRoom(context);
 			},
 		});
 
-		pi.on("session_shutdown", () => stop(false));
+		pi.on("session_shutdown", () => {
+			void stop(false);
+		});
 
 		// Assistant output reaches the room through the existing message stream, not a second loop.
 		pi.on("message_end", (event: Pick<MessageEndEvent, "message">) => {
@@ -263,20 +377,20 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				.map((part) => part.text)
 				.join("\n")
 				.trim();
-			if (!text || text === room.lastSpokenMessage) return;
+			if (!text || text === room.lastSpoken) return;
 			void speak(text, undefined);
 		});
 
 		/**
 		 * The only sanctioned way for this session to move data out of its machine: a short
-		 * conclusion, optionally addressed to the peer bot. Arbitrary repository content cannot
-		 * leave through the room because it never leaves the machine.
+		 * conclusion, optionally addressed to the peer bot. A repository's contents cannot leave
+		 * through the room because they never leave the machine.
 		 */
 		pi.registerTool({
-			name: MONITOR_TOOL,
+			name: ROOM_TOOL,
 			label: "Room message",
 			description:
-				"Send a short conclusion to the room. Use it when the human asks you to share something with the other person's agent. Keep it to what the other side cannot see on its own; never pass file contents or secrets.",
+				"Send a short conclusion to the room. Use it when the human asks you to share something with the other person's agent. Say only what the other side cannot see on its own; never pass file contents or secrets.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -289,10 +403,25 @@ export function createRoomExtension(options: RoomExtensionOptions): ExtensionFac
 				const current = room;
 				if (!current) return { ok: false, error: "not in a room" };
 				const summary = String(args.summary ?? "").slice(0, 2000);
-				const target = current.pendingJoin?.peerOpenId;
-				void speak(summary, args.handOff && target ? target : undefined);
+				const target = args.handOff ? current.peer?.openId : undefined;
+				void speak(summary, target || undefined);
 				return { ok: true };
 			},
 		} as never);
+	};
+}
+
+function credentialsOf(record: RoomAgentRecord): LarkCredentials {
+	return { appId: record.appId, appSecret: record.appSecret, brand: record.brand };
+}
+
+/** Card shape kept minimal: one markdown block plus an optional setting line. */
+function card(text: string, subtitle?: string): Record<string, unknown> {
+	return {
+		config: { wide_screen_mode: true, enable_forward: false },
+		elements: [
+			...(subtitle ? [{ tag: "div", text: { tag: "plain_text", content: subtitle } }] : []),
+			{ tag: "div", text: { tag: "lark_md", content: text } },
+		],
 	};
 }
