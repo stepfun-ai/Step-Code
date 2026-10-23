@@ -76,6 +76,14 @@ if (options.signedApp && options.fromApp !== undefined) {
 if ((options.signedApp || options.fromApp !== undefined) && options.arch === "all") {
 	throw new Error("--signed-app/--from-app need a single architecture; set MACOS_ARCH=arm64 (or x64)");
 }
+// The checkpoint only accepts a Developer ID signature; an ad-hoc app would
+// build for minutes and then be rejected. CSC_NAME means the identity is
+// already in the runner's keychain.
+if (options.signedApp && !options.dryRun && !process.env.CSC_LINK?.trim() && !process.env.CSC_NAME?.trim()) {
+	throw new Error(
+		"--signed-app needs a Developer ID: CSC_LINK (+ CSC_KEY_PASSWORD) or CSC_NAME is not set in this job. Configure them as protected CI variables (see .gitlab-ci.desktop-macos-signing.yml).",
+	);
+}
 if (options.env !== "sit") {
 	console.log(`[dist:mac] --env=${options.env} has no build-time effect; the app reads its backend from ~/.stepcode at run time`);
 }

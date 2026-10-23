@@ -184,10 +184,15 @@ if (appOnly && (fromApp !== undefined || wantWin)) throw new Error("--app-only b
 if (appOnly && macArches.length !== 1) throw new Error("--app-only needs a single --arch=arm64|x64");
 if (fromApp !== undefined && !existsSync(fromApp)) throw new Error(`--from-app does not exist: ${fromApp}`);
 
-// Developer ID appears when the pipeline hands over a certificate; without one the
-// build keeps the ad-hoc signature Apple Silicon needs to start the app at all.
-const signingIdentity = process.env.CSC_LINK?.trim() ? undefined : "-";
-const signing = signingIdentity === undefined;
+// Developer ID appears when the pipeline hands over a certificate (CSC_LINK) or
+// names one already in the keychain (CSC_NAME); electron-builder reads both.
+// Without either, the build keeps the ad-hoc signature Apple Silicon needs to
+// start the app at all.
+const signing = Boolean(process.env.CSC_LINK?.trim() || process.env.CSC_NAME?.trim());
+const signingIdentity = signing ? undefined : "-";
+if (appOnly && !signing) {
+	throw new Error("--app-only builds the Developer ID signed app; set CSC_LINK (+ CSC_KEY_PASSWORD) or CSC_NAME");
+}
 
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
