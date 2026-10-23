@@ -51,18 +51,20 @@ interface CapturedRequest {
 }
 
 it("keeps the request tool block and system prompt byte-identical across a plan-mode cycle", async () => {
-	const cwd = process.cwd();
+	// Filled in once the harness owns its workspace; the tool only runs later.
+	let workspace = "";
 	const harness = await createHarness({
 		tools: [...PLAN_TOOLS, "find_tools"].map((name) =>
 			stepTool(name, (args) => {
 				if (name !== "write_file" || typeof args.path !== "string") return;
-				const target = path.resolve(cwd, args.path);
+				const target = path.resolve(workspace, args.path);
 				mkdirSync(path.dirname(target), { recursive: true });
 				writeFileSync(target, typeof args.content === "string" ? args.content : "");
 			}),
 		),
 		extensionFactories: [{ name: "step-plan", factory: createStepPlanExtension(), hidden: true }],
 	});
+	workspace = harness.tempDir;
 
 	try {
 		// The shape of an ordinary Step profile: every plan tool is already active,
@@ -85,7 +87,10 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 			(context) => {
 				capture(context);
 				return fauxAssistantMessage(
-					fauxToolCall("write_file", { path: path.relative(cwd, planPath), content: "# Plan\n\n1. Do it.\n" }),
+					fauxToolCall("write_file", {
+						path: path.relative(workspace, planPath),
+						content: "# Plan\n\n1. Do it.\n",
+					}),
 					{ stopReason: "toolUse" },
 				);
 			},
@@ -103,7 +108,6 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 
 		// The system prompt embeds the active tool snippets, so equal tools plus an
 		// equal prompt is exactly the prefix the provider caches.
-		console.log("DBG", JSON.stringify(captured.map((c) => c.tools)));
 		expect(captured).toHaveLength(4);
 		for (const request of captured.slice(1)) {
 			expect(request.tools).toEqual(captured[0]?.tools);
@@ -116,7 +120,6 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 });
 
 it("still blocks non-plan mutations after entering plan mode with tools intact", async () => {
-	const cwd = process.cwd();
 	const harness = await createHarness({
 		tools: [...PLAN_TOOLS, "find_tools"].map((name) => stepTool(name)),
 		extensionFactories: [{ name: "step-plan", factory: createStepPlanExtension(), hidden: true }],
@@ -143,7 +146,6 @@ it("still blocks non-plan mutations after entering plan mode with tools intact",
 		expect(JSON.stringify(blocked?.content)).toContain("Plan mode is active");
 		// Nothing was removed: the guard, not the tool list, enforces plan mode.
 		expect(harness.session.agent.state.tools.map((tool) => tool.name)).toEqual(toolsBefore);
-		void cwd;
 	} finally {
 		harness.cleanup();
 	}

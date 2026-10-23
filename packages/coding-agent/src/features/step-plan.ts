@@ -123,10 +123,23 @@ export const createStepPlanExtension =
 		// ExtensionAPI keep working without one.
 		const events = (pi as { events?: EventBus }).events;
 
-		const persistPlanState = (): void => {
-			// No tool snapshot: this build adds tools rather than replacing the list,
-			// so `version` also tells a later restore that the branch never narrowed it.
-			pi.appendEntry("step-plan", { version: 2, enabled, planFilePath, planSource });
+		/**
+		 * Persist the branch's plan state.
+		 *
+		 * `carriesLegacyTools` is only set when rewriting a legacy entry during
+		 * migration: the entry it replaces is the sole record of the list plan mode
+		 * narrowed, so dropping it would strand that session on the next restore.
+		 * Ordinary entries never carry a snapshot — this build appends tools
+		 * instead of replacing the list.
+		 */
+		const persistPlanState = (carriesLegacyTools?: string[]): void => {
+			pi.appendEntry("step-plan", {
+				version: 2,
+				enabled,
+				planFilePath,
+				planSource,
+				...(carriesLegacyTools ? { toolsBeforePlanMode: carriesLegacyTools } : {}),
+			});
 		};
 		/**
 		 * Plan mode is a permission narrowing, not a capability change.
@@ -224,7 +237,7 @@ export const createStepPlanExtension =
 		pi.on("tool_call", async (event, ctx) => {
 			if (!enabled || !MUTATING_TOOLS.has(event.toolName)) return;
 			const planPath = resolvePlanFilePath(ctx);
-			const toolInput = event.input as Record<string, unknown>;
+			const toolInput = (event.input ?? {}) as Record<string, unknown>;
 			const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
 			// Resolve exactly as the file tools do (`~`, `@`, unicode spaces), so an
 			// allowed target cannot land somewhere else than the guard checked.
@@ -239,7 +252,8 @@ export const createStepPlanExtension =
 				reason: [
 					`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planPath}`,
 					`Target: ${targetPath || "(no path provided)"}`,
-					"Plan mode is a permission restriction, not a missing tool: do not retry this edit, rephrase the path, or work around it with a shell command.",
+					"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
+					"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
 					`Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.`,
 				].join("\n"),
 			};
@@ -274,13 +288,13 @@ export const createStepPlanExtension =
 						: [],
 				);
 			const restoredPlanState = planStates[0];
-			// The list to undo belongs to whichever entry narrowed it: a legacy
-			// on-entry recorded what it replaced, and so did an older off-snapshot
-			// that kept the baseline. This build records nothing, so its own entries
-			// (marked by `version`) never replay an older plan session's snapshot —
-			// doing that would reorder and drop tools the branch never touched.
+			// The list to undo belongs to whichever entry narrowed it. An on-entry
+			// wins over an older carried snapshot, so a newer plan session never
+			// replays an earlier one's list; an off branch falls back to the last
+			// entry that recorded one. This build records nothing on entry, so its
+			// own entries only reach here after carrying a legacy list forward.
 			const governingEntry = planStates.find((state) => state?.enabled || state?.toolsBeforePlanMode !== undefined);
-			const legacyBaseline = governingEntry?.version ? undefined : governingEntry?.toolsBeforePlanMode;
+			const legacyBaseline = governingEntry?.toolsBeforePlanMode;
 			enabled = restoredPlanState?.enabled ?? false;
 			planFilePath = restoredPlanState?.planFilePath;
 			planSource = enabled ? (restoredPlanState?.planSource ?? "unknown") : undefined;
@@ -297,7 +311,7 @@ export const createStepPlanExtension =
 					persistedPlanState: restoredPlanState,
 					events,
 					extensionContext: ctx,
-					persistMigratedPlanState: persistPlanState,
+					persistMigratedPlanState: () => persistPlanState(legacyBaseline),
 				});
 			}
 			if (startWithPlan && !enabled) {

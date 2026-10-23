@@ -328,10 +328,14 @@ for path rules and retention responsibilities.
   effect immediately; it does not request approval. An explicit `--plan`
   applies at process startup, including a continued session whose mode was off;
   later reloads and session/branch navigation do not reapply it. The plan path is
-  announced, and `write_file` / `edit_file` remain available for that file.
-  Other file-write targets are blocked while planning. This is **not a shell
-  sandbox**: command tools retain the existing permission policy, and the model
-  is instructed to keep commands read-only while planning.
+  announced. Plan mode does not remove tools from the request — that would
+  invalidate the provider's cached prompt prefix — so enforcement lives in the
+  `tool_call` policy: `write_file`, `edit_file`, `write`, and `edit` may only
+  target the plan file, and every other target is rejected with an actionable
+  denial. Other file-writing tools, including MCP servers, are not covered by
+  that check. This is **not a shell sandbox**: command tools retain the existing
+  permission policy, and the model is instructed to keep commands read-only
+  while planning.
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution, stay in
   plan mode, or provide refinement notes. Cancel
