@@ -87,11 +87,14 @@ describe("feedback command argument parsing", () => {
 });
 
 describe("feedback command interaction", () => {
-	test("treats a TTY command with a comment as a shortcut", async () => {
+	// The unconfigured-endpoint case is unreachable on the internal branch:
+	// resolveFeedbackEndpoint() always resolves a channel default here, so the
+	// public "reports an unconfigured endpoint" test does not apply.
+	test("a TTY command with a comment skips the questions but still shows the consent page", async () => {
 		const root = await makeRoot();
 		const stdout = captureOutput();
 		const stderr = captureOutput();
-		const question = vi.fn();
+		const question = vi.fn().mockResolvedValue("y");
 		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 
 		const exitCode = await runFeedbackCommand(["the", "composer", "dropped", "a", "key"], {
@@ -105,7 +108,8 @@ describe("feedback command interaction", () => {
 		});
 
 		expect(exitCode).toBe(0);
-		expect(question).not.toHaveBeenCalled();
+		// Only the confirmation: the comment and category were not asked for.
+		expect(question.mock.calls.map(([query]) => query)).toEqual(["Submit feedback? [y/N] "]);
 		expect(fetchImpl).toHaveBeenCalledOnce();
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
 		expect(submission).toMatchObject({ comment: "the composer dropped a key" });
@@ -118,11 +122,11 @@ describe("feedback command interaction", () => {
 	test.each([
 		{ label: "an explicit empty --message", argv: ["--category", "bug", "--message="] },
 		{ label: "an explicit empty positional comment", argv: ["--category", "bug", ""] },
-	])("keeps $label out of the guided flow", async ({ argv }) => {
+	])("keeps $label out of the questions but still asks to submit", async ({ argv }) => {
 		const root = await makeRoot();
 		const stdout = captureOutput();
 		const stderr = captureOutput();
-		const question = vi.fn();
+		const question = vi.fn().mockResolvedValue("y");
 		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 
 		const exitCode = await runFeedbackCommand(argv, {
@@ -136,7 +140,7 @@ describe("feedback command interaction", () => {
 		});
 
 		expect(exitCode).toBe(0);
-		expect(question).not.toHaveBeenCalled();
+		expect(question.mock.calls.map(([query]) => query)).toEqual(["Submit feedback? [y/N] "]);
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
 		expect(submission).toMatchObject({ category: "bug", comment: "" });
 		expect(stdout.text()).toContain("Submitted. Feedback ID:");
@@ -178,12 +182,7 @@ describe("feedback command interaction", () => {
 		await writeFile(resolveStderrDevLogPath(root), `before\nError token=${secret}\nafter\n`);
 		const stdout = captureOutput();
 		const stderr = captureOutput();
-		const question = vi
-			.fn()
-			.mockResolvedValueOnce("1")
-			.mockResolvedValueOnce("")
-			.mockResolvedValueOnce("It failed")
-			.mockResolvedValueOnce("y");
+		const question = vi.fn().mockResolvedValueOnce("1").mockResolvedValueOnce("It failed").mockResolvedValueOnce("y");
 		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 
 		const exitCode = await runFeedbackCommand([], {
@@ -200,13 +199,14 @@ describe("feedback command interaction", () => {
 		});
 
 		expect(exitCode).toBe(0);
+		// Attachments are not a question: the guided flow asks for the category,
+		// the comment, and one confirmation.
 		expect(question.mock.calls.map(([query]) => query)).toEqual([
 			expect.stringContaining("Category ("),
-			expect.stringContaining("Attach diagnostics from logs/"),
 			"Feedback: ",
 			"Submit feedback? [y/N] ",
 		]);
-		expect(String(question.mock.calls[1]?.[0])).toContain("[Y/n]");
+		expect(stdout.text()).toContain("Diagnostics: logs/");
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
 			diagnostics: { lines: string[]; truncated: boolean };
 		};
@@ -229,12 +229,7 @@ describe("feedback command interaction", () => {
 		await writeFile(join(diagnosticsDir, fileName), "safe trace line\n");
 		const stdout = captureOutput();
 		const stderr = captureOutput();
-		const question = vi
-			.fn()
-			.mockResolvedValueOnce("1")
-			.mockResolvedValueOnce("")
-			.mockResolvedValueOnce("It failed")
-			.mockResolvedValueOnce("y");
+		const question = vi.fn().mockResolvedValueOnce("1").mockResolvedValueOnce("It failed").mockResolvedValueOnce("y");
 		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 
 		const exitCode = await runFeedbackCommand([], {
@@ -251,10 +246,9 @@ describe("feedback command interaction", () => {
 		});
 
 		const safePath = "diagnostics/input-trace-\\x1b[31msecret\\x1b[0m\\rspoof\\nline.jsonl";
-		const diagnosticsQuestion = String(question.mock.calls[1]?.[0]);
 		expect(exitCode).toBe(0);
-		expect(diagnosticsQuestion).toContain(`Attach diagnostics from ${safePath}?`);
-		expect(diagnosticsQuestion).not.toMatch(/[\u001b\r\n]/u);
+		// The path is only shown in the preview, and never with terminal controls.
+		expect(question.mock.calls.map(([query]) => String(query))).not.toContain(expect.stringContaining("input-trace"));
 		expect(stdout.text()).toContain(`Diagnostics: ${safePath} —`);
 		expect(stdout.text()).not.toContain("\u001b");
 		expect(stdout.text()).not.toContain("\r");
@@ -294,7 +288,7 @@ describe("feedback command interaction", () => {
 		expect(stderr.text()).toBe("");
 	});
 
-	test("keeps an automatically discovered bundle session out of the top-level feedback context", async () => {
+	test("names the automatically discovered bundle session, so the report and its archive join", async () => {
 		const root = await makeRoot();
 		const agentDir = join(root, "agent");
 		const sessionDir = join(agentDir, "sessions", "project");
@@ -305,12 +299,7 @@ describe("feedback command interaction", () => {
 		);
 		const stdout = captureOutput();
 		const stderr = captureOutput();
-		const question = vi
-			.fn()
-			.mockResolvedValueOnce("1")
-			.mockResolvedValueOnce("")
-			.mockResolvedValueOnce("It failed")
-			.mockResolvedValueOnce("y");
+		const question = vi.fn().mockResolvedValueOnce("1").mockResolvedValueOnce("It failed").mockResolvedValueOnce("y");
 		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 
 		const exitCode = await runFeedbackCommand([], {
@@ -332,7 +321,9 @@ describe("feedback command interaction", () => {
 		const submission = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(submission.context.sessionId).toBeUndefined();
+		// The archive already contains this conversation; leaving the id out only made
+		// the report impossible to correlate with the session it describes.
+		expect(submission.context.sessionId).toBe("guessed-session");
 		expect(String(fetchImpl.mock.calls[1]?.[0])).toContain("/bundle?");
 		expect(stdout.text()).toContain("session guessed-session");
 		expect(stderr.text()).toBe("");
@@ -403,7 +394,7 @@ describe("feedback command interaction", () => {
 		const submission = JSON.parse(body) as { context: Record<string, unknown> };
 		expect(submission.context.sessionId).toBe("header-session");
 		expect(body).not.toContain(sessionFile);
-		expect(stderr.text()).toBe("");
+		expect(stderr.text()).toContain("Attaching: conversation transcript");
 	});
 
 	test.each(["absolute", "relative", "backslash", "jsonl-filename"] as const)(

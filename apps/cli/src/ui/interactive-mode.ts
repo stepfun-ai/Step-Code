@@ -4896,11 +4896,11 @@ export class InteractiveMode {
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			try {
-				await this.session.setModel(model, { persist: false });
+				await this.session.setModel(model, { persist: true });
 				this.settingsManager.recordRecentModel(model.provider, model.id);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				this.showStatus(`Model: ${model.id}`);
+				this.showStatus(`Default model: ${model.provider}/${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
@@ -5038,15 +5038,15 @@ export class InteractiveMode {
 
 	showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
-			const selectModel = async (model: Model<any>, persist: boolean) => {
+			const selectModel = async (model: Model<any>) => {
 				try {
-					await this.session.setModel(model, { persist });
+					await this.session.setModel(model, { persist: true });
 					this.settingsManager.recordRecentModel(model.provider, model.id);
 					this.updateAvailableProviderCount();
 					this.footer.invalidate();
 					this.updateEditorBorderColor();
 					done();
-					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
+					this.showStatus(`Default model: ${model.provider}/${model.id}`);
 					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 				} catch (error) {
 					done();
@@ -5060,13 +5060,12 @@ export class InteractiveMode {
 				this.session.model,
 				this.session.modelRuntime,
 				this.session.scopedModels,
-				(model) => selectModel(model, false),
+				selectModel,
 				() => {
 					done();
 					this.redraw.requestRender();
 				},
 				initialSearchInput,
-				(model) => selectModel(model, true),
 				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
 				this.settingsManager.getRecentModels(),
 			);

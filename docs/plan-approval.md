@@ -2,9 +2,14 @@
 
 `exit_plan_mode` submits a written proposal for review. Leaving plan mode and
 approving the proposal are separate events. In headless and RPC sessions, a valid
-proposal exits plan mode and restores the previous tools, while the caller remains
-responsible for obtaining approval before execution. This also applies to RPC
-contexts with `hasUI: true`; their UI bridge does not provide interactive approval.
+proposal exits plan mode, while the caller remains responsible for obtaining
+approval before execution. This also applies to RPC contexts with `hasUI: true`;
+their UI bridge does not provide interactive approval.
+
+Plan mode does not hide tools: it denies mutating calls outside the plan file
+through the `tool_call` policy, so the request's tool block stays byte-identical
+and the provider's prompt cache keeps its prefix. Only a profile that lacks a
+plan tool has it appended on entry, and that addition alone is reverted on exit.
 
 Successful headless and RPC exits return the existing model-facing text plus
 structured `details`, for example:

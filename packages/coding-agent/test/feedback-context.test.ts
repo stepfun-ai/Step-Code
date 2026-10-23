@@ -22,6 +22,53 @@ describe("feedback context identity boundaries", () => {
 		expect(readFeedbackUsername({ STEPCODE_USER: "not a username" })).toBeUndefined();
 	});
 
+	it("names the build a report came from, including when the version is a fallback", async () => {
+		// A source build reports the fallback version; without `versionSource` a
+		// reader would take "0.1.0" for a release.
+		const context = await resolveFeedbackContext({ storageRootDir: await makeRoot(), env: {} });
+		expect(context.version).toBe("0.1.0");
+		expect(context.versionSource).toBe("fallback");
+		expect(context.channel).toBe("dev");
+		expect(context.runtime?.node).toBe(process.versions.node);
+		expect(context.runtime?.electron).toBeUndefined();
+	});
+
+	it("prefers an embedded release identity and its build time over the fallback", async () => {
+		const context = await resolveFeedbackContext({
+			storageRootDir: await makeRoot(),
+			env: {
+				STEPCODE_BUILD_VERSION: "v1.4.2",
+				STEPCODE_BUILD_CHANNEL: "release",
+				STEPCODE_BUILD_COMMIT: "3de15c16",
+				STEPCODE_BUILD_TIME: "2026-10-23T02:00:00.000Z",
+			} as NodeJS.ProcessEnv,
+		});
+		expect(context).toMatchObject({
+			version: "1.4.2",
+			versionSource: "embedded",
+			channel: "release",
+			commit: "3de15c16",
+			buildTime: "2026-10-23T02:00:00.000Z",
+		});
+	});
+
+	it("drops a build time that is not a timestamp", async () => {
+		const context = await resolveFeedbackContext({
+			storageRootDir: await makeRoot(),
+			env: { STEPCODE_BUILD_TIME: "yesterday" } as NodeJS.ProcessEnv,
+		});
+		expect(context.buildTime).toBeUndefined();
+	});
+
+	it("records how the code was installed when the launcher says so", async () => {
+		const context = await resolveFeedbackContext({
+			storageRootDir: await makeRoot(),
+			env: { STEPCODE_INSTALL_SOURCE: "DMG", LC_ALL: "zh_CN.UTF-8" } as NodeJS.ProcessEnv,
+		});
+		expect(context.installSource).toBe("dmg");
+		expect(context.locale).toBe("zh-CN");
+	});
+
 	it("keeps valid host and session identities after trimming", async () => {
 		const context = await resolveFeedbackContext({
 			storageRootDir: await makeRoot(),

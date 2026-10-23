@@ -38,7 +38,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
-| `/model` | Switch models; Ctrl+S in the picker saves the startup default |
+| `/model` | Switch models; Enter in the picker saves the startup default |
 | `/thinking` | Switch thinking level; Ctrl+S in the picker saves the startup default |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, message delivery, transport, and other preferences |
@@ -200,8 +200,40 @@ cat README.md | step -p "Summarize this text"
 | `--session <path\|id>` | Use a specific session file or partial UUID |
 | `--fork <path\|id>` | Fork a session file or partial UUID into a new session |
 | `--session-dir <dir>` | Custom session storage directory |
+| `-C`, `--cwd <dir>` | Working directory for this run (defaults to the process cwd) |
 | `--no-session` | Ephemeral mode; do not save |
 | `--name <name>`, `-n <name>` | Set session display name at startup |
+
+#### Working directory (`-C` / `--cwd`)
+
+`-C <dir>` sets the working directory for the whole run: settings, session storage
+and lookup, resource loading (extensions, skills, prompt templates, themes) and
+tools all resolve against it. A nonexistent path, or a path that is not a
+directory, fails fast with exit code 1.
+
+Interaction with the session flags:
+
+- New sessions and `-c` / `--continue` start in `<dir>`, and continue looks for
+  the most recent session of `<dir>`.
+- `--fork <path|id>` forks into `<dir>`.
+- `--session <path>` / `--session <id>` opens the session as-is: the cwd stored
+  in the session header wins, and `-C` only applies if that directory no longer
+  exists (you are then prompted to pick one). A session id found under a
+  different project is offered for forking into `<dir>`.
+- `--session-dir` is orthogonal: it relocates storage, not work. A relative
+  `--session-dir` resolves against the launcher's directory, like any other
+  storage path.
+
+CLI-side relative paths (`@file` arguments, `-e` / `--skill` /
+`--prompt-template` / `--theme`, and a relative `--export` output) resolve
+against `<dir>`, matching `git -C` expectations. The `--flag=value` form is
+reserved for extension flags; startup flags take a space-separated value
+(`--cwd <dir>`).
+
+`-C` is a startup flag: top-level subcommands (`mcp`, `login`, `feedback`,
+`session-index`, ...) are detected from the first argument, so `step -C <dir>
+<subcommand>` runs the subcommand, not a prompt, and the subcommand does not
+honour `-C`.
 
 ### Tool Options
 
