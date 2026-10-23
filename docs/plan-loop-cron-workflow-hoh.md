@@ -17,7 +17,7 @@ Step 目前擅长在一个 turn 内完成工作，也已经有 session、subagen
 | Cron | 在指定时间执行提醒或任务 | project/session 可见 | `durable=true` 时跨 session |
 | Workflow | 一次调用编排多个 agent 和阶段 | 单次 run，可 resume | run journal 与产物落盘 |
 
-三者都可以把通知送入 Pi 已有的 custom-message/steer 通道，但共享通道不等于
+三者都可以把通知送入运行时已有的 custom-message/steer 通道，但共享通道不等于
 共享生命周期或共享实现。任一方向都必须能够在没有另外两个方向时编译、加载、测试
 和关闭。
 

@@ -6,7 +6,25 @@ import {
 	normalizeNativeShiftEnterInput,
 	ProcessTerminal,
 	resolveEscapeTimeoutMs,
+	supportsTerminalProgress,
 } from "../src/terminal.ts";
+
+describe("supportsTerminalProgress", () => {
+	it("enables OSC 9;4 for terminals verified to render tab progress", () => {
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "otty" }), true);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "ghostty" }), true);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "Ghostty" }), true);
+	});
+
+	it("stays off for unknown terminals and multiplexers", () => {
+		assert.equal(supportsTerminalProgress({}), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "Apple_Terminal" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "iTerm.app" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "tmux" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "otty", TMUX: "/tmp/tmux-1/default,1,0" }), false);
+		assert.equal(supportsTerminalProgress({ TERM_PROGRAM: "ghostty", STY: "1234.pts-0" }), false);
+	});
+});
 
 describe("resolveEscapeTimeoutMs", () => {
 	it("defaults to 100ms over SSH", () => {
@@ -225,8 +243,25 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 	});
 });
 
+describe("ProcessTerminal title", () => {
+	it("writes OSC 0 without allowing title text to terminate or inject control sequences", () => {
+		const writes: string[] = [];
+		const previousWrite = process.stdout.write;
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			writes.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+		try {
+			new ProcessTerminal().setTitle("Fix\nlogin\x07\x1b]2;injected\x9c");
+			assert.deepEqual(writes, ["\x1b]0;Fix login]2;injected\x07"]);
+		} finally {
+			process.stdout.write = previousWrite;
+		}
+	});
+});
+
 describe("ProcessTerminal progress", () => {
-	it("writes a valid OSC 9;4 clear sequence", () => {
+	it("does not emit OSC 9 when progress was never activated", () => {
 		const terminal = new ProcessTerminal();
 		const writes: string[] = [];
 		const previousWrite = process.stdout.write;
@@ -238,9 +273,43 @@ describe("ProcessTerminal progress", () => {
 
 		try {
 			terminal.setProgress(false);
-			assert.deepEqual(writes, ["\x1b]9;4;0\x07"]);
+			terminal.setProgress(false);
+			assert.deepEqual(writes, []);
 		} finally {
 			process.stdout.write = previousWrite;
+		}
+	});
+
+	it("clears active progress once and stops its keepalive", () => {
+		const terminal = new ProcessTerminal();
+		const writes: string[] = [];
+		const previousWrite = process.stdout.write;
+		mock.timers.enable({ apis: ["setInterval"] });
+
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			writes.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			terminal.setProgress(true);
+			mock.timers.tick(1000);
+			assert.deepEqual(writes, ["\x1b]9;4;3\x07", "\x1b]9;4;3\x07"]);
+
+			terminal.setProgress(false);
+			terminal.setProgress(false);
+			mock.timers.tick(3000);
+			assert.deepEqual(writes, ["\x1b]9;4;3\x07", "\x1b]9;4;3\x07", "\x1b]9;4;0\x07"]);
+
+			// A later operation can activate and clear its own indicator.
+			terminal.setProgress(true);
+			terminal.setProgress(false);
+			mock.timers.tick(3000);
+			assert.deepEqual(writes.slice(3), ["\x1b]9;4;3\x07", "\x1b]9;4;0\x07"]);
+		} finally {
+			terminal.setProgress(false);
+			process.stdout.write = previousWrite;
+			mock.timers.reset();
 		}
 	});
 });

@@ -7,7 +7,7 @@
 // very first side effect (before the coding-agent barrel is evaluated) so
 // config.ts resolves the Step storage namespace regardless of launcher name.
 import "#bootstrap/environment";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
 	ambiguousPluginServerNames,
@@ -30,6 +30,7 @@ import {
 	getStepAuthPath,
 	getStepDefaultTheme,
 	getStepLoginStatus,
+	getStepSessionDirOverride,
 	hasConfiguredStepCodeCredential,
 	installProcessStderrDevLogCapture,
 	isStepConfigCommand,
@@ -60,6 +61,7 @@ import {
 	resolveStepStorageRoot,
 	restoreStdout,
 	runFeedbackCommand,
+	runSessionIndexCommand,
 	runStepConfigCommand,
 	runStepLogin,
 	runStepMcpImportPrompt,
@@ -284,6 +286,9 @@ const stepMainOptions: MainOptions = {
 			syncStepLoginProfileEndpoint(getStepAuthPath());
 			return {
 				removed: report.removedNative || report.removedLegacy,
+				// The terminal belongs to the TUI here, so the host reports this
+				// instead of writing to stderr underneath it.
+				accountSessionRemoved: report.removedLoginState,
 				remainingSource: report.remainingSource ? "the environment (STEP_API_KEY)" : null,
 			};
 		},
@@ -350,6 +355,7 @@ const isTopLevelLogin = topLevelStepCommand === "login";
 const isTopLevelLoginStatus = isTopLevelLogin && process.argv[3] === "status";
 const isTopLevelLogout = topLevelStepCommand === "logout";
 const isTopLevelFeedback = topLevelStepCommand === "feedback";
+const isTopLevelSessionIndex = topLevelStepCommand === "session-index";
 const topLevelAuthHelp = process.argv.slice(3).some((arg) => arg === "--help" || arg === "-h");
 
 let telemetryExitReason: "normal" | "error" = "normal";
@@ -400,6 +406,11 @@ try {
 				process.stdout.write(`Removed: ${report.nativePath}\n`);
 			} else {
 				process.stdout.write(`No stored Step credential at ${report.nativePath}\n`);
+			}
+			if (!report.removedLoginState) {
+				process.stderr.write(
+					"Note: the account session could not be removed and is still on disk. Run `step logout` again.\n",
+				);
 			}
 			if (report.remainingSource) {
 				process.stderr.write("Note: STEP_API_KEY is still set, so requests will keep working.\n");
@@ -603,6 +614,18 @@ try {
 								? "credential is invalid or expired"
 								: "could not check credential validity (network error)";
 					process.stdout.write(`Validity: ${validity}.\n`);
+					// The account session is reported next to the key, never instead
+					// of it: a user who only ever had a key still has a working key.
+					const accountSession = status.session;
+					if (accountSession && accountSession.state !== "missing") {
+						const detail =
+							accountSession.state === "expired"
+								? "expired; account features will ask you to sign in again"
+								: accountSession.state === "expiring"
+									? "expiring; it refreshes on next use"
+									: "active";
+						process.stdout.write(`Account session: ${detail}.\n`);
+					}
 					if (status.validity === "invalid") process.exitCode = 1;
 				}
 			}
@@ -639,6 +662,14 @@ try {
 				}
 			}
 		}
+	} else if (isTopLevelSessionIndex) {
+		const sessionDirOverride = getStepSessionDirOverride(process.env);
+		const exitCode = await runSessionIndexCommand(process.argv.slice(3), {
+			agentDir: resolveStepAgentDir(),
+			...(sessionDirOverride ? { extraRoots: [resolve(sessionDirOverride)] } : {}),
+		});
+		if (exitCode !== 0) process.exitCode = exitCode;
+		forceOneShotExit = true;
 	} else if (isTopLevelFeedback) {
 		const feedbackSettingsManager =
 			currentStepSettingsManager ?? createStepSettingsManager(process.cwd(), resolveStepAgentDir());

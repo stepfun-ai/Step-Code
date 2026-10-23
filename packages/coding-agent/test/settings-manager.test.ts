@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
 
@@ -351,6 +351,34 @@ describe("SettingsManager", () => {
 				hyperlinks: true,
 			});
 			expect(getOverrides({ images: "auto", trueColor: "auto", hyperlinks: "auto" })).toEqual({});
+		});
+	});
+
+	describe("terminal progress", () => {
+		afterEach(() => {
+			vi.unstubAllEnvs();
+		});
+
+		it("follows terminal support when unset", () => {
+			vi.stubEnv("TMUX", "");
+			vi.stubEnv("STY", "");
+			vi.stubEnv("TERM_PROGRAM", "otty");
+			expect(SettingsManager.inMemory().getShowTerminalProgress()).toBe(true);
+			vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
+			expect(SettingsManager.inMemory().getShowTerminalProgress()).toBe(false);
+		});
+
+		it("keeps an explicit setting over terminal support", () => {
+			vi.stubEnv("TMUX", "");
+			vi.stubEnv("STY", "");
+			vi.stubEnv("TERM_PROGRAM", "otty");
+			expect(SettingsManager.inMemory({ terminal: { showTerminalProgress: false } }).getShowTerminalProgress()).toBe(
+				false,
+			);
+			vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
+			expect(SettingsManager.inMemory({ terminal: { showTerminalProgress: true } }).getShowTerminalProgress()).toBe(
+				true,
+			);
 		});
 	});
 

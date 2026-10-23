@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,6 +294,59 @@ describe("Step tool profile", () => {
 		}
 	});
 
+	it("keeps bracket-prefixed paths in find_files when the search is narrowed", async () => {
+		// A narrowed search returns paths relative to the search root, so a route
+		// directory such as "[id]" lands in the first position of the line — the
+		// same position a native notice block uses.
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			for (const route of ["[id]", "[...slug]", "[[...slug]]", "static"]) {
+				await mkdir(join(root, "routes", route), { recursive: true });
+				await writeFile(join(root, "routes", route, "page.tsx"), "export default 1;\n");
+			}
+			const find = createStepToolProfile(root).find((tool) => tool.name === "find_files")!;
+			const result = await find.execute(
+				"find",
+				{ pattern: "*.tsx", path: "routes", max_results: 10 },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(result).split("\n").sort()).toEqual([
+				"[...slug]/page.tsx",
+				"[[...slug]]/page.tsx",
+				"[id]/page.tsx",
+				"static/page.tsx",
+			]);
+			expect(result.details).toMatchObject({ matchedFiles: 4, returnedFiles: 4 });
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps paths that start with a notice keyword in find_files", async () => {
+		// "WARNING:" is only usable in a filename off Windows; the stripping this
+		// guards against was prefix-based, so the case is platform-bound.
+		if (process.platform === "win32") return;
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			await writeFile(join(root, "WARNING: read me.ts"), "export default 1;\n");
+			await writeFile(join(root, "plain.ts"), "export default 1;\n");
+			const find = createStepToolProfile(root).find((tool) => tool.name === "find_files")!;
+			const result = await find.execute(
+				"find",
+				{ pattern: "*.ts", max_results: 10 },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(result).split("\n").sort()).toEqual(["WARNING: read me.ts", "plain.ts"]);
+			expect(result.details).toMatchObject({ matchedFiles: 2, returnedFiles: 2 });
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("maps search_files context into native grep output", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
 		try {
@@ -308,6 +362,80 @@ describe("Step tool profile", () => {
 			expect(text(result)).toContain("sample.txt:2: target");
 			expect(text(result)).toContain("sample.txt:1-");
 			expect(text(result)).toContain("sample.txt:3-");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the real line number when the *path* contains a :<digits>: shape", async () => {
+		// The mirror case: a file literally named with a ":<digits>:" sequence.
+		// Windows forbids ":" in filenames, so this only runs where it can exist.
+		if (process.platform === "win32") return;
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			// Make this a work tree so the git backend stays available as the
+			// fallback when ripgrep is not installed: its NUL output carries the
+			// path boundary, while a platform grep without -Z would not.
+			execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+			const lines = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`);
+			lines[2] = "MISMATCH_TARGET";
+			await writeFile(join(root, "report:7:notes.txt"), `${lines.join("\n")}\n`);
+			const search = createStepToolProfile(root).find((tool) => tool.name === "search_files")!;
+			const result = await search.execute(
+				"search-colon-path",
+				{ pattern: "MISMATCH_TARGET", path: "." },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			// Line 3 is the match. Reading 7 as the line number would surface line 7.
+			expect(text(result)).toContain("report:7:notes.txt:3: MISMATCH_TARGET");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports structured match rows so consumers never re-parse rendered text", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			const lines = Array.from({ length: 45 }, (_, index) => `filler line ${index + 1}`);
+			lines[0] = "src/example.ts:42: build failed";
+			await writeFile(join(root, "many.log"), `${lines.join("\n")}\n`);
+			const search = createStepToolProfile(root).find((tool) => tool.name === "search_files")!;
+			const result = await search.execute(
+				"search-structured",
+				{ pattern: "build failed", path: "many.log" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			const rows = (result.details as { matchRows?: Array<{ path: string; line: number; text: string }> }).matchRows;
+			expect(rows).toEqual([{ path: "many.log", line: 1, text: "src/example.ts:42: build failed" }]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the real line number when matched text contains a :<digits>: shape", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			// Line 1 carries a ":42:" shape (a compiler error echoed into a log) and
+			// line 42 is unrelated filler. A greedy row parse reads 42 as the line
+			// number and reloads line 42 instead of line 1.
+			const lines = Array.from({ length: 45 }, (_, index) => `filler line ${index + 1}`);
+			lines[0] = "src/example.ts:42: build failed";
+			lines[41] = "UNRELATED_LINE_42";
+			await writeFile(join(root, "many.log"), `${lines.join("\n")}\n`);
+			const search = createStepToolProfile(root).find((tool) => tool.name === "search_files")!;
+			const result = await search.execute(
+				"search-colon-shape",
+				{ pattern: "build failed", path: "many.log" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			expect(text(result)).toContain("many.log:1: src/example.ts:42: build failed");
+			expect(text(result)).not.toContain("UNRELATED_LINE_42");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

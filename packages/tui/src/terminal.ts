@@ -40,6 +40,16 @@ export function isAppleTerminalSession(): boolean {
 	return process.platform === "darwin" && process.env.TERM_PROGRAM === "Apple_Terminal";
 }
 
+/**
+ * Terminals verified to render OSC 9;4 as per-tab progress. Others may treat
+ * OSC 9 as a desktop notification, and multiplexers drop it, so stay off there.
+ */
+export function supportsTerminalProgress(env: NodeJS.ProcessEnv = process.env): boolean {
+	if (env.TMUX || env.STY) return false;
+	const termProgram = env.TERM_PROGRAM?.toLowerCase();
+	return termProgram === "otty" || termProgram === "ghostty";
+}
+
 export function normalizeNativeShiftEnterInput(
 	data: string,
 	shouldDetectNativeShiftEnter: boolean,
@@ -499,7 +509,8 @@ export class ProcessTerminal implements Terminal {
 
 	setTitle(title: string): void {
 		// OSC 0;title BEL - set terminal window title
-		process.stdout.write(`\x1b]0;${title}\x07`);
+		const safeTitle = title.replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+		process.stdout.write(`\x1b]0;${safeTitle}\x07`);
 	}
 
 	setProgress(active: boolean): void {
@@ -511,9 +522,8 @@ export class ProcessTerminal implements Terminal {
 					process.stdout.write(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 				}, TERMINAL_PROGRESS_KEEPALIVE_MS);
 			}
-		} else {
-			this.clearProgressInterval();
-			// OSC 9;4;0 - clear progress
+		} else if (this.clearProgressInterval()) {
+			// Only clear an indicator we activated: other terminals may interpret OSC 9 as a notification.
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 	}

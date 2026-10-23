@@ -1,4 +1,4 @@
-> pi can create TUI components. Ask it to build one for your use case.
+> step can create TUI components. Ask it to build one for your use case.
 
 # TUI Components
 
@@ -757,7 +757,7 @@ ctx.ui.setStatus("my-ext", undefined);
 
 ### Pattern 4b: Working Indicator Customization
 
-Customize the inline working indicator shown while pi is streaming a response.
+Customize the inline working indicator shown while step is streaming a response.
 
 ```typescript
 // Static indicator
@@ -777,7 +777,7 @@ ctx.ui.setWorkingIndicator({
 // Hide the indicator entirely
 ctx.ui.setWorkingIndicator({ frames: [] });
 
-// Restore pi's default spinner
+// Restore the default spinner
 ctx.ui.setWorkingIndicator();
 ```
 

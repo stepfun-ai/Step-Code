@@ -51,6 +51,15 @@ export interface FindToolDetails {
 	truncation?: TruncationResult;
 	resultLimitReached?: number;
 	backend?: FindBackendName;
+	/**
+	 * Resolved match list, exactly as rendered, with no notices attached.
+	 * Consumers that need paths should read this rather than parsing the
+	 * rendered text: a valid path may itself start with `[` or `WARNING:`,
+	 * which are the same prefixes used by the appended notice block.
+	 * `undefined` means the backend did not report paths (custom operations);
+	 * an empty array means the search genuinely matched nothing.
+	 */
+	files?: string[];
 }
 
 /**
@@ -440,7 +449,7 @@ function finalizeOutput(
 	if (rawPaths.length === 0) {
 		return {
 			content: [{ type: "text", text: "No files found matching pattern" }],
-			details: { backend },
+			details: { backend, files: [] },
 		};
 	}
 
@@ -455,7 +464,7 @@ function finalizeOutput(
 	const rawOutput = relativized.join("\n");
 	const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 	let resultOutput = truncation.content;
-	const details: FindToolDetails = { backend };
+	const details: FindToolDetails = { backend, files: relativized };
 	const notices: string[] = [];
 	if (resultLimitReached) {
 		notices.push(

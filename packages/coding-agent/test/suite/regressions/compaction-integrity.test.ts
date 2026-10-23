@@ -142,6 +142,16 @@ describe("compaction integrity", () => {
 		};
 	}
 
+	function expectOnlyFailureDiagnosticAdded(harness: Harness, before: ReturnType<typeof captureSession>): void {
+		const after = captureSession(harness);
+		const failure = after.entries.at(-1);
+		expect(failure).toMatchObject({ type: "custom", customType: "step-compaction-failure", parentId: before.leafId });
+		expect(after.entries.slice(0, -1)).toEqual(before.entries);
+		expect(after.messages).toEqual(before.messages);
+		expect(after.context).toEqual(before.context);
+		expect(after.leafId).toBe(failure!.id);
+	}
+
 	// CP-01: the marker exists only in the previous checkpoint, outside the retained messages.
 	it("preserves previous history through prepare, split-turn compaction, and context reload", async () => {
 		const harness = await seedSession("prefix");
@@ -187,7 +197,7 @@ describe("compaction integrity", () => {
 				await expect(harness.session.compact()).rejects.toThrow(`${scenario.label} failed: empty summary`);
 
 				expect(appendCompaction).not.toHaveBeenCalled();
-				expect(captureSession(harness)).toEqual(before);
+				expectOnlyFailureDiagnosticAdded(harness, before);
 				expect(harness.session.messages).toBe(messages);
 				expect(JSON.stringify(harness.session.messages)).toContain(HISTORY_MARKER);
 				expect(harness.faux.state.callCount).toBe(scenario.validHistoryFirst ? 2 : 1);
@@ -229,7 +239,7 @@ describe("compaction integrity", () => {
 		await expect(session._runAutoCompaction("threshold", false)).resolves.toBe(false);
 
 		expect(appendCompaction).not.toHaveBeenCalled();
-		expect(captureSession(harness)).toEqual(before);
+		expectOnlyFailureDiagnosticAdded(harness, before);
 		expect(harness.session.messages).toBe(messages);
 		expect(harness.faux.state.callCount).toBe(1);
 		expect(harness.eventsOfType("compaction_end").at(-1)).toMatchObject({
@@ -292,7 +302,7 @@ describe("compaction integrity", () => {
 
 			await expect(harness.session.compact()).rejects.toThrow(error);
 
-			expect(captureSession(harness)).toEqual(before);
+			expectOnlyFailureDiagnosticAdded(harness, before);
 			expect(harness.faux.state.callCount).toBe(1);
 			expect(harness.eventsOfType("compaction_end").at(-1)).toMatchObject({
 				result: undefined,

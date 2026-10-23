@@ -18,6 +18,7 @@
 		{ "name": "@step-harness/cli", "dir": "apps/cli", "role": "app", "reason": "唯一进程入口宿主骨架(S0 起)；进程生命周期/argv/退出码" },
 		{ "name": "@step-harness/contracts", "dir": "packages/contracts", "role": "contract", "reason": "host 到 agent 的稳定契约(in-process facade 类型 + wire 帧),依赖为空" },
 		{ "name": "@step-harness/config", "dir": "packages/config", "role": "engine", "reason": "产品中立的配置格式/加载与启动迁移(config/migrations),不含资源解析" },
+		{ "name": "@step-harness/lark-adapter", "dir": "packages/lark-adapter", "role": "adapter", "reason": "用户批准的飞书外部协议边界；仅 CLI 依赖，离线协议测试，连接独立取消与销毁，不依赖 Agent 或 UI" },
 		{ "name": "pi-extension-with-deps", "dir": "packages/coding-agent/examples/extensions/with-deps", "role": "example", "reason": "扩展示例" },
 		{ "name": "pi-extension-sandbox", "dir": "packages/coding-agent/examples/extensions/sandbox", "role": "example", "reason": "扩展示例" },
 		{ "name": "pi-extension-gondolin", "dir": "packages/coding-agent/examples/extensions/gondolin", "role": "example", "reason": "扩展示例(tsconfig 排除)" }

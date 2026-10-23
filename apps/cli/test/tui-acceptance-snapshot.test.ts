@@ -290,9 +290,9 @@ describe("D. 工具执行流快照", () => {
 		const failure = stepToolComponent();
 		failure.updateResult({ content: [{ type: "text", text: "boom" }], details: {}, isError: true }, false);
 		expect(failure.render(72).join("\n")).toContain(stripTerminalSequences(theme.fg("error", "✗")));
-		// 6-2 错误三要素：why（错误文本 error 色）+ how（↳ 恢复建议）
+		// 6-2 失败态只渲染 why（错误文本 error 色）：不再追加「↳ 恢复建议」行。
 		expect(failure.render(72).join("\n")).toContain(stripTerminalSequences(theme.fg("error", "boom")));
-		expect(failure.render(72).join("\n")).toContain("↳ 可回复「重试」");
+		expect(failure.render(72).join("\n")).not.toContain("↳");
 		expect(plain(failure.render(72))).toMatchSnapshot("tool-error-72");
 	});
 });

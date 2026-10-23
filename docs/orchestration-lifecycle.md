@@ -82,6 +82,13 @@ calls can overshoot the limit by one concurrency wave; the gate stops new calls
 and retries, not tokens already being generated. Workflow journals and progress
 files remain the source for replay and inspection.
 
+`phase(title)` takes one string and only labels a milestone; work runs through
+`agent()`, `parallel()`, and `pipeline()`. A script that passes `phase()` a second
+argument, such as a callback, is rejected before the run starts, with its line
+number, and the VM rejects the same misuse when the call cannot be seen
+statically. A run that completes without calling any agent returns a warning at
+the top of its result instead of silently reporting success.
+
 The foreground workflow tool streams progress snapshots while it runs. The tool
 row shows running and queued counts, completed/total agents, failures, cache
 hits, cancellations, token spend, and the current phase. Each accepted agent
@@ -148,6 +155,76 @@ deltas, so a live generation continuously defers it. Tripping the watchdog settl
 the turn as failed and ends the child even for a keep-alive lane. The default is
 30 minutes, deliberately generous because a long `run_command` is silent while it
 runs; `STEP_SUBAGENT_TURN_IDLE_TIMEOUT_MS` overrides it and `0` disables it.
+
+## Background subagent lanes
+
+`subagent` blocks by default: the call returns once every child has finished.
+With `run_in_background: true` it returns a `lane_id` (`lane_` and eight hex
+digits) at once instead, and the lane runs one single, parallel, or chain call.
+Every check that can reject the call (agent discovery, mode selection, the batch
+limit, unknown agent names, and project-agent confirmation) runs before the lane
+exists. A rejected call returns an ordinary tool error and sends no
+notification.
+
+A lane sends one terminal `<agent-notification lane="…" tasks="N">` message when
+it finishes, fails, or is stopped. It wakes an idle parent. The body opens with a
+summary such as `Lane lane_1a2b3c4d finished: 2 completed, 1 failed.`. That
+summary is followed by duration, usage, child session ids and JSONL paths, any
+dialogs the child raised that were auto-cancelled, failure reasons, and the
+output. The text passes through the shared [tool-output retention
+boundary](../packages/coding-agent/docs/tool-output-retention.md): oversized
+output is saved under the session's `tool-output` directory and replaced by a
+preview with its path. `subscribe: "progress"` adds throttled progress messages
+that do not wake the parent. A child's needs-input request does wake it.
+
+`agent_send` takes `{lane_id, action, prompt?, interrupt?}`:
+
+- `reply` continues a single-agent lane's transcript. While the turn runs it is a
+  steer (`interrupt: true`) or a queued follow-up; after the lane has ended it
+  starts another turn of the same agent on the same child session. Parallel and
+  chain lanes refuse replies; start a new call instead.
+- `stop` aborts the run and ends the lane's children. The terminal notification
+  follows once the run has wound down.
+- `status` reads the lane's in-memory state: status, elapsed time, usage, child
+  sessions, and the last 32,000 characters of its last output. Without `lane_id`
+  it lists the session's lanes. It never waits.
+
+A session keeps its running lanes and the 16 most recently finished ones. Once an
+older finished lane's notification has been sent, the lane is forgotten and its
+idle children are stopped; `agent_send` then reports the id as unknown, and the
+child transcripts named in the notification stay on disk.
+
+Each background turn has a wall-clock limit, unlike the idle watchdog above, and
+output does not reset it. The limit comes from `timeout_seconds` (60–7,200), then
+`[subagent] background_timeout_seconds`, then 3,600 seconds. Reaching it fails
+the turn with a "timed out" error and ends the child; there is no separate
+timed-out status. Lane children stay alive between turns so replies reuse them.
+After 10 idle minutes they are stopped, and a later reply respawns the child with
+the same session id, which resumes its transcript from disk. A session holds at
+most eight running lanes. A ninth call is refused rather than queued; the check
+and the reservation happen in one synchronous step, so a concurrent batch of
+calls cannot overshoot.
+
+Lanes belong to the session runtime that started them. `session_shutdown`
+(quit, signals, `/new`, `/resume`, `/fork`, and reload) aborts every lane of that
+runtime, stops its children, and waits up to three seconds. Children still
+running after that are killed, and their temporary directories are removed.
+The lane list and widget are cleared, and results that arrive later are dropped.
+Lanes are not persisted or resumed. Lane children are also registered for the
+host's process-exit sweep. Shutting down one runtime never touches another
+runtime's lanes. A host that keeps several sessions open, such as a web client,
+therefore keeps one runtime per session, and switching which session is viewed
+does not stop any lane. Interactive quit prints one `Stopping N background
+agents...` line on stderr without asking for confirmation.
+
+Background execution follows the extension mode (`ctx.mode`). It is available in
+the TUI, RPC, and SDK stdio hosts, and in SDK embeddings that bind extensions
+with a `tui` or `rpc` mode. Print and JSON runs, and the default `print` mode of
+an unbound session, end with their prompt, so a background request there runs in
+the foreground. Its result starts with `Background execution is not available in
+this run mode; ran in the foreground.`. `STEP_DISABLE_SUBAGENT_BACKGROUND=1` or
+`[subagent] background = false` does the same everywhere, with a matching
+notice.
 
 ## Cron scheduling and delivery
 

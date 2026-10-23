@@ -86,6 +86,7 @@ import { SettingsManager, type SettingsManagerCreateOptions } from "./core/setti
 import type { SystemPromptProduct } from "./core/system-prompt.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./features/index.ts";
+import { childSessionHeader } from "./features/step-subagent.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { runPrintMode, runRpcMode } from "./modes/index.ts";
 import type { InteractiveModeOptions, StartupTuiPathOptions, StartupUiHooks } from "./modes/interactive-contract.ts";
@@ -593,9 +594,10 @@ export async function createSessionManager(
 		);
 	}
 
+	const newSession = { id: parsed.sessionId, ...childSessionHeader() };
 	return agentDir
-		? createStepSessionManager(cwd, { agentDir, sessionDir, newSession: { id: parsed.sessionId } })
-		: SessionManager.create(cwd, sessionDir, { id: parsed.sessionId });
+		? createStepSessionManager(cwd, { agentDir, sessionDir, newSession })
+		: SessionManager.create(cwd, sessionDir, newSession);
 }
 
 function buildSessionOptions(

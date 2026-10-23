@@ -29,7 +29,7 @@ adapter's license and credential handling before loading it.
 
 ## Quick Reference
 
-Extensions can register either a complete pi-ai `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. Step composes `models.json` overrides above registered native providers.
+Extensions can register either a complete `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. Step composes `models.json` overrides above registered native providers.
 
 ```typescript
 import { createProvider, openAICompletionsApi } from "@step-harness/providers";

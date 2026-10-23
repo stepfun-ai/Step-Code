@@ -199,11 +199,14 @@ A callback that catches an agent-node failure and rethrows a **new** error is co
 | `terminal.showImages` | boolean | `true` | Show images in terminal (if supported) |
 | `terminal.imageWidthCells` | number | `60` | Preferred inline image width in terminal cells |
 | `terminal.clearOnShrink` | boolean | `false` | Clear empty rows when content shrinks (can cause flicker) |
+| `terminal.showTerminalProgress` | boolean | auto | Show an OSC 9;4 busy indicator on the terminal tab while the agent works or compacts. Unset enables it in Otty and Ghostty only, outside tmux/screen; set `true` to force it in other terminals that support OSC 9;4, `false` to disable |
 | `terminal.hyperlinks` | boolean or `"auto"` | `"auto"` | Override OSC 8 hyperlink support (advanced, JSON-only) |
 | `terminal.images` | string or boolean | `"auto"` | Override image protocol support with `"kitty"`, `"iterm2"`, `false`, or `"auto"` (advanced, JSON-only) |
 | `terminal.trueColor` | boolean or `"auto"` | `"auto"` | Override truecolor support (advanced, JSON-only) |
 | `images.autoResize` | boolean | `true` | Resize images to 2000x2000 max. Applies to `@file` attachments, `read`, and images returned by tools |
 | `images.blockImages` | boolean | `false` | Block all images from being sent to LLM |
+
+Changing terminal progress in `/settings` applies immediately. Disabling it clears any active indicator and stops its keepalive; agent and compaction completion always clear progress even if the setting changed during the operation.
 
 ### Shell
 
@@ -313,7 +316,7 @@ String form loads all resources from a package:
 
 ```json
 {
-  "packages": ["pi-skills", "@org/my-extension"]
+  "packages": ["step-skills", "@org/my-extension"]
 }
 ```
 
@@ -323,7 +326,7 @@ Object form filters which resources to load:
 {
   "packages": [
     {
-      "source": "pi-skills",
+      "source": "step-skills",
       "skills": ["brave-search", "transcribe"],
       "extensions": []
     }
@@ -357,7 +360,7 @@ See [packages.md](packages.md) for package management details.
   "warnings": {
     "anthropicExtraUsage": true
   },
-  "packages": ["pi-skills"]
+  "packages": ["step-skills"]
 }
 ```
 

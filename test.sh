@@ -14,6 +14,7 @@ build_outputs=(
 	"packages/providers/dist/index.js"
 	"packages/agent-core/dist/index.js"
 	"packages/config/dist/index.js"
+	"packages/lark-adapter/dist/index.js"
 	"packages/coding-agent/dist/index.js"
 	"apps/cli/dist/main.js"
 )

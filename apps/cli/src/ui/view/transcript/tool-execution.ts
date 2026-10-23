@@ -26,7 +26,6 @@ import {
 	wrapTextWithAnsi,
 } from "@step-harness/pi-tui";
 import { RenderLineCache } from "./render-line-cache.ts";
-import { stepErrorHint } from "./step-error-hints.ts";
 import { prependAfterTerminalSequences } from "./step-message.ts";
 import type { StepToolSpinnerState } from "./step-spinner.ts";
 
@@ -222,13 +221,21 @@ function readNumberDetail(details: unknown, ...keys: string[]): number | undefin
 	return readNumberArg(details, ...keys);
 }
 
+/** Keep command details out of the compact title; expanded rows retain the original command. */
+function formatStepCommandPreview(command: string, width: number): string {
+	const lines = command.split(/\r\n|[\r\n]/u);
+	const firstLine = replaceTabs(lines[0] ?? "");
+	const preview = lines.length > 1 ? `${firstLine} …` : firstLine;
+	return truncateToWidth(preview, Math.max(0, width), "…", false);
+}
+
 /**
  * Build the old Step-shaped call title while leaving Pi's renderer in charge
  * of the actual call/result body. Pi's shell renderers intentionally use their
  * own labels (`$ command`, `edit path`, ...); the Step model-facing contract
  * uses the names below, so changing the title here is presentation-only.
  */
-function formatStepCallTitle(toolName: string, args: unknown, cwd: string): string | undefined {
+function formatStepCallTitle(toolName: string, args: unknown, cwd: string, width: number): string | undefined {
 	if (!STEP_TOOL_NAMES.has(toolName)) return undefined;
 
 	const title = theme.fg("toolTitle", theme.bold(toolName));
@@ -241,7 +248,8 @@ function formatStepCallTitle(toolName: string, args: unknown, cwd: string): stri
 
 	switch (toolName) {
 		case "run_command":
-			argument = command;
+			argument =
+				command === undefined ? undefined : formatStepCommandPreview(command, width - visibleWidth(title) - 2);
 			break;
 		case "find_files":
 			argument = pattern;
@@ -724,15 +732,27 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		if (callLines.length === 0) callLines = [theme.fg("toolTitle", theme.bold(this.toolName))];
-		// Some native call renderers (notably `write`) include a preview below
-		// their header. Treat those rows as payload so the Step connector remains
-		// stable and the preview participates in the same collapse budget as a
-		// result renderer's output.
-		if (callLines.length > 1) {
+		if (this.toolName === "run_command") {
+			// Render the full command at body width only on expansion, separately
+			// from its compact header so native command rows never leak into output.
+			const commandRows =
+				this.expanded && this.stepCallComponent ? trimRenderedRows(this.stepCallComponent.render(bodyWidth)) : [];
+			resultLines = [...commandRows, ...resultLines];
+			callLines = [callLines[0]!];
+		} else if (callLines.length > 1) {
+			// Some native call renderers (notably `write`) include a preview below
+			// their header. Treat those rows as payload so the Step connector remains
+			// stable and the preview participates in the same collapse budget as a
+			// result renderer's output.
 			resultLines = [...callLines.slice(1), ...resultLines];
 			callLines = [callLines[0]!];
 		}
-		const stepTitle = formatStepCallTitle(this.toolName, this.args, this.cwd);
+		const stepTitle = formatStepCallTitle(
+			this.toolName,
+			this.args,
+			this.cwd,
+			safeWidth - 2 - visibleWidth(this.stepElapsedSuffix()),
+		);
 		if (stepTitle !== undefined) {
 			// Keep the native renderer's body/state, but use the exact Step tool
 			// contract in the visible invocation row.
@@ -768,12 +788,6 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		const body = this.buildStepBodyLines(resultLines, bodyWidth);
-		// 错误呈现三要素收尾：what（✗ 标题行）/ why（错误文本）之后补 how——
-		// 一行可执行的恢复建议，让失败不只是被报告，还能被处理。
-		if (!this.isPartial && this.result?.isError) {
-			const hint = stepErrorHint(this.getTextOutput());
-			body.push(clampStepLine(`    ${theme.fg("muted", `↳ ${hint}`)}`, safeWidth));
-		}
 		const lines = [...header, ...body];
 		this.appendImages(lines, safeWidth);
 		return lines.length > 0 ? [...lines, ""] : [];
@@ -794,7 +808,12 @@ export class ToolExecutionComponent extends Container {
 		if (this.toolName === "edit" || this.toolName === "edit_file") {
 			lines = lines.map((line) => stripToolShellBackground(removeLeadingVisibleSpaces(line, 1)));
 		}
-		const stepTitle = formatStepCallTitle(this.toolName, this.args, this.cwd);
+		const stepTitle = formatStepCallTitle(
+			this.toolName,
+			this.args,
+			this.cwd,
+			safeWidth - 2 - visibleWidth(this.stepElapsedSuffix()),
+		);
 		if (stepTitle !== undefined && lines.length > 0) {
 			lines[0] = stepTitle;
 		}

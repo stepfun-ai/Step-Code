@@ -1,6 +1,6 @@
 # Session Search
 
-Pi search is a small query interface over committed session entries. The shared contract returns only stable hit identity; implementations may extend hits with backend-specific display data.
+Session search is a small query interface over committed session entries. The shared contract returns only stable hit identity; implementations may extend hits with backend-specific display data.
 
 ## Core API
 
