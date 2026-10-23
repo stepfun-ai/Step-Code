@@ -69,6 +69,36 @@ stepcode-desktop-package:
         collect_artifacts    # dmg/zip into build/ci, renamed with the arch
         on_exit              # CI_ELECTRON_*_PATH into build_internal.env
       '
+    # Mount the installer that was just collected and start the packaged app
+    # hidden. Without this, a green job only says electron-builder finished: a
+    # bundle that cannot start, or one whose server tree was staged wrong, is
+    # still green here and broken on a user's machine. The smoke prints
+    # STEPCODE_DESKTOP_SMOKE {json} (bridge, auth, /healthz) and exits 0/1.
+    #
+    # Only the host architecture is started: an x64 bundle needs Rosetta, which
+    # the runner image does not promise. qa still ships both dmgs; the second one
+    # is covered by the same packaging code path.
+    - |
+      bash -c '
+        set -eo pipefail
+        arch="$(uname -m)"
+        if [[ "${arch}" == "x86_64" ]]; then arch=x64; fi
+        image="$(ls "${CI_BUILD_ARTIFACTS_DIR}"/*-"${arch}".dmg 2>/dev/null | head -1 || true)"
+        if [[ -z "${image}" ]]; then
+          image="$(ls "${CI_BUILD_ARTIFACTS_DIR}"/*.dmg | head -1)"
+        fi
+        echo "smoke: ${image}"
+        mountpoint="${CI_PROJECT_DIR}/.smoke-mount"
+        mkdir -p "${mountpoint}"
+        cleanup() { hdiutil detach "${mountpoint}" >/dev/null 2>&1 || true; }
+        trap cleanup EXIT
+        hdiutil attach "${image}" -nobrowse -readonly -mountpoint "${mountpoint}" >/dev/null
+        app="$(ls -d "${mountpoint}"/*.app | head -1)"
+        binary="$(ls "${app}/Contents/MacOS/" | head -1)"
+        STEPCODE_DESKTOP_SMOKE=1 \
+        STEPCODE_DESKTOP_USER_DATA_DIR="${CI_PROJECT_DIR}/.smoke-userdata" \
+          "${app}/Contents/MacOS/${binary}"
+      '
   after_script:
     - !reference [.scripts, import-ci-env]
     - bash "${BUILD_SCRIPT_DIR}/package/archive_job_artifacts.sh"
