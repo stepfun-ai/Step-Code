@@ -22,8 +22,11 @@
 #     package.json version, kept as job artifacts. The unsigned fast/qa job
 #     steps aside in that case (.gitlab-ci.desktop-macos.yml).
 #
-# Credentials, protected project/group variables (falcon's template also binds
-# the jobs to the macos-signing / macos-notarization environments):
+# Credentials are protected GitLab variables of this project, injected into the
+# one-off Tart VM of each job; no runner keeps a certificate or key (see
+# catalyst/stepfun-desktop docs/technical/desktop-cicd/macos-signing-capability-plan.md).
+# falcon's template also binds the jobs to the macos-signing /
+# macos-notarization environments:
 #   CSC_LINK              file variable, Developer ID Application .p12
 #   CSC_KEY_PASSWORD      password for that .p12
 #   (or CSC_NAME, when the runner's keychain already holds the identity;
@@ -113,6 +116,15 @@ variables:
     - .stepcode-macos-signing-rules
   stage: macos-notary-submit
   interruptible: false
+  # The upload to Apple goes through the runners tagged macos-notary-upload,
+  # as in catalyst/stepfun-desktop. They do not hold any credential: the
+  # certificate and the App Store Connect key come from the CI variables above.
+  tags:
+    - mobile
+    - online
+    - tart
+    - macos
+    - macos-notary-upload
   # Another machine, fresh clone: the submission must not rebuild anything.
   variables:
     GIT_STRATEGY: 'none'
