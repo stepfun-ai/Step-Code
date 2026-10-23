@@ -12,7 +12,6 @@ describe("extension active tools next-turn refresh", () => {
 					name: "switch_tools",
 					label: "Switch Tools",
 					description: "Switch the active extension tool set",
-					promptSnippet: "Switch to the next extension tool",
 					parameters: Type.Object({}),
 					execute: async () => {
 						pi.setActiveTools(["after_switch"]);
@@ -27,7 +26,6 @@ describe("extension active tools next-turn refresh", () => {
 					name: "after_switch",
 					label: "After Switch",
 					description: "Tool that should be available after switching",
-					promptSnippet: "Run after the active tool set changes",
 					parameters: Type.Object({}),
 					execute: async () => ({
 						content: [{ type: "text", text: "after" }],
@@ -133,7 +131,6 @@ describe("extension active tools next-turn refresh", () => {
 					name: "switch_tools",
 					label: "Switch Tools",
 					description: "Switch the active extension tool set",
-					promptSnippet: "Switch to the next extension tool",
 					parameters: Type.Object({}),
 					execute: async () => {
 						pi.setActiveTools(["after_switch"]);
@@ -148,7 +145,6 @@ describe("extension active tools next-turn refresh", () => {
 					name: "after_switch",
 					label: "After Switch",
 					description: "Tool that should be available after switching",
-					promptSnippet: "Run after the active tool set changes",
 					parameters: Type.Object({}),
 					execute: async () => ({
 						content: [{ type: "text", text: "after" }],

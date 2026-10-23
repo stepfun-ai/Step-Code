@@ -18,14 +18,13 @@ import { readToolSystemPromptContribution } from "../core/tools/read.ts";
 import { writeToolSystemPromptContribution } from "../core/tools/write.ts";
 
 export interface CodingAgentHarnessTool extends HarnessTool {
-	promptSnippet?: string;
 	promptGuidelines?: readonly string[];
 }
 
 function createCodingAgentHarnessTool<TParameters extends TSchema, TDetails>(
 	tool: AgentHarnessTool<ExecutionToolContext, TParameters, TDetails>,
 	context: ExecutionToolContext,
-	prompt: Required<Pick<CodingAgentHarnessTool, "promptSnippet" | "promptGuidelines">>,
+	prompt: Required<Pick<CodingAgentHarnessTool, "promptGuidelines">>,
 ): CodingAgentHarnessTool {
 	return {
 		...tool,
@@ -39,7 +38,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	env: ExecutionEnv;
 	bashCommandPrefix?: string;
 	tools?: CodingAgentHarnessTool[];
-	systemPromptOptions?: Omit<BuildSystemPromptOptions, "cwd" | "promptGuidelines" | "selectedTools" | "toolSnippets">;
+	systemPromptOptions?: Omit<BuildSystemPromptOptions, "cwd" | "promptGuidelines" | "selectedTools">;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -54,21 +53,11 @@ export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHar
 		const tool = options.tools.find((candidate) => candidate.name === name);
 		return tool ? [tool] : [];
 	});
-	const toolSnippets = Object.fromEntries(
-		activeTools.flatMap((tool) => {
-			const promptSnippet = tool.promptSnippet
-				?.replace(/[\r\n]+/g, " ")
-				.replace(/\s+/g, " ")
-				.trim();
-			return promptSnippet ? [[tool.name, promptSnippet]] : [];
-		}),
-	);
 	const promptGuidelines = activeTools.flatMap((tool) => tool.promptGuidelines ?? []);
 	return buildSystemPrompt({
 		...options.systemPromptOptions,
 		cwd: options.cwd,
 		selectedTools: activeTools.map((tool) => tool.name),
-		toolSnippets,
 		promptGuidelines,
 	});
 }
@@ -93,7 +82,6 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		const toolContext = { env } satisfies ExecutionToolContext;
 		tools = [
 			createCodingAgentHarnessTool(createReadTool<ExecutionToolContext>(), toolContext, {
-				promptSnippet: readToolSystemPromptContribution.snippet,
 				promptGuidelines: readToolSystemPromptContribution.guidelines,
 			}),
 			createCodingAgentHarnessTool(
@@ -102,16 +90,13 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				}),
 				toolContext,
 				{
-					promptSnippet: bashToolSystemPromptContribution.snippet,
 					promptGuidelines: bashToolSystemPromptContribution.guidelines,
 				},
 			),
 			createCodingAgentHarnessTool(createEditTool<ExecutionToolContext>(), toolContext, {
-				promptSnippet: editToolSystemPromptContribution.snippet,
 				promptGuidelines: editToolSystemPromptContribution.guidelines,
 			}),
 			createCodingAgentHarnessTool(createWriteTool<ExecutionToolContext>(), toolContext, {
-				promptSnippet: writeToolSystemPromptContribution.snippet,
 				promptGuidelines: writeToolSystemPromptContribution.guidelines,
 			}),
 		];

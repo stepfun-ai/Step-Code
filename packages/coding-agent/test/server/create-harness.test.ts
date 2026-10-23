@@ -37,23 +37,22 @@ async function resolveSystemPrompt(systemPrompt: AgentHarnessOptions["systemProm
 	return systemPrompt();
 }
 
-function createPromptTool(name: string, promptSnippet?: string, promptGuidelines?: string[]): CodingAgentHarnessTool {
+function createPromptTool(name: string, promptGuidelines?: string[]): CodingAgentHarnessTool {
 	return {
 		name,
 		label: name,
 		description: `${name} description`,
 		parameters: Type.Object({}),
 		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
-		promptSnippet,
 		promptGuidelines,
 	};
 }
 
 const defaultPromptTools = [
-	createPromptTool("read", "Read file contents", ["Use read to examine files instead of cat or sed."]),
-	createPromptTool("bash", "Execute bash commands (ls, grep, find, etc.)", ["Use bash for shell commands."]),
-	createPromptTool("edit", "Edit files", ["Edit carefully."]),
-	createPromptTool("write", "Create or overwrite files", ["Use write only for new files or complete rewrites."]),
+	createPromptTool("read", ["Use read to examine files instead of cat or sed."]),
+	createPromptTool("bash", ["Use bash for shell commands."]),
+	createPromptTool("edit", ["Edit carefully."]),
+	createPromptTool("write", ["Use write only for new files or complete rewrites."]),
 ];
 
 describe("coding-agent Harness construction", () => {
@@ -85,14 +84,15 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
-	test("preserves coding-agent prompt snippets and guideline order", () => {
+	test("preserves guideline order without mirroring tool descriptions", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",
 			tools: defaultPromptTools,
 			activeToolNames: ["read", "bash", "edit", "write"],
 		});
-		expect(prompt).toContain("- read: Read file contents");
-		expect(prompt).toContain("- bash: Execute bash commands (ls, grep, find, etc.)");
+		expect(prompt).not.toContain("Available tools");
+		expect(prompt).not.toContain("- read:");
+		expect(prompt).not.toContain("- bash:");
 		expect(prompt).toContain("Use read to examine files instead of cat or sed.");
 		expect(prompt).toContain("Use bash for shell commands.");
 		expect(prompt.indexOf("Use read to examine files")).toBeLessThan(prompt.indexOf("Use bash for shell commands"));
@@ -166,23 +166,23 @@ describe("coding-agent Harness construction", () => {
 			createSpy.mockRestore();
 			try {
 				const initialPrompt = await resolveSystemPrompt(configuredSystemPrompt);
-				expect(initialPrompt).toContain("- read: Read file contents");
-				expect(initialPrompt).toContain("- bash: Execute bash commands (ls, grep, find, etc.)");
-				expect(initialPrompt).toContain("- edit: Make precise file edits with exact text replacement");
-				expect(initialPrompt).toContain("- write: Create or overwrite files");
+				expect(initialPrompt).not.toContain("Available tools");
+				expect(initialPrompt).not.toContain("- read:");
+				expect(initialPrompt).not.toContain("- bash:");
+				expect(initialPrompt).toContain("Use read to examine files instead of cat or sed.");
 
 				await created.harness.setActiveTools(["write"]);
 				const writePrompt = await resolveSystemPrompt(configuredSystemPrompt);
-				expect(writePrompt).toContain("- write: Create or overwrite files");
 				expect(writePrompt).not.toContain("- read:");
 				expect(writePrompt).not.toContain("- bash:");
+				expect(writePrompt).toContain("Use write only for new files or complete rewrites.");
 
 				const read = (await created.harness.getTools()).find((tool) => tool.name === "read");
 				if (!read) throw new Error("Expected the default read tool");
 				await created.harness.setTools([read]);
 				const readPrompt = await resolveSystemPrompt(configuredSystemPrompt);
-				expect(readPrompt).toContain("- read: Read file contents");
 				expect(readPrompt).not.toContain("- write:");
+				expect(readPrompt).toContain("Use read to examine files instead of cat or sed.");
 
 				const inspectTool: CodingAgentHarnessTool = {
 					name: "inspect",
@@ -190,12 +190,11 @@ describe("coding-agent Harness construction", () => {
 					description: "Inspect the configured service",
 					parameters: Type.Object({}),
 					execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
-					promptSnippet: "  Inspect\nthe   configured service  ",
 					promptGuidelines: ["Use inspect for service diagnostics."],
 				};
 				await created.harness.setTools([inspectTool]);
 				const inspectPrompt = await resolveSystemPrompt(configuredSystemPrompt);
-				expect(inspectPrompt).toContain("- inspect: Inspect the configured service");
+				expect(inspectPrompt).not.toContain("- inspect:");
 				expect(inspectPrompt).toContain("Use inspect for service diagnostics.");
 			} finally {
 				await created.harness.close();
@@ -206,39 +205,29 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
-	test("omits active custom tools without prompt metadata from the textual tools section", () => {
+	test("omits active custom tools without prompt metadata from the prompt", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",
 			tools: [createPromptTool("hidden")],
 			activeToolNames: ["hidden"],
 		});
 
-		expect(prompt).toContain("Available tools:\n(none)");
+		expect(prompt).not.toContain("Available tools");
 		expect(prompt).not.toContain("- hidden:");
 		expect(prompt).not.toContain("hidden description");
 	});
 
-	test.each([
-		["bash", "Execute bash commands (ls, grep, find, etc.)", "Use bash for shell commands."],
-		["read", "Read file contents", "Use read to examine files instead of cat or sed."],
-		[
-			"edit",
-			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
-			"Use edit for precise changes (edits[].oldText must match exactly)",
-		],
-		["write", "Create or overwrite files", "Use write only for new files or complete rewrites."],
-	] as const)(
+	test.each(["bash", "read", "edit", "write"] as const)(
 		"does not infer prompt metadata for a caller-supplied %s replacement",
-		(name, builtInSnippet, builtInGuideline) => {
+		(name) => {
 			const prompt = buildCodingAgentHarnessSystemPrompt({
 				cwd: "/workspace",
 				tools: [createPromptTool(name)],
 				activeToolNames: [name],
 			});
 
-			expect(prompt).toContain("Available tools:\n(none)");
-			expect(prompt).not.toContain(builtInSnippet);
-			expect(prompt).not.toContain(builtInGuideline);
+			expect(prompt).not.toContain(`- ${name}:`);
+			expect(prompt).not.toContain(`${name} description`);
 		},
 	);
 
@@ -267,8 +256,8 @@ describe("coding-agent Harness construction", () => {
 			},
 		});
 
-		expect(prompt).toContain("- write: Create or overwrite files");
-		expect(prompt).toContain("- read: Read file contents");
+		expect(prompt).not.toContain("- write:");
+		expect(prompt).not.toContain("- read:");
 		expect(prompt).not.toContain("- bash:");
 		expect(prompt).not.toContain("Use bash for shell commands");
 		expect(prompt).toContain('<project_instructions path="/workspace/AGENTS.md">');

@@ -34,7 +34,6 @@ export default function dynamicToolsExtension(pi: ExtensionAPI) {
 			name,
 			label,
 			description: `Echo a message with prefix: ${prefix}`,
-			promptSnippet: `Echo back user-provided text with ${prefix.trim()} prefix`,
 			promptGuidelines: ["Use echo_session when the user asks for exact echo output."],
 			parameters: ECHO_PARAMS,
 			async execute(_toolCallId, params) {

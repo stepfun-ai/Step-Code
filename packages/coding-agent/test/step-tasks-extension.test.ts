@@ -787,7 +787,6 @@ test("task tool descriptions identify todos rather than work execution", () => {
 	createStepTasksExtension()(api);
 	for (const tool of tools.values()) {
 		expect(tool.description).toMatch(/\btodo\b/i);
-		expect(tool.promptSnippet).toMatch(/\btodo\b/i);
 	}
 	expect(tools.get("task_create")!.description).toContain("with or without plan mode");
 	expect(tools.get("task_create")!.description).toContain("does not execute or delegate");

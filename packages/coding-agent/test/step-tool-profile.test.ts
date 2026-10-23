@@ -34,52 +34,43 @@ describe("Step tool profile", () => {
 		expect(Object.keys(editSchema.properties)).toEqual(["path", "search", "replace", "replace_all", "then_run"]);
 	});
 
-	it("keeps the legacy model-facing descriptions byte-for-byte compatible", () => {
+	it("keeps the model-facing tool descriptions byte-for-byte compatible", () => {
 		const tools = createStepToolProfile(process.cwd());
-		const expected: Record<string, { description: string; promptSnippet: string }> = {
+		const expected: Record<string, { description: string }> = {
 			list_directory: {
 				description: "List one directory with directories first. Prefer this before recursive shell listing.",
-				promptSnippet: "List one directory with directories first",
 			},
 			find_files: {
 				description:
 					"Find files by glob pattern, sorted by modification time (newest first). Prefer this over shell find or recursive ls.",
-				promptSnippet: "Find files by glob pattern",
 			},
 			search_files: {
 				description:
 					"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Prefer this over shell grep.",
-				promptSnippet: "Search file contents with a regular expression",
 			},
 			search_web: {
 				description:
 					"Search the web when the answer depends on current or external information: recent news, fresh documentation, live data, or anything outside built-in knowledge.\n\nThe tool returns compact structured results with markdown links.\n\nIf this tool informs the answer, end the response with a Sources: section containing the relevant result URLs as markdown links.",
-				promptSnippet: "Search the web for current or external information",
 			},
 			read_file: {
 				description:
 					"Read a text file with optional line range; image files (PNG/JPEG/GIF/WebP) are returned as attached images. Prefer this over shell cat for token efficiency.",
-				promptSnippet: "Read a file with an optional line range",
 			},
 			write_file: {
 				description:
 					"Write full content to a file, creating parent directories if missing. Overwrites existing content — for existing files prefer edit_file.",
-				promptSnippet: "Write full content to a file",
 			},
 			edit_file: {
 				description:
 					"Edit one file by literal search/replace. 'search' must match the current file content exactly and appear exactly once unless replace_all is true.",
-				promptSnippet: "Make a precise literal search/replace edit",
 			},
 			run_command: {
 				description:
 					"Run a non-interactive shell command from the initial working directory by default. Use for tests, builds, formatters, git, and project scripts; prefer dedicated file/search tools for reading and searching.",
-				promptSnippet: "Run a non-interactive shell command",
 			},
 			find_tools: {
 				description:
 					"Search registered tools by natural-language intent, tool name, description, and parameter names.",
-				promptSnippet: "Find a tool by describing the operation you need",
 			},
 		};
 
@@ -148,8 +139,8 @@ describe("Step tool profile", () => {
 				})
 			).session;
 			expect(session.getActiveToolNames()).toEqual([...stepToolNames]);
-			expect(session.systemPrompt).toContain("- read_file:");
-			expect(session.systemPrompt).toContain("- run_command:");
+			expect(session.systemPrompt).not.toContain("Available tools");
+			expect(session.systemPrompt).not.toContain("- read_file:");
 			expect(session.systemPrompt).not.toContain("- read:");
 			session.dispose();
 		} finally {

@@ -1171,7 +1171,6 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			label: "Create goal",
 			description:
 				"Create one session-scoped goal only when explicitly requested by the user or system/developer instructions. Do not infer a goal from an ordinary task; an unfinished goal must be completed or cleared first.",
-			promptSnippet: "Create an explicit session goal",
 			parameters: CreateGoalParams,
 			execute: async (_id, params: CreateGoalInput, _signal, _onUpdate, ctx) => {
 				setContext(ctx);
@@ -1185,7 +1184,6 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			name: "get_goal",
 			label: "Get goal",
 			description: "Get the current session goal, status, token budget, and elapsed usage.",
-			promptSnippet: "Inspect the current session goal",
 			parameters: GetGoalParams,
 			execute: async (_id, _params, _signal, _onUpdate, ctx) => {
 				setContext(ctx);
@@ -1197,7 +1195,6 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			label: "Update goal",
 			description:
 				"Update the existing goal. Use complete only when the objective is achieved and verified. Use blocked only after the same blocking condition recurs for at least three consecutive goal turns, counting the original/user-triggered turn, and the agent is truly at an impasse. If a previously blocked goal is resumed, treat it as a fresh blocked audit and require the same blocker for three consecutive resumed goal turns. Once that threshold is satisfied, call update_goal instead of leaving the goal active. Do not use blocked merely because work is hard, uncertain, incomplete, or would benefit from clarification, and do not mark complete merely because the budget is nearly exhausted or the turn is ending. Pause, resume, budget, and usage status changes are controlled by the user or system.",
-			promptSnippet: "Report verified goal completion or a genuine blocker",
 			parameters: UpdateGoalParams,
 			execute: async (_id, params: UpdateGoalInput, _signal, _onUpdate, ctx) => {
 				setContext(ctx);

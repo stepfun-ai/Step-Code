@@ -1,5 +1,11 @@
 /**
  * System prompt construction and project context loading
+ *
+ * Tool descriptions deliberately do not appear in this prompt. The tool schema
+ * sent with every request is the single source of truth for what a tool does
+ * and how to call it, and product layers append their own usage guidance (see
+ * step/system-prompt.ts "Tool selection"). Mirroring one-line snippets here
+ * duplicated that text and drifted from the schema it summarized.
  */
 
 import { APP_NAME, getDocsPath, getExamplesPath, getReadmePath } from "../config.ts";
@@ -12,8 +18,6 @@ export interface BuildSystemPromptOptions {
 	customPrompt?: string;
 	/** Tools to include in prompt. Default: [read, bash, edit, write] */
 	selectedTools?: string[];
-	/** Optional one-line tool snippets keyed by tool name. */
-	toolSnippets?: Record<string, string>;
 	/** Additional guideline bullets appended to the default system prompt guidelines. */
 	promptGuidelines?: string[];
 	/** Text to append to system prompt. */
@@ -58,7 +62,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		product,
 		customPrompt,
 		selectedTools,
-		toolSnippets,
 		promptGuidelines,
 		appendSystemPrompt,
 		cwd,
@@ -130,14 +133,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const docsPath = getDocsPath();
 	const examplesPath = getExamplesPath();
 
-	// Build tools list based on selected tools.
-	// A tool appears in Available tools only when the caller provides a one-line snippet.
-	const tools = activeToolNames;
-	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
-	const toolsList =
-		visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n") : "(none)";
-
 	// Build guidelines based on which tools are actually available
+	const tools = activeToolNames;
 	const guidelinesList: string[] = [];
 	const guidelinesSet = new Set<string>();
 	const addGuideline = (guideline: string): void => {
@@ -180,11 +177,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
 	let prompt = `${introduction}
-
-Available tools:
-${toolsList}
-
-In addition to the tools above, you may have access to other custom tools depending on the project.
 
 Guidelines:
 ${guidelines}

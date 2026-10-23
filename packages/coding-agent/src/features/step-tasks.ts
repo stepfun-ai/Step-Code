@@ -310,7 +310,6 @@ export function createStepTasksExtension(): ExtensionFactory {
 			label: "Create task",
 			description:
 				"Create a todo item in the active execution plan, with or without plan mode. For a different user request, set newPlan to its title on the first task to archive the old checklist; omit it for additional steps or cross-turn continuation. Returns task and plan IDs and starts as pending. This records work; it does not execute or delegate it.",
-			promptSnippet: "Record a todo item without executing work",
 			parameters: TASK_CREATE_PARAMS,
 			executionMode: "sequential",
 			renderShell: "self",
@@ -342,7 +341,6 @@ export function createStepTasksExtension(): ExtensionFactory {
 			label: "Update task",
 			description:
 				"Update an active plan's todo item by taskId. Set in_progress when starting, completed after finishing and validating, or deleted to remove it. Alternatively, use resumePlanId alone to resume an archived checklist only when the user explicitly requests that work; the current plan is archived. This only changes tracking data; it does not execute or schedule work.",
-			promptSnippet: "Update a todo item's progress, details, or dependencies",
 			parameters: TASK_UPDATE_PARAMS,
 			executionMode: "sequential",
 			renderShell: "self",
@@ -412,7 +410,6 @@ export function createStepTasksExtension(): ExtensionFactory {
 			label: "Get task",
 			description:
 				"Read a todo item's full details and all recorded dependencies, including completed ones. Use task_list to check which prerequisites remain unfinished.",
-			promptSnippet: "Read a todo item's full details and recorded dependencies",
 			parameters: TASK_GET_PARAMS,
 			renderShell: "self",
 			renderCall: (args, theme, context) => renderTaskCall("task_get", args.taskId, theme, context),
@@ -426,7 +423,6 @@ export function createStepTasksExtension(): ExtensionFactory {
 			label: "List tasks",
 			description:
 				"List the active plan's todo items with id, subject, status, owner, and unfinished prerequisites (blockedBy). Use it to resume existing work or choose the next open, unblocked item. Set includeHistory:true to inspect plan IDs and counts without switching; only an explicit task_update(resumePlanId) reactivates an archived plan.",
-			promptSnippet: "List todo progress and unfinished prerequisites",
 			parameters: TASK_LIST_PARAMS,
 			renderShell: "self",
 			renderCall: (_args, theme, context) => renderTaskCall("task_list", undefined, theme, context),

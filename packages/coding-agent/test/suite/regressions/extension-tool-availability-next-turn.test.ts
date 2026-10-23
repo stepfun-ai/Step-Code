@@ -11,7 +11,7 @@ it("removes unavailable schemas and prompt guidance before the next model reques
 					name: "disable_remote",
 					label: "Disable remote lookup",
 					description: "Mark the remote lookup unavailable",
-					promptSnippet: "Disable the remote lookup",
+					promptGuidelines: ["Use disable_remote to mark the remote lookup unavailable."],
 					parameters: Type.Object({}),
 					execute: async () => {
 						pi.setUnavailableTools(["remote_lookup"]);
@@ -22,7 +22,7 @@ it("removes unavailable schemas and prompt guidance before the next model reques
 					name: "remote_lookup",
 					label: "Remote lookup",
 					description: "Look up remote data",
-					promptSnippet: "Look up remote data",
+					promptGuidelines: ["Use remote_lookup to look up remote data."],
 					parameters: Type.Object({}),
 					execute: async () => ({ content: [{ type: "text", text: "data" }], details: {} }),
 				});
@@ -48,8 +48,8 @@ it("removes unavailable schemas and prompt guidance before the next model reques
 		]);
 		await harness.session.prompt("Disable remote access and finish.");
 		expect(schemas).toEqual([["disable_remote", "remote_lookup"], ["disable_remote"]]);
-		expect(prompts[0]).toContain("remote_lookup:");
-		expect(prompts[1]).not.toContain("remote_lookup:");
+		expect(prompts[0]).toContain("Use remote_lookup to look up remote data.");
+		expect(prompts[1]).not.toContain("Use remote_lookup to look up remote data.");
 		expect(harness.getPendingResponseCount()).toBe(0);
 	} finally {
 		harness.cleanup();

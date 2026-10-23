@@ -20,7 +20,6 @@ const structuredOutputTool = defineTool({
 	label: "Structured Output",
 	description:
 		"Return a final structured answer. Use this as your last action when the user asks for structured output or a machine-readable summary.",
-	promptSnippet: "Emit a final structured answer as a terminating tool result",
 	promptGuidelines: [
 		"Use structured_output as your final action when the user asks for structured output, JSON-like output, or a machine-readable summary.",
 		"After calling structured_output, do not emit another assistant response in the same turn.",

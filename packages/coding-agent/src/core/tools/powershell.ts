@@ -16,7 +16,6 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
 
 export const powershellToolSystemPromptContribution = {
-	snippet: "Execute PowerShell commands",
 	guidelines: [],
 } as const;
 
@@ -40,7 +39,6 @@ const powershellToolConfig: ShellToolConfig = {
 	label: "powershell",
 	shellName: "PowerShell",
 	prompt: "PS>",
-	promptSnippet: powershellToolSystemPromptContribution.snippet,
 	promptGuidelines: powershellToolSystemPromptContribution.guidelines,
 	tempFilePrefix: "step-powershell",
 };
@@ -59,7 +57,6 @@ export function createPowerShellTool(cwd: string, options?: PowerShellToolOption
 	const definition = createPowerShellToolDefinition(cwd, options);
 	const tool = wrapToolDefinition(definition);
 	Object.assign(tool, {
-		promptSnippet: definition.promptSnippet,
 		promptGuidelines: definition.promptGuidelines,
 	});
 	return tool;

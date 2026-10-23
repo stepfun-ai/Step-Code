@@ -4,7 +4,7 @@ import { buildSystemPrompt } from "../src/core/system-prompt.ts";
 
 describe("buildSystemPrompt", () => {
 	describe("empty tools", () => {
-		test("shows (none) for empty tools list", () => {
+		test("renders no tool inventory for an empty tools list", () => {
 			const prompt = buildSystemPrompt({
 				selectedTools: [],
 				contextFiles: [],
@@ -12,7 +12,8 @@ describe("buildSystemPrompt", () => {
 				cwd: process.cwd(),
 			});
 
-			expect(prompt).toContain("Available tools:\n(none)");
+			expect(prompt).not.toContain("Available tools");
+			expect(prompt).not.toContain("In addition to the tools above");
 		});
 
 		test("shows file paths guideline even with no tools", () => {
@@ -28,25 +29,6 @@ describe("buildSystemPrompt", () => {
 	});
 
 	describe("default tools", () => {
-		test("includes all default tools when snippets are provided", () => {
-			const prompt = buildSystemPrompt({
-				toolSnippets: {
-					read: "Read file contents",
-					bash: "Execute bash commands",
-					edit: "Make surgical edits",
-					write: "Create or overwrite files",
-				},
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain("- read:");
-			expect(prompt).toContain("- bash:");
-			expect(prompt).toContain("- edit:");
-			expect(prompt).toContain("- write:");
-		});
-
 		test.each([
 			[["bash"], "Use bash for file operations"],
 			[["run_command"], "Use bash for file operations"],
@@ -116,30 +98,32 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).not.toContain("for file operations");
 	});
 
-	describe("custom tool snippets", () => {
-		test("includes custom tools in available tools section when promptSnippet is provided", () => {
+	describe("tool descriptions", () => {
+		test("does not mirror tool names or one-line snippets into the prompt", () => {
 			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "dynamic_tool"],
-				toolSnippets: {
-					dynamic_tool: "Run dynamic test behavior",
-				},
+				selectedTools: ["read", "bash", "edit", "write", "dynamic_tool"],
 				contextFiles: [],
 				skills: [],
 				cwd: process.cwd(),
 			});
 
-			expect(prompt).toContain("- dynamic_tool: Run dynamic test behavior");
+			expect(prompt).not.toContain("Available tools");
+			expect(prompt).not.toContain("In addition to the tools above");
+			expect(prompt).not.toContain("- read:");
+			expect(prompt).not.toContain("- bash:");
+			expect(prompt).not.toContain("dynamic_tool");
 		});
 
-		test("omits custom tools from available tools section when promptSnippet is not provided", () => {
+		test("keeps behavior guidance that is not a tool description", () => {
 			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "dynamic_tool"],
+				selectedTools: ["read", "edit", "write", "run_command"],
 				contextFiles: [],
 				skills: [],
 				cwd: process.cwd(),
 			});
 
-			expect(prompt).not.toContain("dynamic_tool");
+			expect(prompt).toContain("Be concise in your responses");
+			expect(prompt).toContain("Show file paths clearly");
 		});
 	});
 

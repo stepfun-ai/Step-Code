@@ -564,7 +564,6 @@ export function registerStepClarifyUserExtension(pi: ExtensionAPI, telemetry?: S
 		label: "Clarify user",
 		description:
 			"Ask the user only when a genuine user-owned decision blocks progress. Use question/reason/options/allow_freeform for one question, or questions[] to collect several answers in one navigable dialog.",
-		promptSnippet: "Ask the user for a blocking clarification",
 		parameters: ClarifyUserSchema,
 		prepareArguments: prepareClarifyArguments,
 		executionMode: "sequential",

@@ -65,7 +65,8 @@ describe("defaultTools setting", () => {
 				.sort(),
 		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
 		expect(session.getActiveToolNames()).toEqual(["grep", "find"]);
-		expect(session.systemPrompt).toContain("- grep:");
+		expect(session.systemPrompt).not.toContain("Available tools");
+		expect(session.systemPrompt).not.toContain("- grep:");
 		expect(session.systemPrompt).not.toContain("- read:");
 		session.dispose();
 	});
@@ -74,7 +75,8 @@ describe("defaultTools setting", () => {
 		const session = await createSession(["read", "powershell", "edit", "write"]);
 
 		expect(session.getActiveToolNames()).toEqual(["read", "powershell", "edit", "write"]);
-		expect(session.systemPrompt).toContain("- powershell: Execute PowerShell commands");
+		expect(session.systemPrompt).not.toContain("Available tools");
+		expect(session.systemPrompt).not.toContain("- powershell:");
 		expect(session.systemPrompt).not.toContain("- bash:");
 		session.dispose();
 	});

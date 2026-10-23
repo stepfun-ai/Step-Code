@@ -16,7 +16,6 @@ function tool(name = "restricted_tool"): ToolDefinition {
 		name,
 		label: "Local check",
 		description: "Run a local check",
-		promptSnippet: "Run the restricted local check",
 		promptGuidelines: [`Use ${name} for the local check.`],
 		parameters: Type.Object({}),
 		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
@@ -74,7 +73,6 @@ describe("extension-owned tool availability", () => {
 		expect(session.getActiveToolNames()).not.toContain(name);
 		expect(session.getAllTools().map((entry) => entry.name)).not.toContain(name);
 		expect(session.agent.state.tools.map((entry) => entry.name)).not.toContain(name);
-		expect(session.systemPrompt).not.toContain(`${name}:`);
 		expect(session.systemPrompt).not.toContain(`Use ${name} for the local check.`);
 	}
 
@@ -103,7 +101,7 @@ describe("extension-owned tool availability", () => {
 		expectUnavailable(session);
 		second.setUnavailableTools([]);
 		expect(session.getActiveToolNames()).toContain("restricted_tool");
-		expect(session.systemPrompt).toContain("restricted_tool:");
+		expect(session.systemPrompt).toContain("Use restricted_tool for the local check.");
 	});
 
 	it("does not activate a previously inactive tool when a restriction is released", async () => {

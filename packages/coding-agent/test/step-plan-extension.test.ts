@@ -1625,7 +1625,6 @@ test("enter_plan_mode describes writing a proposal rather than tracking todos", 
 	expect(tool.description).toContain("write_file or edit_file");
 	expect(tool.description).toContain("File-editing tools are limited to that file");
 	expect(tool.description).toContain("commands still use normal permissions");
-	expect(tool.promptSnippet).toContain("proposal");
 });
 
 test("exit_plan_mode describes review and mode-specific approval rather than unconditional exit", () => {
@@ -1639,7 +1638,6 @@ test("exit_plan_mode describes review and mode-specific approval rather than unc
 	expect(tool.description).toContain("headless and RPC");
 	expect(tool.description).toContain("exits without interactive approval");
 	expect(tool.description).toContain("caller must gate approval externally");
-	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
 });
 
 // ---------------------------------------------------------------------------

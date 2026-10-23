@@ -44,7 +44,6 @@ const bashSchema = Type.Object({
 });
 
 export const bashToolSystemPromptContribution = {
-	snippet: "Execute bash commands (ls, grep, find, etc.)",
 	guidelines: [],
 } as const;
 
@@ -314,7 +313,6 @@ export interface ShellToolConfig {
 	label: string;
 	shellName: string;
 	prompt: string;
-	promptSnippet: string;
 	promptGuidelines?: readonly string[];
 	tempFilePrefix: string;
 }
@@ -332,7 +330,6 @@ export function createShellToolDefinition(
 		name: config.name,
 		label: config.label,
 		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
-		promptSnippet: config.promptSnippet,
 		promptGuidelines: config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
 		async execute(
@@ -534,7 +531,6 @@ const bashToolConfig: ShellToolConfig = {
 	label: "bash",
 	shellName: "bash",
 	prompt: "$",
-	promptSnippet: bashToolSystemPromptContribution.snippet,
 	promptGuidelines: bashToolSystemPromptContribution.guidelines,
 	tempFilePrefix: "step-bash",
 };
@@ -550,7 +546,6 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 	const definition = createBashToolDefinition(cwd, options);
 	const tool = wrapToolDefinition(definition);
 	Object.assign(tool, {
-		promptSnippet: definition.promptSnippet,
 		promptGuidelines: definition.promptGuidelines,
 	});
 	return tool;

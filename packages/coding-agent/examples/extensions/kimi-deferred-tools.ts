@@ -32,7 +32,6 @@ export default function (pi: ExtensionAPI): void {
 		name: "tool_search",
 		label: "Tool Search",
 		description: "Find and activate tools for a capability.",
-		promptSnippet: "Search for additional tools when the active tools cannot perform the task",
 		parameters: Type.Object({
 			query: Type.String({ description: "Capability to search for" }),
 		}),

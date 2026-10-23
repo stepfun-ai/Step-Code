@@ -911,7 +911,6 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 When NOT to use: cron_create is for calendar or expression-based triggers that repeat or must survive a restart. For fanning work out to many subagents on schedule, cron_create only injects a follow-up prompt on trigger; the subsequent turn is where you would call workflow (with its own opt-in). For a multi-turn objective that should persist without a fixed calendar, use create_goal instead.
 
 Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late, capped at half the interval. One-shot jobs at :00 or :30 may fire up to 90 seconds early; other one-shot minutes are exact. Delivery failures remain due and retry. Missed one-shot durable jobs are surfaced as a single batched message when the session returns; missed recurring jobs advance to the next matching minute and emit cron_missed telemetry.`,
-			promptSnippet: "Schedule recurring or one-shot calendar work",
 			parameters: CronCreateParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				currentContext = ctx;
@@ -926,7 +925,6 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			name: "cron_list",
 			label: "List cron jobs",
 			description: "List scheduled cron jobs and their next fire times.",
-			promptSnippet: "List scheduled cron jobs",
 			parameters: Type.Object({}),
 			execute: async (_id, _params, _signal, _onUpdate, ctx) => {
 				currentContext = ctx;
@@ -938,7 +936,6 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			name: "cron_delete",
 			label: "Delete cron job",
 			description: "Delete a scheduled cron job by id.",
-			promptSnippet: "Delete a scheduled cron job",
 			parameters: CronDeleteParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				currentContext = ctx;

@@ -142,13 +142,13 @@ describe("Ultracode entry through a real session", () => {
 		const harness = await createHarness({ tools: [], extensionFactories: [workflowCapabilities] });
 		harnesses.push(harness);
 		await harness.session.bindExtensions({});
-		expect(harness.session.systemPrompt).toContain("- workflow:");
+		expect(harness.session.systemPrompt).toContain("Use workflow only when the user has opted in");
 		harness.setResponses([fauxAssistantMessage("available")]);
 		await harness.session.prompt("Explain the available modes");
 		expect(latestModeNotice(harness)).toBe("");
 		harness.session.setActiveToolsByName([]);
 		expect(harness.session.getActiveToolNames()).toEqual([]);
-		expect(harness.session.systemPrompt).not.toContain("- workflow:");
+		expect(harness.session.systemPrompt).not.toContain("Use workflow only when the user has opted in");
 	});
 
 	it("keeps per-turn authorization scoped to the user prompt", async () => {

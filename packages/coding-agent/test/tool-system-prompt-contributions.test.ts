@@ -28,7 +28,6 @@ describe("built-in tool system prompt contributions", () => {
 		(_name, contribution, createDefinition) => {
 			const definition = createDefinition("/workspace");
 
-			expect(definition.promptSnippet).toBe(contribution.snippet);
 			expect(definition.promptGuidelines ?? []).toEqual(contribution.guidelines);
 		},
 	);

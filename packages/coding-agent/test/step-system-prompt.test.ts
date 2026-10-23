@@ -19,6 +19,7 @@ describe("Step system prompt appendix", () => {
 
 		expect(prompt).toContain("Use the structured tools exposed by the model API");
 		expect(prompt).toContain("Never emit XML or pseudo tool-call syntax");
+		expect(prompt).toContain("Tool selection:");
 		expect(prompt).toContain("- read_file:");
 		expect(prompt).toContain("- edit_file:");
 		expect(prompt).toContain("- run_command:");

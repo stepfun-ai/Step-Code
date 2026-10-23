@@ -463,7 +463,6 @@ function aliasDefinition<
 		name: StepToolName;
 		label: string;
 		description: string;
-		promptSnippet: string;
 		promptGuidelines?: string[];
 		parameters: TStepSchema;
 	},
@@ -475,7 +474,6 @@ function aliasDefinition<
 		name: step.name,
 		label: step.label,
 		description: step.description,
-		promptSnippet: step.promptSnippet,
 		promptGuidelines: step.promptGuidelines,
 		parameters: step.parameters,
 		constrainedSampling: native.constrainedSampling,
@@ -1409,7 +1407,6 @@ function createFindToolsDefinition(
 		name: "find_tools",
 		label: "find_tools",
 		description: "Search registered tools by natural-language intent, tool name, description, and parameter names.",
-		promptSnippet: "Find a tool by describing the operation you need",
 		parameters: findToolsSchema,
 		execute: async (_toolCallId, args: FindToolsInput, _signal, _onUpdate, ctx) => {
 			const definitions = ctx?.getToolCatalog?.() ?? fallbackDefinitions;
@@ -1563,7 +1560,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			name: "list_directory",
 			label: "list_directory",
 			description: "List one directory with directories first. Prefer this before recursive shell listing.",
-			promptSnippet: "List one directory with directories first",
 			parameters: listDirectorySchema,
 		},
 		nativeLs,
@@ -1586,7 +1582,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			label: "find_files",
 			description:
 				"Find files by glob pattern, sorted by modification time (newest first). Prefer this over shell find or recursive ls.",
-			promptSnippet: "Find files by glob pattern",
 			parameters: findFilesSchema,
 		},
 		nativeFind,
@@ -1609,7 +1604,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			label: "search_files",
 			description:
 				"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Prefer this over shell grep.",
-			promptSnippet: "Search file contents with a regular expression",
 			parameters: searchFilesSchema,
 		},
 		nativeGrep,
@@ -1631,7 +1625,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			name: "read_file",
 			label: "read_file",
 			description: READ_FILE_DESCRIPTION,
-			promptSnippet: "Read a file with an optional line range",
 			parameters: readFileSchema,
 		},
 		nativeRead,
@@ -1653,7 +1646,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			name: "write_file",
 			label: "write_file",
 			description: WRITE_FILE_DESCRIPTION,
-			promptSnippet: "Write full content to a file",
 			parameters: writeFileSchema,
 		},
 		nativeWrite,
@@ -1680,7 +1672,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		label: "edit_file",
 		description:
 			"Edit one file by literal search/replace. 'search' must match the current file content exactly and appear exactly once unless replace_all is true.",
-		promptSnippet: "Make a precise literal search/replace edit",
 		promptGuidelines: [
 			"Use edit_file for precise changes; set replace_all=true only when every occurrence should change.",
 		],
@@ -1716,7 +1707,6 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		label: "run_command",
 		description:
 			"Run a non-interactive shell command from the initial working directory by default. Use for tests, builds, formatters, git, and project scripts; prefer dedicated file/search tools for reading and searching.",
-		promptSnippet: "Run a non-interactive shell command",
 		parameters: runCommandSchema,
 		constrainedSampling: nativeBash.constrainedSampling,
 		executionMode: nativeBash.executionMode,

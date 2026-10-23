@@ -154,7 +154,6 @@ export function createSearchWebTool(
 		name: "search_web",
 		label: "search_web",
 		description: buildSearchWebDescription(),
-		promptSnippet: "Search the web for current or external information",
 		promptGuidelines: ["Use search_web for current facts and cite relevant URLs in a final Sources: section."],
 		parameters: searchWebSchema,
 		executionMode: "parallel",
