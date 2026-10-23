@@ -4,6 +4,34 @@ import { WorkingOutputTracker } from "../src/ui/view/chrome/status-indicator.ts"
 import type { RuntimeContext } from "../src/ui/runtime/context.ts";
 import { handleSessionEvent } from "../src/ui/runtime/session-events.ts";
 
+test.each(["agent_end", "auto_clm_end", "compaction_end"] as const)(
+	"clears terminal progress on %s even after the setting is disabled",
+	async (type) => {
+		const setProgress = vi.fn();
+		const ctx = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { terminal: { setProgress } },
+			clearStatusIndicator: vi.fn(),
+			pendingTools: new Map(),
+			redraw: { requestRender: vi.fn() },
+			flushCompactionQueue: vi.fn(),
+		} as unknown as RuntimeContext;
+		if (type === "compaction_end") {
+			await handleSessionEvent(ctx, { type, reason: "manual", result: undefined, aborted: false, willRetry: false });
+		} else if (type === "agent_end") {
+			await handleSessionEvent(ctx, { type, messages: [], willRetry: false });
+		} else {
+			await handleSessionEvent(ctx, {
+				type,
+				result: { attempted: true, accepted: false, fallback: false, reason: "aborted", requests: 0 },
+			});
+		}
+		expect(setProgress).toHaveBeenCalledExactlyOnceWith(false);
+	},
+);
+
 test("turn tips follow the current goal branch and respect the disabled setting", async () => {
 	const now = new Date().toISOString();
 	const goal = { id: "goal-1", sessionId: "session-1", objective: "Ship it", status: "active", createdAt: now, updatedAt: now };

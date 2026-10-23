@@ -257,6 +257,8 @@ interface ServerSentEvent {
 	event: string | null;
 	data: string;
 	raw: string[];
+	/** False only for an event left in the decoder when the transport reaches EOF. */
+	complete: boolean;
 }
 
 interface SseDecoderState {
@@ -274,7 +276,7 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"content_block_stop",
 ]);
 
-function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
+function flushSseEvent(state: SseDecoderState, complete = true): ServerSentEvent | null {
 	if (!state.event && state.data.length === 0) {
 		return null;
 	}
@@ -283,6 +285,7 @@ function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
 		event: state.event,
 		data: state.data.join("\n"),
 		raw: [...state.raw],
+		complete,
 	};
 	state.event = null;
 	state.data = [];
@@ -395,7 +398,7 @@ async function* iterateSseMessages(
 			}
 		}
 
-		const trailingEvent = flushSseEvent(state);
+		const trailingEvent = flushSseEvent(state, false);
 		if (trailingEvent) {
 			yield trailingEvent;
 		}
@@ -432,16 +435,19 @@ async function* iterateAnthropicEvents(
 				sawMessageEnd = true;
 			}
 			yield event;
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			throw new Error(
-				`Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`,
-			);
+		} catch {
+			if (!sse.complete) {
+				throw new ProviderStreamError(`Anthropic stream ended during SSE event ${sse.event}`, "stream_incomplete");
+			}
+			throw new Error(`Could not parse Anthropic SSE event ${sse.event}: invalid JSON payload`);
 		}
 	}
 
-	if (sawMessageStart && !sawMessageEnd) {
-		throw new Error("Anthropic stream ended before message_stop");
+	if (!sawMessageEnd) {
+		throw new ProviderStreamError(
+			sawMessageStart ? "Anthropic stream ended before message_stop" : "Anthropic stream ended before message_start",
+			"stream_incomplete",
+		);
 	}
 }
 

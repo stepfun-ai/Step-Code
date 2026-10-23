@@ -21,6 +21,7 @@ import {
 	workflowProgressResult,
 } from "./rendering.ts";
 import { WorkflowRuntime, workflowToolResult } from "./runtime.ts";
+import { assertWorkflowScriptUsage } from "./script-lint.ts";
 import { isWorkflowPathInside } from "./tool-profile.ts";
 import type { WorkflowAgentRunner, WorkflowProgress, WorkflowRunResult } from "./types.ts";
 import type { UltraloopTurnState } from "./ultraloop-opt-in.ts";
@@ -113,6 +114,7 @@ export async function resolveWorkflowScript(
 	}
 	if (Buffer.byteLength(script, "utf8") > WORKFLOW_MAX_SCRIPT_BYTES)
 		throw new Error(`Workflow script exceeds ${WORKFLOW_MAX_SCRIPT_BYTES} bytes`);
+	assertWorkflowScriptUsage(script);
 	return { name: name.slice(0, 200), script, ...(sourcePath ? { sourcePath } : {}) };
 }
 
@@ -145,7 +147,7 @@ export function createStepWorkflowExtension(options: StepWorkflowExtensionOption
 			renderShell: "self",
 			renderCall: renderWorkflowCall,
 			renderResult: renderWorkflowResult,
-			description: `Run an isolated JavaScript workflow that coordinates many agents through phase(), parallel(), pipeline(), agent(), and the HoH iterate() loop. Scripts run in a sandboxed VM (no process, require, network, wall clock, or randomness); every agent call is journaled under .stepcode/workflows/runs so runs can resume. Provide exactly one of script (inline), scriptPath, or name (saved workflow); /workflows lists saved workflows and recent runs.
+			description: `Run an isolated JavaScript workflow that coordinates many agents through agent(), parallel(), pipeline(), and the HoH iterate() loop; phase(title) takes one string and only labels a milestone (it runs nothing). Scripts run in a sandboxed VM (no process, require, network, wall clock, or randomness); every agent call is journaled under .stepcode/workflows/runs so runs can resume. Provide exactly one of script (inline), scriptPath, or name (saved workflow); /workflows lists saved workflows and recent runs.
 
 Ultracode and Ultraloop name this same multi-agent capability. Interactive controls are /ultracode on, off, status, and help; /ultraloop is an alias. For a single task use ultracode: or ultraloop:. When asked about these modes, explain the controls without starting a workflow. These controls do not expand the active tool profile.
 

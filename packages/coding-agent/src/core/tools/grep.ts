@@ -49,6 +49,22 @@ export interface GrepToolDetails {
 	matchLimitReached?: number;
 	linesTruncated?: boolean;
 	backend?: SearchBackendName;
+	/**
+	 * Structured match rows, for consumers that need the exact file/line rather
+	 * than the rendered text. The backends already know these values; without
+	 * this they were flattened into `path:line: text` and had to be parsed back
+	 * out, which silently mis-reads any row whose path or text itself contains a
+	 * `:<digits>:` shape. Never sent to the LLM (details are local metadata).
+	 */
+	matchRows?: GrepMatchRow[];
+}
+
+/** One matched row in the shape consumers can act on without re-parsing text. */
+export interface GrepMatchRow {
+	/** Path relative to the search root, using forward slashes. */
+	path: string;
+	line: number;
+	text: string;
 }
 
 /** Match tuple produced by every search backend; the caller formats it. */
@@ -293,20 +309,58 @@ function createRipgrepBackend(rgPath: string): SearchBackend {
 }
 
 /**
- * Parse a `path:line:content` (or `path\0line\0content`) triple emitted by
- * git grep / POSIX grep -n. Returns null for lines that do not fit the shape.
- * NUL-separated form is preferred; grep here does not enable it, so parsing
- * uses `path:line:rest` with the first ":<digits>:" delimiter. Filenames
- * containing that literal sequence are the only case that mis-parses; skipping
- * mis-parses beats propagating them as false matches.
+ * Parse one record emitted by git grep / POSIX grep.
+ *
+ * Both backends can separate the path from the rest with a NUL byte, which is
+ * the only form that stays unambiguous when a path or a matched line itself
+ * contains a `:<digits>:` shape. We ask for NUL output from both:
+ *
+ * - `git grep -z` emits `path\0line\0text` and escapes special bytes in the
+ *   path into the Unicode private use area (`0xF000 + byte`), so `a:b.ts`
+ *   arrives as `a\uF03Ab.ts`; that is decoded back here.
+ * - `grep -Z` emits `path\0line:text` with the path verbatim.
+ *
+ * The legacy colon form is still accepted for custom backends that emit it.
+ * The NUL forms are tried first: they carry the field boundary, so no guessing
+ * is involved.
  */
 function parseGrepLine(line: string): GrepMatch | null {
+	const nulParts = line.split("\0");
+	if (nulParts.length >= 3) {
+		// git grep -z: path\0line\0text
+		const [rawPath, lineNumStr, ...rest] = nulParts;
+		const match = finishGrepMatch(decodeGitPath(rawPath ?? ""), lineNumStr ?? "", rest.join("\0"));
+		if (match) return match;
+	}
+	if (nulParts.length === 2) {
+		// grep -Z: path\0line:text
+		const [rawPath, tail] = nulParts;
+		const separator = (tail ?? "").indexOf(":");
+		if (separator > 0) {
+			return finishGrepMatch(rawPath ?? "", (tail ?? "").slice(0, separator), (tail ?? "").slice(separator + 1));
+		}
+	}
+	// Legacy colon form: `path:line:text`, first ":<digits>:" delimiter wins.
 	const match = line.match(/^([^\0]+?):(\d+):(.*)$/);
 	if (!match) return null;
 	const [, filePath, lineNumStr, lineText] = match;
+	return finishGrepMatch(filePath ?? "", lineNumStr ?? "", lineText ?? "");
+}
+
+function finishGrepMatch(filePath: string, lineNumStr: string, lineText: string): GrepMatch | null {
+	if (!filePath) return null;
 	const lineNumber = Number.parseInt(lineNumStr, 10);
 	if (!Number.isInteger(lineNumber) || lineNumber < 1) return null;
 	return { filePath, lineNumber, lineText };
+}
+
+/**
+ * Undo the path escaping `git grep -z` applies: bytes that would be ambiguous in
+ * its output are shifted into the private use area as `0xF000 + byte`.
+ */
+function decodeGitPath(raw: string): string {
+	if (!/[\uF000-\uF0FF]/u.test(raw)) return raw;
+	return raw.replace(/[\uF000-\uF0FF]/gu, (char) => String.fromCharCode(char.charCodeAt(0) - 0xf000));
 }
 
 /** Common driver for a `<cmd> ... -n` fallback backend that streams `path:line:content`. */
@@ -416,7 +470,7 @@ function createGitGrepBackend(): SearchBackend {
 				return { matches: [], matchLimitReached: false };
 			}
 
-			const args: string[] = ["grep", "-n", "-I", "--no-color", "--untracked"];
+			const args: string[] = ["grep", "-n", "-I", "--no-color", "--untracked", "-z"];
 			if (params.ignoreCase) args.push("-i");
 			if (params.literal) args.push("-F");
 			else args.push("-E");
@@ -443,11 +497,26 @@ function globMatch(input: string, pattern: string): boolean {
 	return minimatch(input, pattern, { dot: true });
 }
 
+/**
+ * GNU grep understands `-Z` (filename followed by NUL); BSD grep does not.
+ * The distinction matters only for ambiguity in the path, so we gate on the
+ * implementations that are actually GNU-compatible rather than probing.
+ */
+function posixGrepSupportsNulPath(): boolean {
+	return process.platform !== "darwin" && process.platform !== "freebsd";
+}
+
 function createPosixGrepBackend(): SearchBackend {
 	return {
 		name: "grep",
 		async run(params) {
 			const args = ["-r", "-n", "-H", "-I"];
+			// GNU grep: -Z writes the filename verbatim, NUL-terminated, so a path
+			// containing ":<digits>:" can never be mistaken for the line separator.
+			// BSD grep (macOS) lacks -Z; there the legacy "path:line:text" form is
+			// parsed instead (see parseGrepLine), so the flag is best-effort.
+			const supportsNulPath = posixGrepSupportsNulPath();
+			if (supportsNulPath) args.push("-Z");
 			if (params.ignoreCase) args.push("-i");
 			if (params.literal) args.push("-F");
 			else args.push("-E");
@@ -589,23 +658,34 @@ export function createGrepToolDefinition(
 				return { content: [{ type: "text", text: "No matches found" }], details: undefined };
 			}
 
+			// Rows in the exact shape the render path uses, so a consumer reading
+			// these gets the same numbers the rendered text shows — without having
+			// to parse that text back out.
+			const matchRows: GrepMatchRow[] = [];
+
 			for (const match of matches) {
+				const relativePath = formatPath(match.filePath);
 				if (contextValue === 0 && match.lineText !== undefined) {
-					const relativePath = formatPath(match.filePath);
 					const sanitized = match.lineText.replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
 					const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
 					if (wasTruncated) linesTruncated = true;
 					outputLines.push(`${relativePath}:${match.lineNumber}: ${truncatedText}`);
+					matchRows.push({ path: relativePath, line: match.lineNumber, text: truncatedText });
 				} else {
 					const block = await formatBlock(match.filePath, match.lineNumber);
 					outputLines.push(...block);
+					matchRows.push({
+						path: relativePath,
+						line: match.lineNumber,
+						text: match.lineText !== undefined ? match.lineText.replace(/\r/g, "").replace(/\n$/, "") : "",
+					});
 				}
 			}
 
 			const rawOutput = outputLines.join("\n");
 			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 			let output = truncation.content;
-			const details: GrepToolDetails = { backend: backend.name };
+			const details: GrepToolDetails = { backend: backend.name, matchRows };
 			const notices: string[] = [];
 			if (matchLimitReached) {
 				notices.push(

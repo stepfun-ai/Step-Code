@@ -26,6 +26,21 @@ Unsupported shells and shell-configuration failures still terminate because a
 model retry cannot repair the execution environment. Explicit per-tool denial
 still terminates, and dangerous commands remain blocked outside Full Access.
 
+## Mirrored Approvals
+
+Interactive tool confirmations explicitly set `mirror: true` on the existing
+`ui.confirm` request. A connected Lark screen can answer the same typed request;
+it does not change the permission preset or create an unattended approval policy.
+The first legal local or remote choice resolves the request and aborts its UI
+signal, dismissing the terminal dialog and revoking the remote token. Cancellation
+and runtime invalidation fail closed. Disconnect revokes the remote token but
+leaves the terminal decision available.
+
+Other extension dialogs are terminal-only unless their caller explicitly opts in
+with `mirror: true`. Never opt in secret input, login, or arbitrary custom UI.
+The mirror refuses oversized decisions rather than showing a truncated approval.
+See [Lark connection](lark-connection.md) for current limits and verification scope.
+
 The product policy in `packages/coding-agent/src/step/permissions.ts` runs through
 the existing `tool_call` hook, before foreground/background execution. Clients
 render the existing confirmation request; they do not implement another policy.

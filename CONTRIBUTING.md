@@ -48,7 +48,7 @@ If you use an agent, run it from the repository root directory so it picks up `A
 
 ## Issue Review
 
-Issues submitted Friday through Sunday are not guaranteed to be reviewed.  If something is urgent, ask on Discord: https://discord.com/invite/3cU7Bz4UPx
+Issues submitted Friday through Sunday are not guaranteed to be reviewed. If something is urgent, say so at the top of the issue and explain the impact.
 
 ## Quality Bar For Issues
 
@@ -104,15 +104,11 @@ These are repository-wide submission checks. During development, run focused che
 
 If you are adding a new provider to `packages/providers`, see `AGENTS.md` for required tests.
 
-## Questions?
-
-Ask on [Discord](https://discord.com/invite/nKXTsAcmbT).
-
 ## FAQ
 
 ### Why are weekend issues lower priority?
 
-We triage the tracker during working hours. That means more issues can accumulate over the weekend. Anything submitted Friday through Sunday may be missed or given lower priority in the Monday review queue. If a problem is urgent, ask on Discord and include the short version, a repro, and the relevant logs.
+We triage the tracker during working hours. That means more issues can accumulate over the weekend. Anything submitted Friday through Sunday may be missed or given lower priority in the Monday review queue. If a problem is urgent, flag it in the issue and include the short version, a repro, and the relevant logs.
 
 ### Why do some issues get no reply?
 

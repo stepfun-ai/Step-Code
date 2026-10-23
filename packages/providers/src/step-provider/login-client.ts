@@ -64,8 +64,27 @@ export type StepCliLoginPoll =
 			readonly state: "ready";
 			readonly apiKey: string;
 			readonly uid?: string;
+			readonly login?: StepCliLoginState;
+			/** Why a delivered session could not be used; the API key is still valid. */
+			readonly loginError?: string;
 	  }
 	| { readonly state: "failed"; readonly reason: StepCliLoginFailureReason };
+
+/**
+ * Account session delivered beside the API key.
+ *
+ * The API key remains the only credential for model requests. This is what
+ * lets the CLI act as the signed-in user (account lookups) and refresh that
+ * state on its own, so hosts that need an identity can use it later.
+ */
+export interface StepCliLoginState {
+	readonly accessToken: string;
+	readonly refreshToken: string;
+	readonly deviceId: string;
+	readonly appId: string;
+	/** Remaining access-token lifetime in seconds, when the server reports it. */
+	readonly expiresIn?: number;
+}
 
 export type StepCliLoginErrorKind =
 	/** Non-2xx HTTP response, or a non-zero `status` field in a 2xx envelope. */
@@ -201,10 +220,88 @@ export async function pollStepCliLogin(input: PollStepCliLoginInput): Promise<St
 	const apiKey = readString(credential as Record<string, unknown>, "api_key");
 	if (!apiKey) throw protocolError("poll", "ready response did not contain an api_key");
 	const uid = readBoundedUid(readString(payload, "uid"));
+	const session = readLoginState(credential as Record<string, unknown>);
 	return {
 		state: "ready",
 		apiKey,
 		...(uid ? { uid } : {}),
+		...(session.state ? { login: session.state } : {}),
+		...(session.error ? { loginError: session.error } : {}),
+	};
+}
+
+/**
+ * Read the optional account session.
+ *
+ * Absent on backends that predate it, which is the api-key-only behaviour the
+ * CLI has always had. Present but unusable is reported rather than thrown: the
+ * API key is already in hand and must still be delivered, because a session
+ * problem must never cost the user their key. It is surfaced as a diagnostic so
+ * contract drift stays visible instead of silently dropping the session.
+ */
+function readLoginState(credential: Record<string, unknown>): { state?: StepCliLoginState; error?: string } {
+	const raw = credential.login;
+	if (raw === undefined || raw === null) return {};
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		return { error: "the login field was not an object" };
+	}
+	const parsed = parseStepLoginState(raw);
+	if (!parsed) return { error: "the login field was missing a required token, device id or app id" };
+	return { state: parsed };
+}
+
+/**
+ * Validate a login state that arrived through an untyped channel.
+ *
+ * Returns `undefined` instead of throwing so callers that only need "is this
+ * usable" — the product layer, which receives the session as an `unknown` extra
+ * field on the OAuth credentials — do not have to re-implement the contract.
+ *
+ * This validates the **wire** shape (`access_token`). The product layer needs
+ * the **parsed** shape (`accessToken`); see `parseStepCliLoginState`.
+ */
+export function parseStepLoginState(value: unknown): StepCliLoginState | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const accessToken = readString(record, "access_token");
+	const refreshToken = readString(record, "refresh_token");
+	const deviceId = readString(record, "device_id");
+	const appId = readString(record, "app_id");
+	if (!accessToken || !refreshToken || !deviceId || !appId) return undefined;
+	const expiresIn = readNumber(record, "expires_in");
+	return {
+		accessToken,
+		refreshToken,
+		deviceId,
+		appId,
+		...(expiresIn !== undefined && expiresIn > 0 ? { expiresIn } : {}),
+	};
+}
+
+/**
+ * Validate a login state that has already been through the wire parser.
+ *
+ * `loginStepOAuth` returns the session as an extra field on `OAuthCredentials`,
+ * whose index signature types it as `unknown`, so the product layer has to
+ * narrow it again. This checks the **parsed** (camelCase) shape, not the wire
+ * one: a session that lost a field somewhere in between would otherwise be
+ * stored and then silently fail to refresh.
+ */
+export function parseStepCliLoginState(value: unknown): StepCliLoginState | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const accessToken = readString(record, "accessToken");
+	const refreshToken = readString(record, "refreshToken");
+	const deviceId = readString(record, "deviceId");
+	const appId = readString(record, "appId");
+	if (!accessToken || !refreshToken || !deviceId || !appId) return undefined;
+	const expiresIn = readNumber(record, "expiresIn");
+	return {
+		accessToken,
+		refreshToken,
+		deviceId,
+		appId,
+		...(expiresIn !== undefined && expiresIn > 0 ? { expiresIn } : {}),
 	};
 }
 
@@ -317,7 +414,8 @@ async function readBoundedText(response: Response, phase: "init" | "poll"): Prom
 	return Buffer.concat(chunks).toString("utf8");
 }
 
-function parseAuthBaseUrl(value: string): URL {
+/** Exported so the login-state refresh can reuse the same endpoint validation. */
+export function parseAuthBaseUrl(value: string): URL {
 	let url: URL;
 	try {
 		url = new URL(value);

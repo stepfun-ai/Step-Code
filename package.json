@@ -13,8 +13,8 @@
 	"packageManager": "pnpm@9.15.9",
 	"scripts": {
 		"clean": "pnpm -r --if-present clean",
-		"build": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
-		"build:offline": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build:offline && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
+		"build": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../lark-adapter && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
+		"build:offline": "cd packages/tui && npm run build && cd ../telemetry && npm run build && cd ../providers && npm run build:offline && cd ../agent-core && npm run build && cd ../config && npm run build && cd ../lark-adapter && npm run build && cd ../coding-agent && npm run build && cd ../../apps/cli && npm run build",
 		"build:binaries": "bash scripts/build-binaries.sh --product step --offline-model-data",
 		"check": "biome check --write --error-on-warnings . && pnpm run check:pinned-deps && pnpm run check:ts-imports && pnpm run check:layer-direction && pnpm run check:ui-layer && pnpm run check:workspace-registry && pnpm run check:tui-no-ai && pnpm run check:coding-agent-entry-freeze && pnpm run check:contracts-deps-empty && pnpm run check:derived-compat-only && pnpm run check:no-provider-dispatch && pnpm run check:metadata-not-in-dispatch && pnpm run check:no-secret-leak && pnpm run check:legacy-scope-prefix && pnpm run check:no-observability && pnpm run check:public-boundary && tsgo --noEmit && pnpm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",

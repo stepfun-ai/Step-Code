@@ -15,7 +15,7 @@
 
 | 来源 | 内容 |
 | --- | --- |
-| `~/.stepcode/agent/settings.json` | Pi 原生设置(主题、默认 provider/model、thinking、compaction…) |
+| `~/.stepcode/agent/settings.json` | 运行时原生设置(主题、默认 provider/model、thinking、compaction…) |
 | `~/.stepcode/agent/step-settings.json` | Step 产品设置(permissionPreset、approvalMode、autoResume、feedbackEnabled…) |
 | 无 | MCP 没有配置位置 |
 
@@ -26,12 +26,12 @@
 <cwd>/.stepcode/config.toml        # 项目级(可选)
 ```
 
-三类内容并存于同一文档:Pi 原生设置在根表,Step 产品设置在根表,MCP 在
+三类内容并存于同一文档:运行时原生设置在根表,Step 产品设置在根表,MCP 在
 `[mcp_servers.<name>]` 子表(Codex 风格)。
 
 关键点:
 
-- **单一真相**:`createStepSettingsManager` 把 Pi 的 `SettingsManager` 与 Step
+- **单一真相**:`createStepSettingsManager` 把 运行时的 `SettingsManager` 与 Step
   装饰器指向同一份路径。任何在 CLI 内改的设置(`/theme`、权限预设、审批模式等)
   都写回 `~/.stepcode/config.toml`,`step` 二进制**不再创建** `settings.json`。
 - **项目文件可选**:缺失即"无项目级设置",不报警告、不自动创建;只有显式保存
@@ -127,12 +127,12 @@
 - `readStepConfig(path)` —— `readFileSync` 放在 `try` **之外**,让 `ENOENT` 原样
   抛出,调用方才能区分"文件不存在"和"TOML 非法"。
 - `writeStepConfig(path, doc)` —— 写 `path.<pid>.tmp` 再 `renameSync`,保证原子。
-- `readGlobalStepDefaults(env)` —— 在 Pi 的 SettingsManager 建立之前同步读取
+- `readGlobalStepDefaults(env)` —— 在 运行时的 SettingsManager 建立之前同步读取
   `defaultProvider` / `defaultModel` / `telemetry.*`。这一步必须存在:静默丢弃
   `telemetry.enabled = false` 等于把用户关掉的上报又打开。
 - `updateGlobalMcpConfig(env, fn)` —— 读改写整体包在 `acquireSettingsLockSync` 内。
-- `StepTomlSettingsStorage` —— 实现 Pi 的 `SettingsStorage` 接口,把 TOML 文档
-  (剥掉 `mcp_servers`)以 JSON 字符串形式交给 Pi,写回时再把 `mcp_servers`
+- `StepTomlSettingsStorage` —— 实现 运行时的 `SettingsStorage` 接口,把 TOML 文档
+  (剥掉 `mcp_servers`)以 JSON 字符串形式交给运行时,写回时再把 `mcp_servers`
   合并回去。
 
 ### 3.2 `src/step/mcp.ts`(+294 行)
@@ -239,7 +239,7 @@ if (ctx.mode !== "tui") await startup;         // 仅 TUI 分离
 
 ### 4.2 设置写入与 `mcp_servers` 互相覆盖
 
-Pi 的 `SettingsStorage.withLock` 只认识"设置"这一层,它拿到的字符串里没有
+运行时的 `SettingsStorage.withLock` 只认识"设置"这一层,它拿到的字符串里没有
 `mcp_servers`。如果读、改、写不在同一个临界区,另一个会话在中间写入就会丢失;而且
 写回时必须把**同一次读**里的 `mcp_servers` 合并回去,否则 `/theme` 一改就会把用户
 所有 MCP 配置抹掉。
@@ -291,7 +291,7 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 
 ```
 ~/.stepcode/
-├── config.toml                       # ★ 统一配置:Pi 原生设置 + Step 产品设置 + [mcp_servers]
+├── config.toml                       # ★ 统一配置:运行时原生设置 + Step 产品设置 + [mcp_servers]
 ├── auth.json                         # ★ Step provider 凭据(0600),由 step login 写入
 ├── models.json                       # ★ 模型目录/覆盖(从 agent/ 上提)
 ├── .credentials.json                 # ★ MCP OAuth 令牌(0600),key = "<name>|<url>"
@@ -309,7 +309,7 @@ agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 ├── sessions/                         # 顶层会话记录
 ├── skills/                           # 用户级 skills
 ├── telemetry/                        # 遥测缓冲(spool)
-└── agent/                            # Pi agent 命名空间
+└── agent/                            # agent 命名空间
     ├── prompts/                      # 用户自定义 prompts
     ├── sessions/                     # agent 会话记录
     ├── trust.json                    # 项目信任存储(ProjectTrustStore)

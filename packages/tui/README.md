@@ -685,6 +685,8 @@ interface Terminal {
 - `ProcessTerminal` - Uses `process.stdin/stdout`
 - `VirtualTerminal` - For testing (uses `@xterm/headless`)
 
+`ProcessTerminal.setProgress(true)` emits OSC 9;4 busy state and keeps it alive until cleared or stopped. `setProgress(false)` clears only an indicator activated by that instance and stops its keepalive; clearing an inactive indicator emits no OSC 9, so callers can safely request cleanup even when progress is disabled.
+
 ## Utilities
 
 ```typescript

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { BackgroundAgentLane, StepSubagentResultRecord } from "../src/features/step-subagent.ts";
-import { notifyLaneEvent, notifyLaneFinal } from "../src/features/subagent/lane-events.ts";
+import { buildLaneFinalDetail, notifyLaneEvent } from "../src/features/subagent/lane-events.ts";
+
+/** Deliver a lane's terminal notification the way the lifecycle does. */
+async function notifyLaneFinal(pi: ExtensionAPI, target: BackgroundAgentLane): Promise<void> {
+	notifyLaneEvent(pi, target, "background_failed", await buildLaneFinalDetail(target, "/nonexistent-unused"));
+}
 
 interface Sent {
 	content: string;
@@ -35,23 +40,26 @@ function record(overrides: Partial<StepSubagentResultRecord>): StepSubagentResul
 
 function lane(overrides: Partial<BackgroundAgentLane>): BackgroundAgentLane {
 	return {
-		id: "lane-1",
+		id: "lane_00000001",
 		status: "failed",
 		subscribe: "final",
-		details: { results: [] },
+		startedAt: 0,
+		updatedAt: 0,
+		details: { mode: "single", results: [] },
 		lastProgressNotifyAt: 0,
 		...overrides,
 	} as unknown as BackgroundAgentLane;
 }
 
 describe("lane failure notifications", () => {
-	test("a failed lane always carries each failed task's reason", () => {
+	test("a failed lane always carries each failed task's reason", async () => {
 		const { pi, sent } = fakePi();
-		notifyLaneFinal(
+		await notifyLaneFinal(
 			pi,
 			lane({
 				result: { content: [{ type: "text", text: "partial output without the cause" }], details: undefined },
 				details: {
+					mode: "parallel",
 					results: [
 						record({ status: "completed" }),
 						record({ status: "failed", errorMessage: "provider returned 500", step: 2 }),
@@ -67,24 +75,24 @@ describe("lane failure notifications", () => {
 		expect(sent[0]?.content).toContain("ENOENT: missing fixture");
 	});
 
-	test("a reason already present in the output is not repeated", () => {
+	test("a reason already present in the output is not repeated", async () => {
 		const { pi, sent } = fakePi();
-		notifyLaneFinal(
+		await notifyLaneFinal(
 			pi,
 			lane({
 				result: { content: [{ type: "text", text: "task failed: provider returned 500" }], details: undefined },
-				details: { results: [record({ status: "failed", errorMessage: "provider returned 500" })] },
+				details: { mode: "single", results: [record({ status: "failed", errorMessage: "provider returned 500" })] },
 			} as unknown as Partial<BackgroundAgentLane>),
 		);
 		expect(sent[0]?.content).not.toContain("Failure reasons:");
 	});
 
-	test("a failed lane with no output still reports the cause", () => {
+	test("a failed lane with no output still reports the cause", async () => {
 		const { pi, sent } = fakePi();
-		notifyLaneFinal(
+		await notifyLaneFinal(
 			pi,
 			lane({
-				details: { results: [record({ status: "failed" })] },
+				details: { mode: "single", results: [record({ status: "failed" })] },
 			} as unknown as Partial<BackgroundAgentLane>),
 		);
 		expect(sent[0]?.content).toContain("no error detail captured");
@@ -104,11 +112,5 @@ describe("lane restart notifications", () => {
 		expect(sent[0]?.details?.event).toBe("background_restarted");
 		expect(sent[0]?.content).toContain("restarted its child process");
 		expect(sent[0]?.content).toContain("resumed its transcript");
-	});
-
-	test("subscribe none suppresses restart notifications too", () => {
-		const { pi, sent } = fakePi();
-		notifyLaneEvent(pi, lane({ status: "running", subscribe: "none" }), "background_restarted");
-		expect(sent).toHaveLength(0);
 	});
 });

@@ -40,6 +40,10 @@ test("a source-launched subagent starts the real CLI from a different working di
 	for (const name of ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"]) {
 		if (process.env[name] !== undefined) env[name] = process.env[name];
 	}
+	// macOS Unix socket paths are bounded: tsx adds an IPC suffix below TMPDIR.
+	// Run the isolated suite with TMPDIR=/tmp if the default temp root causes EINVAL.
+	// A subsequent 20s child timeout was intermittent; focused and full reruns passed.
+	// Keep the deadline unchanged until startup-stage evidence identifies the cause.
 	const options = { cwd, env, encoding: "utf8" as const, timeout: 25_000 };
 	const launcher = [fileURLToPath(import.meta.resolve("tsx/cli")), "--tsconfig", tsconfig];
 	// Positive control: the source CLI itself works without built workspace packages.

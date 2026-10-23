@@ -53,6 +53,7 @@ const TRANSIENT_CODES = new Set([
 	"service_unavailable",
 	"internal_error",
 	"timeout_error",
+	"stream_incomplete",
 ]);
 const AUTH_CODES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const NETWORK_CODES = new Set([

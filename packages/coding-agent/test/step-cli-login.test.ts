@@ -265,6 +265,95 @@ describe("Step CLI login poll", () => {
 		).rejects.toMatchObject({ kind: "protocol" });
 	});
 
+	it("carries the account session beside the api_key when the backend sends one", async () => {
+		const login = {
+			access_token: "access-jwt",
+			refresh_token: "refresh-jwt",
+			device_id: "device-1",
+			app_id: "10300",
+			expires_in: 1800,
+		};
+		await expect(
+			pollStepCliLogin({
+				authBaseUrl: AUTH_BASE_URL,
+				pollToken: "token",
+				flowId: "flow-1",
+				fetch: async () => json({ status: 0, state: "ready", credential: { api_key: "sk-step", login } }),
+			}),
+		).resolves.toEqual({
+			state: "ready",
+			apiKey: "sk-step",
+			login: {
+				accessToken: "access-jwt",
+				refreshToken: "refresh-jwt",
+				deviceId: "device-1",
+				appId: "10300",
+				expiresIn: 1800,
+			},
+		});
+	});
+
+	it("treats a ready response without a login field as api-key-only", async () => {
+		await expect(
+			pollStepCliLogin({
+				authBaseUrl: AUTH_BASE_URL,
+				pollToken: "token",
+				flowId: "flow-1",
+				fetch: async () => json({ status: 0, state: "ready", credential: { api_key: "sk-step" } }),
+			}),
+		).resolves.toEqual({ state: "ready", apiKey: "sk-step" });
+	});
+
+	it("degrades to api-key-only when a login field is unusable", async () => {
+		// A session problem must never cost the user their key: the key is already
+		// in hand, so the unusable session is reported and dropped instead.
+		for (const login of [
+			{ access_token: "a", refresh_token: "b", device_id: "d" },
+			{ access_token: "a", refresh_token: "b", app_id: "10300" },
+			{ access_token: "a", device_id: "d", app_id: "10300" },
+			"not-an-object",
+		]) {
+			await expect(
+				pollStepCliLogin({
+					authBaseUrl: AUTH_BASE_URL,
+					pollToken: "token",
+					flowId: "flow-1",
+					fetch: async () => json({ status: 0, state: "ready", credential: { api_key: "sk-step", login } }),
+				}),
+			).resolves.toMatchObject({ state: "ready", apiKey: "sk-step", loginError: expect.any(String) });
+		}
+	});
+
+	it("treats an unusable expires_in as absent rather than as a broken session", async () => {
+		await expect(
+			pollStepCliLogin({
+				authBaseUrl: AUTH_BASE_URL,
+				pollToken: "token",
+				flowId: "flow-1",
+				fetch: async () =>
+					json({
+						status: 0,
+						state: "ready",
+						credential: {
+							api_key: "sk-step",
+							login: {
+								access_token: "a",
+								refresh_token: "b",
+								device_id: "d",
+								app_id: "10300",
+								expires_in: "soon",
+							},
+						},
+					}),
+			}),
+		).resolves.toEqual({
+			state: "ready",
+			apiKey: "sk-step",
+			// The CLI falls back to the token's own expiry, so this stays advisory.
+			login: { accessToken: "a", refreshToken: "b", deviceId: "d", appId: "10300" },
+		});
+	});
+
 	it("classifies retryable and fatal failures", () => {
 		const make = (kind: "http" | "protocol" | "transport", httpStatus?: number) =>
 			new StepCliLoginRequestError(kind, "boom", httpStatus === undefined ? {} : { httpStatus });

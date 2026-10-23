@@ -51,6 +51,7 @@ import {
 	streamSimple,
 } from "@step-harness/providers/compat";
 import { getAgentDir } from "../config.ts";
+import { redactSecretString } from "../step/secret-redaction.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { sleep } from "../utils/sleep.ts";
@@ -78,6 +79,8 @@ import {
 	type LiveContextOutcome,
 	type LiveContextStatus,
 } from "./compaction/live-context/manager.ts";
+import { StableContextNotices } from "./compaction/live-context/stable-notices.ts";
+import { formatRetryPolicy, formatSummaryDiagnostics, SummaryFailure } from "./compaction/summary-diagnostics.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -882,6 +885,7 @@ export class AgentSession {
 
 	private _installLiveContext(): void {
 		const transform = this.agent.transformContext;
+		const notices = new StableContextNotices();
 		this.agent.transformContext = async (raw, signal) => {
 			const live = this._getLiveContext();
 			if (!live) return transform ? transform(raw, signal) : raw;
@@ -911,9 +915,7 @@ export class AgentSession {
 				this.model?.contextWindow ?? 0,
 				guidanceOptions,
 			);
-			return notice || pressure
-				? [...messages, ...(notice ? [notice] : []), ...(pressure ? [pressure] : [])]
-				: messages;
+			return notices.project(messages, [...(notice ? [notice] : []), ...(pressure ? [pressure] : [])]);
 		};
 		const stream = this.agent.streamFunction;
 		this._liveContextBaseStream = stream;
@@ -1078,6 +1080,33 @@ export class AgentSession {
 			steering: [...this._steeringMessages],
 			followUp: [...this._followUpMessages],
 		});
+	}
+
+	private _recordCompactionFailure(error: unknown, reason: "manual" | "threshold" | "overflow"): string {
+		const settings = this.settingsManager.getCompactionSettings();
+		const retry = this.settingsManager.getRetrySettings();
+		const message = redactSecretString(error instanceof Error ? error.message : String(error));
+		const diagnostics = error instanceof SummaryFailure ? error.diagnostics : undefined;
+		const model = this.model;
+		const configuration = `Compaction settings: reserveTokens=${settings.reserveTokens}, keepRecentTokens=${settings.keepRecentTokens}; ${formatRetryPolicy(retry)}; configurationSource=unknown.`;
+		const request = diagnostics
+			? formatSummaryDiagnostics(diagnostics)
+			: `Selected model (request not observed): provider=${model?.provider ?? "unknown"}, model=${model?.id ?? "unknown"}, contextWindow=${model?.contextWindow ?? "unknown"}, model.maxTokens=${model?.maxTokens ?? "unknown"}.`;
+		let result = redactSecretString(`${message}\n${request}\n${configuration}`);
+		try {
+			this.sessionManager.appendCustomEntry("step-compaction-failure", {
+				version: 1,
+				reason,
+				errorMessage: message,
+				diagnostics,
+				settings: { reserveTokens: settings.reserveTokens, keepRecentTokens: settings.keepRecentTokens },
+				retry: { enabled: retry.enabled, maxRetries: retry.maxRetries, baseDelayMs: retry.baseDelayMs },
+				configurationSource: "unknown",
+			});
+		} catch {
+			result += "\nCould not persist compaction diagnostics; original failure retained.";
+		}
+		return result;
 	}
 
 	private async _emitSessionCompactFailed(event: Omit<SessionCompactFailedEvent, "type">): Promise<void> {
@@ -2709,7 +2738,9 @@ export class AgentSession {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
-			const errorMessage = aborted ? undefined : `Compaction failed: ${message}`;
+			const errorMessage = aborted
+				? undefined
+				: `Compaction failed: ${this._recordCompactionFailure(error, "manual")}`;
 			this._compactionAbortController = undefined;
 			this._emit({
 				type: "compaction_end",
@@ -2726,6 +2757,7 @@ export class AgentSession {
 				willRetry: false,
 				fromExtension,
 			});
+			if (!aborted && errorMessage) throw new Error(errorMessage, { cause: error });
 			throw error;
 		} finally {
 			this._compactionAbortController = undefined;
@@ -3077,14 +3109,14 @@ export class AgentSession {
 			// Continue once so queued messages are delivered.
 			return this.agent.hasQueuedMessages();
 		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {
 				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;
+				const failureDetails = aborted ? undefined : this._recordCompactionFailure(error, reason);
 				const formattedErrorMessage = aborted
 					? undefined
 					: reason === "overflow"
-						? `Context overflow recovery failed: ${errorMessage}`
-						: `Auto-compaction failed: ${errorMessage}`;
+						? `Context overflow recovery failed: ${failureDetails}`
+						: `Auto-compaction failed: ${failureDetails}`;
 				this._emit({
 					type: "compaction_end",
 					reason,

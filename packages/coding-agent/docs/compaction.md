@@ -34,6 +34,16 @@ The native pipeline has two summarization mechanisms:
 
 Both use the same structured summary format and track file operations cumulatively. Compaction and branch-summary requests use fresh routing session IDs and, where supported by the provider, disable prompt-cache writes because these one-off prompts are unlikely to be reused.
 
+## Failure diagnostics
+
+Native compaction failures include a safe configuration snapshot in the error shown by TUI, RPC, and SDK. The snapshot reports the runtime model/provider/API, context window, model output limit, selected summary output budget, observed payload output budget when available, approximate input size, reasoning option, request attempts and elapsed time, stop reason and error kind. It also includes compaction reserve/retention and retry settings.
+
+`selectedMaxTokens` is the caller's budget; `observedPayloadMaxTokens` is the numeric output cap observed through the provider payload callback after context/adapter adjustments. Custom streams that do not invoke this callback report `unknown`. Input estimates use serialized characters/4, not the provider tokenizer. Configuration provenance is currently `unknown`; values describe effective runtime settings, not a guessed disk configuration.
+
+Non-cancelled failures append a versioned `step-compaction-failure` custom entry to the session JSONL (when persistence is enabled). This entry is not added to model context and contains no failed summary, prompt, headers, URL, or environment dump. Credential-shaped error text is redacted. Failure to persist diagnostics does not replace the original error. Cancelled requests do not create failure entries.
+
+A `length` response remains an incomplete summary and is never saved as a successful checkpoint. Check model output limits and input headroom rather than assuming increasing `reserveTokens` increases the output cap. Transient transport failures use the existing bounded retry policy; deterministic malformed responses and cancellations do not become network retries.
+
 ## Compaction
 
 ### When It Triggers

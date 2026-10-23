@@ -279,6 +279,24 @@ describe("Step settings manager decorator", () => {
 		expect(JSON.parse(readFileSync(fixture.paths.global, "utf8"))).toEqual({});
 	});
 
+	it("reads the [subagent] background settings and ignores invalid values", () => {
+		const fixture = makeRoot();
+		writeFileSync(
+			fixture.paths.global,
+			JSON.stringify({ subagent: { background: false, background_timeout_seconds: 900 } }),
+		);
+		writeFileSync(fixture.paths.project, JSON.stringify({ subagent: { background_timeout_seconds: -5 } }));
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({
+			subagentBackground: false,
+			subagentBackgroundTimeoutSeconds: 900,
+		});
+		expect(() => manager.setStepSettings({ subagentBackgroundTimeoutSeconds: 0 })).toThrow(
+			/subagentBackgroundTimeoutSeconds/u,
+		);
+	});
+
 	it("lets a project feedback alias override the global canonical setting", () => {
 		const fixture = makeRoot();
 		writeFileSync(fixture.paths.global, JSON.stringify({ feedbackEnabled: true }));
