@@ -198,6 +198,8 @@ interface PromptOptions {
 
 It fires before `prompt()` resolves. `prompt()` still resolves only after the full accepted run finishes, including retries. Failures after acceptance are reported through the normal event and message stream, not through `preflightResult(false)`.
 
+A slash command that hands work to the agent (for example `/plan <task>`) is accepted as soon as its handler returns, so `preflightResult(true)` fires immediately, while the turn it started is still running. `prompt()` still resolves only after that turn settles, so a caller may dispose the session once it returns.
+
 The `prompt()` method handles prompt templates, extension commands, and message sending:
 
 ```typescript

@@ -406,6 +406,22 @@ export class AgentSession {
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
+	/**
+	 * Open extension command handlers and the turns each one started.
+	 *
+	 * `pi.sendUserMessage` and `pi.sendMessage({ triggerTurn })` are
+	 * fire-and-forget bindings, so a command like `/plan <task>` returns while its
+	 * turn is still running. `prompt()` must settle that turn before reporting
+	 * completion: a host that tears down afterwards (print/JSON mode) would
+	 * otherwise dispose the session mid-turn and every in-flight extension would
+	 * observe a stale context.
+	 *
+	 * A stack, not a single slot: two handlers can overlap (one parked on a
+	 * dialog while another is dispatched), and they need not finish in the order
+	 * they started. Every open tracker is charged, so a turn can be over-awaited
+	 * by an unrelated command but never lost — losing it is the bug being fixed.
+	 */
+	private _openCommandTurns: Promise<unknown>[][] = [];
 
 	private _modelRuntime: ModelRuntime;
 	private _agentDir?: string;
@@ -1810,10 +1826,11 @@ export class AgentSession {
 			// Handle extension commands first (execute immediately, even during streaming)
 			// Extension commands manage their own LLM interaction via pi.sendMessage()
 			if (expandPromptTemplates && text.startsWith("/")) {
-				const handled = await this._tryExecuteExtensionCommand(text);
+				// A command is accepted as soon as its handler returns for prompt
+				// purposes, even though the turn it started may still be running.
+				const handled = await this._tryExecuteExtensionCommand(text, () => preflightResult?.(true));
 				if (handled) {
 					// Extension command executed, no prompt to send
-					preflightResult?.(true);
 					return;
 				}
 			}
@@ -1970,13 +1987,16 @@ export class AgentSession {
 	/**
 	 * Try to execute an extension command. Returns true if command was found and executed.
 	 */
-	private async _tryExecuteExtensionCommand(text: string): Promise<boolean> {
+	private async _tryExecuteExtensionCommand(text: string, onAccepted?: () => void): Promise<boolean> {
 		// Parse command name and args
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
 
-		if (await this._handleLiveContextCommand(commandName, args)) return true;
+		if (await this._handleLiveContextCommand(commandName, args)) {
+			onAccepted?.();
+			return true;
+		}
 
 		const command = this._extensionRunner.getCommand(commandName);
 		if (!command) return false;
@@ -1984,9 +2004,10 @@ export class AgentSession {
 		// Get command context from extension runner (includes session control methods)
 		const ctx = this._extensionRunner.createCommandContext();
 
+		const turns: Promise<unknown>[] = [];
+		this._openCommandTurns.push(turns);
 		try {
 			await command.handler(args, ctx);
-			return true;
 		} catch (err) {
 			// Emit error via extension runner
 			this._extensionRunner.emitError({
@@ -1994,8 +2015,24 @@ export class AgentSession {
 				event: "command",
 				error: err instanceof Error ? err.message : String(err),
 			});
-			return true;
+		} finally {
+			const index = this._openCommandTurns.indexOf(turns);
+			if (index !== -1) this._openCommandTurns.splice(index, 1);
 		}
+
+		// The handler may have handed work to the agent and returned. Acceptance is
+		// known now — a caller gating on it (RPC) must not wait for the turn — but
+		// completion is not, so settle before letting the caller tear the session
+		// down. Each binding already reports its own failure; settling must not
+		// rethrow or mask the command's result.
+		onAccepted?.();
+		if (turns.length > 0) await Promise.allSettled(turns);
+		return true;
+	}
+
+	/** Record a turn started by any open command handler, so its prompt can wait. */
+	private _trackDeferredCommandTurn(turn: Promise<unknown>): void {
+		for (const tracker of this._openCommandTurns) tracker.push(turn);
 	}
 
 	/**
@@ -3284,7 +3321,9 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				sendMessage: (message, options) => {
-					this.sendCustomMessage(message, options).catch((err) => {
+					const turn = this.sendCustomMessage(message, options);
+					this._trackDeferredCommandTurn(turn);
+					turn.catch((err) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_message",
@@ -3293,7 +3332,9 @@ export class AgentSession {
 					});
 				},
 				sendUserMessage: (content, options) => {
-					this.sendUserMessage(content, options).catch((err) => {
+					const turn = this.sendUserMessage(content, options);
+					this._trackDeferredCommandTurn(turn);
+					turn.catch((err) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_user_message",

@@ -1440,6 +1440,8 @@ pi.sendMessage({
 
 Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user message that appears as if typed by the user. Always triggers a turn.
 
+The call is fire-and-forget: it returns before the turn finishes. Inside a command handler, a turn started this way is still awaited before `prompt()` resolves, so a host that disposes right after a prompt (print and JSON mode) does not tear the session down mid-turn. Await the call yourself when you need its result before continuing. The same applies to `sendMessage(..., { triggerTurn: true })`.
+
 ```typescript
 // Simple text message
 pi.sendUserMessage("What is 2+2?");
