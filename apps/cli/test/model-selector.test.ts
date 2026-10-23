@@ -51,6 +51,22 @@ describe("model selector", () => {
 		});
 	});
 
+	it("advertises Enter as select-and-save and no longer mentions Ctrl+S", async () => {
+		harness = await createHarness();
+		selector = new ModelSelectorComponent(
+			createFakeTui(),
+			harness.getModel(),
+			harness.session.modelRuntime,
+			[],
+			() => {},
+			() => {},
+		);
+
+		const rendered = stripAnsi(selector.render(120).join("\n"));
+		expect(rendered).toContain("Enter to select and save as default");
+		expect(rendered).not.toContain("Ctrl+S");
+	});
+
 	it("shows recent models first once, with current/default badges and keyboard selection", async () => {
 		harness = await createHarness({
 			models: [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }, { id: "gamma", name: "Gamma" }],
@@ -59,7 +75,7 @@ describe("model selector", () => {
 		const onSelect = vi.fn();
 		selector = new ModelSelectorComponent(
 			createFakeTui(), beta, harness.session.modelRuntime, [], onSelect, () => {},
-			undefined, undefined, beta, [gamma, beta, gamma, { provider: "missing", id: "missing" }],
+			undefined, beta, [gamma, beta, gamma, { provider: "missing", id: "missing" }],
 		);
 		await vi.waitFor(() => expect(stripAnsi(selector!.render(120).join("\n"))).toContain("Model catalogs refreshed."));
 		const rendered = stripAnsi(selector.render(120).join("\n"));
@@ -79,10 +95,10 @@ describe("model selector", () => {
 			models: [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }],
 		});
 		const [alpha, beta] = harness.models;
-		const onDefault = vi.fn();
+		const onSelect = vi.fn();
 		selector = new ModelSelectorComponent(
-			createFakeTui(), alpha, harness.session.modelRuntime, [], () => {}, () => {},
-			undefined, onDefault, beta, [beta],
+			createFakeTui(), alpha, harness.session.modelRuntime, [], onSelect, () => {},
+			undefined, beta, [beta],
 		);
 		for (const char of "default") selector.handleInput(char);
 		const searched = stripAnsi(selector.render(120).join("\n"));
@@ -92,8 +108,8 @@ describe("model selector", () => {
 		expect(searched).toContain(`→ ${beta.id}`);
 		for (const char of "default") selector.handleInput("\x7f");
 		expect(stripAnsi(selector.render(120).join("\n"))).toContain("Recent");
-		selector.handleInput("\x13");
-		expect(onDefault).toHaveBeenCalledWith(expect.objectContaining({ id: beta.id }));
+		selector.handleInput("\r");
+		expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: beta.id }));
 	});
 
 	it("filters recent models to the active scope and restores them in All", async () => {
@@ -103,7 +119,7 @@ describe("model selector", () => {
 		const [alpha, beta, gamma] = harness.models;
 		selector = new ModelSelectorComponent(
 			createFakeTui(), beta, harness.session.modelRuntime, [{ model: beta }, { model: alpha }],
-			() => {}, () => {}, undefined, undefined, undefined, [gamma, alpha],
+			() => {}, () => {}, undefined, undefined, [gamma, alpha],
 		);
 		const scoped = stripAnsi(selector.render(120).join("\n"));
 		expect(scoped).toContain("Recent");
@@ -120,7 +136,7 @@ describe("model selector", () => {
 		harness = await createHarness();
 		selector = new ModelSelectorComponent(
 			createFakeTui(), harness.getModel(), harness.session.modelRuntime, [], () => {}, () => {},
-			undefined, undefined, undefined, [{ provider: "missing", id: "missing" }],
+			undefined, undefined, [{ provider: "missing", id: "missing" }],
 		);
 		expect(stripAnsi(selector.render(120).join("\n"))).not.toContain("Recent");
 	});
@@ -133,7 +149,7 @@ describe("model selector", () => {
 		const onSelect = vi.fn();
 		selector = new ModelSelectorComponent(
 			createFakeTui(), model, harness.session.modelRuntime, [], onSelect, () => {},
-			undefined, undefined, undefined, [other, model],
+			undefined, undefined, [other, model],
 		);
 		const rows = stripAnsi(selector.render(120).join("\n"))
 			.split("\n")
@@ -152,7 +168,7 @@ describe("model selector", () => {
 		const onSelect = vi.fn();
 		selector = new ModelSelectorComponent(
 			createFakeTui(), harness.models[0], harness.session.modelRuntime, [], onSelect, () => {},
-			undefined, undefined, undefined, harness.models.slice(0, 10),
+			undefined, undefined, harness.models.slice(0, 10),
 		);
 		for (let i = 0; i < 10; i++) selector.handleInput("\x1b[B");
 		const rendered = stripAnsi(selector.render(120).join("\n"));

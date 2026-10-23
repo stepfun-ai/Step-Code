@@ -37,6 +37,8 @@ export interface Args {
 	sessionId?: string;
 	fork?: string;
 	sessionDir?: string;
+	/** Working directory override. Defaults to process.cwd() when unset. */
+	cwd?: string;
 	models?: string[];
 	tools?: string[];
 	excludeTools?: string[];
@@ -391,6 +393,12 @@ export function parseArgs(args: string[]): Args {
 				result.sessionDir = taken.value;
 				i = taken.nextIndex;
 			}
+		} else if (arg === "--cwd" || arg === "-C") {
+			const taken = takeOptionValue(args, i, "--cwd", result);
+			if (taken) {
+				result.cwd = taken.value;
+				i = taken.nextIndex;
+			}
 		} else if (arg === "--models") {
 			const taken = takeOptionValue(args, i, "--models", result);
 			if (taken) {
@@ -673,6 +681,7 @@ ${stepPermissionOptionsText}
   --session-id <id>              Use exact project session ID, creating it if missing
   --fork <path|id>               Fork specific session file or partial UUID into a new session
   --session-dir <dir>            Directory for session storage and lookup
+  --cwd, -C <dir>                Working directory (defaults to the process cwd)
   --no-session                   Don't save session (ephemeral)
   --name, -n <name>              Set session display name
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling

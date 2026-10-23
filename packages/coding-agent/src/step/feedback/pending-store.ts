@@ -43,6 +43,28 @@ const BUNDLE_ENTRY_LIMITS: Readonly<Record<string, number>> = {
 	"resume.json": 8 * 1024 * 1024,
 	"dev.log": 512 * 1024,
 };
+/**
+ * Full tool output attached by the bundle: one directory level, fixed prefix,
+ * hex name. A retry re-reads these, so an archive that carried them must stay
+ * valid; without this a stored archive is rejected and can never be re-sent.
+ */
+const TOOL_OUTPUT_ENTRY = /^tool-output\/tool-[0-9a-f]{32}\.txt$/u;
+const TOOL_OUTPUT_ENTRY_LIMIT = 2 * 1024 * 1024;
+/** The largest a single archive entry may be, whichever rule names it. */
+const MAX_BUNDLE_ENTRY_BYTES = 24 * 1024 * 1024;
+/** events + dev.log + manifest + the bundle's ten tool-output files, with headroom. */
+const MAX_BUNDLE_ENTRIES = 16;
+
+function bundleEntryLimit(name: string): number | undefined {
+	return BUNDLE_ENTRY_LIMITS[name] ?? (TOOL_OUTPUT_ENTRY.test(name) ? TOOL_OUTPUT_ENTRY_LIMIT : undefined);
+}
+
+/** A legacy archive names its members differently; both layouts are valid input. */
+function anyEntryLimit(name: string): number | undefined {
+	if (name === LEGACY_SESSION_ENTRY) return BUNDLE_ENTRY_LIMITS["events.jsonl"];
+	if (name === LEGACY_MANIFEST_ENTRY) return BUNDLE_ENTRY_LIMITS[BUNDLE_MANIFEST_ENTRY];
+	return bundleEntryLimit(name);
+}
 
 export interface PendingFeedbackEntry {
 	feedbackId: string;
@@ -133,7 +155,7 @@ export async function normalizePendingFeedbackBundle(data: Buffer): Promise<Buff
 
 	const names = new Set(entries.map((entry) => entry.name));
 	if (names.has(BUNDLE_MANIFEST_ENTRY)) {
-		if (entries.some((entry) => BUNDLE_ENTRY_LIMITS[entry.name] === undefined)) return undefined;
+		if (entries.some((entry) => bundleEntryLimit(entry.name) === undefined)) return undefined;
 		const manifest = entries.find((entry) => entry.name === BUNDLE_MANIFEST_ENTRY);
 		const createdAt = manifest ? validCurrentBundleManifest(manifest.content, entries) : undefined;
 		if (!createdAt) return undefined;
@@ -238,7 +260,19 @@ async function readSubmission(
 		const submission = value as Record<string, unknown>;
 		if (
 			Object.keys(submission).some(
-				(key) => !["feedbackId", "category", "comment", "at", "context", "diagnostics"].includes(key),
+				(key) =>
+					![
+						"feedbackId",
+						"category",
+						"comment",
+						"at",
+						"context",
+						"diagnostics",
+						"schemaVersion",
+						"surface",
+						"sessionSummary",
+						"request",
+					].includes(key),
 			)
 		) {
 			return undefined;
@@ -258,8 +292,12 @@ async function readSubmission(
 			submission.at.length > MAX_AT_LENGTH ||
 			CONTROL_CHARACTERS.test(submission.at) ||
 			!Number.isFinite(Date.parse(submission.at)) ||
+			!isStrictSchemaVersion(submission.schemaVersion) ||
+			!isStrictSurface(submission.surface) ||
 			!isStrictContext(submission.context) ||
-			!isStrictDiagnostics(submission.diagnostics)
+			!isStrictDiagnostics(submission.diagnostics) ||
+			!isStrictSummary(submission.sessionSummary) ||
+			!isStrictRequest(submission.request)
 		) {
 			return undefined;
 		}
@@ -277,12 +315,36 @@ async function rejectSymbolicLink(filePath: string): Promise<void> {
 function isStrictContext(value: unknown): value is FeedbackSubmission["context"] {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const context = value as Record<string, unknown>;
-	const allowed = new Set(["channel", "version", "platform", "commit", "sessionId", "deviceId", "uid", "username"]);
+	const allowed = new Set([
+		"channel",
+		"version",
+		"versionSource",
+		"buildTime",
+		"runtime",
+		"platform",
+		"arch",
+		"osRelease",
+		"locale",
+		"installSource",
+		"commit",
+		"sessionId",
+		"deviceId",
+		"uid",
+		"username",
+	]);
 	if (Object.keys(context).some((key) => !allowed.has(key))) return false;
 	for (const key of ["channel", "version", "platform"] as const) {
 		const field = context[key];
 		if (!isSafeContextString(field, MAX_CONTEXT_VALUE_LENGTH)) return false;
 	}
+	for (const key of ["arch", "osRelease", "locale", "installSource"] as const) {
+		const field = context[key];
+		if (field !== undefined && !isSafeContextString(field, MAX_CONTEXT_VALUE_LENGTH)) return false;
+	}
+	if (context.versionSource !== undefined && !isKnownVersionSource(context.versionSource)) return false;
+	if (context.buildTime !== undefined && normalizeStepCommitForPending(context.buildTime) !== context.buildTime)
+		return false;
+	if (context.runtime !== undefined && !isStrictRuntimeVersions(context.runtime)) return false;
 	if (context.commit !== undefined && normalizeStepCommitForPending(context.commit) !== context.commit) return false;
 	if (context.deviceId !== undefined && normalizeStepDeviceId(context.deviceId) !== context.deviceId) return false;
 	if (context.sessionId !== undefined && normalizeStepWireSessionId(context.sessionId) !== context.sessionId)
@@ -301,6 +363,23 @@ function normalizeStepCommitForPending(value: unknown): string | undefined {
 		redactSecretString(trimmed) === trimmed
 		? trimmed
 		: undefined;
+}
+
+function isKnownVersionSource(value: unknown): boolean {
+	return value === "override" || value === "embedded" || value === "fallback";
+}
+
+/** Interpreter versions: short, printable, and never free text. */
+function isStrictRuntimeVersions(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const runtime = value as Record<string, unknown>;
+	if (Object.keys(runtime).some((key) => !["node", "electron", "bun"].includes(key))) return false;
+	for (const key of ["node", "electron", "bun"] as const) {
+		const field = runtime[key];
+		if (field === undefined) continue;
+		if (typeof field !== "string" || !/^[0-9][\w.+-]{0,31}$/u.test(field)) return false;
+	}
+	return true;
 }
 
 function isSafeContextString(value: unknown, maxLength: number): value is string {
@@ -456,7 +535,7 @@ function validCurrentBundleManifest(content: Buffer, entries: readonly TarEntry[
 			const descriptor = file as Record<string, unknown>;
 			if (Object.keys(descriptor).some((key) => !descriptorKeys.has(key))) return undefined;
 			if (typeof descriptor.name !== "string" || describedNames.has(descriptor.name)) return undefined;
-			if (BUNDLE_ENTRY_LIMITS[descriptor.name] === undefined) return undefined;
+			if (bundleEntryLimit(descriptor.name) === undefined) return undefined;
 			const entry = payloadEntries.get(descriptor.name);
 			if (
 				!entry ||
@@ -491,24 +570,27 @@ function readTarEntries(tar: Buffer): TarEntry[] | undefined {
 			if (!tar.subarray(offset).every((byte) => byte === 0)) return undefined;
 			return entries;
 		}
-		if (entries.length >= Object.keys(BUNDLE_ENTRY_LIMITS).length) return undefined;
+		if (entries.length >= MAX_BUNDLE_ENTRIES) return undefined;
 		if (!validTarChecksum(header)) return undefined;
 		const name = readTarString(header, 0, 100);
-		if (!name || name.includes("/") || readTarString(header, 345, 155) !== "" || names.has(name)) {
+		// One nested directory is allowed only for the fixed tool-output name;
+		// every other member is flat.
+		const known = name === undefined ? undefined : anyEntryLimit(name);
+		const nested = name !== undefined && TOOL_OUTPUT_ENTRY.test(name);
+		if (
+			!name ||
+			known === undefined ||
+			(!nested && name.includes("/")) ||
+			readTarString(header, 345, 155) !== "" ||
+			names.has(name)
+		) {
 			return undefined;
 		}
 		const typeFlag = header[156];
 		if (typeFlag !== 0 && typeFlag !== 0x30) return undefined;
 		const size = readTarOctal(header, 124, 12);
 		if (size === undefined) return undefined;
-		const knownLimit =
-			BUNDLE_ENTRY_LIMITS[name] ??
-			(name === LEGACY_SESSION_ENTRY
-				? BUNDLE_ENTRY_LIMITS["events.jsonl"]
-				: name === LEGACY_MANIFEST_ENTRY
-					? BUNDLE_ENTRY_LIMITS[BUNDLE_MANIFEST_ENTRY]
-					: undefined);
-		if (knownLimit === undefined || size > knownLimit) return undefined;
+		if (known === undefined || size > Math.min(known, MAX_BUNDLE_ENTRY_BYTES)) return undefined;
 		const contentStart = offset + TAR_BLOCK_BYTES;
 		const contentEnd = contentStart + size;
 		if (contentEnd > tar.byteLength) return undefined;
@@ -644,4 +726,273 @@ function writeTar(entries: readonly TarEntry[], at: Date): Buffer {
 function writeTarOctal(target: Buffer, offset: number, length: number, value: number): void {
 	const text = `${value.toString(8)}\0`.padStart(length, "0").slice(-length);
 	Buffer.from(text, "ascii").copy(target, offset, 0, length);
+}
+
+function isStrictSchemaVersion(value: unknown): boolean {
+	return value === undefined || (Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 100);
+}
+
+const FEEDBACK_SURFACES = new Set(["cli", "tui", "web", "desktop", "sdk"]);
+
+function isStrictSurface(value: unknown): boolean {
+	return value === undefined || (typeof value === "string" && FEEDBACK_SURFACES.has(value));
+}
+
+/**
+ * The summary is content-free, so it is validated by shape and bounds only:
+ * counts and token totals are non-negative integers, every string is a safe
+ * bounded identifier, and no unexpected key can smuggle free text in.
+ */
+function isStrictSummary(value: unknown): boolean {
+	if (value === undefined) return true;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const summary = value as Record<string, unknown>;
+	const allowed = new Set([
+		"model",
+		"thinkingLevel",
+		"cwd",
+		"counts",
+		"usage",
+		"thinkingMs",
+		"recentErrors",
+		"lastTurnTools",
+		"features",
+		"request",
+		"compactions",
+		"compactionTotals",
+		"runtime",
+		"truncated",
+	]);
+	if (Object.keys(summary).some((key) => !allowed.has(key))) return false;
+	if (summary.model !== undefined) {
+		const model = summary.model;
+		if (!model || typeof model !== "object" || Array.isArray(model)) return false;
+		const entry = model as Record<string, unknown>;
+		if (Object.keys(entry).some((key) => !["provider", "id", "api"].includes(key))) return false;
+		if (!isSafeContextString(entry.provider, MAX_CONTEXT_VALUE_LENGTH)) return false;
+		if (!isSafeContextString(entry.id, MAX_CONTEXT_VALUE_LENGTH)) return false;
+		if (entry.api !== undefined && !isSafeContextString(entry.api, MAX_CONTEXT_VALUE_LENGTH)) return false;
+	}
+	for (const key of ["thinkingLevel", "cwd"] as const) {
+		if (summary[key] !== undefined && !isSafeContextString(summary[key], MAX_CONTEXT_VALUE_LENGTH)) return false;
+	}
+	if (!isStrictCounts(summary.counts)) return false;
+	if (!isEverySummaryRecord(summary.compactions, 20, isStrictSummaryCompaction)) return false;
+	if (summary.compactionTotals !== undefined && !isStrictCompactionTotals(summary.compactionTotals)) return false;
+	if (summary.runtime !== undefined && !isStrictRuntimeFacts(summary.runtime)) return false;
+	if (!isStrictUsage(summary.usage)) return false;
+	if (summary.thinkingMs !== undefined && !isCount(summary.thinkingMs)) return false;
+	if (!isEverySummaryRecord(summary.recentErrors, 20, isStrictSummaryError)) return false;
+	if (!isEverySummaryRecord(summary.lastTurnTools, 50, isStrictSummaryTool)) return false;
+	if (summary.features !== undefined) {
+		const features = summary.features;
+		if (!features || typeof features !== "object" || Array.isArray(features)) return false;
+		const entry = features as Record<string, unknown>;
+		if (Object.keys(entry).some((key) => !["planMode", "planSource", "goal", "tasks"].includes(key))) return false;
+		if (entry.planMode !== undefined && typeof entry.planMode !== "boolean") return false;
+		for (const key of ["planSource", "goal"] as const) {
+			if (entry[key] !== undefined && !isSafeContextString(entry[key], MAX_CONTEXT_VALUE_LENGTH)) return false;
+		}
+		if (entry.tasks !== undefined && !isStrictCounts(entry.tasks)) return false;
+	}
+	if (summary.request !== undefined && !isStrictRequest(summary.request)) return false;
+	if (summary.truncated !== undefined && typeof summary.truncated !== "boolean") return false;
+	return true;
+}
+
+function isStrictRequest(value: unknown): boolean {
+	if (value === undefined) return true;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const request = value as Record<string, unknown>;
+	const allowed = [
+		"requestId",
+		"provider",
+		"model",
+		"api",
+		"reasoning",
+		"sourceLeafId",
+		"contextWindow",
+		"maxTokens",
+		"responseProvider",
+		"responseModel",
+		"statusCode",
+		"durationMs",
+		"ttftMs",
+		"outcome",
+	];
+	if (Object.keys(request).some((key) => !allowed.includes(key))) return false;
+	if (!isSafeContextString(request.requestId, MAX_CONTEXT_VALUE_LENGTH)) return false;
+	for (const key of [
+		"provider",
+		"model",
+		"api",
+		"reasoning",
+		"sourceLeafId",
+		"responseProvider",
+		"responseModel",
+	] as const) {
+		if (request[key] !== undefined && !isSafeContextString(request[key], MAX_CONTEXT_VALUE_LENGTH)) return false;
+	}
+	for (const key of ["contextWindow", "maxTokens", "statusCode", "durationMs"] as const) {
+		if (request[key] !== undefined && !isCount(request[key])) return false;
+	}
+	if (request.ttftMs !== undefined && request.ttftMs !== null && !isCount(request.ttftMs)) return false;
+	if (
+		request.outcome !== undefined &&
+		request.outcome !== "ok" &&
+		request.outcome !== "http_error" &&
+		request.outcome !== "transport_error"
+	)
+		return false;
+	return true;
+}
+
+/** Host facts: identifiers, counts, and the live context size. No URLs or free text. */
+function isStrictRuntimeFacts(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const facts = value as Record<string, unknown>;
+	const allowed = ["permissionPreset", "contextUsed", "contextWindow", "toolCount", "skillCount", "mcpServerNames"];
+	if (Object.keys(facts).some((key) => !allowed.includes(key))) return false;
+	if (facts.permissionPreset !== undefined && !isSafeContextString(facts.permissionPreset, MAX_CONTEXT_VALUE_LENGTH))
+		return false;
+	for (const key of ["contextUsed", "contextWindow", "toolCount", "skillCount"] as const) {
+		if (facts[key] !== undefined && !isCount(facts[key])) return false;
+	}
+	if (facts.mcpServerNames !== undefined) {
+		if (!Array.isArray(facts.mcpServerNames) || facts.mcpServerNames.length > 32) return false;
+		if (!facts.mcpServerNames.every((name) => isSafeContextString(name, MAX_CONTEXT_VALUE_LENGTH))) return false;
+	}
+	return true;
+}
+
+function isStrictCompactionTotals(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const totals = value as Record<string, unknown>;
+	const allowed = ["passes", "resolved", "tokensBefore", "tokensAfter", "reclaimed"];
+	if (Object.keys(totals).some((key) => !allowed.includes(key))) return false;
+	for (const key of allowed) {
+		const value = totals[key];
+		if (value === undefined) continue;
+		// `reclaimed` is a difference: a compaction that did not shrink the window
+		// is negative, and that is exactly the case a report must still deliver.
+		if (key === "reclaimed") {
+			if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > 1e12) return false;
+			continue;
+		}
+		if (!isCount(value)) return false;
+	}
+	return true;
+}
+
+function isStrictCounts(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const entry = value as Record<string, unknown>;
+	const keys = Object.keys(entry);
+	if (keys.length === 0) return false;
+	for (const key of keys) {
+		if (
+			![
+				"turns",
+				"assistantMessages",
+				"toolCalls",
+				"toolErrors",
+				"failedAttempts",
+				"abortedAttempts",
+				"truncatedAttempts",
+				"modelRequests",
+				"compactions",
+				"customEntries",
+				"completed",
+				"total",
+			].includes(key)
+		)
+			return false;
+		if (!isCount(entry[key])) return false;
+	}
+	return true;
+}
+
+function isStrictUsage(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const entry = value as Record<string, unknown>;
+	const keys = Object.keys(entry);
+	if (keys.length === 0) return false;
+	for (const key of keys) {
+		if (key === "costUsd") {
+			if (typeof entry[key] !== "number" || !Number.isFinite(entry[key] as number)) return false;
+			continue;
+		}
+		if (key === "cacheHitRate") {
+			const rate = entry[key];
+			if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > 1) return false;
+			continue;
+		}
+		if (!["input", "output", "cacheRead", "cacheWrite", "reasoning", "total"].includes(key)) return false;
+		if (!isCount(entry[key])) return false;
+	}
+	return true;
+}
+
+function isCount(value: unknown): boolean {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1e12;
+}
+
+/**
+ * The summary's free-text and identifier fields.
+ *
+ * A pending body can be edited after it was written, so this is the last place
+ * that can refuse one: an unbounded `message` or a `toolName` carrying markup
+ * would reach the collector as-is.
+ */
+const SUMMARY_ERROR_KEYS = new Set([
+	"kind",
+	"toolName",
+	"stopReason",
+	"errorKind",
+	"message",
+	"durationMs",
+	"ttftMs",
+	"reached",
+	"outcome",
+	"at",
+]);
+const SUMMARY_TOOL_KEYS = new Set(["name", "isError"]);
+const SUMMARY_COMPACTION_KEYS = new Set(["tokensBefore", "tokensAfter", "at", "unresolved"]);
+
+function isStrictSummaryError(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const error = value as Record<string, unknown>;
+	if (Object.keys(error).some((key) => !SUMMARY_ERROR_KEYS.has(key))) return false;
+	if (error.kind !== "tool" && error.kind !== "model" && error.kind !== "aborted") return false;
+	for (const key of ["toolName", "stopReason", "errorKind", "reached", "outcome"] as const) {
+		if (error[key] !== undefined && !isSafeContextString(error[key], MAX_CONTEXT_VALUE_LENGTH)) return false;
+	}
+	// The provider's own text is the one long field; bounded like the comment.
+	if (error.message !== undefined && !isSafeContextString(error.message, FEEDBACK_COMMENT_MAX_RUNES)) return false;
+	for (const key of ["durationMs", "ttftMs"] as const) {
+		if (error[key] !== undefined && error[key] !== null && !isCount(error[key])) return false;
+	}
+	if (error.at !== undefined && (typeof error.at !== "string" || !Number.isFinite(Date.parse(error.at)))) return false;
+	return true;
+}
+
+function isStrictSummaryTool(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const tool = value as Record<string, unknown>;
+	if (Object.keys(tool).some((key) => !SUMMARY_TOOL_KEYS.has(key))) return false;
+	return isSafeContextString(tool.name, MAX_CONTEXT_VALUE_LENGTH) && typeof tool.isError === "boolean";
+}
+
+function isStrictSummaryCompaction(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const pass = value as Record<string, unknown>;
+	if (Object.keys(pass).some((key) => !SUMMARY_COMPACTION_KEYS.has(key))) return false;
+	if (!isCount(pass.tokensBefore)) return false;
+	if (pass.tokensAfter !== undefined && !isCount(pass.tokensAfter)) return false;
+	if (pass.at !== undefined && (typeof pass.at !== "string" || !Number.isFinite(Date.parse(pass.at)))) return false;
+	return pass.unresolved === undefined || typeof pass.unresolved === "boolean";
+}
+
+function isEverySummaryRecord(value: unknown, max: number, check: (record: unknown) => boolean): boolean {
+	return value === undefined || (Array.isArray(value) && value.length <= max && value.every(check));
 }

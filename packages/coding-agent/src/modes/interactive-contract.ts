@@ -139,6 +139,8 @@ export interface InteractiveStartupContext {
 export interface StartupTuiPathOptions {
 	agentDir?: string;
 	configDirName?: string;
+	/** Working directory the startup UI discovers project-level resources against. Default: process.cwd() */
+	cwd?: string;
 }
 
 /** Loader used by the session selector to fetch a list of sessions. */

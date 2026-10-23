@@ -5,6 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setCapabilityOverrides } from "@step-harness/pi-tui";
@@ -306,6 +307,7 @@ function assertAllowedAuthProvider(
 async function prepareInitialMessage(
 	parsed: Args,
 	autoResizeImages: boolean,
+	baseDir: string,
 	stdinContent?: string,
 ): Promise<{
 	initialMessage?: string;
@@ -317,6 +319,7 @@ async function prepareInitialMessage(
 
 	const { text, images } = await processFileArguments(parsed.fileArgs, {
 		autoResizeImages,
+		baseDir,
 	});
 	return buildInitialMessage({
 		parsed,
@@ -721,6 +724,11 @@ async function promptForMissingSessionCwd(
 
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
+	/**
+	 * Working directory override. When set, the session, settings discovery,
+	 * and resource loading all key off this path instead of process.cwd().
+	 */
+	cwd?: string;
 	/** Global agent directory for this product instance. */
 	agentDir?: string;
 	/** Project resource directory name for this product instance. */
@@ -863,13 +871,39 @@ export type MainPreparation =
 export async function prepareMain(args: string[], options?: MainOptions): Promise<MainPreparation> {
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
 	const configDirName = options?.configDirName?.trim() || CONFIG_DIR_NAME;
-	const cwd = process.cwd();
+	// Parse argv up front so an explicit --cwd participates in resolution at every
+	// entrypoint: coding-agent's own main() and SDK callers pass no options.cwd, so
+	// without this the flag would parse, print in --help, and then be ignored.
+	const parsed = parseArgs(args);
+	const requestedCwd = options?.cwd ?? parsed.cwd;
+	// An empty value is an easy typo to miss in a launcher script: resolvePath("") would
+	// silently normalize it to the process cwd and every check below would pass.
+	if (requestedCwd !== undefined && requestedCwd.trim() === "") {
+		console.error(chalk.red("Error: --cwd requires a non-empty path"));
+		return { kind: "completed", exitCode: 1 };
+	}
+	const cwd = resolvePath(requestedCwd ?? process.cwd());
+	if (requestedCwd !== undefined) {
+		// Fail fast like `git -C`: a missing or non-directory --cwd must not reach the
+		// session layer, where getMissingSessionCwdIssue would report the just-supplied
+		// path as a stale session-file cwd (and --no-session would skip the check entirely).
+		if (!existsSync(cwd)) {
+			console.error(chalk.red(`Error: --cwd path does not exist: ${cwd}`));
+			return { kind: "completed", exitCode: 1 };
+		}
+		if (!statSync(cwd).isDirectory()) {
+			console.error(chalk.red(`Error: --cwd path is not a directory: ${cwd}`));
+			return { kind: "completed", exitCode: 1 };
+		}
+	}
 	const agentDir = options?.agentDir ? resolvePath(options.agentDir) : getAgentDir();
 	// A computed default agent directory is also used by ordinary Pi. Only an
 	// explicitly supplied product path opts into the Step storage facade; this
 	// keeps Pi's no-argument SessionManager.listAll/continue semantics intact.
 	const productStoragePaths: StartupTuiPathOptions | undefined =
-		options?.agentDir !== undefined || options?.configDirName !== undefined ? { agentDir, configDirName } : undefined;
+		options?.agentDir !== undefined || options?.configDirName !== undefined
+			? { agentDir, configDirName, cwd }
+			: undefined;
 	const authPath = options?.authPath
 		? resolvePath(options.authPath, cwd)
 		: options?.agentDir
@@ -935,7 +969,6 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		return { kind: "completed" };
 	}
 
-	const parsed = parseArgs(args);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -1044,7 +1077,9 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 		cwd,
 		sessionDir,
 		startupSettingsManager,
-		productStoragePaths,
+		// Always hand the resolved cwd to the startup selectors so project-level
+		// discovery (themes, prompts) follows -C even when no storage facade paths apply.
+		productStoragePaths ?? { cwd },
 		sessionRoot,
 		options?.uiHooks?.selectSession,
 	);
@@ -1154,7 +1189,10 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 										mode: isInitialRuntime ? trustPromptMode : appMode,
 										settingsManager: startupSettingsManager,
 										hasUI: isInitialRuntime && trustPromptMode === "interactive",
-										paths: { agentDir, configDirName },
+										// cwd here is the runtime's working directory: the trust prompt and the
+										// first-time setup wizard discover project-level themes against it, so a
+										// -C target shows its own themes instead of the launcher's.
+										paths: { agentDir, configDirName, cwd },
 										ui: options?.uiHooks
 											? {
 													showStartupSelector: options.uiHooks.showStartupSelector,
@@ -1347,6 +1385,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 	const { initialMessage, initialImages } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),
+		cwd,
 		stdinContent,
 	);
 	setThemeStorageDir(agentDir);

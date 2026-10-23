@@ -34,9 +34,39 @@ export function formatFeedbackConsentPreview(input: FeedbackConsentPreviewInput)
 		`Comment:\n${input.submission.comment || "(empty comment)"}`,
 		[
 			"Identity sent with this feedback:",
-			...(["deviceId", "uid", "username", "channel", "version", "platform", "commit"] as const).map(
+			...(
+				[
+					"deviceId",
+					"uid",
+					"username",
+					"channel",
+					"version",
+					"versionSource",
+					"buildTime",
+					"commit",
+					"platform",
+					"arch",
+					"osRelease",
+					"locale",
+					"installSource",
+					"sessionId",
+				] as const
+			).map(
 				(field) => `${field}: ${neutralizeFeedbackConsentMetadata(input.submission.context[field] ?? "(not set)")}`,
 			),
+			// The interpreter versions are one line: three near-identical rows add
+			// noise to a page whose job is to be read once.
+			`runtime: ${neutralizeFeedbackConsentMetadata(
+				["node", "electron", "bun"]
+					.flatMap((name) => {
+						const value = input.submission.context.runtime?.[name as "node" | "electron" | "bun"];
+						return value ? [`${name} ${value}`] : [];
+					})
+					.join(", ") || "(not set)",
+			)}`,
+			...(input.submission.surface
+				? [`surface: ${neutralizeFeedbackConsentMetadata(input.submission.surface)}`]
+				: []),
 		].join("\n"),
 	];
 	const diagnostics = input.submission.diagnostics;

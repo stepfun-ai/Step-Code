@@ -7,6 +7,8 @@ import { normalizeStepWireSessionId } from "../build-identity.ts";
 import { resolveStepSessionDir } from "../environment.ts";
 import { createSecretRedactionCollector, redactSecretString } from "../secret-redaction.ts";
 import { resolveStderrDevLogPath } from "../stderr-dev-log.ts";
+import { collapseHomePaths } from "./redact-home.ts";
+import { annotateTranscriptRows } from "./row-metrics.ts";
 import type { FeedbackBundle } from "./types.ts";
 import { FEEDBACK_BUNDLE_MAX_BYTES, FEEDBACK_SESSION_RECENCY_WINDOW_MS } from "./types.ts";
 import { sanitizeTerminalText } from "./validate.ts";
@@ -24,6 +26,12 @@ const DEV_LOG_MAX_LINES = 2000;
 const DEV_LOG_MAX_BYTES = 512 * 1024;
 const SESSION_HEADER_READ_CHUNK_BYTES = 4 * 1024;
 const SESSION_HEADER_MAX_BYTES = 1024 * 1024;
+/** Full tool output a tool call referenced: these are the files the model was shown a preview of. */
+const TOOL_OUTPUT_DIR = "tool-output";
+const TOOL_OUTPUT_NAME = /^tool-[0-9a-f]{32}\.txt$/u;
+const TOOL_OUTPUT_MAX_FILES = 10;
+const TOOL_OUTPUT_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const TOOL_OUTPUT_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 
 export type FeedbackBundleResult =
 	| { status: "ready"; bundle: FeedbackBundle }
@@ -35,12 +43,35 @@ interface BundleEntry {
 	note?: string;
 }
 
-interface SelectedSession {
+export interface SelectedSession {
 	filePath: string;
 	sessionId: string;
 }
 
-type SessionEntryResult = { status: "ready"; entry: BundleEntry } | { status: "missing" } | { status: "unsafe" };
+type SessionEntryResult =
+	| { status: "ready"; entry: BundleEntry; text: string }
+	| { status: "missing" }
+	| { status: "unsafe" };
+
+/**
+ * The session a report is about, as a file on disk.
+ *
+ * Exported so the summary and the bundle resolve the same session: two
+ * independent guesses could describe one conversation and attach another.
+ */
+export async function resolveFeedbackSession(input: {
+	sessionFile?: string;
+	sessionId?: string;
+	sessionDir?: string;
+	env?: NodeJS.ProcessEnv;
+	/** Project the user is filing from; a guess never leaves this folder. */
+	cwd?: string;
+}): Promise<SelectedSession | undefined> {
+	if (input.sessionFile) return resolveExplicitSessionFile(input.sessionFile, input.sessionId);
+	const sessionRoot = path.resolve(input.sessionDir ?? resolveStepSessionDir(input.env));
+	if (input.sessionId) return findSessionFile(sessionRoot, input.sessionId);
+	return findNewestSessionFile(sessionRoot, input.cwd ?? process.cwd());
+}
 
 export async function buildFeedbackSessionBundle(input: {
 	sessionFile?: string;
@@ -50,14 +81,18 @@ export async function buildFeedbackSessionBundle(input: {
 	env?: NodeJS.ProcessEnv;
 	at?: Date;
 	now?: Date;
+	/** Project the report is filed from; a guessed session never leaves it. */
+	cwd?: string;
+	/**
+	 * The caller resolved the session itself because the user named none. The
+	 * recency rule still applies: a conversation nobody used recently is not
+	 * what the report is about, and attaching the wrong one is a privacy
+	 * incident rather than a degraded report.
+	 */
+	guessedSession?: boolean;
 }): Promise<FeedbackBundleResult> {
-	const sessionRoot = path.resolve(input.sessionDir ?? resolveStepSessionDir(input.env));
-	const guessed = !input.sessionFile && !input.sessionId;
-	const selectedSession = input.sessionFile
-		? await resolveExplicitSessionFile(input.sessionFile, input.sessionId)
-		: input.sessionId
-			? await findSessionFile(sessionRoot, input.sessionId)
-			: await findNewestSessionFile(sessionRoot);
+	const guessed = input.guessedSession ?? (!input.sessionFile && !input.sessionId);
+	const selectedSession = await resolveFeedbackSession(input);
 	if (!selectedSession) return { status: "skipped", reason: "no-session" };
 	const { filePath: sessionFile, sessionId } = selectedSession;
 
@@ -78,20 +113,26 @@ export async function buildFeedbackSessionBundle(input: {
 	if (eventsResult.status === "missing") return { status: "skipped", reason: "no-session" };
 	if (eventsResult.status === "unsafe") return { status: "skipped", reason: "unsafe" };
 	let events = eventsResult.entry;
+	// A tool call's full output is the one thing the model itself only saw a
+	// preview of, and the preview names a path that does not exist on the
+	// receiver's machine. Attach the files this session referenced.
+	let toolOutputs = await readToolOutputEntries(sessionFile, eventsResult.text);
 
+	const entries = (): BundleEntry[] => [events, ...toolOutputs, ...(devLog ? [devLog] : [])];
 	let archive = await compressArchive({
 		at,
 		sessionId,
 		lastActivityAt: stats.mtime,
-		entries: [events, ...(devLog ? [devLog] : [])],
+		entries: entries(),
 	});
 	if (archive.byteLength > FEEDBACK_BUNDLE_MAX_BYTES) {
 		events = limitRedactedSessionEntry(events, EVENTS_FALLBACK_BYTES);
+		toolOutputs = toolOutputs.slice(0, 3).map((entry) => limitRedactedSessionEntry(entry, 512 * 1024));
 		archive = await compressArchive({
 			at,
 			sessionId,
 			lastActivityAt: stats.mtime,
-			entries: [events, ...(devLog ? [devLog] : [])],
+			entries: entries(),
 		});
 	}
 	if (archive.byteLength > FEEDBACK_BUNDLE_MAX_BYTES) return { status: "skipped", reason: "too-large" };
@@ -100,7 +141,7 @@ export async function buildFeedbackSessionBundle(input: {
 		status: "ready",
 		bundle: {
 			data: archive,
-			files: describeEntries([events, ...(devLog ? [devLog] : [])]),
+			files: describeEntries(entries()),
 			sessionId,
 			lastActivityAt: stats.mtime,
 		},
@@ -112,7 +153,9 @@ export function describeFeedbackBundle(bundle: FeedbackBundle): string {
 	return [
 		...bundle.files.map((file) => `${file.name} (${file.bytes} bytes)${file.note ? ` - ${file.note}` : ""}`),
 		`session ${bundle.sessionId}, last active ${bundle.lastActivityAt.toISOString()}.`,
-		"It contains the conversation itself: your prompts, the model's replies, tool calls and their output.",
+		"It contains the conversation itself: your prompts, the model's replies, tool calls and their output,",
+		"the full output files those calls referenced, and the tail of the host log. Credentials are removed",
+		"and your home directory is written as ~.",
 	].join("\n");
 }
 
@@ -151,54 +194,148 @@ function describeEntries(entries: readonly BundleEntry[]): Array<{ name: string;
 }
 
 async function readSessionEntry(filePath: string, maxBytes: number): Promise<SessionEntryResult> {
-	const entry = await readTailEntry(filePath, EVENTS_ENTRY, maxBytes);
-	if (!entry) return { status: "missing" };
+	const linkStats = await fs.lstat(filePath).catch(() => undefined);
+	if (!linkStats?.isFile()) return { status: "unsafe" };
+	const handle = await fs.open(filePath, "r").catch(() => undefined);
+	if (!handle) return { status: "unsafe" };
 	try {
-		const target = entry.content.toString("utf8");
-		const collector = createSecretRedactionCollector(target);
-		const linkStats = await fs.lstat(filePath).catch(() => undefined);
-		if (!linkStats?.isFile()) return { status: "unsafe" };
-		const handle = await fs.open(filePath, "r");
-		try {
-			const decoder = new StringDecoder("utf8");
-			const chunk = Buffer.allocUnsafe(64 * 1024);
-			while (true) {
-				const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, null);
-				if (bytesRead === 0) break;
-				collector.write(decoder.write(chunk.subarray(0, bytesRead)));
-			}
-			collector.write(decoder.end());
-		} finally {
-			await handle.close().catch(() => undefined);
+		const { size } = await handle.stat();
+		if (size === 0) return { status: "missing" };
+		// The archived excerpt is read first and becomes the redaction target: the
+		// collector rewrites exactly this text, so a target smaller than the file
+		// would silently drop the rest of the conversation.
+		const excerpt =
+			size <= maxBytes ? await readBytes(handle, 0, size) : await readHeadTailBytes(handle, size, maxBytes);
+		if (excerpt.byteLength === 0) return { status: "missing" };
+		const collector = createSecretRedactionCollector(excerpt.toString("utf8"));
+		// The whole file is still scanned, so a credential written once early and
+		// echoed later in the excerpt is recognised in both places.
+		const decoder = new StringDecoder("utf8");
+		const chunk = Buffer.allocUnsafe(64 * 1024);
+		let position = 0;
+		while (position < size) {
+			const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.byteLength, size - position), position);
+			if (bytesRead === 0) break;
+			position += bytesRead;
+			collector.write(decoder.write(chunk.subarray(0, bytesRead)));
 		}
+		collector.write(decoder.end());
 		const result = collector.finish();
 		if (result.status === "unsafe") return { status: "unsafe" };
-		const redacted = Buffer.from(result.value, "utf8");
-		if (redacted.byteLength <= maxBytes) {
-			return { status: "ready", entry: { ...entry, content: redacted } };
+		const text = collapseHomePaths(result.value);
+		const redacted = Buffer.from(text, "utf8");
+		const bounded =
+			redacted.byteLength <= maxBytes ? redacted : headAndTailAtLineBoundary(redacted, maxBytes).content;
+		// Every row keeps the plain transcript it had, plus a `feedback` object
+		// with that row's own usage, cache hit rate, and timing. Only this copy is
+		// annotated; the session file on disk is never rewritten.
+		const annotated = Buffer.from(annotateTranscriptRows(bounded.toString("utf8")), "utf8");
+		const content =
+			annotated.byteLength <= maxBytes ? annotated : headAndTailAtLineBoundary(annotated, maxBytes).content;
+		if (content.byteLength === 0) {
+			return {
+				status: "ready",
+				text,
+				entry: {
+					name: EVENTS_ENTRY,
+					content,
+					note: `omitted after redaction, a single line exceeds ${formatBytes(maxBytes)}`,
+				},
+			};
 		}
-
-		const content = tailAtLineBoundary(redacted, maxBytes);
-		const redactionNote =
-			content.byteLength === 0
-				? `omitted after redaction, a single line exceeds ${formatBytes(maxBytes)}`
-				: `tail re-limited after redaction, ${formatBytes(redacted.byteLength)} before re-limit`;
+		const trimmed = redacted.byteLength > maxBytes;
+		const annotatedTrimmed = annotated.byteLength > maxBytes;
+		const note = trimmed
+			? `head and tail of ${formatBytes(size)}, re-limited after redaction`
+			: annotatedTrimmed
+				? `head and tail of ${formatBytes(size)}, re-limited after per-row metrics`
+				: size > maxBytes
+					? `head and tail of ${formatBytes(size)}`
+					: undefined;
 		return {
 			status: "ready",
-			entry: {
-				...entry,
-				content,
-				note: entry.note ? `${entry.note}; ${redactionNote}` : redactionNote,
-			},
+			text,
+			entry: { name: EVENTS_ENTRY, content, ...(note ? { note } : {}) },
 		};
 	} catch {
 		return { status: "unsafe" };
+	} finally {
+		await handle.close().catch(() => undefined);
 	}
+}
+
+async function readBytes(
+	handle: Awaited<ReturnType<typeof fs.open>>,
+	position: number,
+	length: number,
+): Promise<Buffer> {
+	const buffer = Buffer.alloc(length);
+	const { bytesRead } = await handle.read(buffer, 0, length, position);
+	return buffer.subarray(0, bytesRead);
+}
+
+/**
+ * Both ends of an oversized file, cut at line boundaries on each inner edge and
+ * separated by a marker: a reader must be able to tell that the middle is
+ * missing rather than assume the conversation skipped a turn.
+ */
+async function readHeadTailBytes(
+	handle: Awaited<ReturnType<typeof fs.open>>,
+	size: number,
+	maxBytes: number,
+): Promise<Buffer> {
+	const marker = Buffer.from(`\n… [middle of this session omitted, ${formatBytes(size)} on disk] …\n`, "utf8");
+	const budget = Math.max(0, maxBytes - marker.byteLength);
+	const headBudget = Math.floor(budget / 2);
+	const head = await readBytes(handle, 0, headBudget);
+	const headEnd = head.lastIndexOf(0x0a);
+	const tailBudget = budget - headBudget;
+	const tail = await readBytes(handle, size - tailBudget, tailBudget);
+	const tailStart = tail.indexOf(0x0a);
+	const headPart = headEnd <= 0 ? Buffer.alloc(0) : head.subarray(0, headEnd + 1);
+	const tailPart = tailStart === -1 ? Buffer.alloc(0) : tail.subarray(tailStart + 1);
+	// The marker only makes sense between two kept parts.
+	if (headPart.byteLength === 0 || tailPart.byteLength === 0) return Buffer.concat([headPart, tailPart]);
+	return Buffer.concat([headPart, marker, tailPart]);
+}
+
+/**
+ * Attach the full output of tool calls the transcript referenced.
+ *
+ * Only names are taken from the transcript, and they are resolved inside this
+ * session's own `tool-output` directory: a transcript is untrusted input, so it
+ * must not be able to name an arbitrary file.
+ */
+async function readToolOutputEntries(sessionFile: string, transcript: string): Promise<BundleEntry[]> {
+	const names = new Set<string>();
+	for (const match of transcript.matchAll(/tool-[0-9a-f]{32}\.txt/gu)) names.add(match[0]);
+	if (names.size === 0) return [];
+	const directory = path.join(path.dirname(path.resolve(sessionFile)), TOOL_OUTPUT_DIR);
+	const entries: BundleEntry[] = [];
+	let total = 0;
+	for (const name of [...names].slice(0, TOOL_OUTPUT_MAX_FILES)) {
+		if (!TOOL_OUTPUT_NAME.test(name)) continue;
+		const filePath = path.join(directory, name);
+		const stats = await fs.lstat(filePath).catch(() => undefined);
+		if (!stats?.isFile() || stats.size === 0) continue;
+		if (total + Math.min(stats.size, TOOL_OUTPUT_MAX_FILE_BYTES) > TOOL_OUTPUT_MAX_TOTAL_BYTES) break;
+		const read = await readHeadEntry(filePath, `${TOOL_OUTPUT_DIR}/${name}`, TOOL_OUTPUT_MAX_FILE_BYTES);
+		if (!read) continue;
+		const redacted = Buffer.from(collapseHomePaths(redactSecretString(read.content.toString("utf8"))), "utf8");
+		const bounded = limitRedactedSessionEntry({ ...read, content: redacted }, TOOL_OUTPUT_MAX_FILE_BYTES);
+		total += bounded.content.byteLength;
+		const complete = stats.size <= TOOL_OUTPUT_MAX_FILE_BYTES;
+		entries.push({
+			...bounded,
+			note: `${bounded.note ? `${bounded.note}; ` : ""}${complete ? "full tool output" : "tool output, head only"}`,
+		});
+	}
+	return entries;
 }
 
 function limitRedactedSessionEntry(entry: BundleEntry, maxBytes: number): BundleEntry {
 	if (entry.content.byteLength <= maxBytes) return entry;
-	const content = tailAtLineBoundary(entry.content, maxBytes);
+	const content = headAndTailAtLineBoundary(entry.content, maxBytes).content;
 	const note =
 		content.byteLength === 0
 			? `omitted in compressed-size fallback, a single line exceeds ${formatBytes(maxBytes)}`
@@ -244,7 +381,9 @@ async function readDevLogErrorLines(storageRootDir: string, at: Date): Promise<B
 	if (kept.length === 0) return undefined;
 
 	kept.reverse();
-	const redacted = Buffer.from(redactSecretString(`${kept.join("\n")}\n`), "utf8");
+	// The dev log is raw host stderr and routinely names absolute paths; the
+	// consent text promises the home directory is collapsed in every attachment.
+	const redacted = Buffer.from(collapseHomePaths(redactSecretString(`${kept.join("\n")}\n`)), "utf8");
 	const content = tailAtLineBoundary(redacted, DEV_LOG_MAX_BYTES);
 	if (content.byteLength === 0) return undefined;
 	const redactionLimitDropped = countLines(redacted) - countLines(content);
@@ -264,6 +403,48 @@ function tailAtLineBoundary(content: Buffer, maxBytes: number): Buffer {
 	const window = content.subarray(content.byteLength - maxBytes);
 	const firstNewline = window.indexOf(0x0a);
 	return firstNewline === -1 ? Buffer.alloc(0) : window.subarray(firstNewline + 1);
+}
+
+/** Keep both ends of an oversized file; the middle is the part a reader can infer is missing. */
+function headAndTailAtLineBoundary(content: Buffer, maxBytes: number): { content: Buffer } {
+	if (content.byteLength <= maxBytes) return { content };
+	const marker = Buffer.from("\n… [middle of this file omitted] …\n", "utf8");
+	const budget = Math.max(0, maxBytes - marker.byteLength);
+	const headWindow = content.subarray(0, Math.floor(budget / 2));
+	const headEnd = headWindow.lastIndexOf(0x0a);
+	const head = headEnd <= 0 ? Buffer.alloc(0) : headWindow.subarray(0, headEnd + 1);
+	const tailBudget = Math.max(0, budget - head.byteLength);
+	const tailWindow = content.subarray(content.byteLength - tailBudget);
+	const tailStart = tailWindow.indexOf(0x0a);
+	const tail = tailStart === -1 ? Buffer.alloc(0) : tailWindow.subarray(tailStart + 1);
+	const combined = Buffer.concat([head, marker, tail]);
+	return { content: combined.byteLength <= maxBytes ? combined : combined.subarray(0, maxBytes) };
+}
+
+async function readHeadEntry(filePath: string, name: string, maxBytes = 64 * 1024): Promise<BundleEntry | undefined> {
+	const linkStats = await fs.lstat(filePath).catch(() => undefined);
+	if (!linkStats?.isFile()) return undefined;
+	const handle = await fs.open(filePath, "r").catch(() => undefined);
+	if (!handle) return undefined;
+	try {
+		const { size } = await handle.stat();
+		if (size === 0) return undefined;
+		const length = Math.min(size, maxBytes);
+		const buffer = Buffer.alloc(length);
+		const { bytesRead } = await handle.read(buffer, 0, length, 0);
+		const read = buffer.subarray(0, bytesRead);
+		// A truncated read must not end mid-record, so prefer whole lines. A file
+		// that is one long line has none to cut at; keep the window, which is all
+		// a caller can use anyway (the session scan re-reads the file itself).
+		const lastNewline = read.lastIndexOf(0x0a);
+		const content = bytesRead < size && lastNewline > 0 ? read.subarray(0, lastNewline + 1) : read;
+		if (content.byteLength === 0) return undefined;
+		return { name, content };
+	} catch {
+		return undefined;
+	} finally {
+		await handle.close().catch(() => undefined);
+	}
 }
 
 function countLines(content: Buffer): number {
@@ -342,8 +523,24 @@ async function findSessionFile(storageRootDir: string, sessionId: string): Promi
 	return match;
 }
 
-async function findNewestSessionFile(storageRootDir: string): Promise<SelectedSession | undefined> {
-	const files = await collectJsonlFiles(storageRootDir);
+/**
+ * The newest session **of the project the user is in**.
+ *
+ * Walking every project directory and taking the newest file would attach a
+ * conversation from another project — possibly one they are not thinking
+ * about — as the context of this report. A guess therefore stays inside this
+ * cwd's own session folder; an explicit `--session` is the only way out.
+ *
+ * Two layouts exist: the manager's per-project folders, and a flat directory
+ * (an explicit `--session-dir` or a test fixture). A flat directory is only
+ * guessed from when it has no project folders at all, so an ordinary install
+ * can never pick another project's conversation.
+ */
+async function findNewestSessionFile(storageRootDir: string, cwd: string): Promise<SelectedSession | undefined> {
+	const projectDir = path.join(storageRootDir, sessionFolderName(cwd));
+	const hasProjectDir = await isDirectory(projectDir);
+	if (!hasProjectDir && (await hasProjectFolders(storageRootDir))) return undefined;
+	const files = await collectJsonlFiles(hasProjectDir ? projectDir : storageRootDir);
 	let newest: { session: SelectedSession; mtime: number } | undefined;
 	for (const filePath of files) {
 		const stats = await fs.stat(filePath).catch(() => undefined);
@@ -352,6 +549,23 @@ async function findNewestSessionFile(storageRootDir: string): Promise<SelectedSe
 		if (sessionId) newest = { session: { filePath, sessionId }, mtime: stats.mtimeMs };
 	}
 	return newest?.session;
+}
+
+async function isDirectory(target: string): Promise<boolean> {
+	const stats = await fs.stat(target).catch(() => undefined);
+	return stats?.isDirectory() === true;
+}
+
+/** Any `--project--` folder means the sessions are partitioned; do not cross them. */
+async function hasProjectFolders(storageRootDir: string): Promise<boolean> {
+	const names = await fs.readdir(storageRootDir).catch(() => [] as string[]);
+	return names.some((name) => name.startsWith("--") && name.endsWith("--"));
+}
+
+/** Session folders are named after the project path, mirroring the manager. */
+function sessionFolderName(cwd: string): string {
+	const resolved = path.resolve(cwd);
+	return `--${resolved.replace(/^[/\\]/, "").replace(/[/\\:]/gu, "-")}--`;
 }
 
 async function validateSessionFile(filePath: string): Promise<string | undefined> {

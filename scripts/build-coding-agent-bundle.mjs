@@ -120,12 +120,16 @@ function readStepBuildDefines() {
 	const version = process.env.STEPCODE_BUILD_VERSION;
 	const channel = process.env.STEPCODE_BUILD_CHANNEL;
 	const commit = process.env.STEPCODE_BUILD_COMMIT;
+	// When this artifact was produced; a report from a stale install is a
+	// different investigation than one from the build that just shipped.
+	const buildTime = process.env.STEPCODE_BUILD_TIME;
 	const feedbackEndpoint = process.env.STEPCODE_FEEDBACK_ENDPOINT;
 	const feedbackBundleEndpoint = process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
 	const aliases = [
 		["STEPCODE_BUILD_VERSION", version],
 		["STEPCODE_BUILD_CHANNEL", channel],
 		["STEPCODE_BUILD_COMMIT", commit],
+		["STEPCODE_BUILD_TIME", buildTime],
 		["STEPCODE_FEEDBACK_ENDPOINT", feedbackEndpoint],
 		["STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", feedbackBundleEndpoint],
 	];

@@ -328,10 +328,14 @@ for path rules and retention responsibilities.
   effect immediately; it does not request approval. An explicit `--plan`
   applies at process startup, including a continued session whose mode was off;
   later reloads and session/branch navigation do not reapply it. The plan path is
-  announced, and `write_file` / `edit_file` remain available for that file.
-  Other file-write targets are blocked while planning. This is **not a shell
-  sandbox**: command tools retain the existing permission policy, and the model
-  is instructed to keep commands read-only while planning.
+  announced. Plan mode does not remove tools from the request — that would
+  invalidate the provider's cached prompt prefix — so enforcement lives in the
+  `tool_call` policy: `write_file`, `edit_file`, `write`, and `edit` may only
+  target the plan file, and every other target is rejected with an actionable
+  denial. Other file-writing tools, including MCP servers, are not covered by
+  that check. This is **not a shell sandbox**: command tools retain the existing
+  permission policy, and the model is instructed to keep commands read-only
+  while planning.
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution, stay in
   plan mode, or provide refinement notes. Cancel
@@ -415,8 +419,11 @@ The existing six tool names and `/todos` remain; the task schemas add explicit
 new-plan, history-query, and resume fields. Legacy support remains limited to
 migration of legacy plan-mode todos into tasks on the active branch and restoring
 existing task snapshots as a single plan. Older
-saved tool lists retain currently active plan/task tools on restore and exit;
-ordinary custom tools still follow the saved branch selection. There is no
+saved tool lists — written by builds that narrowed the active list on entry —
+retain currently active plan/task tools on restore and exit; ordinary custom
+tools still follow the saved branch selection. Builds that append only the plan
+tools a profile lacks (`version: 2` entries) store no replaced list, so a branch
+written by them never replays an older snapshot. There is no
 additional `TodoWrite` / `update_plan` alias or second checklist store.
 
 The separation follows [Claude Code's plan and task tools](https://code.claude.com/docs/en/tools-reference)
