@@ -7,7 +7,7 @@ Step uses JSON settings files with project settings overriding global settings.
 | `~/.stepcode/agent/settings.json` | Global (all projects) |
 | `.stepcode/settings.json` | Project (current directory) |
 
-Edit directly or use `/settings` for common options. To save startup model defaults interactively, use `/model` and press Ctrl+S on the desired model. To save the startup thinking level, use `/effort` and press Enter.
+Edit directly or use `/settings` for common options. To save startup model defaults interactively, use `/model` and press Enter on the desired model. To save the startup thinking level, use `/effort` and press Enter.
 
 ## Project Trust
 
@@ -27,8 +27,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `defaultProvider` | string | - | Startup provider (e.g., `"anthropic"`, `"openai"`; saved with Ctrl+S in `/model`, or edited manually) |
-| `defaultModel` | string | - | Startup model ID (saved with Ctrl+S in `/model`, or edited manually) |
+| `defaultProvider` | string | - | Startup provider (e.g., `"anthropic"`, `"openai"`; saved with Enter in `/model`, or edited manually) |
+| `defaultModel` | string | - | Startup model ID (saved with Enter in `/model`, or edited manually) |
 | `defaultThinkingLevel` | string | - | Startup thinking level (saved with Enter in `/effort`, or edited manually): `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
 | `modelThinkingLevels` | object | - | Per-model startup thinking levels keyed by `"provider/modelId"`; configure from `/settings` → Default thinking level per model or edit manually |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |

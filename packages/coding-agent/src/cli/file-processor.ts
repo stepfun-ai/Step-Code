@@ -19,6 +19,8 @@ export interface ProcessedFiles {
 export interface ProcessFileOptions {
 	/** Whether to auto-resize images to 2000x2000 max. Default: true */
 	autoResizeImages?: boolean;
+	/** Base directory for relative @file paths. Default: process.cwd() */
+	baseDir?: string;
 }
 
 /** Process @file arguments into text content and image attachments */
@@ -28,8 +30,11 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 	const images: ImageContent[] = [];
 
 	for (const fileArg of fileArgs) {
-		// Expand and resolve path (handles ~ expansion and macOS screenshot Unicode spaces)
-		const absolutePath = resolve(resolveReadPath(fileArg, process.cwd()));
+		// Expand and resolve path (handles ~ expansion and macOS screenshot Unicode spaces).
+		// Relative paths resolve against baseDir so they share one base with the other
+		// CLI-side paths (-e/--skill/--prompt-template/--theme), which is what
+		// `step -C <dir>` users expect; baseDir defaults to the launcher cwd.
+		const absolutePath = resolve(resolveReadPath(fileArg, options?.baseDir ?? process.cwd()));
 
 		// Check if file exists
 		try {

@@ -649,6 +649,8 @@ describe("parseArgs", () => {
 			["--session-id", "--session-id"],
 			["--fork", "--fork"],
 			["--session-dir", "--session-dir"],
+			["--cwd", "--cwd"],
+			["-C", "--cwd"],
 			["--models", "--models"],
 			["--tools", "--tools"],
 			["-t", "--tools"],
@@ -696,6 +698,12 @@ describe("parseArgs", () => {
 			expect(result.thinking).toBe("high");
 			expect(result.themes).toEqual(["/tmp/theme.json"]);
 			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("--cwd and -C both capture the working directory", () => {
+			expect(parseArgs(["--cwd", "/tmp/project"]).cwd).toBe("/tmp/project");
+			expect(parseArgs(["-C", "/tmp/project"]).cwd).toBe("/tmp/project");
+			expect(parseArgs(["-C", "/tmp/project", "fix the bug"]).messages).toEqual(["fix the bug"]);
 		});
 
 		test("an invalid --thinking value still warns rather than erroring", () => {

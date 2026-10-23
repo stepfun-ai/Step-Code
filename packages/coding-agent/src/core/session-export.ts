@@ -10,9 +10,12 @@ export function exportSessionToJsonl(
 	outputPath?: string,
 	createTrailingEntries?: (parentId: string | null, timestamp: string) => readonly object[],
 ): string {
+	// Resolve a relative --export path against the session's working directory, the same
+	// base the other CLI-side paths (@file, -e/--skill/...) use, so `step -C <dir> --export out.jsonl`
+	// lands in <dir> rather than the launcher directory.
 	const filePath = resolvePath(
 		outputPath ?? `session-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
-		process.cwd(),
+		sessionManager.getCwd(),
 	);
 	const dir = dirname(filePath);
 	if (!existsSync(dir)) {

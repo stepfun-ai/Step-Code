@@ -7,10 +7,10 @@
  */
 
 import { existsSync } from "node:fs";
-import path from "node:path";
 import type { AgentMessage } from "@step-harness/agent-core";
 import type { EventBus } from "../core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
+import { resolveToCwd } from "../core/tools/path-utils.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
 import {
@@ -44,7 +44,15 @@ const PLAN_TASK_TOOLS = new Set([
 export type StepPlanSource = "user" | "agent" | "unknown";
 
 interface PlanState {
+	/** Written by this build. Its presence marks an entry that never narrowed the tool list. */
+	version?: 2;
 	enabled: boolean;
+	/**
+	 * Legacy only: the list a narrowing entry replaced. Older builds dropped the
+	 * editing tools on entry and could only restore by replaying this snapshot,
+	 * so sessions written by them still rely on it. This build appends only the
+	 * plan tools a profile lacks and remembers just those additions.
+	 */
 	toolsBeforePlanMode?: string[];
 	planFilePath?: string;
 	/** "user" for /plan or --plan, "agent" for enter_plan_mode. */
@@ -53,6 +61,11 @@ interface PlanState {
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
+}
+
+/** True when both lists hold the same tool names in the same order. */
+function sameToolOrder(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((name, index) => name === right[index]);
 }
 
 const publishedPlanModes = new WeakMap<object, boolean>();
@@ -102,24 +115,63 @@ export const createStepPlanExtension =
 	(options: { telemetry?: StepTelemetryReporter } = {}): ExtensionFactory =>
 	(pi: ExtensionAPI): void => {
 		let enabled = false;
-		let toolsBeforePlanMode: string[] | undefined;
+		/** Plan tools this process appended on entry; the only thing exit removes. */
+		let planModeAddedTools: string[] | undefined;
 		let planFilePath: string | undefined;
 		let planSource: StepPlanSource | undefined;
 		// The event bus is optional so minimal embedder/test harnesses that stub
 		// ExtensionAPI keep working without one.
 		const events = (pi as { events?: EventBus }).events;
 
-		const persistPlanState = (): void => {
-			pi.appendEntry("step-plan", { enabled, toolsBeforePlanMode, planFilePath, planSource });
+		/**
+		 * Persist the branch's plan state.
+		 *
+		 * `carriesLegacyTools` is only set when rewriting a legacy entry during
+		 * migration: the entry it replaces is the sole record of the list plan mode
+		 * narrowed, so dropping it would strand that session on the next restore.
+		 * Ordinary entries never carry a snapshot — this build appends tools
+		 * instead of replacing the list.
+		 */
+		const persistPlanState = (carriesLegacyTools?: string[]): void => {
+			pi.appendEntry("step-plan", {
+				version: 2,
+				enabled,
+				planFilePath,
+				planSource,
+				...(carriesLegacyTools ? { toolsBeforePlanMode: carriesLegacyTools } : {}),
+			});
 		};
+		/**
+		 * Plan mode is a permission narrowing, not a capability change.
+		 *
+		 * The model keeps every tool it already had; the `tool_call` hook below
+		 * denies mutations outside the plan file. Rebuilding the list would rewrite
+		 * the request's tool block, which the provider serializes ahead of the
+		 * system prompt and messages: one such edit invalidates the cached prefix
+		 * for the whole conversation, so a single plan entry can re-bill hundreds of
+		 * thousands of prompt tokens.
+		 *
+		 * A session that does not already offer every plan tool still has to gain
+		 * them (a Pi-native profile lacks the Step aliases). Append only what is
+		 * missing and keep the existing order, so the common Step profile — which
+		 * already offers all of them — leaves the tool block byte-identical.
+		 */
 		const enable = (): void => {
-			toolsBeforePlanMode ??= pi.getActiveTools();
-			// Keep plan-file writes available; tool_call restricts their target.
-			pi.setActiveTools(unique([...toolsBeforePlanMode.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
+			const active = pi.getActiveTools();
+			const missing = PLAN_TOOLS.filter((name) => !active.includes(name));
+			if (missing.length === 0) return;
+			planModeAddedTools = missing;
+			pi.setActiveTools([...active, ...missing]);
 		};
 		const restoreTools = (): void => {
-			if (toolsBeforePlanMode) pi.setActiveTools(toolsBeforePlanMode);
-			toolsBeforePlanMode = undefined;
+			const added = planModeAddedTools;
+			planModeAddedTools = undefined;
+			if (!added || added.length === 0) return;
+			// Remove only what entering added, so tools activated in the meantime
+			// (a late MCP catalog, find_tools) keep their place in the list.
+			const live = pi.getActiveTools();
+			const remaining = live.filter((name) => !added.includes(name));
+			if (remaining.length !== live.length) pi.setActiveTools(remaining);
 		};
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
@@ -185,9 +237,11 @@ export const createStepPlanExtension =
 		pi.on("tool_call", async (event, ctx) => {
 			if (!enabled || !MUTATING_TOOLS.has(event.toolName)) return;
 			const planPath = resolvePlanFilePath(ctx);
-			const toolInput = event.input as Record<string, unknown>;
+			const toolInput = (event.input ?? {}) as Record<string, unknown>;
 			const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
-			if (targetPath && path.resolve(ctx.cwd, targetPath) === path.resolve(planPath)) {
+			// Resolve exactly as the file tools do (`~`, `@`, unicode spaces), so an
+			// allowed target cannot land somewhere else than the guard checked.
+			if (targetPath && resolveToCwd(targetPath, ctx.cwd) === resolveToCwd(planPath, ctx.cwd)) {
 				// Allowed: the mutation targets the plan file itself. This runs
 				// before the write lands, so a missing file marks the plan's creation.
 				recordPlanUpdate(options.telemetry, planSource, !existsSync(planPath));
@@ -195,7 +249,13 @@ export const createStepPlanExtension =
 			}
 			return {
 				block: true,
-				reason: `Plan mode blocked this file mutation. Only the plan file may be written: ${planPath}\nTarget: ${targetPath || "(no path provided)"}`,
+				reason: [
+					`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planPath}`,
+					`Target: ${targetPath || "(no path provided)"}`,
+					"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
+					"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
+					`Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.`,
+				].join("\n"),
 			};
 		});
 
@@ -218,7 +278,7 @@ export const createStepPlanExtension =
 			// Legacy tool lists predate these capabilities. Preserve only the ones
 			// already active; ordinary tools still follow the saved branch selection.
 			const activePlanTaskTools = pi.getActiveTools().filter((name) => PLAN_TASK_TOOLS.has(name));
-			// Undo the previous branch's tool restriction before reading the new one.
+			// Undo whatever the previous branch's entry applied before reading the next.
 			restoreTools();
 			const planStates = [...ctx.sessionManager.getBranch()]
 				.reverse()
@@ -228,24 +288,30 @@ export const createStepPlanExtension =
 						: [],
 				);
 			const restoredPlanState = planStates[0];
-			// Off snapshots omit transient tools; a preceding plan entry retains the baseline.
-			const savedTools = planStates.find((state) => state?.toolsBeforePlanMode)?.toolsBeforePlanMode;
+			// The list to undo belongs to whichever entry narrowed it. An on-entry
+			// wins over an older carried snapshot, so a newer plan session never
+			// replays an earlier one's list; an off branch falls back to the last
+			// entry that recorded one. This build records nothing on entry, so its
+			// own entries only reach here after carrying a legacy list forward.
+			const governingEntry = planStates.find((state) => state?.enabled || state?.toolsBeforePlanMode !== undefined);
+			const legacyBaseline = governingEntry?.toolsBeforePlanMode;
 			enabled = restoredPlanState?.enabled ?? false;
-			toolsBeforePlanMode = savedTools ? unique([...savedTools, ...activePlanTaskTools]) : undefined;
 			planFilePath = restoredPlanState?.planFilePath;
 			planSource = enabled ? (restoredPlanState?.planSource ?? "unknown") : undefined;
+			if (legacyBaseline) {
+				const baseline = unique([...legacyBaseline, ...activePlanTaskTools]);
+				if (!sameToolOrder(pi.getActiveTools(), baseline)) pi.setActiveTools(baseline);
+			}
 			if (enabled) {
 				planFilePath = resolvePlanFilePath(ctx);
 				enable();
-			} else {
-				restoreTools();
 			}
 			if (restoredPlanState) {
 				migrateLegacyPlanTodos({
 					persistedPlanState: restoredPlanState,
 					events,
 					extensionContext: ctx,
-					persistMigratedPlanState: persistPlanState,
+					persistMigratedPlanState: () => persistPlanState(legacyBaseline),
 				});
 			}
 			if (startWithPlan && !enabled) {
