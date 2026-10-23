@@ -117,23 +117,28 @@
 
 ## 5. 主屏差分渲染（regular）
 
-`TuiMainScreen.doRender`（`tui-main-screen.ts:329-750`）每帧的完整顺序：
+`TuiMainScreen.doRender`（`tui-main-screen.ts:323-778`）每帧的完整顺序：
 
-1. 读取 `terminal.columns/rows`，判定宽/高变化与 overlay 开合（`tui-main-screen.ts:331-340`）。overlay 状态变化意味着上一帧镜像的是合成后的画面，前缀不可跨过这次转换复用（`resetFrom = 0`）。
-2. `Container.render(width)` 得到新行（`tui-main-screen.ts:353`）；`renderDirtyStart` 经 `setIncrementalRenderDisabled()` 可强制为 0（`tui.ts:227-233`）。
-3. 有 overlay 时先 `compositeOverlays`（`tui.ts:1202-1261`）：按 anchor/margin/百分比解析位置，把各 overlay 的行按列合成进基线，必要时补空行使 overlay 有屏幕相对坐标。
-4. 定位光标标记 `CURSOR_MARKER`（`\x1b_pi:c\x07`，`tui.ts:90`）：焦点组件在光标处发出这个 APC 序列，渲染器找到后把它从行里剥掉，再用它定位硬件光标（IME 候选窗定位），`findCursorPosition`（`tui-main-screen.ts:250-260`）。
-5. 行归一化 `applyLineResetsFrom`（`tui-main-screen.ts:224-247`）：从 `resetFrom` 起的行做 ANSI 归一化并追加 `SEGMENT_RESET`（`\x1b[0m\x1b]8;;\x07`，`tui.ts:353`），防止样式跨行泄漏；`resetFrom` 之前的行直接引用上一帧。首帧、宽高变化、overlay 切换都会把 `resetFrom` 压到 0。
-6. 全量重绘判定（`fullRender(clear)`，`tui-main-screen.ts:386-428`）：首帧不擦屏直接写；宽度变化必擦（换行位置全变）；高度变化必擦（Termux 软键盘场景例外，否则每次键盘弹出都重放整段历史，`tui-main-screen.ts:456-460`）；内容收缩超过历史最高水位且无 overlay 时擦除空行（`clearOnShrink`，`tui.ts:513-515`、`tui-main-screen.ts:465-469`）。擦屏序列是 `\x1b[2J\x1b[H\x1b[3J`（含 scrollback）。
-7. 差分区间扫描（`tui-main-screen.ts:473-498`）：从 `resetFrom` 扫到两帧最大行数，记 `firstChanged/lastChanged`；纯追加时区间锁在旧长度处（`appendStart` 快速路径）。区间经过 Kitty 图像块时向外扩展，避免从图像块中间重画（`tui-main-screen.ts:284-305`）。
-8. 视口夹取（`tui-main-screen.ts:568-589`）：`firstChanged` 落在上一帧视口之上且文档长度没变——只有 scrollback 副本过期，屏幕上行没动——只重绘可见部分；任何长度变化都可能让行在视口下位移，仍走全量重绘。
-9. 写入（`tui-main-screen.ts:593-680`）：`\x1b[?2026h` 开同步输出 → 视口滚动对齐（必要时 `\r\n` 推进滚动）→ CUU/CUD 移到首变行 → `\r` → 逐行 `\x1b[2K` + 行内容 → 尾部清理旧多出的行 → `\x1b[?2026l`。只写首变行到末变行，单行变化（spinner）不会闪烁全屏。
-10. 硬保险（`tui-main-screen.ts:651-678`）：任何渲染行 `visibleWidth > width` 直接把全部行写进 `tui-crash.log`，清理终端状态后抛错——指向"组件没截断"这个根因。
-11. 更新镜像：`previousLines`、`hardwareCursorRow`、`previousViewportTop`、`previousKittyImageIds`、宽高（`tui-main-screen.ts:737-749`），并按需移动硬件光标（`positionHardwareCursor`，`tui-main-screen.ts:757-788`）。
+1. 读取 `terminal.columns/rows`，判定宽/高变化与 overlay 开合（`tui-main-screen.ts:325-337`）。overlay 状态变化意味着上一帧镜像的是合成后的画面，前缀不可跨过这次转换复用（`resetFrom = 0`）。
+2. `Container.render(width)` 得到新行（`tui-main-screen.ts:347`）；`renderDirtyStart` 经 `setIncrementalRenderDisabled()` 可强制为 0（`tui.ts:227-233`）。
+3. 有 overlay 时先 `compositeOverlays`（`tui.ts:1213-1272`）：按 anchor/margin/百分比解析位置，把各 overlay 的行按列合成进基线，必要时补空行使 overlay 有屏幕相对坐标。
+4. 定位光标标记 `CURSOR_MARKER`（`\x1b_pi:c\x07`，`tui.ts:91`）：焦点组件在光标处发出这个 APC 序列，渲染器找到后把它从行里剥掉，再用它定位硬件光标（IME 候选窗定位），`findCursorPosition`（`tui-main-screen.ts:251-261`）。
+5. 行归一化 `applyLineResetsFrom`（`tui-main-screen.ts:225-248`）：从 `resetFrom` 起的行做 ANSI 归一化并追加 `SEGMENT_RESET`（`\x1b[0m\x1b]8;;\x07`，`tui.ts:357`），防止样式跨行泄漏；`resetFrom` 之前的行直接引用上一帧。首帧、宽高变化、overlay 切换都会把 `resetFrom` 压到 0。
+6. 全量重绘判定（`fullRender(clear)`，`tui-main-screen.ts:387-430`）：首帧不擦屏直接写；宽度变化必擦（换行位置全变）；高度变化必擦（Termux 软键盘场景例外，否则每次键盘弹出都重放整段历史，`tui-main-screen.ts:478-482`）；内容收缩超过历史最高水位且无 overlay 时擦除空行（`clearOnShrink`，`tui.ts:515-517`、`tui-main-screen.ts:486-490`）。擦屏序列是 `\x1b[2J\x1b[H\x1b[3J`（含 scrollback）。它除了用于上述尺寸或内容收缩场景，也是视口上方变化无法就地修补时的兜底：可见窗口与上一帧对不齐（行整体滑出）、图片跨过视口顶、删除行回退、差分时图片块超出屏幕，都会落回它。
+7. 差分区间扫描（`tui-main-screen.ts:493-518`）：从 `resetFrom` 扫到两帧最大行数，记 `firstChanged/lastChanged`；纯追加时区间锁在旧长度处（`appendStart` 快速路径）。区间经过 Kitty 图像块时向外扩展，避免从图像块中间重画（`tui-main-screen.ts:285-306`）。
+8. 视口夹取（`tui-main-screen.ts:586-648`）：`firstChanged` 落在上一帧视口之上时，屏幕上的行并没有动，只有 scrollback 副本过期。文档长度没变时只重绘可见部分，保留过期的 scrollback。**长度变了**则窗口平移 `shift` 行，按可见画面的变化分三种处理：
+   - 可见行内容完全相同（变化全在视口之上）：整帧不写屏，只更新簿记，硬件光标的文档行随 `shift` 平移（`tui-main-screen.ts:617-635`），不写 `\x1b[2J`/`\x1b[3J`；
+   - 可见行有改动、且顶层那一行没变（`inPlaceWindowEdits`，`tui-main-screen.ts:763-782`）：用绝对光标定位只重画那几行（`repaintVisibleRows`，`tui-main-screen.ts:436-461`），不滚动也不碰 scrollback。判据是"顶层行未变、且最多 `IN_PLACE_WINDOW_EDIT_LIMIT` 行不同"，属于启发式：真实 settle 帧只改底部 1~2 行（状态行、footer），而窗口整体滑动或从顶层插删行时顶层必然变，会落到下一种；
+   - 其余情况（顶层变了、窗口整体移动、行被增删）：退回 `fullRender(true)`，此时会写 `\x1b[2J`/`\x1b[3J`。
+   已知取舍（`README.md` 策略 3 同步说明）：视口之上新增或改写的行不会进入终端历史（用户上滚看到的是旧版本，且插入的行缺失）；文档收缩后旧行仍留在 scrollback，上滚会看到一段重复；开启 `clearOnShrink`、或"所有变化都在被删除的行"等回退路径仍会清 scrollback。
+
+9. 写入（`tui-main-screen.ts:649-709`）：`\x1b[?2026h` 开同步输出 → 视口滚动对齐（必要时 `\r\n` 推进滚动）→ CUU/CUD 移到首变行 → `\r` → 逐行 `\x1b[2K` + 行内容 → 尾部清理旧多出的行 → `\x1b[?2026l`。只写首变行到末变行，单行变化（spinner）不会闪烁全屏。
+10. 硬保险（`assertLineFitsWidth`，`tui-main-screen.ts:812-841`）：差分写入、窗口重绘和 `fullRender` 都调用它，渲染行 `visibleWidth > width` 时把全部行写进 `tui-crash.log`，清理终端状态后抛错——指向"组件没截断"这个根因。
+11. 更新镜像：`previousLines`、`hardwareCursorRow`、`previousViewportTop`、`previousKittyImageIds`、宽高（`tui-main-screen.ts:740-750`），并按需移动硬件光标（`positionHardwareCursor`，`tui-main-screen.ts:848-879`）。文档长度变化但可见行未变的帧、以及就地修补的帧走同一套镜像更新（`tui-main-screen.ts:617-635`、`tui-main-screen.ts:451-461`），因此下一帧仍然对着正确的行窗口做差分。
 
 输出统一经过 `BoundedTerminalWriter`（`tui-main-screen.ts:24-80`）：按 1MiB 分块刷盘，超长串按代理对边界切开，避免整帧拼成一个超过 V8 字符串上限的大串。
 
-`stop()` 的收尾（`tui-main-screen.ts:194-202`）：把光标推到内容末尾再换行，退出后主屏 scrollback 不残留半行。
+`stop()` 的收尾（`tui-main-screen.ts:188-196`）：把光标推到内容末尾再换行，退出后主屏 scrollback 不残留半行。
 
 ## 6. 全屏渲染（fullscreen）
 
@@ -213,7 +218,7 @@ alt screen 进入时（`tui-alt-screen.ts:316-318`）：`\x1b[?1049h` + 关 auto
 | 收缩清行 | `terminal.clearOnShrink` 设置项 → `ui.setClearOnShrink()`（`tui.ts:524-527`） | 内容收缩时是否清空多余行（默认 false，开启可能闪烁） |
 | ESC 超时 | 无开关，按传输自动判定（`terminal.ts:103-116`） | 非 SSH 10ms；检测到 `SSH_CONNECTION`/`SSH_TTY` 时 100ms |
 
-唯一的落盘诊断是崩溃现场：任何渲染行 `visibleWidth > width` 时，全部行写入 `<logDirectory>/tui-crash.log`（`tui-main-screen.ts:628-639`）。`logDirectory` 由 `TUI` 构造参数传入，缺省是 `os.tmpdir()` 下按需创建的 `tui-*` 私有临时目录（`tui.ts:479-484`）。
+唯一的落盘诊断是崩溃现场：任何渲染行 `visibleWidth > width` 时，全部行写入 `<logDirectory>/tui-crash.log`（`tui-main-screen.ts:671-682`）。`logDirectory` 由 `TUI` 构造参数传入，缺省是 `os.tmpdir()` 下按需创建的 `tui-*` 私有临时目录（`tui.ts:479-484`）。
 
 ## 9. 测试与验证
 

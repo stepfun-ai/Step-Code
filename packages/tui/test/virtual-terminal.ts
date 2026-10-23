@@ -114,6 +114,19 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	/**
+	 * Simulate scrolling the terminal's own viewport (negative scrolls up into
+	 * scrollback), standing in for a user reading history while output continues.
+	 */
+	scrollLines(lines: number): void {
+		this.xterm.scrollLines(lines);
+	}
+
+	/** Absolute buffer row currently mapped to the top of the visible viewport. */
+	getViewportTop(): number {
+		return this.xterm.buffer.active.viewportY;
+	}
+
+	/**
 	 * Resize the terminal
 	 */
 	resize(columns: number, rows: number): void {

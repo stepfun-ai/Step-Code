@@ -651,11 +651,12 @@ if (matchesKey(data, Key.enter)) {
 
 ## Rendering modes
 
-`TuiMainScreen` uses three rendering strategies:
+`TuiMainScreen` uses four rendering strategies:
 
 1. **First Render**: Output all lines without clearing scrollback
-2. **Width Changed or Change Above Viewport**: Clear screen and fully re-render
-3. **Normal Update**: Move the cursor to the first changed line, clear to the end, and render changed lines
+2. **Size Changed or Content Shrank**: Clear the screen and scrollback and replay the document, because every row moves
+3. **Change Above Viewport**: Leave scrollback alone when a length change moved rows only above the window. Without a document-length change only the affected on-screen rows are repainted. With one, the first visible row still holds its content and at most a few rows below it differ (the settle frame only redraws the dock): nothing is written when they all match, otherwise exactly those rows are repainted in place. A different first row means the window slid and rows left the screen, so that frame replays the document. Two known trade-offs come with keeping scrollback: rows changed above the window never reach terminal history (it shows their old copy, and inserted rows are missing), and a document that shrinks leaves its removed rows in scrollback.
+4. **Normal Update**: Move the cursor to the first changed line, clear to the end, and render changed lines
 
 `TuiAltScreen` owns a terminal-height viewport. Without an explicit layout root it preserves the legacy single-document scrolling behavior. With `setLayoutRoot()`, `VStack`, `HStack`, and nested `ScrollView` components can reserve fixed regions and independently scroll constrained regions. It updates changed viewport rows in place, follows streaming output while at the bottom, and preserves a manually selected scroll position while content grows. Mouse-wheel and configurable keyboard navigation scroll without modifying terminal scrollback, including jumps between OSC 133 semantic prompt markers. Clicking an OSC 8 hyperlink opens it with the configured URL handler. Dragging with the primary mouse button selects text and, unless `TuiAltScreenOptions.copyOnSelect` is `false`, copies it to the clipboard with OSC 52; holding the drag at a scroll view's top or bottom edge auto-scrolls and extends the selection into off-screen content. Kitty images support vertical viewport cropping; iTerm2 inline images fall back to text because the iTerm2 protocol cannot delete or crop placements during viewport repainting.
 
