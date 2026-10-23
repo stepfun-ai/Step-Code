@@ -13,6 +13,7 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/cli`;
 ## Boundaries and invariants
 
 - argv, TTY detection, process exit, signals, and stdout/stderr routing belong here. Agent Loop, session persistence, permission policies, and provider adapters belong in lower layers.
+- Keep process-title assignment out of Electron runtimes (`process.versions.electron`): macOS registers titled Electron Node-mode children as foreground apps. Ordinary Node/Bun CLI titles and the Desktop main window remain unchanged.
 - Inject UI capabilities into coding-agent through hooks; `packages/**` must not import CLI.
 - Non-UI code enters UI only through `#ui` / `#ui/index` or an equivalent public entry point, never deep UI internals. Use `#*` aliases only within this app.
 - Keep JSON, RPC, and SDK stdio stdout limited to protocol output. Send diagnostics through the prescribed stderr / diagnostic channel; do not mix in startup banners.

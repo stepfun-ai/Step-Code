@@ -11,6 +11,9 @@ export const STORAGE_KEYS = {
 	previewWidth: "stepcode.previewWidth",
 	sidebarWidth: "stepcode.sidebarWidth",
 	terminalHeight: "stepcode.terminalHeight",
+	/** The model picked last under each provider, so switching back restores it. */
+	lastModelByProvider: "stepcode.lastModelByProvider",
+	/** Model ids the user favourited; each pins to the top of its provider's list. */
 	pinnedModels: "stepcode.pinnedModels",
 } as const;
 

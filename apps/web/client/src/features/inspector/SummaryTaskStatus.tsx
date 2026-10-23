@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { SessionInspector } from "../../state/types";
 import { Icon } from "../../ui";
+import type { InspectorTaskStatus } from "./model";
 
-export function SummaryTaskStatus({ status }: { readonly status: SessionInspector["tasks"][number]["status"] }) {
+export function SummaryTaskStatus({ status }: { readonly status: InspectorTaskStatus }) {
 	const slot = useRef<HTMLSpanElement>(null);
 	const spinner = useRef<HTMLSpanElement>(null);
 	const result = useRef<HTMLSpanElement>(null);
@@ -58,7 +58,9 @@ export function SummaryTaskStatus({ status }: { readonly status: SessionInspecto
 	}, [status, reduced]);
 	return (
 		<span ref={slot} className="sb-status" data-state={status} data-settling={settling} aria-hidden="true">
-			{status === "pending" ? <Icon name="circle" size="xs" /> : null}
+			{status === "pending" || status === "aborted" ? (
+				<Icon name={status === "pending" ? "circle" : "triangleAlert"} size="xs" />
+			) : null}
 			<span ref={spinner} className="sb-status-spinner">
 				<Icon name="loaderCircle" size="sm" />
 			</span>

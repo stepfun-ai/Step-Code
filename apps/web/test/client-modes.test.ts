@@ -7,8 +7,11 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { chooseMode, clearModes, modePrefix } from "../client/src/features/composer/actions.ts";
+import { commandLeadIcon, MODES, modeFromCommand } from "../client/src/features/composer/modes.ts";
+import { MESSAGES } from "../client/src/i18n/messages.ts";
 import { createInitialState, getState, setState, type ModeId } from "../client/src/state/store.ts";
 
 function reset(): void {
@@ -41,10 +44,11 @@ test("picking an active mode again removes it without sending a clear command", 
 
 test("each mode maps to the prefix the kernel reads for one turn", () => {
 	// `/goal <body>` starts a goal, `/plan <body>` plans that task, and the
-	// `ultraloop:` keyword is the kernel's own per-turn workflow opt-in.
+	// `ultracode:` keyword is the kernel's own per-turn workflow opt-in
+	// (`ultraloop` is its alias and the kernel matches both).
 	assert.equal(modePrefix("goal"), "/goal ");
 	assert.equal(modePrefix("plan"), "/plan ");
-	assert.match(modePrefix("ultraloop"), /^ultraloop: ?$/u);
+	assert.match(modePrefix("ultraloop"), /^ultracode: ?$/u);
 });
 
 test("sending consumes every staged mode", () => {
@@ -52,4 +56,55 @@ test("sending consumes every staged mode", () => {
 	chooseMode("goal");
 	clearModes();
 	assert.deepEqual(getState().modes, { goal: false, plan: false, ultraloop: false });
+});
+
+test("each mode carries its icon, labels and placeholder in every locale", () => {
+	// The staged-mode presentation reads one metadata entry per mode; a key
+	// missing from either locale would render as its key string.
+	assert.deepEqual(
+		MODES.map((mode) => mode.id),
+		["goal", "plan", "ultraloop"],
+	);
+	for (const mode of MODES) {
+		assert.ok(mode.icon, `${mode.id}: no icon`);
+		for (const key of [mode.labelKey, mode.descKey, mode.placeholderKey]) {
+			assert.ok(Object.hasOwn(MESSAGES["zh-CN"], key), `${mode.id}: zh-CN missing ${key}`);
+			assert.ok(Object.hasOwn(MESSAGES["en-US"], key), `${mode.id}: en-US missing ${key}`);
+		}
+	}
+});
+
+test("each mode has its accent and lead theme in composer.css", () => {
+	// A mode is one metadata entry plus its CSS accent (see modes.ts): the card
+	// paints through `[data-mode]`, the prompt's lead chip through
+	// `.prompt-mode[data-mode]`, and the ＋ menu row through its per-mode class.
+	// This keeps a new mode from rendering unthemed.
+	const css = readFileSync(new URL("../client/src/features/composer/composer.css", import.meta.url), "utf8");
+	for (const mode of MODES) {
+		assert.ok(css.includes(`[data-mode="${mode.id}"]`), `${mode.id}: no composer-card accent block`);
+		assert.ok(css.includes(`.prompt-mode[data-mode="${mode.id}"]`), `${mode.id}: no prompt lead theme`);
+		assert.ok(css.includes(`.control-option--${mode.id}`), `${mode.id}: no ＋ menu row class`);
+	}
+	// Plain leading commands share the lead shape through their own class.
+	assert.ok(css.includes(".prompt-command"), "no plain-command lead class");
+});
+
+test("the mode commands stage their mode; the keyword form maps to the same mode", () => {
+	// Typing `/goal`, `/plan` or the ultraloop keyword renders the same chip as
+	// picking the mode from the ＋ menu; every other command stays a plain lead.
+	assert.equal(modeFromCommand("goal"), "goal");
+	assert.equal(modeFromCommand("plan"), "plan");
+	assert.equal(modeFromCommand("ultraloop"), "ultraloop");
+	assert.equal(modeFromCommand("ultracode"), "ultraloop");
+	assert.equal(modeFromCommand("feedback"), null);
+	assert.equal(modeFromCommand("skill:foo"), null);
+});
+
+test("each leading command keeps one icon across typings and menu picks", () => {
+	assert.equal(commandLeadIcon("skill:foo"), "wrench");
+	assert.equal(commandLeadIcon("plugin"), "puzzle");
+	assert.equal(commandLeadIcon("permissions"), "shield");
+	assert.equal(commandLeadIcon("btw"), "question");
+	assert.equal(commandLeadIcon("feedback"), "thumbsUp");
+	assert.equal(commandLeadIcon("compact"), "prompt");
 });

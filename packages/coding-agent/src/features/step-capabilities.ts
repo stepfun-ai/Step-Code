@@ -2,6 +2,7 @@
 
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
+import { createStepCompactExtension } from "./compact.ts";
 import { createStepPlanExtension } from "./step-plan.ts";
 import { registerStepClarifyUserExtension } from "./step-questionnaire.ts";
 import { createStepSubagentExtension, type StepSubagentExtensionOptions } from "./step-subagent.ts";
@@ -21,10 +22,17 @@ export interface StepCapabilitiesExtensionOptions {
 	 * not the Step CLI (the Web server) must set it; the CLI can omit it.
 	 */
 	cliPath?: string;
+	/**
+	 * Whether this host exposes the session-standing ultraloop switch
+	 * (`/ultraloop on|off`). Defaults to true (CLI). The Web/Desktop host offers
+	 * per-turn opt-in only, so it passes false.
+	 */
+	ultraloopSessionMode?: boolean;
 }
 
 /** Compose Pi's native UI examples behind one Step-owned inline extension. */
 export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensionOptions = {}): ExtensionFactory {
+	const compact = createStepCompactExtension();
 	const plan = createStepPlanExtension({ telemetry: options.telemetry });
 	const tasks = createStepTasksExtension();
 	const subagent = createStepSubagentExtension({
@@ -43,10 +51,12 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 		enabled: options.workflow?.enabled,
 		vmExecutor: options.workflow?.vmExecutor,
 		turnState: workflowTurnState,
+		sessionMode: options.ultraloopSessionMode,
 	});
 	return (pi: ExtensionAPI): void => {
 		registerWorkflowChildAcl(pi, options.telemetry);
 		registerStepClarifyUserExtension(pi, options.telemetry);
+		compact(pi);
 		plan(pi);
 		tasks(pi);
 		subagent(pi);

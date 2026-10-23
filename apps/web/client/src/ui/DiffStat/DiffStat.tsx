@@ -11,8 +11,9 @@ export interface DiffStatProps extends ComponentPropsWithRef<"span"> {
 export function DiffStat({ additions, deletions, className, ...rest }: DiffStatProps) {
 	return (
 		<span className={cx(styles.root, "diff-stat", className)} {...rest}>
-			<span className={styles.add}>{`+${additions}`}</span>
-			<span className={styles.del}>{`-${deletions}`}</span>
+			{/* A zero count carries no signal, so it stays neutral rather than green or red. */}
+			<span className={additions ? styles.add : styles.zero}>{`+${additions}`}</span>
+			<span className={deletions ? styles.del : styles.zero}>{`-${deletions}`}</span>
 		</span>
 	);
 }

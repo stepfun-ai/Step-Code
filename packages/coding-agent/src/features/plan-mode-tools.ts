@@ -22,20 +22,45 @@ import {
 import { resolvePath } from "../utils/paths.ts";
 
 /** Exit outcome dimension for plan_mode_exited telemetry. */
-export type StepPlanExitOutcome = "approved" | "toggled_off" | "auto_headless" | "auto_rpc";
+export type StepPlanExitOutcome =
+	| "approved"
+	| "toggled_off"
+	/** Left planning without writing anything: nothing to review, nothing approved. */
+	| "no_proposal"
+	| "auto_headless"
+	| "auto_rpc";
 
 /** State transitions the plan-mode tools drive on the step-plan extension. */
 export interface StepPlanModeController {
 	isPlanModeActive(): boolean;
+	/** Plan mode is on because the user asked for it (`/plan`, `--plan`), not through enter_plan_mode. */
+	enteredByUser(): boolean;
 	/**
 	 * Agent-initiated entry (the enter_plan_mode tool); user entry is the
 	 * /plan toggle owned by the extension. Returns the session plan file path.
 	 */
 	enterPlanMode(extensionContext: ExtensionContext): string;
-	/** Leave plan mode: restore tools, persist state, record telemetry. */
-	exitPlanMode(outcome: StepPlanExitOutcome, extensionContext: ExtensionContext): void;
+	/**
+	 * Leave plan mode: restore any tools plan mode added, persist state, record telemetry.
+	 * `submittedPlanHash` records a proposal handed to an external reviewer.
+	 */
+	exitPlanMode(outcome: StepPlanExitOutcome, extensionContext: ExtensionContext, submittedPlanHash?: string): void;
 	/** Plan file path for this session (persisted or derived from the session id). */
 	resolvePlanFilePath(extensionContext: ExtensionContext): string;
+	/** The proposal with this hash was already handed to an external reviewer. */
+	wasSubmitted(planHash: string): boolean;
+	/**
+	 * The plan file still holds exactly what it held when this round entered plan
+	 * mode, so the round produced no proposal. A file left over from an earlier
+	 * round is not an answer to the current request, even when this process has
+	 * no record of it being submitted.
+	 */
+	unchangedSinceEnter(planHash: string): boolean;
+}
+
+/** Identity of a proposal's exact text, as reported in review details. */
+export function hashPlanContents(planContents: string): string {
+	return createHash("sha256").update(planContents, "utf8").digest("hex");
 }
 
 /** Select a new per-session plan path; the extension retains saved paths on restore. */
@@ -129,13 +154,18 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		parameters: Type.Object({}),
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
 			if (planMode.isPlanModeActive()) {
+				// Not an error and not uncertain state: a model that probes here has to
+				// learn that the mode is on and that probing is never needed.
+				const origin = planMode.enteredByUser()
+					? "the host turned it on for the user's /plan request"
+					: "it was turned on earlier";
 				return controlResult(
-					`Already in plan mode. Write your proposal to ${planMode.resolvePlanFilePath(ctx)} using write_file or edit_file, then call exit_plan_mode when it is ready.`,
+					`Plan mode is already on (${origin}); this call changed nothing and was not needed. Do not call enter_plan_mode again. Write your proposal to ${planMode.resolvePlanFilePath(ctx)} using write_file or edit_file, then call exit_plan_mode once when it is ready.`,
 				);
 			}
 			const planFilePath = planMode.enterPlanMode(ctx);
 			return controlResult(
-				`Plan mode active. Explore the repository, then write your proposal to ${planFilePath} using write_file. Call exit_plan_mode when it is ready for review.`,
+				`Plan mode is now on. Explore the repository, then write your proposal to ${planFilePath} using write_file. Call exit_plan_mode once when it is ready for review.`,
 			);
 		},
 	});
@@ -147,15 +177,42 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		renderShell: "self",
 		renderResult: renderPlanReviewResult,
 		description:
-			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. In interactive mode, user approval exits planning; staying, refining, or cancelling keeps it active. In headless and RPC modes, exits without interactive approval; the caller must gate approval externally before execution.",
+			"Submit the written proposal for review; call it once. Requires a readable, nonempty regular plan file. In interactive mode, user approval exits planning; staying, refining, or cancelling keeps it active. In headless and RPC modes, exits without interactive approval; the caller must gate approval externally before execution. There, calling it without a new proposal only leaves plan mode, for a request that needs no plan.",
 		promptSnippet: "Submit the written proposal for review",
 		parameters: Type.Object({}),
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
-			if (!planMode.isPlanModeActive()) return controlResult("Not in plan mode.");
-			const planFilePath = planMode.resolvePlanFilePath(ctx);
-			if (!existsSync(planFilePath)) {
+			if (!planMode.isPlanModeActive()) {
 				return controlResult(
-					`No plan file at ${planFilePath}. Check the path and permissions, then write it with write_file and call exit_plan_mode again.`,
+					"Plan mode is already off, so there is nothing to submit or leave. Do not call exit_plan_mode again; to submit a revised proposal later, call enter_plan_mode first.",
+				);
+			}
+			const planFilePath = planMode.resolvePlanFilePath(ctx);
+			// No review dialog can be shown: approval belongs to the caller (rpc) or
+			// nobody is there to ask (headless).
+			const external = ctx.mode === "rpc" || !ctx.hasUI;
+			// Said in the persisted result so a later turn, which no longer sees the
+			// request-local reminder, still knows the mode was the user's.
+			const offText = planMode.enteredByUser()
+				? "Plan mode, which the host turned on for the user's /plan request, is now off"
+				: "Plan mode is now off";
+			const leaveWithoutProposal = (reason: string): AgentToolResult<PlanReviewDetails | undefined> => {
+				// Nothing new was written, so there is nothing to review and no decision
+				// for the user: the model decided this request needs no plan. Requiring
+				// a file here trapped the session in plan mode — the model answered
+				// directly, nothing ever submitted, and every later file edit stayed
+				// blocked. Resubmitting an untouched earlier proposal would post a
+				// second review card for a plan the user already has.
+				planMode.exitPlanMode("no_proposal", ctx);
+				return controlResult(
+					`${offText}. ${reason}, so there is nothing to review and the user is not being asked to approve anything. Answer the request directly. Do not call exit_plan_mode or enter_plan_mode again for this request.`,
+				);
+			};
+			if (!existsSync(planFilePath)) {
+				if (external) return leaveWithoutProposal(`No proposal was written at ${planFilePath}`);
+				// The terminal can always review, and its user leaves with /plan: a
+				// missing file is a proposal not yet written, not a decision to leave.
+				return controlResult(
+					`No proposal at ${planFilePath}, so there is nothing to review yet and plan mode stays on. Write the plan there with write_file, then call exit_plan_mode once. If this request needs no plan, answer directly and tell the user they can turn plan mode off with /plan; do not call exit_plan_mode for that.`,
 				);
 			}
 			let planContents: string;
@@ -166,7 +223,17 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					`Cannot review the plan at ${planFilePath}: ${error instanceof Error ? error.message : String(error)}. Provide a readable, nonempty regular file containing your proposal with write_file, then call exit_plan_mode again.`,
 				);
 			}
-			const planHash = createHash("sha256").update(planContents, "utf8").digest("hex");
+			const planHash = hashPlanContents(planContents);
+			if (external && planMode.unchangedSinceEnter(planHash)) {
+				return leaveWithoutProposal(
+					`${planFilePath} still holds the content it had before this request and nothing new was written`,
+				);
+			}
+			if (external && planMode.wasSubmitted(planHash)) {
+				return leaveWithoutProposal(
+					`${planFilePath} still holds the proposal already submitted earlier and nothing new was written`,
+				);
+			}
 			const reviewed = (outcome: PlanReviewOutcome, feedback?: string): PlanReviewDetails => ({
 				planFilePath,
 				planContents,
@@ -180,18 +247,23 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				// An rpc child has a dialog bridge (hasUI is true) but no real user
 				// behind it, so its extension_ui_request select can be auto-cancelled
 				// to "Stay", leaving the child idle in plan mode forever. Exit plan mode
-				// and hand approval to the caller.
-				planMode.exitPlanMode("auto_rpc", ctx);
-				ctx.ui.notify("rpc child auto-approved plan mode exit — user oversight was not gated", "warning");
+				// and hand approval to the caller. Interactive hosts that drive the
+				// session over rpc (StepCode Web/Desktop) land here too: they show the
+				// proposal in their own UI, so the result must neither claim the user
+				// approved nor imply the work may start.
+				planMode.exitPlanMode("auto_rpc", ctx, planHash);
+				// No notice: leaving plan mode is state the host already draws (the strip
+				// closes, the review card appears). An announcement would be a row nobody
+				// typed, and the tool result already tells the model what happened.
 				return reviewedResult(
-					`Cannot gate approval in rpc child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
+					`${offText} and the proposal was submitted for review. Exiting reports that the investigation is finished; it does not authorize implementation. Do not call exit_plan_mode again; wait for the user's decision before changing files.\n\nPlan file: ${planFilePath}\n\nPlan contents:\n${planContents}`,
 					reviewed("external_approval_required"),
 				);
 			}
 			if (!ctx.hasUI) {
-				planMode.exitPlanMode("auto_headless", ctx);
+				planMode.exitPlanMode("auto_headless", ctx, planHash);
 				return reviewedResult(
-					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally.`,
+					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally. Do not call exit_plan_mode again.`,
 					reviewed("external_approval_required"),
 				);
 			}

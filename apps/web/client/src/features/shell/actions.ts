@@ -11,7 +11,7 @@ import { closeStream, showError } from "../../state/session";
 import { getState, setState, setUi, type ThemeChoice } from "../../state/store";
 import type { LoginReport } from "../../state/types";
 
-const THEMES: readonly ThemeChoice[] = ["system", "light", "dark"];
+const THEMES: readonly ThemeChoice[] = ["system", "light", "dark", "violet"];
 
 /**
  * Where "Upgrade" leads: the Step Plan page of the signed-in account's
@@ -26,8 +26,11 @@ function systemPrefersDark(): boolean {
 	return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-/** "light" or "dark" for a theme choice (legacy `resolvedTheme`, 524-526). */
-export function resolvedTheme(theme: ThemeChoice = getState().theme): "light" | "dark" {
+/**
+ * "light", "dark" or "violet" for a theme choice (legacy `resolvedTheme`, 524-526);
+ * "violet" is a light-plane theme of its own, so it passes through unmixed.
+ */
+export function resolvedTheme(theme: ThemeChoice = getState().theme): "light" | "dark" | "violet" {
 	return theme === "system" ? (systemPrefersDark() ? "dark" : "light") : theme;
 }
 
@@ -57,18 +60,6 @@ export function applyLocale(locale: string, persist = true): void {
 /** Show or hide the sidebar (legacy `.app.classList.toggle("sidebar-hidden")`, 3383-3388, 3627). */
 export function toggleSidebar(): void {
 	setUi((ui) => ({ sidebarHidden: !ui.sidebarHidden }));
-}
-
-/**
- * Open the sign-in gate from the shell, the way `step login` does.
- *
- * The gate normally appears only when no model can run; an account that can run
- * models (an API key, or a custom `models.json` provider) boots straight into the
- * app. Its "Not signed in" label is the entry point back to it, so signing in is
- * always one click away instead of requiring a terminal command.
- */
-export function requireSignIn(): void {
-	setUi({ accountMenuOpen: false, loginRequired: true });
 }
 
 /** Ask before logging out: opens `#logoutDialog`, which calls `confirmLogout`. */

@@ -1,31 +1,32 @@
 .embedded-browser { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .app.right-panel-expanded .right-panel.is-browser { grid-column: 1 / -1; }
-.browser-tabs { display: flex; align-items: center; gap: 3px; min-height: 38px; padding: 4px 6px; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
-.browser-tab { display: flex; align-items: center; flex: 0 0 150px; min-width: 0; height: 30px; border-radius: 5px; }
+.browser-tabs { display: flex; align-items: center; gap: 3px; min-height: 38px; padding: 4px 10px; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.browser-tab { display: flex; align-items: center; flex: 0 0 150px; min-width: 0; height: 30px; border-radius: 6px; }
 .browser-tab.is-active { background: var(--canvas); }
-.browser-tab > button[role="tab"] { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 30px; padding: 0 6px; font-size: 11px; }
+.browser-tab > button[role="tab"] { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 30px; padding: 0 6px; font-size: 12px; }
 .browser-tab > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-tab .icon { flex: none; }
 .browser-tab .icon-button { flex: 0 0 24px; width: 24px; height: 24px; }
-.browser-tabs > .icon-button { flex: 0 0 28px; }
-.browser-navigation { display: flex; align-items: center; gap: 4px; padding: 6px; border-bottom: 1px solid var(--line); }
+.browser-tabs > .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+/* Toolbars inset 10px so their 28px icon buttons put the glyphs on the header title's 16px line. */
+.browser-navigation { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .browser-nav-buttons { display: flex; flex: none; }
 .browser-navigation .icon-button, .browser-footer .icon-button { width: 28px; height: 28px; flex: none; }
-.browser-address { width: 0; min-width: 0; flex: 1; height: 30px; padding: 0 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--ink); font: 12px var(--sans); }
+.browser-address { width: 0; min-width: 0; flex: 1; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius-input); background: var(--surface-soft); color: var(--ink); font: 12px var(--sans); }
 .browser-address::placeholder { color: var(--ink-2); }
 .browser-surface { position: relative; flex: 1; min-height: 120px; min-width: 0; overflow: hidden; background: var(--canvas); touch-action: none; overscroll-behavior: contain; }
 .browser-surface:focus-within { outline: 1px solid var(--focus-border); outline-offset: -1px; }
 .browser-frame { display: block; width: 100%; height: 100%; position: absolute; left: 0; top: 0; max-width: none; user-select: none; }
 .browser-input { position: absolute; left: 0; top: 0; width: 1px; height: 20px; padding: 0; opacity: .01; border: 0; resize: none; pointer-events: none; }
 .browser-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--ink-2); font-size: 12px; }
-.browser-error, .browser-notice { flex: none; padding: 7px 10px; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; max-height: 120px; overflow-y: auto; border-bottom: 1px solid var(--line); }
+.browser-error, .browser-notice { flex: none; padding: 8px 16px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; max-height: 120px; overflow-y: auto; border-bottom: 1px solid var(--line); }
 .browser-error { display: flex; align-items: center; gap: 8px; color: var(--danger); background: var(--danger-surface); }
-.browser-error > span { flex: 1; min-width: 0; }
+.browser-error > span { flex: 1; min-width: 0; text-wrap: pretty; }
 .browser-error .icon-button { flex: none; }
 .browser-notice { color: var(--ink-2); background: var(--surface-soft); }
-.browser-footer { display: flex; align-items: center; gap: 3px; min-height: 34px; padding: 3px 6px; border-top: 1px solid var(--line); color: var(--ink-2); }
-.browser-footer > output { flex: 1; min-width: 0; font-size: 10px; overflow-wrap: anywhere; }
-.browser-zoom { flex: 0 0 44px; height: 28px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.browser-footer { display: flex; align-items: center; gap: 3px; min-height: 40px; padding: 6px 10px; border-top: 1px solid var(--line); color: var(--ink-2); }
+.browser-footer > output { flex: 1; min-width: 0; padding-left: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.browser-zoom { flex: none; min-width: 40px; height: 28px; padding: 0 6px; border-radius: var(--radius-control); font-size: 12px; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: no-preference) {
 	.browser-tab.is-loading > button[role="tab"] > .icon { animation: browser-spin 1s linear infinite; }
 }

@@ -10,6 +10,12 @@ import { useAppStore } from "../../state/store";
 import { Icon, LEGACY_ICONS } from "../../ui";
 import { closePreviewTab, selectPreviewTab } from "./actions";
 
+/** First line of a side question, short enough for a tab. */
+function tabTitle(question: string): string {
+	const line = question.replace(/\s+/gu, " ").trim();
+	return line.length <= 28 ? line : `${line.slice(0, 27)}…`;
+}
+
 export function PreviewTabs() {
 	const t = useT();
 	const tabs = useAppStore((state) => state.preview.tabs);
@@ -39,20 +45,25 @@ export function PreviewTabs() {
 		<div className="preview-tabs" id="previewTabs" role="tablist" ref={listRef}>
 			{tabs.map((tab, index) => (
 				<div
-					// Tabs are identified by position in the legacy DOM (`data-index`); cwd + path is unique.
-					key={`${tab.cwd}\u0000${tab.path}`}
+					// Tabs are identified by position in the legacy DOM (`data-index`); a file's
+					// cwd + path + scope is unique, a side answer's id is.
+					key={tab.kind === "file" ? `${tab.cwd}\u0000${tab.path}\u0000${tab.scope ?? ""}` : `btw:${tab.id}`}
 					className={cx("preview-tab", index === active && "active")}
 					role="tab"
 					tabIndex={0}
 					data-index={String(index)}
-					title={tab.path}
+					title={tab.kind === "file" ? tab.path : tab.question}
 					aria-selected={index === active}
 					onClick={(event) => onClick(event, index)}
 					onAuxClick={(event) => onAuxClick(event, index)}
 					onKeyDown={(event) => onKeyDown(event, index)}
 				>
-					<Icon {...LEGACY_ICONS.file} />
-					<span>{basename(tab.path)}</span>
+					{tab.kind === "file" ? (
+						<Icon {...LEGACY_ICONS.file} />
+					) : (
+						<Icon name={tab.pending ? "loaderCircle" : "question"} size="sm" />
+					)}
+					<span>{tab.kind === "file" ? basename(tab.path) : tabTitle(tab.question)}</span>
 					<button className="preview-tab-close" type="button" title={t("closeTab")} aria-label={t("closeTab")}>
 						<Icon name="close-sm" size="xs" />
 					</button>

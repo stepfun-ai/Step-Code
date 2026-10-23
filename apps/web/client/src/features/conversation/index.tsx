@@ -16,5 +16,7 @@ import "./turn-artifacts.css";
 export { ChildAgentView } from "./ChildAgentView";
 export { ConversationStream } from "./ConversationStream";
 export { FeedbackModal } from "./FeedbackModal";
+export { openFeedback } from "./feedback";
+export { SessionHeader } from "./SessionHeader";
 export { StreamNav } from "./StreamNav";
 export { SubagentStatusIcon } from "./SubagentStatusIcon";

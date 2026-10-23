@@ -69,8 +69,8 @@ function harness(): Recorded {
 }
 
 /** Install with both gates open so tests can exercise handler behaviour without a native binding. */
-function install(h: Recorded): void {
-	createUltraloopOptInExtension({ enabled: true, vmExecutor: () => {} })(h.api);
+function install(h: Recorded, options: { sessionMode?: boolean } = {}): void {
+	createUltraloopOptInExtension({ enabled: true, vmExecutor: () => {}, ...options })(h.api);
 }
 
 function makeCtx(
@@ -615,5 +615,62 @@ describe("Ultracode discovery and command aliases", () => {
 		expect(h.commands.has("ultracode")).toBe(false);
 		expect(h.commands.has("ultraloop")).toBe(false);
 		expect(h.handlers.has("before_agent_start")).toBe(false);
+	});
+});
+
+describe("hosts without the session-standing switch", () => {
+	// The Web/Desktop host offers per-turn opt-in only: the composer's ultraloop
+	// pick rides one message. It must neither expose `/ultraloop on` nor revive
+	// standing consent written by a CLI session.
+	test("registers no standing command", () => {
+		const h = harness();
+		install(h, { sessionMode: false });
+		expect(h.commands.has("ultracode")).toBe(false);
+		expect(h.commands.has("ultraloop")).toBe(false);
+	});
+
+	test("ignores a persisted standing entry carried in from another host", () => {
+		const h = harness();
+		install(h, { sessionMode: false });
+		h.contextEntries.push({
+			type: "custom",
+			customType: "ultraloop-session-mode",
+			data: { enabled: true },
+		});
+		h.handlers.get("session_start")?.({ type: "session_start" } as never);
+
+		// No status chip, no standing reminder, and no off-transition notice.
+		expect(h.statuses.has("ultracode")).toBe(false);
+		expect(startOrdinaryTurn(h)).toBeUndefined();
+		expect(h.handlers.get("context")?.({ messages: [] } as never)).toBeUndefined();
+	});
+
+	test("still honors the per-turn keyword", () => {
+		const h = harness();
+		install(h, { sessionMode: false });
+		const result = h.handlers.get("before_agent_start")?.({
+			type: "before_agent_start",
+			prompt: "ultraloop: audit the repository",
+		} as never) as { message?: { customType: string; content: string } } | undefined;
+		expect(result?.message?.customType).toBe("ultraloop-opt-in");
+		// The turn-level reminder is emitted; which variant (available vs not
+		// active in this harness's tool list) is not what this test pins.
+		expect(result?.message?.content).toContain('the keyword "ultraloop"');
+	});
+
+	test("does not journal an opted-in turn as off-consent", () => {
+		const h = harness();
+		install(h, { sessionMode: false });
+		h.handlers.get("before_agent_start")?.({
+			type: "before_agent_start",
+			prompt: "ultraloop: audit the repository",
+		} as never);
+		h.handlers.get("tool_call")?.({
+			type: "tool_call",
+			toolName: "workflow",
+			toolCallId: "call-one-shot",
+			input: {},
+		} as never);
+		expect(h.entries).toEqual([]);
 	});
 });

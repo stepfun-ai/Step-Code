@@ -22,8 +22,11 @@ import type { McpServerStatus, WebSkill } from "../../state/types";
 import { Icon, useDismiss } from "../../ui";
 
 export interface SlashItem {
-	/** `command` inserts `/<key> `, `mcp` opens the MCP view, `skill` inserts `/skill:<key> `. */
-	readonly kind: "command" | "mcp" | "skill";
+	/**
+	 * `command` inserts `/<key> `, `mcp` opens the MCP view, `feedback` opens the
+	 * feedback dialog, `skill` inserts `/skill:<key> `.
+	 */
+	readonly kind: "command" | "mcp" | "feedback" | "skill";
 	readonly key: string;
 	readonly title: string;
 	readonly description: string;
@@ -75,7 +78,7 @@ export function slashGroups(query: string, skills: readonly WebSkill[], t: Trans
 		? []
 		: SLASH_COMMANDS.map(
 				(command): SlashItem => ({
-					kind: command.name === "mcp" ? "mcp" : "command",
+					kind: command.name === "mcp" ? "mcp" : command.name === "feedback" ? "feedback" : "command",
 					key: command.name,
 					title: `/${command.name}`,
 					description: t(command.description),

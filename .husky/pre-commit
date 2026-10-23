@@ -1,26 +1,49 @@
 #!/bin/sh
 
-# Get list of staged files before running check
-STAGED_FILES=$(git diff --cached --name-only)
+# Snapshot the staged files before `pnpm run check` (which runs `biome check --write`).
+# Each line: <working-tree blob id> <partial: 1 when the file also has unstaged changes> <path>.
+# Only files the check actually rewrites are restaged afterwards, so a commit never picks up
+# unstaged work that happens to sit in a staged file.
+SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/pre-commit-staged.XXXXXX") || exit 1
+trap 'rm -f "$SNAPSHOT"' EXIT
+
+git diff --cached --name-only --diff-filter=ACMR | while IFS= read -r file; do
+  [ -f "$file" ] || continue
+  if git diff --quiet -- "$file"; then partial=0; else partial=1; fi
+  printf '%s %s %s\n' "$(git hash-object -- "$file")" "$partial" "$file"
+done > "$SNAPSHOT"
 
 node scripts/check-lockfile-commit.mjs
 if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Run the check script (formatting, linting, and type checking)
+# Run the check script (formatting, linting, and type checking).
+# Git exports GIT_INDEX_FILE to hooks; a commit through a temporary index exports an absolute
+# path, and tests that run git in their own scratch repositories would then use this index.
 echo "Running formatting, linting, and type checking..."
-pnpm run check
+env -u GIT_INDEX_FILE pnpm run check
 if [ $? -ne 0 ]; then
   echo "❌ Checks failed. Please fix the errors before committing."
   exit 1
 fi
 
-# Restage files that were previously staged and may have been modified by formatting
-for file in $STAGED_FILES; do
-  if [ -f "$file" ]; then
-    git add "$file"
+# Restage only files the formatter changed. A partially staged file that changed cannot be
+# restaged without also committing its unstaged hunks, so stop and let the author stage it.
+blocked=0
+while read -r before partial file; do
+  [ -f "$file" ] || continue
+  [ "$(git hash-object -- "$file")" = "$before" ] && continue
+  if [ "$partial" = 1 ]; then
+    echo "❌ Formatting changed $file, which also has unstaged changes."
+    echo "   Stage the formatting fix yourself (git add -p -- \"$file\") and commit again."
+    blocked=1
+  else
+    git add -- "$file" || exit 1
   fi
-done
+done < "$SNAPSHOT"
+if [ "$blocked" -ne 0 ]; then
+  exit 1
+fi
 
 echo "✅ All pre-commit checks passed!"

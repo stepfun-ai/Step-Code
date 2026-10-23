@@ -26,11 +26,9 @@
 	place-items: center;
 	width: 76px;
 	height: 76px;
-	border: 1px solid var(--line);
-	border-radius: var(--radius-dialog);
+	border-radius: 22px;
 	/* Brand tile: stays dark in both themes so the mark keeps its contrast. */
-	background: #15161b;
-	box-shadow: 0 8px 24px var(--shadow);
+	background: var(--brand-tile);
 }
 
 .login-logo-mark {
@@ -42,8 +40,8 @@
 	margin-top: 22px;
 	color: var(--ink);
 	font-size: 30px;
-	font-weight: 650;
-	letter-spacing: -0.01em;
+	font-weight: 600;
+	letter-spacing: -0.022em;
 	line-height: 1.2;
 }
 
@@ -79,12 +77,12 @@
 }
 
 .login-button.primary {
-	background: var(--ink);
-	color: var(--canvas);
+	background: var(--action);
+	color: var(--action-ink);
 }
 
 .login-button.primary:hover:not(:disabled) {
-	opacity: 0.9;
+	background: var(--action-hover);
 }
 
 .login-button.secondary {
@@ -107,6 +105,10 @@
 	height: 22px;
 	flex: none;
 }
+/* On the filled button the arc takes the button's ink so it does not vanish into the fill. */
+.login-button.primary .login-button-mark {
+	--mark-arc: currentColor;
+}
 
 .login-badge {
 	padding: 1px 9px;
@@ -116,96 +118,10 @@
 	opacity: 0.6;
 }
 
-/*
- * The four `step login` profiles, side by side: region is part of the choice
- * rather than a switch under it, so each row says what it will do next.
- */
-.login-methods {
-	display: grid;
-	gap: 10px;
-	margin: 0;
-	padding: 0;
-	border: 0;
-}
-.login-method {
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr);
-	align-items: center;
-	gap: 4px 12px;
-	width: 100%;
-	padding: 12px 14px;
-	border: 1px solid var(--line-strong);
-	border-radius: var(--radius-surface);
-	background: transparent;
-	color: var(--ink);
-	font: inherit;
-	text-align: left;
-	cursor: pointer;
-	transition:
-		background var(--fast),
-		border-color var(--fast),
-		opacity var(--fast);
-}
-.login-method:hover:not(:disabled) {
-	background: var(--hover);
-}
-.login-method:focus-visible {
-	outline: 2px solid var(--focus-border);
-	outline-offset: 2px;
-}
-.login-method:disabled {
-	cursor: default;
-	opacity: 0.45;
-}
-.login-method.plan {
-	border-color: var(--ink);
-}
-.login-method[data-pending] {
-	opacity: 0.75;
-}
-.login-method-icon {
-	display: grid;
-	grid-row: span 2;
-	place-items: center;
-	width: 34px;
-	height: 34px;
-	border-radius: var(--radius-panel);
-	background: var(--surface-soft);
-	color: var(--ink-2);
-}
-.login-method-mark {
-	width: 22px;
-	height: 22px;
-}
-.login-method-text {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	min-width: 0;
-}
-.login-method-text strong {
-	font-size: 14.5px;
-	font-weight: 500;
-}
-.login-method-text small {
-	color: var(--ink-3);
-	font-size: 12px;
-}
-.login-method-hint {
-	grid-column: 2;
-	color: var(--ink-3);
-	font-size: 12px;
-	line-height: 1.4;
-}
-
 .login-switch {
 	margin-top: 10px;
 	color: var(--ink-3);
-	font-size: 12.5px;
-}
-
-.login-own-models {
-	margin-top: 4px;
+	font-size: 13px;
 }
 
 .login-link {
@@ -250,6 +166,7 @@
 .login-select:focus-within,
 .login-key-field:focus-within {
 	border-color: var(--focus-border);
+	box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .login-select {

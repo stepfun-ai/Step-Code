@@ -2,7 +2,9 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { TAG_COLOR_NAMES, type TagColor, useT } from "../../i18n";
 import { useImeGuard } from "../../lib/ime";
 import { getState, shallowEqual, useAppStore } from "../../state/store";
+import { Icon } from "../../ui";
 import { closeTagPicker, createGroupAndTag, setSessionTag } from "./actions";
+import { GroupRenameInput } from "./GroupRenameInput";
 import { cssVar, TAG_COLOR_KEYS, TAG_COLORS } from "./tags";
 
 /** The "name the new group" row (legacy `showTagNameInput`, 1062-1080). */
@@ -10,10 +12,21 @@ function TagNameInput({ sessionId, color }: { readonly sessionId: string; readon
 	const t = useT();
 	const input = useRef<HTMLInputElement>(null);
 	const ime = useImeGuard();
+	const [error, setError] = useState(false);
 	useEffect(() => input.current?.focus(), []);
 	const accept = () => {
 		const fallback = TAG_COLOR_NAMES[getState().locale][color];
-		createGroupAndTag(sessionId, color, input.current?.value.trim() || fallback);
+		const name = input.current?.value.trim() || fallback;
+		// Identical names leave the colour as the only difference between two
+		// groups, which the picker and grouped view cannot show apart.
+		const duplicate = getState().groups.some((group) => group.name.toLowerCase() === name.toLowerCase());
+		if (duplicate) {
+			setError(true);
+			input.current?.focus();
+			input.current?.select();
+			return;
+		}
+		createGroupAndTag(sessionId, color, name);
 		closeTagPicker();
 	};
 	const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -30,12 +43,19 @@ function TagNameInput({ sessionId, color }: { readonly sessionId: string; readon
 				id="tagNameInput"
 				maxLength={12}
 				placeholder={t("groupNamePlaceholder")}
+				aria-invalid={error || undefined}
 				{...ime.handlers}
+				onInput={() => setError(false)}
 				onKeyDown={onKeyDown}
 			/>
 			<button type="button" id="tagNameConfirm" onClick={accept}>
 				{t("confirm")}
 			</button>
+			{error ? (
+				<div className="tag-create-error" role="alert">
+					{t("groupNameDuplicate")}
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -48,6 +68,7 @@ export function TagPicker({ sessionId }: { readonly sessionId: string }) {
 	const t = useT();
 	const data = useAppStore((state) => ({ groups: state.groups, tags: state.tags }), shallowEqual);
 	const [creating, setCreating] = useState<TagColor | null>(null);
+	const [renaming, setRenaming] = useState<TagColor | null>(null);
 	if (creating) return <TagNameInput sessionId={sessionId} color={creating} />;
 
 	const used = new Set(data.groups.map((group) => group.key));
@@ -59,21 +80,49 @@ export function TagPicker({ sessionId }: { readonly sessionId: string }) {
 	};
 	return (
 		<>
-			{data.groups.map((group) => (
-				<button key={group.key} type="button" data-tag={group.key} onClick={() => choose(group.key)}>
-					<span className="tag-diamond" style={cssVar("--tag-color", TAG_COLORS[group.key])} />
-					<span>{group.name}</span>
-				</button>
-			))}
+			{data.groups.map((group) =>
+				renaming === group.key ? (
+					<GroupRenameInput key={group.key} group={group} onDone={() => setRenaming(null)} />
+				) : (
+					// A div wrapper: the row is a button, and the rename pencil cannot nest in one.
+					<div className="group-option" key={group.key}>
+						<button type="button" data-tag={group.key} onClick={() => choose(group.key)}>
+							<span className="tag-diamond" style={cssVar("--tag-color", TAG_COLORS[group.key])} />
+							<span>{group.name}</span>
+						</button>
+						<button
+							type="button"
+							className="group-rename-button"
+							title={t("renameGroup")}
+							aria-label={t("renameGroup")}
+							onClick={() => setRenaming(group.key)}
+						>
+							<Icon name="pencil" size="xs" />
+						</button>
+					</div>
+				),
+			)}
 			{fresh.length ? (
 				<>
 					<div className="tag-picker-caption">{t("createGroup")}</div>
-					{fresh.map((color) => (
-						<button key={color} type="button" data-new-tag={color} onClick={() => setCreating(color)}>
-							<span className="tag-diamond" style={cssVar("--tag-color", TAG_COLORS[color])} />
-							<span>{t("useColor")}</span>
-						</button>
-					))}
+					{/* Colour chips instead of wordy rows: one row of swatches, one click each. */}
+					<div className="tag-new-colors">
+						{fresh.map((color) => {
+							const label = t("createWithColor", { color: TAG_COLOR_NAMES[getState().locale][color] });
+							return (
+								<button
+									key={color}
+									type="button"
+									className="tag-swatch"
+									data-new-tag={color}
+									style={cssVar("--tag-color", TAG_COLORS[color])}
+									title={label}
+									aria-label={label}
+									onClick={() => setCreating(color)}
+								/>
+							);
+						})}
+					</div>
 				</>
 			) : null}
 			<div className="tag-picker-divider" />

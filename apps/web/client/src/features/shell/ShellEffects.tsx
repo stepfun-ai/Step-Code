@@ -6,9 +6,15 @@
 
 import { useEffect } from "react";
 import { activeRightPanel, closeRightPanel } from "../../state/right-panel";
-import { activeCwd, backgroundSessionBusy, interruptCurrent, refreshSessionStatuses } from "../../state/session";
+import {
+	activeCwd,
+	backgroundSessionBusy,
+	closeRenameSession,
+	interruptCurrent,
+	refreshSessionStatuses,
+} from "../../state/session";
 import { type AppState, getState, setUi, useAppStore } from "../../state/store";
-import { answerSelection, pendingSelection } from "../composer/actions";
+import { answerSelection, answerTextInput, pendingSelection, pendingTextInput } from "../composer/actions";
 import { openTree, setPreviewOpen } from "../files/actions";
 import { closeTopmostSettingsLayer } from "../settings/actions";
 import { closeSearch, closeWorkspaceMenu, openSearch } from "../sidebar/actions";
@@ -29,8 +35,11 @@ function handleEscape(): void {
 	// A kernel question blocks its session and sits above everything else;
 	// Escape dismisses it, which the kernel reads as "cancel".
 	const selection = pendingSelection(state);
+	const textInput = pendingTextInput(state);
 	if (selection) void answerSelection(selection, undefined);
+	else if (textInput) void answerTextInput(textInput, undefined);
 	else if (ui.logoutConfirm) closeLogoutConfirm();
+	else if (ui.renameSession) closeRenameSession();
 	else if (ui.imagePreview) setUi({ imagePreview: null });
 	else if (ui.accountMenuOpen) setUi({ accountMenuOpen: false });
 	else if (ui.workspaceRemoval) closeWorkspaceRemoval();
@@ -42,9 +51,12 @@ function handleEscape(): void {
 	else if (ui.workspaceBrowserOpen) setUi({ workspaceBrowserOpen: false });
 	else if (closeTopmostSettingsLayer()) return;
 	else if (ui.workspacePopoverOpen) setUi({ workspacePopoverOpen: false });
+	else if (ui.branchCreateOpen) setUi({ branchCreateOpen: false });
+	else if (ui.branchPopoverOpen) setUi({ branchPopoverOpen: false });
 	else if (ui.tagPicker) setUi({ tagPicker: null });
 	else if (ui.workspaceMenu) closeWorkspaceMenu(true);
 	else if (ui.sessionMenu) setUi({ sessionMenu: null });
+	else if (ui.streamMenu) setUi({ streamMenu: false });
 	else if (ui.fileTreeOpen) setUi({ fileTreeOpen: false });
 	else if (ui.midView) setUi({ midView: null });
 	else if (ui.rightPanelExpanded) setUi({ rightPanelExpanded: false });
@@ -110,7 +122,8 @@ function handleKeydown(event: KeyboardEvent): void {
 		event.preventDefault();
 		openSearch();
 	}
-	if (event.key === "Escape") handleEscape();
+	// A handled Escape (an overlay closed itself, or a field consumed it) closes nothing else.
+	if (event.key === "Escape" && !event.defaultPrevented) handleEscape();
 }
 
 /** How often the rows of sessions running in the background are re-read. */

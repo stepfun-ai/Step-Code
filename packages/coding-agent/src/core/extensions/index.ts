@@ -148,6 +148,8 @@ export type {
 	SetLabelHandler,
 	SetModelHandler,
 	SetThinkingLevelHandler,
+	// Side answers (`/btw`) with a host surface of their own
+	SideAnswer,
 	TerminalInputHandler,
 	// Events - Tool
 	ToolCallEvent,

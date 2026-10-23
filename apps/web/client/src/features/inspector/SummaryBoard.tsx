@@ -3,6 +3,7 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import type { SessionInspector } from "../../state/types";
 import { Icon } from "../../ui";
+import { effectiveTaskStatus, sessionIsLive } from "./model";
 import { SummaryAgents } from "./SummaryAgents";
 import { SummaryTaskStatus } from "./SummaryTaskStatus";
 
@@ -10,10 +11,12 @@ type Task = SessionInspector["tasks"][number];
 
 function TaskRow({
 	task,
+	live,
 	visible,
 	entering,
 }: {
 	readonly task: Task;
+	readonly live: boolean;
 	readonly visible: boolean;
 	readonly entering: boolean;
 }) {
@@ -21,6 +24,7 @@ function TaskRow({
 	const t = useT();
 	const [isNew] = useState(entering);
 	const id = useId();
+	const status = effectiveTaskStatus(task.status, live);
 	return (
 		<li
 			className={`sb-disclosure sb-task-shell${isNew ? " is-new" : ""}${visible ? " is-open" : ""}`}
@@ -28,17 +32,17 @@ function TaskRow({
 			inert={!visible}
 		>
 			<div>
-				<div className={`sb-step is-${task.status}`}>
+				<div className={`sb-step is-${status}`}>
 					<button
 						className="sb-step-trigger"
 						type="button"
-						aria-label={`${task.subject} · ${t(`subagentStatus.${task.status === "pending" ? "queued" : task.status === "in_progress" ? "running" : "completed"}`)}`}
+						aria-label={`${task.subject} · ${t(`subagentStatus.${status === "pending" ? "queued" : status === "in_progress" ? "running" : status}`)}`}
 						aria-expanded={open}
 						aria-controls={id}
 						onClick={() => setOpen(!open)}
 					>
 						<span className="sb-step-symbol">
-							<SummaryTaskStatus status={task.status} />
+							<SummaryTaskStatus status={status} />
 						</span>
 						<span>{task.subject}</span>
 						<Icon name="disclosure" size="xs" className={`sb-fold-icon${open ? " is-open" : ""}`} />
@@ -57,6 +61,7 @@ function TaskRow({
 export function SummaryBoard({ data }: { readonly data?: SessionInspector }) {
 	const t = useT();
 	const current = useAppStore((state) => state.current);
+	const live = sessionIsLive(current?.status);
 	const [completedOpen, setCompletedOpen] = useState(false);
 	const [recent, setRecent] = useState<string[]>([]);
 	const previous = useRef(new Map<string, Task["status"]>());
@@ -116,6 +121,7 @@ export function SummaryBoard({ data }: { readonly data?: SessionInspector }) {
 							<TaskRow
 								key={key}
 								task={task}
+								live={live}
 								entering={hasSnapshot.current && !previous.current.has(key)}
 								visible={task.status !== "completed" || completedOpen || recent.includes(key)}
 							/>

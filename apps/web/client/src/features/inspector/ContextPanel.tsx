@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useT } from "../../i18n";
-import { copyText } from "../../state/session";
+import { copyText, sessionTitle } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SessionEntry, SessionInspector } from "../../state/types";
 import { Icon, IconButton, Tooltip } from "../../ui";
@@ -55,6 +55,12 @@ function MessageRow({ entry }: { readonly entry: SessionEntry }) {
 export function ContextPanel({ data }: { readonly data?: SessionInspector }) {
 	const t = useT();
 	const current = useAppStore((state) => state.current);
+	/* The same title the session header and sidebar show: an unnamed session is titled by its first message. */
+	const title = useAppStore((state) =>
+		state.current
+			? sessionTitle({ ...state.sessions.find((session) => session.id === state.current?.id), ...state.current })
+			: "",
+	);
 	const [filter, setFilter] = useState("all");
 	const entries = current?.entries ?? [];
 	const messages = useMemo(() => entries.filter((entry) => Boolean(entry.message)), [entries]);
@@ -80,7 +86,7 @@ export function ContextPanel({ data }: { readonly data?: SessionInspector }) {
 	return (
 		<div className="context-content">
 			<div className="context-identity">
-				<strong>{current?.name || t("newConversation")}</strong>
+				<strong>{title || t("newConversation")}</strong>
 				<span>{current?.model?.id ?? "--"}</span>
 				<small>{current?.model?.provider ?? "--"}</small>
 			</div>
@@ -124,7 +130,16 @@ export function ContextPanel({ data }: { readonly data?: SessionInspector }) {
 				<div>
 					<span>{t("rightCost")}</span>
 					<strong>
-						{finiteAmount(data?.stats.cost) === undefined ? "--" : `$${data?.stats.cost.toFixed(4)}`}
+						{/* Zero cost after real usage means the model has no price data, not that the run was free. */}
+						{finiteAmount(data?.stats.cost) === undefined ? (
+							"--"
+						) : data?.stats.cost === 0 && (finiteAmount(data?.stats.tokens.total) ?? 0) > 0 ? (
+							<>
+								—<small className="context-unpriced">{t("rightCostUnpriced")}</small>
+							</>
+						) : (
+							`$${data?.stats.cost.toFixed(4)}`
+						)}
 					</strong>
 				</div>
 			</section>

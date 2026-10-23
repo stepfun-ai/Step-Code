@@ -25,7 +25,7 @@
   background: none;
   color: var(--ink-2);
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
   transition: color var(--fast);
 }
@@ -57,12 +57,12 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-overlay);
   background: var(--surface);
-  box-shadow: 0 16px 42px var(--shadow);
+  box-shadow: var(--elev-3);
 }
 .workspace-popover-title {
   padding: 4px 8px 5px;
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .workspace-recent-item {
@@ -127,8 +127,8 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgb(0 0 0 / 28%);
-  backdrop-filter: blur(5px);
+  background: var(--scrim);
+  backdrop-filter: blur(6px) saturate(120%);
 }
 .workspace-browser-dialog {
   display: grid;
@@ -139,7 +139,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: 0 24px 64px var(--shadow);
+  box-shadow: var(--elev-3);
 }
 .workspace-browser-dialog > header {
   display: flex;
@@ -213,8 +213,12 @@
   border-radius: var(--radius-panel);
 }
 .primary-action {
-  background: var(--ink);
-  color: var(--canvas);
+  background: var(--action);
+  color: var(--action-ink);
+  font-weight: 500;
+}
+.primary-action:hover:not(:disabled) {
+  background: var(--action-hover);
 }
 .secondary-action {
   border: 1px solid var(--line);
@@ -233,7 +237,7 @@
 }
 .remove-workspace-dialog h2 {
   font-size: 20px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.3;
   overflow-wrap: anywhere;
 }

@@ -9,8 +9,8 @@
 	display: grid;
 	place-items: center;
 	padding: 16px;
-	background: rgb(0 0 0 / 28%);
-	backdrop-filter: blur(5px);
+	background: var(--scrim);
+	backdrop-filter: blur(6px) saturate(120%);
 }
 .feedback-dialog {
 	display: grid;
@@ -20,7 +20,7 @@
 	border: 1px solid var(--line);
 	border-radius: var(--radius-dialog);
 	background: var(--surface);
-	box-shadow: 0 20px 60px var(--shadow);
+	box-shadow: var(--elev-3);
 }
 .feedback-dialog header {
 	display: flex;
@@ -48,9 +48,9 @@
 	color: var(--ink);
 }
 .feedback-topic[aria-pressed="true"] {
-	border-color: var(--ink);
-	background: var(--ink);
-	color: var(--surface);
+	border-color: var(--line-strong);
+	background: var(--selected);
+	color: var(--ink);
 }
 .feedback-dialog textarea {
 	width: 100%;
@@ -65,18 +65,76 @@
 	resize: vertical;
 }
 .feedback-dialog textarea:focus {
-	border-color: var(--focus-border);
+	border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+	box-shadow: 0 0 0 3px var(--accent-ring);
+}
+/*
+ * `.feedback-attachments`: the consent list. Same muted, bordered block the
+ * settings dialogs use for a bounded explanation, so it reads as information
+ * rather than as another control.
+ */
+.feedback-attachments {
+	display: grid;
+	gap: 6px;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-soft);
+	color: var(--ink-2);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.feedback-attachments-title {
+	color: var(--ink);
+	font-weight: 500;
+}
+.feedback-attachments-list {
+	display: grid;
+	gap: 3px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.feedback-attachments-list li {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 10px;
+}
+.feedback-attachments-list small {
+	color: var(--ink-3);
+	font-variant-numeric: tabular-nums;
+}
+.feedback-attachments-file {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+.feedback-attachments-file code {
+	font-size: 11px;
+}
+.feedback-attachments-file small {
+	color: var(--ink-3);
+	font-variant-numeric: tabular-nums;
+}
+.feedback-attachments-file em {
+	color: var(--ink-3);
+	font-style: normal;
+}
+.feedback-attachments-note,
+.feedback-attachments-identity {
+	color: var(--ink-3);
 }
 .feedback-submit {
 	height: var(--control-h-lg);
 	border-radius: var(--radius-control);
-	background: var(--ink);
-	color: var(--surface);
+	background: var(--action);
+	color: var(--action-ink);
 	font-size: 13px;
-	font-weight: 550;
+	font-weight: 500;
 }
-.feedback-submit:hover {
-	opacity: 0.88;
+.feedback-submit:hover:not(:disabled) {
+	background: var(--action-hover);
 }
 .feedback-submit:disabled {
 	cursor: not-allowed;

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -11,6 +11,7 @@ import {
 	listDirectory,
 	MAX_FILE_COMPLETIONS,
 	MAX_PREVIEW_BYTES,
+	readLocalFile,
 	readWorkspaceFile,
 	searchWorkspaceFiles,
 } from "../src/files.ts";
@@ -222,6 +223,33 @@ test("a file is classified as text, image, binary or too large", async () => {
 		assert.equal(big.kind, "too-large");
 		assert.equal("content" in big, false);
 		await assert.rejects(readWorkspaceFile(root, "src"), /not a file/);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("local reads name any absolute file while workspace containment stays intact", async () => {
+	const { root, outside, cleanup } = await workspace();
+	try {
+		await writeFile(join(outside, "chart.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+		const realOutside = (await realpath(outside)).split(sep).join("/");
+		assert.deepEqual(await readLocalFile(join(outside, "secret.txt")), {
+			kind: "text",
+			path: `${realOutside}/secret.txt`,
+			size: 7,
+			content: "secret\n",
+		});
+		const chart = await readLocalFile(join(outside, "chart.png"));
+		assert.equal(chart.kind, "image");
+		assert.equal(chart.mimeType, "image/png");
+		// Only absolute references are accepted; anything else is a client mistake.
+		for (const input of ["secret.txt", "relative/secret.txt", "", "../outside/secret.txt"])
+			await assert.rejects(readLocalFile(input), /absolute/);
+		await assert.rejects(readLocalFile(join(outside, "missing.md")), /ENOENT/);
+		await assert.rejects(readLocalFile(outside), /not a file/);
+		// The workspace routes keep their own boundary; local reads do not widen it.
+		await assert.rejects(readWorkspaceFile(root, join(outside, "secret.txt")), /outside the workspace/);
+		await assert.rejects(containedWorkspacePath(root, join(outside, "secret.txt")), /outside the workspace/);
 	} finally {
 		await cleanup();
 	}

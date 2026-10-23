@@ -1,19 +1,26 @@
+/*
+ * The pending questionnaire reads like an ordinary message with quick-reply
+ * options, not a floating card: no border, no surface of its own — question
+ * text in the message column, options as compact pills under it.
+ */
 .clarification-panel {
 	--clarification-muted: color-mix(in srgb, var(--ink-3) 55%, var(--surface));
 	--clarification-line: color-mix(in srgb, var(--line) 65%, var(--surface));
-	margin-bottom: 8px;
+	max-width: min(100%, 68ch);
+	margin: 14px 0 6px;
 }
 .clarification-card {
-	padding: 16px 16px 14px;
-	border: 1px solid var(--clarification-line);
-	border-radius: var(--radius-card);
-	background: var(--surface);
-	color: color-mix(in srgb, var(--ink) 95%, var(--surface));
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--ink);
 	font-size: 14px;
-	line-height: 1.5;
+	line-height: 1.65;
 }
-.clarification-header,
-.clarification-title,
+/*
+ * No header chrome remains: a multi-question round shows only the slim page
+ * navigation above the question text.
+ */
 .clarification-navigation,
 .clarification-footer,
 .clarification-custom,
@@ -21,22 +28,12 @@
 	display: flex;
 	align-items: center;
 }
-.clarification-header {
-	justify-content: space-between;
-	margin-bottom: 16px;
-	color: var(--ink-2);
-	font-size: 13px;
-}
-.clarification-title {
-	gap: 9px;
-	font-weight: 400;
-}
-.clarification-title .icon,
-.clarification-custom > .icon {
-	width: 16px;
-	height: 16px;
-}
 .clarification-navigation {
+	gap: 3px;
+	margin-bottom: 6px;
+	color: var(--ink-3);
+	font-size: 12px;
+}.clarification-navigation {
 	gap: 3px;
 	color: var(--ink-3);
 }
@@ -73,10 +70,10 @@
 	padding: 0 0 2px;
 }
 .clarification-body h2 {
-	margin: 0 8px 8px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 22px;
+	margin: 0 8px 10px;
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 1.65;
 	overflow-wrap: anywhere;
 }
 .clarification-reason {
@@ -85,21 +82,22 @@
 	font-size: 12px;
 }
 .clarification-options {
-	display: grid;
-	gap: 4px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
 	min-width: 0;
 	border: 0;
 }
 .clarification-option {
-	display: flex;
+	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	width: 100%;
-	min-height: 32px;
-	padding: 4px 8px;
-	border-radius: var(--radius-surface);
+	min-height: 28px;
+	padding: 3px 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-pill);
 	text-align: left;
-	font-weight: 550;
+	font-weight: 500;
 	font-size: 13px;
 	transition: background-color var(--fast);
 }
@@ -107,44 +105,11 @@
 .clarification-option:focus-visible,
 .clarification-option[aria-pressed="true"] {
 	background: var(--surface-soft);
-}
-.clarification-number {
-	display: grid;
-	place-items: center;
-	flex: none;
-	width: 20px;
-	height: 20px;
-	border: 1px solid var(--line);
-	border-radius: var(--radius-chip);
-	background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface));
-	color: var(--ink-3);
-	font-size: 12px;
-	font-weight: 400;
-	line-height: 1;
-}
-.clarification-option-content {
+	border-color: var(--line-strong);
+}.clarification-option-content {
 	min-width: 0;
 	overflow-wrap: anywhere;
-}
-.clarification-option-content small {
-	display: block;
-	color: var(--ink-2);
-	font-size: 12px;
-	font-weight: 400;
-}
-.clarification-option-arrow {
-	margin-left: auto;
-	color: var(--ink-3);
-	opacity: 0;
-	transform: rotate(180deg);
-	transition: opacity var(--fast);
-}
-.clarification-option:hover .clarification-option-arrow,
-.clarification-option:focus-visible .clarification-option-arrow,
-.clarification-option[aria-pressed="true"] .clarification-option-arrow {
-	opacity: 1;
-}
-.clarification-footer {
+}.clarification-footer {
 	justify-content: space-between;
 	gap: 12px;
 	margin-top: 8px;
@@ -160,7 +125,7 @@
 	width: 100%;
 	text-align: left;
 	color: var(--clarification-muted);
-	font-weight: 550;
+	font-weight: 500;
 	overflow-wrap: anywhere;
 }
 .composer .clarification-custom textarea {
@@ -183,7 +148,7 @@
 .clarification-actions button {
 	min-height: 28px;
 	padding: 3px 10px;
-	border-radius: var(--radius-pill);
+	border-radius: var(--radius-control);
 	font-size: 13px;
 	font-weight: 600;
 	white-space: nowrap;
@@ -195,8 +160,11 @@
 	background: var(--surface-soft);
 }
 .clarification-confirm {
-	background: var(--ink);
-	color: var(--surface);
+	background: var(--action);
+	color: var(--action-ink);
+}
+.clarification-confirm:hover:not(:disabled) {
+	background: var(--action-hover);
 }
 .clarification-confirm:disabled {
 	background: color-mix(in srgb, var(--ink-3) 85%, var(--surface));

@@ -43,6 +43,44 @@ export function workspaceFileReference(cwd: string, value: string, sourcePath = 
 	return workspaceFilePath(cwd, local, sourcePath);
 }
 
+export type ResolvedFileReference =
+	| { readonly scope: "workspace"; readonly path: string }
+	| { readonly scope: "local"; readonly path: string };
+
+/**
+ * Resolve a message reference for the preview: inside the workspace as a
+ * relative path, otherwise — when the reference itself (or the previewed file
+ * it sits in, for links inside an outside file) names an absolute location —
+ * as a local file the host reads by absolute path. Relative references that
+ * leave the workspace stay unresolved, exactly as before.
+ */
+export function resolveFileReference(cwd: string, value: string, sourcePath = ""): ResolvedFileReference | undefined {
+	const local = localFileReference(value);
+	if (!cwd || !local) return;
+	const reference = local.replace(/\\/g, "/");
+	const source = sourcePath.replace(/\\/g, "/");
+	const sourceAbsolute = /^[a-z]:\//i.test(source) || source.startsWith("/");
+	// An absolute source file (a preview outside the workspace) resolves relative
+	// links against its own directory, never against the workspace root —
+	// workspaceFilePath would read that as a path under the root instead.
+	const inside = sourceAbsolute ? undefined : workspaceFilePath(cwd, local, sourcePath);
+	if (inside) return { scope: "workspace", path: inside };
+	const referenceAbsolute = /^[a-z]:\//i.test(reference) || reference.startsWith("/");
+	if (!referenceAbsolute && !sourceAbsolute) return;
+	const spelled = referenceAbsolute ? reference : `${source.slice(0, source.lastIndexOf("/"))}/${reference}`;
+	// The reference's spelling decides which kind of host it can exist on.
+	if (/^[a-z]:\//i.test(spelled) !== /^[a-z]:\//i.test(cwd.replace(/\\/g, "/"))) return;
+	const parts = normalizedParts(spelled);
+	if (!parts) return;
+	const absolute = /^[a-z]:$/i.test(parts[0] ?? "")
+		? `${parts[0]}/${parts.slice(1).join("/")}`
+		: `/${parts.join("/")}`;
+	// A resolved location that lands back inside the workspace stays a workspace path.
+	const asInside = workspaceFilePath(cwd, absolute);
+	if (asInside) return { scope: "workspace", path: asInside };
+	return { scope: "local", path: absolute };
+}
+
 /** Structured tool paths are already literal filenames, not encoded Markdown URLs. */
 export function workspaceFilePath(cwd: string, local: string, sourcePath = ""): string | undefined {
 	if (!cwd || !local || /[\u0000-\u001f]/u.test(local) || /^[\\/]{2}/.test(local)) return;

@@ -98,7 +98,7 @@ export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut }: 
 					{sessions.map((session) => (
 						<SessionRow key={session.id} session={session} filteredOut={hiddenIds.has(session.id)} />
 					))}
-					{sessions.length ? null : <EmptyState>{t("noConversationsYet")}</EmptyState>}
+					{sessions.length ? null : <EmptyState className="project-empty">{t("noConversationsYet")}</EmptyState>}
 				</div>
 			</div>
 		</section>

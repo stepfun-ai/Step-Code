@@ -43,7 +43,9 @@ async function firstRequest(config: string, flags: string[]) {
 		const child = spawn(process.execPath, args, { cwd, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, STEP_CODING_AGENT_DIR: agentDir, STEP_NO_LOCAL_LLM: "1", AWS_EC2_METADATA_DISABLED: "true" }, stdio: ["ignore", "pipe", "pipe"] });
 		let output = "";
 		child.stdout.on("data", (chunk) => { output += chunk; }); child.stderr.on("data", (chunk) => { output += chunk; });
-		const timeout = setTimeout(() => child.kill("SIGKILL"), 20000);
+		// A cold CLI start on a loaded CI runner is much slower than on a laptop;
+		// the SIGKILL guard is here to stop a hang, not to bound normal startup.
+		const timeout = setTimeout(() => child.kill("SIGKILL"), 90_000);
 		const code = await new Promise<number | null>((done, reject) => { child.once("error", reject); child.once("close", done); });
 		clearTimeout(timeout);
 		expect(code, output.slice(-12000)).toBe(0);

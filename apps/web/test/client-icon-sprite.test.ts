@@ -37,8 +37,9 @@ test("icon registry resolves every shared and feature-specific symbol exactly on
 	assert.deepEqual(symbols.sort(), names.map((name) => `i-${name}`).sort());
 	assert.equal(new Set(missing).size, missing.length);
 	for (const name of missing) assert.ok(names.includes(name), `Unknown library gap: ${name}`);
-	// PR #270 must retain feature symbols when shared design-library artwork changes.
-	for (const name of ["stepPlatform", "accountCheck", "clipboardPaste", "summaryRing", "bot", "disclosure"]) {
+	// PR #270 must retain feature symbols when shared design-library artwork changes. (The terminal's
+	// clipboardPaste symbol was dropped together with its copy/paste/clear buttons.)
+	for (const name of ["stepPlatform", "accountCheck", "summaryRing", "bot", "disclosure"]) {
 		assert.ok(names.includes(name), `Missing feature symbol: ${name}`);
 	}
 });

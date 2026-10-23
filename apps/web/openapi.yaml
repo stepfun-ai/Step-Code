@@ -638,6 +638,27 @@ paths:
         "200": { description: "path is the chosen folder, or null when cancelled" }
         "409": { description: The system picker is unavailable or already open }
         "500": { description: The picker helper failed }
+  /api/v1/file:
+    get:
+      description: >-
+        Read-only preview of one file named by an absolute path from message content, for references that point
+        outside every workspace. Same limits and shapes as /api/v1/workspace/file, but the response path is the
+        absolute file path. No directory listing, no writes; authenticated like every other route.
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "kind text|image|binary|too-large, path, size; content for text only" }
+        "400": { description: Path is not absolute, does not exist or is not a file }
+  /api/v1/file/raw:
+    get:
+      description: Image bytes for one absolute path, mirroring /api/v1/workspace/raw.
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Image bytes }
+        "400": { description: Path is not absolute, does not exist or is not a file }
+        "413": { description: Image exceeds the preview limit }
+        "415": { description: File is not an image }
   /api/v1/workspace/files:
     get:
       parameters:
@@ -706,6 +727,43 @@ paths:
         - { name: q, in: query, required: true, schema: { type: string } }
       responses:
         "200": { description: "Name matches below the workspace root: entries and truncated" }
+  /api/v1/workspace/git:
+    get:
+      description: >-
+        Git state of a workspace plus its local branches, for the composer's branch pill. `state.repository` is
+        false when the folder is not inside a git work tree (or git is missing), and `branches` is empty then.
+        `state.dirtyFiles` counts modified, staged and untracked files; `state.branch` is absent on a detached HEAD.
+        Branches are local refs, most recently committed first.
+      parameters:
+        - { name: cwd, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "state (repository, root, branch, detached, dirtyFiles) and branches (name, upstream)" }
+        "403": { description: cwd is not a known workspace }
+  /api/v1/workspace/git/switch:
+    post:
+      description: >-
+        Switch to an existing local branch, or with `create: true` create it at HEAD (or at `from`) and switch to it.
+        `git switch` runs without `--force`, so a switch that would overwrite uncommitted work is refused instead of
+        discarding it; the response then carries `paths`. A failure answers 400 with a `code` the client renders:
+        not-a-repository, git-unavailable, invalid-branch-name, branch-already-exists, target-branch-not-found,
+        tracked-changes-would-be-overwritten, untracked-changes-would-be-overwritten, conflicts-present,
+        operation-in-progress, branch-in-other-worktree, unknown.
+      parameters:
+        - { name: cwd, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch]
+              properties:
+                branch: { type: string, description: Branch to switch to, or to create when create=true }
+                create: { type: boolean, description: Create the branch before switching to it }
+                from: { type: string, description: Start point for create; default HEAD }
+      responses:
+        "200": { description: The new git state }
+        "400": { description: "Branch operation refused: error, code, and paths for an overwrite refusal" }
+        "403": { description: cwd is not a known workspace }
   /api/v1/models:
     get:
       description: >-
@@ -847,12 +905,33 @@ paths:
             Session snapshot including pendingClarifications and pendingSelections (in-memory requests restored after
             page reload). `permissionPreset` is the tier the kernel enforces now, which can differ from the Step
             settings (a "this session" Full Access grant is not persisted).
+            `goal` is the running goal the client draws above the composer (absent when the session has none), and
+            `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   permissionPreset: { type: string, enum: [ask, approve-for-me, full-access] }
+                  goal:
+                    type: object
+                    description: The session's goal (runtime.ts `projectGoal`); absent when there is none.
+                    properties:
+                      id: { type: string }
+                      objective: { type: string }
+                      status:
+                        type: string
+                        enum: [active, paused, blocked, usage_limited, budget_limited, complete]
+                      tokensUsed: { type: integer }
+                      tokenBudget: { type: integer }
+                      rounds: { type: integer, description: "Completed agent runs; progress, not a stop condition" }
+                  planMode:
+                    type: object
+                    description: Plan mode state (runtime.ts `projectPlanMode`).
+                    properties:
+                      enabled: { type: boolean }
+                      planFilePath: { type: string }
+                      planSource: { type: string, enum: [user, agent, unknown] }
                   entries:
                     type: array
                     items:
@@ -879,6 +958,16 @@ paths:
                   pendingSelections:
                     type: array
                     items: { $ref: "#/components/schemas/SelectionRequest" }
+                  pendingTextInputs:
+                    type: array
+                    description: Kernel text prompts (`ui.input`) waiting for an answer (in memory, restored after reload)
+                    items: { $ref: "#/components/schemas/TextInputRequest" }
+                  sideAnswers:
+                    type: array
+                    description: >-
+                      `/btw` answers of this session, oldest first (in memory for the life of the host process, never a
+                      session entry, never model context).
+                    items: { $ref: "#/components/schemas/SideAnswer" }
                   pendingClarifications:
                     type: array
                     items: { $ref: "#/components/schemas/ClarificationRequest" }
@@ -962,8 +1051,15 @@ paths:
         "200":
           description: >-
             SSE snapshot and agent/status/approval/clarification_required/clarification_resolved/selection_required/
-            selection_resolved/queue events. clarification_required carries clarification and selection_required carries
-            selection; the resolved events carry id; queue carries a QueueState (queued, steering).
+            selection_resolved/text_input_required/text_input_resolved/notice/side-answer/queue events.
+            clarification_required carries clarification and selection_required carries selection; the resolved events
+            carry id. text_input_required carries `input` (id, sessionId, title, placeholder) and
+            text_input_resolved carries id. side-answer carries `answer` (id, question, text, model, unavailable,
+            createdAt) for the rail tab. `notice` carries level (info|warning|error), text and optional markdown:
+            it is command output from the kernel's `ui.notify`, shown in the transcript but never persisted and never
+            part of the model's context. `transient: true` marks an announcement of state the client already renders
+            (plan mode, the permission tier): shown briefly, never added to the conversation. A failure the host cannot attribute to a request is sent as `web_error` with
+            a message. queue carries a QueueState (queued, steering).
             Agent envelopes optionally carry thinkingTimings, keyed by original content-block index, with host-observed
             epoch-millisecond startedAt/endedAt fields. Live intervals may omit endedAt; saved intervals are complete.
   /api/v1/sessions/{id}/messages:
@@ -1114,6 +1210,36 @@ paths:
         - { $ref: "#/components/parameters/SessionId" }
       responses:
         "200": { description: Agent interrupted }
+  /api/v1/sessions/{id}/fork:
+    post:
+      description: >-
+        Branch the session at `entryId` (a recorded turn) or at its last user message, and rebind this host session to
+        the new branch. The kernel always creates a new session id and file; `sessionId` in the response is that new id,
+        which is immediately readable through `GET /sessions/{id}`. The new session is named after the parent's current
+        title plus `_fork`, so forking a fork appends again (`title_fork_fork`). Refused while a turn runs or while
+        another fork is in progress.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entryId: { type: string, description: Entry to branch at; omit to use the last user message }
+      responses:
+        "200":
+          description: Fork result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelled: { type: boolean }
+                  sessionId:
+                    type: string
+                    description: The session now bound — the new branch on success, the previous id otherwise
+        "400": { description: The entry cannot be forked, a turn is running, or a fork is already in progress }
   /api/v1/sessions/{id}/name:
     patch:
       parameters:
@@ -1503,6 +1629,30 @@ paths:
                     items: { $ref: "#/components/schemas/DiscoveredModel" }
         "400": { description: Unusable address or a protocol with no readable listing }
         "502": { description: "The endpoint refused, was unreachable, or did not answer with a model listing" }
+  /api/v1/settings/models/test:
+    post:
+      description: >-
+        Send a one-token ping to one model of the declaration currently in the form, saved or not. The body
+        carries the draft (provider id, address, protocol, optional key, model id); a blank key falls back to
+        the stored credential for the provider id. Answers over the provider stack a session would use.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId, baseUrl, api, modelId]
+              properties:
+                providerId: { type: string }
+                baseUrl: { type: string }
+                api: { type: string }
+                apiKey: { type: string, description: "Used for this request only" }
+                modelId: { type: string }
+      responses:
+        "200": { description: The model answered the ping }
+        "400": { description: Missing fields or the model id is not usable }
+        "502": { description: "The provider rejected the request or reported an error" }
+        "504": { description: No answer within the test timeout }
   /api/v1/settings/models/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
@@ -1619,6 +1769,38 @@ paths:
         "200": { description: Session snapshot after the answer was applied }
         "400": { description: Missing id or a non-string value }
         "404": { description: Selection no longer pending, or the value was not offered; the question stays open }
+  /api/v1/sessions/{id}/text-inputs/response:
+    post:
+      description: >-
+        Answer a kernel text prompt (`ui.input`), such as the `/feedback` comment field. Resolves after the command
+        that asked has applied the answer.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+                value:
+                  type: string
+                  description: >-
+                    The submitted text; an empty string is a real answer. Omit to dismiss the prompt (the kernel treats
+                    it as cancelled).
+      responses:
+        "200": { description: Session snapshot after the answer was applied }
+        "400": { description: Missing id or a non-string value }
+        "404": { description: Text input no longer pending }
+  /api/v1/sessions/{id}/side-answers/clear:
+    post:
+      description: Forget this session's `/btw` answers (the rail panel's Clear action).
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      responses:
+        "200": { description: Answers cleared }
   /api/v1/sessions/{id}/clarifications/response:
     post:
       parameters:
@@ -1652,12 +1834,123 @@ paths:
         "200": { description: Response accepted; resumes the existing clarify_user call }
         "400": { description: Invalid or incomplete answers; request remains pending }
         "404": { description: Request no longer pending in this session }
+  /api/v1/sessions/{id}/goal:
+    patch:
+      description: |
+        One control from the goal strip. Each action runs the same `/goal` slash
+        command the CLI issues (`start`, `pause`, `resume`, `edit`, `clear`), so
+        there is one implementation of goal control. Answered 202 because a slash
+        command is a kernel prompt; the resulting goal arrives in the session
+        snapshot's `goal`.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [start, pause, resume, edit, clear] }
+                objective: { type: string, description: "Required for start and edit" }
+      responses:
+        "202": { description: Goal control accepted }
+        "400": { description: "Unknown action, or a missing objective for start/edit" }
+  /api/v1/sessions/{id}/mode:
+    patch:
+      description: |
+        Start or stop a composer mode. `plan` toggles plan mode; `ultraloop` is
+        rejected by hosts that offer per-turn opt-in only; `goal` starts or clears
+        the goal and needs `goal` text when enabling.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode, enabled]
+              properties:
+                mode: { type: string, enum: [goal, plan, ultraloop] }
+                enabled: { type: boolean }
+                goal: { type: string }
+      responses:
+        "202": { description: Mode command accepted }
+  /api/v1/sessions/{id}/feedback/evidence:
+    get:
+      description: >-
+        Prepare a feedback report for this conversation and describe what it would carry. The consent dialog reads this
+        before offering to send anything, and returns the `token` with the submission so the report contains exactly
+        the evidence that was shown. A prepared report is held briefly and consumed once.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      responses:
+        "200":
+          description: The prepared evidence, described for the user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, preview]
+                properties:
+                  token: { type: string, description: "Names the prepared evidence; sent back with the submission" }
+                  preview:
+                    type: object
+                    required: [surface, version, channel, summary, diagnostics]
+                    properties:
+                      surface: { type: string, enum: [web, desktop] }
+                      version: { type: string }
+                      channel: { type: string, enum: [dev, release] }
+                      sessionId: { type: string }
+                      summary: { type: boolean, description: "Content-free session summary is attached" }
+                      diagnostics: { type: boolean, description: "Host log excerpt is attached" }
+                      archive:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, bytes]
+                          properties:
+                            name: { type: string }
+                            bytes: { type: integer }
+                            note: { type: string, description: "Bound or truncation the kernel applied" }
+                      archiveNote: { type: string, description: "Why the archive is absent, when it was skipped" }
+  /api/v1/sessions/{id}/feedback:
+    post:
+      description: >-
+        File feedback about this session. The kernel assembles the body and the session archive, redacts them, and
+        delivers both; the host never assembles its own payload. Without a feedback endpoint configured the host
+        answers 400 with the reason.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sentiment, comment]
+              properties:
+                sentiment: { type: string, enum: [up, down] }
+                topic: { type: string, description: "Composer topic; folded into the comment and mapped to a kernel category" }
+                comment: { type: string }
+                token: { type: string, description: "The token of the evidence the dialog displayed" }
+      responses:
+        "200": { description: Submitted; `message` states the feedback id and any skipped archive }
+        "400": { description: "Feedback is not configured, the category is unknown, or the kernel rejected the body" }
   /api/v1/sessions/{id}/model:
     patch:
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
       responses:
         "200": { description: Persisted model selection }
+  /api/v1/sessions/{id}/models/refresh:
+    post:
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      responses:
+        "200": { description: Re-read models.json and return the session snapshot with the refreshed model catalog }
   /api/v1/sessions/{id}/files:
     get:
       parameters:
@@ -1944,6 +2237,28 @@ components:
         sessionId: { type: string }
         title: { type: string }
         options: { type: array, items: { type: string } }
+    SideAnswer:
+      type: object
+      required: [id, question, text, createdAt]
+      description: One `/btw` answer, shown in a rail tab.
+      properties:
+        id: { type: string }
+        question: { type: string }
+        text: { type: string, description: Markdown answer, or why there is none }
+        model: { type: string }
+        unavailable: { type: boolean, description: Cancelled, or no usable answer }
+        createdAt: { type: integer }
+    TextInputRequest:
+      type: object
+      required: [id, sessionId, title]
+      description: >-
+        A kernel `ui.input` prompt. The title and placeholder are the kernel's own wording; answer through
+        `text-inputs/response`.
+      properties:
+        id: { type: string }
+        sessionId: { type: string }
+        title: { type: string }
+        placeholder: { type: string }
     ClarificationRequest:
       type: object
       required: [id, sessionId, questions]

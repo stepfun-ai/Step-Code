@@ -9,6 +9,7 @@
 	"scripts": {
 		"build": "node scripts/build.mjs",
 		"typecheck": "tsgo -p tsconfig.json --noEmit",
+		"test": "node --test test/*.test.ts",
 		"start": "pnpm --filter @step-harness/web build && node scripts/build.mjs && electron .",
 		"dev": "node scripts/build.mjs --ensure-web && electron .",
 		"icons": "node scripts/icons.mjs",

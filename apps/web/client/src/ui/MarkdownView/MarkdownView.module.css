@@ -4,14 +4,17 @@
  */
 .root {
   & a {
-    color: var(--accent);
-    text-decoration: none;
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
     overflow-wrap: anywhere;
   }
 
   & a:hover,
   & a:focus-visible {
-    text-decoration: underline;
+    text-decoration-color: currentColor;
   }
 
   & a:focus-visible {

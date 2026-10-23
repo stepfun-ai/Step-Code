@@ -13,6 +13,7 @@ import { readFeedbackDiagnostics } from "../src/step/feedback/diagnostics.ts";
 import { resolveFeedbackEndpoint } from "../src/step/feedback/endpoints.ts";
 import {
 	listPendingFeedback,
+	normalizePendingFeedbackBundle,
 	resolveFeedbackPendingPath,
 	writePendingFeedback,
 	writePendingFeedbackBundle,
@@ -1114,6 +1115,66 @@ describe("feedback diagnostics and bundles", () => {
 		// An explicit session file skips the window entirely.
 		const explicit = await buildFeedbackSessionBundle({ storageRootDir: root, sessionFile, now });
 		expect(explicit.status).toBe("ready");
+	});
+
+	test("a bundle with full tool output survives pending normalization", async () => {
+		// The archive carries `tool-output/*.txt`; a stored copy is re-validated
+		// before retry, so an archive it cannot re-read is unrecoverable.
+		const root = await makeRoot();
+		const sessionDir = join(root, "sessions", "project");
+		await mkdir(join(sessionDir, "tool-output"), { recursive: true });
+		const sessionFile = join(sessionDir, "20260831_session-1.jsonl");
+		const toolName = `tool-${"a".repeat(32)}.txt`;
+		await writeFile(
+			sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				message: { role: "toolResult", content: [{ type: "text", text: `Full output: ${toolName}` }] },
+			})}\n`,
+		);
+		await writeFile(join(sessionDir, "tool-output", toolName), "very long tool output\n");
+
+		const result = await buildFeedbackSessionBundle({ storageRootDir: root, sessionFile });
+		expect(result.status).toBe("ready");
+		if (result.status !== "ready") return;
+		expect(result.bundle.files.map((file) => file.name)).toContain(`tool-output/${toolName}`);
+		await expect(normalizePendingFeedbackBundle(Buffer.from(result.bundle.data))).resolves.toBeDefined();
+	});
+
+	test("a guessed session never comes from another project", async () => {
+		// Attaching a conversation from a project the user is not filing from is a
+		// privacy incident, not a helpful guess.
+		const root = await makeRoot();
+		const sessions = join(root, "agent", "sessions");
+		const other = join(sessions, "--other-project--");
+		await mkdir(other, { recursive: true });
+		const otherFile = join(other, "20260831_other.jsonl");
+		await writeFile(otherFile, '{"type":"session","id":"other"}\n');
+		const cwd = join(root, "current-project");
+		await mkdir(cwd, { recursive: true });
+
+		const guessed = await buildFeedbackSessionBundle({ storageRootDir: sessions, sessionDir: sessions, cwd });
+		expect(guessed).toEqual({ status: "skipped", reason: "no-session" });
+		// The same file is still reachable when the user names it.
+		const explicit = await buildFeedbackSessionBundle({ storageRootDir: sessions, sessionFile: otherFile });
+		expect(explicit.status).toBe("ready");
+	});
+
+	test("a guessed session in this project still respects the recency window", async () => {
+		const root = await makeRoot();
+		const sessions = join(root, "agent", "sessions");
+		const cwd = join(root, "project");
+		const projectDir = join(sessions, `--${cwd.replace(/^\//, "").replace(/[/:]/g, "-")}--`);
+		await mkdir(projectDir, { recursive: true });
+		const sessionFile = join(projectDir, "20260101_session.jsonl");
+		await writeFile(sessionFile, '{"type":"session","id":"old"}\n');
+		const old = new Date("2026-01-01T00:00:00.000Z");
+		await utimes(sessionFile, old, old);
+
+		const now = new Date("2026-08-31T00:00:00.000Z");
+		await expect(
+			buildFeedbackSessionBundle({ storageRootDir: sessions, sessionDir: sessions, cwd, now }),
+		).resolves.toEqual({ status: "skipped", reason: "stale" });
 	});
 
 	test("redacts credentials in the session bundle", async () => {

@@ -9,102 +9,47 @@ import styles from "./IconSprite.module.css";
  *
  * The artwork comes from the design team's icon library (icon-library.html):
  * a 24x24 canvas, no colour of its own, every stroke and fill `currentColor`.
- * 48 names below are drawn from it.
+ * 90 of the 100 names below are drawn from it.
  *
  * ICON_NAMES is a DOM contract, so the names never move with the artwork. The
  * Names below without a library counterpart retain their existing in-house,
- * brand or Lucide artwork; swap each one over once the library gains it.
+ * brand, DFSC or Lucide (ISC) artwork; swap each one over once the library gains it.
  */
 export const MISSING_FROM_LIBRARY = [
-	"sidebar",
-	"newChat",
-	"back",
-	"external",
-	"upgrade",
-	"fork",
-	"send",
-	"stop",
-	"folderPlus",
-	"up",
+	"stepPlatform",
 	"tree",
-	"open",
-	"listCheck",
 	"layers",
 	"orbit",
-	"paperclip",
-	"cube",
-	"zap",
 	"wrap",
-	"panelRight",
-	"tag",
-	"puzzle",
 	"fileDiff",
-	"openExternal",
-	"mcp",
-	"palette",
 	"wand",
-	"prompt",
-	"stepPlatform",
-	"keyRound",
-	"accountCheck",
-	"accountExternal",
-	"accountLogout",
-	"accountSignIn",
-	"timer",
-	"database",
-	"clipboardPaste",
-	"eraser",
-	"summaryRing",
-	"layers3",
-	"plug",
-	"summaryCheck",
-	"maximize",
-	"minimize",
-	"scanLine",
-	"bot",
-	"circle",
-	"circleCheck",
-	"circleX",
-	"circleMinus",
 	"loaderCircle",
-	"triangleAlert",
-	"disclosure",
+	"plug",
+	"layers3",
+	"user",
+	"stepcode",
 ] as const;
 
 /*
  * What each gap needs, for the design team:
- * - sidebar: 侧边栏开关（左侧面板）
- * - newChat: 新建对话（气泡 + 加号）
- * - back: 返回（左箭头带尾，区别于左向尖括号）
- * - external: 外链（右上斜箭头）
- * - upgrade: 升级（右上斜箭头出框）
- * - fork: 分支 / fork（Git 分叉）
- * - send: 发送（向上箭头，带尾）
- * - stop: 停止（实心圆角方块）
- * - folderPlus: 新建文件夹（文件夹 + 加号）
- * - up: 向上箭头（带尾）
- * - tree: 文件树（层级缩进线）
- * - open: 展开的文件夹
- * - listCheck: 任务清单（列表 + 对勾）
- * - layers: 图层（多层堆叠）
- * - orbit: 轨道 / 环绕（椭圆轨道 + 卫星）
- * - paperclip: 附件（回形针）
- * - cube: 立方体 / 模型（3D 方块）
- * - zap: 闪电
- * - wrap: 自动换行
- * - panelRight: 右侧面板开关
- * - tag: 标签（吊牌）
- * - puzzle: 插件（拼图块）
- * - fileDiff: 文件差异（文件 + 加减号）
- * - openExternal: 在新窗口打开（方框 + 右上斜箭头）
- * - mcp: MCP 品牌标识
- * - palette: 调色板 / 外观主题
- * - wand: 魔法棒（技能 Skills）
- * - prompt: 命令提示符（无边框的 ›_ ，区别于带框终端）
+ * - stepPlatform: Step 品牌标识（方块阶梯），属品牌资产
+ * - tree: 文件树（层级缩进线）。库里 Nodes 是网络节点图，不是文件层级
+ * - layers: 图层（多层菱形堆叠）。库里 Stack 是扁平横条堆叠
+ * - orbit: 轨道 / Ultraloop（椭圆轨道 + 卫星）
+ * - wrap: 自动换行（横线 + 回折箭头）
+ * - fileDiff: 文件差异（文件 + 加减号）。库里 Compare 是 Git 比较箭头
+ * - wand: 魔法棒（技能 Skills / 自动审批）。库里 Whisk 是打蛋器
+ * - loaderCircle: 加载中（3/4 圆弧，旋转动画用）
+ * - plug: 插头（当前未被使用）
+ * - layers3: 三层图层（当前未被使用）
+ * - user: 账号入口（Lucide user-round，与相邻线性图标同粗细）
+ * - stepcode: StepCode 品牌标识（紫色圆弧 + 琥珀色提示符），双色，由 --mark-arc / --mark-chevron 着色
  */
 
 export const ICON_NAMES = [
 	"stepPlatform",
+	"user",
+	"stepcode",
 	"keyRound",
 	"accountCheck",
 	"accountExternal",
@@ -164,6 +109,7 @@ export const ICON_NAMES = [
 	"tag",
 	"clock",
 	"puzzle",
+	"pluginMarket",
 	"question",
 	"pencil",
 	"terminal",
@@ -203,8 +149,6 @@ export const ICON_NAMES = [
 	"layers3",
 	"timer",
 	"database",
-	"clipboardPaste",
-	"eraser",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -212,20 +156,19 @@ export type IconName = (typeof ICON_NAMES)[number];
 export function IconSprite() {
 	return (
 		<svg className={cx(styles.root, "icon-sprite")} aria-hidden="true" focusable="false">
-			{/* Feature-specific DFSC and Lucide (ISC) symbols. */}
-			<symbol
-				id="i-accountCheck"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M20 6 9 17l-5-5" />
+			{/* icon-library.html: Check */}
+			<symbol id="i-accountCheck" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M4 11.6064L9.65685 17.2633L20.2635 6.6567"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
 			</symbol>
+			{/* Lucide user-round (ISC): the account entry, drawn in the same line weight as its neighbours. */}
 			<symbol
-				id="i-accountExternal"
+				id="i-user"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
@@ -233,30 +176,59 @@ export function IconSprite() {
 				strokeLinecap="round"
 				strokeLinejoin="round"
 			>
-				<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-			</symbol>
-			<symbol
-				id="i-accountLogout"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="m16 17 5-5-5-5M21 12H9M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-			</symbol>
-			<symbol
-				id="i-accountSignIn"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<circle cx="12" cy="8" r="4" />
+				<circle cx="12" cy="8" r="4.5" />
 				<path d="M20 21a8 8 0 0 0-16 0" />
+			</symbol>
+			{/*
+			 * The StepCode mark (the sign-in logo): two colours, so it does not use
+			 * currentColor. `--mark-arc` / `--mark-chevron` recolour it, and
+			 * `--mark-draw` (0..1, registered in stream.css) draws the chevron in.
+			 */}
+			<symbol id="i-stepcode" viewBox="0 0 48 48" fill="none">
+				<path
+					d="M34.6 13.4A15 15 0 1 0 34.6 34.6"
+					strokeWidth="7"
+					strokeLinecap="round"
+					style={{ stroke: "var(--mark-arc, #8f7cff)" }}
+				/>
+				<path
+					d="m21 17.5 6.5 6.5-6.5 6.5"
+					pathLength={1}
+					strokeWidth="4.2"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					style={{
+						stroke: "var(--mark-chevron, #f6b73c)",
+						strokeDasharray: 1,
+						strokeDashoffset: "calc(1 - var(--mark-draw, 1))",
+					}}
+				/>
+			</symbol>
+			{/* icon-library.html: ExternalLink */}
+			<symbol id="i-accountExternal" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M15 5a1 1 0 1 1 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V6.414l-5.293 5.293a1 1 0 0 1-1.414-1.414L17.586 5H15ZM4 7a3 3 0 0 1 3-3h3a1 1 0 1 1 0 2H7a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3a1 1 0 1 1 2 0v3a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7Z"
+						clipRule="evenodd"
+					/>
+				</g>
+			</symbol>
+			{/* icon-library.html: LogOut */}
+			<symbol id="i-accountLogout" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M9.94629 2.59961C10.4433 2.59961 10.8467 3.00294 10.8467 3.5C10.8467 3.99706 10.4433 4.40039 9.94629 4.40039H8.74609C7.89169 4.40039 7.30457 4.40036 6.84961 4.4375C6.40533 4.47382 6.16596 4.5409 5.99316 4.62891C5.59811 4.83025 5.2765 5.1518 5.0752 5.54688C4.9872 5.7197 4.92009 5.95897 4.88379 6.40332C4.84665 6.85833 4.84668 7.44528 4.84668 8.29981V15.7002C4.84668 16.5547 4.84665 17.1417 4.88379 17.5967C4.92009 18.041 4.9872 18.2803 5.0752 18.4531C5.2765 18.8482 5.59811 19.1698 5.99316 19.3711C6.16596 19.4591 6.40533 19.5262 6.84961 19.5625C7.30457 19.5996 7.89169 19.5996 8.74609 19.5996H9.94629C10.4433 19.5996 10.8467 20.0029 10.8467 20.5C10.8467 20.9971 10.4433 21.4004 9.94629 21.4004H8.74609C7.92107 21.4004 7.24746 21.401 6.70215 21.3564C6.1465 21.311 5.64448 21.2134 5.17578 20.9746C4.44211 20.6007 3.84554 20.0042 3.47168 19.2705C3.23287 18.8018 3.13528 18.2998 3.08984 17.7441C3.04529 17.1988 3.0459 16.5253 3.0459 15.7002V8.29981C3.0459 7.47468 3.04529 6.80122 3.08984 6.25586C3.13528 5.70016 3.23287 5.19823 3.47168 4.72949C3.84554 3.99579 4.4421 3.39929 5.17578 3.02539C5.64448 2.78658 6.1465 2.689 6.70215 2.64356C7.24746 2.599 7.92107 2.59961 8.74609 2.59961H9.94629ZM15.2832 6.31055C15.6641 5.99135 16.2315 6.04119 16.5508 6.42188L20.6875 11.3564C20.8519 11.5196 20.9531 11.7462 20.9531 11.9961C20.9531 12.0974 20.9351 12.1943 20.9043 12.2852C20.9001 12.2977 20.8954 12.3099 20.8906 12.3223C20.8762 12.3593 20.8598 12.3952 20.8408 12.4297C20.8332 12.4437 20.8248 12.4571 20.8164 12.4707C20.7995 12.4978 20.7813 12.5238 20.7617 12.5488C20.7546 12.558 20.7497 12.5692 20.7422 12.5781L16.5508 17.5791C16.2314 17.9597 15.664 18.0096 15.2832 17.6904C14.9025 17.3711 14.8528 16.8037 15.1719 16.4229L18.126 12.8965H9.94629C9.44935 12.8964 9.0459 12.4931 9.0459 11.9961C9.0459 11.4991 9.44935 11.0958 9.94629 11.0957H18.1191L15.1719 7.57813C14.8528 7.19728 14.9026 6.62984 15.2832 6.31055Z"
+					fill="currentColor"
+				/>
+			</symbol>
+			{/* icon-library.html: User */}
+			<symbol id="i-accountSignIn" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M12 4C10.3431 4 9 5.34315 9 7C9 8.65685 10.3431 10 12 10C13.6569 10 15 8.65685 15 7C15 5.34315 13.6569 4 12 4ZM7 7C7 4.23858 9.23858 2 12 2C14.7614 2 17 4.23858 17 7C17 9.76142 14.7614 12 12 12C9.23858 12 7 9.76142 7 7ZM12.0001 15C8.3441 15 5.5 17.7501 5.5 20.9999C5.5 21.5522 5.05228 21.9999 4.5 21.9999C3.94772 21.9999 3.5 21.5522 3.5 20.9999C3.5 16.5178 7.37176 13 12.0001 13C16.6283 13 20.5 16.5179 20.5 20.9999C20.5 21.5522 20.0523 21.9999 19.5 21.9999C18.9477 21.9999 18.5 21.5522 18.5 20.9999C18.5 17.7502 15.656 15 12.0001 15Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			<symbol id="i-stepPlatform" viewBox="0 0 24 24" fill="currentColor">
 				<rect x="9" y="2" width="6" height="6" />
@@ -265,67 +237,57 @@ export function IconSprite() {
 				<rect x="1" y="18" width="6" height="6" />
 				<rect x="9" y="18" width="6" height="6" />
 			</symbol>
-			<symbol
-				id="i-keyRound"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
-				<circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+			{/* icon-library.html: Key */}
+			<symbol id="i-keyRound" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M14.3912 3.823C17.5869 3.823 20.1772 6.41338 20.1772 9.60901C20.1772 12.8046 17.5869 15.395 14.3912 15.395C13.9836 15.395 13.5859 15.3528 13.2023 15.2727L12.7213 15.1727L11.0775 16.8156C11.0685 16.8246 11.0565 16.8296 11.0438 16.8296H9.17869V18.6948C9.17869 18.7075 9.17365 18.7194 9.16468 18.7284L8.15038 19.7427C7.87242 20.0207 7.49553 20.1769 7.10245 20.177H3.87088C3.84447 20.177 3.82324 20.1558 3.82324 20.1294V16.8978C3.8233 16.5047 3.97959 16.1278 4.25754 15.8499L8.82751 11.279L8.72758 10.798C8.64744 10.4143 8.60522 10.0167 8.60522 9.60901C8.60522 6.41338 11.1956 3.823 14.3912 3.823Z"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
+				<path
+					d="M14.4386 11.1391C15.3498 11.1391 16.0886 10.4004 16.0886 9.48911C16.0886 8.57784 15.3498 7.83911 14.4386 7.83911C13.5273 7.83911 12.7886 8.57784 12.7886 9.48911C12.7886 10.4004 13.5273 11.1391 14.4386 11.1391Z"
+					fill="currentColor"
+				/>
 			</symbol>
-			<symbol
-				id="i-timer"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M10 2h4m-2 12 3-3" />
-				<circle cx="12" cy="14" r="8" />
+			{/* icon-library.html: Stopwatch */}
+			<symbol id="i-timer" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M8.5 2.5C8.5 1.94772 8.94772 1.5 9.5 1.5H14.5C15.0523 1.5 15.5 1.94772 15.5 2.5C15.5 3.05228 15.0523 3.5 14.5 3.5H9.5C8.94772 3.5 8.5 3.05228 8.5 2.5Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M15.6402 11.5182C16.0645 11.1647 16.1218 10.5341 15.7682 10.1098C15.4147 9.68554 14.7841 9.62821 14.3598 9.98178L11.3598 12.4818C10.9355 12.8353 10.8782 13.4659 11.2318 13.8902C11.5853 14.3145 12.2159 14.3718 12.6402 14.0182L15.6402 11.5182Z"
+						fill="currentColor"
+					/>
+					<path
+						fillRule="evenodd"
+						clipRule="evenodd"
+						d="M3.28125 13.25C3.28125 8.43477 7.18477 4.53125 12 4.53125C16.8152 4.53125 20.7188 8.43477 20.7188 13.25C20.7188 18.0652 16.8152 21.9688 12 21.9688C7.18477 21.9688 3.28125 18.0652 3.28125 13.25ZM12 6.46875C8.25482 6.46875 5.21875 9.50482 5.21875 13.25C5.21875 16.9952 8.25482 20.0312 12 20.0312C15.7452 20.0312 18.7812 16.9952 18.7812 13.25C18.7812 9.50482 15.7452 6.46875 12 6.46875Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-database"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<ellipse cx="12" cy="5" rx="9" ry="3" />
-				<path d="M3 5V19A9 3 0 0 0 21 19V5M3 12A9 3 0 0 0 21 12" />
+			{/* icon-library.html: Database */}
+			<symbol id="i-database" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M19 5.6377C19 7.01841 15.866 8.1377 12 8.1377C8.13401 8.1377 5 7.01841 5 5.6377M19 5.6377C19 4.25699 15.866 3.1377 12 3.1377C8.13401 3.1377 5 4.25699 5 5.6377M19 5.6377L19 17.9559C19 19.5656 15.866 20.8623 12 20.8623C8.13401 20.8623 5 19.607 5 17.9559V5.6377M19 12.1377C19 13.5184 15.866 14.6377 12 14.6377C8.13401 14.6377 5 13.5184 5 12.1377"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
 			</symbol>
-			<symbol
-				id="i-clipboardPaste"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M11 14h10M16 4h2a2 2 0 0 1 2 2v1.344m-3 10.656 4-4-4-4M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113" />
-				<rect x="8" y="2" width="8" height="4" rx="1" />
-			</symbol>
-			<symbol
-				id="i-eraser"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21m-7.752-9.91 8.828 8.828" />
-			</symbol>
-			<symbol id="i-summaryRing" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
-				<circle cx="12" cy="12" r="10" />
+			{/* icon-library.html: EmptyCircle */}
+			<symbol id="i-summaryRing" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M12 4C7.58172 4 4 7.58172 4 12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4ZM2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			<symbol
 				id="i-layers3"
@@ -350,101 +312,97 @@ export function IconSprite() {
 			>
 				<path d="M12 22v-5M15 8V2M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2" />
 			</symbol>
-			<symbol
-				id="i-summaryCheck"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.9"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="m16 9-5.5 5.5L8 12" pathLength="1" />
+			{/*
+			 * icon-library.html: CheckCircle's inner check, traced as one stroke. It
+			 * sits inside summaryRing (EmptyCircle, the same ring), and SummaryTaskStatus
+			 * draws it in through stroke-dashoffset, which needs a stroked path with
+			 * pathLength="1" rather than the library's filled outline.
+			 */}
+			<symbol id="i-summaryCheck" viewBox="0 0 24 24" fill="none">
+				<path
+					pathLength="1"
+					d="M8.25 12.72 10.75 15.48 15.5 8.75"
+					stroke="currentColor"
+					strokeWidth="2"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
 			</symbol>
-			<symbol
-				id="i-maximize"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M15 3h6v6m0-6-7 7M3 21l7-7M9 21H3v-6" />
+			{/* icon-library.html: ExpandLg */}
+			<symbol id="i-maximize" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M13 4C13 3.44772 13.4477 3 14 3H20C20.5523 3 21 3.44772 21 4V10C21 10.5523 20.5523 11 20 11C19.4477 11 19 10.5523 19 10V6.41421L15.2071 10.2071C14.8166 10.5976 14.1834 10.5976 13.7929 10.2071C13.4024 9.81658 13.4024 9.18342 13.7929 8.79289L17.5858 5H14C13.4477 5 13 4.55228 13 4ZM4 13C4.55228 13 5 13.4477 5 14V17.5858L8.79289 13.7929C9.18342 13.4024 9.81658 13.4024 10.2071 13.7929C10.5976 14.1834 10.5976 14.8166 10.2071 15.2071L6.41421 19H10C10.5523 19 11 19.4477 11 20C11 20.5523 10.5523 21 10 21H4C3.44772 21 3 20.5523 3 20V14C3 13.4477 3.44772 13 4 13Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-minimize"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="m14 10 7-7M20 10h-6V4M3 21l7-7M4 14h6v6" />
+			{/* icon-library.html: CollapseLg */}
+			<symbol id="i-minimize" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M13 4C13 3.44772 13.4477 3 14 3C14.5523 3 15 3.44772 15 4V7.58579L19.2929 3.29289C19.6834 2.90237 20.3166 2.90237 20.7071 3.29289C21.0976 3.68342 21.0976 4.31658 20.7071 4.70711L16.4142 9H20C20.5523 9 21 9.44772 21 10C21 10.5523 20.5523 11 20 11H14C13.4477 11 13 10.5523 13 10V4ZM3 14C3 13.4477 3.44772 13 4 13H10C10.5523 13 11 13.4477 11 14V20C11 20.5523 10.5523 21 10 21C9.44772 21 9 20.5523 9 20V16.4142L4.70711 20.7071C4.31658 21.0976 3.68342 21.0976 3.29289 20.7071C2.90237 20.3166 2.90237 19.6834 3.29289 19.2929L7.58579 15H4C3.44772 15 3 14.5523 3 14Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-scanLine"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10" />
+			{/* icon-library.html: ScanCode */}
+			<symbol id="i-scanLine" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M16 4C16.93 4 17.395 4 17.7765 4.10222C18.8117 4.37962 19.6204 5.18827 19.8978 6.22354C20 6.60504 20 7.07003 20 8M8 4C7.07003 4 6.60504 4 6.22354 4.10222C5.18827 4.37962 4.37962 5.18827 4.10222 6.22354C4 6.60504 4 7.07003 4 8M4 16C4 16.93 4 17.395 4.10222 17.7765C4.37962 18.8117 5.18827 19.6204 6.22354 19.8978C6.60504 20 7.07003 20 8 20M16 20C16.93 20 17.395 20 17.7765 19.8978C18.8117 19.6204 19.6204 18.8117 19.8978 17.7765C20 17.395 20 16.93 20 16"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
+				<path d="M9 12H15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
 			</symbol>
-			<symbol
-				id="i-bot"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M12 8V4H8" />
-				<rect width="16" height="12" x="4" y="8" rx="2" />
-				<path d="M2 14h2M20 14h2M15 13v2M9 13v2" />
+			{/* icon-library.html: Robot */}
+			<symbol id="i-bot" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M12.0001 2.59937C12.4971 2.5995 12.9005 3.00278 12.9005 3.49976V4.72437H16.254C16.9821 4.72437 17.5829 4.72359 18.0704 4.76343C18.5684 4.80413 19.0274 4.89211 19.4591 5.11206C20.1277 5.45271 20.6712 5.99624 21.0118 6.66479C21.2318 7.09647 21.3198 7.55554 21.3605 8.05347C21.4003 8.54103 21.3995 9.14179 21.3995 9.86987V10.1521C22.0324 10.5201 22.4581 11.2061 22.4581 11.991V13.0535C22.4581 13.8399 22.0306 14.5268 21.3956 14.8943V14.5505C21.3934 15.3963 21.3864 16.1014 21.338 16.6941C21.2756 17.4576 21.1448 18.1135 20.838 18.7156C20.3448 19.6835 19.5579 20.4704 18.59 20.9636C17.9879 21.2704 17.332 21.4012 16.5685 21.4636C15.8155 21.5251 14.881 21.5251 13.7072 21.5251H10.2911C9.11733 21.5251 8.1828 21.5251 7.42981 21.4636C6.6663 21.4012 6.01037 21.2704 5.40833 20.9636C4.44037 20.4704 3.65352 19.6835 3.16028 18.7156C2.85352 18.1135 2.72266 17.4576 2.66028 16.6941C2.61857 16.1836 2.60797 15.5896 2.60364 14.8943L2.48743 14.821C1.91711 14.44 1.54117 13.7908 1.54114 13.0535V11.991C1.54114 11.2065 1.96631 10.5212 2.59875 10.1531V9.86987C2.59875 9.14179 2.59798 8.54103 2.63782 8.05347C2.67852 7.55554 2.7665 7.09647 2.98645 6.66479C3.3271 5.99624 3.87063 5.45271 4.53918 5.11206C4.97086 4.89211 5.42993 4.80413 5.92786 4.76343C6.41542 4.72359 7.01618 4.72437 7.74426 4.72437H11.0997V3.49976C11.0997 3.0027 11.5031 2.59937 12.0001 2.59937ZM7.74426 6.52515C6.98675 6.52515 6.47252 6.52593 6.07532 6.55835C5.68882 6.58993 5.4923 6.64647 5.35657 6.71558C5.0267 6.88365 4.75804 7.15231 4.58997 7.48218C4.52086 7.61791 4.46432 7.81443 4.43274 8.20093C4.40032 8.59813 4.39954 9.11236 4.39954 9.86987V13.8328C4.39954 15.0363 4.40008 15.8849 4.45422 16.5476C4.5075 17.1997 4.60791 17.5922 4.76379 17.8982C5.08449 18.5276 5.59631 19.0394 6.22571 19.3601C6.53169 19.516 6.92419 19.6164 7.57629 19.6697C8.239 19.7238 9.08759 19.7244 10.2911 19.7244H13.7072C14.9107 19.7244 15.7593 19.7238 16.422 19.6697C17.0741 19.6164 17.4666 19.516 17.7726 19.3601C18.402 19.0394 18.9138 18.5276 19.2345 17.8982C19.3904 17.5922 19.4908 17.1997 19.5441 16.5476C19.5982 15.8849 19.5988 15.0363 19.5988 13.8328V9.86987C19.5988 9.11236 19.598 8.59813 19.5656 8.20093C19.534 7.81443 19.4774 7.61791 19.4083 7.48218C19.2402 7.15231 18.9716 6.88365 18.6417 6.71558C18.506 6.64647 18.3095 6.58993 17.923 6.55835C17.5258 6.52593 17.0115 6.52515 16.254 6.52515H7.74426ZM9.20618 10.2253C9.78596 10.2255 10.256 10.6953 10.256 11.2751V13.6804C10.256 14.2602 9.78596 14.7301 9.20618 14.7302C8.62628 14.7302 8.15637 14.2603 8.15637 13.6804V11.2751C8.15637 10.6952 8.62628 10.2253 9.20618 10.2253ZM14.7941 10.2253C15.3739 10.2255 15.8439 10.6953 15.8439 11.2751V13.6804C15.8439 14.2602 15.3739 14.7301 14.7941 14.7302C14.2142 14.7302 13.7443 14.2603 13.7443 13.6804V11.2751C13.7443 10.6952 14.2142 10.2253 14.7941 10.2253Z"
+					fill="currentColor"
+				/>
 			</symbol>
-			<symbol id="i-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<circle cx="12" cy="12" r="10" />
+			{/* icon-library.html: EmptyCircle */}
+			<symbol id="i-circle" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M12 4C7.58172 4 4 7.58172 4 12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4ZM2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-circleCheck"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.9"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<circle cx="12" cy="12" r="10" />
-				<path d="m16 9-5.5 5.5L8 12" />
+			{/* icon-library.html: CheckCircle */}
+			<symbol id="i-circleCheck" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M12 4C7.58172 4 4 7.58172 4 12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4ZM2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12ZM16.0755 7.93219C16.5272 8.25003 16.6356 8.87383 16.3178 9.32549L11.5678 16.0755C11.3931 16.3237 11.1152 16.4792 10.8123 16.4981C10.5093 16.517 10.2142 16.3973 10.0101 16.1727L7.51006 13.4227C7.13855 13.014 7.16867 12.3816 7.57733 12.0101C7.98598 11.6386 8.61843 11.6687 8.98994 12.0773L10.6504 13.9039L14.6822 8.17451C15 7.72284 15.6238 7.61436 16.0755 7.93219Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-circleX"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.9"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<circle cx="12" cy="12" r="10" />
-				<path d="m15 9-6 6m0-6 6 6" />
+			{/* icon-library.html: XCircle */}
+			<symbol id="i-circleX" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path d="M10.207 8.793a1 1 0 0 0-1.414 1.414L10.586 12l-1.793 1.793a1 1 0 1 0 1.414 1.414L12 13.414l1.793 1.793a1 1 0 0 0 1.414-1.414L13.414 12l1.793-1.793a1 1 0 0 0-1.414-1.414L12 10.586l-1.793-1.793Z" />
+					<path
+						fillRule="evenodd"
+						d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2ZM4 12a8 8 0 1 1 16 0 8 8 0 0 1-16 0Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-circleMinus"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.9"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<circle cx="12" cy="12" r="10" />
-				<path d="M8 12h8" />
+			{/* icon-library.html: MinusCircle */}
+			<symbol id="i-circleMinus" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path d="M9 11a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2H9Z" />
+					<path
+						fillRule="evenodd"
+						d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2ZM4 12a8 8 0 1 1 16 0 8 8 0 0 1-16 0Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			<symbol
 				id="i-loaderCircle"
@@ -457,42 +415,43 @@ export function IconSprite() {
 			>
 				<path d="M21 12a9 9 0 1 1-6.219-8.56" />
 			</symbol>
-			<symbol
-				id="i-triangleAlert"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.9"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01" />
+			{/* icon-library.html: Warning */}
+			<symbol id="i-triangleAlert" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M10.5766 3.49149C11.4862 3.10376 12.5147 3.10373 13.4243 3.49149C14.0236 3.74724 14.4881 4.21878 14.9311 4.79618C15.3744 5.37398 15.8697 6.15918 16.4897 7.14091L20.1606 12.9524C20.8594 14.0589 21.4153 14.9377 21.7817 15.6556C22.1449 16.3674 22.3921 17.0497 22.3383 17.7474C22.2576 18.7929 21.7282 19.7527 20.8872 20.3792C20.3259 20.7972 19.6175 20.9527 18.8217 21.0257C18.019 21.0993 16.9793 21.0989 15.6704 21.0989H8.32955C7.02077 21.0989 5.98084 21.0993 5.17818 21.0257C4.38251 20.9527 3.67391 20.7971 3.11275 20.3792C2.27185 19.7527 1.74235 18.7929 1.66158 17.7474C1.60781 17.0497 1.85504 16.3674 2.21822 15.6556C2.5846 14.9376 3.14137 14.059 3.84029 12.9524L7.51021 7.14091C8.13028 6.15913 8.62551 5.374 9.0688 4.79618C9.512 4.21855 9.97693 3.74717 10.5766 3.49149ZM12.7729 5.01884C12.2796 4.80851 11.7214 4.80859 11.228 5.01884C11.0246 5.10555 10.7726 5.3033 10.3862 5.80692C10 6.31027 9.55174 7.01868 8.91451 8.02763L5.24459 13.8391C4.5281 14.9736 4.02123 15.7765 3.69771 16.4104C3.37132 17.0501 3.3003 17.3918 3.31783 17.6194C3.36166 18.1865 3.64887 18.7073 4.10494 19.0472C4.28809 19.1835 4.61535 19.3058 5.33052 19.3714C6.03926 19.4364 6.98797 19.4378 8.32955 19.4378H15.6704C17.012 19.4378 17.9606 19.4363 18.6694 19.3714C19.3847 19.3058 19.7119 19.1835 19.895 19.0472C20.3511 18.7073 20.6383 18.1866 20.6821 17.6194C20.6996 17.3918 20.6286 17.0502 20.3022 16.4104C19.9787 15.7765 19.4727 14.9735 18.7563 13.8391L15.0854 8.02763C14.4482 7.01874 13.9999 6.31025 13.6137 5.80692C13.2277 5.30374 12.9762 5.10567 12.7729 5.01884ZM12.0034 14.719C12.6385 14.719 13.1538 15.2343 13.1538 15.8694C13.1536 16.5044 12.6384 17.0188 12.0034 17.0188C11.3684 17.0188 10.8531 16.5044 10.853 15.8694C10.853 15.2343 11.3683 14.7191 12.0034 14.719ZM12.0004 8.96024C12.4971 8.96049 12.9005 9.36304 12.9008 9.85966V12.6282C12.9008 13.1251 12.4973 13.5284 12.0004 13.5286C11.5034 13.5286 11.1001 13.1253 11.1001 12.6282V9.85966C11.1004 9.36288 11.5036 8.96024 12.0004 8.96024Z"
+					fill="currentColor"
+				/>
 			</symbol>
-			<symbol
-				id="i-disclosure"
-				viewBox="0 0 14 14"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.5"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M3.5 5.25 7 8.75 10.5 5.25" />
+			{/* icon-library.html: ArrowRight, rotated 90deg */}
+			<symbol id="i-disclosure" viewBox="0 0 24 24" fill="none">
+				<g transform="rotate(90 12 12)">
+					<path
+						d="M9 5L16 12L9 19"
+						stroke="currentColor"
+						strokeWidth="1.8"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					/>
+				</g>
 			</symbol>
-			<symbol id="i-sidebar" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<rect x="1.75" y="2.75" width="14.5" height="12.5" rx="2" />
-				<path d="M6.5 2.75v12.5" />
+			{/* icon-library.html: SidebarLeft */}
+			<symbol id="i-sidebar" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M6 5a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h2V5H6Zm4 0v14h8a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-8ZM3 6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
-			<symbol
-				id="i-newChat"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.6"
-				strokeLinecap="round"
-			>
-				<path d="M3 4.5A2.5 2.5 0 0 1 5.5 2h7A2.5 2.5 0 0 1 15 4.5v6a2.5 2.5 0 0 1-2.5 2.5H8l-3.6 2.5.7-2.5A2.5 2.5 0 0 1 3 10.5z" />
-				<path d="M9 5.25v4.5M6.75 7.5h4.5" />
+			{/* icon-library.html: ChatCompose */}
+			<symbol id="i-newChat" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M12 4.5C7.5271 4.5 4 7.91095 4 12C4 13.6958 4.5996 15.263 5.62036 16.5254C5.80473 16.7534 5.87973 17.0509 5.82551 17.339C5.72928 17.8505 5.60336 18.3503 5.45668 18.8401C6.08722 18.743 6.69878 18.6098 7.2983 18.4395C7.54758 18.3687 7.81461 18.3975 8.04312 18.5197C9.20727 19.1423 10.5566 19.5 12 19.5C16.4729 19.5 20 16.0891 20 12C20 7.91095 16.4729 4.5 12 4.5ZM2 12C2 6.70021 6.53177 2.5 12 2.5C17.4682 2.5 22 6.70021 22 12C22 17.2998 17.4682 21.5 12 21.5C10.3694 21.5 8.82593 21.1286 7.46141 20.4675C6.36717 20.7507 5.2423 20.9253 4.06155 20.9981C3.72191 21.019 3.39493 20.8658 3.19366 20.5915C2.9924 20.3171 2.94448 19.9592 3.06647 19.6415C3.35663 18.8859 3.6004 18.1448 3.77047 17.399C2.65693 15.8695 2 14.0088 2 12ZM12 8C12.5523 8 13 8.44772 13 9V11H15C15.5523 11 16 11.4477 16 12C16 12.5523 15.5523 13 15 13H13V15C13 15.5523 12.5523 16 12 16C11.4477 16 11 15.5523 11 15V13H9C8.44772 13 8 12.5523 8 12C8 11.4477 8.44772 11 9 11H11V9C11 8.44772 11.4477 8 12 8Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Search */}
 			<symbol id="i-search" viewBox="0 0 24 24" fill="none">
@@ -510,24 +469,34 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			<symbol
-				id="i-back"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M14.5 9h-11M7 4.75 2.75 9 7 13.25" />
+			{/* icon-library.html: SvgArrowLeft */}
+			<symbol id="i-back" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M5.293 12.707a1 1 0 0 1 0-1.414l5-5a1 1 0 1 1 1.414 1.414L8.414 11H18a1 1 0 1 1 0 2H8.414l3.293 3.293a1 1 0 0 1-1.414 1.414l-5-5Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
-			<symbol id="i-external" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<path d="M4 13.75 14 3.75M8.5 3.75H14v5.5" />
-				<path d="M2.75 6.25v8.5h8.5" />
+			{/* icon-library.html: ArrowUpRight */}
+			<symbol id="i-external" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M16.243 6.757a1 1 0 0 1 1 1v7.072a1 1 0 0 1-2 0v-4.657L8.464 16.95a1 1 0 0 1-1.414-1.414l6.778-6.779H9.172a1 1 0 0 1 0-2h7.07Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
-			<symbol id="i-upgrade" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<path d="M6 2.5h7.5V10M13.5 2.5 5.5 10.5" />
-				<path d="M10.5 7.5v6h-8v-8h6" />
+			{/* icon-library.html: Upgrade */}
+			<symbol id="i-upgrade" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M4 12C4 7.58172 7.58172 4 12 4C16.4183 4 20 7.58172 20 12C20 16.4183 16.4183 20 12 20C7.58172 20 4 16.4183 4 12ZM12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2ZM16.2071 10.7929L12.7071 7.29289C12.3166 6.90237 11.6834 6.90237 11.2929 7.29289L7.79289 10.7929C7.40237 11.1834 7.40237 11.8166 7.79289 12.2071C8.18342 12.5976 8.81658 12.5976 9.20711 12.2071L11 10.4142V16C11 16.5523 11.4477 17 12 17C12.5523 17 13 16.5523 13 16V10.4142L14.7929 12.2071C15.1834 12.5976 15.8166 12.5976 16.2071 12.2071C16.5976 11.8166 16.5976 11.1834 16.2071 10.7929Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: LightMode */}
 			<symbol id="i-theme" viewBox="0 0 24 24" fill="none">
@@ -556,19 +525,14 @@ export function IconSprite() {
 					strokeLinejoin="round"
 				/>
 			</symbol>
-			<symbol
-				id="i-fork"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.4"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<circle cx="4.5" cy="3.75" r="1.75" />
-				<circle cx="13.5" cy="3.75" r="1.75" />
-				<circle cx="9" cy="14.25" r="1.75" />
-				<path d="M4.5 5.5v1.75a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V5.5M9 9.25v3.25" />
+			{/* icon-library.html: Branch */}
+			<symbol id="i-fork" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M7.75 18C7.75 17.3096 7.19036 16.75 6.5 16.75C5.80964 16.75 5.25 17.3096 5.25 18C5.25 18.6904 5.80964 19.25 6.5 19.25C7.19036 19.25 7.75 18.6904 7.75 18ZM7.75 6C7.75 5.30964 7.19036 4.75 6.5 4.75C5.80964 4.75 5.25 5.30964 5.25 6C5.25 6.69036 5.80964 7.25 6.5 7.25C7.19036 7.25 7.75 6.69036 7.75 6ZM18.75 6C18.75 5.30964 18.1904 4.75 17.5 4.75C16.8096 4.75 16.25 5.30964 16.25 6C16.25 6.69036 16.8096 7.25 17.5 7.25C18.1904 7.25 18.75 6.69036 18.75 6ZM20.75 6C20.75 7.44586 19.8054 8.66989 18.5 9.0918V10C18.5 11.6569 17.1569 13 15.5 13H8.5C7.94772 13 7.5 13.4477 7.5 14V14.9072C8.80556 15.329 9.75 16.554 9.75 18C9.75 19.7949 8.29493 21.25 6.5 21.25C4.70507 21.25 3.25 19.7949 3.25 18C3.25 16.554 4.19444 15.329 5.5 14.9072V9.0918C4.19459 8.66989 3.25 7.44586 3.25 6C3.25 4.20507 4.70507 2.75 6.5 2.75C8.29493 2.75 9.75 4.20507 9.75 6C9.75 7.44586 8.80541 8.66989 7.5 9.0918V11.1738C7.81306 11.0631 8.149 11 8.5 11H15.5C16.0523 11 16.5 10.5523 16.5 10V9.0918C15.1946 8.66989 14.25 7.44586 14.25 6C14.25 4.20507 15.7051 2.75 17.5 2.75C19.2949 2.75 20.75 4.20507 20.75 6Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Dashboard */}
 			<symbol id="i-gauge" viewBox="0 0 24 24" fill="none">
@@ -652,11 +616,24 @@ export function IconSprite() {
 					/>
 				</g>
 			</symbol>
-			<symbol id="i-send" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2">
-				<path d="M9 15V3.75M4.5 8.25 9 3.5l4.5 4.75" />
+			{/* icon-library.html: ArrowUp */}
+			<symbol id="i-send" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M11.293 5.293a1 1 0 0 1 1.414 0l5 5a1 1 0 0 1-1.414 1.414L13 8.414V18a1 1 0 1 1-2 0V8.414l-3.293 3.293a1 1 0 0 1-1.414-1.414l5-5Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
-			<symbol id="i-stop" viewBox="0 0 18 18" fill="currentColor">
-				<rect x="5" y="5" width="8" height="8" rx="1.5" />
+			{/* icon-library.html: Stop */}
+			<symbol id="i-stop" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M6 8C6 6.89543 6.89543 6 8 6H16C17.1046 6 18 6.89543 18 8V16C18 17.1046 17.1046 18 16 18H8C6.89543 18 6 17.1046 6 16V8Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Folder */}
 			<symbol id="i-folder" viewBox="0 0 24 24" fill="none">
@@ -665,9 +642,12 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			<symbol id="i-folderPlus" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<path d="M2 5.25h5.25l1.5 2H16v7.25H2z" />
-				<path d="M12.5 2.75v5M10 5.25h5" />
+			{/* icon-library.html: FolderPlus */}
+			<symbol id="i-folderPlus" viewBox="0 0 18 18" fill="none">
+				<g fill="currentColor">
+					<path d="M15 11.25C15 10.8358 14.6642 10.5 14.25 10.5C13.8358 10.5 13.5 10.8358 13.5 11.25V12.75H12C11.5858 12.75 11.25 13.0858 11.25 13.5C11.25 13.9142 11.5858 14.25 12 14.25H13.5V15.75C13.5 16.1642 13.8358 16.5 14.25 16.5C14.6642 16.5 15 16.1642 15 15.75V14.25H16.5C16.9142 14.25 17.25 13.9142 17.25 13.5C17.25 13.0858 16.9142 12.75 16.5 12.75H15V11.25Z" />
+					<path d="M16.4669 6.56113C16.5 6.96703 16.5 7.46529 16.5 8.06901V8.25C16.5 8.66421 16.1642 9 15.75 9L3 9V11.4C3 12.0424 3.00058 12.4792 3.02816 12.8167C3.05503 13.1455 3.10372 13.3137 3.16349 13.431C3.3073 13.7132 3.53677 13.9427 3.81902 14.0865C3.93632 14.1463 4.10447 14.195 4.43328 14.2218C4.77085 14.2494 5.20757 14.25 5.85 14.25H9C9.41421 14.25 9.75 14.5858 9.75 15C9.75 15.4142 9.41421 15.75 9 15.75H5.81901C5.21529 15.75 4.71702 15.75 4.31113 15.7169C3.88956 15.6824 3.50203 15.6085 3.13803 15.423C2.57354 15.1354 2.1146 14.6765 1.82698 14.112C1.64151 13.748 1.56759 13.3604 1.53315 12.9389C1.49998 12.533 1.49999 12.0347 1.5 11.431V6.56903C1.49999 5.96531 1.49998 5.46703 1.53315 5.06113C1.56759 4.63956 1.64151 4.25203 1.82698 3.88803C2.1146 3.32355 2.57354 2.8646 3.13803 2.57698C3.50203 2.39152 3.88956 2.31759 4.31113 2.28315C4.71703 2.24999 5.2153 2.24999 5.81903 2.25L6.45692 2.25C6.56639 2.24999 6.64898 2.24998 6.7306 2.25441C7.41309 2.29145 8.06248 2.56044 8.57126 3.01684C8.63212 3.07143 8.69047 3.12979 8.76789 3.20723L8.78033 3.21967C8.87548 3.31482 8.90361 3.34259 8.93036 3.36659C9.18475 3.59479 9.50945 3.72928 9.85069 3.7478C9.88658 3.74975 9.92611 3.75 10.0607 3.75L12.181 3.75C12.7847 3.74999 13.283 3.74999 13.6889 3.78315C14.1104 3.81759 14.498 3.89152 14.862 4.07698C15.4265 4.3646 15.8854 4.82355 16.173 5.38803C16.3585 5.75203 16.4324 6.13956 16.4669 6.56113ZM7.56964 4.13342C7.31525 3.90522 6.99056 3.77073 6.64931 3.75221C6.61342 3.75026 6.5739 3.75 6.43934 3.75H5.85C5.20757 3.75 4.77085 3.75059 4.43328 3.77817C4.10447 3.80503 3.93632 3.85373 3.81902 3.91349C3.53677 4.0573 3.3073 4.28677 3.16349 4.56902C3.10372 4.68632 3.05503 4.85447 3.02816 5.18328C3.00058 5.52085 3 5.95757 3 6.6V7.5H14.9987C14.9963 7.16586 14.9898 6.90348 14.9718 6.68328C14.945 6.35447 14.8963 6.18632 14.8365 6.06902C14.6927 5.78678 14.4632 5.5573 14.181 5.41349C14.0637 5.35373 13.8955 5.30503 13.5667 5.27817C13.2292 5.25059 12.7924 5.25 12.15 5.25L10.0431 5.25001C9.93357 5.25002 9.85104 5.25003 9.7694 5.2456C9.08691 5.20855 8.43753 4.93957 7.92874 4.48317C7.86788 4.42857 7.80953 4.37021 7.73211 4.29277L7.71967 4.28033C7.62453 4.18519 7.5964 4.15742 7.56964 4.13342Z" />
+				</g>
 			</symbol>
 			{/* icon-library.html: Close */}
 			<symbol id="i-closeSm" viewBox="0 0 24 24" fill="none">
@@ -692,8 +672,15 @@ export function IconSprite() {
 					strokeLinecap="round"
 				/>
 			</symbol>
-			<symbol id="i-up" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.7">
-				<path d="m5 8 4-4 4 4M9 4v10" />
+			{/* icon-library.html: ArrowUp */}
+			<symbol id="i-up" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M11.293 5.293a1 1 0 0 1 1.414 0l5 5a1 1 0 0 1-1.414 1.414L13 8.414V18a1 1 0 1 1-2 0V8.414l-3.293 3.293a1 1 0 0 1-1.414-1.414l5-5Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Document */}
 			<symbol id="i-file" viewBox="0 0 24 24" fill="none">
@@ -708,9 +695,16 @@ export function IconSprite() {
 				<rect x="7" y="4" width="8" height="4" rx="1" />
 				<rect x="7" y="10" width="8" height="4" rx="1" />
 			</symbol>
-			<symbol id="i-open" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<path d="M2 5.25h5.25l1.5 2H16v7.25H2z" />
-				<path d="M10 4h5v5M15 4l-5.5 5.5" />
+			{/* icon-library.html: FolderOpen */}
+			<symbol id="i-open" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						clipRule="evenodd"
+						d="M8.36575 5.00294C8.31789 5.00035 8.26519 5 8.08579 5H7.3C6.44342 5 5.86113 5.00078 5.41104 5.03755C4.97262 5.07337 4.74842 5.1383 4.59202 5.21799C4.2157 5.40974 3.90973 5.7157 3.71799 6.09202C3.6383 6.24842 3.57337 6.47263 3.53755 6.91104C3.50078 7.36113 3.5 7.94342 3.5 8.8V13.3338C4.10345 12.2477 4.92627 11.2786 6.03229 10.4584C6.46262 10.1392 6.97003 10 7.45416 10H19.4995C19.4981 9.54872 19.4929 9.20759 19.4738 8.92661C19.4487 8.55915 19.4031 8.36814 19.3478 8.23464C19.1448 7.74458 18.7554 7.35523 18.2654 7.15224C18.1319 7.09695 17.9409 7.0513 17.5734 7.02623C17.197 7.00054 16.7126 7 16 7L12.8908 7.00001C12.7448 7.00002 12.6347 7.00003 12.5259 6.99413C11.6159 6.94474 10.75 6.58609 10.0717 5.97756C9.99052 5.90478 9.91272 5.82696 9.80953 5.72375L9.7929 5.70711C9.66604 5.58025 9.62853 5.54323 9.59285 5.51123C9.25366 5.20696 8.82074 5.02764 8.36575 5.00294ZM21.4996 10H21.6958C23.2725 10 24.218 11.7333 23.3868 13.0603C22.2267 14.9122 21.6207 15.9779 21.2984 17.3273C20.8483 19.2122 19.3008 21 17.0719 21H7.25868C7.23455 21 7.21056 21 7.18669 21H6.07372C5.95032 21 5.8274 20.9941 5.70538 20.9825C5.54408 20.9762 5.3918 20.9675 5.24817 20.9558C4.68608 20.9099 4.16937 20.8113 3.68404 20.564C2.93139 20.1805 2.31947 19.5686 1.93597 18.816C1.68868 18.3306 1.59012 17.8139 1.54419 17.2518C1.49998 16.7106 1.49999 16.0463 1.5 15.2413V8.7587C1.49999 7.95373 1.49998 7.28937 1.54419 6.74818C1.59012 6.18608 1.68868 5.66938 1.93597 5.18404C2.31947 4.43139 2.93139 3.81947 3.68404 3.43598C4.16937 3.18869 4.68608 3.09012 5.24817 3.0442C5.78937 2.99998 6.45373 2.99999 7.2587 3L8.10922 3C8.25524 2.99999 8.36528 2.99997 8.47414 3.00588C9.38412 3.05527 10.25 3.41391 10.9283 4.02245C11.0095 4.09525 11.0873 4.17306 11.1905 4.27632L11.2071 4.2929C11.334 4.41975 11.3715 4.45678 11.4072 4.48878C11.7463 4.79305 12.1793 4.97237 12.6343 4.99706C12.6821 4.99966 12.7348 5 12.9142 5L16.0343 5C16.7041 4.99999 17.2569 4.99999 17.7095 5.03087C18.1788 5.06289 18.6129 5.13142 19.0307 5.30449C20.0108 5.71046 20.7895 6.48916 21.1955 7.46927C21.3686 7.88708 21.4371 8.32118 21.4691 8.79047C21.4925 9.1336 21.4982 9.53436 21.4996 10ZM17.0719 19C18.1001 19 19.0467 18.1456 19.3531 16.8627C19.7604 15.1572 20.5385 13.8397 21.691 12H7.45416C7.34602 12 7.26903 12.0312 7.22363 12.0648C5.55547 13.3019 4.68121 14.9804 4.2774 17.1283C4.11717 17.9806 4.77661 18.8636 5.82444 18.9857C6.20963 18.9996 6.68386 19 7.3 19H17.0719Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Add */}
 			<symbol id="i-plus" viewBox="0 0 24 24" fill="none">
@@ -728,15 +722,16 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			{/* icon-library.html: ArrowRight */}
+			{/* icon-library.html: CaretRight */}
 			<symbol id="i-tool" viewBox="0 0 24 24" fill="none">
-				<path
-					d="M9 5L16 12L9 19"
-					stroke="currentColor"
-					strokeWidth="1.8"
-					strokeLinecap="round"
-					strokeLinejoin="round"
-				/>
+				<g fill="currentColor">
+					<path d="M15 12 9 7v10l6-5Z" />
+					<path
+						fillRule="evenodd"
+						d="M8.576 6.094a1 1 0 0 1 1.064.138l6 5a1 1 0 0 1 0 1.536l-6 5A1 1 0 0 1 8 17V7a1 1 0 0 1 .576-.906ZM10 9.135v5.73L13.438 12 10 9.135Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Copy */}
 			<symbol id="i-copy" viewBox="0 0 24 24" fill="none">
@@ -768,17 +763,28 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			<symbol
-				id="i-listCheck"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.4"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M6.5 4.5h9M6.5 9h9M6.5 13.5h9" />
-				<path d="m2 4.5 1 1 1.75-2M2 9l1 1 1.75-2M2 13.5l1 1 1.75-2" />
+			{/* icon-library.html: Tasks */}
+			<symbol id="i-listCheck" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M9.30002 5.6C9.6314 5.15817 9.54185 4.53137 9.10003 4.2C8.6582 3.86863 8.0314 3.95817 7.70003 4.4L5.33158 7.55792L4.64021 6.98178C4.21593 6.62821 3.58537 6.68554 3.2318 7.10981C2.87824 7.53409 2.93556 8.16465 3.35984 8.51822L4.85984 9.76822C5.07041 9.9437 5.34379 10.025 5.61604 9.99325C5.8883 9.96144 6.13556 9.81928 6.30002 9.6L9.30002 5.6Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M12 7C12 6.44771 12.4477 6 13 6H20C20.5523 6 21 6.44771 21 7C21 7.55228 20.5523 8 20 8H13C12.4477 8 12 7.55228 12 7Z"
+						fill="currentColor"
+					/>
+					<path
+						fillRule="evenodd"
+						clipRule="evenodd"
+						d="M6.00003 14C4.34317 14 3.00003 15.3431 3.00003 17C3.00003 18.6569 4.34317 20 6.00003 20C7.65688 20 9.00002 18.6569 9.00002 17C9.00002 15.3431 7.65688 14 6.00003 14ZM5.00003 17C5.00003 16.4477 5.44774 16 6.00003 16C6.55231 16 7.00002 16.4477 7.00002 17C7.00002 17.5523 6.55231 18 6.00003 18C5.44774 18 5.00003 17.5523 5.00003 17Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M13 16C12.4477 16 12 16.4477 12 17C12 17.5523 12.4477 18 13 18H20C20.5523 18 21 17.5523 21 17C21 16.4477 20.5523 16 20 16H13Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			<symbol
 				id="i-layers"
@@ -796,16 +802,15 @@ export function IconSprite() {
 				<ellipse cx="9" cy="9" rx="6.75" ry="3.25" transform="rotate(-25 9 9)" />
 				<circle cx="14.4" cy="6.1" r="1.1" fill="currentColor" stroke="none" />
 			</symbol>
-			<symbol
-				id="i-paperclip"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.5"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M12.75 7.5 7.9 12.35a2.5 2.5 0 0 1-3.54-3.54l5.3-5.3a1.75 1.75 0 0 1 2.48 2.48l-5.3 5.3a1 1 0 0 1-1.42-1.42l4.6-4.6" />
+			{/* icon-library.html: Paperclip */}
+			<symbol id="i-paperclip" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						clipRule="evenodd"
+						d="M9 7C9 4.23858 11.2386 2 14 2C16.7614 2 19 4.23858 19 7V15C19 18.866 15.866 22 12 22C8.13401 22 5 18.866 5 15V9C5 8.44772 5.44772 8 6 8C6.55228 8 7 8.44772 7 9V15C7 17.7614 9.23858 20 12 20C14.7614 20 17 17.7614 17 15V7C17 5.34315 15.6569 4 14 4C12.3431 4 11 5.34315 11 7V15C11 15.5523 11.4477 16 12 16C12.5523 16 13 15.5523 13 15V9C13 8.44772 13.4477 8 14 8C14.5523 8 15 8.44772 15 9V15C15 16.6569 13.6569 18 12 18C10.3431 18 9 16.6569 9 15V7Z"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Close */}
 			<symbol id="i-close-sm" viewBox="0 0 24 24" fill="none">
@@ -824,16 +829,15 @@ export function IconSprite() {
 					strokeLinejoin="round"
 				/>
 			</symbol>
-			<symbol
-				id="i-cube"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.4"
-				strokeLinejoin="round"
-			>
-				<path d="M9 2.25 15.25 5.5v7L9 15.75 2.75 12.5v-7z" />
-				<path d="M2.75 5.5 9 8.75l6.25-3.25M9 8.75v7" />
+			{/* icon-library.html: Cube */}
+			<symbol id="i-cube" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M12.5 3.444a1 1 0 0 0-1 0l-6.253 3.61 6.768 3.807 6.955-3.682-6.47-3.735Zm7.16 5.632L13 12.602v7.666l6.16-3.556a1 1 0 0 0 .5-.867V9.076ZM11 20.268v-7.683L4.34 8.839v7.006a1 1 0 0 0 .5.867L11 20.268Zm-.5-18.557a3 3 0 0 1 3 0l6.66 3.846a3 3 0 0 1 1.5 2.598v7.69a3 3 0 0 1-1.5 2.598L13.5 22.29a3 3 0 0 1-3 0l-6.66-3.846a3 3 0 0 1-1.5-2.598v-7.69a3 3 0 0 1 1.5-2.598L10.5 1.71Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Check */}
 			<symbol id="i-check" viewBox="0 0 24 24" fill="none">
@@ -876,15 +880,15 @@ export function IconSprite() {
 					strokeLinejoin="round"
 				/>
 			</symbol>
-			<symbol
-				id="i-zap"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.5"
-				strokeLinejoin="round"
-			>
-				<path d="M10.25 2 4.5 9.75h3.75l-.5 5.75L13.5 8.25H9.75z" />
+			{/* icon-library.html: Bolt */}
+			<symbol id="i-zap" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M15.24 3.486v.002l-1.056 4.517h5.823c1.726 0 2.596 2.021 1.518 3.3l-.002.003-9.308 10.965-.002.002c-1.397 1.656-3.922.223-3.454-1.76v-.003l1.057-4.517H3.993c-1.726 0-2.596-2.021-1.519-3.3l.003-.003 9.308-10.965.002-.002c1.397-1.656 3.922-.223 3.454 1.76Zm-1.95-.444-1.34 5.735a.998.998 0 0 0 .973 1.226h7.074a.04.04 0 0 1 .003.01.045.045 0 0 1-.004.005l-9.287 10.94 1.341-5.735a.998.998 0 0 0-.973-1.226H4.003a.041.041 0 0 1-.003-.01l.004-.005 9.287-10.94Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Regenerate */}
 			<symbol id="i-loop" viewBox="0 0 24 24" fill="none">
@@ -905,13 +909,25 @@ export function IconSprite() {
 				<path d="M3 4.5h12M3 9h9.75a2.25 2.25 0 0 1 0 4.5H9.5M3 13.5h3.5" />
 				<path d="m11 11.75-1.75 1.75L11 15.25" />
 			</symbol>
-			<symbol id="i-panelRight" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-				<rect x="1.75" y="2.75" width="14.5" height="12.5" rx="2" />
-				<path d="M11.5 2.75v12.5" />
+			{/* icon-library.html: SidebarRight */}
+			<symbol id="i-panelRight" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M18 5a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-2V5h2Zm-4 0v14H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h8Zm7 1a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3V6Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
-			<symbol id="i-tag" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.45">
-				<path d="M2.75 3h6l6.5 6.5-5.75 5.75L3 8.75z" />
-				<circle cx="6" cy="6.25" r="1" fill="currentColor" stroke="none" />
+			{/* icon-library.html: Tag */}
+			<symbol id="i-tag" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M4 5a1 1 0 0 1 1-1h6.172a1 1 0 0 1 .707.293l8 8a1 1 0 0 1 0 1.414l-6.172 6.172a1 1 0 0 1-1.414 0l-8-8A1 1 0 0 1 4 11.172V5Zm1-3a3 3 0 0 0-3 3v6.172a3 3 0 0 0 .879 2.12l8 8a3 3 0 0 0 4.242 0l6.172-6.17a3 3 0 0 0 0-4.243l-8-8A3 3 0 0 0 11.172 2H5Zm3 7a1 1 0 1 1 2 0 1 1 0 0 1-2 0Zm1-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Clock */}
 			<symbol id="i-clock" viewBox="0 0 24 24" fill="none">
@@ -930,15 +946,25 @@ export function IconSprite() {
 					strokeLinejoin="round"
 				/>
 			</symbol>
-			<symbol
-				id="i-puzzle"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.4"
-				strokeLinejoin="round"
-			>
-				<path d="M6.5 2.5a1.5 1.5 0 0 1 3 0c0 .6-.4.9-.4 1.5h2.4a1 1 0 0 1 1 1v2.4c.6 0 .9-.4 1.5-.4a1.5 1.5 0 0 1 0 3c-.6 0-.9-.4-1.5-.4v2.4a1 1 0 0 1-1 1H9.1c0 .6.4.9.4 1.5a1.5 1.5 0 0 1-3 0c0-.6.4-.9.4-1.5H4.5a1 1 0 0 1-1-1V8.9c-.6 0-.9.4-1.5.4a1.5 1.5 0 0 1 0-3c.6 0 .9.4 1.5.4V5a1 1 0 0 1 1-1h2.4c0-.6-.4-.9-.4-1.5z" />
+			{/* icon-library.html: PluginList */}
+			<symbol id="i-puzzle" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M5.20945 18.4406C4.6202 18.137 4.14113 17.6525 3.8409 17.0567C3.53632 16.4522 3.50353 15.6811 3.5 14.2619H3.94737C5.18274 14.2619 6.18421 13.2492 6.18421 12C6.18421 10.7508 5.18274 9.7381 3.94737 9.7381H3.5C3.50353 8.31893 3.53632 7.54777 3.8409 6.94332C4.14113 6.34747 4.6202 5.86303 5.20945 5.55943C5.86784 5.22021 6.72623 5.21439 8.42063 5.21429V4.7619C8.42063 3.51269 9.4221 2.5 10.6575 2.5C11.8928 2.5 12.8943 3.51269 12.8943 4.7619V5.21429C14.5887 5.21439 15.4471 5.22021 16.1055 5.55943C16.6947 5.86303 17.1738 6.34747 17.474 6.94332C17.7786 7.54777 17.8114 8.31893 17.8149 9.7381H18.2632C19.4985 9.7381 20.5 10.7508 20.5 12C20.5 13.2492 19.4985 14.2619 18.2632 14.2619H17.8149C17.8114 15.6811 17.7786 16.4522 17.474 17.0567C17.1738 17.6525 16.6947 18.137 16.1055 18.4406C15.4471 18.7798 14.5887 18.7856 12.8943 18.7857L12.8943 19.2381C12.8943 20.4873 11.8928 21.5 10.6575 21.5C9.4221 21.5 8.42063 20.4873 8.42063 19.2381L8.42063 18.7857C6.72623 18.7856 5.86784 18.7798 5.20945 18.4406Z"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					stroke="currentColor"
+				/>
+			</symbol>
+			{/* icon-library.html: PluginMarket. Only the sidebar entry; plugin lists keep `puzzle`. */}
+			<symbol id="i-pluginMarket" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M6.90039 13C7.35387 13 7.73907 12.9999 8.05566 13.0215C8.38023 13.0436 8.69821 13.0917 9.00977 13.2207C9.72035 13.515 10.2857 14.0804 10.5801 14.791C10.709 15.1026 10.7572 15.4206 10.7793 15.7451C10.8009 16.0617 10.8008 16.4469 10.8008 16.9004C10.8008 17.3539 10.8009 17.7391 10.7793 18.0557C10.7572 18.3802 10.709 18.6982 10.5801 19.0098C10.2857 19.7203 9.72035 20.2857 9.00977 20.5801C8.69821 20.709 8.38023 20.7572 8.05566 20.7793C7.73907 20.8009 7.35387 20.8008 6.90039 20.8008C6.44691 20.8008 6.06171 20.8009 5.74512 20.7793C5.42055 20.7572 5.10257 20.709 4.79102 20.5801C4.08043 20.2857 3.51504 19.7203 3.2207 19.0098C3.09174 18.6982 3.04363 18.3802 3.02148 18.0557C2.9999 17.7391 3 17.3539 3 16.9004C3 16.4469 2.9999 16.0617 3.02148 15.7451C3.04363 15.4206 3.09174 15.1026 3.2207 14.791C3.51504 14.0804 4.08043 13.515 4.79102 13.2207C5.10257 13.0917 5.42055 13.0436 5.74512 13.0215C6.06171 12.9999 6.44691 13 6.90039 13ZM17 13C17.4535 13 17.8387 12.9999 18.1553 13.0215C18.4798 13.0436 18.7978 13.0917 19.1094 13.2207C19.82 13.515 20.3854 14.0804 20.6797 14.791C20.8086 15.1026 20.8568 15.4206 20.8789 15.7451C20.9005 16.0617 20.9004 16.4469 20.9004 16.9004C20.9004 17.3539 20.9005 17.7391 20.8789 18.0557C20.8568 18.3802 20.8086 18.6982 20.6797 19.0098C20.3854 19.7203 19.82 20.2857 19.1094 20.5801C18.7978 20.709 18.4798 20.7572 18.1553 20.7793C17.8387 20.8009 17.4535 20.8008 17 20.8008C16.5465 20.8008 16.1613 20.8009 15.8447 20.7793C15.5202 20.7572 15.2022 20.709 14.8906 20.5801C14.18 20.2857 13.6146 19.7203 13.3203 19.0098C13.1914 18.6982 13.1432 18.3802 13.1211 18.0557C13.0995 17.7391 13.0996 17.3539 13.0996 16.9004C13.0996 16.4469 13.0995 16.0617 13.1211 15.7451C13.1432 15.4206 13.1914 15.1026 13.3203 14.791C13.6146 14.0804 14.18 13.515 14.8906 13.2207C15.2022 13.0917 15.5202 13.0436 15.8447 13.0215C16.1613 12.9999 16.5465 13 17 13ZM6.90039 14.8008C6.42214 14.8008 6.10836 14.8009 5.86719 14.8174C5.63444 14.8333 5.53534 14.8607 5.47949 14.8838C5.20996 14.9954 4.99543 15.21 4.88379 15.4795C4.86068 15.5353 4.83327 15.6344 4.81738 15.8672C4.80093 16.1084 4.80078 16.4221 4.80078 16.9004C4.80078 17.3786 4.80093 17.6924 4.81738 17.9336C4.83327 18.1663 4.86068 18.2654 4.88379 18.3213C4.99543 18.5908 5.20996 18.8053 5.47949 18.917C5.53534 18.9401 5.63444 18.9675 5.86719 18.9834C6.10836 18.9999 6.42214 19 6.90039 19C7.37865 19 7.69242 18.9999 7.93359 18.9834C8.16634 18.9675 8.26544 18.9401 8.32129 18.917C8.59082 18.8053 8.80535 18.5908 8.91699 18.3213C8.9401 18.2654 8.96751 18.1663 8.9834 17.9336C8.99985 17.6924 9 17.3786 9 16.9004C9 16.4221 8.99985 16.1084 8.9834 15.8672C8.96751 15.6344 8.9401 15.5353 8.91699 15.4795C8.80535 15.21 8.59082 14.9954 8.32129 14.8838C8.26544 14.8607 8.16634 14.8333 7.93359 14.8174C7.69242 14.8009 7.37865 14.8008 6.90039 14.8008ZM17 14.8008C16.5217 14.8008 16.208 14.8009 15.9668 14.8174C15.734 14.8333 15.6349 14.8607 15.5791 14.8838C15.3096 14.9954 15.095 15.21 14.9834 15.4795C14.9603 15.5353 14.9329 15.6344 14.917 15.8672C14.9005 16.1084 14.9004 16.4221 14.9004 16.9004C14.9004 17.3786 14.9005 17.6924 14.917 17.9336C14.9329 18.1663 14.9603 18.2654 14.9834 18.3213C15.095 18.5908 15.3096 18.8053 15.5791 18.917C15.6349 18.9401 15.734 18.9675 15.9668 18.9834C16.208 18.9999 16.5217 19 17 19C17.4783 19 17.792 18.9999 18.0332 18.9834C18.266 18.9675 18.3651 18.9401 18.4209 18.917C18.6904 18.8053 18.905 18.5908 19.0166 18.3213C19.0397 18.2654 19.0671 18.1663 19.083 17.9336C19.0995 17.6924 19.0996 17.3786 19.0996 16.9004C19.0996 16.4221 19.0995 16.1084 19.083 15.8672C19.0671 15.6344 19.0397 15.5353 19.0166 15.4795C18.905 15.21 18.6904 14.9954 18.4209 14.8838C18.3651 14.8607 18.266 14.8333 18.0332 14.8174C17.792 14.8009 17.4783 14.8008 17 14.8008ZM6.90039 3C7.35387 3 7.73907 2.9999 8.05566 3.02148C8.38023 3.04363 8.69821 3.09174 9.00977 3.2207C9.72035 3.51504 10.2857 4.08043 10.5801 4.79102C10.709 5.10257 10.7572 5.42055 10.7793 5.74512C10.8009 6.06171 10.8008 6.44691 10.8008 6.90039C10.8008 7.35387 10.8009 7.73907 10.7793 8.05566C10.7572 8.38023 10.709 8.69821 10.5801 9.00977C10.2857 9.72035 9.72035 10.2857 9.00977 10.5801C8.69821 10.709 8.38023 10.7572 8.05566 10.7793C7.73907 10.8009 7.35387 10.8008 6.90039 10.8008C6.44691 10.8008 6.06171 10.8009 5.74512 10.7793C5.42055 10.7572 5.10257 10.709 4.79102 10.5801C4.08043 10.2857 3.51504 9.72035 3.2207 9.00977C3.09174 8.69821 3.04363 8.38023 3.02148 8.05566C2.9999 7.73907 3 7.35387 3 6.90039C3 6.44691 2.9999 6.06171 3.02148 5.74512C3.04363 5.42055 3.09174 5.10257 3.2207 4.79102C3.51504 4.08043 4.08043 3.51504 4.79102 3.2207C5.10257 3.09174 5.42055 3.04363 5.74512 3.02148C6.06171 2.9999 6.44691 3 6.90039 3ZM17 3C17.4535 3 17.8387 2.9999 18.1553 3.02148C18.4798 3.04363 18.7978 3.09174 19.1094 3.2207C19.82 3.51504 20.3854 4.08043 20.6797 4.79102C20.8086 5.10257 20.8568 5.42055 20.8789 5.74512C20.9005 6.06171 20.9004 6.44691 20.9004 6.90039C20.9004 7.35387 20.9005 7.73907 20.8789 8.05566C20.8568 8.38023 20.8086 8.69821 20.6797 9.00977C20.3854 9.72035 19.82 10.2857 19.1094 10.5801C18.7978 10.709 18.4798 10.7572 18.1553 10.7793C17.8387 10.8009 17.4535 10.8008 17 10.8008C16.5465 10.8008 16.1613 10.8009 15.8447 10.7793C15.5202 10.7572 15.2022 10.709 14.8906 10.5801C14.18 10.2857 13.6146 9.72035 13.3203 9.00977C13.1914 8.69821 13.1432 8.38023 13.1211 8.05566C13.0995 7.73907 13.0996 7.35387 13.0996 6.90039C13.0996 6.44691 13.0995 6.06171 13.1211 5.74512C13.1432 5.42055 13.1914 5.10257 13.3203 4.79102C13.6146 4.08043 14.18 3.51504 14.8906 3.2207C15.2022 3.09174 15.5202 3.04363 15.8447 3.02148C16.1613 2.9999 16.5465 3 17 3ZM6.90039 4.80078C6.42214 4.80078 6.10836 4.80093 5.86719 4.81738C5.63444 4.83327 5.53534 4.86068 5.47949 4.88379C5.20996 4.99543 4.99543 5.20996 4.88379 5.47949C4.86068 5.53534 4.83327 5.63444 4.81738 5.86719C4.80093 6.10836 4.80078 6.42214 4.80078 6.90039C4.80078 7.37865 4.80093 7.69242 4.81738 7.93359C4.83327 8.16634 4.86068 8.26544 4.88379 8.32129C4.99543 8.59082 5.20996 8.80535 5.47949 8.91699C5.53534 8.9401 5.63444 8.96751 5.86719 8.9834C6.10836 8.99985 6.42214 9 6.90039 9C7.37865 9 7.69242 8.99985 7.93359 8.9834C8.16634 8.96751 8.26544 8.9401 8.32129 8.91699C8.59082 8.80535 8.80535 8.59082 8.91699 8.32129C8.9401 8.26544 8.96751 8.16634 8.9834 7.93359C8.99985 7.69242 9 7.37865 9 6.90039C9 6.42214 8.99985 6.10836 8.9834 5.86719C8.96751 5.63444 8.9401 5.53534 8.91699 5.47949C8.80535 5.20996 8.59082 4.99543 8.32129 4.88379C8.26544 4.86068 8.16634 4.83327 7.93359 4.81738C7.69242 4.80093 7.37865 4.80078 6.90039 4.80078ZM17 4.80078C16.5217 4.80078 16.208 4.80093 15.9668 4.81738C15.734 4.83327 15.6349 4.86068 15.5791 4.88379C15.3096 4.99543 15.095 5.20996 14.9834 5.47949C14.9603 5.53534 14.9329 5.63444 14.917 5.86719C14.9005 6.10836 14.9004 6.42214 14.9004 6.90039C14.9004 7.37865 14.9005 7.69242 14.917 7.93359C14.9329 8.16634 14.9603 8.26544 14.9834 8.32129C15.095 8.59082 15.3096 8.80535 15.5791 8.91699C15.6349 8.9401 15.734 8.96751 15.9668 8.9834C16.208 8.99985 16.5217 9 17 9C17.4783 9 17.792 8.99985 18.0332 8.9834C18.266 8.96751 18.3651 8.9401 18.4209 8.91699C18.6904 8.80535 18.905 8.59082 19.0166 8.32129C19.0397 8.26544 19.0671 8.16634 19.083 7.93359C19.0995 7.69242 19.0996 7.37865 19.0996 6.90039C19.0996 6.42214 19.0995 6.10836 19.083 5.86719C19.0671 5.63444 19.0397 5.53534 19.0166 5.47949C18.905 5.20996 18.6904 4.99543 18.4209 4.88379C18.3651 4.86068 18.266 4.83327 18.0332 4.81738C17.792 4.80093 17.4783 4.80078 17 4.80078Z"
+					fill="currentColor"
+					stroke="currentColor"
+					strokeWidth="0.2"
+					strokeLinejoin="round"
+				/>
 			</symbol>
 			{/* icon-library.html: Help */}
 			<symbol id="i-question" viewBox="0 0 24 24" fill="none">
@@ -980,17 +1006,15 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			<symbol
-				id="i-openExternal"
-				viewBox="0 0 18 18"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.4"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M8 3.25H5A1.75 1.75 0 0 0 3.25 5v8A1.75 1.75 0 0 0 5 14.75h8A1.75 1.75 0 0 0 14.75 13v-3" />
-				<path d="M10.5 3.25h4.25V7.5M14.5 3.5 9 9" />
+			{/* icon-library.html: ExternalLink */}
+			<symbol id="i-openExternal" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						fillRule="evenodd"
+						d="M15 5a1 1 0 1 1 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V6.414l-5.293 5.293a1 1 0 0 1-1.414-1.414L17.586 5H15ZM4 7a3 3 0 0 1 3-3h3a1 1 0 1 1 0 2H7a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3a1 1 0 1 1 2 0v3a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7Z"
+						clipRule="evenodd"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: SearchFiles */}
 			<symbol id="i-fileSearch" viewBox="0 0 24 24" fill="none">
@@ -999,9 +1023,18 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			<symbol id="i-mcp" viewBox="0 0 24 24" fill="currentColor">
-				<path d="M15.688 2.343a2.588 2.588 0 0 0-3.61 0l-9.626 9.44a.863.863 0 0 1-1.203 0 .823.823 0 0 1 0-1.18l9.626-9.44a4.313 4.313 0 0 1 6.016 0 4.116 4.116 0 0 1 1.204 3.54 4.3 4.3 0 0 1 3.609 1.18l.05.05a4.115 4.115 0 0 1 0 5.9l-8.706 8.537a.274.274 0 0 0 0 .393l1.788 1.754a.823.823 0 0 1 0 1.18.863.863 0 0 1-1.203 0l-1.788-1.753a1.92 1.92 0 0 1 0-2.754l8.706-8.538a2.47 2.47 0 0 0 0-3.54l-.05-.049a2.588 2.588 0 0 0-3.607-.003l-7.172 7.034-.002.002-.098.097a.863.863 0 0 1-1.204 0 .823.823 0 0 1 0-1.18l7.273-7.133a2.47 2.47 0 0 0-.003-3.537z" />
-				<path d="M14.485 4.703a.823.823 0 0 0 0-1.18.863.863 0 0 0-1.204 0l-7.119 6.982a4.115 4.115 0 0 0 0 5.9 4.314 4.314 0 0 0 6.016 0l7.12-6.982a.823.823 0 0 0 0-1.18.863.863 0 0 0-1.204 0l-7.119 6.982a2.588 2.588 0 0 1-3.61 0 2.47 2.47 0 0 1 0-3.54l7.12-6.982z" />
+			{/* icon-library.html: Mcp. The library ships fill="#222326"; currentColor keeps it visible in dark mode. */}
+			<symbol id="i-mcp" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M11.0164 1.5988C12.5829 0.110099 15.0596 0.134209 16.5965 1.67107L16.6688 1.74528C17.5409 2.66274 17.8934 3.89228 17.7274 5.06267C18.8981 4.89639 20.129 5.24993 21.0467 6.12224L21.12 6.1945L21.1678 6.24138L21.2391 6.3156C22.7046 7.85712 22.7046 10.2809 21.2391 11.8224L21.1678 11.8957L12.9852 20.0783L12.951 20.1203C12.8828 20.2237 12.8942 20.3642 12.9852 20.4552L14.6649 22.1349C14.9771 22.4472 14.9771 22.9535 14.6649 23.2658C14.3526 23.5781 13.8463 23.5781 13.534 23.2658L11.8543 21.5861C11.1371 20.8689 11.1253 19.7126 11.8202 18.9816L20.0799 10.7209C20.9733 9.78107 20.9582 8.29441 20.036 7.37224L19.9891 7.32536L19.9452 7.28239C19.0053 6.38897 17.5188 6.40319 16.5965 7.32536L9.76449 14.1574L9.73422 14.1857C9.42033 14.4693 8.93617 14.4599 8.63363 14.1574C8.32134 13.8451 8.32134 13.3388 8.63363 13.0265L15.5096 6.15056C16.403 5.21073 16.3879 3.7241 15.4657 2.80193L15.287 2.63982C14.3604 1.88141 12.9993 1.92139 12.118 2.75896L12.0731 2.80193L3.02621 11.8488L2.99594 11.8771C2.6821 12.1606 2.19787 12.1511 1.89535 11.8488C1.58306 11.5365 1.58306 11.0302 1.89535 10.7179L10.9422 1.67107L11.0164 1.5988Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M13.2342 3.90446C13.548 3.62095 14.0323 3.63053 14.3348 3.93278C14.6471 4.24506 14.6471 4.75137 14.3348 5.06364L7.64438 11.7551C6.70764 12.6918 6.70752 14.2108 7.64438 15.1476C8.58124 16.084 10.1002 16.0842 11.037 15.1476L17.7284 8.45622C18.0407 8.14415 18.547 8.14402 18.8592 8.45622C19.1713 8.76845 19.1713 9.27484 18.8592 9.58708L12.1678 16.2785C10.6308 17.8152 8.15316 17.8385 6.58676 16.3498L6.51352 16.2785C4.95212 14.7171 4.9521 12.1856 6.51352 10.6242L13.2039 3.93278L13.2342 3.90446Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Settings */}
 			<symbol id="i-cog" viewBox="0 0 24 24" fill="none">
@@ -1030,20 +1063,30 @@ export function IconSprite() {
 					strokeLinecap="round"
 				/>
 			</symbol>
-			<symbol
-				id="i-palette"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.12a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2z" />
-				<circle cx="13.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-				<circle cx="17.5" cy="10.5" r="1" fill="currentColor" stroke="none" />
-				<circle cx="8.5" cy="7.5" r="1" fill="currentColor" stroke="none" />
-				<circle cx="6.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
+			{/* icon-library.html: ColorTheme */}
+			<symbol id="i-palette" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M8.25 13.25C9.07843 13.25 9.75 13.9216 9.75 14.75C9.75 15.5784 9.07843 16.25 8.25 16.25C7.42157 16.25 6.75 15.5784 6.75 14.75C6.75 13.9216 7.42157 13.25 8.25 13.25Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M7.5 8.5C8.32843 8.5 9 9.17157 9 10C9 10.8284 8.32843 11.5 7.5 11.5C6.67157 11.5 6 10.8284 6 10C6 9.17157 6.67157 8.5 7.5 8.5Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M15.75 7.25C16.5784 7.25 17.25 7.92157 17.25 8.75C17.25 9.57843 16.5784 10.25 15.75 10.25C14.9216 10.25 14.25 9.57843 14.25 8.75C14.25 7.92157 14.9216 7.25 15.75 7.25Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M11.25 5.5C12.0784 5.5 12.75 6.17157 12.75 7C12.75 7.82843 12.0784 8.5 11.25 8.5C10.4216 8.5 9.75 7.82843 9.75 7C9.75 6.17157 10.4216 5.5 11.25 5.5Z"
+						fill="currentColor"
+					/>
+					<path
+						d="M12 2C17.5228 2 22 6.47715 22 12C22 14.03 20.3542 15.6758 18.3242 15.6758H14.3672C14.0151 15.6758 13.7295 15.9614 13.7295 16.3135C13.7295 16.4527 13.7751 16.5884 13.8594 16.6992L14.7617 17.8857C15.0515 18.267 15.2089 18.733 15.209 19.2119C15.209 20.7515 13.9605 22 12.4209 22H12C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM12 4C7.58172 4 4 7.58172 4 12C4 16.4183 7.58172 20 12 20H12.4209C12.8559 20 13.209 19.6469 13.209 19.2119C13.2089 19.1703 13.195 19.1299 13.1699 19.0967L12.2676 17.9092C11.9188 17.4503 11.7295 16.8898 11.7295 16.3135C11.7295 14.8568 12.9106 13.6758 14.3672 13.6758H18.3242C19.2497 13.6758 20 12.9255 20 12C20 7.58172 16.4183 4 12 4Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			<symbol
 				id="i-wand"
@@ -1117,16 +1160,14 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 			</symbol>
-			<symbol
-				id="i-prompt"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			>
-				<path d="m4 17 6-6-6-6M12 19h8" />
+			{/* icon-library.html: TerminalLg */}
+			<symbol id="i-prompt" viewBox="0 0 24 24" fill="none">
+				<g fill="currentColor">
+					<path
+						d="M2.29289 4.29289C2.68342 3.90237 3.31658 3.90237 3.70711 4.29289L10.7071 11.2929C11.0976 11.6834 11.0976 12.3166 10.7071 12.7071L3.70711 19.7071C3.31658 20.0976 2.68342 20.0976 2.29289 19.7071C1.90237 19.3166 1.90237 18.6834 2.29289 18.2929L8.58579 12L2.29289 5.70711C1.90237 5.31658 1.90237 4.68342 2.29289 4.29289ZM12 19C12 18.4477 12.4477 18 13 18H21C21.5523 18 22 18.4477 22 19C22 19.5523 21.5523 20 21 20H13C12.4477 20 12 19.5523 12 19Z"
+						fill="currentColor"
+					/>
+				</g>
 			</symbol>
 			{/* icon-library.html: Repair */}
 			<symbol id="i-wrench" viewBox="0 0 24 24" fill="none">

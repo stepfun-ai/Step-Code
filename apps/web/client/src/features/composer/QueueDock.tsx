@@ -187,7 +187,7 @@ export function QueueDock() {
 												disabled={busy !== null}
 												onClick={() => void run(item.id, { kind: "steer", id: item.id })}
 											>
-												<Icon name="up" size="sm" />
+												<Icon name="up" size="md" />
 											</button>
 										</Tooltip>
 									</>

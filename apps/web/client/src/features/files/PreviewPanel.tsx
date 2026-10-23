@@ -24,21 +24,24 @@ import { ChangesView } from "./ChangesView";
 import { isMarkdownPath } from "./highlight";
 import { PreviewBody, PreviewPath, useActiveTab } from "./PreviewBody";
 import { PreviewTabs } from "./PreviewTabs";
+import { clearSideAnswers } from "./side-answers";
 
 function PreviewTools() {
 	const t = useT();
 	const tab = useActiveTab();
 	const wrap = useAppStore((state) => state.preview.wrap);
-	const file = tab?.file;
+	const file = tab?.kind === "file" ? tab.file : undefined;
 	const text = file?.kind === "text";
 	const markdown = text && isMarkdownPath(file.path);
+	const isFile = tab?.kind === "file";
+	const rendered = tab?.kind === "file" && tab.rendered;
 	return (
 		<div className="preview-tools">
 			<IconButton
 				id="previewMode"
 				icon="eye"
 				iconSize="sm"
-				aria-pressed={Boolean(tab?.rendered)}
+				aria-pressed={rendered}
 				title={t("renderedPreview")}
 				aria-label={t("renderedPreview")}
 				hidden={!markdown}
@@ -51,7 +54,7 @@ function PreviewTools() {
 				aria-pressed={wrap}
 				title={t("wrapLines")}
 				aria-label={t("wrapLines")}
-				hidden={!text || Boolean(markdown && tab?.rendered)}
+				hidden={!text || Boolean(markdown && rendered)}
 				// Legacy toggled `.code-view.wrap` in the click handler itself; callers read it right after.
 				onClick={() => flushSync(togglePreviewWrap)}
 			/>
@@ -61,7 +64,7 @@ function PreviewTools() {
 				iconSize="sm"
 				title={t("reloadFile")}
 				aria-label={t("reloadFile")}
-				hidden={!tab}
+				hidden={!isFile}
 				onClick={reloadActivePreview}
 			/>
 			<IconButton
@@ -73,6 +76,15 @@ function PreviewTools() {
 				hidden={!text}
 				onClick={copyActivePreview}
 			/>
+			<IconButton
+				id="previewClearSideAnswers"
+				icon="trash"
+				iconSize="sm"
+				title={t("btwClear")}
+				aria-label={t("btwClearHint")}
+				hidden={tab?.kind !== "btw"}
+				onClick={() => void clearSideAnswers()}
+			/>
 		</div>
 	);
 }
@@ -81,7 +93,12 @@ export function PreviewPanel({ embedded = false }: { readonly embedded?: boolean
 	const t = useT();
 	const open = useAppStore((state) => state.preview.open);
 	const changes = useAppStore((state) => state.preview.mode === "changes");
+	const active = useActiveTab();
+	/* With no file open the tab strip and path toolbar would be empty bars above the empty state. */
+	const hasTab = Boolean(active);
 	const panelRef = useRef<HTMLElement>(null);
+	// The panel names what it is showing: a file, a diff, or a side question.
+	const title = active?.kind === "btw" ? t("rightBtw") : t("filePreview");
 
 	// Before the first paint: restoring the width here avoids a jump from the default.
 	useLayoutEffect(() => {
@@ -91,14 +108,7 @@ export function PreviewPanel({ embedded = false }: { readonly embedded?: boolean
 	const panelWidth = () => panelRef.current?.getBoundingClientRect().width ?? PREVIEW_DEFAULT;
 
 	return (
-		<aside
-			className="preview-panel"
-			id="previewPanel"
-			ref={panelRef}
-			title={t("filePreview")}
-			aria-label={t("filePreview")}
-			hidden={!open}
-		>
+		<aside className="preview-panel" id="previewPanel" ref={panelRef} title={title} aria-label={title} hidden={!open}>
 			<ResizeHandle
 				bare
 				className="preview-resizer"
@@ -112,7 +122,7 @@ export function PreviewPanel({ embedded = false }: { readonly embedded?: boolean
 				hidden={embedded}
 			/>
 			<ChangesView hidden={!open || !changes} embedded={embedded} />
-			<div className="preview-tabs-row" hidden={changes}>
+			<div className="preview-tabs-row" hidden={changes || (embedded && !hasTab)}>
 				<PreviewTabs />
 				<IconButton
 					id="previewClose"
@@ -123,7 +133,7 @@ export function PreviewPanel({ embedded = false }: { readonly embedded?: boolean
 					hidden={embedded}
 				/>
 			</div>
-			<div className="preview-toolbar" hidden={changes}>
+			<div className="preview-toolbar" hidden={changes || !hasTab}>
 				<PreviewPath />
 				<PreviewTools />
 			</div>

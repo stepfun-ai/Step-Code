@@ -39,14 +39,18 @@ export function useDismiss({
 			if (latest.current.insideRefs.some((ref) => ref.current?.contains(target))) return;
 			latest.current.onDismiss("outside");
 		};
+		// Capture phase, so the overlay hears Escape before the shell's document listener; marking the
+		// event handled tells that chain this press closed a layer already and must not close the next.
 		const onKeyDown = (keyEvent: KeyboardEvent) => {
-			if (keyEvent.key === "Escape") latest.current.onDismiss("escape");
+			if (keyEvent.key !== "Escape") return;
+			keyEvent.preventDefault();
+			latest.current.onDismiss("escape");
 		};
 		if (event) document.addEventListener(event, onPress);
-		if (closeOnEscape) document.addEventListener("keydown", onKeyDown);
+		if (closeOnEscape) document.addEventListener("keydown", onKeyDown, true);
 		return () => {
 			if (event) document.removeEventListener(event, onPress);
-			if (closeOnEscape) document.removeEventListener("keydown", onKeyDown);
+			if (closeOnEscape) document.removeEventListener("keydown", onKeyDown, true);
 		};
 	}, [enabled, event, closeOnEscape]);
 }

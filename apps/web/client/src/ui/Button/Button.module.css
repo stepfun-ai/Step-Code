@@ -17,13 +17,24 @@
 
 .primary {
 	border: 0;
-	background: var(--ink);
-	color: var(--canvas);
+	background: var(--action);
+	color: var(--action-ink);
+	font-weight: 500;
+	transition: background-color var(--fast);
+}
+
+.primary:hover:not(:disabled) {
+	background: var(--action-hover);
 }
 
 .secondary {
-	border: 1px solid var(--line);
+	border: 1px solid var(--line-strong);
 	background: var(--surface);
+	transition: background-color var(--fast);
+}
+
+.secondary:hover:not(:disabled) {
+	background: var(--surface-soft);
 }
 
 .root:disabled {

@@ -107,5 +107,7 @@ export function ThinkingElapsed({
 		return () => clearInterval(timer);
 	}, [running]);
 	if (!timing || (!running && timing.endedAt === undefined)) return null;
+	// A settled sub-second think would only print "0s"; the label adds nothing.
+	if (!running && (timing.endedAt ?? 0) - timing.startedAt < 1000) return null;
 	return <span className="thinking-elapsed">{t(labelKey, { duration: thinkingElapsed(timing, now) })}</span>;
 }

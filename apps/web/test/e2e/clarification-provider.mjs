@@ -29,16 +29,67 @@ export const clarificationQuestions = [
   },
 ];
 
+/** Text of a chat message, whichever content shape the adapter produced. */
+function messageText(message) {
+  return Array.isArray(message.content)
+    ? message.content.map((part) => part.text ?? "").join("\n")
+    : String(message.content ?? "");
+}
+
+/**
+ * The plan file the host names, so the fixture writes where plan mode allows.
+ * The reminder quotes it; the `exit_plan_mode` result lists it bare.
+ */
+function planPathFrom(messages) {
+  for (const message of [...messages].reverse()) {
+    const match = /Plan file: (?:"((?:[^"\\]|\\.)*)"|(\S+))/u.exec(messageText(message));
+    if (match) return match[1] === undefined ? match[2] : JSON.parse(`"${match[1]}"`);
+  }
+  return undefined;
+}
+
+/** The request-local plan-mode reminder, appended to every model request while planning. */
+function isPlanReminder(message) {
+  return messageText(message).trimStart().startsWith("<system-reminder>Plan mode is ON.");
+}
+
+/** One streamed tool call, the shape the OpenAI adapter turns into a kernel tool call. */
+function toolCallDelta(name, args, id) {
+  return { tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
+}
+
 export async function clarificationCompletion(request, response) {
   let raw = "";
   for await (const chunk of request) raw += chunk;
   const input = JSON.parse(raw);
   const last = input.messages.at(-1);
-  const text = Array.isArray(last.content) ? last.content.map((part) => part.text ?? "").join("\n") : String(last.content);
+  const text = messageText(last);
   const cancelled = last.role === "tool" && text.includes("User clarification cancelled");
+  // The host also sends text-only calls (the session-title sidecar) that carry
+  // no tools; they arrive after a turn, sometimes after this suite has finished,
+  // so a `.find` on a missing list was an unhandled rejection in the run.
+  const tools = Array.isArray(input.tools) ? input.tools : [];
   let delta;
-  if (last.role === "user" && text.includes("approval-fixture")) {
-    const tool = input.tools.find((item) => item.function.name === "bash") ?? input.tools.find((item) => item.function.name === "run_command");
+  if (!tools.length) {
+    delta = { content: "fixture text reply" };
+  } else if (input.messages.some((message) => messageText(message).includes("plan-fixture"))) {
+    // Plan mode: write the proposal where the host says it may, then submit it
+    // once. The `exit_plan_mode` result is the only message that mentions plan
+    // mode itself, which is how the fixture tells the two tool results apart.
+    // The reminder trails every request, so the turn's own message is before it.
+    const turn = [...input.messages].reverse().find((message) => !isPlanReminder(message)) ?? last;
+    const turnText = messageText(turn);
+    if (turn.role === "tool" && turnText.includes("Plan mode")) {
+      delta = { content: "The proposal is submitted." };
+    } else if (turn.role === "user") {
+      const planPath = planPathFrom(input.messages);
+      if (!planPath) throw new Error("plan fixture: the host named no plan file");
+      delta = toolCallDelta("write_file", { path: planPath, content: "# Plan fixture\n\n1. Read the fixture files.\n" }, `plan-write-${input.messages.length}`);
+    } else {
+      delta = toolCallDelta("exit_plan_mode", {}, `plan-exit-${input.messages.length}`);
+    }
+  } else if (last.role === "user" && text.includes("approval-fixture")) {
+    const tool = tools.find((item) => item.function.name === "bash") ?? tools.find((item) => item.function.name === "run_command");
     const path = text.includes("denied") ? "approval-denied.txt" : text.includes("remembered") ? "approval-remembered.txt" : "approval-result.txt";
     const command = `printf '%s\\n' '${"approval command preview ".repeat(24)}' > ${path}\n# exact-end-of-command`;
     delta = { tool_calls: [{ index: 0, id: `approval-call-${input.messages.length}`, type: "function", function: {
@@ -51,7 +102,7 @@ export async function clarificationCompletion(request, response) {
       arguments: JSON.stringify({ questions: freeform ? [{ id: "custom", question: "写下你的回答", allow_freeform: true }] : clarificationQuestions }),
     } }] };
   } else if (last.role === "tool" && text.includes("source:") && !cancelled) {
-    const write = input.tools.find((tool) => tool.function.name === "write_file") ?? input.tools.find((tool) => tool.function.name === "write");
+    const write = tools.find((tool) => tool.function.name === "write_file") ?? tools.find((tool) => tool.function.name === "write");
     delta = { tool_calls: [{ index: 0, id: "write-call", type: "function", function: {
       name: write.function.name, arguments: JSON.stringify({ path: "clarification-result.txt", content: text.replaceAll("\\n", "\n") }),
     } }] };

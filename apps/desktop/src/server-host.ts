@@ -17,6 +17,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
+import { readReleaseEnvelope, withReleaseIdentity } from "./release-envelope.ts";
 
 const LOOPBACK = "127.0.0.1";
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
@@ -147,15 +148,24 @@ export async function launchWebServer(options: WebServerLaunchOptions): Promise<
 		`\n--- ${new Date().toISOString()} starting ${options.entry} on ${origin} (node: ${options.node.command}${options.node.electron ? " as node" : ""}) ---\n`,
 	);
 
-	const environment: NodeJS.ProcessEnv = {
-		...options.environment,
-		STEPCODE_WEB_PORT: String(port),
-		STEPCODE_WEB_CWD: options.workspace,
-		// This shell shows the client in its own window, so a browser tab would be a
-		// second copy. Forced off rather than left unset: the command that launched
-		// the app may have exported it.
-		STEPCODE_WEB_OPEN: "0",
-	};
+	// Installers place the release envelope beside the server entry. It replaces
+	// identity variables inherited from the login shell; a source run has none
+	// and keeps whatever the developer exported.
+	const release = readReleaseEnvelope(dirname(options.entry), (warning) => {
+		log?.write(`--- ${warning} ---\n`);
+	});
+	const environment: NodeJS.ProcessEnv = withReleaseIdentity(
+		{
+			...options.environment,
+			STEPCODE_WEB_PORT: String(port),
+			STEPCODE_WEB_CWD: options.workspace,
+			// This shell shows the client in its own window, so a browser tab would be a
+			// second copy. Forced off rather than left unset: the command that launched
+			// the app may have exported it.
+			STEPCODE_WEB_OPEN: "0",
+		},
+		release,
+	);
 	if (options.node.electron) environment.ELECTRON_RUN_AS_NODE = "1";
 	else delete environment.ELECTRON_RUN_AS_NODE;
 

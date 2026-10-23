@@ -52,6 +52,11 @@ export function workspaceApi(cwd: string, endpoint: string, params: Record<strin
 	return `/api/v1/workspace${endpoint}?${new URLSearchParams({ cwd, ...params })}`;
 }
 
+/** URL of the outside-workspace file API; `path` is an absolute local path. */
+export function localFileApi(endpoint: "" | "/raw", path: string): string {
+	return `/api/v1/file${endpoint}?${new URLSearchParams({ path })}`;
+}
+
 /** Message of a caught value, as the legacy code read `error.message`. */
 export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);

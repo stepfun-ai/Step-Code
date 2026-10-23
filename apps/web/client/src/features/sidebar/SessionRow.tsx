@@ -1,5 +1,5 @@
-import type { KeyboardEvent, MouseEvent } from "react";
-import { formatRelativeTime, useT } from "../../i18n";
+import { type DragEvent, type KeyboardEvent, type MouseEvent, useState } from "react";
+import { formatRelativeTime, useRelativeTimeClock, useT } from "../../i18n";
 import { cx } from "../../lib/format";
 import { openSession, sessionTitle, taskStatus } from "../../state/session";
 import { mapWith, setState, shallowEqual, useAppStore } from "../../state/store";
@@ -8,7 +8,7 @@ import { Icon, LEGACY_ICONS, Popover } from "../../ui";
 import { applyTagFilter, closeSessionMenu, closeTagPicker, toggleSessionMenu, toggleTagPicker } from "./actions";
 import { SessionMenu } from "./SessionMenu";
 import { TagPicker } from "./TagPicker";
-import { cssVar, groupName, TAG_COLORS } from "./tags";
+import { cssVar, groupName, SESSION_DRAG_TYPE, TAG_COLORS } from "./tags";
 
 export interface SessionRowProps {
 	readonly session: SessionSummary;
@@ -21,12 +21,14 @@ export interface SessionRowProps {
 /** One conversation row (legacy `buildSessionRow`, 760-819). */
 export function SessionRow({ session, grouped = false, filteredOut = false }: SessionRowProps) {
 	const t = useT();
+	useRelativeTimeClock();
 	const row = useAppStore((state) => {
 		const tag = state.tags.get(session.id);
 		// The project and grouped views both render a row per session; only the visible one owns its menus.
 		const inView = state.currentView === (grouped ? "group" : "project");
 		const status = taskStatus(state, session);
-		const active = state.current?.id === session.id;
+		// While another session loads, its row is already the selection.
+		const active = (state.ui.openingSession ?? state.current?.id) === session.id;
 		return {
 			status,
 			// The green dot marks a finished run the user has not looked at yet; a
@@ -71,15 +73,25 @@ export function SessionRow({ session, grouped = false, filteredOut = false }: Se
 		event.stopPropagation();
 		if (row.view === "project" && tag) applyTagFilter(row.filter === tag ? null : tag);
 	};
+	// Only the grouped view drags: it is the view where the drop targets (group sections) live.
+	const [dragging, setDragging] = useState(false);
+	const onDragStart = (event: DragEvent<HTMLDivElement>) => {
+		event.dataTransfer.setData(SESSION_DRAG_TYPE, session.id);
+		event.dataTransfer.effectAllowed = "move";
+		setDragging(true);
+	};
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: the legacy row is a div[role=button] holding its own buttons, which a <button> cannot contain.
 		<div
-			className={cx("session-row", status, row.active && "active", row.unread && "unread")}
+			className={cx("session-row", status, row.active && "active", row.unread && "unread", dragging && "dragging")}
 			role="button"
 			tabIndex={0}
 			data-session-id={session.id}
 			style={filteredOut ? { display: "none" } : undefined}
+			draggable={grouped || undefined}
+			onDragStart={grouped ? onDragStart : undefined}
+			onDragEnd={grouped ? () => setDragging(false) : undefined}
 			onClick={onClick}
 			onKeyDown={onKeyDown}
 		>
@@ -108,8 +120,8 @@ export function SessionRow({ session, grouped = false, filteredOut = false }: Se
 						<button
 							className="session-tag-button"
 							type="button"
-							title={t("groups")}
-							aria-label={t("groups")}
+							title={t("setGroup")}
+							aria-label={t("setGroup")}
 							aria-haspopup="menu"
 							aria-expanded={row.tagPickerOpen}
 							aria-controls="tagPicker"
@@ -134,8 +146,8 @@ export function SessionRow({ session, grouped = false, filteredOut = false }: Se
 					<button
 						className="session-menu-button"
 						type="button"
-						title={t("settings")}
-						aria-label={t("settings")}
+						title={t("moreActions")}
+						aria-label={t("moreActions")}
 						aria-haspopup="menu"
 						aria-expanded={row.menuOpen}
 						aria-controls="sessionMenu"

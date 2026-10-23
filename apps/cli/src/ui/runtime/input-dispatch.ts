@@ -369,12 +369,6 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			await ctx.handleClearCommand();
 			return;
 		}
-		if (text === "/compact" || text.startsWith("/compact ")) {
-			const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
-			ctx.editor.setText("");
-			await ctx.handleCompactCommand(customInstructions);
-			return;
-		}
 		if (text === "/reload") {
 			ctx.editor.setText("");
 			await ctx.handleReloadCommand();

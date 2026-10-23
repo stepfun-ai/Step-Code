@@ -3,7 +3,13 @@ import { useLocale, useT } from "../../i18n";
 import { collectTurnChanges } from "../../lib/turn-changes";
 import { setUi, useAppStore } from "../../state/store";
 import type { SteeringMessage, TimelineItem } from "../../state/types";
+import { Icon } from "../../ui";
+import { ClarificationPanel } from "./ClarificationPanel";
+import { CommandRow } from "./CommandRow";
+import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
 import { MessageActions, MessageItem } from "./MessageItem";
+import { NoticeRow } from "./NoticeRow";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { ProcessGroup } from "./ProcessGroup";
 import {
 	groupProcessRows,
@@ -20,16 +26,19 @@ import { TurnChangesCard } from "./TurnChangesCard";
 import { turnArtifacts } from "./turn-artifacts";
 import { collectTurnFooters } from "./turn-footers";
 
-/** Shown while the timeline is empty (legacy index.html 835-842, `renderTimeline`). */
+/**
+ * Shown while the timeline is empty (legacy index.html 835-842, `renderTimeline`):
+ * the StepCode mark, whose amber prompt chevron draws in once on mount, over a
+ * single question.
+ */
 function EmptyConversation() {
 	const t = useT();
 	return (
 		<div className="empty-state">
-			<div className="empty-wordmark">
-				<span>STEP</span>
-				<strong>CODE</strong>
-			</div>
-			<p>{t("emptyConversation")}</p>
+			<span className="empty-mark" aria-hidden="true">
+				<Icon name="stepcode" />
+			</span>
+			<h1 className="empty-title">{t("emptyTitle")}</h1>
 		</div>
 	);
 }
@@ -70,8 +79,11 @@ export function ConversationStream() {
 	// Sent with "立即" or Cmd/Ctrl+Enter: the kernel reads them after the current tool call; shown already.
 	const steering = useAppStore((state) => state.current?.steeringMessages ?? NO_STEERING);
 	const sessionId = useAppStore((state) => state.current?.id ?? "");
+	const opening = useAppStore((state) => state.ui.openingSession !== null);
 	const cwd = useAppStore((state) => state.current?.cwd ?? "");
 	const status = useAppStore((state) => state.current?.status);
+	const compacting = useAppStore((state) => state.compacting);
+	const notices = useAppStore((state) => state.notices);
 	const revertedTurns = useAppStore((state) => state.current?.revertedTurns);
 	// Shown with a sent message's timestamp; the transcript stores no per-message model.
 	const modelId = useAppStore((state) => state.current?.model?.id);
@@ -85,6 +97,11 @@ export function ConversationStream() {
 	const innerRef = useRef<HTMLDivElement>(null);
 	const stick = useRef(true);
 	const previousRows = useRef<readonly (IndexedTimelineRow | ProcessGroupRow)[]>([]);
+	// Notices belong to the page, not the session file: show only this session's.
+	const sessionNotices = useMemo(
+		() => notices.filter((notice) => notice.sessionId === sessionId),
+		[notices, sessionId],
+	);
 	const turns = useMemo(() => collectTurnChanges(items, cwd), [items, cwd]);
 	const footerAfter = useMemo(
 		() => new Map(collectTurnFooters(items, status, pendingTurn !== null).map((turn) => [turn.lastIndex, turn])),
@@ -151,9 +168,16 @@ export function ConversationStream() {
 		return next;
 	}, [items, running, breaks]);
 	return (
-		<div className="stream" id="stream" ref={streamRef} onScroll={onScroll}>
+		<div
+			className="stream"
+			id="stream"
+			ref={streamRef}
+			onScroll={onScroll}
+			data-opening={opening ? "" : undefined}
+			aria-busy={opening || undefined}
+		>
 			<div className="stream-inner" id="streamInner" ref={innerRef}>
-				{items.length || pendingTurn || steering.length ? (
+				{items.length || pendingTurn || steering.length || compacting || sessionNotices.length ? (
 					<>
 						{presentation.map((row) => {
 							const card = cardAfter.get(row.lastIndex);
@@ -169,11 +193,18 @@ export function ConversationStream() {
 									) : row.item.kind === "message" ? (
 										<MessageItem item={row.item} model={modelId} />
 									) : row.item.kind === "tool" ? (
-										<ToolRow item={row.item} />
+										<>
+											<ToolRow item={row.item} />
+											{row.item.planReview ? <PlanReviewCard review={row.item.planReview} /> : null}
+										</>
 									) : row.item.kind === "thinking" ? (
 										<ThinkingDisclosure item={row.item} active={running} />
 									) : row.item.kind === "retry" ? (
 										<RetryRow item={row.item} />
+									) : row.item.kind === "command" ? (
+										<CommandRow item={row.item} />
+									) : row.item.kind === "compaction" ? (
+										<CompactionRow item={row.item} />
 									) : (
 										<ApprovalCard approval={row.item.approval} />
 									)}
@@ -198,6 +229,7 @@ export function ConversationStream() {
 								</Fragment>
 							);
 						})}
+						{compacting ? <CompactionRunningRow /> : null}
 						{steering.map((message, index) => (
 							<MessageItem
 								// Kernel texts carry no id; equal texts are interchangeable here.
@@ -226,10 +258,16 @@ export function ConversationStream() {
 							/>
 						) : null}
 						{thinking ? <ThinkingIndicator /> : null}
+						{sessionNotices.map((notice) => (
+							<NoticeRow key={notice.id} notice={notice} />
+						))}
 					</>
 				) : (
 					<EmptyConversation />
 				)}
+				{/* The pending questionnaire is conversation, not composer chrome: it
+				 * renders as the stream's latest element, where the question was asked. */}
+				<ClarificationPanel />
 			</div>
 		</div>
 	);

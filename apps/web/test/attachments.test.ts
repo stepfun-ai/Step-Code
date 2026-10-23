@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyAttachment, MAX_ATTACHMENT_BYTES, withTextAttachments } from "../src/attachments.ts";
+import {
+	classifyAttachment,
+	MAX_ATTACHMENT_BYTES,
+	MAX_INLINED_CHARS,
+	withTextAttachments,
+} from "../src/attachments.ts";
 
 const text = (name: string, body: string) => ({
 	name,
@@ -45,12 +50,25 @@ test("each attachment becomes its own block, in order", () => {
 	assert.equal(result.match(/\[attached file:/gu)?.length, 2);
 });
 
-test("an oversized text attachment is truncated, not dropped", () => {
+test("an oversized text attachment is truncated and says what is missing", () => {
 	const huge = "x".repeat(50_000);
 	const result = withTextAttachments("go", [text("big.txt", huge)]);
 
-	assert.match(result, /truncated/u);
+	// The model needs the size and an action, not just the word "truncated".
+	assert.match(result, /Showing characters 1-40000 of 50000/u);
+	assert.match(result, /remainder was not included/u);
 	assert.ok(result.length < huge.length);
+});
+
+test("truncation counts code points, so it never splits a character", () => {
+	// 40 001 astral characters: a UTF-16 slice would end on half a surrogate pair.
+	const huge = "\u{1F600}".repeat(MAX_INLINED_CHARS + 1);
+	const result = withTextAttachments("go", [text("emoji.txt", huge)]);
+
+	assert.match(result, /of 40001/u);
+	// The block must decode to whole characters only.
+	const body = result.split("```")[1] ?? "";
+	assert.equal(body.includes("\uFFFD"), false);
 });
 
 test("the size limit is a sane ceiling", () => {

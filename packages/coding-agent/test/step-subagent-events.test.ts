@@ -1015,19 +1015,30 @@ test("idle keep-alive children are stopped after the TTL and a reply resumes qui
 			},
 		})(api);
 		const lane = laneIdOf(await startLane(tools, { agent: "general", task: "first" }));
-		const settle = async (count: number) => {
-			for (let i = 0; i < 100 && sent.filter((m) => m.details?.event === "background_done").length < count; i++) {
-				await vi.advanceTimersByTimeAsync(1);
+		/**
+		 * A finished lane sends its notification only after reading the child's
+		 * details from disk, so waiting on 1ms of virtual time is a race against
+		 * file I/O that a loaded CI runner loses. Advance in steps for a bounded
+		 * virtual budget instead, and report what did arrive.
+		 */
+		const settle = async (count: number): Promise<boolean> => {
+			for (let i = 0; i < 500; i += 1) {
+				if (sent.filter((m) => m.details?.event === "background_done").length >= count) return true;
+				await vi.advanceTimersByTimeAsync(10);
 			}
+			return false;
 		};
-		await settle(1);
+		const notifications = () => sent.map((m) => m.details?.event ?? "?").join(", ") || "none";
+		expect(await settle(1), `notifications after the first lane: ${notifications()}`).toBe(true);
 		await vi.advanceTimersByTimeAsync(LANE_IDLE_TTL_MS - 1_000);
 		expect(stopped).toHaveLength(0);
 		await vi.advanceTimersByTimeAsync(2_000);
 		expect(stopped).toEqual([inputs[0]!.sessionId]);
 
-		await agentSend(tools, { lane_id: lane, action: "reply", prompt: "second" });
-		await settle(2);
+		const reply = textOf(await agentSend(tools, { lane_id: lane, action: "reply", prompt: "second" }));
+		const resumed = await settle(2);
+		expect(resumed, `agent_send said: ${reply}; notifications: ${notifications()}`).toBe(true);
+		expect(inputs, `agent_send said: ${reply}`).toHaveLength(2);
 		expect(inputs[1]!.sessionId).toBe(inputs[0]!.sessionId);
 		// A planned idle stop is not reported as a crash restart.
 		expect(sent.some((message) => message.details?.event === "background_restarted")).toBe(false);

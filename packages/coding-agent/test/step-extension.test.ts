@@ -7,6 +7,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { createStepExtension, stepExtension } from "../src/features/step.ts";
 import { STEP_INIT_PROMPT } from "../src/step/init-prompt.ts";
+import type { StepUsageHost } from "../src/step/usage/commands.ts";
 
 function commandContext(
 	isIdle: boolean,
@@ -17,6 +18,16 @@ function commandContext(
 		ui: { notify: vi.fn(), setStatus: vi.fn(), select: select ?? (async () => undefined) },
 	} as unknown as ExtensionCommandContext;
 }
+
+/**
+ * Session-manager surface for the tool-call contexts below. The plan-mode
+ * pre-check reads the persisted plan state off the branch, and an empty branch
+ * means no plan mode: these tests are about the permission policy alone.
+ */
+const noPlanStateSessionManager = {
+	getBranch: () => [] as Array<{ type: string; customType?: string; data?: unknown }>,
+	getSessionId: () => "step-extension-test",
+};
 
 describe("Step extension", () => {
 	test.each(["ask", "approve-for-me", "full-access"] as const)(
@@ -247,7 +258,10 @@ describe("Step extension", () => {
 			event: unknown,
 			ctx: unknown,
 		) => Promise<unknown>;
-		const result = await handler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false });
+		const result = await handler(
+			{ toolName: "write_file", input: { path: "x", content: "y" } },
+			{ hasUI: false, sessionManager: noPlanStateSessionManager },
+		);
 		expect(result).toMatchObject({ block: true, terminate: true });
 	});
 
@@ -276,7 +290,10 @@ describe("Step extension", () => {
 			ctx: unknown,
 		) => Promise<unknown>;
 		expect(
-			await toolHandler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false }),
+			await toolHandler(
+				{ toolName: "write_file", input: { path: "x", content: "y" } },
+				{ hasUI: false, sessionManager: noPlanStateSessionManager },
+			),
 		).toBeUndefined();
 
 		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
@@ -695,7 +712,10 @@ describe("Step extension", () => {
 				await vi.waitFor(() => expect(status).toHaveBeenCalledWith("step-permission", "Mode: Full Access"));
 			const tool = on.mock.calls.find(([name]) => name === "tool_call")![1];
 			expect(
-				await tool({ toolName: "write_file", input: { path: "file", content: "x" } }, { hasUI: false }),
+				await tool(
+					{ toolName: "write_file", input: { path: "file", content: "x" } },
+					{ hasUI: false, sessionManager: noPlanStateSessionManager },
+				),
 			).toMatchObject({ block: true, terminate: true });
 		},
 	);
@@ -745,7 +765,10 @@ describe("Step extension", () => {
 				ctx: unknown,
 			) => Promise<unknown>;
 			expect(
-				await handler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false }),
+				await handler(
+					{ toolName: "write_file", input: { path: "x", content: "y" } },
+					{ hasUI: false, sessionManager: noPlanStateSessionManager },
+				),
 			).toMatchObject({ block: true, terminate: true });
 		} finally {
 			if (previousPreset === undefined) delete process.env.STEP_PERMISSION_PRESET;
@@ -828,7 +851,7 @@ describe("Step extension", () => {
 			toolName: "write_file",
 			input: { path: "x", content: "y" },
 		};
-		expect(await toolHandler(writeCall, { hasUI: false })).toMatchObject({
+		expect(await toolHandler(writeCall, { hasUI: false, sessionManager: noPlanStateSessionManager })).toMatchObject({
 			block: true,
 			terminate: true,
 		});
@@ -841,7 +864,7 @@ describe("Step extension", () => {
 				setAutoRetryEnabled: vi.fn(),
 			},
 		);
-		expect(await toolHandler(writeCall, { hasUI: false })).toBeUndefined();
+		expect(await toolHandler(writeCall, { hasUI: false, sessionManager: noPlanStateSessionManager })).toBeUndefined();
 	});
 
 	test("limits trace headers to configured cloud-trace model requests", async () => {
@@ -902,5 +925,96 @@ describe("Step extension", () => {
 			if (originalOrigin === undefined) delete process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
 			else process.env.STEPCODE_CLOUD_TRACE_ORIGIN = originalOrigin;
 		}
+	});
+
+	test("records usage provenance for a host with no usage UI", () => {
+		const on = vi.fn();
+		const appendEntry = vi.fn();
+		createStepExtension({ usageRecording: () => ({ agents: [], skills: [] }) })({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+			appendEntry,
+		} as unknown as ExtensionAPI);
+		const handler = on.mock.calls.find(([name]) => name === "usage_recorded")?.[1] as (
+			event: { type: "usage_recorded"; entryId: string; provenance: Record<string, unknown> },
+			ctx: { sessionManager: { getSessionId(): string } },
+		) => void;
+		handler(
+			{
+				type: "usage_recorded",
+				entryId: "assistant-entry",
+				provenance: {
+					requestId: "req-web",
+					sessionId: "session-1",
+					sourceLeafId: null,
+					reasoningAtDispatch: "medium",
+					requestedProvider: "step",
+					requestedModel: "step-5-preview",
+					durationMs: 1200,
+					ttftMs: 300,
+					outcome: "ok",
+					reached: "text",
+				},
+			},
+			{ sessionManager: { getSessionId: () => "session-1" } },
+		);
+		// The join key and timings a feedback report reads must survive, and the
+		// entry must name the assistant message it belongs to.
+		expect(appendEntry).toHaveBeenCalledWith("step.usage_provenance", {
+			version: 1,
+			requestId: "req-web",
+			sessionId: "session-1",
+			sourceLeafId: null,
+			reasoningAtDispatch: "medium",
+			requestedProvider: "step",
+			requestedModel: "step-5-preview",
+			durationMs: 1200,
+			ttftMs: 300,
+			outcome: "ok",
+			reached: "text",
+			originSessionId: "session-1",
+			usageEntryId: "assistant-entry",
+		});
+	});
+
+	test("keeps recording for a host that supplies a usage host", () => {
+		const on = vi.fn();
+		const appendEntry = vi.fn();
+		createStepExtension({
+			usageHost: {
+				resources: () => ({ agents: [], skills: [] }),
+			} as unknown as StepUsageHost,
+		})({
+			registerProvider: vi.fn(),
+			on,
+			registerCommand: vi.fn(),
+			sendUserMessage: vi.fn(),
+			appendEntry,
+		} as unknown as ExtensionAPI);
+		const handler = on.mock.calls.find(([name]) => name === "usage_recorded")?.[1] as (
+			event: { type: "usage_recorded"; entryId: string; provenance: Record<string, unknown> },
+			ctx: { sessionManager: { getSessionId(): string } },
+		) => void;
+		handler(
+			{
+				type: "usage_recorded",
+				entryId: "assistant-entry",
+				provenance: {
+					requestId: "req-host",
+					sessionId: "session-1",
+					sourceLeafId: null,
+					reasoningAtDispatch: "high",
+					requestedProvider: "step",
+					requestedModel: "step-5-preview",
+				},
+			},
+			{ sessionManager: { getSessionId: () => "session-1" } },
+		);
+		expect(appendEntry).toHaveBeenCalledWith(
+			"step.usage_provenance",
+			expect.objectContaining({ requestId: "req-host", usageEntryId: "assistant-entry" }),
+		);
 	});
 });

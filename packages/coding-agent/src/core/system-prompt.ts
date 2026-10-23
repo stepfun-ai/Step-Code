@@ -35,6 +35,11 @@ export interface SystemPromptProduct {
 	introduction?: string;
 	/** Whether to include pi's documentation discovery section. Defaults to true. */
 	includeDocumentation?: boolean;
+	/**
+	 * How the host's UI starts plan, goal, and ultraloop work, forwarded to the
+	 * appendix so one shared contract can describe either interaction.
+	 */
+	interaction?: "session" | "one-shot";
 	/** Product-specific guidance appended after loaded project context. */
 	promptAppendix?: string | ((activeToolNames: readonly string[], context: SystemPromptProductContext) => string);
 }
@@ -46,6 +51,8 @@ export interface SystemPromptProductContext {
 	platform: string;
 	/** Local calendar date at prompt construction time (YYYY-MM-DD). */
 	date: string;
+	/** Interaction model declared by the product, if any. */
+	interaction?: "session" | "one-shot";
 }
 
 /**
@@ -93,6 +100,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		cwd: promptCwd,
 		platform: process.platform,
 		date: localCalendarDate(),
+		...(product?.interaction ? { interaction: product.interaction } : {}),
 	};
 	const productAppendixValue =
 		typeof product?.promptAppendix === "function"

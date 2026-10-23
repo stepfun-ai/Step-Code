@@ -6,15 +6,21 @@
  * ExtensionAPI; there is no parallel plan state machine in the Step layer.
  */
 
-import { existsSync } from "node:fs";
-import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import type { AgentMessage } from "@step-harness/agent-core";
 import type { EventBus } from "../core/event-bus.ts";
-import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionFactory,
+	ToolCallEventResult,
+} from "../core/extensions/types.ts";
+import { resolveToCwd } from "../core/tools/path-utils.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
 import {
 	getPlanFilePath,
+	hashPlanContents,
 	registerPlanModeTools,
 	type StepPlanExitOutcome,
 	type StepPlanModeController,
@@ -44,21 +50,159 @@ const PLAN_TASK_TOOLS = new Set([
 export type StepPlanSource = "user" | "agent" | "unknown";
 
 interface PlanState {
+	/** Written by this build. Its presence marks an entry that never narrowed the tool list. */
+	version?: 2;
 	enabled: boolean;
+	/**
+	 * Legacy only: the list a narrowing entry replaced. Older builds dropped the
+	 * editing tools on entry and could only restore by replaying this snapshot,
+	 * so sessions written by them still rely on it. This build appends only the
+	 * plan tools a profile lacks and remembers just those additions.
+	 */
 	toolsBeforePlanMode?: string[];
 	planFilePath?: string;
 	/** "user" for /plan or --plan, "agent" for enter_plan_mode. */
 	planSource?: StepPlanSource;
+	/**
+	 * Hash of the proposal last handed to an external reviewer (rpc/headless).
+	 * Kept while plan mode is off, so a later plan round can tell an untouched
+	 * file from a new proposal.
+	 */
+	submittedPlanHash?: string;
+	/**
+	 * Hash of the plan file when this round entered plan mode (absent when there
+	 * was no file). A proposal is new only if the model changed the file during
+	 * the round: a leftover plan from an earlier round is not this request's
+	 * answer, even when this process never saw it submitted.
+	 */
+	planHashAtEnter?: string;
 }
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
 }
 
+/** True when both lists hold the same tool names in the same order. */
+function sameToolOrder(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
 const publishedPlanModes = new WeakMap<object, boolean>();
 export function getStepPlanMode(manager: object): string {
 	const value = publishedPlanModes.get(manager);
 	return value === undefined ? "Unknown" : value ? "Plan" : "Default";
+}
+
+/** Latest plan state recorded on the branch, for hosts that render it. */
+export interface StepPlanState {
+	enabled: boolean;
+	planFilePath?: string;
+	planSource: StepPlanSource;
+}
+
+/**
+ * Plan mode as of the latest `step-plan` entry on the branch.
+ *
+ * Reads persisted state rather than the in-memory WeakMap, so a host that
+ * restores a session before the extension replays `session_start` still sees
+ * the right answer. Undefined when the branch records no plan state at all.
+ */
+export function getStepPlanState(
+	entries: readonly { type: string; customType?: string; data?: unknown }[],
+): StepPlanState | undefined {
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== "step-plan") continue;
+		const data = entry.data as PlanState | undefined;
+		if (!data || typeof data.enabled !== "boolean") continue;
+		return {
+			enabled: data.enabled,
+			...(typeof data.planFilePath === "string" ? { planFilePath: data.planFilePath } : {}),
+			planSource: data.planSource ?? "unknown",
+		};
+	}
+	return undefined;
+}
+
+/**
+ * The session-manager surface the plan decision reads.
+ *
+ * Structural, so a host or a test can answer it without a full SessionManager;
+ * the extension context's `sessionManager` already satisfies it.
+ */
+interface PlanModeSessionView {
+	getBranch(): readonly { type: string; customType?: string; data?: unknown }[];
+	getSessionId(): string;
+}
+
+/** Plan mode's verdict on one tool call. */
+export interface PlanModeToolCallDecision {
+	/** The plan file this session may write while plan mode is on. */
+	planFilePath: string;
+	/** The path the call targets, exactly as the model spelled it. */
+	targetPath: string;
+	/** The call targets the plan file, so plan mode lets it through. */
+	targetsPlanFile: boolean;
+	/** The denial for a forbidden mutation; absent when the call is allowed. */
+	block?: ToolCallEventResult;
+}
+
+/**
+ * What plan mode decides about one tool call, or undefined when it decides nothing.
+ *
+ * This is the single source of truth for the plan-file boundary, shared by the
+ * plan extension's own `tool_call` guard and the Step permission pre-check that
+ * runs ahead of it. Two spellings of the rule would drift, and the drift is
+ * silent: a path one side accepts and the other blocks is an edit the user is
+ * asked to approve and then refused.
+ *
+ * State is read from the branch rather than an in-memory flag, because the Step
+ * permission extension is registered before the plan extension: by the time its
+ * handler runs, the plan extension may not have replayed `session_start` yet,
+ * and a restored session must still be guarded. The live state is consulted as
+ * well, so a persist that failed — or an embedder that stores no entries — still
+ * blocks instead of failing open.
+ */
+export function planModeToolCallDecision(options: {
+	manager: PlanModeSessionView;
+	cwd: string;
+	toolName: string;
+	input: unknown;
+}): PlanModeToolCallDecision | undefined {
+	if (!MUTATING_TOOLS.has(options.toolName)) return undefined;
+	const planState = getStepPlanState(options.manager.getBranch());
+	// The branch is the durable record, but it is not the only one that can say
+	// plan mode is on: a persist that failed after `enter()` set the flag, or an
+	// embedder whose `appendEntry` keeps nothing, would leave the branch behind
+	// while the session really is planning. A permission guard must not fail
+	// open on that, so the live state counts too.
+	const live = publishedPlanModes.get(options.manager) === true;
+	if (!planState?.enabled && !live) return undefined;
+	// Resolve exactly as resolvePlanFilePath does: the persisted path, else the
+	// per-session default for this cwd.
+	const planFilePath = planState?.planFilePath ?? getPlanFilePath(options.manager.getSessionId(), options.cwd);
+	const toolInput = (options.input ?? {}) as Record<string, unknown>;
+	const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
+	// Resolve exactly as the file tools do (`~`, `@`, unicode spaces), so an
+	// allowed target cannot land somewhere else than the guard checked.
+	if (targetPath && resolveToCwd(targetPath, options.cwd) === resolveToCwd(planFilePath, options.cwd)) {
+		return { planFilePath, targetPath, targetsPlanFile: true };
+	}
+	return {
+		planFilePath,
+		targetPath,
+		targetsPlanFile: false,
+		block: {
+			block: true,
+			reason: [
+				`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planFilePath}`,
+				`Target: ${targetPath || "(no path provided)"}`,
+				"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
+				"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
+				`Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.`,
+			].join("\n"),
+		},
+	};
 }
 
 /**
@@ -68,7 +212,11 @@ export function getStepPlanMode(manager: object): string {
 function updateStatus(ctx: ExtensionContext, enabled: boolean, planSource: StepPlanSource | undefined): void {
 	publishedPlanModes.set(ctx.sessionManager, enabled);
 	if (enabled) {
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `Planning (${planSource ?? "unknown"})`));
+		const label = `Planning (${planSource ?? "unknown"})`;
+		// Styling is a presentation nicety: a host without a terminal theme must
+		// still get the chip, not a crash inside its status update.
+		const theme = ctx.ui.theme;
+		ctx.ui.setStatus("plan-mode", theme ? theme.fg("warning", label) : label);
 	} else {
 		ctx.ui.setStatus("plan-mode", undefined);
 	}
@@ -97,29 +245,121 @@ function recordPlanUpdate(
 	trackStepTelemetry(telemetry, "plan_updated", { source: source ?? "unknown", created });
 }
 
+/** Hash of the plan file's current contents, or undefined when it cannot be read. */
+function readPlanHash(planFilePath: string): string | undefined {
+	try {
+		return hashPlanContents(readFileSync(planFilePath, "utf8"));
+	} catch {
+		// Missing or unreadable: there is no earlier proposal to warn about, and
+		// exit_plan_mode reports the real error if the model submits it.
+		return undefined;
+	}
+}
+
+/**
+ * The request-local reminder sent while plan mode is on.
+ *
+ * It states the mode as a fact, not a hint: a model that is unsure probes with
+ * enter_plan_mode and calls exit_plan_mode repeatedly, which users read as the
+ * plan command not working.
+ */
+function planModeReminder(options: {
+	planPath: string;
+	planSource: StepPlanSource;
+	canLeaveWithoutProposal: boolean;
+	holdsEarlierPlan: boolean;
+}): string {
+	const origin =
+		options.planSource === "user"
+			? "The host turned it on because the user sent this request with /plan; you did not need to and must not call enter_plan_mode."
+			: options.planSource === "agent"
+				? "You turned it on with enter_plan_mode; do not call enter_plan_mode again."
+				: "It was turned on earlier in this session; do not call enter_plan_mode.";
+	const noPlan = options.canLeaveWithoutProposal
+		? "If the request needs no plan (a question, a trivial edit), say so, leave the plan file untouched, call exit_plan_mode once (it then only leaves plan mode), and answer directly."
+		: "If the request needs no plan (a question, a trivial edit), answer directly and tell the user they can turn plan mode off with /plan; exit_plan_mode only submits a written proposal here.";
+	return [
+		"<system-reminder>Plan mode is ON.",
+		origin,
+		"It stays on until you call exit_plan_mode or the user turns it off. This reminder is the current state: never call enter_plan_mode or exit_plan_mode to check it.",
+		`Plan file: ${JSON.stringify(options.planPath)}.`,
+		...(options.holdsEarlierPlan
+			? ["It still holds content from before this request; overwrite it with the plan for this request."]
+			: []),
+		"Only this file may be written, with write_file or edit_file; every other file mutation is blocked.",
+		"Explore first, write the complete plan there (goal, ordered steps with file paths, validation, open questions), then call exit_plan_mode exactly once to submit it.",
+		"Do not carry the work out: implementation starts only after the user approves the plan.",
+		noPlan,
+		"</system-reminder>",
+	].join(" ");
+}
+
 /** Create Step's native plan extension. */
 export const createStepPlanExtension =
 	(options: { telemetry?: StepTelemetryReporter } = {}): ExtensionFactory =>
 	(pi: ExtensionAPI): void => {
 		let enabled = false;
-		let toolsBeforePlanMode: string[] | undefined;
+		/** Plan tools this process appended on entry; the only thing exit removes. */
+		let planModeAddedTools: string[] | undefined;
 		let planFilePath: string | undefined;
 		let planSource: StepPlanSource | undefined;
+		let submittedPlanHash: string | undefined;
+		let planHashAtEnter: string | undefined;
 		// The event bus is optional so minimal embedder/test harnesses that stub
 		// ExtensionAPI keep working without one.
 		const events = (pi as { events?: EventBus }).events;
 
-		const persistPlanState = (): void => {
-			pi.appendEntry("step-plan", { enabled, toolsBeforePlanMode, planFilePath, planSource });
+		/**
+		 * Persist the branch's plan state.
+		 *
+		 * `carriesLegacyTools` is only set when rewriting a legacy entry during
+		 * migration: the entry it replaces is the sole record of the list plan mode
+		 * narrowed, so dropping it would strand that session on the next restore.
+		 * Ordinary entries never carry a snapshot — this build appends tools
+		 * instead of replacing the list.
+		 */
+		const persistPlanState = (carriesLegacyTools?: string[]): void => {
+			pi.appendEntry("step-plan", {
+				version: 2,
+				enabled,
+				planFilePath,
+				planSource,
+				...(carriesLegacyTools ? { toolsBeforePlanMode: carriesLegacyTools } : {}),
+				...(submittedPlanHash ? { submittedPlanHash } : {}),
+				...(planHashAtEnter ? { planHashAtEnter } : {}),
+			});
 		};
+		/**
+		 * Plan mode is a permission narrowing, not a capability change.
+		 *
+		 * The model keeps every tool it already had; the `tool_call` hook below
+		 * denies mutations outside the plan file. Rebuilding the list would rewrite
+		 * the request's tool block, which the provider serializes ahead of the
+		 * system prompt and messages: one such edit invalidates the cached prefix
+		 * for the whole conversation, so a single plan entry can re-bill hundreds of
+		 * thousands of prompt tokens.
+		 *
+		 * A session that does not already offer every plan tool still has to gain
+		 * them (a Pi-native profile lacks the Step aliases). Append only what is
+		 * missing and keep the existing order, so the common Step profile — which
+		 * already offers all of them — leaves the tool block byte-identical.
+		 */
 		const enable = (): void => {
-			toolsBeforePlanMode ??= pi.getActiveTools();
-			// Keep plan-file writes available; tool_call restricts their target.
-			pi.setActiveTools(unique([...toolsBeforePlanMode.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
+			const active = pi.getActiveTools();
+			const missing = PLAN_TOOLS.filter((name) => !active.includes(name));
+			if (missing.length === 0) return;
+			planModeAddedTools = missing;
+			pi.setActiveTools([...active, ...missing]);
 		};
 		const restoreTools = (): void => {
-			if (toolsBeforePlanMode) pi.setActiveTools(toolsBeforePlanMode);
-			toolsBeforePlanMode = undefined;
+			const added = planModeAddedTools;
+			planModeAddedTools = undefined;
+			if (!added || added.length === 0) return;
+			// Remove only what entering added, so tools activated in the meantime
+			// (a late MCP catalog, find_tools) keep their place in the list.
+			const live = pi.getActiveTools();
+			const remaining = live.filter((name) => !added.includes(name));
+			if (remaining.length !== live.length) pi.setActiveTools(remaining);
 		};
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
@@ -127,31 +367,43 @@ export const createStepPlanExtension =
 			enabled = true;
 			planSource = source;
 			planFilePath = resolvePlanFilePath(ctx);
+			// What the file held before this round: an exit that finds the same
+			// content has no proposal for this request, even if the file predates
+			// the round (a previous plan, possibly from an older build).
+			planHashAtEnter = readPlanHash(planFilePath);
 			enable();
 			recordPlanEnter(options.telemetry, source);
 			updateStatus(ctx, enabled, planSource);
 			persistPlanState();
 			if (source === "user") {
+				// An announcement, not an answer: the host renders plan mode from
+				// session state, so this must not become a transcript row.
 				ctx.ui.notify(
 					`Plan mode enabled. Draft your proposal at ${planFilePath}; file-editing tools are limited to this path. Commands still use normal permissions.`,
 					"info",
+					{ transient: true },
 				);
 			}
 			return planFilePath;
 		};
-		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext, submittedHash?: string): void => {
 			recordPlanExit(options.telemetry, planSource, outcome);
 			enabled = false;
 			planSource = undefined;
+			planHashAtEnter = undefined;
+			if (submittedHash) submittedPlanHash = submittedHash;
 			restoreTools();
 			persistPlanState();
 			updateStatus(ctx, enabled, planSource);
 		};
 		const planModeController: StepPlanModeController = {
 			isPlanModeActive: () => enabled,
+			enteredByUser: () => enabled && planSource === "user",
 			enterPlanMode: (ctx) => enter("agent", ctx),
 			exitPlanMode: exit,
 			resolvePlanFilePath,
+			wasSubmitted: (planHash) => submittedPlanHash === planHash,
+			unchangedSinceEnter: (planHash) => planHashAtEnter !== undefined && planHashAtEnter === planHash,
 		};
 
 		pi.registerFlag("plan", {
@@ -166,7 +418,8 @@ export const createStepPlanExtension =
 				if (!prompt) {
 					if (enabled) {
 						exit("toggled_off", ctx);
-						ctx.ui.notify("Plan mode disabled.", "info");
+						// State the host already draws; see enter().
+						ctx.ui.notify("Plan mode disabled.", "info", { transient: true });
 					} else {
 						enter("user", ctx);
 					}
@@ -178,39 +431,83 @@ export const createStepPlanExtension =
 				// with the plan-mode tool set. Slash commands run even mid-stream; queue
 				// the task behind the current turn in that case instead of throwing.
 				if (!enabled) enter("user", ctx);
-				pi.sendUserMessage(prompt, ctx.isIdle() ? {} : { deliverAs: "followUp" });
+				// Expand a leading `/skill:` or prompt template in the task, as the
+				// same text sent without `/plan` would be (the Web composer puts its
+				// plan prefix in front of a picked skill).
+				pi.sendUserMessage(prompt, {
+					expandPromptTemplates: true,
+					...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
+				});
 			},
 		});
 		registerPlanModeTools(pi, planModeController);
 		pi.on("tool_call", async (event, ctx) => {
-			if (!enabled || !MUTATING_TOOLS.has(event.toolName)) return;
-			const planPath = resolvePlanFilePath(ctx);
-			const toolInput = event.input as Record<string, unknown>;
-			const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
-			if (targetPath && path.resolve(ctx.cwd, targetPath) === path.resolve(planPath)) {
+			// The same decision the permission pre-check consults, so the boundary
+			// has one spelling. Plan mode narrows permissions, it does not remove
+			// the tool, so this guard is the only enforcement.
+			const decision = planModeToolCallDecision({
+				manager: ctx.sessionManager,
+				cwd: ctx.cwd,
+				toolName: event.toolName,
+				input: event.input,
+			});
+			if (!decision) return;
+			if (decision.targetsPlanFile) {
 				// Allowed: the mutation targets the plan file itself. This runs
 				// before the write lands, so a missing file marks the plan's creation.
-				recordPlanUpdate(options.telemetry, planSource, !existsSync(planPath));
+				recordPlanUpdate(options.telemetry, planSource, !existsSync(decision.planFilePath));
 				return;
 			}
-			return {
-				block: true,
-				reason: `Plan mode blocked this file mutation. Only the plan file may be written: ${planPath}\nTarget: ${targetPath || "(no path provided)"}`,
-			};
+			return decision.block;
 		});
 
-		// Plan-mode state is carried by the enter_plan_mode/exit_plan_mode tool
-		// results; nothing is injected into the context. This hook only scrubs
-		// the hidden meta messages persisted by sessions from older versions of
-		// this extension.
-		pi.on("context", async (event) => {
+		// Plan mode has to be visible to the model, not only to the UI.
+		//
+		// A user who picks Plan sends `/plan <task>`: the command enters plan mode
+		// and hands the task over as an ordinary user message, so without this the
+		// model sees a normal request with a restricted tool set and can truthfully
+		// say it was never told about plan mode. A model that is not told plainly
+		// probes instead: it calls enter_plan_mode to "confirm" and exit_plan_mode
+		// more than once. The reminder is request-local (it is never appended to
+		// the session) and re-issued for each request while the mode is on, so it
+		// survives compaction and tool changes. The same filter drops the copies an
+		// earlier request added, and the hidden meta messages persisted by older
+		// versions of this extension.
+		pi.on("context", async (event, ctx) => {
+			const messages = event.messages.filter((message) => {
+				const candidate = message as AgentMessage & { customType?: string };
+				return (
+					candidate.customType !== "step-plan-context" && candidate.customType !== "step-plan-execution-context"
+				);
+			});
+			if (!enabled) return { messages };
+			const planPath = planFilePath ?? resolvePlanFilePath(ctx);
+			const planHash = readPlanHash(planPath);
 			return {
-				messages: event.messages.filter((message) => {
-					const candidate = message as AgentMessage & { customType?: string };
-					return (
-						candidate.customType !== "step-plan-context" && candidate.customType !== "step-plan-execution-context"
-					);
-				}),
+				messages: [
+					...messages,
+					{
+						role: "custom" as const,
+						customType: "step-plan-context",
+						display: false,
+						content: [
+							{
+								type: "text" as const,
+								text: planModeReminder({
+									planPath,
+									planSource: planSource ?? "unknown",
+									// Where no review dialog can be shown, exit_plan_mode without a new
+									// proposal just leaves; the terminal refuses it and keeps planning.
+									canLeaveWithoutProposal: ctx.mode === "rpc" || !ctx.hasUI,
+									holdsEarlierPlan:
+										planHash !== undefined &&
+										(planHash === submittedPlanHash || planModeController.unchangedSinceEnter(planHash)),
+								}),
+							},
+						],
+						timestamp: Date.now(),
+					},
+				],
 			};
 		});
 
@@ -218,7 +515,7 @@ export const createStepPlanExtension =
 			// Legacy tool lists predate these capabilities. Preserve only the ones
 			// already active; ordinary tools still follow the saved branch selection.
 			const activePlanTaskTools = pi.getActiveTools().filter((name) => PLAN_TASK_TOOLS.has(name));
-			// Undo the previous branch's tool restriction before reading the new one.
+			// Undo whatever the previous branch's entry applied before reading the next.
 			restoreTools();
 			const planStates = [...ctx.sessionManager.getBranch()]
 				.reverse()
@@ -228,24 +525,35 @@ export const createStepPlanExtension =
 						: [],
 				);
 			const restoredPlanState = planStates[0];
-			// Off snapshots omit transient tools; a preceding plan entry retains the baseline.
-			const savedTools = planStates.find((state) => state?.toolsBeforePlanMode)?.toolsBeforePlanMode;
+			// The list to undo belongs to whichever entry narrowed it. An on-entry
+			// wins over an older carried snapshot, so a newer plan session never
+			// replays an earlier one's list; an off branch falls back to the last
+			// entry that recorded one. This build records nothing on entry, so its
+			// own entries only reach here after carrying a legacy list forward.
+			const governingEntry = planStates.find((state) => state?.enabled || state?.toolsBeforePlanMode !== undefined);
+			const legacyBaseline = governingEntry?.toolsBeforePlanMode;
 			enabled = restoredPlanState?.enabled ?? false;
-			toolsBeforePlanMode = savedTools ? unique([...savedTools, ...activePlanTaskTools]) : undefined;
 			planFilePath = restoredPlanState?.planFilePath;
 			planSource = enabled ? (restoredPlanState?.planSource ?? "unknown") : undefined;
+			// Hashes have to survive a resume: a proposal already handed to the
+			// reviewer must not be submitted again, and a round's "before" content
+			// still tells a new proposal from the file left by an earlier round.
+			submittedPlanHash = planStates.find((state) => state?.submittedPlanHash)?.submittedPlanHash;
+			planHashAtEnter = enabled ? planStates.find((state) => state?.planHashAtEnter)?.planHashAtEnter : undefined;
+			if (legacyBaseline) {
+				const baseline = unique([...legacyBaseline, ...activePlanTaskTools]);
+				if (!sameToolOrder(pi.getActiveTools(), baseline)) pi.setActiveTools(baseline);
+			}
 			if (enabled) {
 				planFilePath = resolvePlanFilePath(ctx);
 				enable();
-			} else {
-				restoreTools();
 			}
 			if (restoredPlanState) {
 				migrateLegacyPlanTodos({
 					persistedPlanState: restoredPlanState,
 					events,
 					extensionContext: ctx,
-					persistMigratedPlanState: persistPlanState,
+					persistMigratedPlanState: () => persistPlanState(legacyBaseline),
 				});
 			}
 			if (startWithPlan && !enabled) {

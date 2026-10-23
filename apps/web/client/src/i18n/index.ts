@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect } from "react";
+import { type ReactNode, useCallback, useEffect, useSyncExternalStore } from "react";
 import { relativeTime } from "../lib/format";
 import { appStore, useAppStore } from "../state/store";
 import { type Locale, MESSAGES, type MessageKey } from "./messages";
@@ -51,6 +51,34 @@ export function useLocale(): Locale {
 /** `relativeTime` with the translated "just now" label. */
 export function formatRelativeTime(value: string | number | Date | undefined): string {
 	return relativeTime(value, t("justNow"));
+}
+
+/*
+ * One shared 30-second clock for relative times. Without it a row keeps the
+ * label from its last render, so the sidebar says "10m" while a freshly opened
+ * search, reading the same timestamp, says "just now".
+ */
+const clockListeners = new Set<() => void>();
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+let clockNow = Date.now();
+function subscribeClock(listener: () => void): () => void {
+	clockListeners.add(listener);
+	clockTimer ??= setInterval(() => {
+		clockNow = Date.now();
+		for (const notify of clockListeners) notify();
+	}, 30_000);
+	return () => {
+		clockListeners.delete(listener);
+		if (clockListeners.size === 0 && clockTimer !== undefined) {
+			clearInterval(clockTimer);
+			clockTimer = undefined;
+		}
+	};
+}
+
+/** Re-renders the caller as relative times age; pair it with `formatRelativeTime`. */
+export function useRelativeTimeClock(): number {
+	return useSyncExternalStore(subscribeClock, () => clockNow);
 }
 
 /**

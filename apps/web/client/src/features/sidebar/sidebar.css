@@ -37,6 +37,10 @@
 .app.resizing .sidebar-resizer::after {
   background: var(--line-strong);
 }
+.sidebar {
+  /* Chrome's thin scrollbar width, reserved by .conversation-list's stable gutter. */
+  --list-gutter: 11px;
+}
 .brand-row {
   display: flex;
   align-items: center;
@@ -49,14 +53,19 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 17px;
-  letter-spacing: -0.01em;
+  font-size: 16px;
+  letter-spacing: -0.015em;
+}
+.brand strong {
+  font-weight: 600;
 }
 
 .sidebar-actions {
   display: grid;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: 2px;
+  /* Same 8px inset as the session rows below; the extra 2px moves into the row padding so icons stay put. */
+  /* The right inset equals the list's reserved scrollbar gutter, so these fills end where the session rows' do. */
+  padding: 2px var(--list-gutter) 10px 8px;
 }
 .sidebar-action,
 .sidebar-search {
@@ -64,35 +73,81 @@
   align-items: center;
   gap: 11px;
   width: 100%;
-  min-height: 42px;
-  padding: 0 12px;
-  border-radius: var(--radius-panel);
-  color: var(--ink);
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-row);
+  color: var(--ink-2);
   text-align: left;
-  transition: background-color var(--fast);
+  transition:
+    background-color var(--fast),
+    color var(--fast);
 }
 .sidebar-action:hover,
 .sidebar-search:hover {
   background: var(--hover);
+  color: var(--ink);
 }
+/* The open mid view's entry uses the session rows' selection fill. */
+.sidebar-action[aria-current="page"] {
+  background: var(--selected);
+  color: var(--ink);
+}
+/* New conversation stands out by weight and its accent icon alone; it shares the rows' flat hover. */
 .sidebar-action.primary {
+  color: var(--ink);
   font-weight: 600;
 }
-.sidebar-search {
-  color: var(--ink-2);
+.sidebar-action.primary > .icon {
+  color: var(--ink);
 }
+/* Same cap as the search footer's (ui/Kbd). */
 .sidebar-search kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
   margin-left: auto;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tiny);
+  background: var(--surface-soft);
   color: var(--ink-3);
-  font: 11px / 1 var(--mono);
+  font: 500 11px / 1 var(--sans);
 }
 
 .conversation-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 8px 16px;
+  /* No right padding: the stable scrollbar gutter is the row's right inset. */
+  padding: 2px 0 16px 8px;
+  /* Like the stream, the thumb shows only while the pointer is over the list. */
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+  /* Always reserved, so rows do not change width when the list starts to scroll. */
+  scrollbar-gutter: stable;
 }
+.conversation-list:hover {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+/*
+ * The last row fades into the footer instead of being cut by its edge. This is
+ * a painted overlay, not a mask-image on the list: a mask clips every
+ * descendant to the list's box, fixed ones included, so the row action hints
+ * (Tooltip) that overhang the sidebar's right edge would be cut off.
+ */
+.conversation-list::after {
+  content: "";
+  position: sticky;
+  bottom: -16px;
+  z-index: 6;
+  display: block;
+  height: 24px;
+  margin: -8px 0 -16px -8px;
+  background: linear-gradient(to bottom, transparent, var(--sidebar));
+  pointer-events: none;
+}
+/* Frosted glass: rows scrolling under the header blur through the base tint. */
 .list-header-row {
   position: sticky;
   top: 0;
@@ -102,8 +157,19 @@
   gap: 6px;
   margin: 0 2px 8px;
   padding: 2px;
-  background: var(--sidebar);
-  box-shadow: 0 -6px 0 6px var(--sidebar);
+  background: var(--sidebar-glass);
+  backdrop-filter: blur(14px) saturate(1.35);
+}
+/* Rows scrolling up under the header fade out rather than showing half a row in the gap below it. */
+.list-header-row::after {
+  position: absolute;
+  top: 100%;
+  right: -10px;
+  left: -10px;
+  height: 14px;
+  background: linear-gradient(var(--sidebar-glass), transparent);
+  pointer-events: none;
+  content: "";
 }
 .list-header-actions {
   display: flex;
@@ -120,16 +186,16 @@
 }
 .view-tab {
   flex: none;
-  min-height: 20px;
+  min-height: 24px;
   padding: 0 10px;
   border-radius: 6px;
   color: var(--ink-3);
   font-size: 12px;
 }
 .view-tab.active {
-  background: var(--surface);
+  background: var(--thumb);
+  box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 6%);
   color: var(--ink);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
   font-weight: 500;
 }
 .tag-filter {

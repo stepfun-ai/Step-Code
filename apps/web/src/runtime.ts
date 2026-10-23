@@ -15,19 +15,24 @@ import {
 	createStepCronExtension,
 	createStepExtensionInline,
 	createStepGoalExtension,
-	createStepPlanExtension,
 	createStepProviderConfig,
 	createStepSessionManager,
 	createStepSessionManagerFactory,
 	createStepSettingsManager,
-	createUltraloopOptInExtension,
+	createStepToolProfile,
 	DEFAULT_THINKING_LEVEL,
 	DefaultResourceLoader,
 	type ExtensionUIContext,
+	type FeedbackEvidence,
 	FULL_ACCESS_RISK_OPTIONS,
 	findInitialModel,
+	formatFeedbackBundleFailureDetails,
+	formatFeedbackBundleSkipMessage,
+	formatFeedbackPendingDetails,
 	getStepAuthPath,
+	getStepGoal,
 	getStepMcpStatuses,
+	getStepPlanState,
 	getSupportedThinkingLevels,
 	type InlineExtension,
 	isChildAgentSession,
@@ -36,9 +41,13 @@ import {
 	NOOP_OBSERVABILITY_PROVIDER,
 	normalizeFeedbackCategory,
 	openStepSession,
+	plainTheme,
+	prepareFeedbackEvidence as prepareKernelFeedbackEvidence,
 	readFeedbackUsername,
 	readGlobalStepDefaults,
+	readStepBuildIdentity,
 	resolveFeedbackEndpoint,
+	resolveFeedbackSettings,
 	resolveStepAgentDir,
 	resolveStepConfigDir,
 	resolveStepConfigRoot,
@@ -46,10 +55,14 @@ import {
 	type SessionEntry,
 	type SessionIndex,
 	type SessionInfo,
+	type SideAnswer,
+	STEP_APP_SYSTEM_PROMPT_PRODUCT,
 	STEP_DEFAULT_MODEL,
 	STEP_PERMISSION_PRESETS,
 	STEP_PROVIDER_ID,
+	STEPCODE_VERSION,
 	type StepGlobalDefaults,
+	type StepGoalRecord,
 	type StepMcpStatus,
 	type StepPermissionPresetId,
 	type StepSettingsManager,
@@ -62,6 +75,12 @@ import { ApprovalBroker, type ApprovalRequest } from "./approval.ts";
 import { type WebAttachment, withTextAttachments } from "./attachments.ts";
 import { ClarificationBroker, type ClarificationEvent } from "./clarification.ts";
 import { feedbackCategoryFor } from "./feedback.ts";
+import {
+	describeFeedbackEvidence,
+	FeedbackDrafts,
+	type WebFeedbackDraft,
+	type WebFeedbackPreview,
+} from "./feedback-report.ts";
 import { projectInspectorTasks } from "./inspector.ts";
 import {
 	MessageQueue,
@@ -73,9 +92,11 @@ import {
 } from "./message-queue.ts";
 import { RetryTracker } from "./retry-state.ts";
 import { SelectionBroker, type SelectionEvent, type SelectionRequest, selectionSelect } from "./selection.ts";
+import { generateSessionTitle, sessionTitleInput } from "./session-title.ts";
 import { type WebSkill, webSkills } from "./skills.ts";
 import { resolveSubagentCliPath } from "./subagent-cli.ts";
 import { projectSubagentNotification } from "./subagent-notification.ts";
+import { TextInputBroker, type TextInputEvent, textInput } from "./text-input.ts";
 import { savedThinkingTimings, THINKING_TIMING_TYPE, ThinkingClock, type ThinkingTimings } from "./thinking-timing.ts";
 import {
 	revertedTurnIds,
@@ -122,8 +143,30 @@ async function refreshStepModelCatalog(modelRuntime: ModelRuntime): Promise<void
 export type WebEvent =
 	| ClarificationEvent
 	| SelectionEvent
+	| TextInputEvent
 	| { type: "agent"; event: AgentSessionEvent; thinkingTimings?: ThinkingTimings }
 	| { type: "approval_required"; approval: ApprovalRequest }
+	| {
+			/**
+			 * Command output the kernel published through `ui.notify`. It is a
+			 * notice in the transcript, never a prompt: nothing here enters the
+			 * model's context or the session file.
+			 */
+			type: "notice";
+			level: "info" | "warning" | "error";
+			text: string;
+			markdown?: boolean;
+			/** Restates host-rendered state (plan mode, permission tier): shown briefly, not kept. */
+			transient?: boolean;
+	  }
+	| {
+			/**
+			 * A `/btw` answer, for the rail. Side answers are process memory, like the
+			 * terminal panel's history: never a session entry, never model context.
+			 */
+			type: "side-answer";
+			answer: WebSideAnswer;
+	  }
 	| { type: "status"; status: WebSessionStatus; unread: boolean }
 	| ({ type: "queue" } & WebQueueState)
 	| { type: "error"; message: string };
@@ -148,8 +191,25 @@ export function mcpStatuses(): StepMcpStatus[] {
 	return getStepMcpStatuses();
 }
 
+/** One `/btw` answer as the rail shows it. */
+export interface WebSideAnswer {
+	readonly id: string;
+	readonly question: string;
+	readonly text: string;
+	readonly model?: string;
+	/** The request was cancelled or produced nothing usable. */
+	readonly unavailable?: boolean;
+	readonly createdAt: number;
+}
+
+/** Side answers kept per session: enough to scroll back through, bounded like the terminal's history. */
+const SIDE_ANSWER_LIMIT = 30;
+
 /** The session modes the composer can toggle. Each is independent of the others. */
 export type WebMode = "goal" | "plan" | "ultraloop";
+
+/** What the goal strip's buttons and edit form ask for. */
+export type WebGoalAction = "start" | "pause" | "resume" | "edit" | "clear";
 
 /**
  * The official StepCode CLI currently persists sessions through Pi's native
@@ -162,6 +222,14 @@ function webUiContext(
 	broker: ApprovalBroker,
 	clarifications: ClarificationBroker,
 	selections: SelectionBroker,
+	textInputs: TextInputBroker,
+	notify: (notice: {
+		level: "info" | "warning" | "error";
+		text: string;
+		markdown?: boolean;
+		transient?: boolean;
+	}) => void,
+	sideAnswer: (answer: SideAnswer) => void,
 ): ExtensionUIContext {
 	const unsupported = async <T>(fallback: T): Promise<T> => fallback;
 	return {
@@ -169,8 +237,18 @@ function webUiContext(
 		select: selectionSelect(selections),
 		confirm: (title, message, options) =>
 			broker.confirm(title.replace(/^Approve |^Dangerous /u, ""), message, options?.signal),
-		input: async () => undefined,
-		notify: () => {},
+		input: textInput(textInputs),
+		// A command's answer is a notice in the transcript, not a prompt: it never
+		// reaches the model or the session file.
+		notify: (message, type, options) =>
+			notify({
+				level: type ?? "info",
+				text: message,
+				...(options?.markdown ? { markdown: true } : {}),
+				...(options?.transient ? { transient: true } : {}),
+			}),
+		// `/btw` answers get a rail tab instead of a transcript row.
+		sideAnswer,
 		onTerminalInput: () => () => {},
 		setStatus: () => {},
 		setWorkingMessage: () => {},
@@ -190,7 +268,10 @@ function webUiContext(
 		setEditorComponent: () => {},
 		getEditorComponent: () => undefined,
 		get theme() {
-			return undefined as never;
+			// `ExtensionUIContext.theme` is required, and extensions style status
+			// text unconditionally. Identity styling keeps those calls working
+			// without emitting ANSI into HTML or a notice.
+			return plainTheme;
 		},
 		getAllThemes: () => [],
 		getTheme: () => undefined,
@@ -200,10 +281,32 @@ function webUiContext(
 	};
 }
 
-function makeExtensions(
+/**
+ * The resources a provenance entry names, structurally matching the kernel's
+ * `UsageResources`. The Web host renders no `/usage` panel, so it records these
+ * only for the session's `step.usage_provenance` entries.
+ */
+export interface WebUsageResources {
+	agents: string[];
+	skills: { name: string; filePath: string }[];
+}
+
+/**
+ * Extensions the Web/Desktop host mounts, in registration order.
+ *
+ * Exported for the assembly regression test: the list used to lose `goal` and
+ * `cron` silently, which unregistered their slash commands and tools — `/goal`
+ * then reached the model as ordinary text. Keep the test's expectations in step
+ * with this list rather than re-deriving it at each call site.
+ *
+ * `usageRecording` is optional because recording provenance is separate from the
+ * `/usage` UI this host does not render; a caller without one records nothing.
+ */
+export function webExtensions(
 	settingsManager: StepSettingsManager,
 	broker: ApprovalBroker,
 	onPermissionChange: (preset: StepPermissionPresetId) => void,
+	usageRecording?: () => WebUsageResources,
 ): InlineExtension[] {
 	const telemetry = NOOP_OBSERVABILITY_PROVIDER.createReporter();
 	const persisted = settingsManager.getStepSettings();
@@ -218,9 +321,6 @@ function makeExtensions(
 			pi.on("tool_call", (event) => {
 				broker.captureToolCall(event.toolCallId, event.toolName, event.input);
 			});
-			pi.on("session_start", (_event, context) => {
-				context.ui.notify("StepCode Web session ready");
-			});
 		},
 	};
 	return [
@@ -231,13 +331,23 @@ function makeExtensions(
 			stepSettings: () => settingsManager,
 			onPermissionChange,
 			traceHeaderPolicy: NOOP_OBSERVABILITY_PROVIDER.traceHeaderPolicy(),
+			usageRecording,
 		}),
-		createStepCapabilitiesExtensionInline({ telemetry, cliPath: resolveSubagentCliPath() }),
+		// The client's ultraloop pick rides one message; the host offers no
+		// standing `/ultraloop on` switch to revoke, so neither register it nor
+		// revive a standing entry carried in from a CLI session.
+		//
+		// Capabilities registers plan, tasks, subagent, workflow, and ultraloop —
+		// but NOT goal or cron. Those are separate extensions, and omitting one
+		// leaves its tools and slash commands unregistered: `/goal` then reaches
+		// the model as ordinary text, and the session has no create_goal.
+		createStepCapabilitiesExtensionInline({
+			telemetry,
+			cliPath: resolveSubagentCliPath(),
+			ultraloopSessionMode: false,
+		}),
 		createStepCronExtension({ telemetry }),
 		createStepGoalExtension({ telemetry }),
-		createStepPlanExtension({ telemetry }),
-		// Ultracode/Ultraloop takes no telemetry option of its own.
-		createUltraloopOptInExtension(),
 	];
 }
 
@@ -275,9 +385,12 @@ export function pickFallbackModel<T extends { provider: string; id: string }>(
 type CatalogModel = ReturnType<ModelRuntime["getAvailableSnapshot"]>[number];
 
 /** Picker row for one catalog model; `thinkingLevels` lets a draft show effort before a session exists. */
-export function projectModel(model: CatalogModel) {
+export function projectModel(model: CatalogModel, providerName?: string) {
 	return {
 		provider: model.provider,
+		// The picker partitions the catalog by provider; the declared name is
+		// the section heading, the id only its fallback.
+		...(providerName && providerName !== model.provider ? { providerName } : {}),
 		id: model.id,
 		name: model.name,
 		api: model.api,
@@ -296,6 +409,27 @@ export interface WebModelSource {
 	thinkingLevel?: string;
 	availableThinkingLevels: string[];
 	models: ReturnType<typeof projectModel>[];
+}
+
+/**
+ * The declared display name of every provider that has models in the snapshot,
+ * for the picker's per-provider section headings. An unknown provider keeps its
+ * id, which `getProvider` already falls back to.
+ */
+function providerNamesOf(modelRuntime: ModelRuntime): Map<string, string> {
+	const names = new Map<string, string>();
+	for (const model of modelRuntime.getAvailableSnapshot()) {
+		if (!names.has(model.provider)) {
+			names.set(model.provider, modelRuntime.getProvider(model.provider)?.name ?? model.provider);
+		}
+	}
+	return names;
+}
+
+/** Every catalog model with its provider's name attached, as both pickers paint them. */
+function projectedModels(modelRuntime: ModelRuntime): ReturnType<typeof projectModel>[] {
+	const names = providerNamesOf(modelRuntime);
+	return modelRuntime.getAvailableSnapshot().map((model) => projectModel(model, names.get(model.provider)));
 }
 
 /** The kernel's Full Access risk question, recognised by its exact option list. */
@@ -366,7 +500,7 @@ export async function predictDraftModel(
 		resolved && available.some((candidate) => modelsMatch(candidate, resolved))
 			? resolved
 			: pickFallbackModel(available, preferred);
-	const models = available.map(projectModel);
+	const models = projectedModels(modelRuntime);
 	if (!model) return { availableThinkingLevels: [], models };
 	const wanted =
 		modelThinkingLevels[`${model.provider}/${model.id}`] ??
@@ -387,6 +521,52 @@ function imagesOf(attachments: readonly WebAttachment[]): { type: "image"; data:
 		.map((attachment) => ({ type: "image" as const, data: attachment.data, mimeType: attachment.mimeType }));
 }
 
+/** Whether an entry is a persisted user message, which is what makes a prompt not the first. */
+function isUserEntry(entry: SessionEntry): boolean {
+	if (entry.type !== "message") return false;
+	return (entry.message as { role?: unknown }).role === "user";
+}
+
+/**
+ * The kernel consumes a slash command without journaling the text the user sent
+ * (`AgentSession.prompt` executes extension commands directly), so the flow
+ * shows a command's effects — a goal card, a compaction row — but never the
+ * command line itself. The host echoes it as a custom entry: presentation
+ * only, never model context (the same rule as the thinking timings).
+ */
+export const COMMAND_ECHO_TYPE = "stepcode-web.command-echo";
+
+/**
+ * Kernel extension commands reachable from the composer. `/mcp`, `/btw` and
+ * `/feedback` are client-side surfaces and never arrive at `send`; the
+ * `ultracode:` keyword form is an ordinary message and journals on its own.
+ */
+const ECHOED_COMMANDS: ReadonlySet<string> = new Set([
+	"goal",
+	"plan",
+	"init",
+	"compact",
+	"permissions",
+	"ultraloop",
+	"ultracode",
+	"todos",
+	"cron",
+	"workflows",
+	"plugin",
+	"llama",
+]);
+
+/**
+ * The command line to echo for `text`, or null when it is not a kernel
+ * command. `/skill:` never echoes: its expansion journals as a user message
+ * that already carries the skill badge.
+ */
+export function commandEchoText(text: string): string | null {
+	const name = /^\/([A-Za-z0-9][\w.:-]*)(?:\s|$)/u.exec(text)?.[1];
+	if (!name || !ECHOED_COMMANDS.has(name)) return null;
+	return text.trim();
+}
+
 /** Same provider and model id, which is all a resolved model needs to match. */
 function modelsMatch(left: { provider: string; id: string }, right: { provider: string; id: string }): boolean {
 	return left.provider === right.provider && left.id === right.id;
@@ -397,6 +577,8 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 	const usage = entry.type === "message" && entry.message.role === "assistant" ? entry.message.usage : undefined;
 	const notification =
 		entry.type === "custom_message" ? projectSubagentNotification(entry.customType, entry.details) : undefined;
+	// The command echo's text rides the custom entry's data.
+	const echo = commandEchoOf(entry);
 	return {
 		id: entry.id,
 		type: entry.type,
@@ -405,9 +587,25 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
 		...(notification ? { details: notification } : {}),
-		...(entry.type === "compaction" ? { summary: entry.summary } : {}),
+		...(echo === undefined ? {} : { customType: COMMAND_ECHO_TYPE, command: echo }),
+		// A compaction row shows what it replaced: the summary, the prompt volume
+		// before it, and the entry that stays canonical after it.
+		...(entry.type === "compaction"
+			? {
+					summary: entry.summary,
+					tokensBefore: entry.tokensBefore,
+					firstKeptEntryId: entry.firstKeptEntryId,
+				}
+			: {}),
 		...(entry.type === "branch_summary" ? { summary: entry.summary } : {}),
 	};
+}
+
+/** The echoed command line of a command-echo custom entry, or undefined for every other entry. */
+function commandEchoOf(entry: SessionEntry): string | undefined {
+	if (entry.type !== "custom" || entry.customType !== COMMAND_ECHO_TYPE) return undefined;
+	const text = (entry.data as { text?: unknown } | undefined)?.text;
+	return typeof text === "string" && text ? text : undefined;
 }
 
 /** Timing is host presentation metadata, not a field added to provider messages. */
@@ -422,10 +620,64 @@ export function projectEntries(entries: readonly SessionEntry[]): Record<string,
 	});
 }
 
+/** The goal strip's data, or undefined when the session has no goal to show. */
+export function projectGoal(goal: StepGoalRecord | undefined): Record<string, unknown> | undefined {
+	if (!goal) return undefined;
+	return {
+		id: goal.id,
+		objective: goal.objective,
+		status: goal.status,
+		tokensUsed: goal.tokensUsed,
+		...(goal.tokenBudget === undefined ? {} : { tokenBudget: goal.tokenBudget }),
+		// Completed runs, not a stop condition: the client shows it as progress.
+		rounds: goal.iteration,
+	};
+}
+
+/**
+ * Plan mode as a client reads it. `enabled` drives the composer's plan affordance;
+ * `planFilePath` is the file an open plan is drafting into.
+ */
+export function projectPlanMode(
+	state: { enabled: boolean; planFilePath?: string; planSource: string } | undefined,
+): Record<string, unknown> {
+	return {
+		enabled: state?.enabled ?? false,
+		...(state?.planFilePath ? { planFilePath: state.planFilePath } : {}),
+		...(state?.enabled ? { planSource: state.planSource } : {}),
+	};
+}
+
+/** The text of a recorded user message, whichever shape the kernel stored. */
+function userMessageText(content: string | readonly { readonly type: string; readonly text?: string }[]): string {
+	if (typeof content === "string") return content;
+	return content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join(" ");
+}
+
+/** The entry a nameless fork starts from: the last thing the user said. */
+function lastUserEntryId(session: AgentSession): string | undefined {
+	const branch = session.sessionManager.getBranch();
+	return [...branch].reverse().find((entry) => entry.type === "message" && entry.message.role === "user")?.id;
+}
+
+/** Appended to the parent title by every fork, so a fork of a fork reads `_fork_fork`. */
+const FORK_SUFFIX = "_fork";
+/** Keep the suffix visible: a fork of a very long title is shortened, not truncated past the suffix. */
+const FORK_TITLE_MAX = 96;
+
+function forkTitleOf(parent: string): string {
+	const room = FORK_TITLE_MAX - FORK_SUFFIX.length;
+	const base = parent.length <= room ? parent : `${parent.slice(0, room - 1).trimEnd()}…`;
+	return `${base}${FORK_SUFFIX}`;
+}
+
 export class WebSession {
 	readonly broker: ApprovalBroker;
 	readonly clarifications: ClarificationBroker;
 	readonly selections: SelectionBroker;
+	readonly textInputs: TextInputBroker;
+	/** `/btw` answers of this session, oldest first. Process memory, never persisted. */
+	private sideAnswers: WebSideAnswer[] = [];
 	private readonly listeners = new Set<(event: WebEvent) => void>();
 	private runtime!: AgentSessionRuntime;
 	private session!: AgentSession;
@@ -437,11 +689,18 @@ export class WebSession {
 	private unsubscribeSession?: () => void;
 	private unsubscribeRuntimeSessionChange?: () => void;
 	private releaseWriterLease?: () => void;
+	/**
+	 * Set by the store: re-keys a session after a fork, when the same object
+	 * starts advertising the new session id.
+	 */
+	adopt?: (previousId: string, id: string, session: WebSession) => void;
 	/** Receives this session's file writes, including those of forks and /new. */
 	private index?: SessionIndexSink;
 	private writerLeasePath?: string;
 	private archived = false;
 	private readonly reverter = new TurnReverter();
+	/** Set while `fork` swaps the session, so a second click cannot branch again. */
+	private forking = false;
 	/** Status a pending selection interrupted, restored once it is answered. */
 	private statusBeforeSelection?: WebSessionStatus;
 	/** Set while `setPolicy` waits to learn whether its command raised a dialog. */
@@ -472,6 +731,13 @@ export class WebSession {
 	private lastRunAborted = false;
 	/** The kernel's retry of a failed model request, while one is scheduled or running. */
 	private readonly retry = new RetryTracker();
+	/** One background attempt to name this session after its first prompt has run. */
+	private sessionTitleGenerated = false;
+	/**
+	 * Feedback evidence prepared for the dialog the user is reading, until the
+	 * submission that consumes it (see `feedback-report.ts`).
+	 */
+	private readonly feedbackDrafts = new FeedbackDrafts((evidence) => this.describeFeedbackPreview(evidence));
 
 	private constructor(
 		id: string,
@@ -521,10 +787,36 @@ export class WebSession {
 				if (
 					event.type === "selection_resolved" &&
 					!this.selections.pendingRequests().length &&
+					!this.textInputs.pendingRequests().length &&
 					!this.clarifications.pendingRequests().length &&
 					!this.broker.pendingRequests().length
 				) {
 					this.setStatus(this.statusBeforeSelection ?? "idle", false);
+					this.statusBeforeSelection = undefined;
+				}
+			},
+		);
+		// A kernel text prompt is a wait too: the command is suspended until the
+		// answer arrives. It shares the "waiting" projection with selectors so the
+		// composer does not start a second turn behind a half-answered dialog.
+		this.textInputs = new TextInputBroker(
+			() => this.id,
+			(event) => {
+				if (event.type === "text_input_required" && this.status !== "waiting") {
+					this.statusBeforeSelection = this.status;
+					this.setStatus("waiting", false);
+				}
+				this.emit(event);
+				if (
+					event.type === "text_input_resolved" &&
+					!this.textInputs.pendingRequests().length &&
+					!this.selections.pendingRequests().length &&
+					!this.clarifications.pendingRequests().length &&
+					!this.broker.pendingRequests().length
+				) {
+					// The saved status can be stale: the run may have settled while the
+					// dialog was open. The live session knows whether one is active.
+					this.setStatus(this.session.isStreaming ? "running" : (this.statusBeforeSelection ?? "idle"), false);
 					this.statusBeforeSelection = undefined;
 				}
 			},
@@ -625,18 +917,40 @@ export class WebSession {
 				settingsManager,
 				modelRuntime: this.modelRuntime,
 				resourceLoaderOptions: {
-					extensionFactories: makeExtensions(settingsManager, this.broker, (preset) => {
-						this.livePermission = preset;
-					}),
+					extensionFactories: webExtensions(
+						settingsManager,
+						this.broker,
+						(preset) => {
+							this.livePermission = preset;
+						},
+						// The session does not exist yet when the extension list is built,
+						// so recording resolves its skill list lazily, once it does.
+						() => this.usageResources(),
+					),
 				},
 			});
 			// Resolve the model against a populated catalog. `models.json` is only an
 			// offline baseline and Step ships none, so an unrefreshed runtime offers
 			// zero models and the session is left on the `unknown` placeholder.
 			await refreshStepModelCatalog(this.modelRuntime);
+			// The Step model-facing tools, exactly as the CLI mounts them. Without
+			// this the host runs Pi's builtins (`read`/`write`/`edit`/`bash`) while the
+			// prompt, the plan extension and the CLI all name Step's tools
+			// (`read_file`/`write_file`/`run_command`), so plan mode activated tools
+			// that did not exist and the model could not write its own proposal.
+			const profileTools = createStepToolProfile(options.cwd, {
+				agentDir: options.agentDir,
+				searchWeb: { authPath: getStepAuthPath() },
+				read: { autoResizeImages: settingsManager.getImageAutoResize() },
+				bash: {
+					commandPrefix: settingsManager.getShellCommandPrefix(),
+					shellPath: settingsManager.getShellPath(),
+				},
+			});
 			const created = await createAgentSessionFromServices({
 				services,
 				sessionManager: options.sessionManager,
+				...(profileTools.length ? { customTools: profileTools, noTools: "builtin" as const } : {}),
 				sessionStartEvent: options.sessionStartEvent,
 				// Same defaults the CLI injects into argv (`withStepDefaults`): the
 				// persisted provider/model from config.toml, with the product
@@ -644,12 +958,10 @@ export class WebSession {
 				// carries the persisted thinking level, so it is not repeated here.
 				defaultProvider: defaults.provider,
 				...(defaults.modelId ? { defaultModelId: defaults.modelId } : {}),
-				systemPromptProduct: {
-					name: "StepCode",
-					role: "a local coding agent",
-					introduction: "You are StepCode Web. Work in the selected workspace and explain what you do.",
-					includeDocumentation: false,
-				},
+				// The app identity and the Step operating contract come from
+				// coding-agent: Desktop runs this host, so both share one definition
+				// instead of the host assembling a prompt of its own.
+				systemPromptProduct: STEP_APP_SYSTEM_PROMPT_PRODUCT,
 			});
 			return { ...created, services, diagnostics: services.diagnostics };
 		};
@@ -677,9 +989,18 @@ export class WebSession {
 		// A replaced session's dialogs answer nothing: the kernel's generation
 		// guard already ignores them. Dismiss them so the new session starts clean.
 		this.selections.clear();
+		this.textInputs.clear();
+		// A prepared report describes the conversation it was prepared from. After
+		// a fork or `/new` that is a different branch and a different file, so a
+		// token from before the rebind must not submit it under the new id.
+		this.feedbackDrafts.clear();
 		this.livePermission = undefined;
 		// Keep the advertised id in step with the session actually bound, so a
 		// fork or /new does not leave the UI pointing at the previous session.
+		//
+		// The store key is deliberately not moved here: only `fork()` returns an
+		// id the client navigates to. A `/clear` or `switchSession` keeps its key
+		// pointing at this object, which is what the open page still polls.
 		this.id = session.sessionManager.getSessionId();
 		const sessionFile = session.sessionManager.getSessionFile();
 		const resolvedSessionFile = sessionFile ? resolve(sessionFile) : undefined;
@@ -747,10 +1068,23 @@ export class WebSession {
 				// and an extension may have started a follow-up run in the meantime.
 				if (!hold) setImmediate(() => this.dispatchQueued());
 			}
+			// A manual compaction settles no run, so queued messages wait for this
+			// event instead. Auto compaction is part of a run: its retry continues
+			// the turn, and `agent_settled` dispatches the queue after that.
+			if (event.type === "compaction_end" && event.reason === "manual" && !this.session.isStreaming) {
+				setImmediate(() => this.dispatchQueued());
+			}
 		});
 		void session.bindExtensions({
 			mode: "rpc",
-			uiContext: webUiContext(this.broker, this.clarifications, this.selections),
+			uiContext: webUiContext(
+				this.broker,
+				this.clarifications,
+				this.selections,
+				this.textInputs,
+				(notice) => this.emit({ type: "notice", ...notice }),
+				(answer) => this.recordSideAnswer(answer),
+			),
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: (options) => this.runtime.newSession(options),
@@ -859,12 +1193,54 @@ export class WebSession {
 	async send(text: string, attachments: readonly WebAttachment[] = [], followUp = false): Promise<void> {
 		if (this.isReverting()) throw new Error("Wait for the revert to finish");
 		this.unread = false;
+		this.echoCommand(text);
+		this.maybeGenerateSessionTitle(text);
 		const images = imagesOf(attachments);
 		await this.session.prompt(withTextAttachments(text, attachments), {
 			source: "rpc",
 			...(images.length ? { images } : {}),
 			...(followUp ? { streamingBehavior: "followUp" as const } : {}),
 		});
+	}
+
+	/**
+	 * Journal the command line of a kernel slash command before the kernel
+	 * consumes it (see `COMMAND_ECHO_TYPE`). Queued sends replay through
+	 * `send`, so they echo when they actually run.
+	 */
+	private echoCommand(text: string): void {
+		const command = commandEchoText(text);
+		if (command) this.session.sessionManager.appendCustomEntry(COMMAND_ECHO_TYPE, { text: command });
+	}
+
+	/**
+	 * Name the session after its first prompt, with a fire-and-forget sidecar
+	 * call on the session's own model. The sidebar already titles a nameless
+	 * session by its first message, so the generated title only has to beat
+	 * that raw prefix; a failure is dropped and the fallback stays. One
+	 * attempt per open session, and a name set while it runs (the user
+	 * renamed) always wins.
+	 */
+	private maybeGenerateSessionTitle(text: string): void {
+		if (this.sessionTitleGenerated || this.session.sessionName) return;
+		// A user message already on the branch means this send is not the first prompt.
+		if (this.session.sessionManager.getBranch().some(isUserEntry)) return;
+		const input = sessionTitleInput(text);
+		if (!input) return;
+		const model = this.session.model;
+		if (!model) return;
+		this.sessionTitleGenerated = true;
+		// The session under `this.session` can change while the call runs (fork,
+		// /new); the title belongs to the session whose first prompt seeded it.
+		const session = this.session;
+		void generateSessionTitle(this.modelRuntime, model, input)
+			.then((title) => {
+				if (!title || session !== this.session || session.sessionName) return;
+				session.setSessionName(title);
+			})
+			.catch(() => {
+				// Decoration only: a failed sidecar must not surface as a session error.
+			});
 	}
 
 	/** Hand `text` to the running turn, read before its next model call; refused for extension commands. */
@@ -892,9 +1268,9 @@ export class WebSession {
 		}));
 	}
 
-	/** Whether a message sent now has to wait: a run is active or the session waits on the user. */
+	/** Whether a message sent now has to wait: a run is active, the context is being compacted, or the session waits on the user. */
 	private mustQueue(): boolean {
-		return this.session.isStreaming || this.status === "waiting" || this.isReverting();
+		return this.session.isStreaming || this.session.isCompacting || this.status === "waiting" || this.isReverting();
 	}
 
 	/**
@@ -1048,14 +1424,65 @@ export class WebSession {
 	}
 
 	/**
+	 * Keep a `/btw` answer for the rail and announce it.
+	 *
+	 * The terminal keeps the same history in process memory; doing the same here
+	 * means a side question is never written to the session file and never enters
+	 * the model's context, while a reloaded page still shows what it answered.
+	 */
+	recordSideAnswer(answer: SideAnswer): void {
+		const entry: WebSideAnswer = {
+			id: randomUUID(),
+			question: answer.question,
+			text: answer.text,
+			...(answer.model ? { model: answer.model } : {}),
+			...(answer.unavailable ? { unavailable: true } : {}),
+			createdAt: Date.now(),
+		};
+		this.sideAnswers = [...this.sideAnswers, entry].slice(-SIDE_ANSWER_LIMIT);
+		this.emit({ type: "side-answer", answer: entry });
+	}
+
+	/** Drop this session's side answers (the rail panel's Clear action). */
+	clearSideAnswers(): void {
+		this.sideAnswers = [];
+	}
+
+	/**
+	 * Answer a kernel text prompt (`ui.input`). `undefined` dismisses it and an
+	 * empty string is a submitted empty answer, which is how the kernel tells
+	 * "the user cancelled" from "the user typed nothing".
+	 */
+	respondTextInput(id: string, value: string | undefined): boolean {
+		return this.textInputs.respond(id, value);
+	}
+
+	/**
+	 * Prepare this conversation's report and describe it for the consent dialog.
+	 *
+	 * The kernel decides what a report carries; this only shows the user what was
+	 * prepared and keeps it until the submission, so the dialog never promises
+	 * something the payload does not contain.
+	 */
+	async prepareFeedback(): Promise<WebFeedbackDraft> {
+		// Refuse before preparing anything: building an archive for a report that
+		// cannot be delivered would read the session file for nothing.
+		this.assertFeedbackEnabled();
+		return this.feedbackDrafts.keep(await this.prepareFeedbackEvidence());
+	}
+
+	/**
 	 * Submit feedback about this conversation.
 	 *
 	 * The kernel accepts five coarse categories and rejects anything else, while
 	 * the UI offers finer topics. The topic is therefore folded into the comment
 	 * and the kernel category is derived from the sentiment plus the topic, so no
 	 * detail is lost on the way through.
+	 *
+	 * `token` names the evidence the dialog showed the user. Without one (an
+	 * older client, a scripted caller) the evidence is prepared here instead.
 	 */
-	async submitFeedback(input: { sentiment: "up" | "down"; topic?: string; comment: string }): Promise<{
+	async submitFeedback(input: { sentiment: "up" | "down"; topic?: string; comment: string; token?: string }): Promise<{
 		readonly ok: boolean;
 		readonly message: string;
 		readonly feedbackId?: string;
@@ -1064,6 +1491,11 @@ export class WebSession {
 		if (!endpoint) {
 			return { ok: false, message: "Feedback is not configured for this build." };
 		}
+		// An opt-out is a decision about sending anything at all, not just about
+		// the dialog: refuse here too, so a caller that skipped the preview cannot
+		// file a report the user disabled.
+		const disabled = this.feedbackDisabledReason();
+		if (disabled) return { ok: false, message: disabled };
 		const category = feedbackCategoryFor(input.sentiment, input.topic);
 		// The topic table is a copy of a kernel contract; fail loudly if it drifts
 		// rather than letting the kernel reject the submission downstream.
@@ -1073,43 +1505,184 @@ export class WebSession {
 		}
 		const topic = input.topic?.trim();
 		const comment = topic ? `[${topic}] ${input.comment.trim()}` : input.comment.trim();
+		const bundleEndpoint = resolveFeedbackEndpoint(process.env, true);
+		// Send exactly what the dialog showed. A token that no longer names
+		// prepared evidence (expired, consumed, or cleared by a rebind) must not
+		// silently send freshly prepared evidence the user never reviewed.
+		const prepared = input.token ? this.feedbackDrafts.take(input.token) : undefined;
+		if (input.token && !prepared) {
+			return {
+				ok: false,
+				message: "The report details expired before sending. Reopen the dialog to review them again.",
+			};
+		}
+		const evidence = prepared ?? (await this.prepareFeedbackEvidence());
+		const bundle = evidence.bundle;
 		const result = await submitKernelFeedback({
 			category: normalized,
 			comment,
-			sessionId: this.id,
+			...(evidence.summary ? { sessionSummary: evidence.summary } : {}),
+			...(evidence.diagnostics ? { diagnostics: evidence.diagnostics.diagnostics } : {}),
+			...(bundle ? { sessionBundle: bundle } : {}),
 			storageRootDir: resolveStepStorageRoot(),
+			sessionId: bundle?.status === "ready" ? bundle.bundle.sessionId : this.id,
 			endpoint,
+			...(bundleEndpoint ? { bundleEndpoint } : {}),
 			username: readFeedbackUsername(),
-			surface: "cli",
+			surface: this.feedbackSurface(),
 			env: process.env,
 		});
 		if (result.status === "invalid") return { ok: false, message: result.error };
 		if (result.status === "cancelled") return { ok: false, message: "Feedback submission was cancelled." };
+		// A report that is queued for retry was not delivered. Saying "Submitted"
+		// here would tell the user a report exists upstream when it is still local.
+		if (result.status === "pending") {
+			const outcome = result.outcome;
+			return {
+				ok: false,
+				message:
+					outcome.status === "pending"
+						? formatFeedbackPendingDetails(outcome)
+						: "The report was not delivered to the feedback endpoint.",
+			};
+		}
+		// A skipped archive is not a failed report, but the user who was shown a
+		// file list must learn which part of it never left the machine. The same
+		// holds for an archive whose upload failed after the body was accepted: the
+		// kernel keeps it beside the pending body for `step feedback --retry`.
+		const bundleNote =
+			bundle?.status === "skipped"
+				? ` ${formatFeedbackBundleSkipMessage(bundle)}`
+				: result.outcome.status === "delivered" && result.outcome.bundle?.status === "pending"
+					? ` ${formatFeedbackBundleFailureDetails(result.outcome.bundle)}`
+					: "";
 		return {
 			ok: true,
-			message: `Submitted. Feedback ID: ${result.submission.feedbackId}`,
+			message: `Submitted. Feedback ID: ${result.submission.feedbackId}${bundleNote}`,
 			feedbackId: result.submission.feedbackId,
 		};
 	}
 
+	/** The report's own evidence: this session's file, its project, and the host's live facts. */
+	private async prepareFeedbackEvidence(): Promise<FeedbackEvidence> {
+		const sessionFile = this.sessionFile();
+		const usage = this.session.getContextUsage();
+		return await prepareKernelFeedbackEvidence({
+			storageRootDir: resolveStepStorageRoot(),
+			// Name the session file rather than the id: a report must describe this
+			// conversation, never the newest file of a neighbouring project.
+			...(sessionFile ? { sessionFile } : { sessionId: this.id }),
+			cwd: this.cwd,
+			env: process.env,
+			// Nothing can receive the archive without a bundle endpoint; building it
+			// would read and compress up to 24 MiB and promise it on the review page.
+			withoutBundle: resolveFeedbackEndpoint(process.env, true) === undefined,
+			runtime: {
+				...(this.livePermission ? { permissionPreset: this.livePermission } : {}),
+				...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
+				toolCount: this.session.getActiveToolNames().length,
+				skillCount: this.skills().length,
+				mcpServerNames: mcpStatuses().map((status) => status.name),
+			},
+		});
+	}
+
+	/** Why this host will not file a report, or undefined when it will. */
+	private feedbackDisabledReason(): string | undefined {
+		const settings = resolveFeedbackSettings({
+			env: process.env,
+			settings: (this.session.settingsManager as StepSettingsManager).getStepSettings(),
+		});
+		if (settings.enabled) return undefined;
+		return settings.reason === "env-opt-out"
+			? "Feedback is disabled by environment settings."
+			: "Feedback is disabled in Step settings.";
+	}
+
+	private assertFeedbackEnabled(): void {
+		const disabled = this.feedbackDisabledReason();
+		if (disabled) throw new Error(disabled);
+		if (!resolveFeedbackEndpoint()) throw new Error("Feedback is not configured for this build.");
+	}
+
+	/** Which product filed the report; Desktop runs this same host under Electron. */
+	private feedbackSurface(): "web" | "desktop" {
+		return process.versions.electron ? "desktop" : "web";
+	}
+
+	private describeFeedbackPreview(evidence: FeedbackEvidence): WebFeedbackPreview {
+		return describeFeedbackEvidence({
+			evidence,
+			surface: this.feedbackSurface(),
+			version: STEPCODE_VERSION.value,
+			channel: readStepBuildIdentity().channel,
+		});
+	}
+
 	/**
-	 * Fork the conversation at an entry, or from the current turn when omitted.
-	 * Returns the session id now bound, which differs after a successful fork.
+	 * Branch this session at `entryId`, or retry the last turn when omitted.
+	 *
+	 * The kernel always creates a new session id and file. `this.id` therefore
+	 * moves with the rebind (`bindSession`), and the returned id is the new one:
+	 * returning the old id made the client navigate to a session that does not
+	 * exist. `adopt` registers the new id in the store so `GET` and the inspector
+	 * reach the session that was just bound.
 	 */
 	async fork(entryId?: string): Promise<{ cancelled: boolean; sessionId: string }> {
-		if (entryId) {
-			// Forking at a named turn keeps that turn in the new branch; the default
-			// "before" position only accepts a user message.
-			const result = await this.runtime.fork(entryId, { position: "at" });
-			return { cancelled: result.cancelled, sessionId: this.id };
+		// A fork swaps the session under the page. Refusing a concurrent one keeps
+		// a double click from creating two branches and binding the wrong one.
+		if (this.forking) throw new Error("A fork is already in progress");
+		if (this.status === "running" || this.status === "waiting" || this.session.isCompacting)
+			throw new Error("Stop the running turn before forking");
+		this.forking = true;
+		const previousId = this.id;
+		try {
+			const targetEntryId = entryId ?? lastUserEntryId(this.session);
+			if (!targetEntryId) return { cancelled: true, sessionId: previousId };
+			const childTitle = forkTitleOf(this.forkTitle());
+			// An entry keeps that turn in the new branch ("at"); the implicit last
+			// user message means "retry this turn", so the branch ends before it.
+			const result = await this.runtime.fork(targetEntryId, {
+				position: entryId ? "at" : "before",
+			});
+			if (result.cancelled) return { cancelled: true, sessionId: previousId };
+			const childId = this.session.sessionManager.getSessionId();
+			try {
+				// Named after the branch exists, so the write lands in the child file.
+				// Derived from the parent's current title, so forking a fork appends
+				// again: `xxx` -> `xxx_fork` -> `xxx_fork_fork`.
+				this.session.setSessionName(childTitle);
+			} catch (error) {
+				// The branch is usable; a title that did not persist must not be
+				// reported as a failed fork, but it must not be silent either.
+				this.publishError(
+					`Forked session ${childId.slice(0, 8)} but could not name it: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			}
+			// A branch is a new session file: the parent's archive flag is not its own.
+			this.archived = false;
+			this.adopt?.(previousId, childId, this);
+			return { cancelled: false, sessionId: childId };
+		} finally {
+			this.forking = false;
 		}
-		// No target: fork from the last thing the user said.
-		const branch = this.session.sessionManager.getBranch();
-		const lastUserEntry = [...branch]
-			.reverse()
+	}
+
+	/** The parent title a fork extends: the name, else the first user message, else the id. */
+	private forkTitle(): string {
+		const named = this.session.sessionName?.trim();
+		if (named) return named;
+		const firstUser = this.session.sessionManager
+			.getBranch()
 			.find((entry) => entry.type === "message" && entry.message.role === "user");
-		const result = lastUserEntry ? await this.runtime.fork(lastUserEntry.id) : { cancelled: true };
-		return { cancelled: result.cancelled, sessionId: this.id };
+		const first =
+			firstUser?.type === "message" && firstUser.message.role === "user"
+				? userMessageText(firstUser.message.content)
+				: "";
+		const trimmed = first.replace(/\s+/gu, " ").trim();
+		return trimmed || `Session ${this.id.slice(0, 8)}`;
 	}
 
 	async decideApproval(id: string, verdict: "approve" | "approve_for_session" | "deny"): Promise<boolean> {
@@ -1141,6 +1714,20 @@ export class WebSession {
 		const model = this.modelRuntime.getModel(provider, modelId);
 		if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 		await this.session.setModel(model, { persist: true });
+	}
+
+	/**
+	 * Re-read `models.json` and `auth.json` so a provider added in settings
+	 * reaches this open session's picker too, not just sessions started after it.
+	 *
+	 * Same sequence as a draft's catalog build (`draftModels`): the cache-only
+	 * pass reloads the declarations, then the Step catalog refresh restores what
+	 * the rebuild reset to the models.json baseline. Models a running turn is
+	 * already using are unaffected — a request resolves its model when it starts.
+	 */
+	async refreshModels(): Promise<void> {
+		await this.modelRuntime.refresh({ allowNetwork: false }).catch(() => {});
+		await refreshStepModelCatalog(this.modelRuntime);
 	}
 
 	/**
@@ -1179,6 +1766,31 @@ export class WebSession {
 		await this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
 	}
 
+	/**
+	 * Apply one goal-strip control from the client.
+	 *
+	 * These run the same `/goal` subcommands the CLI's TUI issues, so pausing,
+	 * rewording, and clearing have exactly one implementation. They are slash
+	 * commands, not agent turns, so they can be sent while a turn runs.
+	 */
+	async controlGoal(action: WebGoalAction, objective?: string): Promise<void> {
+		const text = objective?.trim();
+		if ((action === "edit" || action === "start") && !text) {
+			throw new Error("A goal objective is required");
+		}
+		const prompt =
+			action === "start"
+				? `/goal ${text}`
+				: action === "edit"
+					? `/goal edit ${text}`
+					: action === "pause"
+						? "/goal pause"
+						: action === "resume"
+							? "/goal resume"
+							: "/goal clear";
+		await this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+	}
+
 	snapshot(): Record<string, unknown> {
 		const manager = this.session.sessionManager;
 		return {
@@ -1191,10 +1803,13 @@ export class WebSession {
 			archived: this.archived,
 			revertedTurns: revertedTurnIds(manager.getBranch()),
 			lastRunAborted: this.lastRunAborted,
+			compacting: this.session.isCompacting,
 			entries: projectEntries(manager.getBranch()),
 			pendingApprovals: this.broker.pendingRequests(),
 			pendingClarifications: this.clarifications.pendingRequests(),
 			pendingSelections: this.selections.pendingRequests(),
+			pendingTextInputs: this.textInputs.pendingRequests(),
+			sideAnswers: this.sideAnswers,
 			queuedMessages: this.queue.views(),
 			steeringMessages: this.steeringViews(),
 			retry: this.retry.view(),
@@ -1206,7 +1821,11 @@ export class WebSession {
 			policies: webPermissionPresets(),
 			thinkingLevel: this.session.thinkingLevel,
 			availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-			models: this.modelRuntime.getAvailableSnapshot().map(projectModel),
+			models: projectedModels(this.modelRuntime),
+			// Goal and plan mode are host-rendered state, not transcript text: the
+			// client draws a goal strip and a plan review card from these.
+			goal: projectGoal(getStepGoal(manager.getBranch(), manager.getSessionId())),
+			planMode: projectPlanMode(getStepPlanState(manager.getBranch())),
 		};
 	}
 
@@ -1230,6 +1849,24 @@ export class WebSession {
 	skills(): WebSkill[] {
 		if (!this.session.settingsManager.getEnableSkillCommands()) return [];
 		return webSkills(this.session.resourceLoader.getSkills().skills);
+	}
+
+	/**
+	 * Resources for this session's `step.usage_provenance` entries.
+	 *
+	 * Recording asks on `session_start`, which can run before `bindSession` has
+	 * exposed the session; an early ask records no skills rather than failing the
+	 * session, and `before_agent_start` collects them once the session is bound.
+	 * The full loader list is used, not `skills()`: provenance describes the
+	 * resources a turn could activate, independent of the `/skill:` UI toggle.
+	 */
+	private usageResources(): WebUsageResources {
+		const skills = this.session?.resourceLoader.getSkills().skills ?? [];
+		return {
+			// The Web host has no agent list of its own: no `/usage` status view.
+			agents: [],
+			skills: skills.map((skill) => ({ name: skill.name, filePath: skill.filePath })),
+		};
 	}
 
 	setArchived(archived: boolean): void {
@@ -1264,6 +1901,9 @@ export class WebSession {
 	async close(): Promise<void> {
 		this.clarifications.clear();
 		this.selections.clear();
+		this.textInputs.clear();
+		// A prepared archive is up to 8 MiB; a closed session must not keep it.
+		this.feedbackDrafts.clear();
 		this.broker.clear();
 		this.unsubscribeSession?.();
 		await this.runtime.dispose();
@@ -1381,8 +2021,24 @@ export class WebSessionStore {
 	async create(cwd: string): Promise<WebSession> {
 		await this.metadata.load();
 		const session = await WebSession.create({ cwd, index: this.index });
+		session.adopt = (previousId, id, adopted) => this.adopt(previousId, id, adopted);
 		this.sessions.set(session.id, session);
 		return session;
+	}
+
+	/**
+	 * Re-key a session after a fork: it now advertises the child id, so the old
+	 * key must stop resolving to it (a `GET /sessions/{old}` that answered with
+	 * the child would be a lie) and the new id must resolve immediately.
+	 */
+	private adopt(previousId: string, id: string, session: WebSession): void {
+		const existing = this.sessions.get(id);
+		// A fresh branch id is unique; anything else would mean two live objects
+		// claim one session, which must not be resolved by picking one. Checked
+		// before the old key is dropped, so a refusal leaves the map consistent.
+		if (existing && existing !== session) throw new Error(`Session id already open: ${id}`);
+		if (this.sessions.get(previousId) === session) this.sessions.delete(previousId);
+		this.sessions.set(id, session);
 	}
 
 	/**
@@ -1426,6 +2082,7 @@ export class WebSessionStore {
 			if (!info && unsavedCwd !== undefined) {
 				this.unsaved.delete(id);
 				const recreated = await WebSession.create({ cwd: unsavedCwd, sessionId: id, index: this.index });
+				recreated.adopt = (previousId, nextId, adopted) => this.adopt(previousId, nextId, adopted);
 				this.sessions.set(recreated.id, recreated);
 				return recreated;
 			}
@@ -1436,6 +2093,7 @@ export class WebSessionStore {
 				sessionId: info.id,
 				index: this.index,
 			});
+			opened.adopt = (previousId, nextId, adopted) => this.adopt(previousId, nextId, adopted);
 			opened.setArchived(this.metadata.isArchived(opened.id));
 			this.sessions.set(opened.id, opened);
 			return opened;

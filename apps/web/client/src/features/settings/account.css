@@ -1,24 +1,6 @@
-.settings-content[data-page="account"] {
-	width: min(680px, 100%);
-	padding: 32px 32px 56px;
-}
-.settings-content[data-page="account"] .settings-page-header {
-	flex-direction: row;
-	align-items: center;
-	margin-bottom: 16px;
-}
-.settings-content[data-page="account"] .settings-page-title {
-	font-size: 15px;
-	font-weight: 600;
-	letter-spacing: 0;
-}
+/* Account shares the settings page frame, header and section titles; only its sections are local. */
 .settings-content[data-page="account"] .settings-section-header {
-	margin: 25px 0 12px;
-}
-.settings-content[data-page="account"] .settings-section-heading h2 {
-	color: var(--ink-2);
-	font-size: 12px;
-	font-weight: 500;
+	margin: 28px 0 12px;
 }
 .settings-account-identity {
 	display: flex;
@@ -51,11 +33,11 @@
 }
 .settings-account-identity-text strong {
 	font-size: 14px;
-	font-weight: 550;
+	font-weight: 500;
 }
 .settings-account-identity-text .settings-status {
 	gap: 6px;
-	font-size: 11px;
+	font-size: 12px;
 }
 .settings-account-identity-text .settings-status i {
 	flex: none;
@@ -65,11 +47,11 @@
 	box-shadow: none;
 }
 .settings-account-logout.settings-btn {
-	font-size: 11px;
+	font-size: 13px;
 }
 .settings-account-uid {
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 	font-variant-numeric: tabular-nums;
 }
 .settings-account-form {
@@ -104,9 +86,10 @@
 	background: var(--hover);
 	border-color: var(--line-strong);
 }
+/* The appearance page's selection: a firmer ink edge and a filled ink check, nothing else. */
 .settings-account-channel.active {
-	border-color: var(--accent);
-	background: color-mix(in oklch, var(--accent) 5%, var(--canvas));
+	border-color: var(--ink);
+	box-shadow: 0 0 0 1px var(--ink);
 }
 .settings-account-channel:disabled {
 	cursor: not-allowed;
@@ -118,34 +101,52 @@
 	gap: 9px;
 	min-width: 0;
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 }
 .settings-account-channel-top > .icon {
 	flex: none;
 	width: 20px;
 	height: 20px;
 }
+/*
+ * A radio mark: an empty hairline ring at rest, a filled ink disc with a check
+ * when chosen. The ring is quiet so four cards do not read as four black dots.
+ */
 .settings-account-channel-check {
 	display: grid;
 	flex: none;
 	place-items: center;
-	width: 15px;
-	height: 15px;
+	box-sizing: border-box;
+	width: 18px;
+	height: 18px;
 	margin-left: auto;
+	border: 1.5px solid var(--line-strong);
+	border-radius: 50%;
+	background: transparent;
+	color: var(--action-ink);
+	transition:
+		background-color var(--fast),
+		border-color var(--fast);
+}
+.settings-account-channel:hover:not(:disabled) .settings-account-channel-check {
+	border-color: var(--ink-3);
+}
+.settings-account-channel.active .settings-account-channel-check {
+	border-color: var(--action);
+	background: var(--action);
 }
 .settings-account-channel-check .icon {
-	width: 15px;
-	height: 15px;
-	color: var(--accent);
+	width: 11px;
+	height: 11px;
 }
 .settings-account-channel strong {
 	font-size: 14px;
-	font-weight: 550;
+	font-weight: 500;
 }
 .settings-account-channel small,
 .settings-account-note {
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 	line-height: 1.6;
 }
 .settings-account-login-area {
@@ -167,15 +168,13 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	font-size: 11px;
+	font-size: 13px;
 }
 .settings-content[data-page="account"] .settings-btn {
-	height: auto;
-	min-height: 34px;
 	gap: 8px;
-	padding: 6px 11px;
-	border-radius: 6px;
-	font-weight: 400;
+	padding: 0 13px;
+	border-radius: var(--radius-control);
+	font-weight: 500;
 }
 .settings-account-actions .icon,
 .settings-account-logout .icon,
@@ -281,15 +280,4 @@
 	.settings-account-login-area {
 		animation: none;
 	}
-}
-
-/* Without a credential the page leads to the shared sign-in gate. */
-.settings-account-link {
-	display: grid;
-	gap: 8px;
-	justify-items: start;
-	padding: 14px 0 4px;
-}
-.settings-account-link .settings-account-note {
-	margin: 0;
 }

@@ -14,7 +14,8 @@
 .stream-nav-rail {
 	position: absolute;
 	top: 50%;
-	right: 10px;
+	/* 12px: the ticks end on the summary card's right edge, one margin with the card. */
+	right: 12px;
 	transform: translateY(-50%);
 	max-height: calc(100% - 96px);
 	overflow-x: hidden;

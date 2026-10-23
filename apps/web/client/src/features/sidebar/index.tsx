@@ -10,6 +10,7 @@ import "./sessions.css";
 import "./overlays.css";
 import { BrandRow, ConversationList, SidebarActions } from "./SidebarNav";
 
+export { RenameSessionDialog } from "./RenameSessionDialog";
 export { SearchModal } from "./SearchModal";
 export { SidebarResizer } from "./SidebarResizer";
 

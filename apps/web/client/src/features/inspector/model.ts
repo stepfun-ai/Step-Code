@@ -1,4 +1,23 @@
-import type { SessionEntry, SubagentStatus, TimelineItem } from "../../state/types";
+import type { SessionEntry, SessionInspector, SessionStatus, SubagentStatus, TimelineItem } from "../../state/types";
+
+/** The status a checklist row renders; `aborted` is derived, never stored in a snapshot. */
+export type InspectorTaskStatus = SessionInspector["tasks"][number]["status"] | "aborted";
+
+/** The statuses during which the session can still be advancing a checklist row. */
+export function sessionIsLive(status: SessionStatus | undefined): boolean {
+	return status === "running" || status === "waiting";
+}
+
+/**
+ * The last task snapshot keeps the status it had when a turn stopped, so a
+ * stopped session must not keep an `in_progress` row spinning.
+ */
+export function effectiveTaskStatus(
+	status: SessionInspector["tasks"][number]["status"],
+	live: boolean,
+): InspectorTaskStatus {
+	return !live && status === "in_progress" ? "aborted" : status;
+}
 
 export interface SummaryAgentRecord {
 	readonly key: string;
@@ -78,13 +97,19 @@ export function recordedMessage(entry: SessionEntry): { role: string; content: u
 	return { role: message.role, content };
 }
 
+/** One-line preview of a recorded message, read as prose: Markdown emphasis, code ticks and line marks are dropped. */
 export function messagePreview(entry: SessionEntry): string {
 	const content = entry.message?.content;
-	if (typeof content === "string") return content;
-	return (
-		content
-			?.map((part) => part.text ?? part.name ?? "")
-			.filter(Boolean)
-			.join(" ") ?? ""
-	);
+	const text =
+		typeof content === "string"
+			? content
+			: (content
+					?.map((part) => part.text ?? part.name ?? "")
+					.filter(Boolean)
+					.join(" ") ?? "");
+	return text
+		.replace(/\*\*|__|`+/g, "")
+		.replace(/(^|\s)(#{1,6}|>|[-*+])\s+/g, "$1")
+		.replace(/\s+/g, " ")
+		.trim();
 }

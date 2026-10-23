@@ -1,14 +1,15 @@
 /* Legacy styles.css 1251-1263 (`.search-footer kbd`). */
 .root {
+/* One key-cap look app-wide: the sidebar hint, the search footer and dialogs share it. */
 	display: inline-grid;
 	place-items: center;
-	min-width: 25px;
-	height: 23px;
-	margin-right: 3px;
+	min-width: 20px;
+	height: 20px;
 	padding: 0 5px;
-	border: 1px solid var(--line-strong);
+	border: 1px solid var(--line);
 	border-radius: var(--radius-tiny);
 	background: var(--surface-soft);
-	color: var(--ink-2);
-	font-size: 11px;
+	color: var(--ink-3);
+	font: 500 11px / 1 var(--sans);
+	margin-right: 3px;
 }

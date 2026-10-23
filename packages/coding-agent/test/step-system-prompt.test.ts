@@ -3,7 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildStepSystemPromptAppendix, invalidateGitEnvironmentCache } from "../src/step/system-prompt.ts";
+import { buildSystemPrompt } from "../src/core/system-prompt.ts";
+import {
+	buildStepSystemPromptAppendix,
+	invalidateGitEnvironmentCache,
+	STEP_APP_SYSTEM_PROMPT_PRODUCT,
+} from "../src/step/system-prompt.ts";
+import { createStepToolProfile } from "../src/step/tool-profile.ts";
 
 const hasGit = ((): boolean => {
 	try {
@@ -318,5 +324,144 @@ describe("Step system prompt appendix", () => {
 		const prompt = buildStepSystemPromptAppendix([], { cwd: "/nonexistent/step-prompt-env" });
 		expect(prompt).toContain("<env>");
 		expect(prompt).not.toContain("Git branch:");
+	});
+});
+
+describe("Step App system prompt product", () => {
+	it("identifies the app without terminal wording", () => {
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.name).toBe("StepCode");
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.role).toBe("a coding agent developed by StepFun");
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction).toContain("You are StepCode");
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction).toContain("running in the StepCode app");
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction).toContain("workspace the user selected");
+		// The CLI identity is the one phrase set that must never reach the app.
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction).not.toMatch(/terminal/iu);
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction).not.toMatch(/StepCode Web/u);
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.includeDocumentation).toBe(false);
+	});
+
+	it("exposes the shared product read-only to every session", () => {
+		// Freezing is only safe while the builder reads the product and never writes
+		// into it. Build twice from the same constant: no throw, identical output.
+		const build = (): string =>
+			buildSystemPrompt({
+				product: STEP_APP_SYSTEM_PROMPT_PRODUCT,
+				cwd: "/workspace/app",
+				selectedTools: ["read_file"],
+			});
+		expect(build()).toBe(build());
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.promptAppendix).toBe(buildStepSystemPromptAppendix);
+	});
+
+	it("is frozen so one session cannot rewrite the identity for the others", () => {
+		expect(Object.isFrozen(STEP_APP_SYSTEM_PROMPT_PRODUCT)).toBe(true);
+		expect(() => {
+			(STEP_APP_SYSTEM_PROMPT_PRODUCT as { introduction: string }).introduction = "hijacked";
+		}).toThrow();
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction).toContain("You are StepCode");
+	});
+
+	it("renders the sections for the tools a Web session actually has", () => {
+		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.promptAppendix).toBe(buildStepSystemPromptAppendix);
+
+		// Built-in tool names come from the same profile the host composes; feature
+		// tools (plan, tasks, subagent, goal, cron) are registered by the capability
+		// extensions the host loads, so they are listed separately.
+		const profileTools = createStepToolProfile(process.cwd()).map((tool) => tool.name);
+		expect(profileTools).toEqual(
+			expect.arrayContaining(["read_file", "write_file", "edit_file", "run_command", "search_web"]),
+		);
+		const featureTools = ["enter_plan_mode", "task_create", "subagent", "create_goal", "cron_create"];
+		const prompt = buildSystemPrompt({
+			product: STEP_APP_SYSTEM_PROMPT_PRODUCT,
+			cwd: "/workspace/app",
+			selectedTools: [...profileTools, ...featureTools],
+		});
+
+		expect(prompt.startsWith("You are StepCode, a coding agent developed by StepFun")).toBe(true);
+		expect(prompt).toContain("# StepCode operating contract");
+		expect(prompt).toContain("<env>");
+		expect(prompt).toContain("Operating mode: all-tools");
+		expect(prompt).toContain("# Planning");
+		expect(prompt).toContain("# Task tracking");
+		expect(prompt).toContain("# Coordination primitives");
+		expect(prompt).toContain("# Long-running goals");
+		expect(prompt).toContain("# Scheduled work");
+		expect(prompt).toContain("# Delegation");
+		expect(prompt).toContain("- edit_file:");
+		expect(prompt).toContain("Tool selection:");
+		// Nothing terminal-only from the CLI identity reaches the app prompt.
+		expect(prompt).not.toMatch(/StepCode Web/u);
+		expect(prompt).not.toMatch(/terminal coding agent|\bTUI\b/u);
+		// The product appendix precedes the working-directory trailer.
+		expect(prompt.indexOf("# StepCode operating contract")).toBeLessThan(
+			prompt.indexOf("Current working directory: /workspace/app"),
+		);
+	});
+});
+
+describe("one-shot interaction contract", () => {
+	const featureTools = [
+		"read_file",
+		"write_file",
+		"edit_file",
+		"run_command",
+		"enter_plan_mode",
+		"create_goal",
+		"workflow",
+	];
+
+	const render = (interaction?: "session" | "one-shot"): string =>
+		buildStepSystemPromptAppendix(featureTools, { cwd: "/workspace/app", ...(interaction ? { interaction } : {}) });
+
+	it("drops session-standing ultraloop consent", () => {
+		const app = render("one-shot");
+		expect(app).not.toContain("ultraloop is on for the session");
+		expect(app).not.toContain("session-standing");
+		expect(app).not.toContain("every substantive task by default");
+		expect(app).not.toContain("token cost as unconstrained");
+		// Per-turn consent survives, with the composer's prefix spelled out.
+		expect(app).toContain('starts with "ultraloop:"');
+		expect(app).toContain("never treat an earlier authorized turn as authorization");
+		expect(app).toContain("require the user's explicit trigger on the message being answered");
+	});
+
+	it("keeps the CLI's standing wording as the default", () => {
+		for (const prompt of [render("session"), render()]) {
+			expect(prompt).toContain("ultraloop is on for the session");
+			expect(prompt).toContain("every substantive task by default");
+			expect(prompt).not.toContain('starts with "ultraloop:"');
+		}
+	});
+
+	it("keeps planning as investigation: exit reports the proposal, it does not authorize work", () => {
+		const app = render("one-shot");
+		expect(app).toContain("Planning means investigation and a written proposal, not carrying the work out");
+		expect(app).toContain("exit_plan_mode reports that the investigation is finished");
+		expect(app).toContain("it does not authorize implementation");
+		// The app shows the proposal for a decision; implementation waits for it.
+		expect(app).toContain("shows the proposal to the user for a decision");
+		expect(app).toContain("never start implementing before that approval arrives");
+		expect(app).toContain("calling exit_plan_mode again");
+		// The CLI's "wait for approval" sentence would be a lie here: there is no
+		// dialog. The one-shot wording replaces it instead of weakening it.
+		expect(app).not.toContain("After the user approves execution");
+		expect(app).not.toContain("carry out the plan in the same turn");
+
+		const cli = render("session");
+		expect(cli).toContain("After the user approves execution");
+		expect(cli).not.toContain("Planning means investigation and a written proposal");
+	});
+
+	it("keeps goal continuation but forbids the model from replacing a goal", () => {
+		const app = render("one-shot");
+		// Option (b): a goal still runs across turns until complete.
+		expect(app).toContain("continue automatically at the host's idle boundary");
+		expect(app).toContain("Never start a goal on your own initiative");
+		expect(app).toContain("never call create_goal to replace a goal that already exists");
+
+		const cli = render("session");
+		expect(cli).toContain("continue automatically at the host's idle boundary");
+		expect(cli).not.toContain("never call create_goal to replace a goal that already exists");
 	});
 });

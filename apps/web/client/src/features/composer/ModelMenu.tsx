@@ -1,23 +1,31 @@
 /**
- * `#modelMenu`: one panel for model and thinking effort, in two views
- * (legacy app.js 2558-2826, `populateModels` 2987-2990).
+ * `#modelMenu`: one panel for model and thinking effort, showing one provider
+ * at a time (legacy app.js 2558-2826, `populateModels` 2987-2990).
  *
- * They are chosen together — effort is a property of a model, and the kernel
- * only exposes the levels a given model supports — so splitting them into two
- * popovers meant guessing the effort before knowing the model.
- *
- * The default view stays short: a few models, the effort as a segmented
- * control, and a "more models" row. Search and pinning live behind that row,
- * because a catalog of five needs neither and a catalog of fifty needs both.
+ * The provider row at the top swaps the list to the provider picker; picking a
+ * provider lands on the model last used under it, so a provider switch is one
+ * click and a model switch at most two.
  */
 
 import { useState } from "react";
 import { useT } from "../../i18n";
+import { modelKey } from "../../state/session";
 import { shallowEqual, useAppStore } from "../../state/store";
+import { openSettings } from "../settings/actions";
 import { selectEffort, selectModel } from "./actions";
 import { ControlMenu } from "./ControlOption";
 import { ModelPanel, type ModelPanelView } from "./ModelPanel";
-import { draftModelSource, type ModelSource, modelLabelParts, readPinnedModels, togglePinnedModel } from "./models";
+import {
+	draftModelSource,
+	groupModelsByProvider,
+	type ModelSource,
+	modelLabelParts,
+	providerSwitchTarget,
+	readLastModelByProvider,
+	readPinnedModels,
+	rememberModelChoice,
+	togglePinnedModel,
+} from "./models";
 import type { ComposerMenuProps } from "./PolicyMenu";
 
 export function ModelMenu({ open, onOpen, onClose }: ComposerMenuProps) {
@@ -27,10 +35,11 @@ export function ModelMenu({ open, onOpen, onClose }: ComposerMenuProps) {
 		(state) => ({ models: state.draftModels, model: state.draftModel, effort: state.draftThinking }),
 		shallowEqual,
 	);
-	const [view, setView] = useState<ModelPanelView>("compact");
+	const [view, setView] = useState<ModelPanelView>("models");
 	const [query, setQuery] = useState("");
 	/** Bumped whenever legacy rebuilt (and refocused) the search field. */
 	const [searchEpoch, setSearchEpoch] = useState(0);
+	/** Favourited models, re-read on open so another tab's pick shows up. */
 	const [pinned, setPinned] = useState<readonly string[]>(readPinnedModels);
 	// A draft paints the host's prediction for its first session, so the label
 	// and panel show the model and effort that session will actually start on.
@@ -41,6 +50,24 @@ export function ModelMenu({ open, onOpen, onClose }: ComposerMenuProps) {
 	const resetSearch = () => {
 		setQuery("");
 		setSearchEpoch((epoch) => epoch + 1);
+	};
+
+	const switchProvider = (provider: string) => {
+		const group = groupModelsByProvider(source.models ?? []).find((candidate) => candidate.provider === provider);
+		if (!group) return;
+		// Already on this provider: the model list is what the user came for.
+		if (source.model && source.model.provider === provider) {
+			setView("models");
+			return;
+		}
+		const target = providerSwitchTarget(group, readLastModelByProvider()[provider]);
+		if (!target) return;
+		void selectModel(modelKey(target)).then((applied) => {
+			if (applied) {
+				rememberModelChoice(provider, modelKey(target));
+				setView("models");
+			}
+		});
 	};
 
 	return (
@@ -60,7 +87,7 @@ export function ModelMenu({ open, onOpen, onClose }: ComposerMenuProps) {
 						<span className="model-control-name" title={labelParts.name}>
 							{labelParts.name}
 						</span>
-						{labelParts.effort}
+						{labelParts.effort ? <span className="model-control-effort">{labelParts.effort}</span> : null}
 					</>
 				) : (
 					"默认模型"
@@ -72,8 +99,8 @@ export function ModelMenu({ open, onOpen, onClose }: ComposerMenuProps) {
 			placement="top-end"
 			open={open}
 			onOpen={() => {
-				// Always open on the short view; "more models" is a deliberate step.
-				setView("compact");
+				// Always open on the model list; the provider picker is a deliberate step.
+				setView("models");
 				setQuery("");
 				setPinned(readPinnedModels());
 				onOpen();
@@ -91,16 +118,27 @@ export function ModelMenu({ open, onOpen, onClose }: ComposerMenuProps) {
 					setView(next);
 					resetSearch();
 				}}
-				onPin={(key) => setPinned(togglePinnedModel(key))}
+				onPinModel={(key) => setPinned(togglePinnedModel(key))}
 				onSelectModel={(value) => {
 					void selectModel(value).then((applied) => {
-						if (applied) onClose();
+						if (applied) {
+							// `value` is `provider\0id`; remember it so switching back to this
+							// provider later returns to this model.
+							const [provider] = value.split("\u0000");
+							rememberModelChoice(provider, value);
+							onClose();
+						}
 					});
 				}}
 				onSelectEffort={(level) => {
 					void selectEffort(level).then((applied) => {
 						if (applied) onClose();
 					});
+				}}
+				onSelectProvider={switchProvider}
+				onManageProviders={() => {
+					onClose();
+					openSettings("models");
 				}}
 			/>
 		</ControlMenu>

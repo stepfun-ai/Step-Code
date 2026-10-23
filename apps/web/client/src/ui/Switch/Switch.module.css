@@ -6,7 +6,7 @@
 	padding: 0;
 	border: 0;
 	border-radius: var(--radius-pill);
-	background: var(--line-strong);
+	background: var(--switch-track);
 	cursor: pointer;
 	transition: background-color var(--fast);
 }
@@ -18,18 +18,18 @@
 	width: 16px;
 	height: 16px;
 	border-radius: 50%;
-	background: var(--surface);
+	background: var(--switch-knob);
 	box-shadow: 0 1px 3px var(--shadow);
-	transition: transform var(--fast);
+	transition: transform 180ms var(--ease-out);
 }
 
 .on {
-	background: var(--ink);
+	background: var(--action);
 }
 
 .on .knob {
 	transform: translateX(16px);
-	background: var(--canvas);
+	background: var(--action-ink);
 }
 
 .root:disabled {

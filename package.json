@@ -21,7 +21,7 @@
 		"pack:win": "node scripts/pack-win.cjs",
 		"check": "biome check --write --error-on-warnings . && pnpm run check:pinned-deps && pnpm run check:ts-imports && pnpm run check:layer-direction && pnpm run check:ui-layer && pnpm run check:workspace-registry && pnpm run check:tui-no-ai && pnpm run check:coding-agent-entry-freeze && pnpm run check:contracts-deps-empty && pnpm run check:derived-compat-only && pnpm run check:no-provider-dispatch && pnpm run check:metadata-not-in-dispatch && pnpm run check:no-secret-leak && pnpm run check:legacy-scope-prefix && pnpm run check:no-observability && tsgo --noEmit && pnpm run check:web && pnpm run check:web-runtime && pnpm run check:browser-smoke && pnpm run check:desktop",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
-		"check:desktop": "pnpm --filter @step-harness/desktop typecheck",
+		"check:desktop": "pnpm --filter @step-harness/desktop typecheck && pnpm --filter @step-harness/desktop test",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
 		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",
 		"check:layer-direction": "node scripts/check-layer-direction.mjs",

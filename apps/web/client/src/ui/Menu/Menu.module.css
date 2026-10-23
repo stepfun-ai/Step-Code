@@ -5,7 +5,7 @@
 	border: 1px solid var(--line);
 	border-radius: var(--radius-menu);
 	background: var(--surface);
-	box-shadow: 0 10px 30px var(--shadow);
+	box-shadow: var(--elev-3);
 }
 
 .item {
@@ -19,19 +19,20 @@
 	border-radius: var(--radius-input);
 	background: none;
 	color: inherit;
-	font-size: 12px;
+	font-size: 13px;
 	text-align: left;
 	text-decoration: none;
 	cursor: pointer;
+	transition: background-color var(--fast);
 }
 
 .item:hover {
 	background: var(--hover);
 }
 
-/* Destructive items keep the neutral ink: buttons are black and white. */
+/* Destructive items name their consequence in the danger colour. */
 .danger {
-	color: var(--ink);
+	color: var(--danger);
 }
 
 .trailing {

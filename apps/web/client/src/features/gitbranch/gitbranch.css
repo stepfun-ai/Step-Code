@@ -1,0 +1,300 @@
+/*
+ * The composer's branch switcher: a pill beside the workspace pill, and the
+ * popover that lists local branches. Tokens come from styles/global.css so
+ * light and dark themes both work.
+ */
+
+.branch-control {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	max-width: min(320px, 40vw);
+}
+.branch-control[hidden] {
+	display: none;
+}
+
+/* Plain text like the workspace label it sits beside: no chip, no border. */
+.branch-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	max-width: 100%;
+	height: var(--control-h-xs);
+	padding: 0 2px;
+	border: 0;
+	background: none;
+	color: var(--ink-2);
+	font-size: 14px;
+	font-weight: 550;
+	cursor: pointer;
+	transition: color var(--fast);
+}
+.branch-pill:hover,
+.branch-pill[aria-expanded="true"] {
+	color: var(--ink);
+}
+.branch-pill:focus-visible {
+	border-radius: var(--radius-row);
+	outline: 2px solid var(--accent-ring);
+}
+.branch-pill > span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.branch-pill > .chevron {
+	flex: none;
+	color: var(--ink-3);
+}
+.branch-icon {
+	flex: none;
+	color: var(--ink-3);
+}
+
+/*
+ * The shared Popover portals this panel to <body> and anchors it to the pill
+ * (position, flip and gap come from its module); only the surface and the
+ * column layout are set here. Flex column: the search and the create action
+ * stay fixed, only the list scrolls.
+ */
+.branch-popover {
+	--popover-gap: 6px;
+	z-index: 45;
+	display: flex;
+	width: min(320px, calc(100vw - 40px));
+	max-height: min(420px, 60vh);
+	flex-direction: column;
+	padding: 6px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-overlay);
+	background: var(--surface);
+	box-shadow: 0 16px 42px var(--shadow);
+}
+.branch-popover-scroll {
+	min-height: 0;
+	flex: 1;
+	overflow-y: auto;
+}
+.branch-search {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px;
+	color: var(--ink-3);
+}
+.branch-search > input {
+	min-width: 0;
+	flex: 1;
+	height: var(--control-h-xs);
+	border: 0;
+	background: none;
+	color: var(--ink);
+	font: inherit;
+	font-size: 13px;
+	outline: none;
+}
+.branch-search > input::placeholder {
+	color: var(--ink-3);
+}
+.branch-popover-divider {
+	height: 1px;
+	flex: none;
+	margin: 5px -6px;
+	background: var(--line);
+}
+.branch-popover-title {
+	padding: 2px 8px 5px;
+	color: var(--ink-3);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+.branch-item {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: var(--radius-row);
+	background: none;
+	color: var(--ink);
+	text-align: left;
+	cursor: pointer;
+}
+.branch-item:hover:not(:disabled),
+.branch-item:focus-visible {
+	background: var(--hover);
+	outline: none;
+}
+.branch-item.selected {
+	background: var(--selected);
+}
+.branch-item:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+.branch-item > .branch-icon {
+	margin-top: 1px;
+}
+.branch-item-text {
+	display: flex;
+	min-width: 0;
+	flex: 1;
+	flex-direction: column;
+	gap: 2px;
+}
+.branch-item-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
+	font-weight: 500;
+}
+.branch-item-detail {
+	color: var(--ink-3);
+	font-size: 12px;
+}
+.branch-check {
+	flex: none;
+	margin-top: 1px;
+	color: var(--ink);
+}
+.branch-empty {
+	padding: 10px 8px;
+	color: var(--ink-3);
+	font-size: 13px;
+}
+.branch-failure {
+	flex: none;
+	margin: 4px 0 0;
+	padding: 7px 8px;
+	border-radius: var(--radius-row);
+	background: var(--danger-surface);
+	color: var(--danger);
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.branch-create-button {
+	display: flex;
+	width: 100%;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	padding: 8px;
+	border: 0;
+	border-radius: var(--radius-row);
+	background: none;
+	color: var(--ink-2);
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+.branch-create-button:hover:not(:disabled),
+.branch-create-button:focus-visible {
+	background: var(--hover);
+	color: var(--ink);
+	outline: none;
+}
+.branch-create-button:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+/* ── Create dialog ───────────────────────────────────────────────────── */
+.branch-dialog {
+	width: min(420px, calc(100vw - 32px));
+	padding: 20px;
+}
+.branch-dialog-header > h2 {
+	margin: 0;
+	color: var(--ink);
+	font-size: 16px;
+	font-weight: 600;
+}
+.branch-dialog-header > p {
+	margin: 6px 0 0;
+	color: var(--ink-2);
+	font-size: 13px;
+	line-height: 1.5;
+}
+.branch-dialog-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 16px;
+	color: var(--ink-2);
+	font-size: 12px;
+	font-weight: 550;
+}
+.branch-dialog .branch-failure {
+	margin-top: 10px;
+}
+.branch-dialog-input {
+	height: var(--control-h-md);
+	padding: 0 var(--control-pad-x);
+	border: 1px solid var(--line-strong);
+	border-radius: var(--radius-input);
+	background: var(--canvas);
+	color: var(--ink);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 400;
+	/* Keep the plain border on focus: no browser focus ring, like the app's other inputs. */
+	outline: 0;
+}
+.branch-dialog-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 20px;
+}
+.branch-dialog-cancel,
+.branch-dialog-submit {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: var(--control-h-md);
+	padding: 0 14px;
+	border-radius: var(--radius-control);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+.branch-dialog-cancel {
+	border: 1px solid var(--line);
+	background: none;
+	color: var(--ink-2);
+}
+.branch-dialog-cancel:hover {
+	background: var(--hover);
+	color: var(--ink);
+}
+.branch-dialog-submit {
+	border: 1px solid transparent;
+	background: var(--ink);
+	color: var(--canvas);
+	font-weight: 550;
+}
+.branch-dialog-submit:disabled,
+.branch-dialog-cancel:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+.branch-dialog-spinner {
+	animation: branch-spin 900ms linear infinite;
+}
+@keyframes branch-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}

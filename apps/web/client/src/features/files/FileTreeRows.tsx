@@ -87,7 +87,7 @@ function TreeNote({ text, level }: { readonly text: string; readonly level: numb
 function useActivePath(cwd: string): string | undefined {
 	return useAppStore((state) => {
 		const tab = state.preview.tabs[state.preview.active];
-		return tab && tab.cwd === cwd ? tab.path : undefined;
+		return tab?.kind === "file" && tab.cwd === cwd ? tab.path : undefined;
 	});
 }
 

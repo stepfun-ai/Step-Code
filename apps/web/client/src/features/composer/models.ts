@@ -5,8 +5,8 @@ import { readStorage, STORAGE_KEYS, writeStorage } from "../../lib/storage";
 import { modelKey } from "../../state/session";
 import type { DraftModels, ModelInfo, SessionSnapshot } from "../../state/types";
 
-/** How many models the compact view shows before deferring to "more models". */
-export const COMPACT_MODEL_COUNT = 3;
+/** How many models the current provider may list before the panel adds a search field. */
+export const MODEL_SEARCH_THRESHOLD = 8;
 
 /** What the model panel is painted from: the open session, or a draft's prediction (`draftModelSource`). */
 export type ModelSource = Pick<SessionSnapshot, "models" | "model" | "thinkingLevel" | "availableThinkingLevels">;
@@ -73,21 +73,37 @@ export function effortLabel(t: TranslateFn, level: string): string {
 	return t(EFFORT_LABELS[level] ?? level);
 }
 
-/** Model ids the user pinned, kept locally so they survive a session change. */
-export function readPinnedModels(): string[] {
+/**
+ * The model picked last under each provider, so switching providers — and
+ * switching back — restores the model the user was on instead of the catalog's
+ * first row. localStorage only; a lost preference is a minor annoyance.
+ */
+export function readLastModelByProvider(): Record<string, string> {
 	try {
-		const parsed: unknown = JSON.parse(readStorage(STORAGE_KEYS.pinnedModels) ?? "[]");
-		return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+		const parsed: unknown = JSON.parse(readStorage(STORAGE_KEYS.lastModelByProvider) ?? "{}");
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+		return Object.fromEntries(
+			Object.entries(parsed as Record<string, unknown>).filter(
+				(entry): entry is [string, string] => typeof entry[1] === "string",
+			),
+		);
 	} catch {
-		return [];
+		return {};
 	}
 }
 
-export function togglePinnedModel(key: string): string[] {
-	const current = readPinnedModels();
-	const next = current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key];
-	writeStorage(STORAGE_KEYS.pinnedModels, JSON.stringify(next));
-	return next;
+export function rememberModelChoice(provider: string, key: string): void {
+	const next = { ...readLastModelByProvider(), [provider]: key };
+	writeStorage(STORAGE_KEYS.lastModelByProvider, JSON.stringify(next));
+}
+
+/**
+ * The model a provider switch lands on: the one remembered for the target
+ * provider, else its first listed one. `current` (already on that provider)
+ * short-circuits — the caller keeps the model and only repaints.
+ */
+export function providerSwitchTarget(group: Pick<ModelGroup, "models">, remembered: string | undefined): ModelInfo {
+	return group.models.find((model) => modelKey(model) === remembered) ?? group.models[0];
 }
 
 /** Human-readable model metadata for the picker rows (strings hard-coded in Chinese, as legacy). */
@@ -120,11 +136,38 @@ export function modelLabelParts(
 }
 
 /**
- * The short list: whatever is pinned, then the active model, then enough of
- * the rest to fill the panel. Capped so a large catalog does not turn the
- * default view into a scroll.
+ * Model ids the user favourited, kept locally so they survive a session
+ * change. A favourited model is pinned to the top of its provider's list.
  */
-/** Catalog filter of the "all models" view: id, name or provider contains the query. */
+export function readPinnedModels(): string[] {
+	try {
+		const parsed: unknown = JSON.parse(readStorage(STORAGE_KEYS.pinnedModels) ?? "[]");
+		return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
+export function togglePinnedModel(key: string): string[] {
+	const current = readPinnedModels();
+	const next = current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key];
+	writeStorage(STORAGE_KEYS.pinnedModels, JSON.stringify(next));
+	return next;
+}
+
+/**
+ * A provider's models with the favourited ones first, in the order they were
+ * favourited; keys pinned under other providers are ignored, so each list pins
+ * only its own.
+ */
+export function pinFirst(models: readonly ModelInfo[], pinned: readonly string[]): ModelInfo[] {
+	const chosen = pinned
+		.map((key) => models.find((model) => modelKey(model) === key))
+		.filter((model): model is ModelInfo => model !== undefined);
+	return [...chosen, ...models.filter((model) => !pinned.includes(modelKey(model)))];
+}
+
+/** Filter of the current provider's model list: id, name or provider contains the query. */
 export function filterModels(models: readonly ModelInfo[], query: string): ModelInfo[] {
 	const needle = query.trim().toLowerCase();
 	return models.filter(
@@ -150,45 +193,54 @@ export function isStepModel(model: ModelInfo): boolean {
 }
 
 export interface ModelGroup {
+	/** The provider every model in this section came from. */
+	readonly provider: string;
+	/** The provider's declared name; the section heading (the account's keeps its own label). */
+	readonly name: string;
 	/** `account` for Step's own catalog, `custom` for `models.json` providers. */
 	readonly source: "account" | "custom";
 	readonly models: ModelInfo[];
 }
 
 /**
- * Candidates split by source, account models first.
+ * Candidates partitioned by provider, the account's models first: one section
+ * per provider instead of one flat list, so a gateway exposing hundreds of ids
+ * never buries another provider's models.
  *
- * The order matters: the flat list arrives in configuration order, so a large
- * custom provider (a gateway exposing hundreds of ids) pushed the account's few
- * models out of the compact view entirely. Grouping keeps both visible and puts
- * the account's models where a signed-in user looks first.
+ * Custom providers keep catalog order (the order `models.json` declares them
+ * in); the account's models come first because that is where a signed-in user
+ * looks first.
  */
-export function groupModelsBySource(models: readonly ModelInfo[]): ModelGroup[] {
-	const account = models.filter(isStepModel);
-	const custom = models.filter((model) => !isStepModel(model));
+export function groupModelsByProvider(models: readonly ModelInfo[]): ModelGroup[] {
+	const groups: ModelGroup[] = [];
+	for (const model of models) {
+		const existing = groups.find((group) => group.provider === model.provider);
+		if (existing) {
+			existing.models.push(model);
+			continue;
+		}
+		groups.push({
+			provider: model.provider,
+			name: model.providerName || model.provider,
+			source: isStepModel(model) ? "account" : "custom",
+			models: [model],
+		});
+	}
 	return [
-		...(account.length ? [{ source: "account" as const, models: account }] : []),
-		...(custom.length ? [{ source: "custom" as const, models: custom }] : []),
+		...groups.filter((group) => group.source === "account"),
+		...groups.filter((group) => group.source === "custom"),
 	];
 }
 
 /**
- * The compact view's rows: account models first, then the pinned and current
- * ones, filled up to `COMPACT_MODEL_COUNT`. A signed-in account with models of
- * its own always shows at least its first one, so "which account am I using" is
- * answerable without opening the full list.
+ * The section the panel's model list shows: the current model's provider, or
+ * the first one (the account's) when no model is resolved yet. Undefined means
+ * an empty catalog — the panel shows its empty state and the way to settings.
  */
-export function compactCandidates(
-	models: readonly ModelInfo[],
-	pinned: readonly string[],
-	active: ModelInfo | undefined,
-): ModelInfo[] {
-	const ordered = groupModelsBySource(models).flatMap((group) => group.models);
-	const chosen = ordered.filter((model) => pinned.includes(modelKey(model)));
-	if (active && !chosen.includes(active)) chosen.push(active);
-	for (const model of ordered) {
-		if (chosen.length >= COMPACT_MODEL_COUNT) break;
-		if (!chosen.includes(model)) chosen.push(model);
-	}
-	return chosen;
+export function currentProviderGroup(
+	source: ModelSource,
+	groups: readonly ModelGroup[] = groupModelsByProvider(source.models ?? []),
+): ModelGroup | undefined {
+	if (!groups.length) return undefined;
+	return groups.find((group) => source.model !== undefined && group.provider === source.model.provider) ?? groups[0];
 }

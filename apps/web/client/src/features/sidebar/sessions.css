@@ -2,15 +2,22 @@
 .project-group {
 	margin-bottom: 6px;
 }
+/* An empty project is one quiet line aligned with session titles, not a padded block. */
+.project-empty.empty-list {
+	padding: 2px 12px 8px;
+	line-height: 20px;
+}
 .project-header {
 	position: relative;
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	min-height: 38px;
+	min-height: 36px;
 	padding: 0 8px;
 	border-radius: var(--radius-row);
 	color: var(--ink-2);
+	font-size: 13px;
+	font-weight: 500;
 	cursor: pointer;
 }
 .project-header:hover {
@@ -63,11 +70,16 @@
 .project-group.folded .project-sessions {
 	grid-template-rows: 0fr;
 }
+/* "Recent" is a group heading like a project's: same size, weight, colour and icon slot. */
 .project-label {
-	padding: 10px 10px 5px;
-	color: var(--ink-3);
-	font-size: 12px;
-	font-weight: 600;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 36px;
+	padding: 0 8px;
+	color: var(--ink-2);
+	font-size: 13px;
+	font-weight: 500;
 }
 .recent-group:empty {
 	display: none;
@@ -81,7 +93,7 @@
 	gap: 7px;
 	width: 100%;
 	min-height: var(--control-h-lg);
-	padding: 6px 8px 6px 30px;
+	padding: 6px 8px 6px 34px;
 	border-radius: var(--radius-row);
 	cursor: pointer;
 	transition: background-color var(--fast);
@@ -89,11 +101,25 @@
 .session-row:hover {
 	background: var(--hover);
 }
+/* Selection is a flat fill: no ring, shadow or spine competing with the row's own rounded edge. */
 .session-row.active {
 	background: var(--selected);
 }
+/* While the market or cron covers the pane, the sidebar entry for it is the one selection. */
+.sidebar:has(.sidebar-action[aria-current="page"]) .session-row.active {
+	background: none;
+}
+.session-row.active .session-title {
+	color: var(--ink);
+	font-weight: 500;
+}
+/* On the selection fill the muted time drops under 4.5:1 in the dark theme; one step up keeps it legible. */
+.session-row.active .session-meta {
+	color: var(--ink-2);
+}
 .session-title {
 	overflow: hidden;
+	color: color-mix(in srgb, var(--ink) 86%, var(--ink-2));
 	font-size: 13px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -109,24 +135,25 @@
 	width: 8px;
 	height: 8px;
 	border: 1.5px solid var(--tag-color, var(--line-strong));
+	/* Filled: at 8px a border-only diamond washes every hue together. */
+	background: var(--tag-color, transparent);
 	border-radius: var(--radius-hairline);
 	transform: rotate(45deg);
 }
-.filter-chip .tag-diamond,
-.group-heading .tag-diamond {
-	background: var(--tag-color, transparent);
-}
 .session-tag-button {
-	display: none;
+	display: grid;
 	place-items: center;
+	/* The slot is always reserved so the meta column never changes width on hover. */
+	visibility: hidden;
 	width: 22px;
 	height: var(--control-h-xs);
 	border-radius: var(--radius-chip);
 	color: var(--ink-3);
 }
 .session-row:hover .session-tag-button,
-.session-tag-button[aria-expanded="true"] {
-	display: grid;
+.session-tag-button[aria-expanded="true"],
+.session-tag-button:focus-visible {
+	visibility: visible;
 }
 .session-tag-button:hover {
 	background: var(--selected);
@@ -134,10 +161,13 @@
 }
 .session-meta {
 	display: flex;
+	flex: none;
 	align-items: center;
 	gap: 6px;
 	color: var(--ink-3);
-	font-size: 11px;
+	font-size: 12px;
+	/* The diamond never drops to a second line: the title column shrinks instead. */
+	white-space: nowrap;
 }
 .session-badge {
 	display: inline-flex;
@@ -147,7 +177,7 @@
 	border-radius: var(--radius-pill);
 	background: var(--badge-surface);
 	color: var(--ink-2);
-	font-size: 10px;
+	font-size: 12px;
 }
 .session-badge.failed {
 	background: var(--danger-surface);
@@ -157,13 +187,15 @@
 	background: var(--attention-surface);
 	color: var(--attention-ink);
 }
+/* Running is told in neutral ink: a quiet badge and a pulsing dot, no brand colour. */
 .session-badge.running {
 	background: var(--badge-surface);
 	color: var(--ink);
 }
 .session-dot {
 	position: absolute;
-	left: 12px;
+	/* Centred under the project's folder icon. */
+	left: 14px;
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
@@ -183,7 +215,10 @@
 	background: var(--success);
 }
 .session-menu-button {
-	display: none;
+	display: inline-grid;
+	place-items: center;
+	/* Same reserved slot as the tag button: a stable meta column. */
+	visibility: hidden;
 	width: 22px;
 	height: var(--control-h-xs);
 	border-radius: var(--radius-chip);
@@ -191,13 +226,9 @@
 }
 /* A button whose menu is open stays shown: the menu is anchored to it. */
 .session-row:hover .session-menu-button,
-.session-menu-button[aria-expanded="true"] {
-	display: inline-grid;
-	place-items: center;
-}
-.session-row:hover .session-time,
-.session-row:has([aria-expanded="true"]) .session-time {
-	display: none;
+.session-menu-button[aria-expanded="true"],
+.session-menu-button:focus-visible {
+	visibility: visible;
 }
 .session-time {
 	position: relative;
@@ -209,6 +240,10 @@
 }
 .grouped-view {
 	position: relative;
+}
+/* An empty project says so on the line its sessions would start. */
+.project-sessions .empty-list {
+	padding: 4px 8px 10px 34px;
 }
 .group-section {
 	position: relative;
@@ -236,6 +271,45 @@
 }
 .group-heading:hover {
 	background: var(--hover);
+}
+/* Rename pencil in the heading: hover-only, right-aligned (the picker's copy lives in overlays.css). */
+.group-heading .group-rename-button {
+	display: none;
+	place-items: center;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	margin-left: auto;
+	border-radius: var(--radius-chip);
+	color: var(--ink-3);
+}
+.group-heading:hover .group-rename-button,
+.group-heading .group-rename-button:focus-visible {
+	display: grid;
+}
+.group-heading .group-rename-button:hover {
+	background: var(--hover);
+	color: var(--ink);
+}
+/* While renaming, the row takes the heading's place: same height, spine stays put. */
+.group-section > .tag-create {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 9px;
+	min-height: 38px;
+	padding: 2px 9px;
+}
+.group-section > .tag-create input {
+	width: 160px;
+}
+/* Drag-and-drop retagging: the grabbed row fades, the hovered section glows its group colour. */
+.session-row.dragging {
+	opacity: 0.35;
+}
+.group-section.drop-target .group-heading {
+	background: color-mix(in srgb, var(--group-color) 14%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--group-color) 55%, transparent);
 }
 .group-section.folded .group-spine,
 .group-section.folded .group-sessions {

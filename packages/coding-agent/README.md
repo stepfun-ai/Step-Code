@@ -76,7 +76,7 @@ Then just talk to StepCode. By default, it gives the model four tools: `read`, `
 
 ## Providers & Models
 
-The shipped build authenticates against the **Step provider** by default. Log in with `/login` (or set `STEP_API_KEY`), then select a Step model via `/model` (or Ctrl+L). Press Ctrl+S in the model picker to save the highlighted model as the startup default.
+The shipped build authenticates against the **Step provider** by default. Log in with `/login` (or set `STEP_API_KEY`), then select a Step model via `/model` (or Ctrl+L). Press Enter in the model picker to select the highlighted model and save it as the startup default.
 
 No other provider catalog is bundled. Add OpenAI- or Anthropic-compatible providers yourself via `~/.stepcode/agent/models.json`; configured catalogs refresh automatically, and `step update --models` forces an immediate refresh. For custom APIs or OAuth, use extensions.
 
@@ -120,7 +120,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 |---------|-------------|
 | `/login`, `/logout` | Manage provider credentials |
 | [`/llama`](docs/llama-cpp.md) | Download, load, and unload llama.cpp router models |
-| `/model` | Switch models; Ctrl+S in the picker saves the startup default |
+| `/model` | Switch models; Enter in the picker saves the startup default |
 | `/effort` | Switch thinking level and save it as the startup default |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, message delivery, transport, and other preferences |

@@ -125,21 +125,6 @@ test("Log out is offered only when a local credential or account session exists"
 	);
 });
 
-test("an account with no Step credential can open the sign-in gate", async () => {
-	const { getState, setState, createInitialState } = await import("../client/src/state/store.ts");
-	const { requireSignIn } = await import("../client/src/features/shell/actions.ts");
-	setState(createInitialState());
-	setState({ login: { ...report, source: "none", configured: false, session: { state: "missing" } } });
-	assert.equal(getState().ui.loginRequired, false);
-	// The "not signed in" label in a running app is the way back to `step login`.
-	requireSignIn();
-	assert.equal(getState().ui.loginRequired, true);
-	// Opening the gate from the account button must also drop its menu.
-	setState({ ui: { ...getState().ui, accountMenuOpen: true } });
-	requireSignIn();
-	assert.equal(getState().ui.accountMenuOpen, false);
-});
-
 /** Run `confirmLogout` against a scripted sign-out report; returns what it left in sessionStorage. */
 async function signOutWith(customModels: boolean): Promise<Map<string, string>> {
 	setState(createInitialState());

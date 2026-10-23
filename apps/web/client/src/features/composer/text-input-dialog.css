@@ -1,0 +1,79 @@
+/* Kernel text prompt (#textInputDialog): `ui.input`, e.g. the `/feedback` comment. */
+
+.text-input-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(460px, 100%);
+  padding: 18px 16px 14px;
+}
+.text-input-dialog > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.text-input-dialog h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.text-input-message {
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+.text-input-field {
+  width: 100%;
+  min-height: calc(var(--control-h-md) * 3);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.text-input-field:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: -1px;
+}
+.text-input-field::placeholder {
+  color: var(--ink-3);
+}
+.text-input-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+.text-input-dialog > footer > button {
+  min-height: var(--control-h-md);
+  padding: 0 16px;
+  border-radius: var(--radius-panel);
+  font-size: 13px;
+}
+#textInputCancel {
+  color: var(--ink-3);
+}
+#textInputCancel:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+#textInputConfirm {
+  background: var(--ink);
+  color: var(--canvas);
+  font-weight: 550;
+  transition: opacity var(--fast);
+}
+#textInputConfirm:hover {
+  opacity: 0.86;
+}
+#textInputConfirm:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: 2px;
+}

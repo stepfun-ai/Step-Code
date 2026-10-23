@@ -75,7 +75,7 @@
 	border: 1px solid var(--line);
 	border-radius: 999px;
 	color: var(--ink-3);
-	font-size: 11px;
+	font-size: 12px;
 }
 .child-agent-tabs {
 	display: flex;
@@ -184,7 +184,7 @@
 	border: 1px solid var(--line);
 	border-radius: var(--radius-inline-code);
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 	line-height: 1.5;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -230,7 +230,7 @@
 	color: var(--danger);
 }
 .subagent-status-icon[data-state="aborted"] {
-	color: var(--attention-ink);
+	color: var(--ink-3);
 }
 .subagent-status-icon[data-tooltip]::after {
 	position: absolute;
@@ -245,7 +245,7 @@
 	background: var(--surface);
 	color: var(--ink);
 	content: attr(data-tooltip);
-	font-size: 11px;
+	font-size: 12px;
 	pointer-events: none;
 }
 .subagent-status-icon:hover::after,
@@ -261,7 +261,7 @@
 }
 .subagent-state-label {
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 }
 .subagent-meta {
 	display: inline-flex;
@@ -270,7 +270,7 @@
 	min-width: 0;
 	margin-left: auto;
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 	font-variant-numeric: tabular-nums;
 	overflow-wrap: anywhere;
 }

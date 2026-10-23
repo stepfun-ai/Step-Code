@@ -15,18 +15,43 @@
 	max-width: var(--composer-width);
 	margin: 0 auto;
 }
+/*
+ * The row above the card: the workspace pill, then the branch pill. The row owns
+ * the spacing under both, and each pill keeps its own popover positioning.
+ */
+.composer-pickers {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-bottom: 8px;
+}
+.composer-pickers > .workspace-control {
+	margin: 0 0 0 6px;
+}
+.composer-pickers > .branch-control {
+	margin: 0;
+}
+.composer-pickers:has(#workspaceControl[hidden]) > .branch-control {
+	margin-left: 6px;
+}
+/*
+ * The prompt deck: the most-touched surface, so it is the one raised plane on
+ * the canvas. Focus only firms its edge; the caret already marks where typing goes.
+ */
 .composer-card {
 	position: relative;
 	z-index: 2;
 	padding: 16px 14px 11px;
-	border: 1px solid var(--line-strong);
+	border: 1px solid var(--line);
 	border-radius: var(--radius-card);
 	background: var(--surface);
-	box-shadow: 0 7px 24px rgb(0 0 0 / 7%);
+	box-shadow: var(--elev-2);
+	transition:
+		border-color 200ms ease,
+		box-shadow 200ms ease;
 }
 .composer-card:focus-within {
-	border-color: var(--focus-border);
-	box-shadow: 0 9px 28px rgb(0 0 0 / 9%);
+	border-color: var(--line-strong);
 }
 .composer textarea {
 	display: block;
@@ -58,6 +83,16 @@
 	cursor: text;
 }
 .prompt-editor:empty::before {
+	content: attr(data-placeholder);
+	color: var(--ink-3);
+	pointer-events: none;
+}
+/*
+ * With the mode lead as the prompt's only content the editor is not `:empty`,
+ * so the placeholder rides `data-empty` (refreshed by the editor helpers) and
+ * renders after the chip, where the typed text will start.
+ */
+.prompt-editor[data-empty]:not(:empty)::after {
 	content: attr(data-placeholder);
 	color: var(--ink-3);
 	pointer-events: none;
@@ -135,14 +170,16 @@
 	z-index: 50;
 	width: max-content;
 	min-width: anchor-size(width);
-	max-width: min(340px, calc(100vw - 32px));
-	max-height: min(420px, 60vh);
+	/* The model picker's width: two-line descriptions wrap without leaving a lone word. */
+	max-width: min(380px, calc(100vw - 32px));
+	/* Tall enough for the model list and its footer rows without a scrollbar for a few pixels. */
+	max-height: min(460px, 64vh);
 	overflow-y: auto;
 	padding: 6px;
 	border: 1px solid var(--line);
 	border-radius: var(--radius-overlay);
 	background: var(--surface);
-	box-shadow: 0 16px 42px var(--shadow);
+	box-shadow: var(--elev-3);
 }
 .control-popover-search {
 	display: flex;
@@ -160,17 +197,21 @@
 }
 .control-popover-search input {
 	width: 100%;
+	/* CJK placeholder glyphs fall back to PingFang and sit about 1px above Geist's line box;
+	   2px of top padding moves the centred text down 1px onto the field's middle. */
+	padding: 2px 0 0;
 	border: 0;
 	outline: 0;
 	background: transparent;
 	font-size: 12px;
 }
+/* 8px insets with 20px + 18px lines: 36px for one line, 56px with a description. */
 .control-option {
 	display: flex;
 	align-items: flex-start;
 	gap: 9px;
 	width: 100%;
-	padding: 7px 9px;
+	padding: 8px 9px;
 	border-radius: var(--radius-row);
 	text-align: left;
 }
@@ -190,47 +231,97 @@
 }
 .control-option-body {
 	display: grid;
-	gap: 1px;
+	gap: 2px;
 	min-width: 0;
 }
 .control-option-title {
-	display: flex;
-	align-items: center;
-	gap: 6px;
+	display: block;
+	overflow: hidden;
+	min-width: 0;
 	font-size: 13px;
-	font-weight: 550;
+	font-weight: 500;
+	line-height: 20px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Model ids are long; give the model list room so a name reads on one line. The permission list shares
+   the width, so the two pickers beside each other open as one size. */
+#modelPopover,
+#policyPopover {
+	width: min(380px, calc(100vw - 32px));
+	max-width: min(380px, calc(100vw - 32px));
 }
 .control-option-desc {
 	color: var(--ink-3);
-	font-size: 11px;
-	line-height: 1.5;
+	font-size: 12px;
+	line-height: 18px;
+	text-wrap: pretty;
+}
+/* On the selection fill the muted lines step up a shade to keep 4.5:1. */
+.control-option[aria-selected="true"] :is(.control-option-desc, .control-option-meta) {
+	color: var(--ink-2);
 }
 .control-option-meta {
 	display: flex;
 	gap: 8px;
 	color: var(--ink-3);
-	font-size: 10px;
+	font-size: 12px;
 }
+/* The check and the pin star share one 18px box centred on the 20px title
+ * line (8px row inset + 1px), so the two icons line up side by side. */
 .control-option-check {
 	flex: none;
-	margin-top: 3px;
+	box-sizing: content-box;
+	margin-top: 1px;
+	padding: 1.5px;
 	margin-left: auto;
-	color: var(--ink);
+	color: var(--accent);
 }
+/* The favourite (pin) star on model rows: right-aligned, and hidden until the
+ * row is hovered — a favourited model keeps its star visible so the pinned
+ * rows stay recognisable. `visibility` (not display) keeps the row from
+ * reflowing when the star appears. */
 .control-option-pin {
 	flex: none;
-	margin-top: 2px;
+	margin-top: 1px;
 	margin-left: auto;
 	padding: 2px;
 	border-radius: var(--radius-tiny);
 	color: var(--ink-3);
+	visibility: hidden;
+}
+/* The check sits left of the star and takes the row's free space, so the star
+ * stays in the same right-edge column on every row. */
+.control-option-check + .control-option-pin {
+	margin-left: 0;
+}
+.control-option:hover .control-option-pin,
+.control-option:focus-visible .control-option-pin {
+	visibility: visible;
 }
 .control-option-pin:hover {
 	background: var(--selected);
 	color: var(--ink);
 }
 .control-option-pin[aria-pressed="true"] {
+	visibility: visible;
 	color: var(--attention);
+}
+/* The provider entry's "自建" badge and the `>` that says the row opens a list. */
+.control-option-badge {
+	padding: 1px 6px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-tiny);
+	color: var(--ink-3);
+	font-size: 10px;
+	font-weight: 500;
+	line-height: 1.4;
+}
+.control-option-more-indicator {
+	flex: none;
+	margin-top: 2px;
+	margin-left: auto;
+	color: var(--ink-3);
 }
 .control-popover-empty {
 	padding: 10px 9px;
@@ -240,12 +331,12 @@
 .control-popover-group {
 	padding: 7px 9px 3px;
 	color: var(--ink-3);
-	font-size: 10px;
+	font-size: 12px;
 	font-weight: 600;
 }
 .model-control select {
 	color: var(--ink);
-	font-weight: 550;
+	font-weight: 500;
 }
 /*
  * The model trigger is the one control whose label has no fixed length: a
@@ -272,9 +363,15 @@
 	display: flex;
 	min-width: 0;
 }
+/* Keep the leading space of " · 高": a flex item would otherwise trim it. */
+.model-control-effort {
+	flex: none;
+	white-space: pre;
+}
 .model-control-name {
 	overflow: hidden;
-	max-width: var(--control-select-max-w);
+	/* Model ids run long (provider routes); the toolbar has room to show most of one. */
+	max-width: min(300px, 32vw);
 	text-overflow: ellipsis;
 }
 /*
@@ -290,8 +387,23 @@
 }
 .control-segmented-label {
 	flex: none;
-	color: var(--ink-2);
+	color: var(--ink-3);
 	font-size: 12px;
+	font-weight: 600;
+}
+/* In the model panel the effort row reads like the list above it: label on the
+ * group-label inset, segments sharing the full width. */
+.control-popover-section > .control-segmented-label {
+	display: block;
+	padding: 7px 9px 5px;
+}
+.control-popover-section > .control-segmented-group {
+	margin: 0 3px 4px;
+}
+/* 30px segments: a comfortable target, on the menus' 4px-ish rhythm. */
+.control-popover-section > .control-segmented-group > .control-segment {
+	flex: 1;
+	padding-block: 6px;
 }
 .control-segmented-group {
 	display: flex;
@@ -314,17 +426,13 @@
 	color: var(--ink);
 }
 .control-segment[aria-pressed="true"] {
-	background: var(--surface);
+	background: var(--thumb);
 	color: var(--ink);
-	box-shadow: 0 1px 3px var(--shadow);
+	/* A white thumb on a near-white track needs an edge to read as chosen. */
+	box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 6%);
+	font-weight: 500;
 }
 /* Hint below the effort block, and the "more models" / "back" row right under the model list. */
-.control-popover-note {
-	padding: 6px 9px 2px;
-	color: var(--ink-3);
-	font-size: 11px;
-	line-height: 1.6;
-}
 .control-popover-more {
 	display: flex;
 	align-items: center;
@@ -349,10 +457,9 @@
 	margin-left: auto;
 }
 /*
- * The full model list scrolls only its rows: the search field stays at the top
- * and "more models"/"back", the effort block and the footer stay put, however
- * long the catalog is. The default view has too few rows to ever scroll, so it
- * lets the panel size itself instead of showing a scrollbar for no reason.
+ * The model list scrolls only its rows: the provider entry, search field and
+ * effort block stay put, however long the provider's catalog is. Few rows let
+ * the panel size itself instead of showing a scrollbar for no reason.
  */
 #modelPopover.control-popover:has(.control-popover-search) {
 	display: flex;
@@ -363,6 +470,52 @@
 	flex: none;
 }
 #modelPopover.control-popover:has(.control-popover-search) > .model-popover-list {
+	flex: 0 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+}
+/*
+ * The model list caps at three rows; a longer catalog scrolls inside the cap,
+ * so the panel keeps its shape however large the provider's catalog is.
+ * Measured row: 69.3px (title + id + meta with padding).
+ */
+#modelPopover > .model-popover-list {
+	max-height: 208px;
+	overflow-y: auto;
+}
+/*
+ * The provider list opens OUTSIDE the model card: the card keeps its position
+ * and width, and the list floats beside it, toward the window's roomier left
+ * side (the card anchors to the composer's right edge).
+ * It rides in the same popover DOM, so an outside press closes both panels —
+ * which is why the card must stop clipping its overflow here.
+ */
+#modelPopover.control-popover:has(.model-popover-side) {
+	overflow: visible;
+}
+.model-popover-side {
+	position: absolute;
+	/* Top-aligned with the model card's provider row — the row that opens
+	 * this list — so the panel reads as that row's submenu. Right of the
+	 * card by default; `.model-popover-side-left` mirrors it when the window
+	 * lacks the room (decided in `ProviderSidePanel`, before paint). */
+	top: 0;
+	left: calc(100% + 8px);
+	display: flex;
+	flex-direction: column;
+	width: 240px;
+	max-height: min(420px, 60vh);
+	padding: 6px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-overlay);
+	background: var(--surface);
+	box-shadow: 0 16px 42px var(--shadow);
+}
+.model-popover-side-left {
+	left: auto;
+	right: calc(100% + 8px);
+}
+.model-popover-side .model-popover-list {
 	flex: 0 1 auto;
 	min-height: 0;
 	overflow-y: auto;
@@ -395,7 +548,7 @@
 	border-radius: var(--radius-pill);
 	background: var(--surface-soft);
 	color: var(--ink-2);
-	font-size: 11px;
+	font-size: 12px;
 }
 .attachment-chip > span {
 	overflow: hidden;
@@ -433,7 +586,7 @@
 	cursor: zoom-in;
 }
 .attachment-thumb:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus-border);
 	outline-offset: 1px;
 }
 .attachment-thumb img {
@@ -448,7 +601,7 @@
 	right: -6px;
 	border: 1px solid var(--line);
 	background: var(--surface);
-	box-shadow: 0 1px 3px var(--shadow);
+	box-shadow: var(--elev-1);
 	opacity: 0;
 	transition: opacity var(--fast);
 }
@@ -522,7 +675,7 @@
 	height: 56px;
 	border-radius: var(--radius-surface);
 	color: #fff;
-	box-shadow: 0 8px 20px var(--shadow);
+	box-shadow: var(--elev-2);
 }
 .file-drop-card .icon {
 	width: 28px;
@@ -531,7 +684,7 @@
 .file-drop-card--file {
 	top: 0;
 	right: 6px;
-	background: color-mix(in srgb, var(--accent) 70%, #fff);
+	background: var(--accent);
 	transform: rotate(14deg);
 }
 .file-drop-card--image {
@@ -558,20 +711,43 @@
 	width: 36px;
 	height: var(--control-h-lg);
 	border-radius: 50%;
-	background: var(--ink);
-	color: var(--surface);
+	background: var(--action);
+	color: var(--action-ink);
+	transition:
+		background-color var(--fast),
+		transform var(--fast);
 }
-.send-button:hover {
-	opacity: 0.86;
+/* Nothing to send yet: the button rests as a neutral disc and only takes the action colour once there is a draft. */
+form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
+	background: var(--surface-soft);
+	color: var(--ink-3);
 }
+.send-button:hover:not(:disabled) {
+	background: var(--action-hover);
+}
+.send-button:active:not(:disabled) {
+	transform: scale(0.94);
+}
+/* Nothing to send yet: a quiet slot, not a faded accent. */
 .send-button:disabled {
+	background: var(--selected);
+	color: var(--ink-3);
+	box-shadow: none;
 	cursor: not-allowed;
-	opacity: 0.28;
+}
+/* Stop is neutral ink: it ends work rather than starting it. */
+.send-button--stop {
+	background: var(--ink);
+	color: var(--canvas);
+	box-shadow: none;
+}
+.send-button--stop:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--ink) 84%, var(--canvas));
 }
 .control-segment-none {
 	padding: 3px 4px;
 	color: var(--ink-3);
-	font-size: 11px;
+	font-size: 12px;
 }
 /*
  * Not in legacy: the pin toggle was a <button> nested inside the option button
@@ -579,7 +755,9 @@
  * the cursor and box a <button> had.
  */
 .control-option-pin {
-	display: inline-block;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	cursor: pointer;
 }
 
@@ -594,7 +772,7 @@
 	border: 1px solid var(--line);
 	border-radius: var(--radius-card);
 	background: var(--surface);
-	box-shadow: 0 8px 28px rgb(0 0 0 / 6%);
+	box-shadow: var(--elev-3);
 }
 .slash-list {
 	display: grid;
@@ -608,14 +786,15 @@
 	gap: 10px;
 	min-width: 0;
 	height: 34px;
-	padding: 0 12px 0 14px;
+	/* Symmetric insets and the 13px menu size every composer popover uses. */
+	padding: 0 12px;
 	border-radius: var(--radius-bubble);
 	color: var(--ink);
-	font-size: 14px;
+	font-size: 13px;
 	cursor: pointer;
 }
 .slash-item.active {
-	background: var(--surface-soft);
+	background: var(--selected);
 }
 .slash-item > .icon:first-child {
 	flex: none;
@@ -642,7 +821,7 @@
 }
 /* Group headers ("命令" / "技能"). */
 .slash-group {
-	padding: 6px 14px 2px;
+	padding: 6px 12px 2px;
 	color: var(--ink-3);
 	font-size: 12px;
 }
@@ -730,7 +909,7 @@
 	height: 34px;
 	padding: 0 12px 0 4px;
 	color: var(--ink);
-	font-size: 14px;
+	font-size: 13px;
 }
 .slash-mcp-back {
 	display: grid;
@@ -967,21 +1146,177 @@
 }
 
 /*
- * Skill and plugin picks (ZCode-style): kind-tinted icon chips — the puzzle
- * marks a plugin (light purple), the wrench a skill (light blue). Built on the
- * attachment chip's shape.
+ * Skill and plugin picks: the glyph tells them apart (puzzle = plugin, wrench =
+ * skill), so the chip itself stays the neutral attachment chip in both themes.
  */
 .pick-chip {
-	--pick-accent: #8b5cf6;
-	border-color: color-mix(in srgb, var(--pick-accent) 35%, var(--line));
-	background: color-mix(in srgb, var(--pick-accent) 10%, var(--surface));
-	color: var(--pick-accent);
-}
-.pick-chip--skill {
-	--pick-accent: #3b82f6;
+	color: var(--ink-2);
 }
 .pick-chip > span {
 	color: var(--ink-2);
+}
+
+/*
+ * ===== 模式主题（暂存模式的专属展示） =====
+ *
+ * 每种模式一个固定强调色（token 定义在 styles/global.css 的 --mode-*，与
+ * 对话流的命令回显行共用）：goal 绿（目标达成）、plan 靛（先谋后动）、
+ * ultraloop 品红（多智能体循环）。卡片、模式 chip、＋菜单的模式行和
+ * goal/plan 常驻条都从这里取色。
+ */
+.composer-card[data-mode="goal"] {
+	--mode-accent: var(--mode-goal);
+}
+.composer-card[data-mode="plan"] {
+	--mode-accent: var(--mode-plan);
+}
+.composer-card[data-mode="ultraloop"] {
+	--mode-accent: var(--mode-ultraloop);
+}
+/*
+ * 模式暂存期间，输入卡片整卡染色：描边和投影带模式色，一眼可辨当前模式；
+ * 聚焦时比常态更亮一档（覆盖 .composer-card:focus-within 的中性描边）。
+ */
+.composer-card[data-mode] {
+	border-color: color-mix(in srgb, var(--mode-accent) 55%, var(--line-strong));
+	box-shadow:
+		0 0 0 1px color-mix(in srgb, var(--mode-accent) 22%, transparent),
+		0 7px 24px color-mix(in srgb, var(--mode-accent) 16%, rgb(0 0 0 / 7%));
+}
+.composer-card[data-mode]:focus-within {
+	border-color: color-mix(in srgb, var(--mode-accent) 70%, var(--focus-border));
+}
+/*
+ * 流光描边：一圈模式色高光沿卡片边框循环掠过（mask 只留 1px 边框环，不遮内
+ * 容、不挡点击）。prefers-reduced-motion 时被全局规则停用，只剩静态描边。
+ */
+.composer-card[data-mode]::before {
+	content: "";
+	position: absolute;
+	inset: -1px;
+	border-radius: inherit;
+	padding: 1px;
+	background: linear-gradient(
+		115deg,
+		transparent 0 45%,
+		color-mix(in srgb, var(--mode-accent) 90%, white 10%) 50%,
+		transparent 55% 100%
+	);
+	background-size: 300% 100%;
+	-webkit-mask:
+		linear-gradient(#fff 0 0) content-box,
+		linear-gradient(#fff 0 0);
+	-webkit-mask-composite: xor;
+	mask:
+		linear-gradient(#fff 0 0) content-box,
+		linear-gradient(#fff 0 0);
+	mask-composite: exclude;
+	animation: mode-border-sweep 3s linear infinite;
+	pointer-events: none;
+}
+@keyframes mode-border-sweep {
+	from {
+		background-position: 100% 0;
+	}
+	to {
+		background-position: 0% 0;
+	}
+}
+/*
+ * 命令前缀 chip：暂存模式（`.prompt-mode`，三色主题+动效）与普通命令
+ * （`.prompt-command`，中性紫、静态）都是 #prompt 行首的行内渲染——退格即
+ * 删；模式 chip 不产生文本（发送由 modePrefix 补命令），普通命令 chip 序列
+ * 化回它的命令文本，内核收到的消息不变。
+ */
+.prompt-mode,
+.prompt-command {
+	--lead-accent: var(--ink-3);
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin: 0 2px;
+	padding: 1px 7px;
+	vertical-align: baseline;
+	border: 1px solid color-mix(in srgb, var(--lead-accent) 35%, transparent);
+	border-radius: var(--radius-chip);
+	background: color-mix(in srgb, var(--lead-accent) 10%, transparent);
+	color: var(--lead-accent);
+	font-weight: 500;
+	white-space: nowrap;
+	user-select: all;
+	cursor: default;
+}
+.prompt-mode {
+	--lead-accent: var(--mode-accent, var(--ink-3));
+}
+.prompt-command {
+	--lead-accent: var(--command-accent);
+}
+.prompt-mode-icon,
+.prompt-command-icon {
+	display: inline-flex;
+}
+.prompt-mode[data-mode="goal"] .prompt-mode-icon {
+	animation: mode-icon-breathe 2.4s ease-in-out infinite;
+}
+.prompt-mode[data-mode="ultraloop"] .prompt-mode-icon {
+	animation: mode-icon-spin 3.6s linear infinite;
+}
+.prompt-mode[data-mode="plan"] .prompt-mode-label {
+	background: linear-gradient(
+		100deg,
+		currentColor 0 42%,
+		color-mix(in srgb, currentColor 40%, var(--ink)) 50%,
+		currentColor 58% 100%
+	);
+	background-size: 300% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+	animation: mode-label-sweep 2.4s linear infinite;
+}
+@keyframes mode-icon-breathe {
+	0%,
+	100% {
+		opacity: 0.8;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1.12);
+	}
+}
+@keyframes mode-icon-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@keyframes mode-label-sweep {
+	from {
+		background-position: 100% 0;
+	}
+	to {
+		background-position: 0% 0;
+	}
+}
+/*
+ * ＋ 菜单的模式行：图标常显模式色（选没选都看得见主题），选中的标题也染
+ * 上，和模式 chip、卡片特效互相呼应。
+ */
+.control-option--goal {
+	--mode-accent: var(--mode-goal);
+}
+.control-option--plan {
+	--mode-accent: var(--mode-plan);
+}
+.control-option--ultraloop {
+	--mode-accent: var(--mode-ultraloop);
+}
+.control-option--mode .control-option-icon {
+	color: var(--mode-accent);
+}
+.control-option--mode[aria-selected="true"] .control-option-title {
+	color: var(--mode-accent);
 }
 
 /* ===== ＋ 菜单的更多行与二级面板（PlusMenu / PlusSubPanels） ===== */
@@ -1004,21 +1339,30 @@
 	align-items: center;
 	gap: 9px;
 	width: 100%;
-	padding: 6px 10px;
+	/* 36px rows: the same 4px grid as the other composer menus. */
+	min-height: 36px;
+	padding: 8px 9px;
 	border: 0;
 	border-radius: var(--radius-row);
 	background: none;
 	color: var(--ink);
-	font-size: 12.5px;
+	font-size: 13px;
+	line-height: 20px;
 	text-align: left;
 	cursor: pointer;
 }
 .plus-row:hover,
 .plus-row--open {
-	background: var(--surface-soft);
+	background: var(--hover);
 }
+.plus-row > .icon:first-child {
+	flex: none;
+	color: var(--ink-2);
+}
+/* Same title weight as the option rows above it in the menu. */
 .plus-row-title {
 	flex: 1;
+	font-weight: 500;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1076,13 +1420,10 @@
 .plus-sub-row:hover {
 	background: var(--hover);
 }
-/* 行首类型标记：与暂存芯片同色（拼图=插件·浅紫，扳手=技能·浅蓝）。 */
+/* Row kind glyph (puzzle = plugin, wrench = skill), neutral like the staged chip. */
 .plus-sub-kind {
 	flex: none;
-	color: #8b5cf6;
-}
-.plus-sub-kind--wrench {
-	color: #3b82f6;
+	color: var(--ink-3);
 }
 .plus-sub-row--faded {
 	opacity: 0.55;
@@ -1096,7 +1437,7 @@
 }
 .plus-sub-name {
 	overflow: hidden;
-	font-size: 12.5px;
+	font-size: 13px;
 	font-weight: 600;
 	color: var(--ink);
 	text-overflow: ellipsis;
@@ -1104,13 +1445,13 @@
 }
 .plus-sub-hint {
 	margin-left: 6px;
-	font-size: 11px;
+	font-size: 12px;
 	font-weight: 400;
 	color: var(--ink-3);
 }
 .plus-sub-desc {
 	overflow: hidden;
-	font-size: 11.5px;
+	font-size: 12px;
 	color: var(--ink-2);
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -1137,7 +1478,7 @@
 .plus-sub-note {
 	display: block;
 	padding: 5px 8px;
-	font-size: 11px;
+	font-size: 12px;
 	color: var(--ink-3);
 }
 .plus-sub-empty {
@@ -1153,4 +1494,54 @@
 }
 .plus-sub-retry:hover {
 	color: var(--ink);
+}
+
+/*
+ * `.plan-strip`: plan mode, docked on the composer's top edge exactly like the
+ * queue dock (same inset and square bottom): it stands on the card's top edge.
+ */
+.plan-strip {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px -1px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+.plan-strip[hidden] {
+  display: none;
+}
+.plan-strip-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  /* Plan's own mode colour, matching the staged-mode chip and card glow. */
+  color: var(--mode-plan);
+}
+.plan-strip-label {
+  flex: none;
+  font-weight: 500;
+}
+.plan-strip-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+.plan-strip-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+  text-align: right;
 }

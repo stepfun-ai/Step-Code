@@ -153,6 +153,14 @@ export interface UltraloopOptInExtensionOptions {
 	vmExecutor?: unknown;
 	/** Written each turn with the parsed "+500k" target (or undefined). */
 	turnState?: UltraloopTurnState;
+	/**
+	 * Whether this host offers the session-standing `/ultraloop on|off` switch.
+	 * Defaults to true (CLI). A host whose UI only offers per-turn opt-in passes
+	 * false: no standing command is registered, and a persisted standing entry
+	 * from another host's session is ignored instead of reviving consent the user
+	 * cannot revoke from this UI.
+	 */
+	sessionMode?: boolean;
 }
 
 /**
@@ -166,14 +174,17 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 
 		let optedInThisTurn = false;
 		let sessionMode = false;
+		const supportsSessionMode = options.sessionMode !== false;
 		const setTurnBudget = (value: number | undefined): void => {
 			if (options.turnState) options.turnState.budgetTotal = value;
 		};
 
 		// Session boundaries restore only the latest mode entry from this session;
-		// sessions without a saved mode start opted-out.
+		// sessions without a saved mode start opted-out. A host without the
+		// standing switch stays opted-out even when the branch carries an entry
+		// written by a host that has it.
 		pi.on("session_start", (_event, ctx) => {
-			sessionMode = persistedSessionMode(ctx.sessionManager.getEntries()) ?? false;
+			sessionMode = supportsSessionMode ? (persistedSessionMode(ctx.sessionManager.getEntries()) ?? false) : false;
 			optedInThisTurn = false;
 			setTurnBudget(undefined);
 			ctx.ui.setStatus("ultracode", sessionMode ? "Ultracode on" : undefined);
@@ -189,7 +200,10 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 			const previous = lastSessionMode(
 				ctx.sessionManager.buildContextEntries().filter((entry) => entry.type === "custom_message"),
 			);
-			const modeReminder = sessionModeReminder(sessionMode, previous);
+			// Without the standing switch there is no session state to announce:
+			// a branch carried over from another host must not emit an "off"
+			// transition the user never asked for.
+			const modeReminder = supportsSessionMode ? sessionModeReminder(sessionMode, previous) : undefined;
 
 			// Session-standing wins when both signals fire: the LLM already knows
 			// workflow is authorized for the whole session; a per-turn reminder
@@ -212,6 +226,7 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 		// Reconcile against the actual provider context in those cases. This fallback
 		// is request-local: it does not append duplicate entries to session history.
 		pi.on("context", (event) => {
+			if (!supportsSessionMode) return;
 			const previous = lastSessionMode(event.messages.filter((message) => message.role === "custom"));
 			const message = sessionModeReminder(sessionMode, previous);
 			if (!message) return;
@@ -290,6 +305,10 @@ export function createUltraloopOptInExtension(options: UltraloopOptInExtensionOp
 				ctx.ui.notify("Usage: /ultracode [on|off|status|help] (/ultraloop is an alias).", "warning");
 			},
 		};
+		// A host that offers only per-turn opt-in registers no standing command:
+		// `/ultraloop on` would grant consent the same UI cannot revoke, and the
+		// per-turn keyword path needs no command at all.
+		if (!supportsSessionMode) return;
 		pi.registerCommand("ultracode", command);
 		pi.registerCommand("ultraloop", {
 			...command,

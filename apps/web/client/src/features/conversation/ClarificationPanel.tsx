@@ -6,7 +6,7 @@ import { useImeGuard } from "../../lib/ime";
 import { useAppStore } from "../../state/store";
 import type { ClarificationReply, ClarificationRequest } from "../../state/types";
 import { Icon, IconButton } from "../../ui";
-import { replyToClarification } from "./actions";
+import { replyToClarification } from "../composer/actions";
 
 export function ClarificationPanel() {
 	const request = useAppStore((state) => state.current?.pendingClarifications?.[0]);
@@ -71,11 +71,13 @@ function Questionnaire({ request }: { readonly request: ClarificationRequest }) 
 
 	return (
 		<div className="clarification-card" aria-busy={busy}>
-			<header className="clarification-header">
-				<span className="clarification-title">
-					<Icon name="question" />
-					{t("clarificationTitle")}
-				</span>
+			{/*
+			 * No header, no card chrome: the questionnaire reads as part of the
+			 * conversation — the question text with quick-reply pills under it.
+			 * Only a multi-question round shows the slim page navigation, and
+			 * closing the round lives with the other footer text actions.
+			 */}
+			{request.questions.length > 1 ? (
 				<nav className="clarification-navigation" aria-label={t("clarificationNavigation")}>
 					<IconButton
 						icon="chevronLeft"
@@ -92,14 +94,8 @@ function Questionnaire({ request }: { readonly request: ClarificationRequest }) 
 						disabled={last || busy}
 						onClick={() => navigate(page + 1)}
 					/>
-					<IconButton
-						icon="close-sm"
-						aria-label={t("clarificationClose")}
-						disabled={busy}
-						onClick={() => void send([], true)}
-					/>
 				</nav>
-			</header>
+			) : null}
 			<div className="clarification-body" key={page}>
 				<h2 id="clarification-question">{question.question}</h2>
 				{question.reason && <p className="clarification-reason">{question.reason}</p>}
@@ -110,17 +106,13 @@ function Questionnaire({ request }: { readonly request: ClarificationRequest }) 
 							type="button"
 							className="clarification-option"
 							disabled={busy}
+							title={option.description || undefined}
 							aria-pressed={
 								!editing && answer !== undefined && "optionIndex" in answer && answer.optionIndex === index
 							}
 							onClick={() => save({ id: question.id, optionIndex: index })}
 						>
-							<span className="clarification-number">{index + 1}</span>
-							<span className="clarification-option-content">
-								<span>{option.label}</span>
-								{option.description && <small>{option.description}</small>}
-							</span>
-							<Icon name="back" className="clarification-option-arrow" />
+							{option.label}
 						</button>
 					))}
 				</fieldset>
@@ -163,6 +155,9 @@ function Questionnaire({ request }: { readonly request: ClarificationRequest }) 
 						onClick={() => save({ id: question.id, skipped: true })}
 					>
 						{t("clarificationSkip")}
+					</button>
+					<button type="button" className="clarification-skip" disabled={busy} onClick={() => void send([], true)}>
+						{t("clarificationClose")}
 					</button>
 					<button type="button" className="clarification-confirm" disabled={busy || !canConfirm} onClick={confirm}>
 						{t(busy ? "clarificationSending" : last ? "clarificationSend" : "clarificationContinue")}

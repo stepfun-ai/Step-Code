@@ -18,7 +18,7 @@ import { FULL_ACCESS_PRESET, isFullAccessRisk } from "../lib/permissions";
 import { isDesktopHost } from "../platform/host";
 import { assistantBlocks } from "./assistant-content";
 import { observePerformance } from "./performance";
-import { type AppState, getState, mapWith, setState, setUi } from "./store";
+import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
 import { backgroundSubagentStatuses, subagentTasks } from "./subagent-tasks";
 import { readThinkingTimings } from "./thinking-timing";
 import type {
@@ -32,6 +32,7 @@ import type {
 	DraftModels,
 	FileChange,
 	LoginReport,
+	NoticeItem,
 	QueueState,
 	SelectionRequest,
 	SessionEntry,
@@ -40,6 +41,8 @@ import type {
 	SessionSnapshot,
 	SessionStatus,
 	SessionSummary,
+	SideAnswer,
+	TextInputRequest,
 	ThinkingTimings,
 	TimelineItem,
 	ToolArgs,
@@ -52,11 +55,111 @@ import type {
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let toastSeq = 0;
 
+/** Notices are page-local command output; keep the newest so a chatty command cannot grow the list forever. */
+const NOTICE_LIMIT = 20;
+/** Side answers kept per session, matching the host's own bound. */
+const SIDE_ANSWER_LIMIT = 30;
+/**
+ * Answers whose tab the reader closed. The host keeps them (they are its history),
+ * so without this a snapshot refresh would resurrect the tab they dismissed.
+ */
+const dismissedSideAnswers = new Set<string>();
+
+/** Stop restoring one answer's tab after the reader closed it. */
+export function forgetSideAnswer(id: string): void {
+	dismissedSideAnswers.add(id);
+}
+
+/** The answers a snapshot should restore: everything the reader has not closed. */
+export function restorableSideAnswers(answers: readonly SideAnswer[]): readonly SideAnswer[] {
+	return answers.filter((answer) => !dismissedSideAnswers.has(answer.id));
+}
+let noticeSeq = 0;
+
+/**
+ * Append a command notice to the transcript. Notices are this page's view of
+ * `ui.notify`: they are never persisted and never enter the model's context.
+ */
+/**
+ * Goal lifecycle state the right rail's goal panel already shows: a notice
+ * would only repeat it as a bubble. Warnings that need a decision still show.
+ */
+const GOAL_STATUS_NOTICE =
+	/^(Goal set: |Goal (paused|resumed|cleared|updated)\.|Goal commands: |Goal: .*\(iteration |Stopped a queued goal turn |Goal .+ is (paused|blocked|usage_limited))/u;
+
+/** Whether a notice only restates goal state the goal panel already renders. */
+export function goalStatusNotice(text: string): boolean {
+	return GOAL_STATUS_NOTICE.test(text.trim());
+}
+
+export function pushNotice(level: NoticeItem["level"], text: string, options?: { readonly markdown?: boolean }): void {
+	if (goalStatusNotice(text)) return;
+	const current = getState().current;
+	noticeSeq += 1;
+	const item: NoticeItem = {
+		id: `notice-${noticeSeq}`,
+		sessionId: current?.id ?? "",
+		level,
+		text,
+		...(options?.markdown ? { markdown: true } : {}),
+	};
+	setState((state) => ({ notices: [...state.notices, item].slice(-NOTICE_LIMIT) }));
+}
+
+/**
+ * What opens side answers in the rail. `state/session.ts` must not import a
+ * feature (features import it), so the tab actions install themselves here.
+ */
+let openSideAnswerTab: (answer: SideAnswer) => void = () => {};
+let syncSideAnswerTabs: (answers: readonly SideAnswer[]) => void = () => {};
+let dropSideAnswerTabs: () => void = () => {};
+
+/** Called once by `features/files/actions.ts`; keeps the reducer free of feature imports. */
+export function installSideAnswerTabs(actions: {
+	open: (answer: SideAnswer) => void;
+	sync: (answers: readonly SideAnswer[]) => void;
+	drop: () => void;
+}): void {
+	openSideAnswerTab = actions.open;
+	syncSideAnswerTabs = actions.sync;
+	dropSideAnswerTabs = actions.drop;
+}
+
+/**
+ * File one `/btw` answer: keep it on the session (so the rail can list it) and
+ * open it as its own tab, the way asking the question is what the user wanted.
+ * The conversation, its entries and the model's context are untouched.
+ */
+export function applySideAnswer(answer: SideAnswer): void {
+	setState((state) => ({
+		current: state.current
+			? {
+					...state.current,
+					sideAnswers: [
+						...(state.current.sideAnswers ?? []).filter((item) => item.id !== answer.id),
+						answer,
+					].slice(-SIDE_ANSWER_LIMIT),
+				}
+			: state.current,
+	}));
+	openSideAnswerTab(answer);
+}
+
+/** Remove one notice the reader dismissed. */
+export function dismissNotice(id: string): void {
+	setState((state) => ({ notices: state.notices.filter((notice) => notice.id !== id) }));
+}
+
 /** Show the top-centre toast for 4.2s (legacy `showError`, 3184-3193). `danger=false` is the neutral tone. */
 export function showError(message: string, danger = true): void {
+	showToast(message, danger ? "danger" : "neutral");
+}
+
+/** A short, self-dismissing announcement. State the UI already draws says nothing else. */
+export function showToast(message: string, tone: ToastState["tone"] = "neutral"): void {
 	toastSeq += 1;
 	const seq = toastSeq;
-	setState({ toast: { message, tone: danger ? "danger" : "neutral", seq } });
+	setState({ toast: { message, tone, seq } });
 	if (toastTimer !== undefined) clearTimeout(toastTimer);
 	toastTimer = setTimeout(() => {
 		if (getState().toast?.seq === seq) setState({ toast: null });
@@ -187,6 +290,51 @@ export function childAgents(name: string, details: unknown): Pick<ToolTimelineIt
 	return children.length ? { children } : {};
 }
 
+/**
+ * The proposal an `exit_plan_mode` call submitted.
+ *
+ * `details` is the only structured copy: the plan file may change afterwards,
+ * and `planHash` is what binds a decision to the text the user reviewed. A
+ * result without those fields is a guard result ("not in plan mode", unreadable
+ * file), which stays a plain tool row.
+ */
+export function planReview(details: unknown): Pick<ToolTimelineItem, "planReview"> {
+	if (!details || typeof details !== "object") return {};
+	const value = details as {
+		planFilePath?: unknown;
+		planContents?: unknown;
+		planHash?: unknown;
+		outcome?: unknown;
+	};
+	if (
+		typeof value.planFilePath !== "string" ||
+		typeof value.planContents !== "string" ||
+		typeof value.planHash !== "string"
+	) {
+		return {};
+	}
+	const outcome = value.outcome;
+	if (
+		outcome !== "approved" &&
+		outcome !== "feedback" &&
+		outcome !== "dismissed" &&
+		outcome !== "external_approval_required"
+	) {
+		return {};
+	}
+	return {
+		planReview: {
+			planFilePath: value.planFilePath,
+			planContents: value.planContents,
+			planHash: value.planHash,
+			outcome,
+			// Only a handoff to the user is actionable; the other outcomes were
+			// already resolved inside a host that could ask.
+			pending: outcome === "external_approval_required",
+		},
+	};
+}
+
 /** `{ args }` for a tool item when the call has arguments a row names, else nothing. */
 function withArgs(input: unknown): { args?: ToolArgs } {
 	const args = toolArgs(input);
@@ -205,6 +353,37 @@ function imageSources(content: unknown): string[] {
 }
 
 /**
+ * How many conversational messages a compaction replaced: everything since the
+ * previous compaction, before the first entry this one keeps. Earlier summaries
+ * are not counted again. The branch still holds the summarized entries, so this
+ * counts the transcript rows the summary stands in for, not the session file.
+ */
+function compactedMessageCount(
+	entries: readonly SessionEntry[],
+	compactionIndex: number,
+	firstKeptEntryId: unknown,
+): number {
+	// An earlier compaction already accounts for everything before it.
+	let start = 0;
+	for (let index = compactionIndex - 1; index >= 0; index -= 1) {
+		if (entries[index]?.type === "compaction") {
+			start = index + 1;
+			break;
+		}
+	}
+	const keptIndex =
+		typeof firstKeptEntryId === "string" ? entries.findIndex((entry) => entry.id === firstKeptEntryId) : -1;
+	const end = keptIndex >= 0 && keptIndex < compactionIndex ? keptIndex : compactionIndex;
+	let count = 0;
+	for (const entry of entries.slice(start, end)) {
+		if (entry.type === "message" && (entry.message?.role === "user" || entry.message?.role === "assistant")) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
+/**
  * Project session entries into timeline rows (legacy `timelineFromEntries`, 2055-2096).
  *
  * A failed request the kernel retried is followed directly by the next
@@ -214,6 +393,13 @@ function imageSources(content: unknown): string[] {
  */
 export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry?: SessionRetry): TimelineItem[] {
 	const items: TimelineItem[] = [];
+	/*
+	 * A command that expands into its own user message (`/plan <task>`) journals
+	 * the task twice — once as the host's echo, once as the message the kernel
+	 * sends. The echo carries the badge, so the identical message that follows
+	 * it is dropped from the timeline (it stays journaled for the model).
+	 */
+	let echoArgs: string | null = null;
 	const toolResults = new Map<string, NonNullable<SessionEntry["message"]>>();
 	for (const entry of entries) {
 		if (entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolCallId) {
@@ -221,9 +407,42 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 		}
 	}
 	const messages = entries.filter((entry) => entry.type === "message" && entry.message);
-	for (const [index, entry] of messages.entries()) {
+	const messagePosition = new Map(messages.map((entry, index) => [entry.id, index]));
+	for (const [entryIndex, entry] of entries.entries()) {
+		if (entry.type === "compaction") {
+			items.push({
+				itemId: `compaction-${entry.id}`,
+				kind: "compaction",
+				summary: typeof entry.summary === "string" ? entry.summary : "",
+				...(typeof entry.tokensBefore === "number" ? { tokensBefore: entry.tokensBefore } : {}),
+				removedMessages: compactedMessageCount(entries, entryIndex, entry.firstKeptEntryId),
+				...(typeof entry.timestamp === "string" ? { timestamp: entry.timestamp } : {}),
+			});
+			continue;
+		}
+		// The host's echo of a kernel slash command: the transcript's only record of the typed line.
+		if (entry.type === "custom" && entry.customType === "stepcode-web.command-echo") {
+			const command = typeof entry.command === "string" ? entry.command : "";
+			if (command) {
+				items.push({
+					itemId: `command-${entry.id}`,
+					kind: "command",
+					command,
+					...(typeof entry.timestamp === "string" ? { timestamp: entry.timestamp } : {}),
+				});
+				echoArgs = /^\/[A-Za-z0-9][\w.:-]*\s*([\s\S]*)$/u.exec(command)?.[1]?.trim() || null;
+			}
+			continue;
+		}
+		if (entry.type !== "message") continue;
 		const message = entry.message;
 		if (!message || message.role === "toolResult") continue;
+		if (message.role === "user" && echoArgs !== null) {
+			const duplicate = contentText(message.content).trim() === echoArgs;
+			echoArgs = null;
+			if (duplicate) continue;
+		}
+		const index = messagePosition.get(entry.id) ?? 0;
 		const text = contentText(message.content);
 		const images = message.role === "user" ? imageSources(message.content) : [];
 		// A failed request leaves an assistant message with no content; without a row the error was invisible.
@@ -297,6 +516,10 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					...withArgs(block.arguments),
 					...(change ? { change } : {}),
 					...links,
+					// The proposal comes from the persisted result, not the live event, so
+					// a snapshot refresh (which follows every finished message) keeps the
+					// review card. Without this it flashed once and vanished.
+					...(block.name === "exit_plan_mode" ? planReview(result?.details) : {}),
 					...(block.name === "subagent"
 						? {
 								subagentTasks: subagentTasks(
@@ -328,7 +551,7 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 		else items.push({ itemId: "retry-live", kind: "retry", errors: [retry.errorMessage], live: retry });
 	}
 	const background = backgroundSubagentStatuses(entries);
-	return items.map((item) =>
+	const rows = items.map((item) =>
 		item.kind === "tool" && item.subagentTasks
 			? {
 					...item,
@@ -348,6 +571,29 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 				}
 			: item,
 	);
+	return settlePlanReviews(rows);
+}
+
+/**
+ * A plan review is actionable only while nothing has superseded it.
+ *
+ * Each decision the card sends is an ordinary user message, so a user message
+ * after the proposal is the decision. A newer `exit_plan_mode` proposal
+ * supersedes an older one. The card itself stays in the transcript as the
+ * record of that round; it just stops offering buttons.
+ */
+function settlePlanReviews(items: TimelineItem[]): TimelineItem[] {
+	let latest = -1;
+	items.forEach((item, index) => {
+		if (item.kind === "tool" && item.planReview) latest = index;
+	});
+	if (latest < 0) return items;
+	const decided = items.some((item, index) => index > latest && item.kind === "message" && item.role === "user");
+	return items.map((item, index) => {
+		if (item.kind !== "tool" || !item.planReview) return item;
+		const pending = item.planReview.pending && index === latest && !decided;
+		return pending === item.planReview.pending ? item : { ...item, planReview: { ...item.planReview, pending } };
+	});
 }
 
 /**
@@ -402,6 +648,7 @@ export function renderSnapshot(snapshot: SessionSnapshot): void {
 		// A response that left before an answer must not reopen the dialog.
 		pendingSelections: (snapshot.pendingSelections ?? []).filter((request) => !resolvedSelections.has(request.id)),
 	};
+	const previousSessionId = getState().current?.id;
 	setState((state) => {
 		const timelineItems = [...timelineFromEntries(snapshot.entries, snapshot.retry), ...approvalItems(snapshot)];
 		const pendingTurn =
@@ -425,8 +672,16 @@ export function renderSnapshot(snapshot: SessionSnapshot): void {
 			sessions: mergeSessionSummary(state.sessions, snapshot),
 			timelineItems,
 			pendingTurn,
+			// The snapshot is authoritative when the page (re)loads; live
+			// `compaction_start` / `compaction_end` events refine it afterwards.
+			compacting: snapshot.compacting === true,
 		};
 	});
+	// Side answers belong to one session, so tabs from the previous one are dropped
+	// before this session's are restored. A reloaded page then shows the history
+	// again; an open file tab stays in front.
+	if (previousSessionId !== snapshot.id) dropSideAnswerTabs();
+	syncSideAnswerTabs(restorableSideAnswers(snapshot.sideAnswers ?? []));
 }
 
 /** User messages in a timeline; `pendingTurn` compares this before and after a send. */
@@ -451,7 +706,7 @@ let stream: EventSource | null = null;
 export function closeStream(): void {
 	stream?.close();
 	stream = null;
-	setState({ performanceRun: null });
+	setState({ performanceRun: null, compacting: false });
 	liveApprovals.clear();
 	liveClarifications.clear();
 	resolvedClarifications.clear();
@@ -467,6 +722,9 @@ interface AgentStreamEvent {
 	readonly result?: { readonly content?: unknown; readonly details?: unknown };
 	readonly isError?: boolean;
 	readonly assistantMessageEvent?: { readonly type?: string; readonly contentIndex?: number };
+	/** `compaction_start` / `compaction_end` carry the reason and, on failure, the message. */
+	readonly reason?: string;
+	readonly errorMessage?: string;
 }
 
 function updateTimeline(update: (items: readonly TimelineItem[]) => readonly TimelineItem[]): void {
@@ -603,6 +861,20 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 			performanceRun: observePerformance(state.performanceRun, agentEvent, performance.now()),
 		}));
 	}
+	if (agentEvent.type === "compaction_start") {
+		// A manual compaction is answered by the compaction row, not by a turn, so
+		// the bubble drawn for `/compact` goes away. A threshold/overflow
+		// compaction happens inside a real turn (before `agent_start` is even
+		// announced), and that bubble must survive it.
+		const manual = agentEvent.reason === "manual";
+		setState({ compacting: true, ...(manual ? { pendingTurn: null } : {}) });
+	}
+	if (agentEvent.type === "compaction_end") {
+		setState({ compacting: false });
+		// A refusal or a failed summarization is command output: say why, where
+		// the command was typed. The row itself appears from the session entry.
+		if (agentEvent.errorMessage) pushNotice("warning", agentEvent.errorMessage);
+	}
 	if (agentEvent.type === "message_update") {
 		const event = agentEvent.assistantMessageEvent;
 		scheduleLiveMessage(
@@ -693,6 +965,7 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 			outputSummary: compact(output),
 			outputDetail: clipDetail(output),
 			...childAgents(item.toolName, agentEvent.result?.details),
+			...(item.toolName === "exit_plan_mode" ? planReview(agentEvent.result?.details) : {}),
 			...(item.toolName === "subagent"
 				? {
 						subagentTasks: subagentTasks(
@@ -710,6 +983,9 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 		agentEvent.type === "entry_appended" ||
 		agentEvent.type === "session_info_changed" ||
 		agentEvent.type === "agent_settled" ||
+		// The compaction entry is written without `entry_appended`; the end event
+		// is what makes the new row and the lowered context usage visible.
+		agentEvent.type === "compaction_end" ||
 		// The snapshot carries the retry (attempt, backoff) and folds the failures it retries.
 		agentEvent.type === "auto_retry_start" ||
 		agentEvent.type === "auto_retry_end"
@@ -831,6 +1107,72 @@ export function connectStream(id: string): void {
 					: state.current,
 		}));
 	});
+	source.addEventListener("text_input_required", (event) => {
+		const request = JSON.parse((event as MessageEvent).data).input as TextInputRequest;
+		if (stream !== source || request.sessionId !== id) return;
+		setState((state) => ({
+			current:
+				state.current?.id === id
+					? {
+							...state.current,
+							pendingTextInputs: [
+								...(state.current.pendingTextInputs ?? []).filter((item) => item.id !== request.id),
+								request,
+							],
+						}
+					: state.current,
+		}));
+	});
+	source.addEventListener("text_input_resolved", (event) => {
+		if (stream !== source) return;
+		const requestId = JSON.parse((event as MessageEvent).data).id as string;
+		setState((state) => ({
+			current:
+				state.current?.id === id
+					? {
+							...state.current,
+							pendingTextInputs: (state.current.pendingTextInputs ?? []).filter((item) => item.id !== requestId),
+						}
+					: state.current,
+		}));
+	});
+	// Command output (`ui.notify`). It is a notice row, not a message: it never
+	// enters the session file, so it lives for this page load only.
+	source.addEventListener("notice", (event) => {
+		if (stream !== source) return;
+		const notice = JSON.parse((event as MessageEvent).data) as {
+			level?: string;
+			text?: string;
+			markdown?: boolean;
+			transient?: boolean;
+		};
+		if (typeof notice.text !== "string" || !notice.text) return;
+		const level =
+			notice.level === "warning" || notice.level === "error" || notice.level === "info" ? notice.level : "info";
+		if (notice.transient) {
+			// An announcement about state the UI already renders (plan mode, the
+			// permission tier): show it, then let it go. It must not become a row in
+			// a conversation the user did not send anything to.
+			showToast(notice.text, level === "error" ? "danger" : "neutral");
+			return;
+		}
+		pushNotice(level, notice.text, notice.markdown ? { markdown: true } : undefined);
+		// A command answered in place (`/btw`, `/status`, a refusal) starts no turn,
+		// so the optimistic bubble that `sendMessage` drew would otherwise sit
+		// under a "thinking" indicator forever. Only a command can be answered
+		// this way: a prompt's notices (session start, permission) belong to a
+		// turn whose bubble must stay until its message is recorded.
+		setState((state) => ({
+			pendingTurn: /^\s*\/[A-Za-z0-9]/u.test(state.pendingTurn?.text ?? "") ? null : state.pendingTurn,
+		}));
+	});
+	// A `/btw` answer: its own tab in the rail, never a transcript row.
+	source.addEventListener("side-answer", (event) => {
+		if (stream !== source) return;
+		const answer = JSON.parse((event as MessageEvent).data).answer as SideAnswer;
+		if (!answer || typeof answer.id !== "string") return;
+		applySideAnswer(answer);
+	});
 	source.addEventListener("web_error", (event) => {
 		setState({ pendingTurn: null });
 		showError(JSON.parse((event as MessageEvent).data).message || "运行错误");
@@ -869,6 +1211,71 @@ export async function refreshSessions(): Promise<void> {
 		);
 		return { sessions: [...kept, ...data.sessions], ...foldLiveStatuses(state, live, listed) };
 	});
+}
+
+/** Keep the open session's snapshot in step with a row action done from a menu. */
+function patchCurrentSession(id: string, fields: Partial<SessionSummary>): void {
+	setState((state) => (state.current?.id === id ? { current: { ...state.current, ...fields } } : {}));
+}
+
+export type SessionAction = "rename" | "archive" | "delete";
+
+/** Close `#renameSessionDialog`; ignored while its request runs, so the result still lands. */
+export function closeRenameSession(): void {
+	if (getState().ui.renameSession?.pending) return;
+	setUi({ renameSession: null });
+}
+
+/**
+ * Submit `#renameSessionDialog`. The dialog closes once the host accepted the name; a failure keeps it
+ * open with the typed name so the user can retry, and reports the error in the toast.
+ */
+export async function renameSession(name: string): Promise<void> {
+	const target = getState().ui.renameSession;
+	const trimmed = name.trim();
+	if (!target || target.pending || !trimmed) return;
+	setUi({ renameSession: { ...target, pending: true } });
+	try {
+		await apiSend(`/api/v1/sessions/${target.sessionId}/name`, "PATCH", { name: trimmed });
+		patchCurrentSession(target.sessionId, { name: trimmed });
+		setUi((ui) => (ui.renameSession?.sessionId === target.sessionId ? { renameSession: null } : {}));
+		await refreshSessions();
+	} catch (error) {
+		setUi((ui) =>
+			ui.renameSession?.sessionId === target.sessionId ? { renameSession: { ...target, pending: false } } : {},
+		);
+		showError(errorMessage(error));
+	}
+}
+
+/**
+ * Rename / archive / delete one session (legacy `openSessionMenu` click
+ * handler, 1297-1328). Called from the sidebar's row menu and the
+ * conversation header's menu; the open session's snapshot follows along so
+ * the header title does not wait for the next SSE snapshot.
+ */
+export async function runSessionAction(action: SessionAction, session: SessionSummary): Promise<void> {
+	try {
+		if (action === "rename") {
+			// The dialog submits through renameSession; nothing changed yet, so there is nothing to refresh.
+			setUi({ renameSession: { sessionId: session.id, name: sessionTitle(session), pending: false } });
+			return;
+		}
+		if (action === "archive") {
+			const archived = !session.archived;
+			await apiSend(`/api/v1/sessions/${session.id}/archive`, "PATCH", { archived });
+			patchCurrentSession(session.id, { archived });
+		}
+		if (action === "delete" && window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) {
+			await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
+			forgetUnlistedSession(session.id);
+			const state = getState();
+			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
+		}
+		await refreshSessions();
+	} catch (error) {
+		showError(errorMessage(error));
+	}
 }
 
 /**
@@ -939,14 +1346,18 @@ export async function refreshWorkspaces(): Promise<void> {
 /** Open a session and follow its stream (legacy `openSession`, 3122-3130). */
 export async function openSession(id: string): Promise<void> {
 	choseSession = true;
-	setUi({ midView: null, childView: null });
+	setUi({ midView: null, childView: null, openingSession: id });
 	setState({ pendingTurn: null });
 	try {
 		const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${id}`);
+		// A later pick owns the pane; this answer arriving late must not repaint it.
+		if (getState().ui.openingSession !== id) return;
 		renderSnapshot(snapshot);
 		connectStream(id);
 	} catch (error) {
-		showError(errorMessage(error));
+		if (getState().ui.openingSession === id) showError(errorMessage(error));
+	} finally {
+		if (getState().ui.openingSession === id) setUi({ openingSession: null });
 	}
 }
 
@@ -980,8 +1391,9 @@ export function startDraft(cwd: string = getState().bootstrapCwd): void {
 			draftCwd,
 		};
 	});
-	// A new conversation replaces whatever covers the pane (cron / plugin market, a child agent).
-	setUi({ midView: null, childView: null });
+	// A new conversation replaces whatever covers the pane (cron / plugin market, a child agent),
+	// and a session still loading from an earlier pick.
+	setUi({ midView: null, childView: null, openingSession: null });
 	requestPromptFocus();
 	void loadDraftModels(draftCwd);
 }
@@ -1007,6 +1419,24 @@ async function loadDraftModels(cwd: string): Promise<void> {
 	} catch (error) {
 		showError(errorMessage(error));
 	}
+}
+
+/**
+ * Re-read the host's model catalog after a settings visit: a model provider
+ * added or removed there must reach the picker without a new conversation.
+ * The open session re-reads `models.json` in place; a draft simply asks again.
+ */
+export async function refreshModelCatalog(): Promise<void> {
+	const state = getState();
+	if (state.current) {
+		try {
+			renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${state.current.id}/models/refresh`, "POST"));
+		} catch (error) {
+			showError(errorMessage(error));
+		}
+		return;
+	}
+	await loadDraftModels(state.draftCwd || state.bootstrapCwd);
 }
 
 /**

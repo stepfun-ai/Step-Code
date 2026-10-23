@@ -18,7 +18,7 @@ export function TurnArtifacts({
 	const [showAll, setShowAll] = useState(false);
 	const activePath = useAppStore((state) => {
 		const tab = state.preview.tabs[state.preview.active];
-		return activeRightPanel(state) === "files" && tab?.cwd === cwd ? tab.path : null;
+		return activeRightPanel(state) === "files" && tab?.kind === "file" && tab.cwd === cwd ? tab.path : null;
 	});
 	if (!artifacts.length) return null;
 	return (

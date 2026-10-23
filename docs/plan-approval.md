@@ -2,9 +2,17 @@
 
 `exit_plan_mode` submits a written proposal for review. Leaving plan mode and
 approving the proposal are separate events. In headless and RPC sessions, a valid
-proposal exits plan mode and restores the previous tools, while the caller remains
-responsible for obtaining approval before execution. This also applies to RPC
-contexts with `hasUI: true`; their UI bridge does not provide interactive approval.
+proposal exits plan mode, while the caller remains responsible for obtaining
+approval before execution. This also applies to RPC contexts with `hasUI: true`;
+their UI bridge does not provide interactive approval.
+
+Plan mode does not hide tools: it denies mutating calls outside the plan file
+through the `tool_call` policy, so the request's tool block stays byte-identical
+and the provider's prompt cache keeps its prefix. Only a profile that lacks a
+plan tool has it appended on entry, and that addition alone is reverted on exit.
+That denial is decided before any approval prompt, so a host never asks the user
+to approve a mutation plan mode forbids; a write to the plan file itself still
+goes through the normal permission policy.
 
 Successful headless and RPC exits return the existing model-facing text plus
 structured `details`, for example:
@@ -90,7 +98,11 @@ complete plan, rather than displaying an approved result.
 Missing, empty, whitespace-only, unreadable, and non-regular plan files retain
 their existing explanatory text and leave plan mode active. Their `details` are
 `undefined`; they never receive a successful handoff outcome or hash. Calling
-`exit_plan_mode` outside plan mode likewise returns no handoff details. A
+`exit_plan_mode` outside plan mode likewise returns no handoff details, and in
+headless/RPC sessions a readable file whose content is unchanged since the round
+entered plan mode (or that still holds the already-submitted proposal) counts as
+no new proposal: it exits plan mode and returns no handoff details, so a leftover
+plan from an earlier round is never presented as this request's answer. A
 non-error tool result alone is therefore insufficient to recognize a handoff.
 
 `approvalSource`, `planHash`, and `planModeExited` are optional in `PlanReviewDetails`

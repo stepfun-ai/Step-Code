@@ -4,7 +4,6 @@ import { getStepPlanMode } from "../../features/step-plan.ts";
 import { STEPCODE_VERSION } from "../version.ts";
 import { type PlanUsageController, usageText } from "./account.ts";
 import { overviewDates } from "./activity.ts";
-import { registerUsageRecording } from "./recording.ts";
 import type { UsageOverview, UsagePresentation, UsageResources, UsageStatus, UsageView } from "./types.ts";
 
 export const USAGE_COMMAND_HELP = "Usage: /usage [overview|account] | /usage --refresh | /usage account --refresh";
@@ -42,7 +41,6 @@ export function registerStepUsageCommands(
 	};
 	pi.on("session_start", close);
 	pi.on("session_shutdown", close);
-	registerUsageRecording(pi, host ? () => host.resources() : undefined);
 
 	const capture = (ctx: ExtensionCommandContext): UsageStatus => {
 		const model = ctx.model,

@@ -8,6 +8,7 @@
 import { useMemo, useState } from "react";
 import { type TranslateFn, useT } from "../../i18n";
 import { apiSend, errorMessage } from "../../lib/api";
+import { cx } from "../../lib/format";
 import { showError } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsMcpServer } from "../../state/types";
@@ -63,7 +64,11 @@ function McpRow({
 					<Badge>{server.transport === "stdio" ? "stdio" : "HTTP"}</Badge>
 					<StatusDot tone={state.tone} label={state.label} />
 				</div>
-				<div className="settings-list-desc mono" title={server.error ?? summary(t, server)}>
+				<div
+					// Commands and URLs read as code; the "from plugin" sentence does not.
+					className={cx("settings-list-desc", server.source !== "plugin" && "mono")}
+					title={server.error ?? summary(t, server)}
+				>
 					{server.error && server.enabled ? server.error : summary(t, server)}
 				</div>
 			</div>

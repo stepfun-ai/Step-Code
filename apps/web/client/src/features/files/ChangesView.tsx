@@ -218,7 +218,8 @@ export function ChangesView({ hidden, embedded = false }: { readonly hidden: boo
 	const closeMenu = () => setUi({ changesMenu: null });
 	return (
 		<section className="changes-view" id="changesView" aria-label={t("turnChanges")} hidden={hidden}>
-			<div className="changes-header">
+			{/* With no turn there is nothing to pick or act on; the body's empty state says so alone. */}
+			<div className="changes-header" hidden={!turn}>
 				<div className="changes-turn">
 					<Popover
 						className="changes-menu changes-turn-menu"
@@ -252,7 +253,7 @@ export function ChangesView({ hidden, embedded = false }: { readonly hidden: boo
 							disabled={!turn}
 							onClick={() => setUi({ changesMenu: menu === "turn" ? null : "turn" })}
 						>
-							<span>{turn ? turnLabel(turn, t) : t("noTurnChanges")}</span>
+							<span>{turn ? turnLabel(turn, t) : ""}</span>
 							<Icon name="chevronDown" size="xs" />
 							{turn ? <DiffStat additions={turn.additions} deletions={turn.deletions} /> : null}
 						</button>
@@ -342,7 +343,10 @@ export function ChangesView({ hidden, embedded = false }: { readonly hidden: boo
 					))}
 				</ul>
 			) : (
-				<div className="preview-message">{t("noTurnChanges")}</div>
+				<div className="preview-message changes-empty">
+					<Icon name="fileDiff" />
+					{t("noTurnChanges")}
+				</div>
 			)}
 		</section>
 	);

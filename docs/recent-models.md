@@ -2,7 +2,7 @@
 
 The `/model` selector shows a **Recent** section above the existing model list when the search is empty and history contains models available in the active scope. Recent rows are removed from the remaining list. Search hides the sections and searches the original list once, preserving fuzzy ranking and default-model search.
 
-Successful interactive selections (Enter, Ctrl+S, exact `/model provider/id`, and model cycling) record a provider/id pair. Selecting the same pair again moves it to the front. The history keeps at most ten distinct pairs; identical IDs from different providers remain separate. Cancelling or a failed selection does not record history. Startup and session restoration do not rewrite it.
+Successful interactive selections (Enter, exact `/model provider/id`, and model cycling) record a provider/id pair. Selecting the same pair again moves it to the front. The history keeps at most ten distinct pairs; identical IDs from different providers remain separate. Cancelling or a failed selection does not record history. Startup and session restoration do not rewrite it.
 
 History is stored as the global settings field `recentModels`, using Step's existing `config.toml` storage adapter (or the embedded host's settings storage). It is global-only, is validated when read, and concurrent sessions merge selections under the existing storage lock. No credentials or model objects are stored. Recent history does not change startup defaults or model cycling order. With `STEPCODE_CONFIG_PATH`, default selection still writes the external active model; history uses the wrapped global settings storage.
 

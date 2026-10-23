@@ -57,6 +57,14 @@ function textResult(value: string): StepSubagentRunResult {
 	};
 }
 
+/**
+ * Entries the extensions persist through `appendEntry`, read back by the
+ * session-manager stub's `getBranch()`. Plan mode's `tool_call` guard reads
+ * persisted plan state, so a stub that dropped these would leave it blind.
+ * `createApi()` resets it; tests build their context afterwards.
+ */
+let persistedEntries: Array<{ type: "custom"; customType: string; data?: unknown }> = [];
+
 function createApi(): {
 	api: ExtensionAPI;
 	tools: Map<string, ToolDefinition>;
@@ -69,6 +77,7 @@ function createApi(): {
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	let active = ["read_file", "find_files", "search_files", "list_directory", "run_command", "write_file", "edit_file"];
+	persistedEntries = [];
 	const api = {
 		registerTool(tool: ToolDefinition) {
 			tools.set(tool.name, tool);
@@ -89,7 +98,9 @@ function createApi(): {
 			active = [...names];
 		},
 		getFlag: () => false,
-		appendEntry: () => {},
+		appendEntry: (customType: string, data: unknown) => {
+			persistedEntries.push({ type: "custom", customType, data });
+		},
 		sendMessage: () => {},
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
@@ -164,7 +175,7 @@ function createContext(cwd: string, model?: Model<string>): ExtensionContext {
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
 		},
-		sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
+		sessionManager: { getEntries: () => [], getBranch: () => persistedEntries, getSessionId: () => "test-session" },
 		modelRegistry: {} as never,
 		scopedModels: [],
 	} as unknown as ExtensionContext;

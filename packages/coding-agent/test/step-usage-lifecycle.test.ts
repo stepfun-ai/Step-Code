@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../src/core/extensions/types.ts";
 import { PlanUsageController } from "../src/step/usage/account.ts";
 import { registerStepUsageCommands, type StepUsageHost } from "../src/step/usage/commands.ts";
+import { registerUsageRecording } from "../src/step/usage/recording.ts";
 import type { UsageOverview, UsagePresentation } from "../src/step/usage/types.ts";
 
 const empty: UsageOverview = {
@@ -63,6 +64,10 @@ function fixture() {
 		output: vi.fn(),
 	};
 	const commands = registerStepUsageCommands(pi, host, () => "Ask");
+	// Recording is registered by the Step extension in a product host (it belongs
+	// to the session lifecycle, not to this command); wiring both on one `pi` is
+	// what this file exercises. `step-extension.test.ts` covers the wiring.
+	registerUsageRecording(pi, () => host.resources());
 	return {
 		ctx,
 		commands,

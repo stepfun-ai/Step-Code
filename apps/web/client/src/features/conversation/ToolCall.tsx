@@ -67,6 +67,13 @@ export const ToolRow = memo(function ToolRow({
 }) {
 	const t = useT();
 	const cwd = useAppStore((state) => state.current?.cwd ?? "");
+	// A call still pending in a session that is no longer working never got its result (the turn
+	// was stopped or the host restarted): it stops claiming to run.
+	const idle = useAppStore((state) => {
+		const status = state.current?.status;
+		return status !== undefined && status !== "running" && status !== "waiting";
+	});
+	const stale = !readOnly && idle && item.state === "pending";
 	const [open, setOpen] = useState(false);
 	const [visited, setVisited] = useState(false);
 	const detailsId = useId();
@@ -85,7 +92,7 @@ export const ToolRow = memo(function ToolRow({
 		<div className={cx("tool-call", open && "open")} data-kind={toolKind(item)} data-tool-state={item.state}>
 			{/* Not a button: the subject is a button of its own, and a button cannot hold one. The
 			    toggle stretches under the whole row, so a click anywhere but the subject expands it. */}
-			<div className={cx("tool-row", item.state, open && "open")}>
+			<div className={cx("tool-row", stale ? "stale" : item.state, open && "open")}>
 				<button
 					type="button"
 					className="tool-toggle"
@@ -108,11 +115,12 @@ export const ToolRow = memo(function ToolRow({
 					</span>
 					<Icon className="tool-twisty" name="disclosure" size="xs" />
 				</span>
-				<span className="tool-detail" hidden={!open}>
+				<span className="tool-detail">
 					<span className="tool-dot" aria-hidden="true">
 						·
 					</span>
-					{item.state === "failed" ? <span className="tool-failed">{t("toolFailed")}</span> : null}
+					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph. */}
+					{stale ? <span className="tool-failed">{t("toolInterrupted")}</span> : null}
 					<RowSubject item={item} path={shown} openable={openable} />
 					{item.change?.patch ? <DiffStatRow item={item} /> : null}
 				</span>
@@ -125,16 +133,19 @@ export const ToolRow = memo(function ToolRow({
 				<div className="tool-disclosure-body">
 					{visited ? (
 						<div className="tool-cx">
-							<details className="tool-cx-input">
-								<summary>
-									<Icon name="chevronRight" size="2xs" />
-									{t("toolInput")}
-									<code>{item.toolName}</code>
-								</summary>
-								<pre className="tool-cx-pre wrap">
-									{item.inputDetail || item.inputSummary || t("toolNoInput")}
-								</pre>
-							</details>
+							{/* A command's input is the command itself, already printed in full on the card head. */}
+							{toolKind(item) === "bash" ? null : (
+								<details className="tool-cx-input">
+									<summary>
+										<Icon name="chevronRight" size="2xs" />
+										{t("toolInput")}
+										<code>{item.toolName}</code>
+									</summary>
+									<pre className="tool-cx-pre wrap">
+										{item.inputDetail || item.inputSummary || t("toolNoInput")}
+									</pre>
+								</details>
+							)}
 							{card ? (
 								<ChangeCard item={item} path={shown} openable={openable} />
 							) : (

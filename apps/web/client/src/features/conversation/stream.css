@@ -82,6 +82,30 @@
 .message-skill--plugin {
 	--message-kind-accent: #8b5cf6;
 }
+/* The session modes and plain commands echo as user messages: the badge carries
+ * each mode's accent (the composer lead chip colours) or the neutral command
+ * purple, so a command keeps its identity inside an ordinary message bubble. */
+.message-skill--goal {
+	--message-kind-accent: var(--mode-goal);
+}
+.message-skill--plan {
+	--message-kind-accent: var(--mode-plan);
+}
+.message-skill--ultraloop {
+	--message-kind-accent: var(--mode-ultraloop);
+}
+.message-skill--command {
+	--message-kind-accent: var(--command-accent);
+}
+/*
+ * A command echo's badge sits inside the user bubble, inline before the text
+ * (the same prefix position the composer's lead chip had), not above it: drop
+ * the standalone badge's bottom margin and let the text flow after it.
+ */
+.message-body > .message-skill {
+	margin: 0 7px 0 0;
+	vertical-align: baseline;
+}
 /* A user message's images, above its text, right-aligned like the bubble. */
 .message-images {
 	display: flex;
@@ -192,6 +216,24 @@
  * text instead of spanning the column; the earlier `width: 100%` on
  * `.message-body` (shared with replies) overrode that and pinned it left.
  */
+/*
+ * A command-invoking message's badge rides inside its bubble, inline before
+ * the text; the Markdown body inside the wrapper keeps the same typography.
+ */
+.message-body--invoked {
+	display: block;
+}
+/* The Markdown body is block-level, so the badge floats to stay on the first
+ * text line, in front of the words — the input box's chip position. */
+.message-body--invoked > .message-skill {
+	float: left;
+	margin: 1px 7px 1px 0;
+}
+.message .message-md {
+	min-width: 0;
+	font-size: 14px;
+	font-weight: 500;
+}
 .message.user .message-body {
 	width: fit-content;
 	max-width: min(100%, 68ch);
@@ -1182,4 +1224,302 @@
 	color: var(--ink-2);
 	font: 12px / 18px var(--mono);
 	overflow-wrap: anywhere;
+}
+
+/*
+ * `.plan-review`: the proposal an exit_plan_mode call handed to the user.
+ * Styled as a sibling of `.approval` — same card, same heading metrics, same
+ * pill actions — because both ask the user to decide before work continues.
+ */
+.plan-review {
+	padding: 16px;
+	border: 1px solid color-mix(in srgb, var(--line) 65%, var(--surface));
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	color: color-mix(in srgb, var(--ink) 95%, var(--surface));
+}
+.plan-review-heading {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-height: 20px;
+	color: var(--ink-2);
+	font-size: 13px;
+	line-height: 20px;
+}
+.plan-review-dot {
+	width: 6px;
+	height: 6px;
+	flex: none;
+	border-radius: 50%;
+	background: var(--attention);
+}
+.plan-review-heading-title {
+	color: var(--attention-ink);
+	font-weight: 600;
+}
+.plan-review-more {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: auto;
+	padding: 0 8px;
+	border-radius: var(--radius-chip);
+	color: var(--ink-3);
+	font-size: 13px;
+	line-height: 20px;
+}
+.plan-review-more:hover {
+	background: var(--surface-soft);
+	color: var(--ink-2);
+}
+.plan-review-title {
+	display: block;
+	margin-top: 10px;
+	color: var(--ink);
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.5;
+}
+.plan-review-summary {
+	margin-top: 6px;
+	color: var(--ink-2);
+	font-size: 13px;
+	line-height: 20px;
+	overflow-wrap: anywhere;
+}
+.plan-review-contents {
+	margin-top: 10px;
+	padding: 0 4px;
+	max-height: min(360px, 40vh);
+	overflow: auto;
+	color: var(--ink-2);
+	font: 13px / 18px var(--mono);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.plan-review-contents[hidden] {
+	display: none;
+}
+.plan-review-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+.plan-review-actions button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 28px;
+	padding: 3px 10px;
+	border: 1px solid color-mix(in srgb, var(--line) 65%, var(--surface));
+	border-radius: var(--radius-pill);
+	background: var(--surface);
+	color: var(--ink);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 20px;
+}
+.plan-review-actions button:hover {
+	background: var(--surface-soft);
+}
+.plan-review-actions button:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+.plan-review-actions .approve {
+	border-color: var(--ink);
+	background: var(--ink);
+	color: var(--surface);
+}
+.plan-review-actions .approve:hover {
+	background: var(--ink-2);
+}
+.plan-review-notes {
+	display: grid;
+	gap: 8px;
+	width: 100%;
+}
+.plan-review-textarea {
+	width: 100%;
+	padding: 6px 8px;
+	border: 1px solid var(--line-strong);
+	border-radius: var(--radius-input);
+	background: var(--surface);
+	color: var(--ink);
+	font: inherit;
+	font-size: 13px;
+	line-height: 20px;
+	resize: vertical;
+}
+.plan-review-textarea:focus {
+	border-color: var(--focus-border);
+	outline: none;
+}
+.plan-review-note-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+@media (max-width: 480px) {
+	.plan-review { padding: 14px 12px; }
+}
+
+/*
+ * A context compaction: metadata line plus an optional summary panel. Collapsed
+ * by default because the summary is the model's working context, not a reply.
+ */
+.compaction-row {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+}
+.compaction-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 2px 4px;
+	border: 0;
+	border-radius: var(--radius-input);
+	background: transparent;
+	color: var(--ink-3);
+	font: inherit;
+	font-size: 12.5px;
+	line-height: 20px;
+	text-align: left;
+	cursor: pointer;
+}
+button.compaction-head:hover {
+	background: var(--hover);
+}
+button.compaction-head:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 1px;
+}
+.compaction-glyph {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	color: var(--ink-4, var(--ink-3));
+}
+.compaction-name {
+	flex: none;
+	color: var(--ink-2);
+	font-weight: 550;
+}
+.compaction-separator {
+	flex: none;
+	color: var(--ink-3);
+}
+.compaction-status {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.compaction-chevron {
+	display: inline-flex;
+	flex: none;
+	margin-left: 2px;
+	color: var(--ink-3);
+	transition: transform var(--fast);
+}
+.compaction-row[data-expanded] .compaction-chevron {
+	transform: rotate(180deg);
+}
+.compaction-row[data-running] .compaction-status {
+	animation: compaction-pulse 1.6s ease-in-out infinite;
+}
+@keyframes compaction-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.45;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.compaction-row[data-running] .compaction-status {
+		animation: none;
+	}
+	.compaction-chevron {
+		transition: none;
+	}
+}
+.compaction-body {
+	max-height: 340px;
+	overflow: auto;
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-panel);
+	background: var(--surface-soft);
+	overscroll-behavior: contain;
+}
+.compaction-body[hidden] {
+	display: none;
+}
+.compaction-summary {
+	font-size: 13px;
+	line-height: 1.6;
+}
+.compaction-summary > :first-child {
+	margin-top: 0;
+}
+.compaction-summary > :last-child {
+	margin-bottom: 0;
+}
+
+/*
+ * Command output (`ui.notify`): a page-local note, dismissable, never part of
+ * the session. Markdown notices read like message text; plain ones keep their
+ * spacing because they can be aligned output.
+ */
+.notice-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	min-width: 0;
+	padding: 8px 10px 8px 12px;
+	border: 1px solid var(--line);
+	border-left: 3px solid var(--line-strong);
+	border-radius: var(--radius-panel);
+	background: var(--surface-soft);
+}
+.notice-row[data-level="warning"] {
+	border-left-color: var(--ink-2);
+}
+.notice-row[data-level="error"] {
+	border-left-color: var(--danger);
+}
+.notice-content {
+	flex: 1;
+	min-width: 0;
+}
+.notice-text {
+	margin: 0;
+	color: var(--ink-2);
+	font-size: 13px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+.notice-markdown {
+	color: var(--ink-2);
+	font-size: 13px;
+	line-height: 1.6;
+}
+.notice-markdown > :first-child {
+	margin-top: 0;
+}
+.notice-markdown > :last-child {
+	margin-bottom: 0;
+}
+.notice-dismiss {
+	flex: none;
+	margin: -2px -4px 0 0;
+	color: var(--ink-3);
 }

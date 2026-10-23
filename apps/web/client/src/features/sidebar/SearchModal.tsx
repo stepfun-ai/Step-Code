@@ -77,9 +77,21 @@ function searchRows(
 }
 
 /** A snippet with each match in a <mark>; whitespace runs collapse to one space. */
+/*
+ * Snippets are cut from the raw Markdown of a message; a result line reads as
+ * prose, so emphasis, code ticks, heading and quote marks are dropped. The
+ * match markers are control characters and survive untouched.
+ */
+function plainSnippet(snippet: string): string {
+	return snippet
+		.replace(/\*\*|__|`+/g, "")
+		.replace(/(^|\s)(#{1,6}|>|[-*+])\s+/g, "$1")
+		.replace(/\s+/g, " ");
+}
+
 function highlighted(snippet: string): ReactNode[] {
 	const nodes: ReactNode[] = [];
-	const text = snippet.replace(/\s+/g, " ");
+	const text = plainSnippet(snippet);
 	let offset = 0;
 	while (offset < text.length) {
 		const start = text.indexOf(MATCH_START, offset);
@@ -93,6 +105,23 @@ function highlighted(snippet: string): ReactNode[] {
 		nodes.push(<mark key={start}>{text.slice(start + 1, stop)}</mark>);
 		offset = stop + 1;
 	}
+	return nodes;
+}
+
+/** Marks each case-insensitive occurrence of `query` in a title, so a title hit shows why it matched. */
+function markQuery(text: string, query: string): ReactNode {
+	const needle = query.trim().toLowerCase();
+	if (!needle) return text;
+	const nodes: ReactNode[] = [];
+	const haystack = text.toLowerCase();
+	let offset = 0;
+	for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, offset)) {
+		if (at > offset) nodes.push(text.slice(offset, at));
+		nodes.push(<mark key={at}>{text.slice(at, at + needle.length)}</mark>);
+		offset = at + needle.length;
+	}
+	if (!nodes.length) return text;
+	if (offset < text.length) nodes.push(text.slice(offset));
 	return nodes;
 }
 
@@ -179,7 +208,8 @@ export function SearchModal() {
 	const note = query.trim() ? coverageNote(answered, t) : "";
 	const move = (delta: number) => {
 		if (!results.length) return;
-		setIndex((current) => (current + delta + results.length) % results.length);
+		// The first row starts highlighted, so the first ↓ moves to the second.
+		setIndex((current) => (Math.max(current, 0) + delta + results.length) % results.length);
 	};
 	const onInput = (event: FormEvent<HTMLInputElement>) => {
 		setIndex(-1);
@@ -243,13 +273,26 @@ export function SearchModal() {
 					{...ime.handlers}
 					onInputCapture={onInput}
 					onKeyDown={onKeyDown}
+					role="combobox"
+					aria-expanded={results.length > 0}
+					aria-controls="globalSearchResults"
+					aria-autocomplete="list"
+					aria-label={t("searchPlaceholder")}
+					aria-activedescendant={results.length ? `search-option-${index >= 0 ? index : 0}` : undefined}
 				/>
 			</div>
-			<div className="search-results" id="globalSearchResults" ref={list}>
+			<div
+				className="search-results"
+				id="globalSearchResults"
+				ref={list}
+				role="listbox"
+				aria-label={t("searchTitle")}
+			>
 				{results.length ? (
 					[...projects].map(([cwd, items]) => (
-						<section className="search-project" key={cwd}>
-							<div className="search-project-header">
+						// biome-ignore lint/a11y/useSemanticElements: an option group inside a listbox is role="group"; a fieldset is a form control group.
+						<section className="search-project" key={cwd} role="group" aria-label={basename(cwd) || t("recent")}>
+							<div className="search-project-header" aria-hidden="true">
 								<Icon {...LEGACY_ICONS.folder} />
 								<span>{basename(cwd) || t("recent")}</span>
 							</div>
@@ -258,20 +301,32 @@ export function SearchModal() {
 								const { session, hit } = row;
 								// A title hit repeats the title; the first message says more.
 								const excerpt = hit && hit.entryType !== "session" ? hit.snippet : "";
+								const title = sessionTitle(session);
+								const preview = excerpt ? "" : skillPreview(session.firstMessage);
+								// A title derived from the first message would only be printed twice.
+								const showPreview = Boolean(excerpt) || (Boolean(preview) && preview !== title);
 								return (
 									<button
 										key={session.id}
-										className={itemIndex === index ? "search-result selected" : "search-result"}
+										className={
+											itemIndex === (index >= 0 ? index : 0) ? "search-result selected" : "search-result"
+										}
 										type="button"
+										id={`search-option-${itemIndex}`}
+										role="option"
+										aria-selected={itemIndex === (index >= 0 ? index : 0)}
+										tabIndex={-1}
 										data-index={String(itemIndex)}
 										data-entry-id={hit?.entryId ?? undefined}
 										onClick={() => openResult(row)}
 									>
 										<span className="search-result-main">
-											<strong>{sessionTitle(session)}</strong>
-											<small className={excerpt ? "search-result-snippet" : undefined}>
-												{excerpt ? highlighted(excerpt) : skillPreview(session.firstMessage)}
-											</small>
+											<strong>{markQuery(title, query)}</strong>
+											{showPreview ? (
+												<small className={excerpt ? "search-result-snippet" : undefined}>
+													{excerpt ? highlighted(excerpt) : preview}
+												</small>
+											) : null}
 										</span>
 										<time>{formatRelativeTime(session.modified)}</time>
 									</button>

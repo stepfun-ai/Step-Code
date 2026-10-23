@@ -60,7 +60,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "login", description: "Sign in with your Step account" },
 	{ name: "logout", description: "Sign out from your Step account" },
 	{ name: "new", description: "Start a new session" },
-	{ name: "compact", description: "Manually compact the session context" },
+	// `/compact` is a kernel command (features/compact.ts) so every host runs the
+	// same handler; it is discovered from `getCommands()`, not from this list.
 	{
 		name: "clm",
 		description: "Inspect or enable model-managed working context",

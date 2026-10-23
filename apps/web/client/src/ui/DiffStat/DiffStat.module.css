@@ -11,3 +11,6 @@
 .del {
 	color: var(--danger);
 }
+.zero {
+	color: var(--ink-3);
+}

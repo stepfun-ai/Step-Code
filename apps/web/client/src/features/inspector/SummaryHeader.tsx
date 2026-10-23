@@ -3,7 +3,7 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import type { SessionInspector } from "../../state/types";
 import { Icon, Tooltip } from "../../ui";
-import { summaryAgentRecords } from "./model";
+import { sessionIsLive, summaryAgentRecords } from "./model";
 
 export function SummaryHeader({ data }: { readonly data?: SessionInspector }) {
 	const t = useT();
@@ -16,12 +16,12 @@ export function SummaryHeader({ data }: { readonly data?: SessionInspector }) {
 	const records = useMemo(() => (sessionId ? summaryAgentRecords(items) : []), [sessionId, items]);
 	const tasks = data?.tasks ?? [];
 	const done = tasks.filter((task) => task.status === "completed").length;
-	const sessionLive = status === "running" || status === "waiting";
+	const sessionLive = sessionIsLive(status);
 	const running =
 		sessionLive &&
 		(tasks.some((task) => task.status === "in_progress") || records.some((row) => row.status === "running"));
-	// An interrupted turn is reported as aborted rather than silently idle (see
-	// SummaryTaskStatus, which settles every row on this state).
+	// An interrupted turn is reported as aborted rather than silently idle; the
+	// board's rows render the same verdict via effectiveTaskStatus.
 	const state = running
 		? "running"
 		: status === "failed"

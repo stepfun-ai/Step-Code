@@ -1,39 +1,24 @@
-import { t, useT } from "../../i18n";
-import { apiSend, errorMessage } from "../../lib/api";
-import { forgetUnlistedSession, refreshSessions, sessionTitle, showError, startDraft } from "../../state/session";
-import { getState } from "../../state/store";
+import { useT } from "../../i18n";
+import { runSessionAction, type SessionAction } from "../../state/session";
 import type { SessionSummary } from "../../state/types";
 import { closeSessionMenu } from "./actions";
 
-type SessionAction = "rename" | "archive" | "delete";
-
-/** Rename / archive / delete one session (legacy `openSessionMenu` click handler, 1297-1328). */
-async function runSessionAction(action: SessionAction, session: SessionSummary): Promise<void> {
-	try {
-		if (action === "rename") {
-			const name = window.prompt(t("rename"), sessionTitle(session));
-			if (name?.trim()) await apiSend(`/api/v1/sessions/${session.id}/name`, "PATCH", { name: name.trim() });
-		}
-		if (action === "archive") {
-			await apiSend(`/api/v1/sessions/${session.id}/archive`, "PATCH", { archived: !session.archived });
-		}
-		if (action === "delete" && window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) {
-			await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
-			forgetUnlistedSession(session.id);
-			const state = getState();
-			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
-		}
-		await refreshSessions();
-	} catch (error) {
-		showError(errorMessage(error));
-	}
-}
-
-/** Content of `#sessionMenu`: rename / archive / delete one session (legacy app.js 1287-1329). */
-export function SessionMenu({ session }: { readonly session: SessionSummary }) {
+/**
+ * Content of `#sessionMenu`: rename / archive / delete one session (legacy
+ * app.js 1287-1329). Rendered by the sidebar's row menu and the conversation
+ * header's; `onAction` lets a caller outside the sidebar close its own menu.
+ */
+export function SessionMenu({
+	session,
+	onAction,
+}: {
+	readonly session: SessionSummary;
+	readonly onAction?: () => void;
+}) {
 	const translate = useT();
 	const run = (action: SessionAction) => {
 		closeSessionMenu();
+		onAction?.();
 		void runSessionAction(action, session);
 	};
 	return (

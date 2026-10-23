@@ -1,6 +1,10 @@
 // CSS order matters: tokens and base rules, then the ui/ CSS Modules (via the
 // barrel), then feature CSS (imported by the features through App). Feature
 // rules use the legacy class names and must be able to override the primitives.
+// The bundled variable fonts come first: they only declare @font-face rules
+// (font-display: swap, per-script unicode-range), so they never block paint.
+import "@fontsource-variable/geist/wght.css";
+import "@fontsource-variable/geist-mono/wght.css";
 import "./styles/global.css";
 import "./ui";
 

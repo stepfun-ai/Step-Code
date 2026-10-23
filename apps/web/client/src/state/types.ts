@@ -64,6 +64,8 @@ export interface ModelRef {
 }
 
 export interface ModelInfo extends ModelRef {
+	/** The provider's declared display name; the picker's section heading, `provider` its fallback. */
+	readonly providerName?: string;
 	readonly name?: string;
 	readonly api?: string;
 	readonly reasoning?: boolean;
@@ -195,6 +197,12 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly pendingClarifications?: readonly ClarificationRequest[];
 	/** Kernel selectors waiting for an answer (src/selection.ts), e.g. the Full Access risk question. */
 	readonly pendingSelections?: readonly SelectionRequest[];
+	/** Kernel text prompts (`ui.input`) waiting for an answer (src/text-input.ts). */
+	readonly pendingTextInputs?: readonly TextInputRequest[];
+	/** The kernel is compacting the context; a prompt sent now has to wait. */
+	readonly compacting?: boolean;
+	/** `/btw` answers of this session, oldest first (process memory, not the transcript). */
+	readonly sideAnswers?: readonly SideAnswer[];
 	/** User entry ids of turns whose file changes were reverted (runtime.ts `revertTurn`). */
 	readonly revertedTurns?: readonly string[];
 	/**
@@ -208,6 +216,28 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly steeringMessages?: readonly SteeringMessage[];
 	/** The kernel retrying a failed model request right now (runtime.ts `RetryTracker`). */
 	readonly retry?: SessionRetry;
+	/** The session's goal, drawn as the strip above the composer (runtime.ts `projectGoal`). */
+	readonly goal?: GoalState;
+	/** Plan mode state (runtime.ts `projectPlanMode`). */
+	readonly planMode?: PlanModeState;
+}
+
+/** The goal strip's data (runtime.ts `projectGoal`). */
+export interface GoalState {
+	readonly id: string;
+	readonly objective: string;
+	readonly status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+	readonly tokensUsed: number;
+	readonly tokenBudget?: number;
+	/** Completed agent runs; progress, not a stop condition. */
+	readonly rounds: number;
+}
+
+/** Plan mode state (runtime.ts `projectPlanMode`). */
+export interface PlanModeState {
+	readonly enabled: boolean;
+	readonly planFilePath?: string;
+	readonly planSource?: string;
 }
 
 /** GET /api/v1/sessions/{id}/inspector; read-only runtime projections. */
@@ -290,6 +320,28 @@ export interface SelectionRequest {
 	readonly options: readonly string[];
 }
 
+/**
+ * A `/btw` answer (runtime.ts `WebSideAnswer`). Process memory on the host: it
+ * never reaches the session file or the model's context, so a host restart drops
+ * it and the rail says so.
+ */
+export interface SideAnswer {
+	readonly id: string;
+	readonly question: string;
+	readonly text: string;
+	readonly model?: string;
+	readonly unavailable?: boolean;
+	readonly createdAt: number;
+}
+
+/** A kernel `ui.input` prompt (src/text-input.ts). The title and placeholder are the kernel's wording. */
+export interface TextInputRequest {
+	readonly id: string;
+	readonly sessionId: string;
+	readonly title: string;
+	readonly placeholder?: string;
+}
+
 export interface ClarificationRequest {
 	readonly id: string;
 	readonly sessionId: string;
@@ -370,6 +422,22 @@ export interface ToolTimelineItem {
 	readonly subagentTasks?: readonly SubagentTask[];
 	/** A workflow call's run id; its agents come from `GET /sessions/{id}/children?workflowRun=`. */
 	readonly workflowRun?: string;
+	/** An `exit_plan_mode` result awaiting the user's decision; see `PlanReview`. */
+	readonly planReview?: PlanReview;
+}
+
+/**
+ * The proposal an `exit_plan_mode` call submitted, from the tool's structured
+ * details. `planHash` identifies the exact reviewed text, so a decision binds to
+ * the proposal the user actually saw.
+ */
+export interface PlanReview {
+	readonly planFilePath: string;
+	readonly planContents: string;
+	readonly planHash: string;
+	readonly outcome: "approved" | "feedback" | "dismissed" | "external_approval_required";
+	/** True while the plan is waiting for the user's verdict. */
+	readonly pending: boolean;
 }
 
 /** A child agent a tool call started. Its transcript is read-only. */
@@ -463,7 +531,49 @@ export type TimelineItem =
 	| ThinkingTimelineItem
 	| ToolTimelineItem
 	| ApprovalTimelineItem
-	| RetryTimelineItem;
+	| RetryTimelineItem
+	| CommandTimelineItem
+	| CompactionTimelineItem;
+
+/**
+ * A kernel slash command the user sent, echoed by the host: the command runs
+ * without a user message, so this row is the transcript's record of what was
+ * typed. It persists in the session file (outside model context) and reloads
+ * like any other row; `/mcp`, `/btw` and `/feedback` never become one.
+ */
+export interface CommandTimelineItem {
+	readonly itemId: string;
+	readonly kind: "command";
+	/** The command line as sent, e.g. `/goal 整理文件夹`. */
+	readonly command: string;
+	readonly timestamp?: string;
+}
+
+/**
+ * A context compaction the kernel recorded. Collapsed by default: the header
+ * says what it replaced, and the summary opens on demand. It comes from the
+ * session entry, so it survives a reload like any other transcript row.
+ */
+export interface CompactionTimelineItem {
+	readonly itemId: string;
+	readonly kind: "compaction";
+	readonly summary: string;
+	/** Prompt volume before compaction, when the entry records it. */
+	readonly tokensBefore?: number;
+	/** Message entries the summary replaced (0 when the branch no longer holds them). */
+	readonly removedMessages: number;
+	readonly timestamp?: string;
+}
+
+/** Command output published through the kernel's `ui.notify`, shown in the transcript but never persisted. */
+export interface NoticeItem {
+	readonly id: string;
+	readonly sessionId: string;
+	readonly level: "info" | "warning" | "error";
+	readonly text: string;
+	/** Render `text` as Markdown (a `/btw` answer) instead of preformatted text. */
+	readonly markdown?: boolean;
+}
 
 export interface WebWorkspace {
 	readonly path: string;
@@ -692,4 +802,23 @@ export interface SettingsSkill {
 	readonly enabled: boolean;
 	readonly toggleable: boolean;
 	readonly deletable: boolean;
+}
+
+/** `GET /api/v1/workspace/git` state (src/git.ts `GitWorkspaceState`). */
+export interface GitWorkspaceState {
+	/** False for a folder that is not inside a git work tree, or when git is missing. */
+	readonly repository: boolean;
+	/** Repository root; present when `repository`. */
+	readonly root?: string;
+	/** Short branch name; absent on a detached HEAD. */
+	readonly branch?: string;
+	readonly detached?: boolean;
+	/** Modified, staged and untracked files in the repository. */
+	readonly dirtyFiles?: number;
+}
+
+/** One local branch from `GET /api/v1/workspace/git`. */
+export interface GitBranchEntry {
+	readonly name: string;
+	readonly upstream?: string;
 }

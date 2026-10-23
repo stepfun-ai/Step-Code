@@ -1,6 +1,6 @@
 import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
-import { errorMessage } from "../../lib/api";
+import { ApiError, errorMessage } from "../../lib/api";
 import { writeClipboard } from "../../lib/clipboard";
 import { isMacPlatform } from "../../lib/format";
 import type { EmbeddedBrowserFrame, EmbeddedBrowserSnapshot } from "../../state/types";
@@ -13,6 +13,9 @@ export function BrowserPanel({ open }: { open: boolean }) {
 	const t = useT();
 	const [snapshot, setSnapshot] = useState(EMPTY);
 	const [error, setError] = useState("");
+	/* The host refuses a second page with 409; say so in the UI language instead of echoing its English. */
+	const failureText = (failure: unknown) =>
+		failure instanceof ApiError && failure.status === 409 ? t("browserBusy") : errorMessage(failure);
 	const [ready, setReady] = useState(false);
 	const [retry, setRetry] = useState(0);
 	const [frame, setFrame] = useState<EmbeddedBrowserFrame>();
@@ -48,7 +51,7 @@ export function BrowserPanel({ open }: { open: boolean }) {
 					if (!disposed) setFrame(next);
 				}
 			} catch (failure) {
-				if (!disposed) setError(errorMessage(failure));
+				if (!disposed) setError(failureText(failure));
 			} finally {
 				decoding = false;
 			}
@@ -62,7 +65,7 @@ export function BrowserPanel({ open }: { open: boolean }) {
 			},
 			(failure, disconnected) => {
 				if (!disposed) {
-					setError(errorMessage(failure));
+					setError(failureText(failure));
 					if (disconnected) setReady(false);
 				}
 			},
@@ -76,7 +79,7 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				if (!disposed) setReady(true);
 			})
 			.catch((failure: unknown) => {
-				if (!disposed) setError(errorMessage(failure));
+				if (!disposed) setError(failureText(failure));
 				client.close();
 			});
 		return () => {
@@ -120,7 +123,7 @@ export function BrowserPanel({ open }: { open: boolean }) {
 		void connection.current
 			?.selection(activeId)
 			.then(writeClipboard)
-			.catch((failure: unknown) => setError(errorMessage(failure)));
+			.catch((failure: unknown) => setError(failureText(failure)));
 	};
 	const point = (x: number, y: number) => {
 		const rect = surface.current?.getBoundingClientRect();
@@ -268,7 +271,12 @@ export function BrowserPanel({ open }: { open: boolean }) {
 					autoComplete="off"
 				/>
 				<Tooltip content={t("go")}>
-					<IconButton type="submit" icon="send" aria-label={t("go")} disabled={!ready || !address.trim()} />
+					<IconButton
+						type="submit"
+						icon="chevronRight"
+						aria-label={t("go")}
+						disabled={!ready || !address.trim()}
+					/>
 				</Tooltip>
 			</form>
 			{error ? (
@@ -325,7 +333,7 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				) : (
 					<div className="browser-empty">
 						<Icon name="globe" size="lg" />
-						<span>{t(ready ? "browserNewTab" : "browserConnecting")}</span>
+						<span>{t(ready ? "browserNewTab" : error ? "browserNotConnected" : "browserConnecting")}</span>
 					</div>
 				)}
 				<textarea

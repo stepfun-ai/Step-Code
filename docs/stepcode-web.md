@@ -81,6 +81,129 @@ said (`valid`, `invalid`, `unavailable`), and `session` reports
 has no account session and is still configured; an expired session only loses
 the account name and avatar, never model requests.
 
+### System prompt
+
+The browser host and Desktop pass the app product prompt,
+`STEP_APP_SYSTEM_PROMPT_PRODUCT` from `@step-harness/coding-agent`
+(`packages/coding-agent/src/step/system-prompt.ts`), into
+`createAgentSessionFromServices`. Desktop runs this same host, so one definition
+covers both. The CLI declares its terminal product in `apps/cli/src/main.ts`;
+the two are intended to differ only in `role` and `introduction` (the identity,
+plus the app's rule for reporting what the app already shows), with the same
+`includeDocumentation: false` and the same operating contract. A test in
+`apps/cli/test/` asserts the CLI side against the shared builder.
+
+The Step operating contract (`buildStepSystemPromptAppendix`) is attached inside
+that shared definition rather than at the host. It carries the tool selection
+rules, the operating mode, the sections the active tools enable (planning, task
+tracking, coordination, long-running goals, scheduled work, delegation), and an
+`<env>` block (working directory, platform, date, Git branch and uncommitted
+count). Sharing one definition means a host does not need to, and should not,
+assemble its own identity: doing so drops the contract that the same tool set
+advertises. Change the app prompt in the package; `apps/web/src/` passes the
+value and assembles no prompt.
+
+The app product also declares `interaction: "one-shot"`. The composer's plan,
+goal, and ultracode picks mark a single message: the client prefixes the text
+(`/plan `, `/goal `, `ultracode: `) and drops the pick once the message is
+accepted. The product name is **Ultracode**; `ultraloop` remains the kernel's
+alias for the same keyword and is what older sessions carry. The appendix
+renders that model, and the CLI keeps the default `session` rendering:
+
+- **plan** — `/plan <task>` still enters plan mode and sends the task. Planning
+  means investigation and a written proposal, never carrying the work out, and
+  exiting is part of that: `exit_plan_mode` reports that the investigation is
+  finished. The tool leaves plan mode immediately (`ctx.mode` is `rpc` and
+  `ui.custom` is unsupported), returning the proposal in its structured
+  `details` (`planFilePath`, `planContents`, `planHash`). The client renders
+  those details as a review card — see [Plan review card](#plan-review-card) —
+  and the prompt tells the model to end the turn there and wait for the user's
+  decision. The pick marks one message, but plan mode itself stays on until the
+  model calls `exit_plan_mode` or the user toggles `/plan`. A picked skill rides
+  after the prefix (`/plan /skill:<name> <task>`); the plan command expands it.
+- **goal** — the goal is still how it always was: started once, then continued
+  automatically at idle boundaries until complete (the one-shot pick changes
+  only how the user starts it). The prompt forbids starting a goal on the
+  model's own initiative and forbids replacing an unfinished goal with
+  `create_goal`; a second `/goal` is rejected by the kernel while one is active.
+- **ultracode** (`ultraloop` is the kernel alias) — there is no session-standing switch. The host passes
+  `ultraloopSessionMode: false`, so `/ultracode` and `/ultraloop` are not
+  registered, a persisted `ultraloop-session-mode` entry from a CLI session is
+  ignored instead of reviving consent the UI cannot revoke, and no session
+  reminder is emitted. Only the per-turn keyword/phrase opt-in applies, and the
+  prompt drops the CLI's "standing for the session" guidance.
+
+The capabilities extension registers compact, plan, tasks, subagent, workflow,
+and ultracode; goal and cron are separate extensions the host must also mount
+(`webExtensions` in `src/runtime.ts`, asserted by `test/extensions.test.ts`).
+Losing one is silent — its slash command and tools simply never register, and a
+typed `/goal` then reaches the model as ordinary text. Extensions are keyed by
+command and tool name, so a duplicate would silently override the option above.
+
+A host that renders no terminal must still answer `ExtensionUIContext.theme`:
+extensions style status text unconditionally. The Web host returns the kernel's
+identity-styled `plainTheme`, and `step-plan.ts` falls back to plain text when a
+host answers nothing.
+
+### Session state on screen
+
+Two pieces of kernel state are host-rendered rather than transcript text, so the
+snapshot carries them and the client draws controls from them:
+
+- `goal` (`projectGoal`) is the running goal: objective, status, tokens, rounds.
+  The client shows it as `#goalStrip` above the composer, with pause / resume,
+  edit, and delete. Each control calls `PATCH /sessions/{id}/goal`, which runs
+  the same `/goal pause|resume|edit|clear` slash command the CLI's TUI issues —
+  one implementation, and the action lands in the transcript as the command it
+  is. A goal outlives the message that started it, which is why it needs
+  persistent controls instead of the one-shot mode chip.
+- `planMode` (`projectPlanMode`) reports whether plan mode is active, from the
+  latest `step-plan` branch entry rather than an in-memory flag, so a restored
+  session answers correctly before the extension replays `session_start`.
+
+Both are read from `getStepGoal` / `getStepPlanState` in the package, never
+inferred from UI text.
+
+### Plan review card
+
+An `exit_plan_mode` result without a host dialog is a decision waiting for the
+user. The client turns the tool's persisted `details` into `#planReviewCard`: the
+proposal, "view full plan", and two buttons. The card is projected from the tool
+result in the session entries, not only from the live stream event, because every
+finished message refreshes the snapshot; a card that existed only on the stream
+disappeared before anyone could answer it, and a reopened session showed none.
+
+- **Request changes** sends the notes through `/plan`, so the revision round is
+  planned again and produces a new proposal. Plan mode is already off when this
+  card is shown, and a plain message would have let the model implement instead
+  of revise.
+- **Approve and run** sends a normal message that authorizes implementation.
+
+Both are ordinary user messages: the decision is in the transcript, starts one
+turn, and needs no separate execution channel. Only the newest proposal without a
+user message after it is actionable; an older or already-decided card stays in the
+transcript as the record of that round but offers no buttons. `planHash` identifies
+the reviewed text.
+
+Building a prompt runs `git symbolic-ref` and `git status` synchronously, now in
+the multi-session host rather than a single CLI process. The appendix bounds each
+call with a 1.5 s timeout, caches per working directory for five seconds, and
+omits the Git lines when a call fails. The cache is keyed by directory, so
+sessions in different workspaces do not share branch or dirty-count facts. No
+host calls `invalidateGitEnvironmentCache` from product code, so the cache only
+expires by that five-second window.
+
+The prompt is rebuilt when a session starts and whenever its active tool set or
+extended resources change (`setActiveToolsByName`, extension skill / prompt /
+theme paths), not on every turn. An uncached rebuild therefore stalls the host's
+event loop while its bounded `git` calls run: up to three spawns of 1.5 s each
+(`symbolic-ref`, a `rev-parse` fallback only when the first fails, and `status`)
+on a repo where git hangs, freezing every session's event stream until they
+return. The host already blocks synchronously elsewhere (file discovery runs
+`git rev-parse`, resolved config values run shell commands), so this is not a new
+class of blocking; making environment collection asynchronous is tracked as a
+follow-up rather than part of the prompt change.
+
 ### Sign-in dialog
 
 When the bootstrap report says `configured: false` (no `auth.json`, an empty
@@ -92,10 +215,10 @@ ignored while it is open. The gate is enabled for Desktop, and for plain Web
 after an explicit Step sign-out; a first plain-Web visit can still sign in from
 Account settings.
 
-A Step account is not required. The gate's "Use your own models" link
-(`#loginOwnModels`) closes it, lets bootstrap continue, and opens Settings >
-Models, where a custom endpoint and key are configured (bring your own key).
-Once such a model is usable, later starts skip the gate.
+The gate offers only Step Plan and API-key sign-in, for the mainland or (via
+the link under the buttons) the international platform. Custom `models.json`
+models still count: once such a model is usable, later starts skip the gate.
+Signed out, the sidebar account button opens Settings > Account directly.
 
 A session fixes its model catalog and provider endpoint when it is built, so
 one opened before the credential existed (another tab, or a page loaded before
@@ -132,7 +255,9 @@ keeps its zh-CN default.
 The approval path is an adapter: Step extensions call
 `ExtensionUIContext.confirm`, the Web Host's approval broker emits an SSE
 request, and the browser returns `approve`, `approve_for_session`, or `deny`.
-Missing or cancelled approvals fail closed.
+Missing or cancelled approvals fail closed. A plan-mode denial never reaches
+`confirm`: the kernel blocks a mutation outside the plan file before the
+permission policy runs, so no approval card is emitted for it.
 
 Approval snapshots and SSE requests include the full captured tool `input` and
 the specific policy `reason`. The browser renders a neutral card with a localized
@@ -250,6 +375,22 @@ point out of the workspace.
   `binary` (NUL byte in the first 8 KB), or `too-large`; only `text` carries
   content. `raw` streams images, and nothing else, for the preview.
 
+An empty workspace also shows a branch switcher beside the folder pill, above
+the composer card. Both pickers choose where the next conversation starts, so
+both hide once a session is open: the session stays on the folder and branch it
+was created in. `GET /api/v1/workspace/git` takes the same `cwd` and answers
+with `state` (`repository`, `root`, `branch`, `detached`, `dirtyFiles`) plus
+the local `branches`, most recently committed first. `repository` is false for
+a folder outside a git work tree or when git is missing, and the pill hides.
+`POST /api/v1/workspace/git/switch` switches to an existing branch, or with
+`create: true` creates it at HEAD and switches. It runs `git switch` without
+`--force`, so a switch that would overwrite uncommitted work is refused instead
+of discarding it; the 400 body carries a stable `code` and the blocking `paths`,
+which the page renders in its own words. Git runs as an argv array with
+`--no-optional-locks` (a background read never takes `index.lock` from a
+session's own commit) and a timeout, and the branch name is validated before it
+reaches git.
+
 Clicking a file opens a preview panel on the right: one tab per file, line
 numbers, wrap toggle, reload, copy, a rendered view for Markdown, and inline
 images. Highlighting is a small regex tokenizer per language family (comments,
@@ -318,10 +459,20 @@ and survives a host restart.
 
 The composer's slash menu opens when the whole prompt is a single `/word`. It
 lists two groups, fuzzy-matched with the CLI's scoring (a client copy of
-`packages/tui/src/fuzzy.ts`): commands (`/goal`, `/init`, `/plan`, `/mcp`) and
-the session's skills; a `skill:` prefix lists skills only. Arrow keys move
-through both groups, Enter or Tab picks, Escape closes. Picking a command
-inserts `/<name> ` so arguments can follow; the kernel runs it on send.
+`packages/tui/src/fuzzy.ts`): commands (`/goal`, `/init`, `/plan`, `/btw`,
+`/compact`, `/feedback`, `/mcp`) and the session's skills; a `skill:` prefix
+lists skills only. Arrow keys move through both groups, Enter or Tab picks,
+Escape closes. Picking a command inserts `/<name> ` so arguments can follow; the
+kernel runs it on send. `/compact` and `/feedback` therefore follow the same
+kernel command the CLI runs, and only the host's presentation differs:
+`/compact` appends a collapsible compaction row, and `/feedback` (typed without
+arguments or picked from the menu) opens the feedback dialog instead of a
+prompt. `/btw` opens its own rail tab (see below). Command replies reach the page through
+the kernel's `ui.notify` → SSE `notice`, never as a user or assistant message,
+so they do not enter the session file or the model's context; notices live for
+the page load and can be dismissed. Kernel `ui.input` prompts travel as
+`text-input-required` / `text-input-resolved` events and are answered through
+`POST /api/v1/sessions/{id}/text-inputs/response`.
 Skills come from `GET /api/v1/sessions/{id}/skills`
 (the session's resource loader, so plugin skills are included); a draft uses
 `GET /api/v1/workspace/skills`, which resolves the folder's skill resources
@@ -329,9 +480,84 @@ without extensions. Picking a skill inserts `/skill:<name> `; the kernel
 expands it into the skill's instructions when the prompt is sent, and the
 conversation shows the skill as a chip above the request. Picking `/mcp` shows
 `GET /api/v1/mcp` in place: every server with its state, tool count and start
-error, including servers disabled in `config.toml`. The kernel's own `/mcp`
-command only prints through `notify`, which the Web host does not render. The
-MCP status list is process-wide (written by the session that started last).
+error, including servers disabled in `config.toml`. The MCP status list is
+process-wide (written by the session that started last).
+
+A compaction is a transcript fact, not a toast: the kernel's `compaction` entry
+is projected as a collapsed `compact` row (`已压缩 N 条历史记录（约 M tokens）`)
+whose summary opens on click and survives a reload. While it runs, the row says
+`正在压缩…`; a prompt sent then queues and starts when compaction ends.
+
+Forking branches the session the way the kernel defines it: a new session id and
+file, `parentSession` pointing back, and the host rebound to the branch. The
+response's `sessionId` is that new id, and the store is re-keyed in the same
+step, so the client's next read and the inspector resolve instead of 404ing. The
+branch is titled `<parent title>_fork`, derived from the parent's current title,
+so forking a fork gives `<title>_fork_fork`. A fork is refused while a turn runs,
+while the context is compacting, or while another fork is in flight. A branch has
+no file until its first reply, so an untouched fork has nothing to branch yet:
+the implicit fork reports "cancelled" (the client's generic notice), and an
+explicit entry on such a branch is refused by the kernel.
+
+`/btw` is the one command that bypasses the queue: asking a side question while
+the main task runs is its purpose, and the kernel runs extension commands before
+its streaming gate. Every other command is queued like a message, so `/compact`
+takes effect when the turn ends.
+
+A `/btw` answer is its own thread, so it gets its own tab in the preview rail
+(`kind: "btw"`) instead of a transcript row: the conversation, its entries and the
+model's context are untouched, and the tab strip's × closes one answer without
+deleting it. The composer intercepts `/btw <question>` before it becomes a
+message: the tab opens at once with the question and a waiting state, because the
+answer takes a model round trip and the reader should see where it will appear.
+The kernel's `ui.sideAnswer` fills that tab in, rendering the answer as Markdown;
+a host without that surface keeps the Markdown notice, and the terminal keeps its
+panel. Answers live in host memory for the session (bounded, like the terminal
+panel's history), appear in the snapshot so a reloaded page can show them again,
+and are cleared by `POST /sessions/{id}/side-answers/clear`.
+
+Plan mode is visible to the model as well as to the page. `/plan <task>` enters
+plan mode and sends the task as an ordinary user message. Every model request
+while the mode is on carries a request-local `<system-reminder>` (never appended
+to the session; each request drops the previous copy) that states the mode as a
+fact: plan mode is ON, the host turned it on for the user's `/plan` request, and
+`enter_plan_mode` must not be called; it names the plan file
+(`.stepcode/plans/session-<id>.md`), says only that file may be written with
+`write_file` / `edit_file`, and asks for exactly one `exit_plan_mode` call once
+the proposal is written. A model that was only hinted at probed instead — it
+called `enter_plan_mode` to "confirm" (answered "Already in plan mode") and
+called `exit_plan_mode` again in later turns.
+
+Plan mode ends the way it does in the terminal: the model calls
+`exit_plan_mode`, or the user toggles `/plan`. A request that needs no proposal
+calls the tool once without writing the file; with nothing new to review it just
+leaves plan mode and the model answers directly. "Nothing new" means the plan
+file still holds the content it had when this round entered plan mode
+(`planHashAtEnter` in the `step-plan` entry) or the proposal already submitted in
+an earlier round (`submittedPlanHash`). The first check covers a file left over
+from an earlier round or from an older build, which the submitted hash alone
+cannot recognise; either way, re-entering with the Plan chip never posts the old
+plan for review again. The terminal, which has a review
+dialog, keeps refusing a missing file and tells the model to let the user leave
+with `/plan`. Tool results say the outcome plainly and persist it: after a
+submit or a plain exit they report that plan mode (which the host turned on for
+`/plan`) is now off and not to call the tool again; `enter_plan_mode` while the
+mode is on says it changed nothing and was not needed. Leaving is never
+announced as a transcript row: the strip closing and (for a proposal) the review
+card are the whole report.
+
+The host mounts the same tool profile as the CLI (`createStepToolProfile`), so
+the model is offered `read_file` / `write_file` / `edit_file` / `run_command`
+rather than Pi's builtins. Without it, plan mode enabled names that did not
+exist and a proposal could not be written at all ("Tool write_file not found").
+
+State the client already draws is never narrated into the conversation: plan mode
+(`snapshot.planMode` → the composer's `Plan · <file>` strip) and the permission
+tier (`policies`) announce themselves with `notify(…, { transient: true })`, which
+the host forwards and the client shows as a short toast, not a row. Command
+answers (`/status`, `/usage`, `/todos`, `/cron`, `/btw` on a text-only host) still
+become dismissible notices, because those are answers to something the user
+typed.
 
 The shared Web/Desktop composer also completes workspace files and folders at
 an `@` token after whitespace or at the start of a line. It follows the actual

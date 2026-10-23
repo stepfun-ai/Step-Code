@@ -8,7 +8,8 @@ const STATUS_ICON: Readonly<Record<SubagentStatus, IconName>> = {
 	running: "loaderCircle",
 	completed: "circleCheck",
 	failed: "circleX",
-	aborted: "triangleAlert",
+	// Stopped on request is not a fault: a neutral stop mark, not a warning triangle.
+	aborted: "circleMinus",
 	skipped: "circleMinus",
 	unknown: "circle",
 };

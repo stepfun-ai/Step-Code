@@ -1,7 +1,7 @@
 import { useT } from "../../i18n";
 import { shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
-import { EmptyState } from "../../ui";
+import { EmptyState, Icon } from "../../ui";
 import { ProjectGroup } from "./ProjectGroup";
 import { SessionRow } from "./SessionRow";
 
@@ -77,7 +77,10 @@ export function ProjectView() {
 				)}
 			</div>
 			<div className="recent-group" id="recentGroup" hidden={recent.length === 0}>
-				<div className="project-label">{t("recent")}</div>
+				<div className="project-label">
+					<Icon name="clock" />
+					<span>{t("recent")}</span>
+				</div>
 				<div id="recentTasks">
 					{recent.map((session) => (
 						<SessionRow key={session.id} session={session} filteredOut={hiddenIds.has(session.id)} />

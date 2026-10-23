@@ -15,21 +15,31 @@
 	flex: none;
 	align-items: center;
 	gap: 12px;
-	padding: 14px 20px;
+	/* One title-bar height across the mid views, so switching views never moves the divider. */
+	height: var(--session-header-h);
+	/* The session header's insets and title type, so switching views moves nothing. */
+	/* Gutter on both sides: the close button ends on the card grid's right edge. */
+	padding: 0 var(--gutter);
 	border-bottom: 1px solid var(--line);
 }
+/* The floating show-sidebar button sits over the bar's start, as on the session header. */
+.app.sidebar-hidden .market-header {
+	padding-left: 60px;
+}
 .market-header strong {
-	font-size: 15px;
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0;
 }
 .market-search {
 	flex: 1;
 	max-width: 280px;
-	height: var(--control-h-md);
+	height: var(--control-h);
 	margin-left: auto;
 	padding: 0 12px;
 	border: 1px solid var(--line);
-	border-radius: 999px;
-	background: var(--surface-soft);
+	border-radius: var(--radius-input);
+	background: var(--surface);
 	transition:
 		border-color 120ms ease,
 		background-color 120ms ease,
@@ -62,21 +72,25 @@
 .market-grid {
 	display: grid;
 	flex: 1;
-	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	/* auto-fit: a few cards share the row instead of leaving empty tracks on the right. */
+	/* Fills the width: six cards make two even rows of three at 1440px. */
+	grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 	align-content: start;
 	gap: 12px;
-	padding: 18px 20px;
+	padding: 20px var(--gutter);
 	overflow: auto;
 }
 .market-card {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	padding: 14px;
+	padding: 16px;
 	border: 1px solid var(--line);
-	border-radius: 12px;
+	border-radius: var(--radius-overlay);
 	background: var(--surface);
+	transition: border-color var(--fast);
 }
+/* Cards sit on the page, not above it: hover is an edge, never a shadow or a lift. */
 .market-card:hover {
 	border-color: var(--line-strong);
 }
@@ -91,19 +105,23 @@
 	place-items: center;
 	width: 34px;
 	height: 34px;
-	border: 1px solid var(--line);
-	border-radius: 9px;
+	border-radius: var(--radius-control);
 	background: var(--surface-soft);
+	color: var(--ink-2);
 }
 .market-card .card-title {
-	font-size: 13.5px;
+	font-size: 14px;
 	font-weight: 600;
 }
 .market-card .card-desc {
 	flex: 1;
-	font-size: 12px;
-	line-height: 1.55;
-	opacity: 0.7;
+	color: var(--ink-2);
+	font-size: 13px;
+	line-height: 1.6;
+}
+/* A task's schedule and its next run are two facts: each gets its own line instead of a ragged wrap. */
+#cronGrid .card-desc {
+	white-space: pre-line;
 }
 .market-card .card-foot {
 	display: flex;
@@ -111,44 +129,130 @@
 	justify-content: space-between;
 }
 .market-card .card-meta {
-	font-size: 11px;
-	opacity: 0.55;
+	color: var(--ink-3);
+	font-size: 12px;
+}
+/* Schedule lines break only at their spaces, never inside "周一" or a time. */
+#cronGrid .card-desc {
+	word-break: keep-all;
+}
+#cronGrid .card-meta {
+	font-family: var(--mono);
+}
+.market-card .card-monogram {
+	font-size: 15px;
+	font-weight: 600;
 }
 .market-card .card-action {
-	padding: 4px 12px;
-	border: 1px solid var(--line);
-	border-radius: 999px;
+	height: var(--control-h-sm);
+	padding: 0 12px;
+	border: 1px solid var(--line-strong);
+	border-radius: var(--radius-control);
 	background: transparent;
+	color: var(--ink-2);
 	font-size: 12px;
+	font-weight: 500;
 	cursor: pointer;
+	transition:
+		background-color var(--fast),
+		border-color var(--fast);
+}
+.market-card .card-action:not(.installed, .planned):hover {
+	background: var(--hover);
+}
+/* In the market the off state is an offer ("Install"), so it is the filled action; a paused cron task stays neutral. */
+#marketGrid .card-action:not(.installed, .planned) {
+	border-color: var(--action);
+	background: var(--action);
+	color: var(--action-ink);
+}
+#marketGrid .card-action:not(.installed, .planned):hover {
+	border-color: var(--action-hover);
+	background: var(--action-hover);
+}
+/* Installed and a cron task's enabled/paused are states, not actions: quiet labels, no outline. */
+#cronGrid .card-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding-inline: 0;
+	border-color: transparent;
+	background: transparent;
+	color: var(--ink-3);
+	cursor: default;
+}
+/* Enabled vs paused: a filled status dot against a hollow one, the same marks as the MCP list. */
+#cronGrid .card-action::before {
+	width: 6px;
+	height: 6px;
+	border: 1px solid currentColor;
+	border-radius: 50%;
+	content: "";
+}
+/* Enabled is ink with a filled dot; paused stays muted and hollow, so the two read apart at a glance. */
+#cronGrid .card-action.installed {
+	color: var(--ink);
+}
+#cronGrid .card-action.installed::before {
+	background: currentColor;
+}
+/* Not installable yet: a quiet label, not a disabled button. */
+#marketGrid .card-action.planned {
+	display: inline-flex;
+	align-items: center;
+	padding: 0;
+	border-color: transparent;
+	background: transparent;
+	color: var(--ink-3);
+	cursor: default;
 }
 .market-card .card-action.installed {
-	border-color: #2fa96e;
-	color: #2fa96e;
+	border-color: transparent;
+	background: transparent;
+	/* "Enabled" reads the same in the market and on cron cards. */
+	color: var(--ink);
 	cursor: default;
+}
+/* Installed reads as a state, like the cron cards: a check before the label, no button face. */
+#marketGrid .card-action.installed {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding-inline: 0;
+}
+#marketGrid .card-action.installed::before {
+	width: 9px;
+	height: 5px;
+	margin-top: -3px;
+	border-bottom: 1.5px solid var(--accent);
+	border-left: 1.5px solid var(--accent);
+	rotate: -45deg;
+	content: "";
 }
 .market-note {
 	flex: none;
-	padding: 10px 20px;
+	padding: 10px var(--gutter);
 	border-top: 1px solid var(--line);
-	font-size: 11px;
-	opacity: 0.6;
+	color: var(--ink-3);
+	font-size: 12px;
 }
 .btn-primary {
 	display: inline-flex;
 	flex: none;
 	align-items: center;
 	gap: 6px;
+	height: var(--control-h);
 	margin-left: auto;
-	padding: 5px 14px;
+	padding: 0 14px;
 	border: 0;
-	border-radius: 999px;
-	background: var(--ink);
-	color: var(--canvas);
-	font-size: 12.5px;
-	font-weight: 600;
+	border-radius: var(--radius-control);
+	background: var(--action);
+	color: var(--action-ink);
+	font-size: 13px;
+	font-weight: 500;
 	cursor: pointer;
+	transition: background-color var(--fast);
 }
 .btn-primary:hover {
-	opacity: 0.88;
+	background: var(--action-hover);
 }

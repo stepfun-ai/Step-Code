@@ -15,7 +15,14 @@
 		color var(--fast);
 }
 
-.root:hover {
+.root:hover:not(:disabled, [aria-disabled="true"]) {
 	color: var(--ink);
 	background: var(--hover);
+}
+
+/* Unavailable reads as unavailable everywhere: faded, no hover, no pointer. */
+.root:disabled,
+.root[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: default;
 }

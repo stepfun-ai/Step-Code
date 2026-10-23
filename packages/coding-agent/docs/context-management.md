@@ -9,13 +9,16 @@ recovery as fallbacks.
 ## Request notice stability
 
 Working-context status and pressure notices remain at their original positions
-in the request view during append-only conversation turns. They are not written
-to the canonical transcript. Retries reuse the same notice content and timestamp;
-new tool results and user messages follow previously issued notices. An edited,
-shortened, or different context projection clears the retained notices so a
-branch switch or compaction does not replay stale advice into the new context.
-This preserves ordinary prompt-prefix reuse without preventing intentional
-context edits.
+in the request view during append-only conversation turns. Task snapshots follow
+the same rule: append a new version only when its rendered state changes, and
+keep prior versions at their original boundaries. Unchanged state and retries
+reuse the same content and timestamp. These request-only records are not written
+to the canonical transcript; new tool results and user messages follow previously
+issued records. An edited, shortened, or different context projection clears the
+retained records so a branch switch or compaction does not replay stale advice
+into the new context. This preserves ordinary prompt-prefix reuse without
+preventing intentional context edits. A cold resume starts a new request-only
+record history and can require one cache warm-up.
 
 ## Select a compression mode
 
@@ -169,7 +172,7 @@ can complete the remaining review and answer without restarting the task.
 
 ## Current task state after compaction
 
-When Step task tools are active, ordinary model requests include a fresh,
+When Step task tools are active, ordinary model requests include a current,
 read-only snapshot of the active task plan. It shows task counts and existing
 IDs, statuses, short titles, and open blockers. In-progress tasks appear first;
 the snapshot is limited to 24 open rows and 4,096 UTF-8 bytes, with omission
@@ -177,13 +180,22 @@ counts directing the model to `task_list` or `task_get` for more detail. IDs are
 never shortened into different usable references.
 
 This is request-local task metadata supplied by the existing extension context
-hook. It works with both native compaction and CLM, and is not stored as another conversation message or included in editable CLM
-mirrors. A safely reused actor prefix may retain its historical snapshot in a
-maintenance request; newly appended tool results and user instructions remain
-authoritative, and maintenance cannot change task status. It refreshes after task tools run and follows the active plan on resume or branch
-navigation. Titles are data; the current user's request determines priorities.
-Only explicit task tool calls change task status. The snapshot neither completes
-tasks automatically nor creates another agent continuation when a model stops.
+hook. It works with both native compaction and CLM, and is not stored as another
+conversation message or included in editable CLM mirrors. During append-only
+turns, previous snapshots remain at their original request positions and a changed
+snapshot is appended after new conversation messages. The last snapshot is current;
+earlier snapshots are historical. Rebuilding a fresh snapshot at the request tail
+on every turn would remove a prior input item and break provider prompt-cache
+prefix reuse even when no task changed. Deleting the last task appends a zero-task
+snapshot; disabling task tools clears the request-only snapshot history.
+
+A safely reused actor prefix may retain its historical snapshots in a maintenance
+request; newly appended tool results and user instructions remain authoritative,
+and maintenance cannot change task status. Task tools refresh the current view,
+which follows the active plan on resume or branch navigation. Titles are data;
+the current user's request determines priorities. Only explicit task tool calls
+change task status. The snapshot neither completes tasks automatically nor creates
+another agent continuation when a model stops.
 
 ## Explicit and ordinary context edits
 

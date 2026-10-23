@@ -9,37 +9,119 @@
  * under ui/. Load order (main.tsx): this file, then ui/*, then features.
  */
 
-/* legacy 1-116: tokens and dark theme */
+/*
+ * Two themes share one structure and differ in material:
+ *
+ *   Porcelain (light)  flat white paper on neutral greys.
+ *   Nocturne  (dark)   flat graphite on neutral greys; floating layers catch
+ *                      a faint top highlight.
+ *
+ * Both are subtractive: planes are told apart by tone, selection is a flat
+ * fill, and shadows belong only to layers that float (menus, popovers,
+ * dialogs, the composer deck). No decorative rings, spines or gradients.
+ *
+ * Both take their accent from the StepCode mark: the violet arc is the
+ * interactive accent, the amber prompt chevron is reserved for the text caret
+ * and the mark itself. Status colours (danger, attention, success) never reuse
+ * the accent, so "selected" never reads as "succeeded".
+ */
 :root {
+  color-scheme: light;
+  /* ── Planes ──────────────────────────────────────────────────────── */
   --canvas: #ffffff;
-  --sidebar: #f7f7f8;
+  /* Theme base: a very light blue workbench (no violet in the hue) — the whole
+     bottom layer of the window, with the cards floating on it. The sidebar IS
+     that plane (same tone, no separate module — its grid column alone sets it
+     apart); only frosted overlays (sticky list header, file tree) tint with
+     --sidebar-glass over a backdrop blur. The periwinkle base lives on as the
+     "violet" theme choice below. */
+  --sidebar: var(--workbench);
+  --sidebar-glass: rgb(240 246 253 / 72%);
   --surface: #ffffff;
-  --surface-soft: #f5f5f6;
-  --hover: #ededee;
-  --selected: #e9e9ea;
-  --line: #e2e2e3;
-  --line-strong: #cfcfd1;
-  --ink: #171718;
-  --ink-2: #66666a;
-  --ink-3: #96969b;
-  --danger: #c7473c;
-  --attention: #d49a22;
-  --success: #3d9950;
-  --danger-surface: #fff0ee;
-  --attention-surface: #fff7df;
+  --surface-soft: #f4f4f5;
+  --hover: #f1f1f3;
+  --selected: #e8e8eb;
+  --bubble: #f4f4f5;
   --code-surface: #f7f7f8;
-  --shadow: rgb(0 0 0 / 12%);
-  --sans:
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* ── Lines ───────────────────────────────────────────────────────── */
+  --line: #ebebee;
+  --line-strong: #d8d8dc;
+  --switch-track: var(--line-strong);
+  --switch-knob: var(--surface);
+  /* The terminal surface: a near-white light blue, a touch bluer than the
+     workbench so the dock reads as its own instrument without going dark. */
+  --term-bg: #f0f5fd;
+  /* ANSI colours xterm would otherwise take from its dark-terminal defaults (≥4.5:1 on the canvas). */
+  --term-green: #15803d;
+  --term-yellow: #a16207;
+  --term-cyan: #0e7490;
+  /* ANSI blue is a plain blue, not the brand violet (violet is reserved for focus and progress). */
+  --term-blue: #2459c8;
+  --term-magenta: #a21caf;
+  /* ── Ink ─────────────────────────────────────────────────────────── */
+  --ink: #171718;
+  --ink-2: #5c5c63;
+  /* 4.6:1 on the sidebar grey (#f7f7f8), so muted 12px labels stay AA there too. */
+  --ink-3: #96969b;
+  /* ── Status ──────────────────────────────────────────────────────── */
+  --danger: #c8372c;
+  --attention: #c98a12;
+  /* 4.9:1 on white, as legible as the deletion red at the 12px diff counts. */
+  --success: #237a4b;
+  --danger-surface: #fdf0ee;
+  --attention-surface: #fdf6e2;
+  /* ── Brand and accent ────────────────────────────────────────────── */
+  --brand-violet: #8f7cff;
+  --brand-amber: #f6b73c;
+  --brand-tile: #17161f;
+  --accent: #5b47e0;
+  --accent-hover: #4b38cc;
+  --accent-ink: #ffffff;
+  --accent-soft: rgb(91 71 224 / 9%);
+  --accent-ring: rgb(23 23 24 / 8%);
+  /*
+   * Filled controls (primary buttons, send, switches) are ink in both themes, so
+   * the accent stays a quiet signal (focus rings, check marks, the context meter) and is
+   * never a button fill.
+   */
+  --action: var(--ink);
+  --action-hover: color-mix(in srgb, var(--ink) 84%, var(--canvas));
+  --action-ink: var(--canvas);
+  --caret: #df9a14;
+  /* ── Depth ───────────────────────────────────────────────────────── */
+  --shadow: rgb(16 16 18 / 12%);
+  --scrim: rgb(16 16 18 / 26%);
+  --edge-light: transparent;
+  --elev-1: 0 1px 2px rgb(16 16 18 / 5%);
+  --elev-2: 0 1px 2px rgb(16 16 18 / 4%), 0 10px 28px -10px rgb(16 16 18 / 16%);
+  --elev-3: 0 2px 6px rgb(16 16 18 / 5%), 0 28px 64px -20px rgb(16 16 18 / 28%);
+  /* Selected thumb of a segmented tray: separated by tone alone, never by a ring. */
+  --thumb: var(--surface);
+  --inline-code: rgb(16 16 18 / 5.5%);
+
+  /*
+   * Geist (bundled from @fontsource-variable, see main.tsx) sets Latin text and
+   * digits; its faces declare Latin/Cyrillic unicode-ranges, so CJK falls through
+   * to the system face (PingFang / YaHei) and no CJK font is ever downloaded. The
+   * faces use font-display: swap, so text paints in the fallback stack at once and
+   * nothing waits on a font file.
+   */
+  --sans-fallback:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Segoe UI", system-ui, sans-serif;
+  --sans: "Geist Variable", var(--sans-fallback);
+  --mono-fallback: "SF Mono", ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --mono: "Geist Mono Variable", var(--mono-fallback);
   --sidebar-width: 260px;
   --composer-width: 760px;
+  --session-header-h: 48px;
   /* Horizontal inset shared by the message column and the composer, so their
      left edges line up instead of drifting apart by a few pixels. */
   --gutter: 32px;
   --radius-control: 8px;
-  --radius-card: 20px;
+  --radius-card: 16px;
   --fast: 120ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* ── Control metrics ─────────────────────────────────────────────── */
   --control-h: 32px; /* default control (control-select) */
@@ -50,7 +132,8 @@
   --control-h-lg: 36px; /* send button, list row */
   --control-h-xs: 22px; /* inline row buttons */
   --input-h: 28px; /* tag create input */
-  --brand-row-h: 64px;
+  /* Same height as the session header, so the sidebar brand, the title bar and the rail share one centre line. */
+  --brand-row-h: var(--session-header-h);
   --textarea-min-h: 64px;
   --textarea-max-h: 320px; /* #prompt grows to this, then scrolls */
   --textarea-pad-x: 7px;
@@ -60,72 +143,137 @@
   --icon-sm: 15px; /* compact toolbar icons */
   --icon-md: 18px; /* default: sidebar, composer, dialogs */
   --icon-lg: 20px; /* dialog close buttons */
-  /* ── Radius ramp ─────────────────────────────────────────────────── */
+  /* ── Radius ramp: 4 / 6 / 8 / 12 / 16, plus pills. ─────────────────── */
   --radius-hairline: 1px;
   --radius-spine: 2px;
   --radius-inline-code: 4px;
-  --radius-tiny: 5px;
+  --radius-tiny: 4px;
   --radius-chip: 6px;
-  --radius-input: 7px;
-  --radius-row: 9px;
-  --radius-panel: 10px;
-  --radius-menu: 11px;
+  --radius-input: 8px;
+  --radius-row: 8px;
+  --radius-panel: 12px;
+  --radius-menu: 12px;
   --radius-surface: 12px;
-  --radius-overlay: 14px;
-  --radius-search: 15px;
+  --radius-overlay: 12px;
+  --radius-search: 12px;
   --radius-bubble: 16px;
-  --radius-dialog: 18px;
+  --radius-dialog: 16px;
   --radius-pill: 999px;
   /* ── Chrome ──────────────────────────────────────────────────────── */
+  /*
+   * Workbench: the theme base tone behind the sidebar and the floating
+   * column cards — a very light blue in the light theme, a deep navy in the
+   * dark one. The main and right columns sit on it as rounded cards, so it
+   * stays a step darker than the card surface (`--canvas`).
+   */
+  --workbench: #edf4fc;
+  --workbench-inset: 4px;
+  --workbench-gap: 2px;
+  --card-shadow: 0 1px 2px rgb(20 24 60 / 5%), 0 4px 12px rgb(20 24 60 / 5%);
   --scrollbar-size: 8px;
-  --scrollbar-thumb: #ceced1;
-  --selection: #dedee0;
+  --scrollbar-thumb: #d6d6da;
+  /* Selected text gets a neutral grey wash, like the rest of the selection language. */
+  --selection: rgb(23 23 24 / 12%);
   /* Status badges and the shared focus ring. */
-  --badge-surface: #eeeeef;
-  --attention-ink: #9a6b12;
-  --focus-border: #9d9da1;
-  --accent: #1677ff;
-  --accent-ring: rgb(22 119 255 / 12%);
+  --badge-surface: #eeeef0;
+  --attention-ink: #8a5d06;
+  /* A focused field firms its edge in neutral grey; violet is not a border colour. */
+  --focus-border: #9a9aa2;
+  /* ── Session-mode accents ────────────────────────────────────────── */
+  /* Shared by the composer (card glow, prompt lead chips, ＋ menu rows) and
+     the conversation's command-echo rows: fixed values, mixed with the theme
+     surfaces at each use site, so light and dark both work. */
+  --mode-goal: #10b981;
+  --mode-plan: #6366f1;
+  --mode-ultraloop: #d946ef;
+  --command-accent: #8b5cf6;
   /* ── Source preview tokens ───────────────────────────────────────── */
-  --tok-comment: #7d8590;
-  --tok-string: #1a7f37;
-  --tok-number: #0550ae;
-  --tok-keyword: #a626a4;
-  --tok-key: #b0442e;
-  --tok-tag: #0b63c5;
+  --tok-comment: #6e6d7a;
+  /*
+   * Code colours stay out of the semantic hues: no red/green (errors, diffs) and no violet (the
+   * accent). Keywords carry weight in ink; strings teal, numbers and tags blue, keys slate.
+   */
+  --tok-string: #0b6e7c;
+  --tok-number: #2459c8;
+  --tok-keyword: var(--ink);
+  --tok-key: #4b5874;
+  --tok-tag: #2459c8;
 }
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #181819;
-  --sidebar: #202022;
-  --surface: #272729;
-  --surface-soft: #303033;
-  --hover: #353538;
-  --selected: #3b3b3f;
-  --line: #3b3b3e;
-  --line-strong: #55555a;
-  --ink: #f1f1f2;
-  --ink-2: #b8b8bd;
-  --ink-3: #85858b;
-  --danger: #ef7468;
-  --attention: #e6b44c;
-  --success: #64bb75;
-  --danger-surface: #3d2726;
-  --attention-surface: #3a3323;
-  --code-surface: #222224;
-  --shadow: rgb(0 0 0 / 38%);
-  --scrollbar-thumb: #4a4a4f;
-  --selection: #3d3d42;
-  --badge-surface: #3b3b3f;
-  --attention-ink: #e6b44c;
-  --focus-border: #6a6a70;
-  --tok-comment: #8b949e;
-  --tok-string: #7ee787;
-  --tok-number: #79c0ff;
-  --tok-keyword: #d2a8ff;
-  --tok-key: #ffa198;
-  --tok-tag: #79c0ff;
+  --canvas: #161618;
+  /* One step clearer of the #161618 canvas, so cards and menus read as raised. */
+  --surface: #1f1f23;
+  --surface-soft: #232327;
+  --hover: #242428;
+  --selected: #303035;
+  --bubble: #26262a;
+  --code-surface: #121214;
+  --line: #2a2a2e;
+  --line-strong: #3e3e44;
+  --ink: #ededef;
+  /* Secondary and tertiary text are a clear step apart, not two near-identical greys. */
+  --ink-2: #b4b4bb;
+  --ink-3: #8f8f98;
+  /* An off switch: a dark knob on a dark track disappears, so the knob takes a light grey. */
+  --switch-track: #4a4a52;
+  --switch-knob: #a8a8b0;
+  --term-bg: var(--canvas);
+  --term-green: var(--success);
+  --term-yellow: #e8c06a;
+  --term-cyan: #6cc6d4;
+  --term-blue: #8ab8ff;
+  --term-magenta: #d39af0;
+  --danger: #ff7b6f;
+  --attention: #f2bf58;
+  --success: #62cc8f;
+  --danger-surface: #3a2024;
+  --attention-surface: #33291a;
+  --brand-tile: #232327;
+  --accent: #a08fff;
+  --accent-hover: #b3a5ff;
+  --accent-ink: #15121f;
+  --accent-soft: rgb(160 143 255 / 12%);
+  --accent-ring: rgb(237 237 239 / 10%);
+  --caret: #f6b73c;
+  --shadow: rgb(0 0 0 / 46%);
+  --scrim: rgb(6 6 10 / 58%);
+  --edge-light: rgb(255 255 255 / 5%);
+  --elev-1: 0 1px 2px rgb(0 0 0 / 32%), inset 0 1px 0 var(--edge-light);
+  --elev-2: 0 2px 6px rgb(0 0 0 / 30%), 0 14px 36px -12px rgb(0 0 0 / 62%), inset 0 1px 0 var(--edge-light);
+  --elev-3: 0 4px 12px rgb(0 0 0 / 34%), 0 36px 80px -24px rgb(0 0 0 / 72%), inset 0 1px 0 var(--edge-light);
+  --thumb: #38383e;
+  --inline-code: rgb(255 255 255 / 7%);
+  --scrollbar-thumb: #38383e;
+  --selection: rgb(237 237 239 / 22%);
+  --badge-surface: #2c2c31;
+  --attention-ink: #f2bf58;
+  --focus-border: #626269;
+  --tok-comment: #8a8a9c;
+  --tok-string: #7cc9d4;
+  --tok-number: #8ab8ff;
+  --tok-keyword: var(--ink);
+  --tok-key: #a9b4cc;
+  --tok-tag: #8ab8ff;
+  --workbench: #101724;
+  --card-shadow: var(--elev-1);
+  /* Frosted overlay tint for the dark base plane. */
+  --sidebar-glass: rgb(16 23 36 / 68%);
+}
+
+/*
+ * Violet: the periwinkle base kept as its own theme choice — the same planes
+ * as Porcelain (sidebar merged into the workbench, floating cards), tinted
+ * lilac instead of blue.
+ */
+html[data-theme="violet"] {
+  --workbench: #f4f5fc;
+  --sidebar-glass: rgb(244 245 252 / 72%);
+}
+html[data-theme="violet"] .sidebar {
+  --hover: #e8eaf6;
+  --selected: #dde1f1;
 }
 
 /* legacy 118-155: reset, focus ring, scrollbars, icon sizing */
@@ -151,7 +299,17 @@ body {
   font-family: var(--sans);
   font-size: 14px;
   line-height: 1.6;
+  /* Geist's straight-sided "l"/"1" and single-storey "a" are its default; keep kerning and contextual alternates on. */
+  font-kerning: normal;
+  font-feature-settings: "calt" 1, "kern" 1;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+/* The type system uses three weights (400 / 500 / 600); the UA's `bolder` would add a fourth. */
+b,
+strong {
+  font-weight: 600;
 }
 button,
 input,
@@ -165,13 +323,11 @@ button {
   background: none;
   cursor: pointer;
 }
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
-[role="button"]:focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
+/* The text caret is the amber chevron of the StepCode mark. */
+input,
+textarea,
+[contenteditable="true"] {
+  caret-color: var(--caret);
 }
 select {
   appearance: none;
@@ -184,11 +340,37 @@ select {
   height: var(--scrollbar-size);
 }
 ::-webkit-scrollbar-thumb {
-  border-radius: var(--radius-control);
-  background: var(--scrollbar-thumb);
+  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--scrollbar-thumb) padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--line-strong);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+/* Without this Chrome paints the corner between two scrollbars opaque white, a bright square on dark code. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Panel and list scrollbars, like the reading column's, show only while the pointer is over them, as on macOS. */
+:is(.right-panel-scroll, .search-results, .control-popover, .plus-menu-scroll, .tool-cx-pre, .tool-cx-code, .changes-files, .changes-diff, .preview-body)::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+:is(.right-panel-scroll, .search-results, .control-popover, .plus-menu-scroll, .tool-cx-pre, .tool-cx-code, .changes-files, .changes-diff, .preview-body):hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+/* The reading column's scrollbar shows only while the pointer is over it, as on macOS. */
+#stream::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  transition: background-color var(--fast);
+}
+#stream:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+#stream:hover::-webkit-scrollbar-thumb:hover {
+  background-color: var(--line-strong);
 }
 
 /*
@@ -238,6 +420,7 @@ select {
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
+  background: var(--workbench);
   transition: grid-template-columns 0.18s ease;
 }
 .app.sidebar-hidden {
@@ -261,7 +444,13 @@ select {
   transition: none;
 }
 
-/* legacy 191-203: sidebar column (App.tsx renders aside.sidebar) */
+/*
+ * legacy 191-203: sidebar column (App.tsx renders aside.sidebar). The sidebar
+ * is the workbench plane itself — identical tone, no divider, no gradient;
+ * only its grid column (width/height) delimits it, and the cards' edges mark
+ * the boundary. Row feedback gets its own step so it stays readable on the
+ * tinted plane.
+ */
 .sidebar {
   position: relative;
   grid-column: 1;
@@ -271,26 +460,39 @@ select {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid var(--line);
   background: var(--sidebar);
+  --hover: #dfe9f7;
+  --selected: #d3e0f4;
 }
-.app.sidebar-hidden .sidebar {
-  border-right: 0;
+html[data-theme="dark"] .sidebar {
+  --hover: #1f2940;
+  --selected: #273352;
 }
 
-/* legacy 248-257: brand mark, shared by the sidebar brand row and the logged-out overlay */
+/*
+ * legacy 248-257: brand mark, shared by the sidebar brand row and the logged-out overlay.
+ * The tile stays violet-black in both themes, as on the sign-in screen, so the
+ * violet arc and amber chevron of the mark keep their contrast.
+ */
 .brand-mark {
   display: grid;
   place-items: center;
   width: 30px;
   height: var(--control-h-sm);
   border-radius: var(--radius-row);
-  background: var(--ink);
-  color: var(--surface);
-  font: 700 14px / 1 var(--mono);
+  background: var(--brand-tile);
+  color: var(--brand-violet);
+}
+.brand-mark > .icon {
+  width: 72%;
+  height: 72%;
 }
 
-/* legacy 675-684: main column (App.tsx renders main.main) */
+/*
+ * legacy 675-684: main column (App.tsx renders main.main).
+ * The column sits on the workbench as a rounded card, so its children clip at
+ * the corners; fixed-position surfaces (the toast) are unaffected.
+ */
 .main {
   position: relative;
   grid-column: 2;
@@ -299,7 +501,12 @@ select {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  margin: var(--workbench-inset) var(--workbench-gap) var(--workbench-inset) var(--workbench-inset);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-surface);
   background: var(--canvas);
+  box-shadow: var(--card-shadow);
 }
 
 /*
@@ -316,32 +523,35 @@ select {
   width: 100%;
   max-width: 100%;
   font-size: 15px;
-  line-height: 1.75;
+  line-height: 1.68;
   overflow-wrap: anywhere;
 }
+/* In the conversation prose runs the column's full width, one right edge with tool rows, bubbles and the composer. */
+#stream .message-body {
+  max-width: 100%;
+}
 /*
- * Headings carry the visual hierarchy: the body copy is set in the muted ink so
- * long answers read calmly, and every heading (plus `**bold**` lead-ins such as
- * "1. …") steps back up to full contrast. Without the weight and size steps the
- * numbered section titles used to look exactly like the prose under them.
+ * Headings carry the visual hierarchy by size, weight and the space above them;
+ * body copy and headings share the full-strength ink.
  */
 .message-body h2,
 .message-body h3,
 .message-body h4 {
-  margin: 18px 0 8px;
+  /* A section break: clearly more air above than below, so a heading leads what follows. */
+  margin: 24px 0 8px;
   color: var(--ink);
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.4;
 }
 .message-body h2 {
-  font-size: 1.18em;
+  font-size: 20px;
 }
 .message-body h3 {
-  font-size: 1.08em;
+  font-size: 17px;
 }
 .message-body h4 {
-  font-size: 1em;
+  font-size: 15px;
 }
 .message-body > h2:first-child,
 .message-body > h3:first-child,
@@ -352,29 +562,78 @@ select {
   color: var(--ink);
   font-weight: 600;
 }
+/* Replies are read in full-strength ink; headings and bold stand out by size and weight, not by a lighter body. */
 .message.assistant .message-body {
-  color: var(--ink-2);
-}
-.message.assistant .message-body h2,
-.message.assistant .message-body h3,
-.message.assistant .message-body h4,
-.message.assistant .message-body strong {
   color: var(--ink);
 }
 .message-body .md-li {
   position: relative;
   display: block;
-  padding-left: 1.1em;
+  padding-left: 1.25em;
+}
+.message-body .md-li + .md-li {
+  margin-top: 0.2em;
 }
 .message-body .md-li::before {
   position: absolute;
-  left: 0.25em;
+  left: 0.3em;
   content: "•";
   color: var(--ink-3);
+}
+.message-body .md-li-nested::before {
+  content: "◦";
+}
+/* Links read in the text's own ink; the underline marks them, so a reply is not dotted with violet. */
+.message-body a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--fast);
+}
+.message-body a:hover {
+  text-decoration-color: currentColor;
+}
+.message-body strong {
+  font-weight: 600;
 }
 .message-body .md-gap {
   display: block;
   height: 10px;
+}
+/*
+ * A quote is set back from the prose with a rule, and a horizontal rule is a
+ * block: both appear in answers that talk *about* Markdown, and showing their
+ * source characters there reads as broken rendering.
+ */
+.message-body blockquote {
+  margin: 12px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--ink-3);
+}
+.message-body hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+/* A numbered item keeps the number its author wrote. */
+.message-body .md-li.md-oli {
+  padding-left: 1.55em;
+}
+.message-body .md-li.md-oli::before {
+  left: 0.1em;
+  content: attr(data-n) ".";
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+/* Two-space indentation is one nesting level. */
+.message-body .md-li.md-li-nested {
+  padding-left: 2.2em;
+}
+.message-body .md-li.md-li-nested.md-oli {
+  padding-left: 3em;
 }
 .message-body .md-table-wrap {
   max-width: 100%;
@@ -398,11 +657,17 @@ select {
   background: var(--surface-soft);
   font-weight: 600;
 }
+/* Inline code is a tint, not a box: borders turn a dense paragraph into a grid of tiles. */
 .message-body code:not(.code-block code) {
-  padding: 2px 5px;
+  padding: 1px 5px;
   border-radius: var(--radius-inline-code);
-  background: var(--surface-soft);
+  background: var(--inline-code);
+  /* Body ink: a path or identifier is read exactly, so it must not sit grey-on-grey. */
+  color: var(--ink);
+  /* Fixed rather than em-relative, so headings and small text do not spawn fractional sizes. */
   font: 13px / 1.5 var(--mono);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 .message-body .md-table-scroll {
   max-width: 100%;
@@ -462,7 +727,7 @@ select {
 }
 .code-block {
   overflow: hidden;
-  margin: 12px 0;
+  margin: 14px 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-surface);
   background: var(--code-surface);
@@ -471,29 +736,35 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: var(--control-h-md);
-  padding: 0 10px;
-  border-bottom: 1px solid var(--line);
+  height: 30px;
+  padding: 0 6px 0 14px;
   color: var(--ink-3);
-  font: 11px / 1 var(--mono);
+  font: 12px / 1 var(--mono);
 }
 .copy-code {
-  padding: 4px 6px;
-  border-radius: var(--radius-tiny);
+  padding: 4px 8px;
+  border-radius: var(--radius-chip);
   color: var(--ink-2);
-  font: 11px / 1 var(--sans);
+  font: 12px / 1 var(--sans);
 }
 .copy-code:hover {
   background: var(--hover);
 }
 .code-block pre {
-  max-height: 360px;
-  overflow: auto;
-  padding: 12px 14px;
+  /* No height cap: a reply's code is read whole, and a clipped block hid its last lines. */
+  overflow-x: auto;
+  padding: 2px 14px 14px;
+  /* The pre's own line box would otherwise use the UA monospace 15px and loosen every line. */
+  font: 12.5px / 1.6 var(--mono);
+}
+/* A thin scrollbar that stays visible: overlay scrollbars hide, and a cut line would not read as scrollable. */
+.code-block pre {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
 }
 .code-block code {
   tab-size: 4;
-  font: 12px / 1.65 var(--mono);
+  font: inherit;
   white-space: pre;
 }
 
@@ -560,11 +831,15 @@ select {
   top: calc(var(--brand-row-h) + var(--titlebar-inset));
 }
 /*
- * The same title strip runs across the top of the main column, so the window
- * drags (and double-click zooms) from above the conversation too, not only
- * from the sidebar. The strip stops short of the right edge to leave the
- * stream's scrollbar grabbable. Controls that land in it (the sidebar show
- * button, market and cron headers, child-agent bar) opt out.
+ * The whole top band of the window is title bar: across the main column it
+ * covers the session header's full height (--session-header-h), and it
+ * continues over the right panel's header and the top of the tool rail, so
+ * the window drags (and a double-click applies the macOS "double-click a
+ * window's title bar" action, zoom by default) from anywhere on that line.
+ * The main strip stops short of the right edge to leave the stream's
+ * scrollbar grabbable. Controls that land in the band (session menu, sidebar
+ * show button, market and cron headers, child-agent bar, panel and rail
+ * buttons) opt out.
  */
 [data-host="desktop"][data-platform="darwin"] .main::before {
   content: "";
@@ -572,10 +847,43 @@ select {
   top: 0;
   right: 12px;
   left: 0;
-  height: var(--titlebar-inset);
+  height: var(--session-header-h);
   -webkit-app-region: drag;
 }
-[data-host="desktop"][data-platform="darwin"] .main :is(button, a, input, textarea, select, [role="button"]) {
+[data-host="desktop"][data-platform="darwin"] .right-panel-header {
+  -webkit-app-region: drag;
+}
+[data-host="desktop"][data-platform="darwin"] .right-tool-rail {
+  position: relative;
+}
+[data-host="desktop"][data-platform="darwin"] .right-tool-rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--session-header-h);
+  -webkit-app-region: drag;
+}
+/*
+ * The workbench inset pulls the cards off the window edge, so the strip above
+ * them is chrome, not card: drag the window from that band too. Nothing
+ * interactive renders in the top inset band (the cards' own strips take over
+ * below it).
+ */
+[data-host="desktop"][data-platform="darwin"] .app::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  height: var(--workbench-inset);
+  -webkit-app-region: drag;
+}
+[data-host="desktop"][data-platform="darwin"]
+  :is(.main, .right-panel, .right-tool-rail)
+  :is(button, a, input, textarea, select, [role="button"], [role="tab"], [contenteditable="true"]) {
   -webkit-app-region: no-drag;
 }
 [data-host="desktop"][data-platform="darwin"]

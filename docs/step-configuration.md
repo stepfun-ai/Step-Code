@@ -221,8 +221,12 @@ late tools or warnings from reaching the new session.
 The macOS/Linux installer and `step update` run `step mcp prepare` after
 installing the new binary. This prepares the built-in StepPage executable before
 the installer finishes. StepPage requires Node.js 20 or newer on PATH; Step itself
-does not require a separately installed Node.js. Download or prerequisite failures
-show a warning and leave Step usable.
+does not require a separately installed Node.js. On macOS/Linux, the desktop host
+appends a private Electron-backed `node` wrapper to the server's PATH, allowing
+StepPage to use the bundled runtime without installing Node globally. System Node
+and explicit MCP PATH overrides still take precedence. The CLI retains the system
+Node prerequisite. Download or prerequisite failures show a warning and leave Step
+usable.
 
 Before connecting `steppage__steppage`, Step verifies `steppage-mcp --version`
 and repairs a missing or broken managed executable. Existing preinstallation

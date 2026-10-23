@@ -1,17 +1,18 @@
 .turn-artifacts { display: flex; align-items: center; gap: 12px; min-height: 44px; margin-top: 20px; padding: 5px 0; }
-.artifact-strip-label { color: var(--ink-2); font-size: 11px; flex: none; }
+.artifact-strip-label { color: var(--ink-2); font-size: 12px; flex: none; }
 .artifact-entries { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 8px; flex: 1; min-width: 0; }
-.artifact-row { display: flex; align-items: center; min-width: 0; max-width: 100%; padding: 2px 3px 2px 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
+.artifact-row { display: flex; align-items: center; min-width: 0; max-width: 100%; padding: 2px 3px 2px 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .artifact-row:hover { border-color: var(--ink-2); }
 .artifact-row:has(.artifact-main[aria-expanded="true"]) { border-color: var(--focus-border); background: var(--selection); }
-.artifact-main { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 28px; padding: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--ink); font-size: 12px; text-align: left; }
+.artifact-main { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 28px; padding: 5px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font-size: 12px; text-align: left; }
 .artifact-main > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 230px; }
 .artifact-main > .icon { color: var(--ink-2); }
 .artifact-row .artifact-copy { flex: none; width: 26px; height: 24px; margin-left: 3px; padding: 0; border: 0; border-left: 1px solid var(--line); border-radius: 0 3px 3px 0; background: transparent; color: var(--ink-2); }
-.artifact-count { flex: none; font-size: 10px; color: var(--ink-2); }
-.artifact-more { padding: 3px 5px; min-height: 26px; border: 0; font-size: 11px; color: var(--ink-2); background: transparent; }
+.artifact-count { flex: none; font-size: 12px; color: var(--ink-2); }
+.artifact-more { padding: 3px 5px; min-height: 26px; border: 0; font-size: 12px; color: var(--ink-2); background: transparent; }
 .turn-artifacts + .turn-changes { margin-top: 6px; }
-.md-file-reference { display: inline; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--accent); font: inherit; text-align: inherit; overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: 3px; }
+.md-file-reference { display: inline; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; overflow-wrap: anywhere; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.md-file-reference:hover { text-decoration-color: currentColor; }
 @media (max-width: 650px) {
 	.turn-artifacts { gap: 8px; }
 	.artifact-entries { gap: 3px 8px; }

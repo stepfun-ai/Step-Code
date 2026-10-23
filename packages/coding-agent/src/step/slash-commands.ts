@@ -15,7 +15,6 @@ import {
 } from "../render/btw-panel.ts";
 import { getAvailableThemes } from "../theme/theme.ts";
 import { copyToClipboard } from "../utils/clipboard.ts";
-import { buildFeedbackSessionBundle } from "./feedback/bundle.ts";
 import {
 	type FeedbackSubmitResult,
 	formatFeedbackBundleFailureDetails,
@@ -24,9 +23,9 @@ import {
 	formatFeedbackSubmittedMessage,
 	submitFeedback,
 } from "./feedback/command.ts";
-import { confirmFeedbackSubmission, neutralizeFeedbackConsentMetadata } from "./feedback/consent.ts";
-import { readFeedbackDiagnostics } from "./feedback/diagnostics.ts";
+import { confirmFeedbackSubmission } from "./feedback/consent.ts";
 import { resolveFeedbackEndpoint } from "./feedback/endpoints.ts";
+import { prepareFeedbackEvidence } from "./feedback/evidence.ts";
 import { resolveFeedbackSettings } from "./feedback/settings.ts";
 import {
 	FEEDBACK_CATEGORIES,
@@ -149,7 +148,7 @@ export function registerStepPiCommandAdapters(
 		{
 			description: "Send feedback about the current session",
 			handler: async (args, ctx) => {
-				await handleStepFeedbackCommand(args, ctx, telemetry, stepSettings, feedbackIdentity);
+				await handleStepFeedbackCommand(args, ctx, telemetry, stepSettings, feedbackIdentity, permissions);
 			},
 		},
 		telemetry,
@@ -181,6 +180,11 @@ const BTW_SYSTEM_REMINDER = [
  * credentials, no agent and no session, so there is nothing to append and
  * nothing to rewind. A main turn in flight is untouched, because this never
  * enters the agent loop at all.
+ *
+ * Presentation is the only host difference: a terminal host answers in place in
+ * a panel that can be re-read and cleared, every other host gets the answer as
+ * a notice. Both keep the same guarantee — the answer never joins the
+ * transcript the model sees.
  */
 async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
 	const question = args.trim();
@@ -188,7 +192,7 @@ async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext):
 		ctx.ui.notify("Usage: /btw <question>", "warning");
 		return;
 	}
-	if (!ctx.hasUI || ctx.mode !== "tui") {
+	if (!ctx.hasUI) {
 		ctx.ui.notify("/btw requires an interactive UI.", "warning");
 		return;
 	}
@@ -198,8 +202,6 @@ async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext):
 		return;
 	}
 
-	// Aborted when the panel closes, so esc does not leave a request in flight.
-	const controller = new AbortController();
 	const context = {
 		systemPrompt: ctx.getSystemPrompt(),
 		messages: [
@@ -212,6 +214,50 @@ async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext):
 			},
 		],
 	};
+
+	if (ctx.mode !== "tui") {
+		// A non-terminal host has no panel to close, so the request runs to
+		// completion; cancelling the turn (Esc) aborts it, and it must not
+		// outlive the command either, so the signal is combined with one the
+		// handler owns.
+		const controller = new AbortController();
+		const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+		// A host with a surface of its own (a rail tab) gets the answer there; a
+		// text-only host gets it as a notice. Either way it stays out of the
+		// conversation the model sees.
+		const present = (text: string, unavailable = false): void => {
+			if (ctx.ui.sideAnswer) {
+				ctx.ui.sideAnswer({
+					question,
+					text,
+					model: `${model.provider}/${model.id}`,
+					...(unavailable ? { unavailable: true } : {}),
+				});
+				return;
+			}
+			ctx.ui.notify(text, unavailable ? "warning" : "info", { markdown: !unavailable });
+		};
+		try {
+			if (signal.aborted) {
+				present(BTW_CANCELLED, true);
+				return;
+			}
+			const message = await ctx.modelRegistry.complete(model, context, { signal, maxTokens: 2048 });
+			btwHistory.append(question, message);
+			present(assistantText(message) || BTW_NO_ANSWER, !assistantText(message));
+		} catch (error) {
+			// A cancelled request is not a failure. Anything else — a missing key,
+			// a provider refusal — is worth showing instead of a generic line.
+			const cancelled = signal.aborted;
+			present(cancelled ? BTW_CANCELLED : (error instanceof Error && error.message) || BTW_NO_ANSWER, true);
+		} finally {
+			controller.abort();
+		}
+		return;
+	}
+
+	// Aborted when the panel closes, so esc does not leave a request in flight.
+	const controller = new AbortController();
 
 	let panel: BtwPanel | undefined;
 	const answer = ctx.modelRegistry
@@ -311,6 +357,7 @@ async function handleStepFeedbackCommand(
 	telemetry?: StepTelemetryReporter,
 	stepSettings?: () => { getStepSettings(): { feedbackEnabled?: boolean } } | undefined,
 	feedbackIdentity?: () => FeedbackIdentity,
+	permissions?: () => string,
 ): Promise<void> {
 	const feedbackSettings = resolveFeedbackSettings({
 		env: process.env,
@@ -339,10 +386,41 @@ async function handleStepFeedbackCommand(
 	const identity = feedbackIdentity?.() ?? {};
 	const shortcutComment = args.trim();
 	if (shortcutComment) {
-		const result = await submitFeedback({
-			comment: shortcutComment,
+		// `/feedback <text>` used to send the sentence alone, which is exactly the
+		// report that cannot be investigated. It now carries the same evidence as
+		// the guided flow; only the category and the comment come from the command.
+		const readAt = new Date();
+		const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+		const permission = permissions?.();
+		const evidence = await prepareFeedbackEvidence({
 			storageRootDir,
-			sessionId: ctx.sessionManager.getSessionId(),
+			...sessionSourceOf(ctx),
+			at: readAt,
+			// Nothing can receive the archive without a bundle endpoint; building it
+			// would read and compress up to 24 MiB and promise it on the review page.
+			withoutBundle: bundleEndpoint === undefined,
+			runtime: {
+				...permissionFacts(permission),
+				...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
+				...(typeof ctx.getToolCatalog === "function" ? { toolCount: ctx.getToolCatalog().length } : {}),
+			},
+		});
+		const sessionBundle = evidence.bundle;
+		if (sessionBundle?.status === "skipped") {
+			ctx.ui.notify(
+				formatFeedbackBundleSkipMessage(sessionBundle),
+				sessionBundle.reason === "too-large" || sessionBundle.reason === "unsafe" ? "warning" : "info",
+			);
+		}
+		const result = await submitFeedback({
+			category: "other",
+			comment: shortcutComment,
+			...(evidence.diagnostics ? { diagnostics: evidence.diagnostics.diagnostics } : {}),
+			...(evidence.summary ? { sessionSummary: evidence.summary } : {}),
+			...(sessionBundle ? { sessionBundle } : {}),
+			storageRootDir,
+			sessionId:
+				sessionBundle?.status === "ready" ? sessionBundle.bundle.sessionId : ctx.sessionManager.getSessionId(),
 			endpoint,
 			...(bundleEndpoint ? { bundleEndpoint } : {}),
 			telemetry,
@@ -350,6 +428,12 @@ async function handleStepFeedbackCommand(
 			surface: "tui",
 			...(identity.uid ? { uid: identity.uid } : {}),
 			...(identity.username ? { username: identity.username } : {}),
+			confirm: async (submission) =>
+				await confirmFeedbackSubmission(ctx, {
+					submission,
+					...(evidence.diagnostics ? { diagnosticsDisplayPath: evidence.diagnostics.displayPath } : {}),
+					...(sessionBundle?.status === "ready" ? { bundle: sessionBundle.bundle } : {}),
+				}),
 		});
 		notifyFeedbackResult(ctx, result);
 		return;
@@ -373,45 +457,38 @@ async function handleStepFeedbackCommand(
 	if (rawComment === undefined) return;
 	const comment = rawComment.trim();
 	const readAt = new Date();
-	const diagnosticsCandidate = await readFeedbackDiagnostics({ storageRootDir, at: readAt });
-	const bundleCandidate = bundleEndpoint
-		? await buildFeedbackSessionBundle({
-				storageRootDir,
-				sessionFile: ctx.sessionManager.getSessionFile(),
-				sessionId: ctx.sessionManager.getSessionId(),
-				at: readAt,
-			})
-		: undefined;
-	if (bundleCandidate?.status === "skipped") {
+	// One submission carries everything: the transcript, the full output files
+	// it referenced, the log tail, and the content-free session summary. Asking
+	// the user to pick what to attach produced reports that could not be
+	// investigated; the only decision left is whether to send at all.
+	// Minimal embedders (and tests) may not implement every context accessor.
+	const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+	const permission = permissions?.();
+	const evidence = await prepareFeedbackEvidence({
+		storageRootDir,
+		...sessionSourceOf(ctx),
+		at: readAt,
+		withoutBundle: bundleEndpoint === undefined,
+		runtime: {
+			...permissionFacts(permission),
+			...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
+			...(typeof ctx.getToolCatalog === "function" ? { toolCount: ctx.getToolCatalog().length } : {}),
+		},
+	});
+	const sessionBundle = evidence.bundle;
+	if (sessionBundle?.status === "skipped") {
 		ctx.ui.notify(
-			formatFeedbackBundleSkipMessage(bundleCandidate),
-			bundleCandidate.reason === "too-large" || bundleCandidate.reason === "unsafe" ? "warning" : "info",
+			formatFeedbackBundleSkipMessage(sessionBundle),
+			sessionBundle.reason === "too-large" || sessionBundle.reason === "unsafe" ? "warning" : "info",
 		);
 	}
-	const availableFiles = [
-		...(diagnosticsCandidate ? [diagnosticsCandidate.displayPath] : []),
-		...(bundleCandidate?.status === "ready" ? bundleCandidate.bundle.files.map((file) => file.name) : []),
-	].map(neutralizeFeedbackConsentMetadata);
-	let includeAttachments = false;
-	if (availableFiles.length > 0) {
-		const uploadChoice = await ctx.ui.select(
-			`UPLOAD LOGS?\n${availableFiles.join(", ")}`,
-			["Yes · Include the listed files", "No · Send feedback without files"],
-			{ overlay: true },
-		);
-		if (!uploadChoice) return;
-		includeAttachments = uploadChoice === "Yes · Include the listed files";
-	} else if (bundleCandidate?.status !== "skipped") {
-		ctx.ui.notify("No logs or session files are currently available.", "info");
-	}
-	const diagnostics = includeAttachments ? diagnosticsCandidate?.diagnostics : undefined;
-	const sessionBundle = includeAttachments && bundleCandidate?.status === "ready" ? bundleCandidate : undefined;
 	const submissionSessionId =
 		sessionBundle?.status === "ready" ? sessionBundle.bundle.sessionId : ctx.sessionManager.getSessionId();
 	const result = await submitFeedback({
 		category,
 		comment,
-		...(diagnostics ? { diagnostics } : {}),
+		...(evidence.diagnostics ? { diagnostics: evidence.diagnostics.diagnostics } : {}),
+		...(evidence.summary ? { sessionSummary: evidence.summary } : {}),
 		...(sessionBundle ? { sessionBundle } : {}),
 		storageRootDir,
 		sessionId: submissionSessionId,
@@ -425,11 +502,42 @@ async function handleStepFeedbackCommand(
 		confirm: async (submission) =>
 			await confirmFeedbackSubmission(ctx, {
 				submission,
-				...(diagnosticsCandidate ? { diagnosticsDisplayPath: diagnosticsCandidate.displayPath } : {}),
-				...(sessionBundle ? { bundle: sessionBundle.bundle } : {}),
+				...(evidence.diagnostics ? { diagnosticsDisplayPath: evidence.diagnostics.displayPath } : {}),
+				...(sessionBundle?.status === "ready" ? { bundle: sessionBundle.bundle } : {}),
 			}),
 	});
 	notifyFeedbackResult(ctx, result);
+}
+
+/**
+ * The permission tier as the report names it.
+ *
+ * `step.ts` hands this callback the preset's display label for the status bar;
+ * the report documents ids, and the CLI host already sends the id. Normalize
+ * here so one tier never arrives under two spellings.
+ */
+function permissionFacts(value: string | undefined): { permissionPreset?: string } {
+	const normalized = (value ?? "")
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z]+/gu, "-")
+		.replace(/^-|-$/gu, "");
+	return normalized === "" || normalized === "unknown" ? {} : { permissionPreset: normalized };
+}
+
+/**
+ * Where this session lives, for the evidence collector.
+ *
+ * `cwd` is the session's project, which under `-C/--cwd` is not the process's
+ * working directory. A session that has not written its file yet is found by
+ * id, and a guessed one only inside this project's folder.
+ *
+ * A minimal embedder may expose only the id; the bundle then resolves by id.
+ */
+function sessionSourceOf(ctx: ExtensionCommandContext): { sessionFile?: string; sessionId: string; cwd: string } {
+	const manager = ctx.sessionManager;
+	const sessionFile = typeof manager.getSessionFile === "function" ? manager.getSessionFile() : undefined;
+	return { ...(sessionFile ? { sessionFile } : {}), sessionId: manager.getSessionId(), cwd: ctx.cwd };
 }
 
 function notifyFeedbackResult(ctx: ExtensionCommandContext, result: FeedbackSubmitResult): void {

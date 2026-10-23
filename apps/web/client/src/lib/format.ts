@@ -14,12 +14,33 @@ export function compact(value: unknown, limit = 120): string {
 	return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
+/** Fields that name a structured argument for a reader, in preference order. */
+const READABLE_FIELDS = ["label", "title", "question", "subject", "description", "prompt", "name", "id"];
+
+/**
+ * A structured argument as words: an object by its first readable field, a list by its first
+ * item (plus how many follow). Raw JSON in a one-line row is unreadable; the details keep it whole.
+ */
+function readableArg(value: unknown): string {
+	if (Array.isArray(value)) {
+		if (!value.length) return "[]";
+		const first = readableArg(value[0]);
+		return value.length > 1 ? `${first} +${value.length - 1}` : first;
+	}
+	if (value && typeof value === "object") {
+		const record = value as Record<string, unknown>;
+		const field = READABLE_FIELDS.find((key) => typeof record[key] === "string" && record[key]);
+		return field ? String(record[field]) : "{…}";
+	}
+	return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 /** One-line `key=value` summary of a tool's arguments (legacy `toolInputSummary`). */
 export function toolInputSummary(input: unknown): string {
 	if (!input || typeof input !== "object") return "无输入摘要";
 	return compact(
 		Object.entries(input as Record<string, unknown>)
-			.map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+			.map(([key, value]) => `${key}=${readableArg(value)}`)
 			.join(" "),
 	);
 }
@@ -96,11 +117,13 @@ export function relativeTime(
 	return `${Math.floor(elapsed / 86_400_000)}d`;
 }
 
-/** 45.9K rather than 45900, so a row stays one line (legacy `formatTokens`). */
+/** 45.9K rather than 45900 and 118.6M rather than 118627K, so a row stays one line. */
 export function formatTokens(count: number): string {
 	if (count < 1000) return String(count);
 	const kilo = count / 1000;
-	return `${kilo >= 100 ? Math.round(kilo) : kilo.toFixed(1)}K`;
+	if (kilo < 999.5) return `${kilo >= 100 ? Math.round(kilo) : kilo.toFixed(1)}K`;
+	const mega = count / 1_000_000;
+	return `${mega >= 100 ? Math.round(mega) : mega.toFixed(1)}M`;
 }
 
 /** `512 B` / `1.5 KB` / `2.0 MB` (legacy `formatBytes`). */

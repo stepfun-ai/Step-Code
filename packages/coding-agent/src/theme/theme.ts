@@ -477,6 +477,83 @@ export class Theme {
 	}
 }
 
+/**
+ * A theme for hosts that render text outside a terminal: every styling helper
+ * returns its text unchanged.
+ *
+ * `ExtensionUIContext.theme` is a required capability, and extensions style
+ * status text unconditionally (`ctx.ui.theme.fg("warning", ...)`). A host with
+ * no terminal (the Web/Desktop renderer) therefore cannot answer `undefined`
+ * without turning that call into a crash; it also must not emit ANSI into HTML.
+ * Identity styling is the only answer that is both safe and honest.
+ */
+export class PlainTheme extends Theme {
+	constructor() {
+		// No palette: every styling helper below is overridden. The three keys
+		// Theme derives from other optional colors still need a value, so an empty
+		// string stands in (it maps to a plain reset and never throws).
+		super(
+			{ thinkingXhigh: "", text: "", mdHeading: "" } as unknown as Record<
+				Exclude<ThemeColor, OptionalThemeColor>,
+				string | number
+			>,
+			{ selectedBg: "", customMessageBg: "" } as unknown as Record<
+				Exclude<ThemeBg, OptionalThemeBg>,
+				string | number
+			>,
+			"256color",
+			{ name: "plain" },
+		);
+	}
+
+	override fg(_color: ThemeColor, text: string): string {
+		return text;
+	}
+
+	override bg(_color: ThemeBg, text: string): string {
+		return text;
+	}
+
+	override bold(text: string): string {
+		return text;
+	}
+
+	override italic(text: string): string {
+		return text;
+	}
+
+	override underline(text: string): string {
+		return text;
+	}
+
+	override inverse(text: string): string {
+		return text;
+	}
+
+	override strikethrough(text: string): string {
+		return text;
+	}
+
+	override getFgAnsi(_color: ThemeColor): string {
+		return "";
+	}
+
+	override getBgAnsi(_color: ThemeBg): string {
+		return "";
+	}
+
+	override getThinkingBorderColor(_level: ThinkingLevel): (str: string) => string {
+		return (str: string) => str;
+	}
+
+	override getBashModeBorderColor(): (str: string) => string {
+		return (str: string) => str;
+	}
+}
+
+/** Shared instance: styling is stateless, so hosts need not build one per call. */
+export const plainTheme = new PlainTheme();
+
 // ============================================================================
 // Theme Loading
 // ============================================================================

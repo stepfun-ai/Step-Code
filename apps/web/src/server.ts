@@ -25,13 +25,17 @@ import { browserRoute } from "./browser-routes.ts";
 import { listWorkflowChildren, readChildTranscript } from "./child-sessions.ts";
 import { type DirectoryPickerMode, pickNativeDirectory, resolveDirectoryPickerMode } from "./directory-picker.ts";
 import {
+	absoluteLocalPath,
 	completeWorkspaceFiles,
 	containedWorkspacePath,
 	listDirectory,
 	MAX_IMAGE_BYTES,
+	readLocalFile,
 	readWorkspaceFile,
 	searchWorkspaceFiles,
+	type WorkspaceFile,
 } from "./files.ts";
+import { createBranch, GitBranchError, listLocalBranches, readGitState, switchBranch } from "./git.ts";
 import { buildLoginReport, type LoginReport, loginMethods, WebLoginController } from "./login.ts";
 import { signOutStep } from "./logout.ts";
 import {
@@ -41,6 +45,7 @@ import {
 	importLocalStepgoModels,
 	listModelProviders,
 	saveModelProvider,
+	testProviderModel,
 } from "./model-providers.ts";
 import {
 	classifyAttachment,
@@ -405,6 +410,47 @@ async function pickWorkspaceFolder(request: IncomingMessage, response: ServerRes
 }
 
 /**
+ * `/api/v1/workspace/git/*`: the composer branch pill (see git.ts). `parts`
+ * starts after `git`, URL-decoded: nothing (state + branches), `switch` or
+ * `branches`. A branch operation is a write, so it answers 400 with the code
+ * and blocking paths the client renders instead of a bare message.
+ */
+async function gitRoute(
+	parts: string[],
+	method: string,
+	url: URL,
+	request: IncomingMessage,
+	response: ServerResponse,
+): Promise<void> {
+	const cwd = await knownWorkspace(url.searchParams.get("cwd"));
+	if (!cwd) return error(response, 403, "Folder is not a known workspace");
+	try {
+		if (parts.length === 0 && method === "GET") {
+			const state = await readGitState(cwd);
+			if (!state.repository) return json(response, 200, { state, branches: [] });
+			const { branches } = await listLocalBranches(cwd, state);
+			return json(response, 200, { state, branches });
+		}
+		if (parts.length === 1 && parts[0] === "switch" && method === "POST") {
+			const input = await body(request);
+			if (typeof input.branch !== "string" || !input.branch.trim()) {
+				return error(response, 400, "branch is required");
+			}
+			const create = input.create === true;
+			const state = create
+				? await createBranch(cwd, input.branch, typeof input.from === "string" ? input.from : undefined)
+				: await switchBranch(cwd, input.branch);
+			return json(response, 200, { state });
+		}
+		return error(response, 404, "Not found");
+	} catch (caught) {
+		if (!(caught instanceof GitBranchError)) throw caught;
+		// Not a repository or no git on PATH is the caller's folder, not a server fault.
+		return json(response, 400, { error: caught.message, code: caught.code, paths: caught.paths });
+	}
+}
+
+/**
  * `/api/v1/settings/*`: the settings screen's MCP, plugin, marketplace and skill
  * management (see settings.ts). `parts` starts after `settings`, URL-decoded.
  */
@@ -505,6 +551,11 @@ async function settingsRoute(
 			if (name === "discover" && !action && method === "POST") {
 				return json(response, 200, { models: await discoverProviderModels(await body(request)) });
 			}
+			// A connection test answers for the same draft in the form.
+			if (name === "test" && !action && method === "POST") {
+				await testProviderModel(await body(request));
+				return json(response, 200, { ok: true });
+			}
 			if (name && !action && method === "PUT") {
 				// A blank key field keeps the stored key; only an explicit flag removes it.
 				const input = await body(request);
@@ -560,17 +611,32 @@ async function completeFiles(cwd: string, url: URL, response: ServerResponse): P
 	}
 }
 
-async function serveWorkspaceImage(response: ServerResponse, cwd: string, inputPath: string): Promise<void> {
-	const file = await readWorkspaceFile(cwd, inputPath);
-	if (file.kind !== "image") return error(response, 415, "Only images can be served raw");
-	if (file.size > MAX_IMAGE_BYTES) return error(response, 413, "Image is too large to preview");
+async function serveImageFile(
+	response: ServerResponse,
+	target: string,
+	file: Extract<WorkspaceFile, { kind: "image" }>,
+): Promise<void> {
 	response.writeHead(200, {
 		"content-type": file.mimeType,
 		"content-length": String(file.size),
 		"cache-control": "no-store",
 		"x-content-type-options": "nosniff",
 	});
-	createReadStream(await containedWorkspacePath(cwd, inputPath)).pipe(response);
+	createReadStream(target).pipe(response);
+}
+
+async function serveWorkspaceImage(response: ServerResponse, cwd: string, inputPath: string): Promise<void> {
+	const file = await readWorkspaceFile(cwd, inputPath);
+	if (file.kind !== "image") return error(response, 415, "Only images can be served raw");
+	if (file.size > MAX_IMAGE_BYTES) return error(response, 413, "Image is too large to preview");
+	await serveImageFile(response, await containedWorkspacePath(cwd, inputPath), file);
+}
+
+async function serveLocalImage(response: ServerResponse, inputPath: string): Promise<void> {
+	const file = await readLocalFile(inputPath);
+	if (file.kind !== "image") return error(response, 415, "Only images can be served raw");
+	if (file.size > MAX_IMAGE_BYTES) return error(response, 413, "Image is too large to preview");
+	await serveImageFile(response, await absoluteLocalPath(inputPath), file);
 }
 
 const server = createServer(async (request, response) => {
@@ -675,6 +741,24 @@ const server = createServer(async (request, response) => {
 				return removed ? json(response, 200, { ok: true }) : error(response, 404, "Workspace is not registered");
 			}
 		}
+		// Read-only preview of one file named by an absolute path from message
+		// content. Same cookie authentication as every other route; unlike
+		// /workspace/* there is no folder-registry check — the path is the
+		// user's own message reference, and these routes only read a single
+		// known file, never list directories or write.
+		if (
+			parts[2] === "file" &&
+			method === "GET" &&
+			(parts.length === 3 || (parts.length === 4 && parts[3] === "raw"))
+		) {
+			const inputPath = url.searchParams.get("path") ?? "";
+			try {
+				if (parts.length === 4) return await serveLocalImage(response, inputPath);
+				return json(response, 200, await readLocalFile(inputPath));
+			} catch (caught) {
+				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
+			}
+		}
 		if (parts[2] === "workspace" && parts.length === 4 && method === "GET") {
 			const cwd = await knownWorkspace(url.searchParams.get("cwd"));
 			if (!cwd) return error(response, 403, "Folder is not a known workspace");
@@ -692,6 +776,9 @@ const server = createServer(async (request, response) => {
 				// A bad path inside a valid workspace is the caller's mistake.
 				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
 			}
+		}
+		if (parts[2] === "workspace" && parts[3] === "git") {
+			return await gitRoute(parts.slice(4).map(decodeURIComponent), method, url, request, response);
 		}
 		if (parts[2] === "settings" && parts[3]) {
 			return await settingsRoute(parts.slice(3).map(decodeURIComponent), method, url, request, response);
@@ -864,6 +951,19 @@ const server = createServer(async (request, response) => {
 					return error(response, 404, "Selection not found");
 				return json(response, 200, session.snapshot());
 			}
+			if (parts[4] === "text-inputs" && parts[5] === "response" && parts.length === 6 && method === "POST") {
+				const input = await body(request);
+				if (typeof input.id !== "string") return error(response, 400, "Text input id is required");
+				// An absent value means the user dismissed the dialog; "" is a real answer.
+				if (input.value !== undefined && typeof input.value !== "string")
+					return error(response, 400, "value must be a string");
+				if (!session.respondTextInput(input.id, input.value)) return error(response, 404, "Text input not found");
+				return json(response, 200, session.snapshot());
+			}
+			if (parts[4] === "side-answers" && parts[5] === "clear" && parts.length === 6 && method === "POST") {
+				session.clearSideAnswers();
+				return json(response, 200, { ok: true });
+			}
 			if (parts[4] === "approvals" && parts[5] === "decision" && method === "POST") {
 				const input = await body(request);
 				const verdict = input.verdict;
@@ -918,6 +1018,22 @@ const server = createServer(async (request, response) => {
 				await session.setModel(input.provider, input.modelId);
 				return json(response, 200, session.snapshot());
 			}
+			if (parts[4] === "models" && parts[5] === "refresh" && parts.length === 6 && method === "POST") {
+				// A provider added in settings must reach an open session's picker; the
+				// session's catalog is otherwise frozen at creation.
+				await session.refreshModels();
+				return json(response, 200, session.snapshot());
+			}
+			if (parts[4] === "feedback" && parts[5] === "evidence" && parts.length === 6 && method === "GET") {
+				// The consent dialog reads this before it offers to send anything: it
+				// names the evidence the submission will carry, and prepares it once.
+				try {
+					return json(response, 200, await session.prepareFeedback());
+				} catch (caught) {
+					// Nothing configured is the caller's problem to show, not a fault.
+					return error(response, 400, caught instanceof Error ? caught.message : String(caught));
+				}
+			}
 			if (parts[4] === "feedback" && method === "POST") {
 				const input = await body(request);
 				if (input.sentiment !== "up" && input.sentiment !== "down") {
@@ -925,10 +1041,14 @@ const server = createServer(async (request, response) => {
 				}
 				if (typeof input.comment !== "string") return error(response, 400, "comment is required");
 				const topic = typeof input.topic === "string" ? input.topic : undefined;
+				// The dialog sends back the token of the evidence it displayed, so the
+				// report cannot describe something the user was never shown.
+				const token = typeof input.token === "string" ? input.token : undefined;
 				const result = await session.submitFeedback({
 					sentiment: input.sentiment,
 					...(topic ? { topic } : {}),
 					comment: input.comment,
+					...(token ? { token } : {}),
 				});
 				// A rejected submission is the caller's problem to show, not a 500.
 				return json(response, result.ok ? 200 : 400, result);
@@ -944,6 +1064,28 @@ const server = createServer(async (request, response) => {
 					// from), not a server fault.
 					return error(response, 400, caught instanceof Error ? caught.message : String(caught));
 				}
+			}
+			if (parts[4] === "goal" && method === "PATCH") {
+				const input = await body(request);
+				const action = input.action;
+				if (
+					action !== "start" &&
+					action !== "pause" &&
+					action !== "resume" &&
+					action !== "edit" &&
+					action !== "clear"
+				) {
+					return error(response, 400, "action must be start, pause, resume, edit or clear");
+				}
+				const objective = typeof input.objective === "string" ? input.objective : undefined;
+				if ((action === "start" || action === "edit") && !objective?.trim()) {
+					return error(response, 400, "objective is required to start or edit a goal");
+				}
+				// Slash commands, so fire-and-forget like /messages.
+				void session
+					.controlGoal(action, objective)
+					.catch((caught) => session.publishError(caught instanceof Error ? caught.message : String(caught)));
+				return json(response, 202, { ok: true });
 			}
 			if (parts[4] === "mode" && method === "PATCH") {
 				const input = await body(request);

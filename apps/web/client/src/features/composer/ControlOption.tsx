@@ -1,7 +1,4 @@
-/**
- * Building blocks shared by the composer popovers (legacy app.js 2354-2478:
- * `setupPopover`, `controlOption`, `hint`, `note`, `groupLabel`).
- */
+/** Building blocks shared by the composer popovers (legacy app.js 2354-2478: `setupPopover`, `controlOption`, `hint`, `note`, `groupLabel`). */
 
 import type { KeyboardEvent, ReactNode } from "react";
 import { useT } from "../../i18n";
@@ -14,10 +11,12 @@ export interface ControlOptionProps<T extends string> {
 	readonly description?: string;
 	readonly meta?: readonly string[];
 	readonly selected: boolean;
-	/** Pin toggle state; only meaningful with `onPin`. */
+	/** Favourite (pin) toggle state; only meaningful with `onPin`. */
 	readonly pinned?: boolean;
 	readonly onPin?: () => void;
 	readonly onSelect: (id: T) => void;
+	/** Extra classes next to `control-option`, e.g. a per-mode accent carrier. */
+	readonly className?: string;
 }
 
 /** One row in a composer popover: icon, title, description, optional trailing slot. */
@@ -31,6 +30,7 @@ export function ControlOption<T extends string>({
 	pinned = false,
 	onPin,
 	onSelect,
+	className,
 }: ControlOptionProps<T>) {
 	const t = useT();
 	// Legacy nested a <button> here. A button inside a button is invalid HTML
@@ -48,7 +48,7 @@ export function ControlOption<T extends string>({
 	return (
 		<button
 			type="button"
-			className="control-option"
+			className={className ? `control-option ${className}` : "control-option"}
 			role="option"
 			aria-selected={selected ? "true" : "false"}
 			onClick={() => onSelect(id)}
@@ -59,6 +59,7 @@ export function ControlOption<T extends string>({
 				{description ? <span className="control-option-desc">{description}</span> : null}
 				{meta?.length ? <span className="control-option-meta">{meta.join(" · ")}</span> : null}
 			</span>
+			{selected ? <Icon name="check" size="sm" className="control-option-check" /> : null}
 			{onPin ? (
 				// biome-ignore lint/a11y/useSemanticElements: a <button> cannot nest inside the option <button>; see above.
 				<span
@@ -70,10 +71,9 @@ export function ControlOption<T extends string>({
 					onClick={pin}
 					onKeyDown={pinKey}
 				>
-					<Icon name="star" />
+					<Icon name="star" size="xs" />
 				</span>
 			) : null}
-			{selected ? <Icon name="check" size="sm" className="control-option-check" /> : null}
 		</button>
 	);
 }
@@ -81,11 +81,6 @@ export function ControlOption<T extends string>({
 /** An empty-state row for a popover that has nothing to show (legacy `hint`). */
 export function PopoverHint({ children }: { readonly children: ReactNode }) {
 	return <div className="control-popover-empty">{children}</div>;
-}
-
-/** A muted explanatory line, as opposed to an empty-state hint (legacy `note`). */
-export function PopoverNote({ children }: { readonly children: ReactNode }) {
-	return <div className="control-popover-note">{children}</div>;
 }
 
 /** A small section heading inside a popover (legacy `groupLabel`). */
@@ -141,6 +136,7 @@ export function ControlMenu({
 				className="control-popover"
 				id={popoverId}
 				role="listbox"
+				aria-label={title}
 				placement={placement}
 				open={open}
 				onClose={onClose}

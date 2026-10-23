@@ -1,13 +1,13 @@
 /**
  * `#plusMenu`: the composer's add menu behind one `+` trigger. Holds everything
  * that used to sit in the control row or only in Settings: staging attachments,
- * the session modes (goal / plan / ultraloop, single-select, moved here from
+ * the session modes (goal / plan / ultracode, single-select, moved here from
  * `#modeMenu`), and three entries with ZCode-style secondary panels — plugins,
  * skills and other sessions' context. The permission preset stays a sibling
  * button, not an entry here.
  *
- * Picking a mode is single-select and stages the mode's command line in the
- * composer (see `chooseMode`); the goal text itself is typed after `/goal `.
+ * Picking a mode is single-select and stages it as the prompt's lead chip (see
+ * `chooseMode` + `insertModeLead`); the goal text itself is typed after it.
  * The 更多 rows open their panel on hover or click; the panel closes with the
  * menu.
  */
@@ -15,32 +15,19 @@
 import { type ChangeEvent, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { type ModeId, useAppStore } from "../../state/store";
-import type { IconName } from "../../ui";
-import { Icon, IconButton, Popover } from "../../ui";
-import { addAttachments } from "./actions";
+import { Icon, IconButton, type IconName, Popover } from "../../ui";
 import { ControlOption, PopoverGroupLabel } from "./ControlOption";
+import { MODES } from "./modes";
 import { PluginsPanel, SessionsPanel, SkillsPanel } from "./PlusSubPanels";
 import type { ComposerMenuProps } from "./PolicyMenu";
-
-/** The three session modes, shared with the composer's mode chip. */
-export const MODES: ReadonlyArray<{
-	readonly id: ModeId;
-	readonly icon: IconName;
-	readonly labelKey: string;
-	readonly descKey: string;
-}> = [
-	{ id: "goal", icon: "target", labelKey: "modeGoal", descKey: "modeGoalDesc" },
-	{ id: "plan", icon: "listCheck", labelKey: "modePlan", descKey: "modePlanDesc" },
-	{ id: "ultraloop", icon: "orbit", labelKey: "modeUltraloop", descKey: "modeUltraloopDesc" },
-];
 
 /** The 更多 entries that carry a secondary panel. */
 type SubKey = "plugins" | "skills" | "sessions";
 
-const SUB_ENTRIES: ReadonlyArray<{ key: SubKey; labelKey: string }> = [
-	{ key: "plugins", labelKey: "settingsPlugins" },
-	{ key: "skills", labelKey: "slashSkills" },
-	{ key: "sessions", labelKey: "otherSessionContext" },
+const SUB_ENTRIES: ReadonlyArray<{ key: SubKey; labelKey: string; icon: IconName }> = [
+	{ key: "plugins", labelKey: "settingsPlugins", icon: "puzzle" },
+	{ key: "skills", labelKey: "slashSkills", icon: "wand" },
+	{ key: "sessions", labelKey: "otherSessionContext", icon: "layers" },
 ];
 
 export interface PlusMenuProps extends ComposerMenuProps {
@@ -52,6 +39,8 @@ export interface PlusMenuProps extends ComposerMenuProps {
 	readonly onPickPlugin: (name: string, installed: boolean) => void;
 	/** Packages the picked session's context into `#prompt` (see `Composer`). */
 	readonly onPickSession: (id: string) => void;
+	/** Stages files picked through `#attachInput` the same way as pasted or dropped ones (see `PromptInput`). */
+	readonly onFiles: (files: readonly File[]) => void;
 }
 
 export function PlusMenu({
@@ -62,6 +51,7 @@ export function PlusMenu({
 	onPickSkill,
 	onPickPlugin,
 	onPickSession,
+	onFiles: stageFiles,
 }: PlusMenuProps) {
 	const t = useT();
 	const input = useRef<HTMLInputElement | null>(null);
@@ -114,7 +104,7 @@ export function PlusMenu({
 	const onFiles = (event: ChangeEvent<HTMLInputElement>) => {
 		const files = [...(event.target.files ?? [])];
 		event.target.value = "";
-		if (files.length) void addAttachments(files);
+		if (files.length) stageFiles(files);
 	};
 
 	return (
@@ -153,6 +143,8 @@ export function PlusMenu({
 									<ControlOption
 										key={mode.id}
 										id={mode.id}
+										// The per-mode class carries the row's accent (`--mode-*` in composer.css).
+										className={`control-option--mode control-option--${mode.id}`}
 										icon={mode.icon}
 										title={t(mode.labelKey)}
 										description={t(mode.descKey)}
@@ -177,6 +169,7 @@ export function PlusMenu({
 									}
 									onMouseEnter={(event) => openSub(entry.key, event.currentTarget)}
 								>
+									<Icon name={entry.icon} className="control-option-icon" />
 									<span className="plus-row-title">{t(entry.labelKey)}</span>
 									<Icon name="chevronRight" size="2xs" className="plus-row-chevron" />
 								</button>

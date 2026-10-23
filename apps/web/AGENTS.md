@@ -208,9 +208,9 @@ When to add or change one:
   notification prose, infer per-task success from the parent tool, or add child execution controls in the inspector.
 - `features/inspector` owns the shared right rail, Summary and Context views.
   Summary uses DFSC's independent content-height floating board with a close-only
-  header and fixed compact width; it always floats out of flow and never reserves
-  a grid column, so the conversation keeps its width whether it is open or not. Do not
-  wrap it in the full-height inspector chrome used by the other panels.
+  header and fixed compact width. It floats over the conversation and reserves no
+  grid space; where there is room the reading column slides aside without
+  narrowing. Do not wrap it in the full-height inspector chrome used by the other panels.
   Summary's DFSC colors are scoped to that surface. Keep grid disclosures,
   fixed-slot completion motion and reduced-motion support; never replay a
   live completion animation for initially loaded completed history.
@@ -306,8 +306,9 @@ When to add or change one:
   expires the page cookie. Keep the launch cookie through a Step sign-out so
   Desktop reloads into `#loginGate` without a new terminal link. A Step account
   is optional: the gate opens only when no model can run (no Step credential
-  and `customModels: false`), and "Use your own models" (`#loginOwnModels`)
-  always leads past it to Settings > Models. Never remove custom providers on a
+  and `customModels: false`); the gate itself has no "Use your own models"
+  link. Signed out, the sidebar account button opens Settings > Account
+  directly (no menu), not the gate. Never remove custom providers on a
   Step sign-out. No
   balance/allowance placeholders.
 - Do not depend on `process.cwd()` being the workspace; the desktop starts the server elsewhere (macOS privacy

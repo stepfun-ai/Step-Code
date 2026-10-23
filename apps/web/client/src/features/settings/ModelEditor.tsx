@@ -92,6 +92,60 @@ interface ModelRowState {
 	readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
 }
 
+/** One row's connection test: in flight, answered, or failed with the reason. */
+type ModelTestState = { status: "testing" } | { status: "ok" } | { status: "fail"; error: string };
+
+/**
+ * The per-row connection test control: a zap button to start, a spinner while
+ * probing, then a coloured answer whose tooltip carries the reason. It answers
+ * for the declaration currently in the form, saved or not.
+ */
+function ModelTestAction({
+	state,
+	disabled,
+	onTest,
+}: {
+	readonly state: ModelTestState | undefined;
+	readonly disabled: boolean;
+	readonly onTest: () => void;
+}) {
+	const t = useT();
+	if (state?.status === "testing")
+		return (
+			<span className="settings-model-test testing" title={t("settingsModelsTest")}>
+				<Spinner />
+			</span>
+		);
+	if (state?.status === "ok")
+		return (
+			<Tooltip content={t("settingsModelsTestOk")}>
+				<span className="settings-model-test ok" role="img" aria-label={t("settingsModelsTestOk")}>
+					<Icon name="check" size="xs" />
+				</span>
+			</Tooltip>
+		);
+	if (state?.status === "fail")
+		return (
+			<Tooltip content={`${t("settingsModelsTestFailed")}: ${state.error}`}>
+				<span className="settings-model-test fail" role="img" aria-label={t("settingsModelsTestFailed")}>
+					<Icon name="close" size="xs" />
+				</span>
+			</Tooltip>
+		);
+	return (
+		<Tooltip content={t("settingsModelsTest")}>
+			<IconButton
+				icon="zap"
+				iconSize="xs"
+				className="settings-icon-action"
+				aria-label={t("settingsModelsTest")}
+				disabled={disabled}
+				onClick={onTest}
+			/>
+		</Tooltip>
+	);
+}
+
 /**
  * The thinking levels a model saved from this page offers when its own map is
  * not known. A model listing does not say which efforts a model takes, and the
@@ -418,6 +472,27 @@ export function ModelEditor({
 			models: current.models.map((row) => (row.key === key ? { ...row, ...patch } : row)),
 		}));
 
+	/** Connection tests started this visit, keyed by row key (rows are re-keyed, not reused). */
+	const [tests, setTests] = useState<Record<string, ModelTestState>>({});
+
+	// The probe uses the declaration as it stands in the form — saved or not —
+	// with a typed key winning over the stored one, mirroring the save itself.
+	const testRow = (row: ModelRowState) => {
+		if (!row.id.trim() || tests[row.key]?.status === "testing") return;
+		setTests((current) => ({ ...current, [row.key]: { status: "testing" } }));
+		void apiSend(`${MODELS_PATH}/test`, "POST", {
+			providerId: editing ? editor.id : form.id.trim(),
+			baseUrl: form.baseUrl.trim(),
+			api: form.api,
+			apiKey: form.apiKey.trim() || undefined,
+			modelId: row.id.trim(),
+		})
+			.then(() => setTests((current) => ({ ...current, [row.key]: { status: "ok" } })))
+			.catch((caught: unknown) => {
+				setTests((current) => ({ ...current, [row.key]: { status: "fail", error: errorMessage(caught) } }));
+			});
+	};
+
 	// Selected candidates become editable rows, keeping what the endpoint said and
 	// leaving any row the user already adjusted alone.
 	const addSelected = () => {
@@ -657,6 +732,11 @@ export function ModelEditor({
 											{t("settingsModelsImageInput")}
 										</label>
 									</div>
+									<ModelTestAction
+										state={tests[row.key]}
+										disabled={!row.id.trim() || !form.baseUrl.trim()}
+										onTest={() => testRow(row)}
+									/>
 									<Tooltip content={t("settingsDelete")}>
 										<button
 											type="button"

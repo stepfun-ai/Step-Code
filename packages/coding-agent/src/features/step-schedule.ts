@@ -226,6 +226,26 @@ export function getStepGoalStatus(
 	return undefined;
 }
 
+/**
+ * Latest goal on the active branch, for hosts that render it (a status strip
+ * with pause / edit / delete controls) without holding a runtime instance.
+ *
+ * Returns undefined when the branch ends in a clear snapshot, or when no goal
+ * was ever recorded.
+ */
+export function getStepGoal(
+	entries: readonly { type: string; customType?: string; data?: unknown }[],
+	sessionId: string,
+): StepGoalRecord | undefined {
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== "step-goal") continue;
+		const snapshot = parseSnapshot(entry.data, sessionId);
+		if (snapshot.valid) return snapshot.goal ? cloneGoal(snapshot.goal) : undefined;
+	}
+	return undefined;
+}
+
 function makeId(idFactory: () => string, current?: StepGoalRecord): string {
 	for (let attempt = 0; attempt < 10; attempt++) {
 		try {

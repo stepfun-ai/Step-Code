@@ -26,7 +26,9 @@
 }
 
 .selected {
-	background: var(--surface);
+	background: var(--thumb);
 	color: var(--ink);
-	box-shadow: 0 1px 3px var(--shadow);
+	/* A white thumb on a near-white track needs an edge to read as chosen. */
+	box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 6%);
+	font-weight: 500;
 }

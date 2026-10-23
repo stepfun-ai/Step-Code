@@ -155,7 +155,6 @@ export interface RuntimeContext {
 	handleClearCommand(): Promise<void>;
 	handleClipboardPaste(imageOnly?: boolean): Promise<void>;
 	handleCloneCommand(): Promise<void>;
-	handleCompactCommand(customInstructions?: string): Promise<void>;
 	handleCopyCommand(options?: { flashConfirmation?: boolean; preferSelection?: boolean }): Promise<void>;
 	handleCtrlC(): void;
 	handleCtrlD(): void;

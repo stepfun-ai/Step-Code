@@ -1,23 +1,32 @@
-/** Body of `#modelPopover` (legacy `renderModelPicker`, app.js 2606-2807). */
+/**
+ * `#modelPopover` (legacy `renderModelPicker`, app.js 2558-2807): the panel
+ * shows one provider at a time. The provider row at the top opens the provider
+ * list **beside** the model list — both panels stay visible, so a pick shows
+ * immediately what the model list switches to.
+ *
+ * The model and its effort are chosen together in this one popover because the
+ * kernel only exposes the levels a given model supports.
+ */
 
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
+import { cx } from "../../lib/format";
 import { modelKey } from "../../state/session";
-import type { ModelInfo } from "../../state/types";
 import { Icon, SearchInput, SegmentedControl } from "../../ui";
-import { ControlOption, PopoverGroupLabel, PopoverHint, PopoverNote } from "./ControlOption";
+import { ControlOption, PopoverGroupLabel, PopoverHint } from "./ControlOption";
+import type { ModelGroup } from "./models";
 import {
-	COMPACT_MODEL_COUNT,
-	compactCandidates,
+	currentProviderGroup,
 	effortLabel,
 	filterModels,
-	groupModelsBySource,
-	isStepModel,
+	groupModelsByProvider,
+	MODEL_SEARCH_THRESHOLD,
 	type ModelSource,
 	modelMeta,
+	pinFirst,
 } from "./models";
 
-export type ModelPanelView = "compact" | "all";
+export type ModelPanelView = "models" | "providers";
 
 export interface ModelPanelProps {
 	readonly source: ModelSource;
@@ -25,61 +34,87 @@ export interface ModelPanelProps {
 	readonly query: string;
 	/** Changes whenever the search field should be emptied and refocused. */
 	readonly searchEpoch: number;
+	/** Model keys the user favourited; each pins to the top of its provider's list. */
 	readonly pinned: readonly string[];
 	readonly onQuery: (query: string) => void;
 	readonly onView: (view: ModelPanelView) => void;
-	readonly onPin: (key: string) => void;
 	readonly onSelectModel: (value: string) => void;
+	readonly onPinModel: (key: string) => void;
 	readonly onSelectEffort: (level: string) => void;
+	readonly onSelectProvider: (provider: string) => void;
+	/** "管理模型": open the settings page that manages providers. */
+	readonly onManageProviders: () => void;
 }
 
 export function ModelPanel(props: ModelPanelProps) {
-	const { source, view, query, searchEpoch, pinned, onQuery, onView, onPin, onSelectModel, onSelectEffort } = props;
+	const {
+		source,
+		view,
+		query,
+		searchEpoch,
+		pinned,
+		onQuery,
+		onView,
+		onSelectModel,
+		onPinModel,
+		onSelectEffort,
+		onSelectProvider,
+		onManageProviders,
+	} = props;
 	const t = useT();
-	const models = source.models ?? [];
-	const levels = source.availableThinkingLevels ?? [];
+	const groups = groupModelsByProvider(source.models ?? []);
 	const currentKey = source.model ? modelKey(source.model) : "";
-	const active = models.find((model) => modelKey(model) === currentKey);
-	const effort = source.thinkingLevel;
-	const all = view === "all";
-	const candidates = all ? filterModels(models, query) : compactCandidates(models, pinned, active);
-	return (
+	const provider = currentProviderGroup(source, groups);
+	const models = provider ? filterModels(pinFirst(provider.models, pinned), query) : [];
+	// A large gateway needs a search field; a handful of models does not.
+	const searchable = (provider?.models.length ?? 0) > MODEL_SEARCH_THRESHOLD;
+	const main = provider ? (
 		<>
-			{all ? <ModelSearch key={searchEpoch} query={query} onQuery={onQuery} /> : null}
-			{/* Only the rows scroll, so the search above and the controls below stay in view. */}
+			<ProviderRow
+				group={provider}
+				open={view === "providers"}
+				onToggle={() => onView(view === "providers" ? "models" : "providers")}
+			/>
+			{searchable ? <ModelSearch key={searchEpoch} query={query} onQuery={onQuery} /> : null}
+			{/* Only the rows scroll, so the provider row, search and controls stay in view. */}
 			<div className="model-popover-list">
-				<ModelRows
-					candidates={candidates}
-					pinned={pinned}
-					currentKey={currentKey}
-					pinnable={all}
-					onPin={onPin}
-					onSelect={onSelectModel}
-				/>
+				<PopoverGroupLabel>{t("modelsSection")}</PopoverGroupLabel>
+				{models.length ? (
+					models.map((model) => {
+						const key = modelKey(model);
+						return (
+							<ControlOption
+								key={key}
+								id={key}
+								title={model.name || model.id}
+								// The id only adds information when the model has a display name of its own.
+								description={model.name && model.name !== model.id ? model.id : undefined}
+								meta={modelMeta(model)}
+								selected={key === currentKey}
+								pinned={pinned.includes(key)}
+								onPin={() => onPinModel(key)}
+								onSelect={onSelectModel}
+							/>
+						);
+					})
+				) : (
+					<PopoverHint>{t("noModels")}</PopoverHint>
+				)}
 			</div>
-			{all ? (
-				<MoreButton onClick={() => onView("compact")}>
-					<Icon name="chevronLeft" size="sm" />
-					<span>{t("backToModels")}</span>
-				</MoreButton>
-			) : models.length > COMPACT_MODEL_COUNT ? (
-				<MoreButton onClick={() => onView("all")}>
-					<Icon name="layers" size="sm" />
-					<span>{t("moreModels")}</span>
-					<Icon name="chevronRight" size="sm" />
-				</MoreButton>
-			) : null}
 			<div className="control-popover-section">
 				<span className="control-segmented-label">{t("thinkingEffort")}</span>
-				{levels.length ? (
+				{(source.availableThinkingLevels ?? []).length ? (
 					<SegmentedControl
 						bare
 						className="control-segmented-group"
 						role="group"
 						aria-label={t("thinkingEffort")}
 						itemClassName="control-segment"
-						items={levels.map((level) => ({ value: level, label: effortLabel(t, level) }))}
-						value={effort ?? null}
+						items={(source.availableThinkingLevels ?? []).map((level) => ({
+							value: level,
+							label: effortLabel(t, level),
+						}))}
+						value={source.thinkingLevel ?? null}
 						onChange={onSelectEffort}
 					/>
 				) : (
@@ -90,16 +125,98 @@ export function ModelPanel(props: ModelPanelProps) {
 					</div>
 				)}
 			</div>
-			{all ? null : <PopoverNote>{t("modelSwitchHint")}</PopoverNote>}
+		</>
+	) : (
+		<PopoverHint>{t("noModels")}</PopoverHint>
+	);
+	if (view !== "providers" || !provider) return main;
+	// The model card keeps its place, and the provider list floats OUT beside
+	// it — on the right by default, to the left when the window has no room
+	// there. It rides in the same popover DOM so an outside press closes both.
+	return (
+		<>
+			{main}
+			<ProviderSidePanel>
+				<div className="model-popover-list">
+					<PopoverGroupLabel>{t("chooseProvider")}</PopoverGroupLabel>
+					{groups.map((group) => (
+						<ControlOption
+							key={group.provider}
+							id={group.provider}
+							icon={group.source === "account" ? "stepPlatform" : "cube"}
+							title={providerGroupLabel(t, group)}
+							// A declared name that differs from the id is worth a sub-line; an
+							// id repeated below its own fallback title would read as a stutter.
+							description={
+								group.source === "custom" && group.name !== group.provider ? group.provider : undefined
+							}
+							selected={group.models.some((model) => modelKey(model) === currentKey)}
+							onSelect={onSelectProvider}
+						/>
+					))}
+				</div>
+				<button type="button" className="control-popover-more" onClick={onManageProviders}>
+					<Icon name="settings" size="sm" />
+					<span>{t("manageModels")}</span>
+				</button>
+			</ProviderSidePanel>
 		</>
 	);
 }
 
-/** The "more models" / "back" row, right under the model list so it never scrolls out of reach. */
-function MoreButton({ onClick, children }: { readonly onClick: () => void; readonly children: ReactNode }) {
+/**
+ * The provider list beside the model card, on its right when the window has
+ * the room and mirrored to its left when it does not. Measured in a layout
+ * effect, before paint, so the panel never flashes on the wrong side.
+ */
+function ProviderSidePanel({ children }: { readonly children: ReactNode }) {
+	const panel = useRef<HTMLDivElement | null>(null);
+	const [left, setLeft] = useState(false);
+	useLayoutEffect(() => {
+		const node = panel.current;
+		if (!node) return;
+		setLeft(node.getBoundingClientRect().right > window.innerWidth - 8);
+	}, []);
 	return (
-		<button type="button" className="control-popover-more" onClick={onClick}>
+		<div ref={panel} className={cx("model-popover-side", left && "model-popover-side-left")}>
 			{children}
+		</div>
+	);
+}
+
+/** A provider's section title, the account's keeps its product label. */
+export function providerGroupLabel(t: (key: string) => string, group: Pick<ModelGroup, "source" | "name">): string {
+	return group.source === "account" ? t("modelsFromAccount") : group.name;
+}
+
+/** The provider entry at the top of the panel: name, badge, and the way to the provider list. */
+function ProviderRow({
+	group,
+	open,
+	onToggle,
+}: {
+	readonly group: ModelGroup;
+	readonly open: boolean;
+	readonly onToggle: () => void;
+}) {
+	const t = useT();
+	return (
+		<button
+			type="button"
+			className="control-option control-option-provider"
+			aria-expanded={open ? "true" : "false"}
+			onClick={onToggle}
+		>
+			<Icon name={group.source === "account" ? "stepPlatform" : "cube"} className="control-option-icon" />
+			<span className="control-option-body">
+				<span className="control-option-title">
+					{providerGroupLabel(t, group)}
+					{group.source === "custom" ? (
+						<span className="control-option-badge">{t("providerBadgeCustom")}</span>
+					) : null}
+				</span>
+			</span>
+			<Icon name={open ? "chevron" : "chevronRight"} size="sm" className="control-option-more-indicator" />
 		</button>
 	);
 }
@@ -124,55 +241,4 @@ function ModelSearch({ query, onQuery }: { readonly query: string; readonly onQu
 			onChange={(event) => onQuery(event.target.value)}
 		/>
 	);
-}
-
-interface ModelRowsProps {
-	readonly candidates: readonly ModelInfo[];
-	readonly pinned: readonly string[];
-	readonly currentKey: string;
-	readonly pinnable: boolean;
-	readonly onPin: (key: string) => void;
-	readonly onSelect: (value: string) => void;
-}
-
-/** Model rows for one set of candidates; an "other models" heading precedes the first unpinned one. */
-function ModelRows({ candidates, pinned, currentKey, pinnable, onPin, onSelect }: ModelRowsProps) {
-	const t = useT();
-	if (!candidates.length) return <PopoverHint>{t("noModels")}</PopoverHint>;
-	const rows: ReactNode[] = [];
-	// The account's own models and the ones from models.json are different
-	// sources; a signed-in user needs to see both, each under its own heading.
-	const grouped = groupModelsBySource(candidates);
-	const labelled = grouped.length > 1;
-	for (const group of grouped) {
-		if (labelled)
-			rows.push(
-				<PopoverGroupLabel key={`source-${group.source}`}>
-					{t(group.source === "account" ? "modelsFromAccount" : "modelsFromProviders")}
-				</PopoverGroupLabel>,
-			);
-		let othersLabelled = false;
-		for (const model of group.models) {
-			const key = modelKey(model);
-			if (!labelled && !othersLabelled && !pinned.includes(key)) {
-				rows.push(<PopoverGroupLabel key="others-label">{t("others")}</PopoverGroupLabel>);
-				othersLabelled = true;
-			}
-			rows.push(
-				<ControlOption
-					key={key}
-					id={key}
-					icon={isStepModel(model) ? "stepPlatform" : "cube"}
-					title={model.name || model.id}
-					description={model.id}
-					meta={modelMeta(model)}
-					selected={key === currentKey}
-					pinned={pinnable ? pinned.includes(key) : false}
-					onPin={pinnable ? () => onPin(key) : undefined}
-					onSelect={onSelect}
-				/>,
-			);
-		}
-	}
-	return rows;
 }

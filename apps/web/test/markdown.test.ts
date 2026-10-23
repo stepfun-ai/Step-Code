@@ -149,3 +149,45 @@ test("leaves pipes without a delimiter row as text", () => {
 	assert.equal(renderMarkdown("| a | b |", labels), "| a | b |");
 	assert.equal(renderMarkdown("| a | b |\n|---|", labels), "| a | b |<br>|---|");
 });
+
+test("renders quotes and rules as blocks instead of their source characters", () => {
+	// A side answer that talks *about* Markdown used to show a literal ">" and "---".
+	const html = renderMarkdown("前文\n\n> 引用块 **加粗** 与 `code`\n> 第二行\n\n---\n\n后文", labels);
+	assert.match(html, /<blockquote>引用块 <strong>加粗<\/strong> 与 <code>code<\/code><br>第二行<\/blockquote>/);
+	assert.match(html, /<hr>/);
+	assert.equal(html.includes("&gt; 引用块"), false);
+	assert.equal(html.includes("<br>---"), false);
+});
+
+test("numbered and nested list items keep their structure", () => {
+	const html = renderMarkdown("1. 第一步\n2. 第二步\n\n- 并列\n  - 嵌套两级", labels);
+	assert.match(html, /<span class="md-li md-oli" data-n="1">第一步<\/span><span class="md-li md-oli" data-n="2">第二步<\/span>/);
+	assert.match(html, /<span class="md-li md-li-nested">嵌套两级<\/span>/);
+	// Item blocks do not gain a line break between them.
+	assert.equal(/data-n="1">第一步<\/span><br>/u.test(html), false);
+});
+
+test("a rule inside a fenced block stays code", () => {
+	const html = renderMarkdown("```\n---\n> quote\n```", labels);
+	assert.match(html, /<code>---\n&gt; quote<\/code>/);
+	assert.equal(html.includes("<hr>"), false);
+	assert.equal(html.includes("<blockquote>"), false);
+});
+
+test("passes a fence's language to the code highlighter and keeps unhighlighted fences escaped", () => {
+	const seen: string[] = [];
+	const html = renderMarkdown("```TypeScript extra\nconst a = 1;\n```", labels, {
+		highlightCode: (code, language) => {
+			seen.push(`${language}:${code}`);
+			return `<span class="tok-keyword">const</span>${code.slice(5)}`;
+		},
+	});
+	assert.deepEqual(seen, ["typescript:const a = 1;"]);
+	assert.match(html, /<code><span class="tok-keyword">const<\/span> a = 1;<\/code>/);
+	assert.match(renderMarkdown("```\n<b>\n```", labels), /<code>&lt;b&gt;<\/code>/);
+});
+
+test("ends a bare URL where the sentence resumes after its query", () => {
+	const html = renderMarkdown("看 https://git.example.com/a/tree/x?ref_type=heads这个分支上，然后加一个流水线", labels);
+	assert.match(html, /href="https:\/\/git.example.com\/a\/tree\/x\?ref_type=heads"[^>]*>[^<]*<\/a>这个分支上，然后/);
+});

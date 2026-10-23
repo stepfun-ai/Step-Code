@@ -20,26 +20,36 @@ function Card({
 	card,
 	icon,
 	offLabel,
+	status = false,
 }: {
 	readonly card: DemoCard;
-	readonly icon: IconName;
+	/** Without an icon the tile shows the card's initial, so a grid of plugins is not six identical marks. */
+	readonly icon?: IconName;
 	readonly offLabel: string;
+	/** The foot shows a state (a task's enabled/paused), never an action. */
+	readonly status?: boolean;
 }) {
 	const t = useT();
 	return (
 		<div className="market-card">
 			<div className="card-head">
-				<span className="card-icon">
-					<Icon name={icon} />
+				<span className={cx("card-icon", !icon && "card-monogram")} aria-hidden="true">
+					{icon ? <Icon name={icon} /> : card.title.slice(0, 1).toUpperCase()}
 				</span>
 				<span className="card-title">{card.title}</span>
 			</div>
 			<div className="card-desc">{card.desc}</div>
 			<div className="card-foot">
 				<span className="card-meta">{card.meta}</span>
-				<button className={cx("card-action", card.on && "installed")} type="button" disabled={card.on}>
-					{card.on ? t("enabled") : offLabel}
-				</button>
+				{status || card.on || card.planned ? (
+					<span className={cx("card-action", card.on && "installed", card.planned && "planned")}>
+						{card.on ? t("enabled") : card.planned ? t("comingSoon") : offLabel}
+					</span>
+				) : (
+					<button className="card-action" type="button">
+						{offLabel}
+					</button>
+				)}
 			</div>
 		</div>
 	);
@@ -74,7 +84,9 @@ export function CronView() {
 			</header>
 			<div className="market-grid" id="cronGrid">
 				{open
-					? CRON_DEMO.map((card) => <Card key={card.title} card={card} icon="clock" offLabel={t("paused")} />)
+					? CRON_DEMO.map((card) => (
+							<Card key={card.title} card={card} icon="clock" offLabel={t("paused")} status />
+						))
 					: null}
 			</div>
 			<footer className="market-note">{t("cronNote")}</footer>
@@ -113,9 +125,7 @@ export function MarketView() {
 				/>
 			</header>
 			<div className="market-grid" id="marketGrid">
-				{open
-					? cards.map((card) => <Card key={card.title} card={card} icon="puzzle" offLabel={t("install")} />)
-					: null}
+				{open ? cards.map((card) => <Card key={card.title} card={card} offLabel={t("install")} />) : null}
 			</div>
 			<footer className="market-note">{t("marketNote")}</footer>
 		</div>

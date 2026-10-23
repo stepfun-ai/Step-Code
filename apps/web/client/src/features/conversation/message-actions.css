@@ -17,11 +17,12 @@
 .message-action {
 	display: inline-grid;
 	place-items: center;
-	width: var(--control-h-xs);
-	height: var(--control-h-xs);
-	border-radius: var(--radius-chip);
+	/* 28px targets: these are the turn's real controls, not decoration. */
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-control);
 	color: var(--ink-3);
-	font-size: 11px;
+	font-size: 12px;
 }
 .message-action:hover {
 	background: var(--hover);
@@ -34,7 +35,7 @@
 .message-actions .message-time {
 	padding: 0 6px;
 	color: var(--ink-3);
-	font-size: 11px;
+	font-size: 12px;
 }
 .message-actions .message-usage {
 	display: inline-flex;

@@ -59,7 +59,8 @@ export const RetryRow = memo(function RetryRow({ item }: { readonly item: RetryT
 				{/* Only the live row is a status region, so a screen reader hears each new attempt but not history. */}
 				{live ? (
 					<output className="tool-verb">
-						<span className="tool-pending">{label}</span>
+						{label}
+						<span className="tool-pending" data-label={label} aria-hidden="true" />
 					</output>
 				) : (
 					<span className="tool-verb">{label}</span>

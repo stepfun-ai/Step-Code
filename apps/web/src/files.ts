@@ -122,16 +122,15 @@ function looksBinary(sample: Buffer): boolean {
 }
 
 /**
- * Read a workspace file for the preview. Never throws for "cannot show this":
- * images, binaries and oversized files come back as a kind the client renders
- * as a placeholder, so one odd file does not look like a server fault.
+ * Read one absolute file for the preview; `path` is the path the client should
+ * see (workspace-relative or absolute, depending on the calling scope). Never
+ * throws for "cannot show this": images, binaries and oversized files come
+ * back as a kind the client renders as a placeholder, so one odd file does not
+ * look like a server fault.
  */
-export async function readWorkspaceFile(cwd: string, inputPath: string): Promise<WorkspaceFile> {
-	const root = await realpath(cwd);
-	const target = await containedWorkspacePath(root, inputPath);
+async function previewFileAt(target: string, path: string): Promise<WorkspaceFile> {
 	const info = await stat(target);
 	if (!info.isFile()) throw new Error("Path is not a file");
-	const path = toPosix(relative(root, target));
 	const mimeType = imageMimeType(target);
 	if (mimeType) return { kind: "image", path, size: info.size, mimeType };
 	if (info.size > MAX_PREVIEW_BYTES) return { kind: "too-large", path, size: info.size };
@@ -145,6 +144,30 @@ export async function readWorkspaceFile(cwd: string, inputPath: string): Promise
 	} finally {
 		await handle.close();
 	}
+}
+
+/** Read a workspace file for the preview, as a path relative to the workspace root. */
+export async function readWorkspaceFile(cwd: string, inputPath: string): Promise<WorkspaceFile> {
+	const root = await realpath(cwd);
+	const target = await containedWorkspacePath(root, inputPath);
+	return previewFileAt(target, toPosix(relative(root, target)));
+}
+
+/**
+ * Normalise a client reference that names a file anywhere on disk. Unlike the
+ * workspace routes there is no containment check — the reference itself is the
+ * user's own message content, and the host already authenticates every caller.
+ */
+export async function absoluteLocalPath(inputPath: string): Promise<string> {
+	if (!inputPath || /[\u0000-\u001f]/u.test(inputPath) || !isAbsolute(inputPath))
+		throw new Error("Path must be absolute");
+	return realpath(inputPath);
+}
+
+/** Read an absolute path outside any workspace for the preview, named by its own path. */
+export async function readLocalFile(inputPath: string): Promise<WorkspaceFile> {
+	const target = await absoluteLocalPath(inputPath);
+	return previewFileAt(target, toPosix(target));
 }
 
 /**

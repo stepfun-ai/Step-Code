@@ -11,19 +11,22 @@ import {
 } from "../../state/right-panel";
 import { getState, type RightPanelId, setUi, useAppStore } from "../../state/store";
 import type { SessionInspector } from "../../state/types";
-import { IconButton, type IconName, Menu, MenuItem, Popover, ResizeHandle, Tooltip } from "../../ui";
+import { Icon, IconButton, type IconName, Menu, MenuItem, Popover, ResizeHandle, Tooltip } from "../../ui";
 import { BrowserPanel } from "../browser";
 import { ChildAgentView } from "../conversation";
 import { PreviewPanel } from "../files";
 import { applyPreviewWidth, PREVIEW_DEFAULT, restorePreviewWidth } from "../files/actions";
+import { useActiveTab } from "../files/PreviewBody";
 import { toggleTerminalDock } from "../terminal/actions";
 import { ContextPanel } from "./ContextPanel";
+import { GoalPanel } from "./GoalPanel";
 import { SummaryBoard } from "./SummaryBoard";
 import { SummaryHeader } from "./SummaryHeader";
 
 const PANELS: readonly { id: RightPanelId; icon: IconName; label: string }[] = [
 	{ id: "summary", icon: "layers", label: "rightSummary" },
 	{ id: "context", icon: "scanLine", label: "rightContext" },
+	{ id: "goal", icon: "target", label: "rightGoal" },
 	{ id: "changes", icon: "fileDiff", label: "rightChanges" },
 	{ id: "files", icon: "fileText", label: "filePreview" },
 	{ id: "subagent", icon: "bot", label: "subagents" },
@@ -34,14 +37,23 @@ export function RightToolRail() {
 	const t = useT();
 	const active = useAppStore(activeRightPanel);
 	const terminalOpen = useAppStore((state) => state.ui.terminalOpen);
+	/* The floating summary card is hidden under a mid view (market, cron), so its button must not read as pressed there. */
+	const summaryCovered = useAppStore((state) => Boolean(state.ui.midView));
+	const pressed = (id: RightPanelId) => active === id && !(id === "summary" && summaryCovered);
+	// The rail marks a goal that is still running, so the lifecycle GUI is findable.
+	const goalActive = useAppStore((state) => {
+		const goal = state.current?.goal;
+		return goal !== undefined && goal.status !== "complete";
+	});
 	const button = (panel: (typeof PANELS)[number]) => (
 		<Tooltip key={panel.id} content={t(panel.label)}>
 			<IconButton
 				data-right-panel={panel.id}
+				className={panel.id === "goal" && goalActive ? "rail-goal-active" : undefined}
 				icon={panel.icon}
 				aria-label={t(panel.label)}
 				aria-controls="rightPanel"
-				aria-pressed={active === panel.id}
+				aria-pressed={pressed(panel.id)}
 				onClick={() => toggleRightPanel(panel.id)}
 			/>
 		</Tooltip>
@@ -68,6 +80,12 @@ export function RightToolRail() {
 export function RightPanel() {
 	const t = useT();
 	const panel = useAppStore(activeRightPanel);
+	// A side answer shares the preview panel; its header names the surface, not the files.
+	const activeTab = useActiveTab();
+	const panelTitle =
+		panel === "files" && activeTab?.kind === "btw"
+			? t("rightBtw")
+			: t(PANELS.find((entry) => entry.id === panel)?.label ?? "rightTools");
 	const expanded = useAppStore((state) => state.ui.rightPanelExpanded);
 	const currentId = useAppStore((state) => state.current?.id);
 	const activityTurn = useAppStore(summaryActivityTurn);
@@ -118,7 +136,7 @@ export function RightPanel() {
 			id="rightPanel"
 			ref={ref}
 			className={`right-panel${summary ? " summary-board" : ""}${panel === "browser" ? " is-browser" : ""}${expanded ? " is-expanded" : ""}`}
-			aria-label={t(PANELS.find((entry) => entry.id === panel)?.label ?? "rightTools")}
+			aria-label={panelTitle}
 			hidden={!panel}
 		>
 			<ResizeHandle
@@ -133,11 +151,7 @@ export function RightPanel() {
 				hidden={summary}
 			/>
 			<header className="right-panel-header">
-				{summary ? (
-					<SummaryHeader data={data} />
-				) : (
-					<h2>{t(PANELS.find((entry) => entry.id === panel)?.label ?? "rightTools")}</h2>
-				)}
+				{summary ? <SummaryHeader data={data} /> : <h2>{panelTitle}</h2>}
 				{showStats && !summary ? (
 					<Tooltip content={t("refresh")}>
 						<IconButton
@@ -210,11 +224,17 @@ export function RightPanel() {
 			<div className="right-panel-scroll" hidden={panel !== "context"}>
 				<ContextPanel key={`context-${currentId ?? ""}`} data={data} />
 			</div>
+			<div className="right-panel-scroll" hidden={panel !== "goal"}>
+				<GoalPanel key={`goal-${currentId ?? ""}`} />
+			</div>
 			<PreviewPanel embedded />
 			<ChildAgentView embedded />
 			<BrowserPanel open={panel === "browser"} />
 			{panel === "subagent" && (!currentId || childParentId !== currentId) ? (
-				<p className="preview-message">{t("rightNoSubagent")}</p>
+				<div className="preview-message changes-empty">
+					<Icon name="bot" />
+					{t("rightNoSubagent")}
+				</div>
 			) : null}
 		</aside>
 	);

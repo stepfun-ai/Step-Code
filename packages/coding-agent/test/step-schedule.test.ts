@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core
 import {
 	continuationPrompt,
 	createStepGoalExtension,
+	getStepGoal,
 	type StepGoalRecord,
 	StepGoalRuntime,
 	type StepGoalSnapshot,
@@ -1101,5 +1102,40 @@ describe("goal budget boundaries", () => {
 		expect(() => runtime.setUserStatus("active")).toThrow("/goal budget");
 		runtime.update("complete");
 		expect(runtime.setTokenBudget(null)).toMatchObject({ status: "complete", tokensUsed: 10 });
+	});
+});
+
+describe("getStepGoal for host UI", () => {
+	const goal: StepGoalRecord = {
+		id: "g1",
+		sessionId: "s1",
+		objective: "audit the repository",
+		status: "active",
+		tokensUsed: 10,
+		timeUsedSeconds: 5,
+		createdAt: "2026-10-22T00:00:00.000Z",
+		updatedAt: "2026-10-22T00:00:10.000Z",
+		iteration: 1,
+	};
+	const entry = (data: unknown) => ({ type: "custom", customType: "step-goal", data });
+
+	test("reports the latest goal on the branch", () => {
+		expect(getStepGoal([entry(goal)], "s1")).toMatchObject({ id: "g1", objective: "audit the repository" });
+	});
+
+	test("reports nothing after a clear snapshot", () => {
+		const cleared = { cleared: true, sessionId: "s1", updatedAt: "2026-10-22T00:01:00.000Z" };
+		expect(getStepGoal([entry(goal), entry(cleared)], "s1")).toBeUndefined();
+	});
+
+	test("ignores a goal recorded for another session", () => {
+		expect(getStepGoal([entry(goal)], "other-session")).toBeUndefined();
+	});
+
+	test("returns a copy, so a host cannot mutate persisted state", () => {
+		const read = getStepGoal([entry(goal)], "s1");
+		expect(read).not.toBe(goal);
+		if (read) read.objective = "tampered";
+		expect(getStepGoal([entry(goal)], "s1")?.objective).toBe("audit the repository");
 	});
 });

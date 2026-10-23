@@ -10,6 +10,7 @@ import type {
 	DirectoryListing,
 	DraftModels,
 	LoginReport,
+	NoticeItem,
 	PolicyPreset,
 	SelectionRequest,
 	SessionSnapshot,
@@ -68,11 +69,11 @@ export function createStore<S extends object>(initial: S): Store<S> {
 
 /* ── App state (legacy app.js `state`, lines 1-53) ───────────────────────── */
 
-export type ThemeChoice = "system" | "light" | "dark";
+export type ThemeChoice = "system" | "light" | "dark" | "violet";
 export type ConversationView = "project" | "group";
 export type ModeId = "goal" | "plan" | "ultraloop";
 export type DirectoryPickerMode = "native" | "browse";
-export type RightPanelId = "summary" | "context" | "changes" | "files" | "subagent" | "browser";
+export type RightPanelId = "summary" | "context" | "goal" | "changes" | "files" | "subagent" | "browser";
 
 /** Lazy file tree of one workspace (legacy `state.tree`). */
 export interface TreeState {
@@ -87,15 +88,42 @@ export interface TreeState {
 	readonly resultsTruncated: boolean;
 }
 
-export interface PreviewTab {
+/** A file open in the preview rail. */
+export interface FilePreviewTab {
+	readonly kind: "file";
 	readonly cwd: string;
 	readonly path: string;
+	/** Present when the file lives outside the workspace; `path` is then absolute. */
+	readonly scope?: "local";
 	readonly file: WorkspaceFile | null;
 	readonly error: string;
 	readonly loading: boolean;
 	/** Markdown shown rendered rather than as source. */
 	readonly rendered: boolean;
 }
+
+/**
+ * A `/btw` answer in the same tab strip as files: a side question has its own
+ * thread, so it gets its own tab and the conversation stays untouched.
+ * Process memory, like the terminal's side-answer history.
+ */
+export interface SideAnswerTab {
+	readonly kind: "btw";
+	readonly id: string;
+	readonly question: string;
+	readonly text: string;
+	readonly model?: string;
+	readonly unavailable?: boolean;
+	readonly createdAt: number;
+	/**
+	 * Waiting for the model. The tab opens as soon as the question is sent, so
+	 * the reader sees where the answer will appear instead of watching the
+	 * conversation for it.
+	 */
+	readonly pending?: boolean;
+}
+
+export type PreviewTab = FilePreviewTab | SideAnswerTab;
 
 /** The preview panel's turn-changes view (features/files/ChangesView). */
 export interface ChangesViewState {
@@ -158,6 +186,10 @@ export interface UiState {
 	readonly workspacePopoverOpen: boolean;
 	/** `#accountMenu`: the sidebar footer's account popover */
 	readonly accountMenuOpen: boolean;
+	/** `#branchPopover` visible: the composer's branch switcher. */
+	readonly branchPopoverOpen: boolean;
+	/** `#branchCreateDialog` visible: creating a branch from the switcher. */
+	readonly branchCreateOpen: boolean;
 	/** `#workspaceBrowserModal` visible */
 	readonly workspaceBrowserOpen: boolean;
 	readonly workspaceRemoval: { readonly path: string; readonly pending: boolean } | null;
@@ -171,10 +203,17 @@ export interface UiState {
 	readonly workspaceMenu: { readonly cwd: string } | null;
 	/** `#sessionMenu`, open below the more button of a session row. */
 	readonly sessionMenu: { readonly sessionId: string } | null;
+	/** `#streamMenu`, open below the more button of the conversation header strip. */
+	readonly streamMenu: boolean;
 	/** `#tagPicker`, open below the tag button of a session row. `sessionId` is the legacy `state.tagTarget`. */
 	readonly tagPicker: { readonly sessionId: string } | null;
 	/** `#authBanner` visible (a request returned 401). */
 	readonly authExpired: boolean;
+	/**
+	 * `#renameSessionDialog`: naming one session. `name` seeds the field; `pending` while the rename request runs.
+	 * An in-page dialog, because the desktop host (Electron) does not implement `window.prompt`.
+	 */
+	readonly renameSession: { readonly sessionId: string; readonly name: string; readonly pending: boolean } | null;
 	/** `#logoutDialog`: confirming Log out; `pending` while `POST /api/v1/logout` runs. */
 	readonly logoutConfirm: { readonly pending: boolean } | null;
 	/** `#loginGate` visible: no model can run yet (no Step credential, no custom model), and the app waits behind it. */
@@ -183,6 +222,8 @@ export interface UiState {
 	readonly promptFocusRequest: number;
 	/** Mid-pane view covering the conversation: `#cronView` or `#marketView` (`.market-view.open`). */
 	readonly midView: "cron" | "market" | null;
+	/** Session whose snapshot is loading after a pick: its row highlights and the stream shows progress at once. */
+	readonly openingSession: string | null;
 	/** Open menu of the changes view: `turn`, `more`, or `file:<shown path>`. */
 	readonly changesMenu: string | null;
 	/** The composer's slash menu: matching commands, or the MCP server list picked from it. */
@@ -241,6 +282,10 @@ export interface AppState {
 	/** Current selection's locally observed run; cleared on replacement or stream interruption. */
 	readonly performanceRun: PerformanceRun | null;
 	readonly timelineItems: readonly TimelineItem[];
+	/** `ui.notify` output for this page load, shown after the timeline and never persisted. */
+	readonly notices: readonly NoticeItem[];
+	/** The kernel is compacting the context right now (host event, mirrored by the snapshot). */
+	readonly compacting: boolean;
 	/**
 	 * A message sent but not yet in the session entries. The composer sets it on
 	 * Enter so the stream shows the message and a thinking indicator at once,
@@ -341,6 +386,8 @@ export function createInitialState(): AppState {
 		current: null,
 		performanceRun: null,
 		timelineItems: [],
+		notices: [],
+		compacting: false,
 		pendingTurn: null,
 		bootstrapCwd: "",
 		draftCwd: "",
@@ -395,6 +442,8 @@ export function createInitialState(): AppState {
 			searchOpen: false,
 			workspacePopoverOpen: false,
 			accountMenuOpen: false,
+			branchPopoverOpen: false,
+			branchCreateOpen: false,
 			workspaceBrowserOpen: false,
 			workspaceRemoval: null,
 			settingsPage: null,
@@ -402,12 +451,15 @@ export function createInitialState(): AppState {
 			settingsDialog: null,
 			workspaceMenu: null,
 			sessionMenu: null,
+			streamMenu: false,
 			tagPicker: null,
 			authExpired: false,
+			renameSession: null,
 			logoutConfirm: null,
 			loginRequired: false,
 			promptFocusRequest: 0,
 			midView: null,
+			openingSession: null,
 			changesMenu: null,
 			slashMenu: null,
 			fileCompletionOpen: false,

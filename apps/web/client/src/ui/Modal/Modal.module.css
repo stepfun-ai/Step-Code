@@ -6,13 +6,13 @@
 	display: grid;
 	place-items: center;
 	padding: 16px;
-	background: rgb(0 0 0 / 28%);
-	backdrop-filter: blur(5px);
+	background: var(--scrim);
+	backdrop-filter: blur(6px) saturate(120%);
 }
 
 .dialog {
 	border: 1px solid var(--line);
-	border-radius: var(--radius-card);
+	border-radius: var(--radius-dialog);
 	background: var(--surface);
-	box-shadow: 0 24px 64px var(--shadow);
+	box-shadow: var(--elev-3);
 }

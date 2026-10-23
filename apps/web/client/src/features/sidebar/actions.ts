@@ -52,7 +52,7 @@ export function toggleWorkspaceMenu(cwd: string): void {
 		closeWorkspaceMenu(true);
 		return;
 	}
-	setUi({ workspaceMenu: { cwd }, sessionMenu: null, tagPicker: null });
+	setUi({ workspaceMenu: { cwd }, sessionMenu: null, tagPicker: null, streamMenu: false });
 }
 
 export function closeWorkspaceMenu(restoreFocus = false): void {
@@ -68,7 +68,7 @@ export function closeWorkspaceMenu(restoreFocus = false): void {
 /** Open or close `#sessionMenu` for a session (legacy `openSessionMenu`, 1291-1329). */
 export function toggleSessionMenu(sessionId: string): void {
 	const open = getState().ui.sessionMenu?.sessionId === sessionId;
-	setUi({ sessionMenu: open ? null : { sessionId }, workspaceMenu: null, tagPicker: null });
+	setUi({ sessionMenu: open ? null : { sessionId }, workspaceMenu: null, tagPicker: null, streamMenu: false });
 }
 
 /** Legacy `closeSessionMenu` (1287-1289). */
@@ -79,7 +79,7 @@ export function closeSessionMenu(): void {
 /** Open or close `#tagPicker` for a session (legacy `openTagPicker`, 1022-1060). */
 export function toggleTagPicker(sessionId: string): void {
 	const open = getState().ui.tagPicker?.sessionId === sessionId;
-	setUi({ tagPicker: open ? null : { sessionId }, workspaceMenu: null, sessionMenu: null });
+	setUi({ tagPicker: open ? null : { sessionId }, workspaceMenu: null, sessionMenu: null, streamMenu: false });
 }
 
 export function closeTagPicker(): void {
@@ -135,4 +135,11 @@ export function setSessionTag(sessionId: string, color: TagColor | null): void {
 export function createGroupAndTag(sessionId: string, color: TagColor, name: string): void {
 	setState((state) => ({ groups: [...state.groups, { key: color, name }] }));
 	setSessionTag(sessionId, color);
+}
+
+/** Rename the group a tag colour stands for; rows and the filter chip follow the colour, not the name. */
+export function renameGroup(key: TagColor, name: string): void {
+	setState((state) => ({
+		groups: state.groups.map((group) => (group.key === key ? { ...group, name } : group)),
+	}));
 }

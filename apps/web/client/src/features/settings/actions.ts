@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api";
+import { refreshModelCatalog } from "../../state/session";
 import { getState, type SettingsEditor, type SettingsPage, setUi } from "../../state/store";
 
 export function openSettings(page: SettingsPage = "general"): void {
@@ -14,6 +15,9 @@ export function openSettings(page: SettingsPage = "general"): void {
 
 export function closeSettings(): void {
 	setUi({ settingsPage: null, settingsEditor: null, settingsDialog: null });
+	// A provider added or removed in the models page must reach the picker this
+	// return trip, without starting a new conversation to see it.
+	void refreshModelCatalog();
 }
 
 export function showSettingsPage(page: SettingsPage): void {
