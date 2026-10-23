@@ -371,7 +371,7 @@ describe("AgentSession compaction characterization", () => {
 			reason: "threshold",
 			aborted: false,
 			willRetry: false,
-			errorMessage: "Auto-compaction failed: summary generator blew up",
+			errorMessage: expect.stringContaining("Auto-compaction failed: summary generator blew up"),
 		});
 		expect(failedEvents).toEqual([
 			expect.objectContaining({
@@ -380,7 +380,7 @@ describe("AgentSession compaction characterization", () => {
 				aborted: false,
 				willRetry: false,
 				fromExtension: false,
-				errorMessage: "Auto-compaction failed: summary generator blew up",
+				errorMessage: expect.stringContaining("Auto-compaction failed: summary generator blew up"),
 			}),
 		]);
 	});

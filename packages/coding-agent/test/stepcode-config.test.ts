@@ -174,6 +174,56 @@ describe("StepCode config compatibility", () => {
 		expect(config).toMatchObject({ defaultProvider: "proxy", defaultModel: "selected" });
 	});
 
+	test("reads and writes the subagent background settings in the injected config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-"));
+		roots.push(root);
+		const configPath = join(root, "stepcode", "config.json");
+		const agentDir = join(root, "stepcode", "agent");
+		const projectDir = join(root, "project");
+		await mkdir(agentDir, { recursive: true });
+		await mkdir(projectDir, { recursive: true });
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: { p: { api: "anthropic-messages", baseUrl: "https://proxy.example/v1", models: [{ id: "m" }] } },
+				activeModel: "m",
+				subagent: { background: false, backgroundTimeoutSeconds: 900 },
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(projectDir, agentDir), config!);
+		expect(manager.getStepSettings()).toMatchObject({
+			subagentBackground: false,
+			subagentBackgroundTimeoutSeconds: 900,
+		});
+
+		manager.setEffectiveStepSettings({ ...manager.getStepSettings(), subagentBackgroundTimeoutSeconds: 1_800 });
+		const saved = JSON.parse(readFileSync(configPath, "utf8")) as { subagent: Record<string, unknown> };
+		expect(saved.subagent).toEqual({ background: false, backgroundTimeoutSeconds: 1_800 });
+		expect(() =>
+			manager.setEffectiveStepSettings({ ...manager.getStepSettings(), subagentBackgroundTimeoutSeconds: 10 }),
+		).toThrow(/subagentBackgroundTimeoutSeconds/u);
+	});
+
+	test("ignores an out-of-range subagent timeout in the injected config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-bad-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		const agentDir = join(root, "agent");
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: { p: { api: "anthropic-messages", baseUrl: "https://proxy.example/v1", models: [{ id: "m" }] } },
+				activeModel: "m",
+				subagent: { backgroundTimeoutSeconds: 5 },
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, agentDir), config!);
+		expect(manager.getStepSettings().subagentBackgroundTimeoutSeconds).toBeUndefined();
+	});
+
 	test("keeps StepCode model and permission reads and writes in the injected config", async () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-authority-"));
 		roots.push(root);

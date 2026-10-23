@@ -1,7 +1,20 @@
 /** Step-only slash command adapters built on Pi's public extension actions. */
 
+import type { Message } from "@step-harness/providers";
 import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "../core/extensions/types.ts";
+import { convertToLlm } from "../core/messages.ts";
+import { sessionEntryToContextMessages } from "../core/session-manager.ts";
+import {
+	assistantText,
+	BTW_CANCELLED,
+	BTW_NO_ANSWER,
+	BtwHistory,
+	type BtwPanel,
+	type BtwPanelOutcome,
+	createBtwPanel,
+} from "../render/btw-panel.ts";
 import { getAvailableThemes } from "../theme/theme.ts";
+import { copyToClipboard } from "../utils/clipboard.ts";
 import { buildFeedbackSessionBundle } from "./feedback/bundle.ts";
 import {
 	type FeedbackSubmitResult,
@@ -120,6 +133,18 @@ export function registerStepPiCommandAdapters(
 
 	registerTrackedCommand(
 		pi,
+		"btw",
+		{
+			description: "Ask a quick side question without interrupting the main conversation",
+			handler: async (args, ctx) => {
+				await handleStepBtwCommand(args, ctx);
+			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
 		"feedback",
 		{
 			description: "Send feedback about the current session",
@@ -132,6 +157,120 @@ export function registerStepPiCommandAdapters(
 }
 
 type RegisteredCommandOptions = Omit<RegisteredCommand, "name" | "sourceInfo">;
+
+/**
+ * Prior side questions, for this process only.
+ *
+ * Claude Code keeps the same store on the session object and only the next side
+ * question reads it. Module scope here because the command adapters are
+ * registered once per process and a side question is never concurrent.
+ */
+const btwHistory = new BtwHistory();
+
+const BTW_SYSTEM_REMINDER = [
+	"<system-reminder>This is a side question from the user. You must answer this question directly in a single response.",
+	"Tools are unavailable here. Do not continue, plan, or edit anything for the main task.</system-reminder>",
+].join("\n");
+
+/**
+ * `/btw <question>`: one side question that leaves the conversation untouched.
+ *
+ * Claude Code forks the message list, runs a single turn with `skipTranscript`,
+ * throws the returned messages away, and files the answer under `btwHistory`.
+ * `modelRegistry.complete()` is Step's equivalent: same provider, same
+ * credentials, no agent and no session, so there is nothing to append and
+ * nothing to rewind. A main turn in flight is untouched, because this never
+ * enters the agent loop at all.
+ */
+async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	const question = args.trim();
+	if (!question) {
+		ctx.ui.notify("Usage: /btw <question>", "warning");
+		return;
+	}
+	if (!ctx.hasUI || ctx.mode !== "tui") {
+		ctx.ui.notify("/btw requires an interactive UI.", "warning");
+		return;
+	}
+	const model = ctx.model;
+	if (!model) {
+		ctx.ui.notify("/btw needs a model. Pick one with /model.", "warning");
+		return;
+	}
+
+	// Aborted when the panel closes, so esc does not leave a request in flight.
+	const controller = new AbortController();
+	const context = {
+		systemPrompt: ctx.getSystemPrompt(),
+		messages: [
+			...forkBtwMessages(ctx),
+			...btwHistory.toMessages(),
+			{
+				role: "user" as const,
+				content: [{ type: "text" as const, text: `${BTW_SYSTEM_REMINDER}\n\n${question}` }],
+				timestamp: Date.now(),
+			},
+		],
+	};
+
+	let panel: BtwPanel | undefined;
+	const answer = ctx.modelRegistry
+		.complete(model, context, { signal: controller.signal, maxTokens: 2048 })
+		.then((message) => {
+			btwHistory.append(question, message);
+			panel?.setAnswer(assistantText(message));
+			panel?.finish();
+			return message;
+		})
+		.catch(() => {
+			panel?.setAnswer(controller.signal.aborted ? BTW_CANCELLED : BTW_NO_ANSWER);
+			panel?.finish();
+			return undefined;
+		});
+
+	await ctx.ui.custom<BtwPanelOutcome>((tui, theme, _keybindings, done) => {
+		panel = createBtwPanel({
+			question,
+			theme,
+			tui,
+			history: btwHistory.list(),
+			onClose: (outcome) => {
+				panel = undefined;
+				done(outcome);
+			},
+			onCopy: (text) => {
+				void copyToClipboard(text);
+			},
+			onClearHistory: () => btwHistory.clear(),
+			onChange: () => tui.requestRender(),
+		});
+		return panel;
+	});
+
+	panel = undefined;
+	controller.abort();
+	// Settle the request so a rejection cannot surface as an unhandled rejection
+	// after the panel is gone.
+	await answer;
+}
+
+/**
+ * The conversation so far, as the side question's starting point.
+ *
+ * Claude Code's fork sanitizes by dropping a trailing incomplete assistant
+ * message. Same thing here: a final assistant message whose tool calls have no
+ * results is rejected by providers that validate message order, and a main turn
+ * still streaming is exactly when that happens.
+ */
+function forkBtwMessages(ctx: ExtensionCommandContext): Message[] {
+	const agentMessages = ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+	const messages = convertToLlm(agentMessages);
+	const last = messages.at(-1);
+	if (last?.role === "assistant" && last.content.some((block) => block.type === "toolCall")) {
+		return messages.slice(0, -1);
+	}
+	return messages;
+}
 
 function registerTrackedCommand(
 	pi: ExtensionAPI,

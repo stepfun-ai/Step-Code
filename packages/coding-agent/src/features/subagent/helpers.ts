@@ -137,19 +137,9 @@ export function isRecordValue(value: unknown): value is Record<string, unknown> 
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/**
- * Session-id prefixes for the child processes Step spawns: `subagent` lanes and
- * `workflow` agents (both run through `runStepSubagentProcess`).
- *
- * A child runs in the parent's cwd, so its transcript lands in the same per-cwd
- * session directory as the parent's, and a single fan-out can add a dozen of
- * them. The prefix is the only marker separating the two, so the resume picker
- * filters on it to keep the list to sessions a user actually started.
- */
-export const SUBAGENT_SESSION_ID_PREFIX = "subagent-";
-export const WORKFLOW_SESSION_ID_PREFIX = "workflow-";
-
-/** True for a session written by a spawned child agent, not by a user. */
-export function isChildAgentSessionId(sessionId: string): boolean {
-	return sessionId.startsWith(SUBAGENT_SESSION_ID_PREFIX) || sessionId.startsWith(WORKFLOW_SESSION_ID_PREFIX);
-}
+export {
+	isChildAgentSession,
+	isChildAgentSessionId,
+	SUBAGENT_SESSION_ID_PREFIX,
+	WORKFLOW_SESSION_ID_PREFIX,
+} from "../../core/child-session.ts";

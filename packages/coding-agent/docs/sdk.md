@@ -471,7 +471,7 @@ const customRuntime = await ModelRuntime.create({
   modelsPath: "/my/app/models.json",
 });
 
-// Or inject any pi-ai CredentialStore
+// Or inject any `@step-harness/providers` CredentialStore
 const credentials = new InMemoryCredentialStore();
 const inMemoryRuntime = await ModelRuntime.create({ credentials });
 
@@ -1176,7 +1176,7 @@ createAgentSessionRuntime
 AgentSessionRuntime
 
 // Auth and Models
-ModelRuntime // implements pi-ai Models and owns credential storage
+ModelRuntime // implements the providers-package Models and owns credential storage
 ModelRegistry // synchronous extension compatibility facade
 CredentialSynchronizationError
 resolveCliModel

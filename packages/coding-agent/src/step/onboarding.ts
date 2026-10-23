@@ -1,5 +1,7 @@
 /** Shared Step login profiles and the side-effect-free onboarding reducer. */
 
+import type { StepCliLoginState } from "@step-harness/providers/step-provider";
+
 export const STEP_LOGIN_PROFILE_IDS = ["step_plan", "step_plan_oversea", "platform_cn", "platform_oversea"] as const;
 
 export type StepLoginProfileId = (typeof STEP_LOGIN_PROFILE_IDS)[number];
@@ -131,6 +133,10 @@ export type StepLoginEvent =
 			readonly type: "credential";
 			readonly apiKey: string;
 			readonly uid?: string;
+			/** Account session, when the backend delivered a usable one. */
+			readonly login?: StepCliLoginState;
+			/** Why a delivered session was unusable; the API key is still valid. */
+			readonly loginError?: string;
 	  }
 	| { readonly type: "type"; readonly text: string }
 	| { readonly type: "backspace" }

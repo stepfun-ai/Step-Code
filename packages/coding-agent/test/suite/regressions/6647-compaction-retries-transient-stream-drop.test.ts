@@ -4,7 +4,8 @@ import {
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
 } from "@step-harness/providers";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionManager } from "../../../src/core/session-manager.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
 /**
@@ -168,6 +169,93 @@ describe("#6647 compaction retries transient summarization failures", () => {
 		expect(starts).toHaveLength(2);
 		expect(ends).toHaveLength(1);
 		expect(ends[0]).toMatchObject({ type: "summarization_retry_finished" });
+		expect(harness.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "custom",
+				customType: "step-compaction-failure",
+				data: expect.objectContaining({
+					diagnostics: expect.objectContaining({ attempts: 3, observedMaxTokens: undefined, stopReason: "error" }),
+				}),
+			}),
+		);
+	});
+
+	it("persists effective request budgets without prompts or credentials on a length failure", async () => {
+		const harness = await createHarness({ withConfiguredAuth: false });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const originalMessages = harness.sessionManager.buildSessionContext().messages;
+		harness.session.agent.streamFunction = (model, _context, options) => {
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(async () => {
+				await options?.onPayload?.(
+					{ max_output_tokens: 16, input: "private-prompt-fixture", apiKey: "private-key-fixture" },
+					model,
+				);
+				stream.push({
+					type: "done",
+					reason: "length",
+					message: {
+						...fauxAssistantMessage("partial summary must not be saved", { stopReason: "length" }),
+						usage: createUsage(10),
+					},
+				});
+			});
+			return stream;
+		};
+		const persisted = SessionManager.create(harness.tempDir, harness.tempDir);
+		for (const entry of harness.sessionManager.getEntries()) {
+			if (
+				entry.type === "message" &&
+				(entry.message.role === "user" || entry.message.role === "assistant" || entry.message.role === "toolResult")
+			)
+				persisted.appendMessage(entry.message);
+		}
+		const append = vi
+			.spyOn(harness.sessionManager, "appendCustomEntry")
+			.mockImplementation((type, data) => persisted.appendCustomEntry(type, data));
+		await expect(harness.session.compact()).rejects.toThrow("observedPayloadMaxTokens=16");
+		append.mockRestore();
+		const entry = SessionManager.open(persisted.getSessionFile()!)
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "step-compaction-failure");
+		expect(entry).toMatchObject({
+			data: {
+				version: 1,
+				reason: "manual",
+				diagnostics: {
+					model: harness.getModel().id,
+					contextWindow: harness.getModel().contextWindow,
+					modelMaxTokens: harness.getModel().maxTokens,
+					selectedMaxTokens: harness.getModel().maxTokens,
+					observedMaxTokens: 16,
+					attempts: 1,
+					stopReason: "length",
+				},
+			},
+		});
+		expect(JSON.stringify(entry)).not.toMatch(/private-prompt-fixture|private-key-fixture|partial summary/);
+		expect(harness.sessionManager.buildSessionContext().messages).toEqual(originalMessages);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+	});
+
+	it("retains the original failure when diagnostic persistence fails", async () => {
+		const harness = await createHarness({ withConfiguredAuth: false });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		useScriptedStreamFn(harness, [
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "insufficient_quota" }),
+		]);
+		const append = vi.spyOn(harness.sessionManager, "appendCustomEntry").mockImplementation(() => {
+			throw new Error("disk unavailable");
+		});
+		try {
+			await expect(harness.session.compact()).rejects.toThrow(
+				/insufficient_quota[\s\S]*Could not persist compaction diagnostics/,
+			);
+		} finally {
+			append.mockRestore();
+		}
 	});
 
 	it("aborts an in-flight retry backoff via abortCompaction", async () => {
@@ -192,5 +280,10 @@ describe("#6647 compaction retries transient summarization failures", () => {
 		await expect(compactPromise).rejects.toThrow();
 		const compactionEnd = harness.eventsOfType("compaction_end").at(-1);
 		expect(compactionEnd).toMatchObject({ aborted: true });
+		expect(
+			harness.sessionManager
+				.getEntries()
+				.some((entry) => entry.type === "custom" && entry.customType === "step-compaction-failure"),
+		).toBe(false);
 	});
 });

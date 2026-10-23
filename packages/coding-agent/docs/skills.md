@@ -31,7 +31,7 @@ Step loads skills from:
 - Project (only after the project is trusted):
   - `.stepcode/skills/`
   - `.agents/skills/` and `.claude/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
-- Packages: `skills/` directories or `pi.skills` entries in `package.json`
+- Packages: `skills/` directories, or `pi.skills` entries in `package.json` (the manifest key keeps its legacy name; see [Packages](packages.md))
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
 
@@ -236,4 +236,4 @@ cd /path/to/brave-search && npm install
 ## Skill Repositories
 
 - [Anthropic Skills](https://github.com/anthropics/skills) - Document processing (docx, pdf, pptx, xlsx), web development
-- [Step Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription
+- [Skills collection](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription

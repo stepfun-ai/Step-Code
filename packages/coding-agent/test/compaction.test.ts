@@ -371,8 +371,9 @@ describe("getSummarizationFailure length-stop diagnostics", () => {
 	it("surfaces the token cap in the length-stop message when provided", () => {
 		const message = getSummarizationFailure(lengthResponse, "Summarization", 19660);
 		expect(message).toContain("hit the token cap");
-		expect(message).toContain("19660-token output cap");
-		expect(message).toContain("raise reserveTokens");
+		expect(message).toContain("19660-token selected output cap");
+		expect(message).toContain("check model output limits");
+		expect(message).not.toContain("raise reserveTokens");
 	});
 
 	it("omits the cap note when maxTokens is not provided", () => {

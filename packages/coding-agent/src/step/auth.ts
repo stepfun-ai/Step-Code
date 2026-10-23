@@ -13,6 +13,7 @@ import type { Credential } from "@step-harness/providers";
 import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import { STEP_PROVIDER_ID, STEP_STATIC_REFRESH_TOKEN } from "../features/step-provider/index.ts";
 import { LEGACY_RENAMED_CONFIG_DIR, resolveStepConfigRoot, resolveStepHomeDir } from "./environment.ts";
+import { clearStepLoginState } from "./login-state.ts";
 
 /** Current Pi-shaped credential path under the StepCode agent directory. */
 export function getStepAuthPath(env: Record<string, string | undefined> = process.env): string {
@@ -125,6 +126,8 @@ export async function migrateLegacyStepCredential(
 export interface StepLogoutResult {
 	removedNative: boolean;
 	removedLegacy: boolean;
+	/** True when no account session remains on disk. */
+	removedLoginState: boolean;
 	nativePath: string;
 	legacyPath: string;
 	remainingSource: "environment" | null;
@@ -136,6 +139,7 @@ export async function logoutStepCredentials(
 		env?: Record<string, string | undefined>;
 	} = {},
 ): Promise<StepLogoutResult> {
+	const env = options.env ?? process.env;
 	const nativePath = normalize(options.nativePath ?? getStepAuthPath());
 	const legacyPath = normalize(options.legacyPath ?? getLegacyStepAuthPath());
 	let removedNative = false;
@@ -172,10 +176,16 @@ export async function logoutStepCredentials(
 		}
 	}
 
-	const env = options.env ?? process.env;
+	// The account session is cleared last, and its failure never stops the API key
+	// from being removed. Whether anything is left on disk is reported, because a
+	// sign-out that claims success while a long-lived refresh token survives is
+	// worse than one that says otherwise.
+	const removedLoginState = await clearStepLoginState(env).catch(() => false);
+
 	return {
 		removedNative,
 		removedLegacy,
+		removedLoginState,
 		nativePath,
 		legacyPath,
 		remainingSource: env.STEP_API_KEY?.trim() ? "environment" : null,

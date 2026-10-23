@@ -21,7 +21,7 @@ Step loads themes from:
 - Built-in: `dark`, `light`, `sage`, `step-blue`, `step-violet`, `step-violet-light`
 - Global: `~/.stepcode/agent/themes/*.json`
 - Project: `.stepcode/themes/*.json` (only after the project is trusted)
-- Packages: `themes/` directories or `pi.themes` entries in `package.json`
+- Packages: `themes/` directories, or `pi.themes` entries in `package.json` (the manifest key keeps its legacy name; see [Packages](packages.md))
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
 

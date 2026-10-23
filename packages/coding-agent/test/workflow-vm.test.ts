@@ -94,6 +94,16 @@ test("exposes JSON args, metadata, and every host primitive", async () => {
 	expect(calls.agents[0]?.options).toEqual({ label: "worker" });
 });
 
+test("phase() rejects a second argument instead of silently dropping it", async () => {
+	const { host, calls } = createHost();
+	// Built at runtime so the static pre-run check cannot see it; the VM guard must.
+	await expect(
+		runInQuickJs(`const p = phase; p("Review", async () => { await agent("never"); }); return 1;`, undefined, host),
+	).rejects.toThrow("phase(title) takes one string");
+	expect(calls.phases).toEqual([]);
+	expect(calls.agents).toEqual([]);
+});
+
 test("reports an unlimited budget as null", async () => {
 	const { host } = createHost({ budgetTotal: () => null });
 	const result = await runInQuickJs(`return { total: budget.total };`, undefined, host);

@@ -39,8 +39,8 @@ Configure via `package.json`:
 ```json
 {
   "piConfig": {
-    "name": "pi",
-    "configDir": ".pi"
+    "name": "step",
+    "configDir": ".stepcode"
   }
 }
 ```

@@ -44,6 +44,7 @@ import type {
 	QuickJSRuntime,
 	QuickJSWASMModule,
 } from "quickjs-emscripten-core";
+import { PHASE_USAGE_MESSAGE } from "./script-lint.ts";
 import type { WorkflowJsonSchema, WorkflowMeta, WorkflowTaskFailure } from "./types.ts";
 
 const MAX_SCRIPT_BYTES = 128 * 1024;
@@ -485,7 +486,10 @@ globalThis.pipeline = async (items, ...stages) => {
     return value;
   }));
 };
-globalThis.phase = (title) => { __workflow_phase_ref(String(title === undefined ? "" : title)); };
+globalThis.phase = (...args) => {
+  if (args.length > 1) throw new TypeError(${JSON.stringify(PHASE_USAGE_MESSAGE)});
+  __workflow_phase_ref(String(args[0] === undefined ? "" : args[0]));
+};
 globalThis.log = (message) => { __workflow_log_ref(String(message === undefined ? "" : message)); };
 globalThis.budget = Object.freeze({
   total: __workflow_total,

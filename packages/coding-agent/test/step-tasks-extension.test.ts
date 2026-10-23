@@ -1008,7 +1008,8 @@ test("context shows current task state without changing canonical messages or ta
 	await run(h.tools, "task_update", { taskId: "1", status: "completed" }, ctx);
 	const updatedEntries = h.sessionManager.getEntries().length;
 	const second = (await h.emit({ type: "context", messages: first.messages }, ctx)) as typeof first;
-	expect(second.messages.filter((m) => m.customType === "step-tasks-state")).toHaveLength(1);
+	expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+	expect(second.messages.filter((m) => m.customType === "step-tasks-state")).toHaveLength(2);
 	expect(parse(second).counts).toMatchObject({ total: 2, completed: 1, pending: 1 });
 	expect(parse(second).openTasks).toEqual([expect.objectContaining({ id: "2", blockedBy: [] })]);
 	expect(h.sessionManager.getEntries()).toHaveLength(updatedEntries);
