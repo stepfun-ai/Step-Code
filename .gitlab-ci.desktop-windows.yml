@@ -9,11 +9,12 @@
 # latest.yml to match, and records CI_WIN_EXE_PATH and friends.
 #
 # Only fast (unsigned) is offered: qa and release sign the installer with an EV
-# token from build/tools/win/signing/ and Vault, which is Phase 2. pack-win.cjs
+# token from build/tools/win/signing/ and Vault, which is not wired up yet (the
+# release-tag installer is unsigned for the same reason). pack-win.cjs
 # itself fails on --sign rather than shipping an unsigned installer under a
 # signed profile's name.
 #
-# Phase 1 runs this on the macOS Tart runner as a cross-build: electron-builder's
+# This runs on the macOS Tart runner as a cross-build: electron-builder's
 # nsis target is platform independent, and this repo's packer is only
 # electron-builder (no Rust/Tauri installer, no EV token), so no Windows box is
 # needed to produce an unsigned installer. It was built and collected locally on
@@ -62,12 +63,16 @@ stepcode-desktop-package-windows:
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
     ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
     # Falcon stages the collected installers outside the workspace by default:
-    # they must survive `git clean` and are ~150MB per installer. Phase 1 has no
-    # distribution job, so the installer has to be a job artifact — point the
-    # staging root inside build/ (gitignored) to make it downloadable. Phase 3's
-    # upload jobs must use the same value if they run on this machine.
+    # they must survive `git clean` and are ~150MB per installer. This ad-hoc
+    # build is not uploaded anywhere (releases upload through desktop_upload_*),
+    # so the installer has to be a job artifact — point the staging root inside
+    # build/ (gitignored) to make it downloadable.
     CI_WIN_STAGING_ROOT: '$CI_PROJECT_DIR/build/desktop-staging'
   rules:
+    # A tag-creating run is not a packaging run; release tags package Windows in
+    # stepcode-desktop-release-windows (.gitlab-ci.desktop-release.yml).
+    - if: '$DESKTOP_BUMP != "none"'
+      when: never
     - if: '$TASK_TYPE == "package" && $BUILD_PLATFORM == "windows" && $BUILD_PROFILE == "fast" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
       when: always
     - when: never

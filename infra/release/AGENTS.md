@@ -12,6 +12,7 @@ Inherits the [root rules](../../AGENTS.md). This directory provides local releas
 ## Boundaries and invariants
 
 - This repository generates local artifacts only. Do not add uploads, protected tags, private CI, object-store SDKs, credentials, or internal publication services.
+  Exception: private CI branches (which drop `check:public-boundary`) carry the StepCode Desktop release scripts `desktop-next-version.mjs`, `desktop-tag-release.mjs` and `desktop-release.mjs` (TOS upload); they must not reach the public branch.
 - When changing targets, check `release-targets.json`, the bundle's `TARGETS`, build scripts, and both installers together. Do not assume these files are generated from a single source.
 - Use existing build identity for Step version / channel / commit, independently of compatibility-package versions. Keep version formats, archive names, manifest URLs, and checksums consistent.
 - Preserve `tar.gz` for macOS / Linux and `zip` for Windows, with actual `step` / `step.exe` output names.

@@ -6,11 +6,13 @@
 # build/ci/ with falcon's <name>-<version>_<build>-macos-<arch>.dmg shape and
 # writes CI_ELECTRON_DMG_*_PATH into build/ci/build_internal.env.
 #
-# Phase 1 is unsigned. falcon's configure_desktop_profile maps the profile:
+# This job is the unsigned build (macOS gets an ad-hoc signature, no
+# notarization). falcon's configure_desktop_profile maps the profile:
 #   fast → FAST_BUILD=1, SKIP_NOTARIZE=1, arch=arm64
 #   qa   → SKIP_NOTARIZE=1, arch=all (arm64 + x64)
-# The signed/notarized release profile needs the macOS signing template and Vault
-# credentials, which is Phase 2 — so it is not offered here.
+# The Developer ID signed and notarized build is .gitlab-ci.desktop-macos-signing.yml:
+# release tags always use it, and MACOS_SIGNING_ENABLED=true selects it for a
+# Run pipeline, in which case this job steps aside.
 #
 # ELECTRON_MIRROR / ELECTRON_BUILDER_BINARIES_MIRROR: electron-builder downloads
 # the Electron zip and its nsis/dmg helper bundles itself, over github.com by
@@ -38,8 +40,10 @@ stepcode-desktop-package:
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
     ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
   rules:
-    # Phase 1: fast and qa only, and only from Run pipeline / the platform's API
-    # trigger. release needs a Developer ID and notarization (Phase 2).
+    # A signed run (MACOS_SIGNING_ENABLED) and a release-tag run (DESKTOP_BUMP)
+    # are other pipelines' jobs; tag pipelines never match the source check.
+    - if: '$MACOS_SIGNING_ENABLED == "true" || $DESKTOP_BUMP != "none"'
+      when: never
     - if: '$TASK_TYPE == "package" && ($BUILD_PLATFORM == "macos" || $BUILD_PLATFORM == "electron") && ($BUILD_PROFILE == "fast" || $BUILD_PROFILE == "qa") && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
       when: always
     - when: never
@@ -108,8 +112,8 @@ stepcode-desktop-package:
       - build_archive/
       - build/ci/ci.env
       - build/ci/build_internal.env
-      # Phase 1 has no distribution job, so the installer has to be a job
-      # artifact. dist-electron keeps electron-builder's own name, so a bad
+      # Ad-hoc builds are not uploaded anywhere, so the installer has to be a
+      # job artifact. dist-electron keeps electron-builder's own name, so a bad
       # rename on falcon's side cannot lose the dmg entirely.
       - dist-electron/*.dmg
       - dist-electron/*.zip

@@ -31,8 +31,11 @@
 // every platform (node-pty, @step-harness/pi-tui), so one server tree serves
 // all targets; nothing is rebuilt.
 //
-// Builds are unsigned (internal testing): macOS gets an ad-hoc signature so
-// Apple Silicon can run it; Windows executables are not signed.
+// Signing: with CSC_LINK set (the release pipeline's Developer ID .p12) the mac
+// app is signed with hardened runtime and the entitlements in resources/;
+// notarization is a separate pipeline stage (.gitlab-ci.desktop-macos-signing.yml
+// on the CI branch). Without it, macOS gets an ad-hoc signature so Apple
+// Silicon can run the app. Windows executables are not signed.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -67,12 +70,14 @@ const RELEASE_ENVELOPE_FILE = "stepcode-release.json";
  * and the web host, not the workspace package version (`0.84.4`, which tracks
  * the upstream Pi packages). Same sources as `packages/coding-agent/src/step/
  * version.ts`: a release tag in STEPCODE_BUILD_VERSION, else the root
- * package.json version (which matches its STEPCODE_FALLBACK_VERSION).
+ * package.json version (which matches its STEPCODE_FALLBACK_VERSION). A
+ * Desktop release tag (`desktop-vX.Y.Z`, see infra/release/desktop-tag-release.mjs)
+ * is accepted too, so CI can pass its tag through unchanged.
  */
 function productVersion() {
 	const tag = process.env.STEPCODE_BUILD_VERSION?.trim()
 		.replace(/^refs\/tags\//iu, "")
-		.replace(/^(?:step|pi)-v/iu, "")
+		.replace(/^(?:step|pi|desktop)-v/iu, "")
 		.replace(/^v(?=\d)/iu, "");
 	const value = tag || readJson(join(repoRoot, "package.json")).version;
 	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(value)) {

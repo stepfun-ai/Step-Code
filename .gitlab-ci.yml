@@ -1,36 +1,59 @@
-# Desktop installers (macOS dmg, Windows NSIS) for StepCode, built by
-# catalyst/falcon-mobile-pipeline.
+# StepCode Desktop: installers (macOS dmg, Windows NSIS), Developer ID signing
+# and notarization, and tag-driven releases to TOS.
 #
 # This file lives only on CI branches: scripts/check-public-boundary.mjs forbids
-# .gitlab-ci.yml in the public tree, exactly as feat/stepcode-web-mvp-gh-build and
-# feat/stepcode-desktop-mvp-build do, and those branches drop
-# `pnpm run check:public-boundary` from `check` for the same reason. Everything
-# this file drives (scripts/package-mac-ci.mjs, scripts/pack-win.cjs, the two job
-# files) is also on the public branch.
+# .gitlab-ci.yml and object-store upload code in the public tree, exactly as
+# feat/stepcode-web-mvp-gh-build and feat/stepcode-desktop-mvp-build do, and
+# those branches drop `pnpm run check:public-boundary` from `check` for the
+# same reason.
 #
-# falcon provides the Run pipeline form (stages/variables.yml) and the job
-# before_script (stages/before_script.yml): it clones the toolchain into
-# ./pipeline, normalises BUILD_PROFILE for desktop (fast → FAST_BUILD=1,
-# SKIP_NOTARIZE=1, CI_ELECTRON_ARCH=arm64; qa → SKIP_NOTARIZE=1, arch=all),
-# and persists that into build/ci/ci.env. The two job files below then only
-# build and collect.
+# Two ways in:
 #
-# falcon's package.yml / publish.yml are deliberately NOT included: they add FE
-# callbacks and TOS uploads which need platform project tokens and Vault
-# credentials. Phase 1 only produces installers; distribution is Phase 3.
+# 1. Release (tag-driven; the version comes only from the tag).
+#    Run pipeline on DESKTOP_RELEASE_BRANCH (or the default branch) with
+#    DESKTOP_BUMP = patch | minor | major and nothing else. desktop_tag_release
+#    (infra/release/desktop-tag-release.mjs) creates the next protected tag
+#    desktop-vX.Y.Z on that commit; the first one is desktop-v0.1.0. The tag
+#    pipeline then
+#      - signs and notarizes the mac app for arm64 and x64
+#        (.gitlab-ci.desktop-macos-signing.yml) and wraps each stapled app into
+#        a dmg + zip,
+#      - packages the Windows NSIS installer (unsigned: EV signing is not wired
+#        up yet),
+#      - uploads all three installers to the test bucket automatically
+#        (desktop_upload_test), and to the production bucket on a manual click
+#        (desktop_upload_prod). desktop/latest.json is uploaded last in each
+#        bucket, so the channel never names a file that is not there yet.
+#    Every installer, app.getVersion() and the packaged stepcode-release.json
+#    carry X.Y.Z; nothing in the tree is edited for a release.
 #
-# Run pipeline (CI/CD → Run pipeline):
-#   TASK_TYPE=package
-#   BUILD_PLATFORM=macos | windows   (electron is a legacy alias for macos)
-#   BUILD_PROFILE=fast              (macOS also accepts qa: both arches)
-#   CI_PKG_SKIP_DEPLOYMENT=1
-#   CI_BUILD_NOTIF=0
-#   CI_PIPELINE_REF=main            (only change it to test a falcon branch)
+# 2. Ad-hoc packaging through falcon (catalyst/falcon-mobile-pipeline).
+#    Run pipeline with
+#      TASK_TYPE=package
+#      BUILD_PLATFORM=macos | windows   (electron is a legacy alias for macos)
+#      BUILD_PROFILE=fast               (macOS also accepts qa: both arches)
+#      CI_PKG_SKIP_DEPLOYMENT=1
+#      CI_BUILD_NOTIF=0
+#      CI_PIPELINE_REF=main             (only change it to test a falcon branch)
+#    gives unsigned installers as job artifacts. Add MACOS_SIGNING_ENABLED=true
+#    (macOS, protected branch) to get the signed and notarized arm64 + x64 build
+#    instead, at the root package.json version; nothing is uploaded.
 #
 # TASK_TYPE, BUILD_PLATFORM, BUILD_PROFILE, CI_PKG_SKIP_DEPLOYMENT and
-# CI_BUILD_NOTIF come from stages/variables.yml. Do not redeclare them in a
-# local `variables:` block: that replaces the upstream entry wholesale and drops
-# the values from the Run pipeline dropdown.
+# CI_BUILD_NOTIF come from falcon's stages/variables.yml. Do not redeclare them
+# in the `variables:` block below: that replaces the upstream entry wholesale
+# and drops the values from the Run pipeline dropdown. falcon's package.yml /
+# publish.yml are not included: they add FE callbacks and falcon's own TOS
+# uploads; releases here go through infra/release/desktop-release.mjs.
+#
+# Credentials are CI variables, never values in this file:
+#   upload, test bucket:  STEP_TOS_ENDPOINT, STEP_TOS_REGION, STEP_TOS_BUCKET,
+#                         STEP_TOS_ACCESS_KEY, STEP_TOS_SECRET_KEY, STEP_TOS_PREFIX
+#   upload, production:   STEP_TOS_PROD_ACCESS_KEY, STEP_TOS_PROD_SECRET_KEY
+#                         (bucket and endpoint below)
+#   tagging:              STEP_RELEASE_TOKEN (protected; api scope, allowed to
+#                         create the protected desktop-v* tags)
+#   signing/notarization: see .gitlab-ci.desktop-macos-signing.yml
 #
 # The default branch's version of this file also runs the CLI/TUI lint, test,
 # tag, package, publish and notify jobs. When merging, keep those jobs and the
@@ -38,30 +61,55 @@
 
 workflow:
   rules:
-    # Desktop packaging is manual: it starts from Run pipeline and from the
-    # platform's API trigger. A branch push would create a pipeline whose only
-    # jobs are all ruled out, which GitLab reports as failed and which then
-    # blocks the merge request.
+    # Release tag pipelines.
+    - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
+    # Everything else starts from Run pipeline or the platform's API trigger. A
+    # branch push would create a pipeline whose jobs are all ruled out, which
+    # GitLab reports as failed and which then blocks the merge request.
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
 
 include:
   - project: 'catalyst/falcon-mobile-pipeline'
     ref: main
     file: 'stages/variables.yml'
-  # Brings the job before_script, the .scripts.initial-env / .scripts.import-ci-env
-  # references and the stages list (package, upload, test, publish).
+  # Brings the global before_script (falcon toolchain clone and prepare.sh), the
+  # .scripts.initial-env / .scripts.import-ci-env references and a stages list.
+  # Jobs that do not use falcon set `before_script: []`.
   - project: 'catalyst/falcon-mobile-pipeline'
     ref: main
     file: 'stages/before_script.yml'
   - local: '.gitlab-ci.desktop-macos.yml'
   - local: '.gitlab-ci.desktop-windows.yml'
-  # Developer ID signing + notarization. Off unless MACOS_SIGNING_ENABLED=true on a
-  # protected ref; it brings its own pinned include of falcon's signing template.
+  # Developer ID signing + notarization: release tags, or MACOS_SIGNING_ENABLED.
+  # It brings its own pinned include of falcon's signing template.
   - local: '.gitlab-ci.desktop-macos-signing.yml'
+  - local: '.gitlab-ci.desktop-release.yml'
 
-# falcon's before_script.yml declares package/upload/test/publish; the notarization
-# topology adds three more, and the last include wins on this key.
+variables:
+  # Branch whose pipelines may create a Desktop tag, besides the default branch.
+  DESKTOP_RELEASE_BRANCH: 'feat/stepcode-desktop-ci-pipeline-build'
+  # Inert by default: a release is started explicitly from the Run pipeline
+  # form, which creates the tag and leaves the rest to the tag pipeline.
+  DESKTOP_BUMP:
+    value: 'none'
+    options:
+      - 'none'
+      - 'patch'
+      - 'minor'
+      - 'major'
+    description: 'Create the next StepCode Desktop tag (desktop-vX.Y.Z) and release it; leave none for a normal pipeline.'
+  MACOS_SIGNING_ENABLED:
+    value: 'false'
+    options:
+      - 'false'
+      - 'true'
+    description: 'Ad-hoc macOS packaging only: sign with the Developer ID and notarize instead of the unsigned fast/qa build. Needs a protected branch. Release tags always sign.'
+
+# falcon's before_script.yml declares package/upload/test/publish; the release
+# and notarization topology add their own, and the last declaration wins.
 stages:
+  - verify
+  - tag
   - package
   - macos-checkpoint
   - macos-notary-submit
