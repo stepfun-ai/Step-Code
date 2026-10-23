@@ -14,7 +14,8 @@
 # artifacts, as falcon's contract asks.
 #
 # When the jobs exist (protected refs only, see .stepcode-macos-signing-rules):
-#   - release tags desktop-vX.Y.Z: always; the version is the tag's, and
+#   - releases (Run pipeline with DESKTOP_BUMP on the release branch, or a
+#     pipeline on a desktop-vX.Y.Z tag): always; the version is the tag's, and
 #     desktop_upload_test publishes the result (.gitlab-ci.desktop-release.yml);
 #   - Run pipeline with MACOS_SIGNING_ENABLED=true, TASK_TYPE=package,
 #     BUILD_PLATFORM=macos and DESKTOP_BUMP=none: a signed build at the root
@@ -25,6 +26,8 @@
 # the jobs to the macos-signing / macos-notarization environments):
 #   CSC_LINK              file variable, Developer ID Application .p12
 #   CSC_KEY_PASSWORD      password for that .p12
+#   (or CSC_NAME, when the runner's keychain already holds the identity;
+#   `dist:mac --signed-app` stops before building when neither is set)
 #   APPLE_API_KEY         file variable, App Store Connect API key (.p8)
 #   APPLE_API_KEY_ID      key id
 #   APPLE_API_ISSUER      issuer uuid (Team key; omit for an individual key)
@@ -50,20 +53,24 @@ variables:
     # unprotected refs anyway.
     - if: '$CI_COMMIT_REF_PROTECTED != "true"'
       when: never
+    # Releases: the same two rules as .desktop-release-rules.
+    - if: '$DESKTOP_BUMP != "none" && $CI_COMMIT_BRANCH && ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $DESKTOP_RELEASE_BRANCH) && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
     - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
     # An explicit signed macOS build: not a Windows run, not a tag-creating run,
     # and only from Run pipeline / the API trigger.
     - if: '$MACOS_SIGNING_ENABLED == "true" && $DESKTOP_BUMP == "none" && $TASK_TYPE == "package" && ($BUILD_PLATFORM == "macos" || $BUILD_PLATFORM == "electron") && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
     - when: never
 
-# Release tags carry the version; an ad-hoc signed build keeps the root
-# package.json version. Exported here because these jobs do not run falcon's
-# initial-env, so CI_BUILD_APP_VERSION is never set for them.
+# Releases carry the tag's version (DESKTOP_TAG from desktop_tag_release's
+# dotenv, or the tag the pipeline runs on); an ad-hoc signed build keeps the
+# root package.json version. Exported here because these jobs do not run
+# falcon's initial-env, so CI_BUILD_APP_VERSION is never set for them.
 .stepcode-macos-version:
   script:
     - |
-      if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        export STEPCODE_BUILD_VERSION="${CI_COMMIT_TAG#desktop-v}"
+      tag="${DESKTOP_TAG:-${CI_COMMIT_TAG:-}}"
+      if [ -n "${tag}" ]; then
+        export STEPCODE_BUILD_VERSION="${tag#desktop-v}"
         export STEPCODE_BUILD_COMMIT="${CI_COMMIT_SHA}"
       fi
       echo "StepCode Desktop version: ${STEPCODE_BUILD_VERSION:-root package.json}"
@@ -73,7 +80,10 @@ variables:
     - .macos-signed-app-checkpoint
     - .stepcode-macos-signing-rules
   stage: macos-checkpoint
-  needs: []
+  needs:
+    - job: desktop_tag_release
+      artifacts: true
+      optional: true
   interruptible: false
   # A build here mutates nothing outside the job: no falcon scripts, no staging.
   variables:
@@ -179,6 +189,9 @@ stepcode-desktop-notary-finalize-arm64:
   variables:
     MACOS_ARCH: 'arm64'
   needs:
+    - job: desktop_tag_release
+      artifacts: true
+      optional: true
     - job: stepcode-desktop-checkpoint-arm64
       artifacts: true
     - job: stepcode-desktop-notary-submit-arm64
@@ -202,6 +215,9 @@ stepcode-desktop-notary-finalize-x64:
   variables:
     MACOS_ARCH: 'x64'
   needs:
+    - job: desktop_tag_release
+      artifacts: true
+      optional: true
     - job: stepcode-desktop-checkpoint-x64
       artifacts: true
     - job: stepcode-desktop-notary-submit-x64

@@ -9,12 +9,12 @@
 #
 # Two ways in:
 #
-# 1. Release (tag-driven; the version comes only from the tag).
+# 1. Release (tag-driven; the version comes only from the tag), one pipeline.
 #    Run pipeline on DESKTOP_RELEASE_BRANCH (or the default branch) with
 #    DESKTOP_BUMP = patch | minor | major and nothing else. desktop_tag_release
-#    (infra/release/desktop-tag-release.mjs) creates the next protected tag
-#    desktop-vX.Y.Z on that commit; the first one is desktop-v0.1.0. The tag
-#    pipeline then
+#    (infra/release/desktop-tag-release.mjs) pushes the next protected tag
+#    desktop-vX.Y.Z on that commit (the first one is desktop-v0.1.0) with
+#    ci.skip, and hands its version to the rest of this same pipeline, which
 #      - signs and notarizes the mac app for arm64 and x64
 #        (.gitlab-ci.desktop-macos-signing.yml) and wraps each stapled app into
 #        a dmg + zip,
@@ -25,7 +25,10 @@
 #        (desktop_upload_prod). desktop/latest.json is uploaded last in each
 #        bucket, so the channel never names a file that is not there yet.
 #    Every installer, app.getVersion() and the packaged stepcode-release.json
-#    carry X.Y.Z; nothing in the tree is edited for a release.
+#    carry X.Y.Z; nothing in the tree is edited for a release. A pipeline run
+#    on an existing desktop-v* tag repeats that release (e.g. after a failure).
+#    The tag is pushed without a pipeline of its own because a tag pipeline
+#    would run as the token's bot user, which cannot read the falcon includes.
 #
 # 2. Ad-hoc packaging through falcon (catalyst/falcon-mobile-pipeline).
 #    Run pipeline with
@@ -51,8 +54,8 @@
 #                         STEP_TOS_ACCESS_KEY, STEP_TOS_SECRET_KEY, STEP_TOS_PREFIX
 #   upload, production:   STEP_TOS_PROD_ACCESS_KEY, STEP_TOS_PROD_SECRET_KEY
 #                         (bucket and endpoint below)
-#   tagging:              STEP_RELEASE_TOKEN (protected; api scope, allowed to
-#                         create the protected desktop-v* tags)
+#   tagging:              STEP_RELEASE_TOKEN (protected; api + write_repository
+#                         scopes, allowed to create the protected desktop-v* tags)
 #   signing/notarization: see .gitlab-ci.desktop-macos-signing.yml
 #
 # The default branch's version of this file also runs the CLI/TUI lint, test,
@@ -61,7 +64,7 @@
 
 workflow:
   rules:
-    # Release tag pipelines.
+    # A pipeline on an existing release tag (a pushed tag, or Run pipeline on it).
     - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
     # Everything else starts from Run pipeline or the platform's API trigger. A
     # branch push would create a pipeline whose jobs are all ruled out, which

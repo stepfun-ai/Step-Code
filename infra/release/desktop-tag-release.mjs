@@ -1,16 +1,24 @@
 #!/usr/bin/env node
 
 /**
- * Create the next StepCode Desktop tag (`desktop-vX.Y.Z`) through the GitLab API.
+ * Create the next StepCode Desktop tag (`desktop-vX.Y.Z`) on the commit this
+ * pipeline builds, and hand its version to the rest of the pipeline.
  *
  * Desktop releases are tag-driven: this is the only place a Desktop version is
- * chosen. Every other Desktop job reads `CI_COMMIT_TAG`, so a build that never
- * had a tag cannot publish one.
+ * chosen. The release jobs of the same pipeline read the version from the
+ * `--dotenv` file this script writes (a GitLab dotenv report), so a build that
+ * never got a tag cannot publish one.
  *
- * Needs a project access token with the `api` scope in STEP_RELEASE_TOKEN, and
- * permission to create protected tags for `desktop-v*`.
+ * The tag is pushed with `-o ci.skip`: a tag pipeline would run as the token's
+ * bot user, which cannot read the falcon includes, and would build the same
+ * release twice. Tags are listed through the API.
+ *
+ * Needs a project access token in STEP_RELEASE_TOKEN with the `api` and
+ * `write_repository` scopes, allowed to create the protected `desktop-v*` tags.
  */
 
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { computeNextDesktopTag, DESKTOP_BUMP_KINDS } from "./desktop-next-version.mjs";
@@ -55,18 +63,36 @@ export async function fetchDesktopTagNames({ apiUrl, projectId, token }) {
 	return names;
 }
 
-export async function createDesktopTag({ apiUrl, projectId, token, tag, ref, message }) {
-	const url = `${projectUrl(apiUrl, projectId)}/repository/tags`;
-	const query = new URLSearchParams({ tag_name: tag, ref, message });
-	const response = await fetch(`${url}?${query}`, {
-		method: "POST",
-		headers: { "PRIVATE-TOKEN": token, accept: "application/json" },
+/** Remote URL carrying the token as password; never printed. */
+export function tokenRemoteUrl({ serverUrl, projectPath, token }) {
+	const url = new URL(`${String(serverUrl).replace(/\/+$/u, "")}/${projectPath}.git`);
+	url.username = "release-tagger";
+	url.password = token;
+	return url.toString();
+}
+
+/**
+ * Push `<commit>:refs/tags/<tag>` (a lightweight tag) without creating a
+ * pipeline for it. Output is redacted because git echoes the remote URL on
+ * some failures.
+ */
+export function pushDesktopTag({ remoteUrl, token, tag, commit, run = spawnSync }) {
+	const result = run("git", ["push", "--porcelain", "-o", "ci.skip", remoteUrl, `${commit}:refs/tags/${tag}`], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
 	});
-	if (!response.ok) {
-		const body = await response.text().catch(() => "");
-		throw failure("POST", url, response, body, "check api scope and protected-tag permissions for desktop-v*");
+	const redact = (text) => String(text ?? "").replaceAll(token, "***");
+	if (result.error) throw new Error(`git push ${tag} failed: ${redact(result.error.message)}`);
+	if (result.status !== 0) {
+		throw new Error(
+			`git push ${tag} failed (exit ${result.status}); check write_repository scope and protected-tag permissions for desktop-v*\n${redact(result.stderr).slice(0, 400)}`,
+		);
 	}
-	return response.json();
+}
+
+/** GitLab dotenv report: the release jobs get DESKTOP_TAG / DESKTOP_VERSION as variables. */
+export function desktopDotenv(tag) {
+	return `DESKTOP_TAG=${tag}\nDESKTOP_VERSION=${tag.slice("desktop-v".length)}\n`;
 }
 
 function parseArgs(argv) {
@@ -87,7 +113,7 @@ async function main() {
 	const bump = String(args.get("bump") ?? "").trim();
 	if (!DESKTOP_BUMP_KINDS.includes(bump)) {
 		process.stderr.write(
-			`Usage: node infra/release/desktop-tag-release.mjs --bump <${DESKTOP_BUMP_KINDS.join("|")}> [--dry-run]\n`,
+			`Usage: node infra/release/desktop-tag-release.mjs --bump <${DESKTOP_BUMP_KINDS.join("|")}> [--dotenv <file>] [--dry-run]\n`,
 		);
 		process.exitCode = 1;
 		return;
@@ -95,9 +121,9 @@ async function main() {
 	const token = requiredEnv("STEP_RELEASE_TOKEN");
 	const apiUrl = requiredEnv("CI_API_V4_URL");
 	const projectId = requiredEnv("CI_PROJECT_ID");
-	// The tag points at the commit this pipeline tested; the tag pipeline then
+	// The tag points at the commit this pipeline checked; the same pipeline then
 	// builds and publishes exactly that commit.
-	const ref = requiredEnv("CI_COMMIT_SHA");
+	const commit = requiredEnv("CI_COMMIT_SHA");
 	const tags = await fetchDesktopTagNames({ apiUrl, projectId, token });
 	const { latestTag, nextTag } = computeNextDesktopTag({ tags, bump });
 	process.stderr.write(`latest Desktop tag: ${latestTag ?? "none"}\n`);
@@ -106,7 +132,14 @@ async function main() {
 		process.stdout.write(`${nextTag}\n`);
 		return;
 	}
-	await createDesktopTag({ apiUrl, projectId, token, tag: nextTag, ref, message: `StepCode Desktop ${nextTag}` });
+	const remoteUrl = tokenRemoteUrl({
+		serverUrl: requiredEnv("CI_SERVER_URL"),
+		projectPath: requiredEnv("CI_PROJECT_PATH"),
+		token,
+	});
+	pushDesktopTag({ remoteUrl, token, tag: nextTag, commit });
+	const dotenv = args.get("dotenv");
+	if (typeof dotenv === "string") writeFileSync(dotenv, desktopDotenv(nextTag));
 	process.stdout.write(`${nextTag}\n`);
 }
 

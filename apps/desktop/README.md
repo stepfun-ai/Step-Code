@@ -177,13 +177,16 @@ still unsigned (EV signing is not wired up).
 
 ## Releases
 
-Releases are tag-driven, on the private CI branch (`.gitlab-ci.yml`, `.gitlab-ci.desktop-release.yml`):
+Releases are tag-driven, on the private CI branch (`.gitlab-ci.yml`, `.gitlab-ci.desktop-release.yml`), and one
+pipeline does all of it:
 
 1. **Run pipeline** on the release branch (or the default branch) with `DESKTOP_BUMP` = `patch` / `minor` /
-   `major`. `desktop_tag_release` (`infra/release/desktop-tag-release.mjs`) creates the next protected
-   `desktop-vX.Y.Z` tag on that commit; the first tag is `desktop-v0.1.0`.
-2. The tag pipeline builds that version (`STEPCODE_BUILD_VERSION=X.Y.Z`): signed and notarized mac arm64 / x64 dmgs
-   and the Windows x64 NSIS installer. Nothing in the tree is bumped.
+   `major`. `desktop_tag_release` (`infra/release/desktop-tag-release.mjs`) pushes the next protected
+   `desktop-vX.Y.Z` tag on that commit (the first is `desktop-v0.1.0`) without a pipeline of its own, and passes the
+   version to the following jobs.
+2. The same pipeline builds that version (`STEPCODE_BUILD_VERSION=X.Y.Z`): signed and notarized mac arm64 / x64 dmgs
+   and the Windows x64 NSIS installer. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats
+   its release.
 3. `desktop_upload_test` (automatic) and then `desktop_upload_prod` (manual) run
    `infra/release/desktop-release.mjs --upload`: the same installers go to `desktop/<v>/` in the test and the
    production TOS bucket, with `SHA256SUMS`, `manifest.json` and finally the channel pointer `desktop/latest.json`.

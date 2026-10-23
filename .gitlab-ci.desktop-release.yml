@@ -2,6 +2,13 @@
 # and the uploads to TOS. See the header of .gitlab-ci.yml for the flow; the mac
 # installers of a release come from .gitlab-ci.desktop-macos-signing.yml.
 #
+# A release is one pipeline: Run pipeline with DESKTOP_BUMP on the release
+# branch. desktop_tag_release pushes the tag (without a pipeline of its own) and
+# passes DESKTOP_TAG / DESKTOP_VERSION to the release jobs as a dotenv report.
+# Running a pipeline on an existing desktop-v* tag repeats that release from
+# the tag (version from CI_COMMIT_TAG). Every release job carries the same two
+# rules, `.desktop-release-rules`; keep .stepcode-macos-signing-rules in step.
+#
 # Bucket layout (prefix STEP_TOS_PREFIX), written by infra/release/desktop-release.mjs:
 #   desktop/<v>/StepCode-<v>-mac-arm64.dmg   immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-x64.dmg     immutable, Developer ID signed + notarized
@@ -28,15 +35,24 @@ variables:
       - node_modules/
     policy: pull-push
 
-# The version of a release pipeline comes only from its tag.
+.desktop-release-rules:
+  rules:
+    - if: '$DESKTOP_BUMP != "none" && $CI_COMMIT_BRANCH && ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $DESKTOP_RELEASE_BRANCH) && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
+    - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
+    - when: never
+
+# The version of a release pipeline comes only from its tag: the one
+# desktop_tag_release just pushed (dotenv), or the tag the pipeline runs on.
 .desktop-release-version:
   script:
     - |
-      if [ -z "${CI_COMMIT_TAG:-}" ] || ! printf '%s' "$CI_COMMIT_TAG" | grep -Eq '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "This job releases StepCode Desktop and must run from a desktop-vX.Y.Z tag, not ${CI_COMMIT_TAG:-a branch}." >&2
+      if [ -z "${DESKTOP_TAG:-}" ]; then DESKTOP_TAG="${CI_COMMIT_TAG:-}"; fi
+      if [ -z "${DESKTOP_TAG}" ] || ! printf '%s' "$DESKTOP_TAG" | grep -Eq '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "This job releases StepCode Desktop and needs a desktop-vX.Y.Z tag (from desktop_tag_release or the pipeline ref), not '${DESKTOP_TAG}'." >&2
         exit 1
       fi
-      export DESKTOP_VERSION="${CI_COMMIT_TAG#desktop-v}"
+      export DESKTOP_TAG
+      export DESKTOP_VERSION="${DESKTOP_TAG#desktop-v}"
       export STEPCODE_BUILD_VERSION="$DESKTOP_VERSION"
       export STEPCODE_BUILD_COMMIT="$CI_COMMIT_SHA"
       echo "StepCode Desktop version: $DESKTOP_VERSION"
@@ -44,12 +60,10 @@ variables:
 # Release-script tests and the desktop typecheck, before a tag is created and
 # before a release is uploaded.
 desktop_check:
-  extends: .desktop-docker-job
   stage: verify
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
-    - if: '$DESKTOP_BUMP != "none" && $CI_COMMIT_BRANCH'
-    - when: never
+  extends:
+    - .desktop-docker-job
+    - .desktop-release-rules
   script:
     - pnpm install --frozen-lockfile --ignore-scripts
     - node --test scripts/desktop-release.test.mjs
@@ -61,17 +75,20 @@ desktop_tag_release:
   needs: [desktop_check]
   cache: []
   rules:
-    - if: '$DESKTOP_BUMP != "none" && $CI_COMMIT_BRANCH && ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $DESKTOP_RELEASE_BRANCH)'
+    - if: '$DESKTOP_BUMP != "none" && $CI_COMMIT_BRANCH && ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $DESKTOP_RELEASE_BRANCH) && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
     - when: never
   script:
     - |
       if [ -z "${STEP_RELEASE_TOKEN:-}" ]; then
         echo "STEP_RELEASE_TOKEN is not set: it is a protected variable, so the branch must be protected." >&2
-        echo "It needs the api scope and permission to create the protected desktop-v* tags." >&2
+        echo "It needs the api and write_repository scopes and may create the protected desktop-v* tags." >&2
         exit 1
       fi
-    # No dependencies: the script only talks to the GitLab API.
-    - node infra/release/desktop-tag-release.mjs --bump "$DESKTOP_BUMP"
+    # No dependencies: the script only talks to the GitLab API and git.
+    - node infra/release/desktop-tag-release.mjs --bump "$DESKTOP_BUMP" --dotenv desktop.env
+  artifacts:
+    reports:
+      dotenv: desktop.env
 
 # Same cross-build as stepcode-desktop-package-windows, without falcon: a
 # release names its version from the tag and needs no falcon collection.
@@ -83,7 +100,10 @@ stepcode-desktop-release-windows:
     - online
     - macos
     - tart
-  needs: []
+  needs:
+    - job: desktop_tag_release
+      artifacts: true
+      optional: true
   resource_group: stepcode-windows-packer
   timeout: 150 minutes
   interruptible: false
@@ -91,9 +111,7 @@ stepcode-desktop-release-windows:
   variables:
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
     ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
-    - when: never
+  rules: !reference [.desktop-release-rules, rules]
   script:
     - !reference [.desktop-release-version, script]
     - corepack enable
@@ -102,7 +120,7 @@ stepcode-desktop-release-windows:
     - pnpm install --frozen-lockfile
     - pnpm pack:win -- --env=prod --no-sign
   artifacts:
-    name: 'stepcode-desktop-windows-$CI_COMMIT_TAG'
+    name: 'stepcode-desktop-windows-$CI_PIPELINE_IID'
     paths:
       - dist-electron/*.exe
       - dist-electron/latest.yml
@@ -131,24 +149,27 @@ desktop_upload_test:
   needs:
     - job: desktop_check
       artifacts: false
+    - job: desktop_tag_release
+      artifacts: true
+      optional: true
     - job: stepcode-desktop-notary-finalize-arm64
       artifacts: true
     - job: stepcode-desktop-notary-finalize-x64
       artifacts: true
     - job: stepcode-desktop-release-windows
       artifacts: true
-  rules:
-    # Automatic: once every installer is built (and the mac ones notarized),
-    # the test bucket gets the release.
-    - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
-      when: on_success
-    - when: never
+  # Automatic: once every installer is built (and the mac ones notarized), the
+  # test bucket gets the release.
+  rules: !reference [.desktop-release-rules, rules]
   variables:
     DESKTOP_BASE_URL: '$STEP_RELEASE_BASE_URL'
 
 desktop_upload_prod:
   extends: .desktop-upload
   needs:
+    - job: desktop_tag_release
+      artifacts: true
+      optional: true
     - job: stepcode-desktop-notary-finalize-arm64
       artifacts: true
     - job: stepcode-desktop-notary-finalize-x64
@@ -157,9 +178,11 @@ desktop_upload_prod:
       artifacts: true
     - job: desktop_upload_test
       artifacts: false
+  # Manual: production users see a release only after someone checked the test
+  # bucket's installers.
   rules:
-    # Manual: production users see a release only after someone checked the
-    # test bucket's installers.
+    - if: '$DESKTOP_BUMP != "none" && $CI_COMMIT_BRANCH && ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $DESKTOP_RELEASE_BRANCH) && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
+      when: manual
     - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
       when: manual
     - when: never

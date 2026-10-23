@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { computeNextDesktopTag, parseDesktopReleaseTag } from "../infra/release/desktop-next-version.mjs";
+import { desktopDotenv, pushDesktopTag, tokenRemoteUrl } from "../infra/release/desktop-tag-release.mjs";
 import {
 	DESKTOP_TARGETS,
 	installerFileName,
@@ -100,4 +101,24 @@ test("desktop release: a missing installer fails the release", async () => {
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+test("desktop tag push: ci.skip, commit to tag ref, token redacted on failure", () => {
+	const calls = [];
+	const ok = (command, args) => {
+		calls.push([command, ...args]);
+		return { status: 0, stdout: "", stderr: "" };
+	};
+	const remoteUrl = tokenRemoteUrl({ serverUrl: "https://git.example.test/", projectPath: "group/repo", token: "s3cret" });
+	assert.equal(remoteUrl, "https://release-tagger:s3cret@git.example.test/group/repo.git");
+	pushDesktopTag({ remoteUrl, token: "s3cret", tag: "desktop-v0.1.1", commit: "abc123", run: ok });
+	assert.deepEqual(calls, [
+		["git", "push", "--porcelain", "-o", "ci.skip", remoteUrl, "abc123:refs/tags/desktop-v0.1.1"],
+	]);
+	const denied = () => ({ status: 1, stdout: "", stderr: `remote: denied for ${remoteUrl}` });
+	assert.throws(
+		() => pushDesktopTag({ remoteUrl, token: "s3cret", tag: "desktop-v0.1.1", commit: "abc123", run: denied }),
+		(error) => !error.message.includes("s3cret") && error.message.includes("***"),
+	);
+	assert.equal(desktopDotenv("desktop-v1.2.3"), "DESKTOP_TAG=desktop-v1.2.3\nDESKTOP_VERSION=1.2.3\n");
 });
