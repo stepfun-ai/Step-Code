@@ -77,6 +77,10 @@ function createReftableWorktree(tempDir: string): WorktreeFixture {
 	return { worktreeDir, reftableDir };
 }
 
+// These checks exercise real fs.watch delivery, not only the mocked git callback.
+// A full-suite wait timed out but focused and later full reruns passed; event loss
+// versus scheduling delay is unconfirmed. Capture watcher/debounce timing on recurrence
+// rather than increasing this deadline without evidence.
 async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
 	const startedAt = Date.now();
 	while (!condition()) {

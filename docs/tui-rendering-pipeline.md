@@ -55,7 +55,7 @@
 
 退出时反向恢复：关进度、关 bracketed paste、`\x1b[<u` 关 Kitty、关 modifyOtherKeys、销毁 StdinBuffer、暂停 stdin（防退出后残留 Ctrl+D 打到父 shell）、恢复 raw（`terminal.ts:428-474`）。`drainInput` 在退出前排空残留按键，避免 Kitty release 事件泄漏到 SSH 父 shell（`terminal.ts:390-426`）。
 
-`write()` 只是 `process.stdout.write`，可选把字节流追加到 `PI_TUI_WRITE_LOG` 指定文件便于回放（`terminal.ts:476-485`）。尺寸回落链是 `stdout.columns → env.COLUMNS → 80`（`terminal.ts:487-493`）。
+`write()` 只是 `process.stdout.write`，没有任何落盘旁路（`terminal.ts:457-459`）。尺寸回落链是 `stdout.columns → env.COLUMNS → 80`（`terminal.ts:461-463`）。
 
 ## 2. 输入拆分与分发
 
@@ -65,7 +65,7 @@
 
 - 遇到 `\x1b[200~` 进入 paste 模式，直到 `\x1b[201~` 发出 `paste` 事件（`stdin-buffer.ts:324-377`）。
 - 否则用 `extractCompleteSequences` 切出完整序列，剩余部分挂超时：裸 `ESC` 用 escape 超时，其余用序列超时（`stdin-buffer.ts:380-396`）。
-- escape 超时默认 10ms，`SSH_CONNECTION`/`SSH_TTY` 下 100ms，可用 `PI_TUI_ESC_TIMEOUT` 覆盖（`terminal.ts:104-121`）——高延迟链路上 ESC 前缀的 Alt 组合需要更长的重组窗口。
+- escape 超时默认 10ms，`SSH_CONNECTION`/`SSH_TTY` 下 100ms，无覆盖开关（`resolveEscapeTimeoutMs`，`terminal.ts:103-116`）——高延迟链路上 ESC 前缀的 Alt 组合需要更长的重组窗口。
 - Kitty 协议下"重复上报的可打印字符"会被抑制：已消费的码点再次单独到达时丢弃（`stdin-buffer.ts:399-408`）。
 
 `ProcessTerminal.setupStdinBuffer` 把序列流接成：协商响应优先消费 → 其余通过 `forwardInputSequence` 送到 `onInput`（即 `TuiBase.handleTerminalInput`）；`paste` 事件重新包上 bracketed paste 标记再送入，编辑器侧无需区分两条路径（`terminal.ts:204-232`）。
@@ -120,7 +120,7 @@
 `TuiMainScreen.doRender`（`tui-main-screen.ts:329-750`）每帧的完整顺序：
 
 1. 读取 `terminal.columns/rows`，判定宽/高变化与 overlay 开合（`tui-main-screen.ts:331-340`）。overlay 状态变化意味着上一帧镜像的是合成后的画面，前缀不可跨过这次转换复用（`resetFrom = 0`）。
-2. `Container.render(width)` 得到新行（`tui-main-screen.ts:353`）；`renderDirtyStart` 经 `PI_TUI_DISABLE_INCREMENTAL` 开关可强制为 0（`tui.ts:224-229`）。
+2. `Container.render(width)` 得到新行（`tui-main-screen.ts:353`）；`renderDirtyStart` 经 `setIncrementalRenderDisabled()` 可强制为 0（`tui.ts:227-233`）。
 3. 有 overlay 时先 `compositeOverlays`（`tui.ts:1202-1261`）：按 anchor/margin/百分比解析位置，把各 overlay 的行按列合成进基线，必要时补空行使 overlay 有屏幕相对坐标。
 4. 定位光标标记 `CURSOR_MARKER`（`\x1b_pi:c\x07`，`tui.ts:90`）：焦点组件在光标处发出这个 APC 序列，渲染器找到后把它从行里剥掉，再用它定位硬件光标（IME 候选窗定位），`findCursorPosition`（`tui-main-screen.ts:250-260`）。
 5. 行归一化 `applyLineResetsFrom`（`tui-main-screen.ts:224-247`）：从 `resetFrom` 起的行做 ANSI 归一化并追加 `SEGMENT_RESET`（`\x1b[0m\x1b]8;;\x07`，`tui.ts:353`），防止样式跨行泄漏；`resetFrom` 之前的行直接引用上一帧。首帧、宽高变化、overlay 切换都会把 `resetFrom` 压到 0。
@@ -128,7 +128,7 @@
 7. 差分区间扫描（`tui-main-screen.ts:473-498`）：从 `resetFrom` 扫到两帧最大行数，记 `firstChanged/lastChanged`；纯追加时区间锁在旧长度处（`appendStart` 快速路径）。区间经过 Kitty 图像块时向外扩展，避免从图像块中间重画（`tui-main-screen.ts:284-305`）。
 8. 视口夹取（`tui-main-screen.ts:568-589`）：`firstChanged` 落在上一帧视口之上且文档长度没变——只有 scrollback 副本过期，屏幕上行没动——只重绘可见部分；任何长度变化都可能让行在视口下位移，仍走全量重绘。
 9. 写入（`tui-main-screen.ts:593-680`）：`\x1b[?2026h` 开同步输出 → 视口滚动对齐（必要时 `\r\n` 推进滚动）→ CUU/CUD 移到首变行 → `\r` → 逐行 `\x1b[2K` + 行内容 → 尾部清理旧多出的行 → `\x1b[?2026l`。只写首变行到末变行，单行变化（spinner）不会闪烁全屏。
-10. 硬保险（`tui-main-screen.ts:651-678`）：任何渲染行 `visibleWidth > width` 直接把全部行写进 `pi-crash.log`，清理终端状态后抛错——指向"组件没截断"这个根因。
+10. 硬保险（`tui-main-screen.ts:651-678`）：任何渲染行 `visibleWidth > width` 直接把全部行写进 `tui-crash.log`，清理终端状态后抛错——指向"组件没截断"这个根因。
 11. 更新镜像：`previousLines`、`hardwareCursorRow`、`previousViewportTop`、`previousKittyImageIds`、宽高（`tui-main-screen.ts:737-749`），并按需移动硬件光标（`positionHardwareCursor`，`tui-main-screen.ts:757-788`）。
 
 输出统一经过 `BoundedTerminalWriter`（`tui-main-screen.ts:24-80`）：按 1MiB 分块刷盘，超长串按代理对边界切开，避免整帧拼成一个超过 V8 字符串上限的大串。
@@ -169,7 +169,7 @@ alt screen 进入时（`tui-alt-screen.ts:316-318`）：`\x1b[?1049h` + 关 auto
 
 ## 7. 产品侧接线（apps/cli）
 
-渲染库只提供机制；"什么事件、什么数据、变成什么组件"由产品层决定，边界遵守 AGENTS.md 的所有权规则（组件编排属 `coding-agent`/宿主，差分渲染原语属 `pi-tui`，产品层不重写渲染循环）。
+渲染库只提供机制；"什么事件、什么数据、变成什么组件"由产品层决定，边界遵守 AGENTS.md 的所有权规则（组件编排属 `coding-agent`/宿主，差分渲染原语属 `@step-harness/pi-tui` 包，产品层不重写渲染循环）。
 
 ### 7.1 组合根
 
@@ -202,28 +202,28 @@ alt screen 进入时（`tui-alt-screen.ts:316-318`）：`\x1b[?1049h` + 关 auto
 
 主题文件变化（`interactive-mode.ts:1248-1253`）：`ui.invalidate()` + `requestRender()`——`invalidate` 丢弃容器与组件的渲染缓存，主题色在下一帧的归一化行里生效。语法高亮全部加载完成后同样失效重绘（`interactive-mode.ts:1265-1269`）。git 分支变化只触发 `requestRender`（footer 数据提供者推送，`interactive-mode.ts:1256-1258`）。
 
-## 8. 环境变量与调试开关
+## 8. 渲染开关与调试
 
-| 变量 | 作用 |
-| --- | --- |
-| `PI_TUI_DISABLE_INCREMENTAL=1` | 关掉增量渲染，每帧全量走，用于渲染等价测试（`tui.ts:224-229`） |
-| `PI_HARDWARE_CURSOR=1` | 显示硬件光标（默认隐藏，`tui.ts:447`） |
-| `PI_CLEAR_ON_SHRINK=0` | 内容收缩时不清空多余行，减少慢终端重绘（`tui.ts:448`、`513-515`） |
-| `PI_TUI_ESC_TIMEOUT=<ms>` | 覆盖裸 ESC 判定超时（默认 10ms，SSH 100ms，`terminal.ts:104-121`） |
-| `PI_TUI_WRITE_LOG=<dir\|file>` | 把渲染字节流落盘，回放诊断（`terminal.ts:138-151`） |
-| `PI_DEBUG_REDRAW=1` | 全量重绘原因写入 `pi-debug.log`（`tui-main-screen.ts:430-437`） |
-| `PI_TUI_DEBUG=1` | 每帧差分细节（区间、光标、前后帧）写入 `/tmp/tui`（`tui-main-screen.ts:703-730`） |
-| `PI_CODING_AGENT_DIR` | 日志目录（缺省 `~/.pi/agent`，`tui.ts:469`） |
+本节的开关都**不是环境变量**。早期版本把它们记作 `PI_TUI_*` / `PI_DEBUG_*` 环境变量，源码中并无任何对应的读取逻辑（`packages/tui/src` 内没有读取过 `PI_` 前缀的环境变量）。实际入口如下：
+
+| 开关 | 入口 | 作用 |
+| --- | --- | --- |
+| 增量渲染 | `setIncrementalRenderDisabled(true)`（`tui.ts:227-229`，进程内全局） | 每帧全量渲染，用于渲染等价测试 |
+| 硬件光标 | `showHardwareCursor` 设置项 → `ui.setShowHardwareCursor()`（`tui.ts:506-511`） | 显示终端光标，便于 IME（默认隐藏） |
+| 收缩清行 | `terminal.clearOnShrink` 设置项 → `ui.setClearOnShrink()`（`tui.ts:524-527`） | 内容收缩时是否清空多余行（默认 false，开启可能闪烁） |
+| ESC 超时 | 无开关，按传输自动判定（`terminal.ts:103-116`） | 非 SSH 10ms；检测到 `SSH_CONNECTION`/`SSH_TTY` 时 100ms |
+
+唯一的落盘诊断是崩溃现场：任何渲染行 `visibleWidth > width` 时，全部行写入 `<logDirectory>/tui-crash.log`（`tui-main-screen.ts:628-639`）。`logDirectory` 由 `TUI` 构造参数传入，缺省是 `os.tmpdir()` 下按需创建的 `tui-*` 私有临时目录（`tui.ts:479-484`）。
 
 ## 9. 测试与验证
 
 - `packages/tui/test` 用 `node:test`：差分行为（`container-render-cache.test.ts`、`main-screen-offscreen-change.test.ts`）、overlay 定位（`overlay-*.test.ts`）、布局（`layout.test.ts`）、输入（`stdin-buffer.test.ts`、`keys.test.ts`、`keybindings.test.ts`、`input.test.ts`）、宽度回归（`bug-regression-isimageline-startswith-bug.test.ts`、`tab-width.test.ts` 等）。
-- 渲染等价性：`PI_TUI_DISABLE_INCREMENTAL=1` 强制全量路径，与增量路径逐字节对比——增量复用一旦算错前缀就会在这里现形。
+- 渲染等价性：`setIncrementalRenderDisabled(true)` 强制全量路径，与增量路径逐字节对比——增量复用一旦算错前缀就会在这里现形。
 - 产品侧：`apps/cli/test` 的 TUI 快照测试（如 `tui-acceptance-snapshot.test.ts`）锁住视图渲染输出。
 
 ## 10. 归属与约束
 
 - 差分渲染、输入分发、布局合成只存在于 `packages/tui`；`apps/cli` 不 fork、不重写。
 - `packages/tui` 保持零 AI 依赖（`docs/step-harness-architecture-redesign.md` 的 `check-tui-no-ai` 检查）。
-- 组件不得输出超过传入宽度的行——主屏渲染器会抛错并把现场写进 `pi-crash.log`；测量用 `visibleWidth()`，截断用 `truncateToWidth()`。
+- 组件不得输出超过传入宽度的行——主屏渲染器会抛错并把现场写进 `tui-crash.log`；测量用 `visibleWidth()`，截断用 `truncateToWidth()`。
 - 跨进程渲染契约（远端会话）在 `packages/protocol`；本文只覆盖本地进程内的 TUI 渲染。

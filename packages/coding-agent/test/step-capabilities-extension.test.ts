@@ -219,7 +219,7 @@ test("Step capabilities register native plan, clarify_user, and subagent tools",
 	expect([...commands.keys()]).toEqual(expect.arrayContaining(["plan", "todos"]));
 });
 
-test("subagent follows the Pi schema and ignores an empty chain beside parallel tasks", async () => {
+test("subagent rejects unknown fields and ignores an empty chain beside parallel tasks", async () => {
 	const { api, tools } = createApi();
 	const calls: string[] = [];
 	createStepSubagentExtension({
@@ -244,30 +244,29 @@ test("subagent follows the Pi schema and ignores an empty chain beside parallel 
 	expect(schema.properties).toHaveProperty("agentScope");
 	expect(tool!.prepareArguments).toBeUndefined();
 
+	// Fields outside the schema are rejected rather than silently dropped, so a
+	// model that invents parameters gets a validation error it can correct.
 	const staleCall = {
 		agent: "",
-		agent_type: "",
 		alias: "",
 		chain: [],
-		context_mode: "fresh",
-		description: "",
 		group: "",
-		isolate_workspace: false,
-		model: "",
-		prompt: "",
 		run_in_background: false,
 		task: "",
 		tasks: [
 			{ agent: "general", task: "first inspection" },
 			{ agent: "review", task: "second inspection" },
 		],
-		worktree_name: "",
 	};
+	expect(() => validateToolArguments(tool as never, { name: "subagent", arguments: staleCall } as never)).toThrow(
+		/Validation failed/u,
+	);
+	const { alias: _alias, group: _group, ...currentCall } = staleCall;
 	const validated = validateToolArguments(
 		tool as never,
 		{
 			name: "subagent",
-			arguments: staleCall,
+			arguments: currentCall,
 		} as never,
 	);
 	const result = (await tool!.execute(

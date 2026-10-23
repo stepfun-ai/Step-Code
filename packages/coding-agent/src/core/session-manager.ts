@@ -19,6 +19,7 @@ import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { CHILD_SESSION_ORIGIN } from "./child-session.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -26,6 +27,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import { createSessionSummary, foldSessionSummaryEntry, resolveSessionModifiedTime } from "./session-summary.ts";
 import { createUsageLineage } from "./usage-lineage.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
@@ -36,12 +38,19 @@ export interface SessionHeader {
 	id: string;
 	timestamp: string;
 	cwd: string;
+	/** Path of the session this one was forked or continued from. */
 	parentSession?: string;
+	/** Set by a child agent (subagent lane or workflow agent) on the session it creates. */
+	origin?: typeof CHILD_SESSION_ORIGIN;
+	/** Id of the session whose agent spawned this child, when known. */
+	parentSessionId?: string;
 }
 
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
+	origin?: typeof CHILD_SESSION_ORIGIN;
+	parentSessionId?: string;
 }
 
 export interface SessionEntryBase {
@@ -181,12 +190,22 @@ export interface SessionInfo {
 	name?: string;
 	/** Path to the parent session (if this session was forked). */
 	parentSessionPath?: string;
+	/** Header `origin`; `isChildAgentSession` tells child-agent sessions apart. */
+	origin?: typeof CHILD_SESSION_ORIGIN;
 	created: Date;
 	modified: Date;
 	messageCount: number;
 	firstMessage: string;
 	allMessagesText: string;
 }
+
+/** A session file was written: created, appended to, or rewritten in place. */
+export interface SessionFilePersistedEvent {
+	path: string;
+	kind: "create" | "append" | "rewrite";
+}
+
+export type SessionFilePersistedListener = (event: SessionFilePersistedEvent) => void;
 
 export type ReadonlySessionManager = Pick<
 	SessionManager,
@@ -657,44 +676,15 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 	}
 }
 
-function isMessageWithContent(message: AgentMessage): message is Message {
-	return typeof (message as Message).role === "string" && "content" in message;
-}
-
-function extractTextContent(message: Message): string {
-	const content = message.content;
-	if (typeof content === "string") {
-		return content;
-	}
-	return content
-		.filter((block): block is TextContent => block.type === "text")
-		.map((block) => block.text)
-		.join(" ");
-}
-
-function getMessageActivityTime(entry: SessionMessageEntry): number | undefined {
-	const message = entry.message;
-	if (!isMessageWithContent(message)) return undefined;
-	if (message.role !== "user" && message.role !== "assistant") return undefined;
-
-	const msgTimestamp = (message as { timestamp?: number }).timestamp;
-	if (typeof msgTimestamp === "number") {
-		return msgTimestamp;
-	}
-
-	const t = new Date(entry.timestamp).getTime();
-	return Number.isNaN(t) ? undefined : t;
-}
-
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const stats = await stat(filePath);
 		let header: SessionHeader | null = null;
-		let messageCount = 0;
-		let firstMessage = "";
+		const summary = createSessionSummary();
 		const allMessages: string[] = [];
-		let name: string | undefined;
-		let lastActivityTime: number | undefined;
+		const collectText = (text: string): void => {
+			allMessages.push(text);
+		};
 
 		const rl = createInterface({
 			input: createReadStream(filePath, { encoding: "utf8" }),
@@ -711,54 +701,25 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 				continue;
 			}
 
-			// Extract session name (use latest, including explicit clears)
-			if (entry.type === "session_info") {
-				name = entry.name?.trim() || undefined;
-			}
-
-			if (entry.type !== "message") continue;
-			messageCount++;
-
-			const activityTime = getMessageActivityTime(entry);
-			if (typeof activityTime === "number") {
-				lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
-			}
-
-			const message = entry.message;
-			if (!isMessageWithContent(message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
-
-			const textContent = extractTextContent(message);
-			if (!textContent) continue;
-
-			allMessages.push(textContent);
-			if (!firstMessage && message.role === "user") {
-				firstMessage = textContent;
-			}
+			foldSessionSummaryEntry(summary, entry as SessionEntry, collectText);
 		}
 
 		if (!header) return null;
 
 		const cwd = typeof header.cwd === "string" ? header.cwd : "";
 		const parentSessionPath = header.parentSession;
-		const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : NaN;
-		const modified =
-			typeof lastActivityTime === "number" && lastActivityTime > 0
-				? new Date(lastActivityTime)
-				: !Number.isNaN(headerTime)
-					? new Date(headerTime)
-					: stats.mtime;
 
 		return {
 			path: filePath,
 			id: header.id,
 			cwd,
-			name,
+			name: summary.name,
 			parentSessionPath,
+			...(header.origin === CHILD_SESSION_ORIGIN ? { origin: header.origin } : {}),
 			created: new Date(header.timestamp),
-			modified,
-			messageCount,
-			firstMessage: firstMessage || "(no messages)",
+			modified: new Date(resolveSessionModifiedTime(header, summary.lastActivityTime, stats.mtime.getTime())),
+			messageCount: summary.messageCount,
+			firstMessage: summary.firstMessage || "(no messages)",
 			allMessagesText: allMessages.join(" "),
 		};
 	} catch {
@@ -866,6 +827,7 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private filePersistedListener: SessionFilePersistedListener | undefined;
 
 	private constructor(
 		cwd: string,
@@ -942,6 +904,8 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: options?.parentSession,
+			...(options?.origin ? { origin: options.origin } : {}),
+			...(options?.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
@@ -988,6 +952,28 @@ export class SessionManager {
 		} finally {
 			closeSync(fd);
 		}
+		this._notifyFilePersisted(this.sessionFile, "rewrite");
+	}
+
+	/**
+	 * Observe successful writes to this manager's session files, e.g. to keep a
+	 * derived search index current. The listener runs synchronously after each
+	 * write; pass undefined to remove it.
+	 */
+	setFilePersistedListener(listener: SessionFilePersistedListener | undefined): void {
+		this.filePersistedListener = listener;
+	}
+
+	private _notifyFilePersisted(path: string, kind: SessionFilePersistedEvent["kind"]): void {
+		const listener = this.filePersistedListener;
+		if (!listener) return;
+		try {
+			listener({ path, kind });
+		} catch {
+			// The write already succeeded and the file stays authoritative. An
+			// observer failure must not fail or roll back the session write;
+			// derived indexes reconcile from the file later.
+		}
 	}
 
 	isPersisted(): boolean {
@@ -1021,6 +1007,7 @@ export class SessionManager {
 		if (!hasAssistant) {
 			if (this.flushed) {
 				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+				this._notifyFilePersisted(this.sessionFile, "append");
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
@@ -1038,8 +1025,10 @@ export class SessionManager {
 				closeSync(fd);
 			}
 			this.flushed = true;
+			this._notifyFilePersisted(this.sessionFile, "create");
 		} else {
 			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			this._notifyFilePersisted(this.sessionFile, "append");
 		}
 	}
 

@@ -68,6 +68,74 @@ describe("Step projected rows", () => {
 		expect(args.command).toBe(command);
 	});
 
+	it("previews long run_command scripts in the title and shows the full command only on expand", () => {
+		const script = [
+			'playwriter -e "',
+			"  if (!state.r24) {",
+			"    state.page = context.pages().find((p) => p.url().includes('grafana'));",
+			"    const marker = 'FULL_COMMAND_TAIL';",
+			"  }",
+			'" -s 3 2>&1 | tail -12',
+		].join("\n");
+		const { component } = createHarness("run_command", { command: script, timeout: 120 });
+		component.setArgsComplete();
+		component.markExecutionStarted();
+		component.updateResult({ content: [{ type: "text", text: "RESULT_ROW" }], isError: false }, false);
+
+		const collapsed = expectPhysicalRows(component, 200).filter((row) => row.length > 0);
+		expect(collapsed[0]).toBe('● run_command(playwriter -e " …)');
+		expect(collapsed.join("\n")).not.toContain("FULL_COMMAND_TAIL");
+		expect(collapsed.join("\n")).not.toContain("timeout 120s");
+		expect(collapsed[1]).toBe("  └ RESULT_ROW");
+
+		component.setExpanded(true);
+		const expanded = expectPhysicalRows(component, 200).join("\n");
+		expect(expanded).toContain("FULL_COMMAND_TAIL");
+		expect(expanded).toContain('$ playwriter -e "');
+		expect(expanded).toContain("RESULT_ROW");
+	});
+
+	it("shows the full short command on expand and removes it on collapse", () => {
+		const { component } = createHarness("run_command", { command: "pnpm test" });
+		component.updateResult({ content: [{ type: "text", text: "ok" }], isError: false }, false);
+		component.setExpanded(true);
+		const rows = expectPhysicalRows(component, 80).filter((row) => row.length > 0);
+		expect(rows[0]).toBe("● run_command(pnpm test)");
+		expect(rows.join("\n")).toContain("$ pnpm test");
+		component.setExpanded(false);
+		expect(expectPhysicalRows(component, 80).join("\n")).not.toContain("$ pnpm test");
+	});
+
+	it.each([40, 80, 200])("sizes command previews to width %s while retaining elapsed time", (width) => {
+		const command = `echo ${"界面测试".repeat(40)} TAIL_MARKER`;
+		const spinner: StepToolSpinnerState = { frame: "⠋", elapsedSeconds: () => 12 };
+		const { component } = createHarness("run_command", { command }, width, 44, spinner);
+		const header = expectPhysicalRows(component, width)[0]!;
+		expect(header).toMatch(/^⠋ run_command\(/u);
+		expect(header).toMatch(/…\) · 12s$/u);
+		expect(visibleWidth(header)).toBeGreaterThan(width - 3);
+		component.setExpanded(true);
+		const expanded = expectPhysicalRows(component, width).join("\n");
+		expect(expanded).toContain("TAIL_MARKER");
+		component.setExpanded(false);
+		expect(expectPhysicalRows(component, width)[0]).toBe(header);
+	});
+
+	it("does not limit a fitting single-line command to 50 characters", () => {
+		const command = `echo ${"x".repeat(80)}`;
+		const { component } = createHarness("run_command", { command });
+		expect(expectPhysicalRows(component, 200)[0]).toBe(`⠋ run_command(${command})`);
+	});
+
+	it.each(["\n", "\r\n", "\r"])("previews only the first command line for %j separators", (separator) => {
+		const command = `echo first${separator}echo HIDDEN_COMMAND`;
+		const args = { command };
+		const { component } = createHarness("run_command", args);
+		expect(expectPhysicalRows(component, 80)[0]).toBe("⠋ run_command(echo first …)");
+		expect(expectPhysicalRows(component, 80).join("\n")).not.toContain("HIDDEN_COMMAND");
+		expect(args.command).toBe(command);
+	});
+
 	it.each([
 		["list_directory", { path: "src/one\ntwo\tdir" }],
 		["read_file", { path: "src/one\rtwo.txt", start_line: 1, end_line: 2 }],

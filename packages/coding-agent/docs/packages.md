@@ -8,7 +8,7 @@ Step packages bundle extensions, skills, prompt templates, and themes so you can
 
 - [Install and Manage](#install-and-manage)
 - [Package Sources](#package-sources)
-- [Creating a Step Package](#creating-a-pi-package)
+- [Creating a Step Package](#creating-a-step-package)
 - [Package Structure](#package-structure)
 - [Dependencies](#dependencies)
 - [Package Filtering](#package-filtering)
@@ -115,7 +115,7 @@ Local paths point to files or directories on disk and are added to settings with
 
 ## Creating a Step Package
 
-Add a `step` manifest to `package.json` or use conventional directories. Include the `pi-package` keyword for discoverability.
+Add the manifest to `package.json` or use conventional directories. The key itself is `pi` and the discovery keyword is `pi-package`; both keep their legacy spelling so packages published before the rename stay discoverable, and both are read as-is by the loader.
 
 ```json
 {

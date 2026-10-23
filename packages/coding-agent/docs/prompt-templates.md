@@ -10,7 +10,7 @@ Step loads prompt templates from:
 
 - Global: `~/.stepcode/agent/prompts/*.md`
 - Project: `.stepcode/prompts/*.md` (only after the project is trusted)
-- Packages: `prompts/` directories or `pi.prompts` entries in `package.json`
+- Packages: `prompts/` directories, or `pi.prompts` entries in `package.json` (the manifest key keeps its legacy name; see [Packages](packages.md))
 - Settings: `prompts` array with files or directories
 - CLI: `--prompt-template <path>` (repeatable)
 

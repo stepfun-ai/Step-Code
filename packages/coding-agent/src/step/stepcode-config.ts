@@ -16,6 +16,7 @@ import {
 	type StepPermissionPresetId,
 } from "./permissions.ts";
 import {
+	isValidSubagentBackgroundTimeout,
 	resetLegacyPermissionSettings,
 	type StepSettings,
 	type StepSettingsManager,
@@ -344,6 +345,9 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 	const fullAccessAcknowledged = readBoolean(approval?.fullAccessAcknowledged);
 	const feedback = asObject(root.feedback);
 	const feedbackEnabled = readBoolean(feedback?.enabled);
+	const subagent = asObject(root.subagent);
+	const subagentBackground = readBoolean(subagent?.background);
+	const subagentTimeout = subagent?.backgroundTimeoutSeconds;
 	const settings: StepSettings = {
 		...(preset ? { permissionPreset: preset } : {}),
 		...(mode ? { approvalMode: mode } : {}),
@@ -351,6 +355,10 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 		...(autoResume !== undefined ? { autoResume } : {}),
 		...(fullAccessAcknowledged !== undefined ? { fullAccessAcknowledged } : {}),
 		...(feedbackEnabled !== undefined ? { feedbackEnabled } : {}),
+		...(subagentBackground !== undefined ? { subagentBackground } : {}),
+		...(isValidSubagentBackgroundTimeout(subagentTimeout)
+			? { subagentBackgroundTimeoutSeconds: subagentTimeout }
+			: {}),
 	};
 	resetLegacyPermissionSettings(settings, readString(approval?.preset), readString(approval?.mode));
 	return settings;
@@ -371,6 +379,12 @@ function writeStepCodeSettings(root: Record<string, unknown>, patch: Partial<Ste
 		if (patch.feedbackEnabled === undefined) delete feedback.enabled;
 		else feedback.enabled = patch.feedbackEnabled;
 		root.feedback = feedback;
+	}
+	if (Object.hasOwn(patch, "subagentBackground") || Object.hasOwn(patch, "subagentBackgroundTimeoutSeconds")) {
+		const subagent = asMutableObject(root.subagent) ?? {};
+		writeOptionalField(subagent, "background", patch, "subagentBackground");
+		writeOptionalField(subagent, "backgroundTimeoutSeconds", patch, "subagentBackgroundTimeoutSeconds");
+		root.subagent = subagent;
 	}
 }
 
@@ -405,6 +419,17 @@ function validateStepSettings(settings: Partial<StepSettings>): void {
 	}
 	if (settings.fullAccessAcknowledged !== undefined && typeof settings.fullAccessAcknowledged !== "boolean") {
 		throw new Error(`Invalid Step fullAccessAcknowledged setting: ${String(settings.fullAccessAcknowledged)}`);
+	}
+	if (settings.subagentBackground !== undefined && typeof settings.subagentBackground !== "boolean") {
+		throw new Error(`Invalid Step subagentBackground setting: ${String(settings.subagentBackground)}`);
+	}
+	if (
+		settings.subagentBackgroundTimeoutSeconds !== undefined &&
+		!isValidSubagentBackgroundTimeout(settings.subagentBackgroundTimeoutSeconds)
+	) {
+		throw new Error(
+			`Invalid Step subagentBackgroundTimeoutSeconds setting: ${String(settings.subagentBackgroundTimeoutSeconds)}`,
+		);
 	}
 }
 

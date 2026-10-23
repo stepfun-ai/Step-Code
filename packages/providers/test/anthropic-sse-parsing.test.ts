@@ -79,6 +79,57 @@ function createFakeAnthropicClient(response: Response): Anthropic {
 }
 
 describe("Anthropic raw SSE parsing", () => {
+	it.each([
+		"event: content_block_delta\n",
+		'event: content_block_delta\ndata: {"type":"content_block_delta","secret":"private-fixture',
+		"",
+	])("classifies an unfinished message stream as transient (%j)", async (tail) => {
+		const start = minimalAnthropicEvents[0]!;
+		const response = new Response(`event: ${start.event}\ndata: ${start.data}\n\n${tail}`);
+		const stream = streamAnthropic(
+			anthropicModel(),
+			{ messages: [] },
+			{
+				client: createFakeAnthropicClient(response),
+			},
+		);
+		const events = [];
+		for await (const event of stream) events.push(event);
+		const result = await stream.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorKind).toBe("transient");
+		expect(result.errorMessage).not.toContain("private-fixture");
+		expect(events.filter((event) => event.type === "error")).toHaveLength(1);
+	});
+
+	it("does not classify a delimited invalid JSON event as a dropped connection", async () => {
+		const response = new Response("event: content_block_delta\ndata: invalid-private-fixture\n\n");
+		const result = await streamAnthropic(
+			anthropicModel(),
+			{ messages: [] },
+			{
+				client: createFakeAnthropicClient(response),
+			},
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorKind).not.toBe("transient");
+		expect(result.errorMessage).not.toContain("private-fixture");
+	});
+
+	it("does not retry-classify a cancelled stream", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const result = await streamAnthropic(
+			anthropicModel(),
+			{ messages: [] },
+			{
+				client: createFakeAnthropicClient(createSseResponse(minimalAnthropicEvents)),
+				signal: controller.signal,
+			},
+		).result();
+		expect(result.stopReason).toBe("aborted");
+		expect(result.errorKind).toBeUndefined();
+	});
 	it("repairs malformed SSE JSON and malformed streamed tool JSON", async () => {
 		const model = anthropicModel();
 		const context: Context = {

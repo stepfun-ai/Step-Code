@@ -1,48 +1,48 @@
 # Step Integration
 
-The Step entrypoint is intentionally an adapter around pi's coding-agent
-runtime. The Step entrypoint sets product defaults and calls `main()` with the
-Step extension; it does not create a second event loop or a second TUI.
+The Step entrypoint is intentionally a thin adapter around the shared
+coding-agent runtime. It sets product defaults and calls `main()` with the Step
+extension; it does not create a second event loop or a second TUI.
 
 ## Ownership
 
 - `InteractiveMode`, selectors, overlays, rendering, and input decoding stay in
-  pi. Step selects a presentation-only `StepEditor` subclass that delegates
-  `handleInput()` to pi's `CustomEditor`, plus Step welcome/footer components;
-  these wrappers only format rendered lines and never own input or session
-  state.
+  the shared runtime. Step selects a presentation-only `StepEditor` subclass
+  that delegates `handleInput()` to the native `CustomEditor`, plus Step
+  welcome/footer components; these wrappers only format rendered lines and
+  never own input or session state.
 - `AgentSessionRuntime` remains the session and agent-loop authority.
 - `extensions/step-provider` supplies the Step model catalog and browser OAuth
-  flow through pi's provider API.
+  flow through the shared provider API.
 - `stepcode.ts` is a forwarding facade for hosts that need a Step-named
   boundary; it delegates prompt, queue, model, event, and disposal operations
-  directly to pi. Event subscriptions follow the active session when pi handles
-  `/new`, `/resume`, or `/fork`.
+  directly to the runtime. Event subscriptions follow the active session when
+  the runtime handles `/new`, `/resume`, or `/fork`.
 - `step/stdio.ts` contains the length-prefixed frame codec and the small
   transport-neutral event bridge.
 - `step/feedback/` owns Step's user-initiated feedback contract: input
   validation and redaction, collector endpoint selection, optional diagnostics
-  and session-bundle construction, ordered delivery, and pending retries. Pi
-  supplies the active `SessionManager` and extension UI; feedback does not own
-  session state or participate in the agent loop.
+  and session-bundle construction, ordered delivery, and pending retries. The
+  runtime supplies the active `SessionManager` and extension UI; feedback does
+  not own session state or participate in the agent loop.
 - `step/stdio-host.ts` is the optional `step --sdk-stdio` adapter. It owns only
   framing, request validation, reverse UI requests, and wire projections. Query
   declared SDK tools and lifecycle hooks are installed as temporary wrappers
-  around Pi's public `Agent` callbacks; their actual execution, validation,
-  transcript updates, and abort semantics still run in Pi's agent loop. The
-  host rebinds after session replacement and serializes writes so stdout stays
-  a valid byte stream. Unsupported query options are reported in the init
+  around the runtime's public `Agent` callbacks; their actual execution,
+  validation, transcript updates, and abort semantics still run in the shared
+  agent loop. The host rebinds after session replacement and serializes writes
+  so stdout stays a valid byte stream. Unsupported query options are reported in the init
   message instead of being silently ignored.
 
   The stdio handshake advertises `streaming-input`, `sdk-tools`,
   `permission-callback`, `hooks`, and `sessions`. Partial text events are
   emitted only when `includePartialMessages` is enabled; final assistant and
-  tool-result events always come from the Pi session event stream.
+  tool-result events always come from the runtime session event stream.
 
 ## Product defaults
 
 The `step` entrypoint uses `STEP_CODING_AGENT_DIR` and
-`STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, Pi's
+`STEP_CODING_AGENT_SESSION_DIR` when present. Without a session override, the
 native layout is `~/.stepcode/agent/sessions/<encoded-cwd>`. Project-local
 resources use `.stepcode/`. When no explicit theme has been saved, the
 built-in `step-blue` palette is used for either terminal appearance, without
@@ -51,18 +51,18 @@ automatic violet light/dark switching. Non-interactive
 `step --export` uses the same precedence as startup: explicit `--use-theme`,
 saved settings, then the Step product default.
 Set `STEP_PROVIDER`, `STEP_MODEL`, `STEP_API_KEY`, or the provider endpoint
-variables to override the defaults. The Step launcher also disables pi release
-and install checks so the product does not contact upstream services.
+variables to override the defaults. The Step launcher also disables upstream
+release and install checks so the product does not contact those services.
 
 The Step `Working...` row measures elapsed time from `agent_start` across model
 and tool turns. While a response streams, it estimates output tokens from the
 normalized thinking, text, and tool-call deltas at four characters per token;
 positive final `usage.output` replaces that response's estimate. Anthropic and
 OpenAI-compatible providers share this normalized event path. The `thinking`
-label follows thinking events and clears when text or tool output begins. Pi's
+label follows thinking events and clears when text or tool output begins. The
 native presentation does not run this tracker or display these metrics.
 
-The built-in Step provider uses pi's `anthropic-messages` adapter. Pi appends
+The built-in Step provider uses the `anthropic-messages` adapter, which appends
 `/v1/messages` to the configured base URL, so the canonical Step base is
 `https://api.stepfun.com/step_plan`. For compatibility, `STEP_BASE_URL` also
 accepts the older `.../v1` and `.../v1/messages` spellings; the provider
@@ -121,32 +121,32 @@ reusing the value would authenticate a gateway key against
 `api.stepfun.com` and fail.
 
 Session storage is also selected through the Step wrapper. The wrapper keeps
-Pi's `SessionManager` class, JSONL format, and tree operations unchanged, but
-binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
+the native `SessionManager` class, JSONL format, and tree operations unchanged,
+but binds its `create`, `open`, `continueRecent`, `forkFrom`, `list`, and `listAll`
 operations to the active Step agent root. Runtime replacement flows (`/new`,
 `/resume`, `/fork`, and `/import`) use that same bound factory, so a later
-operation cannot fall back to Pi's default `~/.stepcode/agent/sessions` directory.
+operation cannot fall back to the default `~/.stepcode/agent/sessions`
+directory.
 Managed `fd` and `rg` binaries follow the same explicit `agentDir` boundary and
 are installed under `<step-agent-dir>/bin`.
 
-These presentation/runtime switches are passed to pi's composition root as
+These presentation/runtime switches are passed to the composition root as
 explicit options: `defaultTheme` selects the single blue Step palette and
 `disableBackgroundServices` suppresses optional catalog, update, and install
 telemetry work. It is deliberately distinct from interactive `offline` mode,
 so disabling those background services does not prevent the first-run OAuth
 flow. `tuiStyle: "step"` selects the Step presentation variant for the native
 interactive mode. The shared `main.ts`, InteractiveMode, and theme controller
-do not inspect Step-specific environment variables; the ordinary `pi` entrypoint
-does not pass these options and keeps its upstream defaults.
+do not inspect Step-specific environment variables; callers that pass no such
+options keep the default behavior.
 
 Step also injects a settings decorator through `settingsManagerFactory`. The
-decorator delegates Pi's complete `SettingsManager` API, including global and
+decorator delegates the complete `SettingsManager` API, including global and
 project merging, trust, reload, and flush. Product-only permission policy is
 kept in the unified `config.toml` files at `~/.stepcode/config.toml` and
 `<cwd>/.stepcode/config.toml`, with the same global-then-project precedence and
 file locking. This keeps fields such as `permissionPreset` and `autoResume` out
-of Pi's native `settings.json` schema while leaving ordinary Pi startup
-unchanged.
+of the native `settings.json` schema while leaving default startup unchanged.
 
 Top-level `step feedback` and interactive `/feedback` use a Step-owned gate,
 configured by `feedbackEnabled` in the Step config and the legacy feedback
@@ -174,14 +174,14 @@ cannot succeed and the report or archive must be changed before resubmission.
 
 Embedded Step hosts can use `createStepAgentSession()` or
 `createStepAgentSessionServices()` from the Step surface. These are thin
-wrappers around Pi's corresponding factories: they resolve the Step global
-agent directory and decorate an existing Pi manager when one is supplied.
-They do not alter Pi's session file format or agent loop. Callers that supply a
-custom or in-memory Pi manager should pass explicit `stepSettingsPaths` when
+wrappers around the corresponding factories: they resolve the Step global
+agent directory and decorate an existing manager when one is supplied.
+They do not alter the session file format or agent loop. Callers that supply a
+custom or in-memory manager should pass explicit `stepSettingsPaths` when
 they need to control where the Step sidecar is stored.
 
-`/init` submits a Codex-style repository-instructions prompt through pi's
-normal user-message path. The model inspects the project and uses pi's native
+`/init` submits a Codex-style repository-instructions prompt through the
+normal user-message path. The model inspects the project and uses the native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
 
@@ -200,7 +200,7 @@ over the 120-second default. For a server, watcher, or longer job, use
 `run_in_background: true`, inspect the returned log path, and stop the process
 with the returned command when it is no longer needed. Background execution
 keeps its session-bound lifecycle and ignores the foreground timeout fields.
-Pi's separate native `bash` tool retains its optional timeout contract.
+The separate native `bash` tool retains its optional timeout contract.
 
 On Linux, timeout and abort cleanup snapshots the command's current descendants
 before killing its process group. Descendants in separate process groups are
@@ -428,22 +428,22 @@ separation, not model-specific restrictions on which task tools are available.
 ## Compatibility matrix
 
 The following is the current audit against the previous StepCode. “Native”
-means the behavior is supplied by Pi and is intentionally not duplicated in
+means the behavior is supplied by the shared runtime and is intentionally not duplicated in
 the Step layer; “adapter” means a small wrapper in `src/step/` or the Step
 extension. Entries marked “separate product” require a gateway or external
 service and are not silently faked by this fork.
 
 | Previous Step surface | Current ownership | State |
 | --- | --- | --- |
-| Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
+| Model/provider selection, compaction, resume, fork, new session | Native commands and `SessionManager` | aligned |
 | StepCode OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
-| Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
-| Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` replaces Pi's native `/thinking`, while `/permission` and `/mode` remain absent |
+| Global/project settings and session paths | Native managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
+| Step permissions, `/permissions`, `/init` | Step extension/facades over native selectors and hooks | aligned; `/effort` replaces the native `/thinking`, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
-| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `stepcode.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
+| Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `stepcode.ts`, and the Step extension over the current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
-| Legacy top-level `models`, `serve`, `goal`, and related gateway commands | Previous command dispatcher | separate product; Pi package commands remain unchanged |
+| Legacy top-level `models`, `serve`, `goal`, and related gateway commands | Previous command dispatcher | separate product; the package commands remain unchanged |
 
 This distinction is deliberate: a missing external service is reported as a
 gap instead of being represented by a command that appears to work but changes
@@ -451,18 +451,18 @@ session or approval semantics.
 
 ## Distribution
 
-The npm package exposes both `pi` and `step` from bundled entrypoints. The
-standalone archives likewise contain both executables (`pi`/`step`, or their
-Windows `.exe` variants); the Step executable uses the same Bun runtime setup as
-Pi before loading the Step product adapter.
+The npm package exposes a single `step` bin from the bundled entrypoint. The
+standalone archives contain the matching `step` executable (`step.exe` on
+Windows); it uses the shared Bun runtime setup before loading the Step product
+adapter.
 
 ## Non-goals
 
 This layer does not reimplement editor key handling, UTF-8 buffering, render
 throttling, selectors, or agent scheduling. Step's permission extension only
-defines the product tiers and dangerous-command policy; it invokes Pi's
+defines the product tiers and dangerous-command policy; it invokes the
 native `tool_call` confirmation and `ui.select` flows. Auto-resume likewise
-toggles Pi's native retry setting and adds only a bounded continuation after a
+toggles the native retry setting and adds only a bounded continuation after a
 settled retryable failure. Changes to the underlying interaction or scheduling
-behavior belong in Pi's shared packages and should be consumed here through
+behavior belong in the shared packages and should be consumed here through
 their public APIs.

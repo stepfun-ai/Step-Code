@@ -31,6 +31,14 @@ import {
 	type SkillInstructionContext,
 	stripSkillInstructions,
 } from "./skill-instructions.ts";
+import {
+	createSummaryDiagnostics,
+	getSummaryDiagnostics,
+	observeSummaryPayload,
+	SummaryFailure,
+	saveSummaryDiagnostics,
+	summaryFailure,
+} from "./summary-diagnostics.ts";
 import { createSummarySourceReducer } from "./summary-overflow.ts";
 import {
 	computeFileLists,
@@ -585,8 +593,8 @@ ${SUMMARY_DETAIL_RULES}`;
 /**
  * Returns an error message when a summarization response cannot safely be persisted.
  * A length stop contains partial text and must not become a session checkpoint.
- * When the model reported its output cap, it is surfaced in the message so
- * operators can see which limit was hit and tune `reserveTokens` accordingly.
+ * The displayed budget is selected by the caller, not read back from the HTTP payload.
+ * Effective request limits are recorded separately in the failure diagnostics.
  */
 export function getSummarizationFailure(
 	response: AssistantMessage,
@@ -600,7 +608,9 @@ export function getSummarizationFailure(
 		return `${label} failed: ${response.errorMessage || "Unknown error"}`;
 	}
 	if (response.stopReason === "length") {
-		const capNote = maxTokens ? ` (${maxTokens}-token output cap; raise reserveTokens if this recurs)` : "";
+		const capNote = maxTokens
+			? ` (${maxTokens}-token selected output cap; check model output limits and request context headroom)`
+			: "";
 		return `${label} failed: generation hit the token cap and the summary is incomplete${capNote}`;
 	}
 	return undefined;
@@ -640,16 +650,40 @@ export async function completeSummarization(
 ): Promise<AssistantMessage> {
 	// Avoid cache writes for one-off summaries. Reuse caller-supplied routing when available;
 	// callers without a session ID, including branch summaries, receive a fresh routing ID.
+	const diagnostics = createSummaryDiagnostics(model, context, options);
+	const startedAt = Date.now();
 	const requestOptions: SimpleStreamOptions = {
 		...options,
 		cacheRetention: "none",
 		sessionId: options.sessionId ?? uuidv7(),
+		onPayload: async (payload, requestModel) => {
+			const replacement = await options.onPayload?.(payload, requestModel);
+			diagnostics.observedMaxTokens = observeSummaryPayload(replacement ?? payload);
+			return replacement;
+		},
 	};
-	const produce = async (): Promise<AssistantMessage> =>
-		streamFn
+	const produce = async (): Promise<AssistantMessage> => {
+		diagnostics.attempts++;
+		diagnostics.observedMaxTokens = undefined;
+		return streamFn
 			? (await streamFn(model, context, requestOptions)).result()
 			: completeSimple(model, context, requestOptions);
-	return retryAssistantCall(produce, retry, requestOptions.signal, callbacks);
+	};
+	let response: AssistantMessage;
+	try {
+		response = await retryAssistantCall(produce, retry, requestOptions.signal, callbacks);
+	} catch (error) {
+		if (requestOptions.signal?.aborted) throw new DOMException("Summarization aborted", "AbortError");
+		diagnostics.durationMs = Date.now() - startedAt;
+		throw new SummaryFailure(error instanceof Error ? error.message : String(error), diagnostics);
+	}
+	diagnostics.durationMs = Date.now() - startedAt;
+	diagnostics.stopReason = response.stopReason;
+	diagnostics.errorKind = response.errorKind;
+	diagnostics.rawStopReason = response.rawStopReason;
+	diagnostics.usage = response.usage;
+	saveSummaryDiagnostics(response, diagnostics);
+	return response;
 }
 
 /**
@@ -735,6 +769,9 @@ async function completeSummaryWithOverflowRecovery(
 	let reductions = 0;
 	let reduceSource: ReturnType<typeof createSummarySourceReducer>;
 	let usage: Usage | undefined;
+	let lastResponse: AssistantMessage | undefined;
+	let attempts = 0;
+	const startedAt = Date.now();
 	const requestOptions = { ...options, sessionId: options.sessionId ?? uuidv7() };
 
 	// A local recovery/cancellation failure can end produce() while a transient retry is
@@ -756,6 +793,10 @@ async function completeSummaryWithOverflowRecovery(
 		for (;;) {
 			if (options.signal?.aborted) throw new Error("Compaction cancelled");
 			const response = await completeSummarization(model, context, requestOptions, streamFn);
+			const diagnostics = getSummaryDiagnostics(response);
+			if (diagnostics) diagnostics.stage = label;
+			lastResponse = response;
+			attempts++;
 			usage = usage ? combineUsage(usage, response.usage) : response.usage;
 			if (options.signal?.aborted) throw new Error("Compaction cancelled");
 			// Do not infer overflow from successful usage or empty/length-limited output.
@@ -784,10 +825,28 @@ async function completeSummaryWithOverflowRecovery(
 
 	try {
 		const response = await retryAssistantCall(produce, retry, options.signal, retryCallbacks);
-		return { ...response, usage: usage ?? response.usage };
+		const result = { ...response, usage: usage ?? response.usage };
+		const diagnostics = getSummaryDiagnostics(response);
+		if (diagnostics) {
+			saveSummaryDiagnostics(result, { ...diagnostics, attempts, durationMs: Date.now() - startedAt });
+		}
+		return result;
 	} catch (error) {
 		if (activeRetry !== undefined) {
 			await callbacks?.onRetryFinished?.(false, activeRetry, error instanceof Error ? error.message : String(error));
+		}
+		if (error instanceof SummaryFailure) {
+			error.diagnostics.stage = label;
+			error.diagnostics.attempts += attempts;
+			error.diagnostics.durationMs = Date.now() - startedAt;
+			throw error;
+		}
+		if (lastResponse && !options.signal?.aborted) {
+			const diagnostics = getSummaryDiagnostics(lastResponse);
+			if (diagnostics) {
+				saveSummaryDiagnostics(lastResponse, { ...diagnostics, attempts, durationMs: Date.now() - startedAt });
+				throw summaryFailure(error instanceof Error ? error.message : String(error), lastResponse);
+			}
 		}
 		throw error;
 	}
@@ -854,16 +913,16 @@ export async function generateSummaryWithUsage(
 	}
 	const failure = getSummarizationFailure(response, "Summarization", maxTokens);
 	if (failure) {
-		throw new Error(failure);
+		throw summaryFailure(failure, response);
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
-		throw new Error("Summarization attempted to call a tool");
+		throw summaryFailure("Summarization attempted to call a tool", response);
 	}
 
 	const textContent = contentText(response.content);
 	// Validate model text before split-turn scaffolding or file metadata can make it look nonempty.
 	if (textContent.trim().length === 0) {
-		throw new Error("Summarization failed: empty summary (response contained no summary text)");
+		throw summaryFailure("Summarization failed: empty summary (response contained no summary text)", response);
 	}
 
 	return { text: textContent, usage: response.usage };
@@ -1157,15 +1216,18 @@ async function generateTurnPrefixSummary(
 	}
 	const failure = getSummarizationFailure(response, "Turn prefix summarization", maxTokens);
 	if (failure) {
-		throw new Error(failure);
+		throw summaryFailure(failure, response);
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
-		throw new Error("Turn prefix summarization attempted to call a tool");
+		throw summaryFailure("Turn prefix summarization attempted to call a tool", response);
 	}
 	const textContent = contentText(response.content);
 	// A valid history summary cannot substitute for a missing turn-prefix summary.
 	if (textContent.trim().length === 0) {
-		throw new Error("Turn prefix summarization failed: empty summary (response contained no summary text)");
+		throw summaryFailure(
+			"Turn prefix summarization failed: empty summary (response contained no summary text)",
+			response,
+		);
 	}
 
 	return {

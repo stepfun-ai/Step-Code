@@ -49,6 +49,13 @@ export {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "./core/cache-stats.ts";
+export {
+	CHILD_SESSION_ORIGIN,
+	isChildAgentSession,
+	isChildAgentSessionId,
+	SUBAGENT_SESSION_ID_PREFIX,
+	WORKFLOW_SESSION_ID_PREFIX,
+} from "./core/child-session.ts";
 // Compaction
 export {
 	type BranchPreparation,
@@ -202,6 +209,7 @@ export {
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";
 export type { ToolRenderContext } from "./core/extensions/types.ts";
+export type { UIDecisionRequest } from "./core/extensions/ui-decisions.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { FooterDataProvider } from "./core/footer-data-provider.ts";
@@ -311,7 +319,12 @@ export {
 } from "./core/sdk.ts";
 export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
-export type { SessionListProgress } from "./core/session-manager.ts";
+export * from "./core/session-index/index.ts";
+export type {
+	SessionFilePersistedEvent,
+	SessionFilePersistedListener,
+	SessionListProgress,
+} from "./core/session-manager.ts";
 export {
 	type BranchSummaryEntry,
 	buildContextEntries,
@@ -489,11 +502,6 @@ export {
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
 } from "./features/step-schedule.ts";
-export {
-	isChildAgentSessionId,
-	SUBAGENT_SESSION_ID_PREFIX,
-	WORKFLOW_SESSION_ID_PREFIX,
-} from "./features/step-subagent.ts";
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.
@@ -542,6 +550,17 @@ export { type RenderDiffOptions, renderDiff } from "./render/diff.ts";
 export { DynamicBorder } from "./render/dynamic-border.ts";
 export { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./render/keybinding-hints.ts";
 export { truncateToVisualLines, type VisualTruncateResult } from "./render/visual-truncate.ts";
+export {
+	createSessionSearchService,
+	parseSearchQueryParams,
+	parseSessionListParams,
+	SESSION_SEARCH_METHODS,
+	type SessionListItemWire,
+	type SessionListPageWire,
+	type SessionSearchMethod,
+	SessionSearchRequestError,
+	type SessionSearchService,
+} from "./server/session-search-service.ts";
 export {
 	getLegacyStepAuthPath,
 	getStepAuthPath,
@@ -611,6 +630,17 @@ export {
 	type StepLoginOutcome,
 	syncStepLoginProfileEndpoint,
 } from "./step/login-flow.ts";
+export {
+	buildStepLoginState,
+	clearStepLoginState,
+	getStepLoginStatePath,
+	getStepLoginToken,
+	readStepLoginState,
+	type StepLoginState,
+	type StepLoginTokenOptions,
+	type StepLoginTokenOutcome,
+	saveStepLoginState,
+} from "./step/login-state.ts";
 export {
 	getStepLoginStatus,
 	type StepCredentialValidity,

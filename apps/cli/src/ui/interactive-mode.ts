@@ -1271,13 +1271,13 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Update terminal title with session name and cwd.
+	 * Show the session name, or product and cwd when unnamed.
 	 */
 	updateTerminalTitle(): void {
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(sessionName);
 		} else {
 			this.ui.terminal.setTitle(`${APP_TITLE} - ${cwdBasename}`);
 		}
@@ -4202,6 +4202,7 @@ export class InteractiveMode {
 				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
 				this.showStatus(msg);
 			} else {
+				this.settingsManager.recordRecentModel(result.model.provider, result.model.id);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				const thinkingStr =
@@ -4795,6 +4796,7 @@ export class InteractiveMode {
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
+						this.ui.terminal.setProgress(enabled && (this.session.isStreaming || this.session.isCompacting));
 					},
 					onStatusTipsChange: (enabled) => {
 						this.settingsManager.setStatusTips(enabled);
@@ -4895,6 +4897,7 @@ export class InteractiveMode {
 		if (model) {
 			try {
 				await this.session.setModel(model, { persist: false });
+				this.settingsManager.recordRecentModel(model.provider, model.id);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
@@ -5038,6 +5041,7 @@ export class InteractiveMode {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
 				try {
 					await this.session.setModel(model, { persist });
+					this.settingsManager.recordRecentModel(model.provider, model.id);
 					this.updateAvailableProviderCount();
 					this.footer.invalidate();
 					this.updateEditorBorderColor();
@@ -5064,6 +5068,7 @@ export class InteractiveMode {
 				initialSearchInput,
 				(model) => selectModel(model, true),
 				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
+				this.settingsManager.getRecentModels(),
 			);
 			return {
 				component: selector,
@@ -5737,6 +5742,9 @@ export class InteractiveMode {
 			const report = await this.options.stepLogout?.();
 			if (!report) return;
 			this.showStatus(report.removed ? "Signed out of Step." : "No stored Step credential.");
+			if (report.accountSessionRemoved === false) {
+				this.showWarning("The account session could not be removed and is still on disk. Run /logout again.");
+			}
 			if (report.remainingSource) {
 				this.showWarning(`An API key is still active from ${report.remainingSource}.`);
 			}
@@ -6823,9 +6831,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 			this.hideExtensionSelector();
 			this.hideExtensionInput();
 			this.disposeActiveSelector();
-			if (this.settingsManager.getShowTerminalProgress()) {
-				this.ui.terminal.setProgress(false);
-			}
+			this.ui.terminal.setProgress(false);
 			this.themeController.disableAutoSync();
 			this.clearExtensionTerminalInputListeners();
 			this.footer.dispose();

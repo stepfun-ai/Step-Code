@@ -13,6 +13,7 @@ export const workspaceSourcePaths = {
 	codingAgentIndex: fileURLToPath(new URL("./packages/coding-agent/src/index.ts", import.meta.url)),
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
 	configIndex: fileURLToPath(new URL("./packages/config/src/index.ts", import.meta.url)),
+	larkAdapterIndex: fileURLToPath(new URL("./packages/lark-adapter/src/index.ts", import.meta.url)),
 } as const;
 
 export default {
@@ -33,6 +34,7 @@ export default {
 			{ find: /^@step-harness\/coding-agent$/, replacement: workspaceSourcePaths.codingAgentIndex },
 			{ find: /^@step-harness\/pi-tui$/, replacement: workspaceSourcePaths.tuiIndex },
 			{ find: /^@step-harness\/config$/, replacement: workspaceSourcePaths.configIndex },
+			{ find: /^@step-harness\/lark-adapter$/, replacement: workspaceSourcePaths.larkAdapterIndex },
 			// A1 backward-compat: legacy @earendil-works/pi-* specifiers (used by example
 			// extensions and old user extensions) resolve to the same renamed sources.
 			{ find: /^@earendil-works\/pi-telemetry$/, replacement: workspaceSourcePaths.telemetryIndex },

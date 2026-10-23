@@ -1,5 +1,6 @@
 import type { ThinkingLevel } from "@step-harness/agent-core";
 import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@step-harness/pi-tui";
+import { supportsTerminalProgress } from "@step-harness/pi-tui";
 import type { Transport } from "@step-harness/providers";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -48,7 +49,7 @@ export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
 	clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
-	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
+	showTerminalProgress?: boolean; // default: auto, on in Otty and Ghostty (OSC 9;4 terminal progress indicators)
 	hyperlinks?: boolean | "auto";
 	images?: "kitty" | "iterm2" | "auto" | false;
 	trueColor?: boolean | "auto";
@@ -102,6 +103,7 @@ export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
+	recentModels?: { provider: string; id: string }[];
 	defaultThinkingLevel?: ThinkingLevel;
 	modelThinkingLevels?: Record<string, ThinkingLevel>; // per-model default thinking level overrides keyed by "provider/modelId"
 	transport?: TransportSetting; // default: "auto"
@@ -192,6 +194,23 @@ function parseTimeoutSetting(value: unknown, settingName: string): number | unde
 }
 
 export type SettingsScope = "global" | "project";
+
+function normalizeRecentModels(value: unknown): { provider: string; id: string }[] {
+	if (!Array.isArray(value)) return [];
+	const result: { provider: string; id: string }[] = [];
+	const seen = new Set<string>();
+	for (const entry of value) {
+		if (!isMergeableObject(entry)) continue;
+		const { provider, id } = entry;
+		if (typeof provider !== "string" || !provider.trim() || typeof id !== "string" || !id.trim()) continue;
+		const key = `${provider}\0${id}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push({ provider, id });
+		if (result.length === 10) break;
+	}
+	return result;
+}
 
 export interface SettingsManagerCreateOptions {
 	projectTrusted?: boolean;
@@ -738,6 +757,26 @@ export class SettingsManager {
 		return this.settings.defaultModel;
 	}
 
+	getRecentModels(): { provider: string; id: string }[] {
+		return normalizeRecentModels(this.globalSettings.recentModels);
+	}
+
+	recordRecentModel(provider: string, id: string): void {
+		const model = { provider, id };
+		this.globalSettings.recentModels = normalizeRecentModels([model, ...this.getRecentModels()]);
+		if (this.globalSettingsLoadError) return;
+		this.enqueueWrite("global", () => {
+			this.storage.withLock("global", (current) => {
+				const settings = current
+					? SettingsManager.migrateSettings(JSON.parse(stripBom(current)) as Record<string, unknown>)
+					: {};
+				// Merge under the lock so another session's selections are not lost.
+				settings.recentModels = normalizeRecentModels([model, ...normalizeRecentModels(settings.recentModels)]);
+				return JSON.stringify(settings, null, 2);
+			});
+		});
+	}
+
 	setDefaultProvider(provider: string): void {
 		this.globalSettings.defaultProvider = provider;
 		this.markModified("defaultProvider");
@@ -1235,7 +1274,7 @@ export class SettingsManager {
 	}
 
 	getShowTerminalProgress(): boolean {
-		return this.settings.terminal?.showTerminalProgress ?? false;
+		return this.settings.terminal?.showTerminalProgress ?? supportsTerminalProgress();
 	}
 
 	setShowTerminalProgress(enabled: boolean): void {

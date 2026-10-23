@@ -7,7 +7,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "../../src/core/tools/truncate.ts";
-import { createStepExtension } from "../../src/features/step.ts";
+import { StepPermissionController } from "../../src/step/permissions.ts";
 import { createStepToolProfile } from "../../src/step/tool-profile.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
@@ -240,15 +240,24 @@ describe("AgentSession final tool output", () => {
 		if (process.platform === "win32") return;
 		const sandbox = mkdtempSync(join(tmpdir(), "step-tool-output-bash-"));
 		vi.stubEnv("STEP_CODING_AGENT_DIR", join(sandbox, "agent"));
+		let harness: Harness | undefined;
+		let fullOutputPath: string | undefined;
 		try {
-			const harness = await createHarness({
+			harness = await createHarness({
 				tools: [],
 				initialActiveToolNames: ["run_command"],
 				settings: { compaction: { enabled: false } },
 				extensionFactories: [
-					createStepExtension({
-						permission: { env: {}, initialPreset: "approve-for-me", toolOverrides: { run_command: "allow" } },
-					}),
+					(pi) => {
+						// Output retention needs the real permission gate, not unrelated
+						// plugin provisioning and MCP connections from the full Step extension.
+						const permissions = new StepPermissionController({
+							env: {},
+							initialPreset: "approve-for-me",
+							toolOverrides: { run_command: "allow" },
+						});
+						pi.on("tool_call", (event, ctx) => permissions.handleToolCall(event, ctx));
+					},
 					(pi) => {
 						const tool = createStepToolProfile(sandbox, { agentDir: join(sandbox, "agent") }).find(
 							(candidate) => candidate.name === "run_command",
@@ -272,12 +281,19 @@ describe("AgentSession final tool output", () => {
 				},
 			]);
 			await harness.session.prompt("run the build");
-			await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			expect(requestText).toContain("\n3000\n");
-			expect(requestText).toMatch(/Full output: \S*step-bash-\S+\.log\]/);
+			const match = requestText.match(/Full output: (\S*step-bash-\S+\.log)\]/);
+			expect(match).not.toBeNull();
+			fullOutputPath = match![1];
+			expect(await readFile(fullOutputPath, "utf8")).toBe(
+				`${Array.from({ length: 3000 }, (_, n) => n + 1).join("\n")}\n`,
+			);
 			expect(requestText.endsWith("Command exited with code 1")).toBe(true);
 			expect(requestText).not.toContain("Showing first");
 		} finally {
+			await harness?.session.abort();
+			await harness?.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			if (fullOutputPath) rmSync(fullOutputPath, { force: true });
 			vi.unstubAllEnvs();
 			rmSync(sandbox, { recursive: true, force: true });
 		}

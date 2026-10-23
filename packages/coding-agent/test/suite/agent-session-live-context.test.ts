@@ -35,10 +35,12 @@ describe("AgentSession CLM context integration", () => {
 		await harness.session.prompt("Fix the parser and retain the public API.");
 		await harness.session.prompt("Check progress.");
 		let next: Context | undefined;
+		let sentMessages: Context["messages"] = [];
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("organize_context", {}), { stopReason: "toolUse" }),
 			(context) => {
 				next = context;
+				sentMessages = structuredClone(context.messages);
 				return fauxAssistantMessage("done");
 			},
 		]);
@@ -48,6 +50,16 @@ describe("AgentSession CLM context integration", () => {
 		expect(next!.messages.some((m) => m.role === "toolResult" && m.toolName === "organize_context")).toBe(true);
 		expect(JSON.stringify(harness.sessionManager.getEntries())).toContain("Verbose old exploration");
 		expect(harness.session.getLiveContextStatus()!.revision).toBe(1);
+		expect(JSON.stringify(sentMessages)).toContain("Context revision 1 accepted");
+		harness.setResponses([
+			(context) => {
+				expect(context.messages.slice(0, sentMessages.length)).toEqual(sentMessages);
+				expect(JSON.stringify(context.messages).match(/Context revision 1 accepted/g)).toHaveLength(1);
+				return fauxAssistantMessage("continued");
+			},
+		]);
+		await harness.session.prompt("continue");
+		expect(JSON.stringify(harness.sessionManager.getEntries())).not.toContain('"customType":"live-context-status"');
 	});
 	it("can inspect a large context index and edit it before native threshold compaction", async () => {
 		let h: Harness;

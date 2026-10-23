@@ -1,8 +1,10 @@
 import type { AgentMessage } from "@step-harness/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { describe, expect, it } from "vitest";
 import {
 	STEP_TASK_STATE_MESSAGE,
 	TASK_STATE_MAX_BYTES,
+	TaskStateContext,
 	withTaskStateContext,
 } from "../src/features/step-tasks-context.ts";
 
@@ -81,5 +83,78 @@ describe("bounded task context", () => {
 		};
 		expect(withTaskStateContext([user, other, old], undefined, 4)).toEqual([user, other]);
 		expect(withTaskStateContext([user, other, old], { tasks: [] }, 4)).toEqual([user, other]);
+	});
+});
+
+describe("stable task context", () => {
+	const user: AgentMessage = { role: "user", content: "Continue the requested work", timestamp: 1 };
+	const task = { id: "1", subject: "Investigate", status: "pending", blockedBy: [] };
+	const state = { plan: { id: "plan-1", title: "Existing request" }, tasks: [task] };
+	const snapshots = (messages: AgentMessage[]) =>
+		messages.filter((message) => message.role === "custom" && message.customType === STEP_TASK_STATE_MESSAGE);
+
+	it("preserves snapshot position and timestamp across retries and appended tool turns", () => {
+		const context = new TaskStateContext();
+		const source = [user];
+		const first = context.project(source, state, 2);
+		expect(context.project(structuredClone(source), structuredClone(state), 3)).toEqual(first);
+		const call = fauxToolCall("task_list", {}, { id: "call-1" });
+		const extended: AgentMessage[] = [
+			...source,
+			fauxAssistantMessage(call, { stopReason: "toolUse", timestamp: 4 }),
+			{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [], isError: false, timestamp: 5 },
+		];
+		const second = context.project(extended, state, 6);
+		expect(second).toEqual([...first, ...extended.slice(source.length)]);
+		expect(snapshots(second)).toHaveLength(1);
+		expect(source).toEqual([user]);
+	});
+
+	it("appends a changed snapshot without replacing earlier request metadata", () => {
+		const context = new TaskStateContext();
+		const source = [user];
+		const first = context.project(source, state, 2);
+		const extended = [...source, fauxAssistantMessage("Investigation complete", { timestamp: 3 })];
+		const completed = { ...state, tasks: [{ ...task, status: "completed" }] };
+		const second = context.project(extended, completed, 4);
+		expect(second.slice(0, first.length)).toEqual(first);
+		expect(snapshots(second)).toHaveLength(2);
+		expect(record(second).data.counts).toMatchObject({ total: 1, completed: 1, pending: 0 });
+		expect(record(second).message.content).toContain("earlier snapshots are historical");
+		expect(context.project(structuredClone(extended), completed, 5)).toEqual(second);
+	});
+
+	it("supersedes deleted tasks with one empty snapshot and does not revive them", () => {
+		const context = new TaskStateContext();
+		const first = context.project([user], state, 2);
+		const second = context.project([user], { tasks: [] }, 3);
+		expect(second.slice(0, first.length)).toEqual(first);
+		expect(record(second).data.counts).toMatchObject({ total: 0, pending: 0, completed: 0 });
+		expect(record(second).data.openTasks).toEqual([]);
+		expect(context.project([user], { tasks: [{ ...task, status: "deleted" }] }, 4)).toEqual(second);
+		expect(new TaskStateContext().project([user], { tasks: [] }, 5)).toEqual([user]);
+	});
+
+	it.each(["edit", "shrink", "reset"])("clears obsolete snapshots after a %s context boundary", (boundary) => {
+		const context = new TaskStateContext();
+		const source = [user, fauxAssistantMessage("obsolete details", { timestamp: 2 })];
+		context.project(source, state, 3);
+		const completed = { ...state, tasks: [{ ...task, status: "completed" }] };
+		context.project([...source, fauxAssistantMessage("done", { timestamp: 4 })], completed, 5);
+		if (boundary === "reset") context.reset();
+		const changed = boundary === "edit" ? [user, fauxAssistantMessage("concise details")] : source;
+		const next = context.project(changed, completed, 6);
+		expect(next.slice(0, changed.length)).toEqual(changed);
+		expect(snapshots(next)).toHaveLength(1);
+		expect(record(next).data.counts.completed).toBe(1);
+	});
+
+	it("drops retained metadata while tools are disabled and starts fresh on re-enable", () => {
+		const context = new TaskStateContext();
+		const first = context.project([user], state, 2);
+		expect(context.project(first, undefined, 3)).toEqual([user]);
+		const next = context.project([user], state, 4);
+		expect(snapshots(next)).toHaveLength(1);
+		expect(record(next).message.timestamp).toBe(4);
 	});
 });

@@ -123,7 +123,18 @@ export class FooterComponent implements Component {
 
 	render(width: number): string[] {
 		if (this.presentation === "step") {
-			return this.renderStepPresentation(width);
+			const lines = this.renderStepPresentation(width);
+			const larkStatus = sanitizeStatusText(this.footerData.getExtensionStatuses().get("lark") ?? "");
+			if (larkStatus) {
+				lines.unshift(
+					truncateToWidth(
+						theme.fg(larkStatus.startsWith("lark · connected") ? "success" : "muted", larkStatus),
+						Math.max(1, Math.floor(width)),
+						"",
+					),
+				);
+			}
+			return lines;
 		}
 
 		const state = this.session.state;
@@ -369,7 +380,7 @@ export class FooterComponent implements Component {
 		if (safeWidth >= 100) {
 			for (const [key, status] of [...extensionStatuses.entries()].sort(([a], [b]) => a.localeCompare(b))) {
 				// Permission and Ultracode already have leading segments.
-				if (key === "step-permission" || key === "ultracode") continue;
+				if (key === "step-permission" || key === "ultracode" || key === "lark") continue;
 				const cleaned = status
 					.replace(/[\r\n\t]+/gu, " ")
 					.replace(/ +/gu, " ")

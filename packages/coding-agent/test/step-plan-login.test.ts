@@ -2,6 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as settingsManager from "../src/core/settings-manager.ts";
+import { acquireSettingsLockSync } from "../src/core/settings-manager.ts";
 import { loginStepOAuth } from "../src/features/step-provider/index.ts";
 import {
 	checkStepPlanBeforeInteractive,
@@ -9,6 +11,7 @@ import {
 	runStepLogin,
 	writeStepLoginCredential,
 } from "../src/step/login-flow.ts";
+import { readStepLoginState, saveStepLoginState } from "../src/step/login-state.ts";
 import type { StepLoginProfileId } from "../src/step/onboarding.ts";
 import type { StepOnboardingView } from "../src/step/onboarding-view.ts";
 import { PlanUsageController, resolvePlanUsageAccount } from "../src/step/usage/account.ts";
@@ -18,13 +21,11 @@ import * as browser from "../src/utils/open-browser.ts";
 
 vi.mock("../src/features/step-provider/index.ts", async (original) => ({
 	...(await original<typeof import("../src/features/step-provider/index.ts")>()),
-	loginStepOAuth: vi.fn(async () => ({
-		access: "plan-key",
-		refresh: "static",
-		expires: Number.MAX_SAFE_INTEGER,
-		uid: "123",
-	})),
+	loginStepOAuth: vi.fn(async () => oauthResult.current),
 }));
+
+/** What the mocked sign-in returns; swapped per test. */
+const oauthResult = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 
 function snapshot(family: "none" | "coding" | "token" = "none"): PlanUsageSnapshot {
 	return {
@@ -74,6 +75,12 @@ describe("Step Plan login availability", () => {
 		authPath = join(root, "auth.json");
 		vi.mocked(loginStepOAuth).mockClear();
 		vi.spyOn(browser, "openBrowser").mockImplementation(() => {});
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+		};
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();
@@ -82,12 +89,16 @@ describe("Step Plan login availability", () => {
 	function controller(fetcher: typeof fetch) {
 		return new PlanUsageController(() => resolvePlanUsageAccount(authPath, {}), fetcher, Date.now, 100);
 	}
-	function start(planUsage: PlanUsageController, requiredPlan?: "step_plan" | "step_plan_oversea") {
+	function start(
+		planUsage: PlanUsageController,
+		requiredPlan?: "step_plan" | "step_plan_oversea",
+		env: Record<string, string | undefined> = {},
+	) {
 		let view!: StepOnboardingView;
 		const stop = vi.fn();
 		const login = runStepLogin({
 			authPath,
-			env: {},
+			env,
 			noBrowser: true,
 			planUsage,
 			requiredPlan,
@@ -304,6 +315,176 @@ describe("Step Plan login availability", () => {
 			});
 			expect(readStepLoginCredential(authPath)).toMatchObject({ access: "plan-key", profile: "step_plan_oversea" });
 		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("stores the account session beside the api key after a browser sign-in", async () => {
+		// Regression: the session rode along on the credential event but was
+		// never handed to `persist`, so nothing reached the disk and the whole
+		// account-session feature was silently absent.
+		const loginStatePath = join(root, "step-login.json");
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: {
+				accessToken: "access-jwt",
+				refreshToken: "refresh-jwt",
+				deviceId: "device-1",
+				appId: "10300",
+				expiresIn: 1800,
+			},
+		};
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			// Isolate the account session; an empty env resolves to the real home.
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			await expect(login).resolves.toMatchObject({ kind: "completed" });
+			const stored = JSON.parse(await readFile(loginStatePath, "utf8")) as Record<string, unknown>;
+			expect(stored).toMatchObject({
+				profile: "step_plan",
+				appId: "10300",
+				deviceId: "device-1",
+				accessToken: "access-jwt",
+				refreshToken: "refresh-jwt",
+			});
+			expect(stored.accessExpiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
+			// The api key is unaffected by the session being stored.
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("completes the sign-in when the backend sends no account session", async () => {
+		const loginStatePath = join(root, "step-login.json");
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			await expect(login).resolves.toMatchObject({ kind: "completed" });
+			await expect(readFile(loginStatePath, "utf8")).rejects.toThrow();
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("still signs in when the backend sends an unusable account session", async () => {
+		// The API key is already in hand, so a broken session field must not cost
+		// the user their sign-in — only account features become unavailable.
+		const loginStatePath = join(root, "step-login.json");
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: { access_token: "a", refresh_token: "b" },
+			loginError: "the login field was missing a required token, device id or app id",
+		};
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			await expect(login).resolves.toMatchObject({
+				kind: "completed",
+				warning: expect.stringContaining("server rejected the account session"),
+			});
+			await expect(readFile(loginStatePath, "utf8")).rejects.toThrow();
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("completes the sign-in with a warning when the account session cannot be locked at all", async () => {
+		// Regression: a non-contention lock failure (read-only directory,
+		// permissions) used to escape `persist` and report the whole sign-in as
+		// "Could not save credentials" although the API key was already written.
+		const loginStatePath = join(root, "step-login.json");
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: { accessToken: "access-jwt", refreshToken: "refresh-jwt", deviceId: "device-1", appId: "10300" },
+			loginError: "ignored when a session is present but not stored",
+		};
+		vi.spyOn(settingsManager, "acquireSettingsLockSync").mockImplementation(() => {
+			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+		});
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			{ STEPCODE_LOGIN_STATE_PATH: loginStatePath },
+		);
+		try {
+			view.handleInput("1");
+			const outcome = await login;
+			expect(outcome.kind).toBe("completed");
+			expect(outcome.warning).toContain("could not be saved: permission denied");
+			// The server's reason is kept next to the local failure, not replaced by it.
+			expect(outcome.warning).toContain("The server rejected the account session");
+			expect(readStepLoginCredential(authPath)).toMatchObject({ type: "oauth", access: "plan-key" });
+		} finally {
+			view.handleInput("\x03");
+			await login;
+		}
+	});
+
+	it("warns that the previous session survives when another process holds it", async () => {
+		const loginStatePath = join(root, "step-login.json");
+		const env = { STEPCODE_LOGIN_STATE_PATH: loginStatePath };
+		await saveStepLoginState(
+			{
+				version: 1,
+				profile: "step_plan",
+				appId: "10300",
+				deviceId: "old-device",
+				accessToken: "old-access",
+				refreshToken: "old-refresh",
+				accessExpiresAt: Math.floor(Date.now() / 1000) + 1800,
+			},
+			env,
+		);
+		oauthResult.current = {
+			access: "plan-key",
+			refresh: "static",
+			expires: Number.MAX_SAFE_INTEGER,
+			uid: "123",
+			login: { accessToken: "access-jwt", refreshToken: "refresh-jwt", deviceId: "device-1", appId: "10300" },
+		};
+		const release = acquireSettingsLockSync(loginStatePath);
+		const { login, view } = start(
+			controller(vi.fn<typeof fetch>(async () => Response.json(snapshot("coding")))),
+			undefined,
+			env,
+		);
+		try {
+			view.handleInput("1");
+			const outcome = await login;
+			expect(outcome.kind).toBe("completed");
+			expect(outcome.warning).toContain("could not be written");
+			expect(outcome.warning).toContain("previous account session may still be on disk");
+			expect(readStepLoginState(env)?.refreshToken).toBe("old-refresh");
+		} finally {
+			release();
 			view.handleInput("\x03");
 			await login;
 		}

@@ -12,7 +12,7 @@ import type { AgentToolResult } from "@step-harness/agent-core";
 import { Type } from "typebox";
 import type { EventBus } from "../core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
-import { withTaskStateContext } from "./step-tasks-context.ts";
+import { TaskStateContext } from "./step-tasks-context.ts";
 import { parseImportBatch, STEP_TASKS_IMPORT_CHANNEL, type StepTaskImportItem } from "./step-tasks-import.ts";
 import { formatTaskLine, renderTaskCall, renderTaskResult } from "./step-tasks-render.ts";
 
@@ -162,6 +162,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		const tasks = new Map<string, StepTask>();
 		const archivedPlans = new Map<string, TaskPlan>();
+		const taskContext = new TaskStateContext();
 		let activePlan: Omit<TaskPlan, "tasks"> | undefined;
 		let nextId = 1;
 		/** Import batches buffered until the active-branch snapshot restore ran. */
@@ -284,7 +285,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 			}));
 
 		pi.on("context", (event) => ({
-			messages: withTaskStateContext(
+			messages: taskContext.project(
 				event.messages,
 				pi.getActiveTools().some((name) => ["task_create", "task_update", "task_get", "task_list"].includes(name))
 					? { plan: activePlan, tasks: listTasks() }
@@ -453,6 +454,7 @@ export function createStepTasksExtension(): ExtensionFactory {
 		});
 
 		const restoreTasks = (ctx: ExtensionContext): void => {
+			taskContext.reset();
 			tasks.clear();
 			archivedPlans.clear();
 			activePlan = undefined;

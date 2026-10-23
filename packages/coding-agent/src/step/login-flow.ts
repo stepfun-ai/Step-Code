@@ -3,12 +3,15 @@ import { AuthStorage, readStoredCredential } from "../core/auth-storage.ts";
 import {
 	defaultStepCliClientInfo,
 	loginStepOAuth,
+	parseStepCliLoginState,
 	STEP_PROVIDER_ID,
 	STEP_STATIC_REFRESH_TOKEN,
+	type StepCliLoginState,
 } from "../features/step-provider/index.ts";
 import { detectTerminalBackgroundFromEnv, initTheme, resolveThemeSetting, theme } from "../theme/theme.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import { resolveStepAgentDir } from "./environment.ts";
+import { buildStepLoginState, clearStepLoginState, saveStepLoginState } from "./login-state.ts";
 import {
 	INITIAL_STEP_LOGIN_STEP,
 	isStepLoginSettled,
@@ -58,8 +61,26 @@ export interface RunStepLoginOptions {
 	readonly requiredPlan?: "step_plan" | "step_plan_oversea";
 }
 
-/** Model discovery can return fallback models even when the account has no plan. */
-export function getMissingStepPlanProfile(state: AccountUsageState): "step_plan" | "step_plan_oversea" | undefined {
+/**
+ * Narrow the account session that rode along on the OAuth credentials.
+ *
+ * It arrives through an `unknown` bag, so it is validated here rather than
+ * trusted. This is the *parsed* shape; the wire shape is validated where the
+ * protocol defines it, in providers, so the two cannot drift apart.
+ */
+function readLoginState(value: unknown): StepCliLoginState | undefined {
+	return parseStepCliLoginState(value);
+}
+
+/** Both warnings matter; showing only one hides why account features are gone. */
+function combineWarnings(...warnings: Array<string | undefined>): string | undefined {
+	const present = warnings.filter((warning): warning is string => Boolean(warning));
+	return present.length > 0 ? present.join("\n") : undefined;
+}
+
+/** Model discovery can return fallback models even when the account has no plan. */ export function getMissingStepPlanProfile(
+	state: AccountUsageState,
+): "step_plan" | "step_plan_oversea" | undefined {
 	const { snapshot, account } = state;
 	if (state.status !== "ready" || !snapshot || !account.eligible) return undefined;
 	if (account.profile !== "step_plan" && account.profile !== "step_plan_oversea") return undefined;
@@ -229,6 +250,8 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		: undefined;
 	let savedPath = options.requiredPlan ? authPath : undefined;
 	let warning: string | undefined;
+	/** Set when sign-in succeeded but the account session could not be stored. */
+	let loginWarning: string | undefined;
 	let settle: ((outcome: StepLoginOutcome) => void) | undefined;
 	const finished = new Promise<StepLoginOutcome>((resolve) => {
 		settle = resolve;
@@ -272,14 +295,23 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		}
 		if (next.kind === "saving") {
 			const apiKey = event.type === "credential" ? event.apiKey.trim() : "";
-			await persist(next.choice, apiKey, event.type === "credential" ? event.uid : undefined);
+			await persist(
+				next.choice,
+				apiKey,
+				event.type === "credential" ? event.uid : undefined,
+				event.type === "credential" ? event.login : undefined,
+				event.type === "credential" ? event.loginError : undefined,
+			);
 			return;
 		}
 		if (next.kind === "checkingPlan") {
 			const account = await planUsage.query(true);
 			// Esc, cancellation, or a replacement login owns the view now.
 			if (step !== next) return;
-			warning = stepPlanCheckWarning(account);
+			// A failed account-session save is reported alongside the plan check,
+			// not replaced by it: only the browser path can carry a session, and
+			// that is exactly the path that runs this check.
+			warning = combineWarnings(stepPlanCheckWarning(account), loginWarning);
 			dispatch({ type: getMissingStepPlanProfile(account) ? "planRequired" : "saved" });
 			return;
 		}
@@ -329,6 +361,10 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				type: "credential",
 				apiKey: credential.access,
 				uid: typeof credential.uid === "string" ? credential.uid : undefined,
+				// Absent on backends that predate the account session; the login
+				// then completes with the API key alone, as it always has.
+				login: readLoginState(credential.login),
+				loginError: typeof credential.loginError === "string" ? credential.loginError : undefined,
 			});
 		} catch (error) {
 			if (!controller.signal.aborted)
@@ -336,7 +372,13 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 		}
 	}
 
-	async function persist(choice: StepLoginProfileId, apiKey: string, uid?: string): Promise<void> {
+	async function persist(
+		choice: StepLoginProfileId,
+		apiKey: string,
+		uid?: string,
+		login?: StepCliLoginState,
+		loginError?: string,
+	): Promise<void> {
 		const saving = step;
 		try {
 			const profile = profiles.find((candidate) => candidate.id === choice);
@@ -348,10 +390,47 @@ export async function runStepLogin(options: RunStepLoginOptions = {}): Promise<S
 				...(uid ? { uid } : {}),
 				obtainedAt: (options.now ?? (() => new Date()))().toISOString(),
 			});
+			// The account session is a separate file on purpose: it expires and
+			// refreshes on its own, and losing it must never cost the API key. Every
+			// failure here is a warning, never a failed sign-in — the key is already
+			// written by this point.
+			//
+			// Any previous session is dropped first. Signing in again — as another
+			// account, or with a profile that carries no session at all — must not
+			// leave the old account's session behind, or a host would read an
+			// identity that does not match the API key just written.
+			const rejected = loginError ? `The server rejected the account session (${loginError}).` : undefined;
+			const staleSession = "A previous account session may still be on disk and could be used by account features.";
+			let cleared = false;
+			try {
+				cleared = await clearStepLoginState(options.env ?? process.env);
+				const written = login
+					? await saveStepLoginState(buildStepLoginState(login, choice), options.env ?? process.env)
+					: true;
+				// A written session has already replaced whatever was there, so an
+				// unsuccessful clear is irrelevant in that case. Only a session that
+				// was neither written nor cleared leaves the old account's behind.
+				const replaced = cleared || (login !== undefined && written);
+				loginWarning = combineWarnings(
+					login && !written
+						? "Signed in, but the account session could not be written. Account features will ask you to sign in again."
+						: undefined,
+					replaced ? undefined : staleSession,
+					rejected,
+				);
+			} catch (error) {
+				loginWarning = combineWarnings(
+					`Signed in, but the account session could not be saved: ${
+						error instanceof Error ? error.message : String(error)
+					}.`,
+					cleared ? "Account features will ask you to sign in again." : staleSession,
+					rejected,
+				);
+			}
 			if (step !== saving) return;
 			savedProfile = profile;
 			savedPath = authPath;
-			warning = undefined;
+			warning = loginWarning;
 			syncStepLoginProfileEndpoint(authPath, options.env ?? process.env);
 			dispatch({ type: profile.credentialSource === "browser" ? "checkPlan" : "saved" });
 		} catch (error) {

@@ -33,8 +33,10 @@ describe("agent telemetry schemas", () => {
 			"pi.harness.event_handler",
 			"pi.session.write",
 		]);
+		const expected = renderAgentTelemetrySchemaMarkdown();
+		expect(expected).toMatch(/^# Step Agent Telemetry Schemas\n/);
 		const actual = readFileSync(resolve(import.meta.dirname, "../../docs/telemetry-schema.md"), "utf8");
-		expect(actual).toBe(renderAgentTelemetrySchemaMarkdown());
+		expect(actual).toBe(expected);
 	});
 
 	it("starts AI-request and harness spans through one composed typed starter", async () => {
