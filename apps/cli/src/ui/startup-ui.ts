@@ -31,6 +31,8 @@ const STARTUP_PRESENTATION: "native" | "step" = IS_STEP_ENTRYPOINT ? "step" : "n
 export interface StartupTuiPathOptions {
 	agentDir?: string;
 	configDirName?: string;
+	/** Working directory the startup UI discovers project-level resources against. Default: process.cwd() */
+	cwd?: string;
 }
 
 function loadThemes(resources: ResolvedResource[]): Theme[] {
@@ -53,7 +55,7 @@ function loadThemes(resources: ResolvedResource[]): Theme[] {
 	return themes;
 }
 
-async function loadStartupThemes(
+export async function loadStartupThemes(
 	settingsManager: SettingsManager,
 	paths: Required<StartupTuiPathOptions>,
 ): Promise<Theme[]> {
@@ -61,7 +63,9 @@ async function loadStartupThemes(
 		projectTrusted: false,
 	});
 	const packageManager = new DefaultPackageManager({
-		cwd: process.cwd(),
+		// Discover project-level themes against the resolved working directory, not the
+		// launcher's process.cwd(), so `step -C <dir>` pickers list <dir>'s themes.
+		cwd: paths.cwd,
 		agentDir: paths.agentDir,
 		configDirName: paths.configDirName,
 		settingsManager: globalSettingsManager,
@@ -77,6 +81,7 @@ export async function createStartupTui(
 	const resolvedPaths: Required<StartupTuiPathOptions> = {
 		agentDir: paths.agentDir ?? (IS_STEP_ENTRYPOINT ? resolveStepAgentDir() : getAgentDir()),
 		configDirName: paths.configDirName?.trim() || CONFIG_DIR_NAME,
+		cwd: paths.cwd ?? process.cwd(),
 	};
 	// Theme helpers have a product-level custom-theme directory context in
 	// addition to the resource loader's explicit paths. Bind it before any

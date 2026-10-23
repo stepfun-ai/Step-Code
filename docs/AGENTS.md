@@ -7,6 +7,7 @@ Inherits the [root rules](../AGENTS.md). This directory maintains repository-wid
 - `development.md`, `testing.md`: coding conventions, collaboration, failure handling, and validation selection.
 - `step-configuration.md`, `step-unified-config-and-mcp.md`: configuration, directories, trust, and MCP startup / write contracts.
 - `command-permissions.md`: command analysis and product approvals. `orchestration-lifecycle.md`, `goal-lifecycle.md`: orchestration and goal lifecycles.
+- `feedback-report.md`: what a user feedback report carries, its bounds and redaction, and the host integration contract.
 - `tui-rendering-pipeline.md`, `step-goal-ui.md`: CLI UI and terminal rendering integration.
 - `open-source-status.md`, `THIRD_PARTY_PROVENANCE.md`: public-source boundaries and third-party provenance.
 - Other topic / research documents must state their scope in the title and text; they do not automatically define current implementation rules.

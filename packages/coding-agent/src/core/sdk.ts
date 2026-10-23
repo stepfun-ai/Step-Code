@@ -39,6 +39,17 @@ import {
 	withFileMutationQueue,
 } from "./tools/index.ts";
 
+/** The furthest kind of block the attempt produced, for reporting a user stop. */
+function reachedOf(message: { content?: readonly { type?: string }[] }): "thinking" | "text" | "toolCall" | undefined {
+	let reached: "thinking" | "text" | "toolCall" | undefined;
+	for (const block of message.content ?? []) {
+		if (block.type === "toolCall") return "toolCall";
+		if (block.type === "text") reached = "text";
+		else if (block.type === "thinking" && reached === undefined) reached = "thinking";
+	}
+	return reached;
+}
+
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
 // or invoke low-level agent loops without supplying streamFn. Agent core remains
 // provider-agnostic and does not import pi-ai/compat itself.
@@ -343,6 +354,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				reasoningAtDispatch: options?.reasoning ?? "off",
 				requestedProvider: model.provider,
 				requestedModel: model.id,
+				// Dispatch-time facts: a later model or config change must not
+				// rewrite what this request actually ran with.
+				api: model.api,
+				...(model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+				...(model.maxTokens > 0 ? { maxTokens: model.maxTokens } : {}),
 			};
 			const startedAt = Date.now();
 			let statusCode = 0;
@@ -366,15 +382,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				...(modelRequestObserver || options?.onResponse
-					? {
-							onResponse: async (response, resolvedModel: Model<Api>) => {
-								statusCode = response.status;
-								if (modelRequestObserver) responseModel = resolvedModel;
-								await options?.onResponse?.(response, resolvedModel);
-							},
-						}
-					: undefined),
+				// Always installed: the recorded provenance needs the status code and
+				// the model that actually answered, whether or not a telemetry
+				// observer is mounted (public builds mount none).
+				onResponse: async (response, resolvedModel: Model<Api>) => {
+					statusCode = response.status;
+					responseModel = resolvedModel;
+					await options?.onResponse?.(response, resolvedModel);
+				},
 				transformHeaders: async (requestHeaders) => {
 					const headers = mergeProviderAttributionHeaders(model, options?.sessionId, requestHeaders);
 					return headerRunner?.hasHandlers("before_provider_headers")
@@ -394,7 +409,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				throw error;
 			}
 			return observeModelRequestStream(model, stream, modelRequestObserver, {
-				onTerminal: (message) => rememberRequestUsage(message, usageProvenance),
+				// A user stop during a slow or stuck request is a report of its own:
+				// the timings say whether a token ever arrived.
+				onCompleted: (message, completion) =>
+					rememberRequestUsage(message, {
+						...usageProvenance,
+						durationMs: completion.durationMs,
+						ttftMs: completion.ttftMs,
+						outcome: completion.outcome,
+						reached: reachedOf(message),
+						...(completion.statusCode > 0 ? { statusCode: completion.statusCode } : {}),
+						// Auth or a proxy can redirect the request; record who answered.
+						...(completion.provider !== model.provider ? { responseProvider: completion.provider } : {}),
+						...(completion.model !== model.id ? { responseModel: completion.model } : {}),
+					}),
 				startedAt,
 				sessionId: options?.sessionId,
 				getStatusCode: () => statusCode,

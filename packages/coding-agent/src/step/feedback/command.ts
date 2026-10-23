@@ -2,7 +2,7 @@ import { stdin as input, stdout as output } from "node:process";
 import * as readline from "node:readline/promises";
 import { resolveStepStorageRoot } from "../storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../telemetry.ts";
-import { buildFeedbackSessionBundle, describeFeedbackBundle, type FeedbackBundleResult } from "./bundle.ts";
+import { describeFeedbackBundle, type FeedbackBundleResult } from "./bundle.ts";
 import { neutralizeFeedbackConsentMetadata } from "./consent.ts";
 import {
 	deliverFeedback,
@@ -13,8 +13,9 @@ import {
 	type FeedbackDeliveryOutcome,
 	retryPendingFeedback,
 } from "./delivery.ts";
-import { readFeedbackDiagnostics } from "./diagnostics.ts";
 import { resolveFeedbackEndpoint } from "./endpoints.ts";
+import { prepareFeedbackEvidence } from "./evidence.ts";
+import type { FeedbackRuntimeFacts, FeedbackSessionSummary } from "./session-summary.ts";
 import { resolveFeedbackSettings } from "./settings.ts";
 import { buildFeedbackSubmission } from "./submission.ts";
 import {
@@ -23,6 +24,7 @@ import {
 	type FeedbackCategory,
 	type FeedbackDiagnostics,
 	type FeedbackSubmission,
+	type FeedbackSurface,
 } from "./types.ts";
 import { normalizeFeedbackCategory } from "./validate.ts";
 
@@ -41,6 +43,8 @@ export interface FeedbackCommandDependencies {
 	env?: NodeJS.ProcessEnv;
 	interactive?: boolean;
 	prompt?: FeedbackCommandPrompt;
+	/** Live host state (permission tier, live context size) the session file does not carry. */
+	runtime?: FeedbackRuntimeFacts | (() => FeedbackRuntimeFacts | Promise<FeedbackRuntimeFacts>);
 }
 
 export interface FeedbackCommandPrompt {
@@ -51,6 +55,8 @@ export interface FeedbackSubmitInput {
 	category?: string;
 	comment: string;
 	diagnostics?: FeedbackDiagnostics;
+	/** Content-free session state, attached by default; see `session-summary.ts`. */
+	sessionSummary?: FeedbackSessionSummary;
 	sessionId?: string;
 	sessionBundle?: FeedbackBundleResult;
 	storageRootDir: string;
@@ -61,7 +67,7 @@ export interface FeedbackSubmitInput {
 	telemetry?: StepTelemetryReporter;
 	fetchImpl?: typeof fetch;
 	env?: NodeJS.ProcessEnv;
-	surface: "cli" | "tui";
+	surface: FeedbackSurface;
 	confirm?: (submission: FeedbackSubmission) => Promise<boolean>;
 }
 
@@ -121,6 +127,8 @@ export async function submitFeedback(input: FeedbackSubmitInput): Promise<Feedba
 	const built = await buildFeedbackSubmission({
 		category: input.category,
 		comment: input.comment,
+		...(input.sessionSummary ? { sessionSummary: input.sessionSummary } : {}),
+		surface: input.surface,
 		...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
 		storageRootDir: input.storageRootDir,
 		...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -242,14 +250,16 @@ export async function runFeedbackCommand(
 	let category = parsed.category;
 	let comment = (parsed.message ?? parsed.positional.join(" ")).trim();
 	const hasExplicitComment = parsed.message !== undefined || parsed.positional.length > 0;
+	// A terminal means the consent page can be shown, whether or not the comment
+	// was typed on the command line. Only the questions depend on that.
 	const guided = canPrompt && !hasExplicitComment;
-	if (!guided && !category && !comment) {
+	if (!canPrompt && !category && !comment) {
 		write(stderr, "step feedback needs a comment or --category when no interactive terminal is available\n");
 		return 1;
 	}
 	let ownedPrompt: readline.Interface | undefined;
 	let prompt: FeedbackCommandPrompt | undefined;
-	if (guided) {
+	if (canPrompt) {
 		if (dependencies.prompt) prompt = dependencies.prompt;
 		else {
 			ownedPrompt = readline.createInterface({ input: stdin, output: stdout });
@@ -257,7 +267,7 @@ export async function runFeedbackCommand(
 		}
 	}
 	try {
-		if (prompt && !category) {
+		if (guided && prompt && !category) {
 			category = await askCategory(prompt);
 			if (!category) {
 				write(stdout, "Cancelled; nothing was submitted\n");
@@ -265,29 +275,37 @@ export async function runFeedbackCommand(
 			}
 		}
 		const readAt = new Date();
-		const shouldReadDiagnostics =
-			parsed.diagnostics === true || (prompt !== undefined && parsed.diagnostics !== false);
-		let diagnostics = shouldReadDiagnostics
-			? await readFeedbackDiagnostics({ storageRootDir, at: readAt })
-			: undefined;
-		const shouldBuildBundle =
-			bundleEndpoint !== undefined &&
-			(parsed.sessionBundle === true || (prompt !== undefined && parsed.sessionBundle !== false));
-		let sessionBundle = shouldBuildBundle
-			? await buildFeedbackSessionBundle({
-					storageRootDir,
-					...(!parsed.session && dependencies.sessionFile ? { sessionFile: dependencies.sessionFile } : {}),
-					sessionId: parsed.session ?? dependencies.sessionId,
-					at: readAt,
-					env,
-				})
-			: undefined;
+		// Everything is gathered by default. A report without the conversation
+		// cannot be investigated, and asking the user to assemble it produced
+		// reports that were just their own sentence. The two flags stay as
+		// explicit opt-outs for scripted callers.
+		const evidence = await prepareFeedbackEvidence({
+			storageRootDir,
+			sessionFile: parsed.session ? undefined : dependencies.sessionFile,
+			sessionId: parsed.session ?? dependencies.sessionId,
+			at: readAt,
+			env,
+			// A bundle that cannot be uploaded is 24 MiB of reading and gzip for
+			// nothing, and it would be announced on the consent page.
+			withoutBundle: parsed.sessionBundle === false || bundleEndpoint === undefined,
+			withoutDiagnostics: parsed.diagnostics === false,
+			...(dependencies.runtime
+				? {
+						runtime:
+							typeof dependencies.runtime === "function" ? await dependencies.runtime() : dependencies.runtime,
+					}
+				: {}),
+		});
+		const sessionBundle = evidence.bundle;
 		if (!parsed.json && sessionBundle?.status === "skipped") {
 			write(stdout, `${formatFeedbackBundleSkipMessage(sessionBundle)}\n`);
 		}
-		if (prompt && parsed.diagnostics === undefined) diagnostics = await askDiagnostics(prompt, diagnostics);
-		if (prompt && parsed.sessionBundle === undefined) sessionBundle = await askBundle(prompt, sessionBundle);
-		if (prompt) {
+		// With no terminal to show the review page on, say what goes with the
+		// report so a scripted submission is never silent about the transcript.
+		if (!prompt && !parsed.json && sessionBundle?.status === "ready") {
+			write(stderr, `Attaching: ${descriptionsOf(sessionBundle)}\n`);
+		}
+		if (guided && prompt) {
 			const answer = await prompt.question("Feedback: ");
 			if (answer === undefined) {
 				write(stdout, "Cancelled; nothing was submitted\n");
@@ -303,11 +321,12 @@ export async function runFeedbackCommand(
 				: sessionArgumentLooksLikePath
 					? undefined
 					: parsed.session
-			: dependencies.sessionId;
+			: (evidence.sessionId ?? dependencies.sessionId);
 		const result = await submitFeedback({
 			category,
 			comment,
-			...(diagnostics ? { diagnostics: diagnostics.diagnostics } : {}),
+			...(evidence.diagnostics ? { diagnostics: evidence.diagnostics.diagnostics } : {}),
+			...(evidence.summary ? { sessionSummary: evidence.summary } : {}),
 			...(sessionBundle ? { sessionBundle } : {}),
 			storageRootDir,
 			...(submissionSessionId ? { sessionId: submissionSessionId } : {}),
@@ -322,8 +341,8 @@ export async function runFeedbackCommand(
 			...(prompt
 				? {
 						confirm: async (submission: FeedbackSubmission) => {
-							if (submission.diagnostics && diagnostics) {
-								previewDiagnostics(stdout, diagnostics.displayPath, submission.diagnostics);
+							if (submission.diagnostics && evidence.diagnostics) {
+								previewDiagnostics(stdout, evidence.diagnostics.displayPath, submission.diagnostics);
 							}
 							previewBundle(stdout, sessionBundle);
 							return await confirm(prompt, "Submit feedback? [y/N] ");
@@ -426,10 +445,8 @@ function feedbackHelp(): string {
 		"Options:",
 		"  --category <name>       bug, bad-result, good-result, safety-check, other",
 		"  --message <text>        Feedback comment",
-		"  --diagnostics           Attach bounded diagnostics",
-		"  --no-diagnostics        Do not attach diagnostics",
-		"  --session-bundle         Attach the current session archive",
-		"  --no-session-bundle      Do not attach a session archive",
+		"  --no-diagnostics        Send without the log excerpt (it is attached by default)",
+		"  --no-session-bundle     Send without the conversation archive (attached by default)",
 		"  --session <id-or-path>   Session to archive",
 		"  --retry                  Retry locally pending feedback",
 		"  --json                   Emit JSON only on stdout",
@@ -452,23 +469,18 @@ async function askCategory(prompt: FeedbackCommandPrompt): Promise<FeedbackCateg
 	}
 }
 
-async function askDiagnostics(
-	prompt: FeedbackCommandPrompt,
-	candidate: Awaited<ReturnType<typeof readFeedbackDiagnostics>>,
-): Promise<Awaited<ReturnType<typeof readFeedbackDiagnostics>>> {
-	if (!candidate) return undefined;
-	const displayPath = neutralizeFeedbackConsentMetadata(candidate.displayPath);
-	return (await confirm(prompt, `Attach diagnostics from ${displayPath}? [Y/n] `, true)) ? candidate : undefined;
-}
-
-async function askBundle(
-	prompt: FeedbackCommandPrompt,
-	candidate: FeedbackBundleResult | undefined,
-): Promise<FeedbackBundleResult | undefined> {
-	if (!candidate || candidate.status !== "ready") return candidate;
-	return (await confirm(prompt, `${describeFeedbackBundle(candidate.bundle)}\nAttach session bundle? [Y/n] `, true))
-		? candidate
-		: undefined;
+/** One line naming what the archive carries, for a non-interactive submission. */
+function descriptionsOf(candidate: FeedbackBundleResult): string {
+	if (candidate.status !== "ready") return "nothing";
+	const names = candidate.bundle.files.map((file) => file.name);
+	const toolOutputs = names.filter((name) => name.startsWith("tool-output/")).length;
+	const parts = [
+		"conversation transcript",
+		...(toolOutputs > 0 ? [`${toolOutputs} full tool output file${toolOutputs === 1 ? "" : "s"}`] : []),
+		...(names.includes("dev.log") ? ["log tail"] : []),
+		"session summary",
+	];
+	return `${parts.join(", ")}; pass --no-session-bundle to send the report without the transcript`;
 }
 
 function previewBundle(stream: NodeJS.WritableStream, candidate: FeedbackBundleResult | undefined): void {

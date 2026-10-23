@@ -68,6 +68,14 @@ export interface ModelRequestObserver {
 export interface ObserveModelRequestStreamOptions {
 	/** Local, best-effort terminal hook; independent of optional remote observers. */
 	readonly onTerminal?: (message: AssistantMessage) => void;
+	/**
+	 * Local, best-effort completion hook with the timing the observer computed.
+	 *
+	 * Runs after {@link onTerminal} so a caller recording provenance on the
+	 * message can add time-to-first-token and the wire outcome. It is offered
+	 * independently of a remote observer, which may not be mounted.
+	 */
+	readonly onCompleted?: (message: AssistantMessage, completion: ModelRequestCompleted) => void;
 	/** Timestamp captured immediately before the provider stream is requested. */
 	readonly startedAt?: number;
 	/** Session identity forwarded to the observer, when available. */
@@ -142,7 +150,7 @@ export function observeModelRequestStream(
 	observer: ModelRequestObserver | undefined,
 	options: ObserveModelRequestStreamOptions = {},
 ): AssistantMessageEventStream {
-	if (!observer && !options.onTerminal) return source;
+	if (!observer && !options.onTerminal && !options.onCompleted) return source;
 
 	const startedAt = options.startedAt ?? Date.now();
 	const started = createStartedRequest(model, options, startedAt);
@@ -166,7 +174,6 @@ export function observeModelRequestStream(
 		} catch {
 			/* Local diagnostics cannot change streaming. */
 		}
-		if (!observer) return;
 		const completedAt = Date.now();
 		const statusCode = readStatusCode(options.getStatusCode);
 		const effectiveModel = readModel(model, options.getModel);
@@ -187,7 +194,14 @@ export function observeModelRequestStream(
 			usage: copyUsage(message.usage),
 			...(unexpectedError ? { errorType: readErrorType(unexpectedError) } : undefined),
 		};
-		notifyCompleted(observer, completion);
+		if (options.onCompleted) {
+			try {
+				options.onCompleted(message, completion);
+			} catch {
+				/* Local diagnostics cannot change streaming. */
+			}
+		}
+		if (observer) notifyCompleted(observer, completion);
 	};
 
 	void (async () => {

@@ -36,6 +36,83 @@ function makeSubmission(feedbackId: string): FeedbackSubmission {
 }
 
 describe("pending feedback body validation", () => {
+	test("retries a body written with the build identity and session summary", async () => {
+		// A pending file is re-validated before retry. If a new field is not
+		// allowed here, a report saved offline is silently dropped on the next run.
+		const root = await makeRoot();
+		const feedbackId = "20000000-0000-4000-8000-000000000001";
+		const submission = {
+			...makeSubmission(feedbackId),
+			schemaVersion: 2,
+			surface: "cli",
+			context: {
+				channel: "release",
+				version: "1.4.2",
+				versionSource: "embedded",
+				buildTime: TIMESTAMP,
+				runtime: { node: "24.21.0", electron: "44.7.0" },
+				platform: "darwin",
+				arch: "arm64",
+				osRelease: "25.0.0",
+				locale: "zh-CN",
+				installSource: "dmg",
+				commit: "3de15c16",
+			},
+			sessionSummary: {
+				counts: { turns: 1, toolCalls: 2, truncatedAttempts: 0 },
+				usage: { input: 10, output: 5, total: 15, cacheHitRate: 0.5 },
+				// A pass that did not shrink the window: `reclaimed` is negative, and
+				// the report must still be retryable.
+				compactions: [{ tokensBefore: 100, tokensAfter: 120 }],
+				compactionTotals: { passes: 1, resolved: 1, tokensBefore: 100, tokensAfter: 120, reclaimed: -20 },
+				runtime: { permissionPreset: "approve-for-me", mcpServerNames: ["playwright"] },
+			},
+			request: { requestId: "req-1", contextWindow: 200000, ttftMs: null, outcome: "ok" },
+		};
+		await writeFile(resolveFeedbackPendingPath(root, feedbackId), `${JSON.stringify(submission, null, 2)}\n`);
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+
+		const [result] = await retryPendingFeedback({
+			storageRootDir: root,
+			endpoint: "https://feedback.test/feedback",
+			fetchImpl,
+		});
+
+		expect(result?.body?.status).toBe("delivered");
+		expect(fetchImpl).toHaveBeenCalledOnce();
+	});
+
+	test("rejects a pending body whose runtime versions are not versions", async () => {
+		const root = await makeRoot();
+		const feedbackId = "20000000-0000-4000-8000-000000000002";
+		const submission = {
+			...makeSubmission(feedbackId),
+			context: {
+				channel: "release",
+				version: "1.4.2",
+				runtime: { node: "<script>alert(1)</script>" },
+				platform: "darwin",
+			},
+		};
+		await writeFile(resolveFeedbackPendingPath(root, feedbackId), `${JSON.stringify(submission)}\n`);
+		// Paired with an archive so the invalid body is surfaced for inspection
+		// rather than hidden (a standalone invalid body is not listed at all).
+		await writePendingFeedbackBundle({ storageRootDir: root, feedbackId, data: Buffer.from("archive") });
+		const fetchImpl = vi.fn<typeof fetch>();
+
+		const [result] = await retryPendingFeedback({
+			storageRootDir: root,
+			endpoint: "https://feedback.test/feedback",
+			fetchImpl,
+		});
+
+		// The invalid body is reported as a rejected, still-pending report that
+		// names its file, and nothing is posted.
+		expect(result?.body).toMatchObject({ status: "pending", reason: "rejected" });
+		expect(result?.body?.status === "pending" ? result.body.pendingPath : undefined).toContain(feedbackId);
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
 	test("posts only a valid body and leaves every invalid body unchanged", async () => {
 		const root = await makeRoot();
 		const invalidBodies = [

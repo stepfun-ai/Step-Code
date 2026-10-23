@@ -440,13 +440,18 @@ describe("Step Pi slash command adapters", () => {
 		expect(notify).toHaveBeenCalledWith("/feedback requires an interactive UI.", "warning");
 	});
 
-	test("submits a shortcut comment without opening guided confirmation or attachments", async () => {
+	test("a shortcut comment carries the same evidence as the guided flow", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
 		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
 		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
+		const sessionFile = join(root, "20260831_session-1.jsonl");
+		await writeFile(
+			sessionFile,
+			'{"type":"session","id":"session-1"}\n{"type":"message","message":{"role":"user"}}\n',
+		);
 		const { commands } = registerCommands();
 		const confirm = vi.fn().mockResolvedValue(true);
 		const notify = vi.fn();
@@ -454,15 +459,16 @@ describe("Step Pi slash command adapters", () => {
 		await getCommand(commands, "feedback").handler("the composer dropped a key", {
 			hasUI: true,
 			ui: { confirm, notify },
-			sessionManager: { getSessionId: () => "session-1" },
+			sessionManager: { getSessionId: () => "session-1", getSessionFile: () => sessionFile },
 		} as unknown as ExtensionCommandContext);
 
-		expect(confirm).not.toHaveBeenCalled();
+		// The category and comment come from the command; everything else is the
+		// same evidence the guided flow submits, behind the same consent page.
+		expect(confirm).toHaveBeenCalledOnce();
 		expect(fetchMock).toHaveBeenCalledOnce();
 		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
-		expect(body).toMatchObject({ comment: "the composer dropped a key" });
-		expect(body.category).toBeUndefined();
-		expect(body.diagnostics).toBeUndefined();
+		expect(body).toMatchObject({ comment: "the composer dropped a key", category: "other", surface: "tui" });
+		expect(body.sessionSummary).toBeDefined();
 		const feedbackId = String(body.feedbackId);
 		expect(notify).toHaveBeenCalledWith(
 			`Submitted. Feedback ID: ${feedbackId} — include this ID when contacting support.`,
@@ -485,7 +491,7 @@ describe("Step Pi slash command adapters", () => {
 
 		const context = {
 			hasUI: true,
-			ui: { notify: vi.fn() },
+			ui: { notify: vi.fn(), confirm: vi.fn().mockResolvedValue(true) },
 			sessionManager: { getSessionId: () => "session-1" },
 		} as unknown as ExtensionCommandContext;
 		await getCommand(commands, "feedback").handler("before login", context);
@@ -504,6 +510,45 @@ describe("Step Pi slash command adapters", () => {
 			uid: "uid-current",
 			username: "account@example.test",
 		});
+	});
+
+	test("a session with no file yet is not replaced by another project's conversation", async () => {
+		// The session id is authoritative: when its file has not been written, the
+		// report must carry no conversation rather than a neighbouring one. This is
+		// also why `-C/--cwd` cannot change what a report attaches: that flag routes
+		// to a session, not to `step feedback`, and a run in another project still
+		// names its own session id.
+		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
+		temporaryRoots.push(root);
+		const sessions = join(root, "agent", "sessions");
+		const project = join(root, "project");
+		const folder = join(sessions, `--${project.replace(/^\//, "").replace(/[/:]/g, "-")}--`);
+		await mkdir(folder, { recursive: true });
+		await writeFile(
+			join(folder, "2026-10-23T00-00-00-000Z_other.jsonl"),
+			`${JSON.stringify({ type: "session", id: "other-session", cwd: project, parentId: null })}\n`,
+		);
+		vi.stubEnv("STEP_CODING_AGENT_DIR", join(root, "agent"));
+		vi.stubEnv("STEP_CODING_AGENT_SESSION_DIR", sessions);
+		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
+		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const { commands } = registerCommands();
+
+		await getCommand(commands, "feedback").handler("unwritten", {
+			cwd: project,
+			hasUI: true,
+			ui: { notify: vi.fn(), confirm: vi.fn().mockResolvedValue(true) },
+			sessionManager: { getSessionId: () => "unwritten-session", getSessionFile: () => undefined },
+		} as unknown as ExtensionCommandContext);
+
+		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+			context: { sessionId?: string };
+			sessionSummary?: unknown;
+		};
+		expect(body.sessionSummary).toBeUndefined();
+		expect(body.context.sessionId).toBe("unwritten-session");
 	});
 
 	test("cancels immediately when comment input is dismissed with Esc", async () => {
@@ -539,10 +584,7 @@ describe("Step Pi slash command adapters", () => {
 		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		vi.stubGlobal("fetch", vi.fn<typeof fetch>());
 		const { commands } = registerCommands();
-		const select = vi
-			.fn()
-			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
-			.mockResolvedValueOnce("No · Send feedback without files");
+		const select = vi.fn().mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.");
 		const input = vi.fn().mockResolvedValue("It failed");
 
 		await getCommand(commands, "feedback").handler("", {
@@ -557,10 +599,10 @@ describe("Step Pi slash command adapters", () => {
 
 		expect(select.mock.calls[0]?.[2]).toEqual({ overlay: true });
 		expect(input.mock.calls[0]?.[2]).toEqual({ overlay: true });
-		expect(select.mock.calls[1]?.[2]).toEqual({ overlay: true });
+		expect(select).toHaveBeenCalledOnce();
 	});
 
-	test("neutralizes a diagnostics filename before showing the upload selector", async () => {
+	test("neutralizes a diagnostics filename in the consent preview", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
 		const diagnosticsDir = join(root, "diagnostics");
@@ -573,10 +615,7 @@ describe("Step Pi slash command adapters", () => {
 		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
 		vi.stubGlobal("fetch", vi.fn<typeof fetch>());
 		const { commands } = registerCommands();
-		const select = vi
-			.fn()
-			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
-			.mockResolvedValueOnce("No · Send feedback without files");
+		const select = vi.fn().mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.");
 		const confirm = vi.fn().mockResolvedValue(false);
 
 		await getCommand(commands, "feedback").handler("", {
@@ -594,11 +633,12 @@ describe("Step Pi slash command adapters", () => {
 			},
 		} as unknown as ExtensionCommandContext);
 
-		const uploadTitle = String(select.mock.calls[1]?.[0]);
-		expect(uploadTitle).not.toContain("\x1b[2JOWNED");
-		expect(uploadTitle).not.toContain("line\nbreak");
-		expect(uploadTitle).toContain("line\\nbreak");
-		expect(uploadTitle).toContain("\\x1b[2JOWNED.jsonl");
+		// The filename only reaches the consent preview, where controls are escaped.
+		const preview = String(confirm.mock.calls[0]?.[1]);
+		expect(preview).not.toContain("\x1b[2JOWNED");
+		expect(preview).not.toContain("line\nbreak");
+		expect(preview).toContain("line\\nbreak");
+		expect(preview).toContain("\\x1b[2JOWNED.jsonl");
 		expect(confirm).toHaveBeenCalledOnce();
 	});
 
@@ -617,10 +657,7 @@ describe("Step Pi slash command adapters", () => {
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
-		const select = vi
-			.fn()
-			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
-			.mockResolvedValueOnce("Yes · Include the listed files");
+		const select = vi.fn().mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.");
 		const input = vi.fn().mockResolvedValue("It failed");
 		const confirm = vi.fn().mockImplementation(async () => {
 			await rm(sessionFile);
@@ -639,18 +676,9 @@ describe("Step Pi slash command adapters", () => {
 			},
 		} as unknown as ExtensionCommandContext);
 
-		expect(select).toHaveBeenCalledTimes(2);
-		const uploadTitle = String(select.mock.calls[1]?.[0]);
-		expect(uploadTitle).toBe(`UPLOAD LOGS?\nlogs/${basename(devLogPath)}, events.jsonl, dev.log`);
-		expect(select).toHaveBeenNthCalledWith(
-			2,
-			uploadTitle,
-			["Yes · Include the listed files", "No · Send feedback without files"],
-			{ overlay: true },
-		);
-		expect(uploadTitle).not.toContain("before");
-		expect(uploadTitle).not.toContain("Error: renderer failed");
-		expect(uploadTitle).not.toContain("after");
+		// There is no attachment question any more: the report always carries the
+		// conversation, and the consent page is the only place it is described.
+		expect(select).toHaveBeenCalledOnce();
 		expect(confirm).toHaveBeenCalledOnce();
 		expect(custom).not.toHaveBeenCalled();
 		expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -674,9 +702,8 @@ describe("Step Pi slash command adapters", () => {
 		expect(finalPreview).toContain("dev.log (");
 		expect(finalPreview).toContain("context lines around 1 error");
 		expect(finalPreview).toContain("session session-1, last active ");
-		expect(finalPreview).toContain(
-			"It contains the conversation itself: your prompts, the model's replies, tool calls and their output.",
-		);
+		expect(finalPreview).toContain("It contains the conversation itself: your prompts, the model's replies");
+		expect(finalPreview).toContain("the full output files those calls referenced");
 		const uploadedBundle = fetchMock.mock.calls[1]?.[1]?.body as Uint8Array;
 		expect(finalPreview).toContain(`Session bundle (${uploadedBundle.byteLength} compressed bytes):`);
 		const bundleUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
@@ -721,7 +748,7 @@ describe("Step Pi slash command adapters", () => {
 		expect(body.context.sessionId).toBe("header-session");
 	});
 
-	test("submits guided feedback without any files when upload is declined", async () => {
+	test("attaches the conversation and log without asking, so one submission is enough to investigate", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-slash-feedback-"));
 		temporaryRoots.push(root);
 		const sessionFile = join(root, "20260831_session-1.jsonl");
@@ -734,10 +761,7 @@ describe("Step Pi slash command adapters", () => {
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
-		const select = vi
-			.fn()
-			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
-			.mockResolvedValueOnce("No · Send feedback without files");
+		const select = vi.fn().mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.");
 		const confirm = vi.fn().mockResolvedValue(true);
 
 		await getCommand(commands, "feedback").handler("", {
@@ -754,12 +778,15 @@ describe("Step Pi slash command adapters", () => {
 			},
 		} as unknown as ExtensionCommandContext);
 
-		expect(select).toHaveBeenCalledTimes(2);
+		expect(select).toHaveBeenCalledOnce();
 		expect(confirm).toHaveBeenCalledOnce();
-		expect(fetchMock).toHaveBeenCalledOnce();
+		// One report body plus one archive: the transcript and the log go with it.
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(fetchMock.mock.calls[0]?.[0]).toBe("https://feedback.test/feedback");
 		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
-		expect(body.diagnostics).toBeUndefined();
+		expect(body.diagnostics).toBeDefined();
+		expect(body.sessionSummary).toBeDefined();
+		expect(body.surface).toBe("tui");
 	});
 
 	test("explains when no matching session archive can be attached", async () => {
@@ -958,10 +985,7 @@ describe("Step Pi slash command adapters", () => {
 			.mockResolvedValueOnce(new Response(null, { status: 409 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const { commands } = registerCommands();
-		const select = vi
-			.fn()
-			.mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.")
-			.mockResolvedValueOnce("Yes · Include the listed files");
+		const select = vi.fn().mockResolvedValueOnce("bug: Crash, error, hang, or broken behavior.");
 		const input = vi.fn().mockResolvedValue("It failed");
 		const confirm = vi.fn().mockResolvedValue(true);
 		const notify = vi.fn();
