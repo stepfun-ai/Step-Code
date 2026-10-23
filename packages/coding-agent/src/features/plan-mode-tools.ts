@@ -32,7 +32,7 @@ export interface StepPlanModeController {
 	 * /plan toggle owned by the extension. Returns the session plan file path.
 	 */
 	enterPlanMode(extensionContext: ExtensionContext): string;
-	/** Leave plan mode: restore tools, persist state, record telemetry. */
+	/** Leave plan mode: restore any tools plan mode added, persist state, record telemetry. */
 	exitPlanMode(outcome: StepPlanExitOutcome, extensionContext: ExtensionContext): void;
 	/** Plan file path for this session (persisted or derived from the session id). */
 	resolvePlanFilePath(extensionContext: ExtensionContext): string;

@@ -664,8 +664,12 @@ test.each(planEntryCases)(
 		expect(harness.activeTools()).toEqual(
 			expect.arrayContaining(["write_file", "edit_file", "run_command", "custom_tool"]),
 		);
-		expect(harness.activeTools()).not.toContain("write");
-		expect(harness.activeTools()).not.toContain("edit");
+		// Plan mode narrows permissions, not the tool block: the aliases stay
+		// visible and the tool_call policy below is what blocks them. Dropping
+		// them would rewrite the request's tool block and discard the provider's
+		// cached prompt prefix for the whole conversation.
+		expect(harness.activeTools()).toContain("write");
+		expect(harness.activeTools()).toContain("edit");
 		if (source === "user") {
 			expect(harness.notifications.at(-1)?.message).toContain(planPath);
 			expect(harness.notifications.at(-1)?.message).not.toContain("command execution are disabled");
@@ -705,6 +709,104 @@ test.each(planEntryCases)(
 		}
 	},
 );
+
+test("entering and leaving plan mode keeps an equivalent tool set in its original order", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	// A real Step profile already offers every plan tool, including clarify_user,
+	// so plan mode narrows permissions without changing the capability set.
+	const originalTools = [
+		"clarify_user",
+		"enter_plan_mode",
+		"exit_plan_mode",
+		"list_directory",
+		"find_files",
+		"search_files",
+		"read_file",
+		"write_file",
+		"edit_file",
+		"run_command",
+		"find_tools",
+		"custom_tool",
+	];
+	harness.api.setActiveTools(originalTools);
+	const applied: string[][] = [];
+	const setActiveTools = harness.api.setActiveTools.bind(harness.api);
+	harness.api.setActiveTools = (names: string[]) => {
+		applied.push([...names]);
+		setActiveTools(names);
+	};
+
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+	await harness.commands.get("plan")!.handler("", context);
+
+	// Reapplying the same set in a different order rewrites the request's tool
+	// block and drops the provider prompt cache for the whole conversation.
+	expect(harness.activeTools()).toEqual(originalTools);
+	expect(applied).toEqual([]);
+
+	// Plan-file writes stay gated by the tool_call path check, not by absence.
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	await expect(
+		harness.emit(
+			{ type: "tool_call", toolName: "write_file", input: { path: path.relative(cwd, planPath) } },
+			context,
+		),
+	).resolves.toBeUndefined();
+	await expect(
+		harness.emit({ type: "tool_call", toolName: "write_file", input: { path: "src/app.ts" } }, context),
+	).resolves.toMatchObject({ block: true });
+
+	await harness.commands.get("plan")!.handler("", context);
+	expect(harness.activeTools()).toEqual(originalTools);
+	expect(applied).toEqual([]);
+});
+
+test("entering plan mode appends only the plan tools a profile lacks", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	// A Pi-native profile has the editing aliases but not the Step names, so
+	// plan mode has to add them — and must not remove anything to do it.
+	const originalTools = ["read_file", "write", "edit", "custom_tool"];
+	harness.api.setActiveTools(originalTools);
+	const applied: string[][] = [];
+	const setActiveTools = harness.api.setActiveTools.bind(harness.api);
+	harness.api.setActiveTools = (names: string[]) => {
+		applied.push([...names]);
+		setActiveTools(names);
+	};
+
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("", context);
+	expect(applied).toEqual([
+		[
+			...originalTools,
+			"find_files",
+			"search_files",
+			"list_directory",
+			"run_command",
+			"clarify_user",
+			"write_file",
+			"edit_file",
+		],
+	]);
+	// Existing order is preserved and nothing is dropped.
+	expect(harness.activeTools().slice(0, originalTools.length)).toEqual(originalTools);
+	expect(harness.activeTools()).toContain("write");
+	expect(harness.activeTools()).toContain("edit");
+
+	// The aliases stay visible; the policy blocks the mutation instead.
+	await expect(
+		harness.emit({ type: "tool_call", toolName: "write", input: { path: "src/app.ts" } }, context),
+	).resolves.toMatchObject({ block: true });
+
+	await harness.commands.get("plan")!.handler("", context);
+	expect(harness.activeTools()).toEqual(originalTools);
+	expect(applied).toHaveLength(2);
+});
 
 async function restoreLifecycle(harness: Harness, type: "session_start" | "session_tree"): Promise<void> {
 	await harness.emit(

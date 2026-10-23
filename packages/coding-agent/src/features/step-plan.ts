@@ -45,6 +45,10 @@ export type StepPlanSource = "user" | "agent" | "unknown";
 
 interface PlanState {
 	enabled: boolean;
+	/**
+	 * Baseline restored when plan mode leaves. Written only when entering had to
+	 * add a tool, plus by older builds that narrowed the active list on entry.
+	 */
 	toolsBeforePlanMode?: string[];
 	planFilePath?: string;
 	/** "user" for /plan or --plan, "agent" for enter_plan_mode. */
@@ -53,6 +57,11 @@ interface PlanState {
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
+}
+
+/** True when both lists hold the same tool names in the same order. */
+function sameToolOrder(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((name, index) => name === right[index]);
 }
 
 const publishedPlanModes = new WeakMap<object, boolean>();
@@ -112,14 +121,35 @@ export const createStepPlanExtension =
 		const persistPlanState = (): void => {
 			pi.appendEntry("step-plan", { enabled, toolsBeforePlanMode, planFilePath, planSource });
 		};
+		/**
+		 * Plan mode is a permission narrowing, not a capability change.
+		 *
+		 * The model keeps every tool it already had; the `tool_call` hook below
+		 * denies mutations outside the plan file. Removing the editing tools would
+		 * mean rewriting the request's tool block, which the provider serializes
+		 * ahead of the system prompt and messages: one such edit invalidates the
+		 * cached prefix for the whole conversation, so a single plan entry can
+		 * re-bill hundreds of thousands of prompt tokens.
+		 *
+		 * A session that does not already offer every plan tool still has to gain
+		 * them (a Pi-native profile lacks the Step aliases). Append only what is
+		 * missing and keep the existing order, so the common Step profile — which
+		 * already offers all of them — leaves the tool block byte-identical.
+		 */
 		const enable = (): void => {
-			toolsBeforePlanMode ??= pi.getActiveTools();
-			// Keep plan-file writes available; tool_call restricts their target.
-			pi.setActiveTools(unique([...toolsBeforePlanMode.filter((name) => !MUTATING_TOOLS.has(name)), ...PLAN_TOOLS]));
+			const active = pi.getActiveTools();
+			const missing = PLAN_TOOLS.filter((name) => !active.includes(name));
+			if (missing.length === 0) return;
+			toolsBeforePlanMode ??= active;
+			pi.setActiveTools([...active, ...missing]);
 		};
 		const restoreTools = (): void => {
-			if (toolsBeforePlanMode) pi.setActiveTools(toolsBeforePlanMode);
+			if (!toolsBeforePlanMode) return;
+			const baseline = toolsBeforePlanMode;
 			toolsBeforePlanMode = undefined;
+			// An unchanged list would rebuild the same system prompt and tool block;
+			// skip it so leaving plan mode cannot invalidate a byte-identical prefix.
+			if (!sameToolOrder(pi.getActiveTools(), baseline)) pi.setActiveTools(baseline);
 		};
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
@@ -218,7 +248,7 @@ export const createStepPlanExtension =
 			// Legacy tool lists predate these capabilities. Preserve only the ones
 			// already active; ordinary tools still follow the saved branch selection.
 			const activePlanTaskTools = pi.getActiveTools().filter((name) => PLAN_TASK_TOOLS.has(name));
-			// Undo the previous branch's tool restriction before reading the new one.
+			// Undo whatever the previous branch's entry applied before reading the next.
 			restoreTools();
 			const planStates = [...ctx.sessionManager.getBranch()]
 				.reverse()
@@ -228,17 +258,21 @@ export const createStepPlanExtension =
 						: [],
 				);
 			const restoredPlanState = planStates[0];
-			// Off snapshots omit transient tools; a preceding plan entry retains the baseline.
+			// A baseline comes from an entry that had to add a plan tool, or from a
+			// session written by an older build, which narrowed the active list on
+			// entry. That branch owns the list, so drop tools added since.
 			const savedTools = planStates.find((state) => state?.toolsBeforePlanMode)?.toolsBeforePlanMode;
 			enabled = restoredPlanState?.enabled ?? false;
-			toolsBeforePlanMode = savedTools ? unique([...savedTools, ...activePlanTaskTools]) : undefined;
 			planFilePath = restoredPlanState?.planFilePath;
 			planSource = enabled ? (restoredPlanState?.planSource ?? "unknown") : undefined;
+			if (savedTools) {
+				const baseline = unique([...savedTools, ...activePlanTaskTools]);
+				if (!sameToolOrder(pi.getActiveTools(), baseline)) pi.setActiveTools(baseline);
+			}
+			toolsBeforePlanMode = undefined;
 			if (enabled) {
 				planFilePath = resolvePlanFilePath(ctx);
 				enable();
-			} else {
-				restoreTools();
 			}
 			if (restoredPlanState) {
 				migrateLegacyPlanTodos({
