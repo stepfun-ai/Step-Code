@@ -23,7 +23,7 @@ This package only changes when the change needs the OS, the window or the proces
 | Bundler | esbuild 0.28 (`scripts/build.mjs`) | `src/main.ts` -> `dist/main.js` (ESM); `src/preload.ts` -> `dist/preload.cjs` (CJS: sandboxed preloads cannot load ES modules) |
 | Server | `@step-harness/web` (workspace dependency) | Spawned with `ELECTRON_RUN_AS_NODE=1` |
 | Lint / format | Biome (root `biome.json`) | Tabs, indent width 3, line width 120 |
-| Installers | electron-builder 26.15 (dev dependency, `scripts/package.mjs`) | dmg (mac arm64 / x64), NSIS (win x64); unsigned |
+| Installers | electron-builder 26.15 (dev dependency, `scripts/package.mjs`) | dmg (mac arm64 / x64), NSIS (win x64); unsigned locally, Developer ID signed + notarized mac in release CI |
 
 No other runtime dependencies. Adding one needs the user's approval; pin it to an exact version and install with
 `pnpm install --ignore-scripts`. Do not add a renderer framework, a second web server or native Node modules.
@@ -120,7 +120,7 @@ Run from the repo root.
 | `pnpm --filter @step-harness/desktop build` | esbuild bundle only |
 | `pnpm --filter @step-harness/desktop typecheck` | Type check source and tests (also part of `pnpm run check`) |
 | `pnpm --filter @step-harness/desktop test` | Offline child-process, Node fallback and release-envelope regressions |
-| `pnpm --filter @step-harness/desktop package[:mac\|:win]` | Unsigned installers in `release/<version>/` (run `pnpm build` first; see README) |
+| `pnpm --filter @step-harness/desktop package[:mac\|:win]` | Installers in `release/<version>/`, unsigned unless `CSC_LINK` is set (run `pnpm build` first; see README) |
 | `STEPCODE_DESKTOP_SMOKE=1 pnpm --filter @step-harness/desktop dev` | Load hidden, print `STEPCODE_DESKTOP_SMOKE {json}`, exit 0/1 |
 | `pnpm run check` | Required before handing back any code change |
 
@@ -140,8 +140,17 @@ changes).
   let the user grant access; do not work around the prompt.
 - Do not kill Electron or server processes you did not start.
 
+## Signing and releases
+
+macOS Developer ID signing (`CSC_LINK`, hardened runtime, `resources/entitlements.mac*.plist`) and notarization run
+in release CI on the private CI branch (falcon's macos-signing stages); releases are tag-driven (`desktop-vX.Y.Z`) and
+uploaded to TOS by `infra/release/desktop-release.mjs`. See README "Signing" and "Releases". Keep `--signed-app` /
+`--from-app` from rebuilding or repacking an app once it is signed: that would drop the notarization ticket.
+
+The bundle id `com.stepfun.stepcode` and Team ID are part of the signing contract; changing the bundle id makes the
+installed app a different application.
+
 ## Not in scope yet
 
-Code signing, notarization and auto-update. Ask before starting any of them; they need decisions from the user
-(certificates, update channel). Installers (`scripts/package.mjs`), icons and the bundle id `com.stepfun.stepcode`
-exist; changing the bundle id makes the installed app a different application.
+In-app auto-update (reading `desktop/latest.json`) and Windows code signing. Ask before starting either; they need
+decisions from the user (update channel, EV certificate).

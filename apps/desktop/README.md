@@ -128,13 +128,14 @@ Run `pnpm build` at the repo root first, then from the repo root:
 
 The GitLab pipeline (`catalyst/falcon-mobile-pipeline`) does not call these directly. It calls the repo-root entry
 points, which build the monorepo, drive the two commands above, and copy the installers to `dist-electron/`, where
-falcon reads them: `pnpm dist:mac -- --env=<sit|prod> --arch=<all|arm64|x64> [--fast-build] [--notarize]` and
+falcon reads them: `pnpm dist:mac -- --env=<sit|prod> --arch=<all|arm64|x64> [--fast-build] [--notarize]`
+(plus `--signed-app` / `--from-app=<.app>` for the notarization stages, see [Signing](#signing)) and
 `pnpm pack:win -- --env=<sit|prod> --no-sign`, the latter also writing `dist-electron/latest.yml` and
 `dist-electron/channel-artifacts.json`. Both accept `--dry-run` to print the plan without building.
 
 `<version>` is the product version shown by `step --version` and the web host, not the workspace package version:
-`STEPCODE_BUILD_VERSION` when set (a release tag such as `v0.2.0` is accepted), otherwise the root `package.json`
-version. It is also what the app reports (`app.getVersion()`, `window.stepcodeDesktop.version`).
+`STEPCODE_BUILD_VERSION` when set (a release tag such as `v0.2.0` or `desktop-v0.2.0` is accepted), otherwise the
+root `package.json` version. Release pipelines set it from the `desktop-vX.Y.Z` tag (see [Releases](#releases)). It is also what the app reports (`app.getVersion()`, `window.stepcodeDesktop.version`).
 
 Each target also gets a `stepcode-release.json` beside the resolved server entry
 (`<resources>/server/node_modules/@step-harness/web/dist`), which `src/release-envelope.ts` reads when the shell spawns
@@ -160,10 +161,36 @@ Native modules are N-API prebuilds for every platform (node-pty, `@step-harness/
 every target and nothing is rebuilt. Optional per-platform packages that are not installed on the build machine are
 left out (e.g. `@mariozechner/clipboard` for Windows; its callers fall back without it).
 
-The builds are **unsigned** (macOS gets an ad-hoc signature so Apple Silicon starts it; no notarization). On macOS
-the first launch needs right-click → Open (or `xattr -dr com.apple.quarantine /Applications/StepCode.app`); on
-Windows SmartScreen asks for "More info → Run anyway".
+## Signing
+
+Local builds and the ad-hoc falcon jobs are **unsigned** (macOS gets an ad-hoc signature so Apple Silicon starts it;
+no notarization). On macOS the first launch needs right-click → Open (or
+`xattr -dr com.apple.quarantine /Applications/StepCode.app`); on Windows SmartScreen asks for "More info → Run anyway".
+
+With `CSC_LINK` / `CSC_KEY_PASSWORD` set, `scripts/package.mjs` signs the mac app with that Developer ID instead,
+with hardened runtime and `resources/entitlements.mac.plist` / `entitlements.mac.inherit.plist`. Notarization is not
+done here: on the CI branch, `.gitlab-ci.desktop-macos-signing.yml` runs falcon's macos-signing stages per architecture
+(arm64 and x64): `dist:mac --signed-app` builds the signed app, falcon checks it and submits it to Apple, staples the
+ticket, and `dist:mac --from-app=<stapled .app>` wraps that exact app into the dmg and zip. Release tags always take
+this path; a Run pipeline takes it with `MACOS_SIGNING_ENABLED=true` on a protected branch. The Windows installer is
+still unsigned (EV signing is not wired up).
+
+## Releases
+
+Releases are tag-driven, on the private CI branch (`.gitlab-ci.yml`, `.gitlab-ci.desktop-release.yml`):
+
+1. **Run pipeline** on the release branch (or the default branch) with `DESKTOP_BUMP` = `patch` / `minor` /
+   `major`. `desktop_tag_release` (`infra/release/desktop-tag-release.mjs`) creates the next protected
+   `desktop-vX.Y.Z` tag on that commit; the first tag is `desktop-v0.1.0`.
+2. The tag pipeline builds that version (`STEPCODE_BUILD_VERSION=X.Y.Z`): signed and notarized mac arm64 / x64 dmgs
+   and the Windows x64 NSIS installer. Nothing in the tree is bumped.
+3. `desktop_upload_test` (automatic) and then `desktop_upload_prod` (manual) run
+   `infra/release/desktop-release.mjs --upload`: the same installers go to `desktop/<v>/` in the test and the
+   production TOS bucket, with `SHA256SUMS`, `manifest.json` and finally the channel pointer `desktop/latest.json`.
+
+Stage a release locally without uploading (after `package`):
+`node infra/release/desktop-release.mjs --version X.Y.Z --base-url https://example.test/stepcode`.
 
 ## Not included yet
 
-Code signing, notarization and auto-update.
+Auto-update in the app (it does not read `desktop/latest.json` yet) and Windows code signing.

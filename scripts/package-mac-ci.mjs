@@ -13,8 +13,11 @@
 //
 //   node scripts/package-mac-ci.mjs --env=sit --arch=arm64 --fast-build
 //
-// The installers are unsigned (macOS gets an ad-hoc signature); `--notarize` is
-// accepted and skipped until Phase 2 adds a Developer ID.
+// The default build is unsigned (macOS gets an ad-hoc signature). The signed
+// release goes through falcon's macos-signing stages instead: `--signed-app`
+// builds the Developer ID signed .app (CSC_LINK) for the checkpoint, and
+// `--from-app=<stapled .app>` wraps the notarized app into a dmg + zip.
+// `--notarize` is accepted and skipped: notarization is its own pipeline stage.
 
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
