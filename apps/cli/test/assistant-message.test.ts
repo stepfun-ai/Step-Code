@@ -91,6 +91,48 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("answer");
 	});
 
+	test("hoists thinking ahead of the answer when the model streams it last", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "text", text: "answer text" },
+				{ type: "thinking", thinking: "late reasoning" },
+			]),
+		);
+		const lines = stripAnsi(component.render(80).join("\n")).split("\n");
+		const thinkingLine = lines.findIndex((line) => line.includes("late reasoning"));
+		const answerLine = lines.findIndex((line) => line.includes("answer text"));
+
+		expect(thinkingLine).toBeGreaterThanOrEqual(0);
+		expect(answerLine).toBeGreaterThanOrEqual(0);
+		expect(thinkingLine).toBeLessThan(answerLine);
+	});
+
+	test("keeps segmented reasoning in place when thinking already leads", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "first reasoning" },
+				{ type: "text", text: "first answer" },
+				{ type: "thinking", thinking: "follow-up reasoning" },
+				{ type: "text", text: "final answer" },
+			]),
+		);
+		const lines = stripAnsi(component.render(80).join("\n")).split("\n");
+
+		expect(lines.findIndex((line) => line.includes("first reasoning"))).toBeLessThan(
+			lines.findIndex((line) => line.includes("first answer")),
+		);
+		expect(lines.findIndex((line) => line.includes("follow-up reasoning"))).toBeGreaterThan(
+			lines.findIndex((line) => line.includes("first answer")),
+		);
+		expect(lines.findIndex((line) => line.includes("final answer"))).toBeGreaterThan(
+			lines.findIndex((line) => line.includes("follow-up reasoning")),
+		);
+	});
+
 	test("uses configured output padding for text and thinking", () => {
 		initTheme("dark");
 

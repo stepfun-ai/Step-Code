@@ -176,6 +176,24 @@ describe("Step message presentation", () => {
 		expect(finalAnswer).toBeGreaterThan(followUpThinking);
 	});
 
+	test("hoists thinking ahead of the answer when the model streams it last", () => {
+		initTheme("step-blue");
+		const component = new StepAssistantMessageComponent(
+			assistantMessage([
+				{ type: "text", text: "the answer" },
+				{ type: "thinking", thinking: "late reasoning" },
+			]),
+			false,
+			getMarkdownTheme(),
+		);
+		const lines = plain(component.render(80));
+		const thinking = lines.findIndex((line) => line.includes("late reasoning"));
+		const answer = lines.findIndex((line) => line.includes("the answer"));
+		expect(thinking).toBeGreaterThanOrEqual(0);
+		expect(answer).toBeGreaterThanOrEqual(0);
+		expect(thinking).toBeLessThan(answer);
+	});
+
 	test("updates output padding without dropping the first character", () => {
 		initTheme("step-blue");
 		const assistant = new StepAssistantMessageComponent(

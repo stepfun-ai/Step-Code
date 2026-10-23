@@ -3,7 +3,7 @@ import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
 import { type MarkdownTheme, stripTerminalSequences, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
 import type { AssistantMessage } from "@step-harness/providers";
 import { estimateTokens, formatElapsedTime, formatTokens } from "../chrome/footer.ts";
-import { AssistantMessageComponent } from "./assistant-message.ts";
+import { AssistantMessageComponent, withThinkingBeforeAnswer } from "./assistant-message.ts";
 import { UserMessageComponent } from "./user-message.ts";
 
 /** OSC 133 prompt-zone markers emitted by pi's message components. */
@@ -107,7 +107,7 @@ function partitionAssistantContent(message: AssistantMessage): AssistantContentR
 	const runs: AssistantContentRun[] = [];
 	let previousKind: AssistantContentRun["kind"] | undefined;
 
-	for (const content of message.content) {
+	for (const content of withThinkingBeforeAnswer(message.content)) {
 		if (content.type !== "thinking" && content.type !== "text") {
 			previousKind = undefined;
 			continue;

@@ -19,6 +19,37 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 type ZoneCache = { width: number; native: string[]; lines: string[] };
 
 /**
+ * Normalize a provider-assembled content array so that thinking blocks always
+ * render before the answer. Most models emit the reasoning stream first, but
+ * some turns flush it only after the answer text, which would otherwise paint
+ * the thinking block below the answer in those turns and above it in every
+ * other turn of the same conversation.
+ *
+ * Only the degenerate shape is rewritten: when no thinking block precedes the
+ * first answer block, every thinking block is hoisted ahead of the answer
+ * (stable within each group). Alternating runs (thinking, answer, thinking,
+ * answer) already lead with thinking and are returned untouched, preserving
+ * segmented reasoning where each answer follows its own thinking.
+ */
+export function withThinkingBeforeAnswer(content: AssistantMessage["content"]): AssistantMessage["content"] {
+	let firstText = -1;
+	let firstThinking = -1;
+	for (let i = 0; i < content.length; i++) {
+		const block = content[i];
+		if (block === undefined) continue;
+		if (firstText === -1 && block.type === "text" && block.text.trim().length > 0) firstText = i;
+		if (firstThinking === -1 && block.type === "thinking" && block.thinking.trim().length > 0) firstThinking = i;
+	}
+	if (firstText === -1 || firstThinking < firstText) {
+		return content;
+	}
+	return [
+		...content.filter((block) => block.type === "thinking"),
+		...content.filter((block) => block.type !== "thinking"),
+	];
+}
+
+/**
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
@@ -130,9 +161,11 @@ export class AssistantMessageComponent extends Container {
 			this.contentContainer.addChild(new Spacer(1));
 		}
 
+		const orderedContent = withThinkingBeforeAnswer(message.content);
+
 		// Render content in order
-		for (let i = 0; i < message.content.length; i++) {
-			const content = message.content[i];
+		for (let i = 0; i < orderedContent.length; i++) {
+			const content = orderedContent[i];
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
@@ -143,8 +176,8 @@ export class AssistantMessageComponent extends Container {
 				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
-				for (; i < message.content.length; i++) {
-					const thinkingContent = message.content[i];
+				for (; i < orderedContent.length; i++) {
+					const thinkingContent = orderedContent[i];
 					if (thinkingContent.type !== "thinking") {
 						break;
 					}
@@ -161,7 +194,7 @@ export class AssistantMessageComponent extends Container {
 
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
+				const hasVisibleContentAfter = orderedContent
 					.slice(i + 1)
 					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 
