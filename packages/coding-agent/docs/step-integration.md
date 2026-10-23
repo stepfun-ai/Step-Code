@@ -415,8 +415,11 @@ The existing six tool names and `/todos` remain; the task schemas add explicit
 new-plan, history-query, and resume fields. Legacy support remains limited to
 migration of legacy plan-mode todos into tasks on the active branch and restoring
 existing task snapshots as a single plan. Older
-saved tool lists retain currently active plan/task tools on restore and exit;
-ordinary custom tools still follow the saved branch selection. There is no
+saved tool lists — written by builds that narrowed the active list on entry —
+retain currently active plan/task tools on restore and exit; ordinary custom
+tools still follow the saved branch selection. Builds that append only the plan
+tools a profile lacks (`version: 2` entries) store no replaced list, so a branch
+written by them never replays an older snapshot. There is no
 additional `TodoWrite` / `update_plan` alias or second checklist store.
 
 The separation follows [Claude Code's plan and task tools](https://code.claude.com/docs/en/tools-reference)
