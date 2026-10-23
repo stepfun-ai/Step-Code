@@ -406,6 +406,17 @@ export class AgentSession {
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
+	/**
+	 * Turns started by an extension command handler. `pi.sendUserMessage` and
+	 * `pi.sendMessage({ triggerTurn })` are fire-and-forget bindings, so a command
+	 * like `/plan <task>` returns while its turn is still running. `prompt()` must
+	 * settle them before reporting completion: a host that tears down afterwards
+	 * (print/JSON mode) would otherwise dispose the session mid-turn, and every
+	 * in-flight extension would observe a stale context.
+	 */
+	private _deferredCommandTurns: Promise<unknown>[] = [];
+	/** Depth of nested extension command handlers; only outer prompts drain. */
+	private _commandDepth = 0;
 
 	private _modelRuntime: ModelRuntime;
 	private _agentDir?: string;
@@ -1984,9 +1995,9 @@ export class AgentSession {
 		// Get command context from extension runner (includes session control methods)
 		const ctx = this._extensionRunner.createCommandContext();
 
+		this._commandDepth++;
 		try {
 			await command.handler(args, ctx);
-			return true;
 		} catch (err) {
 			// Emit error via extension runner
 			this._extensionRunner.emitError({
@@ -1994,8 +2005,28 @@ export class AgentSession {
 				event: "command",
 				error: err instanceof Error ? err.message : String(err),
 			});
-			return true;
+		} finally {
+			this._commandDepth--;
 		}
+		// The handler may have handed work to the agent and returned. Report the
+		// command as finished only once that work has settled, so the caller's
+		// session cannot be disposed underneath it.
+		if (this._commandDepth === 0) await this._settleDeferredCommandTurns();
+		return true;
+	}
+
+	/** Record a turn an extension command started, so its prompt can wait for it. */
+	private _trackDeferredCommandTurn(turn: Promise<unknown>): void {
+		if (this._commandDepth === 0) return;
+		this._deferredCommandTurns.push(turn);
+	}
+
+	private async _settleDeferredCommandTurns(): Promise<void> {
+		if (this._deferredCommandTurns.length === 0) return;
+		const turns = this._deferredCommandTurns.splice(0);
+		// Each binding already reports its own failure; settling must not rethrow or
+		// mask the command's result.
+		await Promise.allSettled(turns);
 	}
 
 	/**
@@ -3284,7 +3315,9 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				sendMessage: (message, options) => {
-					this.sendCustomMessage(message, options).catch((err) => {
+					const turn = this.sendCustomMessage(message, options);
+					this._trackDeferredCommandTurn(turn);
+					turn.catch((err) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_message",
@@ -3293,7 +3326,9 @@ export class AgentSession {
 					});
 				},
 				sendUserMessage: (content, options) => {
-					this.sendUserMessage(content, options).catch((err) => {
+					const turn = this.sendUserMessage(content, options);
+					this._trackDeferredCommandTurn(turn);
+					turn.catch((err) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_user_message",
