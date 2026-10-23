@@ -17,7 +17,7 @@
 // accepted and skipped until Phase 2 adds a Developer ID.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,13 +26,25 @@ const desktopRoot = join(repoRoot, "apps", "desktop");
 const releaseDir = join(desktopRoot, "release");
 const distDir = join(repoRoot, "dist-electron");
 
-const options = { env: "sit", arch: "all", fastBuild: false, notarize: false, dryRun: false };
+const options = {
+	env: "sit",
+	arch: "all",
+	fastBuild: false,
+	notarize: false,
+	dryRun: false,
+	// Notarization pipeline modes (falcon macos-signing): produce the signed .app
+	// only, or wrap an already notarized .app into the dmg. Neither repacks the app.
+	signedApp: false,
+	fromApp: undefined,
+};
 
 // `pnpm run dist:mac -- <args>` forwards the separator itself; npm strips it.
 for (const arg of process.argv.slice(2)) {
 	if (arg === "--") continue;
 	if (arg.startsWith("--env=")) options.env = arg.slice("--env=".length);
 	else if (arg.startsWith("--arch=")) options.arch = arg.slice("--arch=".length);
+	else if (arg.startsWith("--from-app=")) options.fromApp = arg.slice("--from-app=".length);
+	else if (arg === "--signed-app") options.signedApp = true;
 	else if (arg === "--fast-build") options.fastBuild = true;
 	else if (arg === "--notarize") options.notarize = true;
 	else if (arg === "--dry-run") options.dryRun = true;
@@ -53,7 +65,13 @@ if (!["all", "arm64", "x64"].includes(options.arch)) {
 	throw new Error(`Unsupported --arch=${options.arch}; expected all, universal, arm64, or x64`);
 }
 if (options.notarize) {
-	console.warn("[dist:mac] --notarize is skipped: the build is unsigned (Phase 2 adds a Developer ID)");
+	console.warn("[dist:mac] --notarize is skipped here: notarization runs as its own pipeline stage (falcon macos-signing)");
+}
+if (options.signedApp && options.fromApp !== undefined) {
+	throw new Error("--signed-app builds an .app; --from-app packages one. Pass one");
+}
+if ((options.signedApp || options.fromApp !== undefined) && options.arch === "all") {
+	throw new Error("--signed-app/--from-app need a single architecture; set MACOS_ARCH=arm64 (or x64)");
 }
 if (options.env !== "sit") {
 	console.log(`[dist:mac] --env=${options.env} has no build-time effect; the app reads its backend from ~/.stepcode at run time`);
@@ -82,9 +100,21 @@ if (version !== undefined && !process.env.STEPCODE_BUILD_VERSION) process.env.ST
 
 // No `--ignore-scripts` anywhere in CI: node-pty and esbuild ship postinstall
 // artifacts, and electron-builder needs the electron binary.
+const packagerArgs =
+	options.signedApp
+		? ["--mac", "--app-only", `--arch=${options.arch}`]
+		: options.fromApp !== undefined
+			? [`--from-app=${options.fromApp}`, `--arch=${options.arch}`]
+			: ["--mac", `--arch=${options.arch}`];
 const steps = [
-	{ label: "build the monorepo", command: "pnpm", args: ["run", "build"] },
-	{ label: "package macOS dmgs", command: process.execPath, args: [join(desktopRoot, "scripts", "package.mjs"), "--mac", `--arch=${options.arch}`] },
+	// An .app handed in by --from-app is already built and signed; rebuilding it
+	// here would throw away the signature and the notarization staple.
+	...(options.fromApp === undefined ? [{ label: "build the monorepo", command: "pnpm", args: ["run", "build"] }] : []),
+	{
+		label: options.signedApp ? "package the signed .app" : options.fromApp !== undefined ? "package the notarized .app" : "package macOS dmgs",
+		command: process.execPath,
+		args: [join(desktopRoot, "scripts", "package.mjs"), ...packagerArgs],
+	},
 ];
 
 if (options.dryRun) {
@@ -96,6 +126,8 @@ if (options.dryRun) {
 				arch: options.arch,
 				fastBuild: options.fastBuild,
 				notarize: false,
+				signedApp: options.signedApp,
+				fromApp: options.fromApp ?? null,
 				version,
 				distDir: relative(repoRoot, distDir),
 				steps: steps.map((step) => [step.command, ...step.args].join(" ")),
@@ -128,6 +160,26 @@ for (const step of steps) {
 // architecture cannot be collected into this build.
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
+
+if (options.signedApp) {
+	// The checkpoint needs the .app itself, not an installer: hand its path to the
+	// job through a file, since a subprocess cannot export a variable to the shell.
+	const apps = [];
+	for (const entry of readdirSync(releaseDir, { withFileTypes: true })) {
+		if (!entry.isDirectory() || entry.name === "stage") continue;
+		const versionDir = join(releaseDir, entry.name);
+		for (const archEntry of readdirSync(versionDir, { withFileTypes: true })) {
+			if (!archEntry.isDirectory()) continue;
+			for (const name of readdirSync(join(versionDir, archEntry.name))) {
+				if (name.endsWith(".app")) apps.push(join(versionDir, archEntry.name, name));
+			}
+		}
+	}
+	if (apps.length !== 1) throw new Error(`Expected one .app under ${relative(repoRoot, releaseDir)}, found ${apps.length}`);
+	writeFileSync(join(distDir, "signed-app-path.txt"), `${apps[0]}\n`);
+	console.log(`[dist:mac] signed app: ${relative(repoRoot, apps[0])}`);
+	process.exit(0);
+}
 
 const copied = [];
 for (const entry of readdirSync(releaseDir, { withFileTypes: true })) {

@@ -1,0 +1,130 @@
+# Developer ID signing + notarization for the macOS installer.
+#
+# Falcon's template owns the four-phase topology (docs/macos-signing.md):
+#   A  macos-checkpoint        build + app-owned sign, verify the .app, archive it
+#   B1 macos-notary-submit     notarytool submit --no-wait, records the submission id
+#   B2 macos-notary-finalize   wait, staple, validate, then the app packages it
+# Nothing in here signs with falcon's keys: the .app has to be correctly signed by
+# this repo's own toolchain before the checkpoint looks at it, which is what
+# `pnpm dist:mac -- --signed-app` does (Developer ID from CSC_LINK, hardened
+# runtime, entitlements in apps/desktop/resources/).
+#
+# Off by default. The jobs need protected-ref-only credentials, so they only exist
+# when MACOS_SIGNING_ENABLED=true is set on the branch being built:
+#   CSC_LINK              file variable, Developer ID Application .p12
+#   CSC_KEY_PASSWORD      password for that .p12
+#   APPLE_API_KEY         file variable, App Store Connect API key (.p8)
+#   APPLE_API_KEY_ID      key id
+#   APPLE_API_ISSUER      issuer uuid (Team key; omit for an individual key)
+#   (or MACOS_NOTARY_KEYCHAIN_PROFILE, when the runner already holds one)
+# The branch itself must be protected: falcon's template creates no job otherwise.
+#
+# The include and MACOS_FALCON_REF/MACOS_FALCON_SHA are pinned to the same
+# immutable falcon commit on purpose (see docs/macos-signing.md): the YAML and the
+# ruby controller cloned at run time must be the same revision.
+include:
+  - project: 'catalyst/falcon-mobile-pipeline'
+    ref: 9d0ab7e56c356aa24541ec2997609172e4fa7e44
+    file: '/stages/macos-signing.yml'
+
+variables:
+  MACOS_FALCON_REF: '9d0ab7e56c356aa24541ec2997609172e4fa7e44'
+  MACOS_FALCON_SHA: '9d0ab7e56c356aa24541ec2997609172e4fa7e44'
+  # arm64 only: the checkpoint and the notarization run per architecture, and the
+  # x64 dmg keeps shipping unsigned from the fast/qa profile until x64 signing is
+  # asked for.
+  MACOS_ARCH: 'arm64'
+  MACOS_EXPECTED_BUNDLE_ID: 'com.stepfun.stepcode'
+  MACOS_EXPECTED_TEAM_ID: 'H7DGS2BM94'
+
+.stepcode-macos-signing-rules:
+  # Inheriting the template's own rule would build these jobs on any protected
+  # ref; without the credentials they can only fail, so gate on the opt-in flag.
+  rules:
+    - if: '$CI_COMMIT_REF_PROTECTED == "true" && $MACOS_SIGNING_ENABLED == "true"'
+    - when: never
+
+stepcode-desktop-checkpoint:
+  extends:
+    - .macos-signed-app-checkpoint
+    - .stepcode-macos-signing-rules
+  stage: macos-checkpoint
+  # A build here mutates nothing outside the job: no falcon scripts, no staging.
+  variables:
+    CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+    ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
+    ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+  script:
+    - corepack enable
+    - corepack prepare --activate pnpm@9.15.9
+    # No --ignore-scripts: node-pty and esbuild build their binaries in postinstall.
+    - pnpm install --frozen-lockfile
+    - pnpm dist:mac -- --env=prod --arch="${MACOS_ARCH}" --signed-app
+    # The packager writes the path because a child process cannot export a variable.
+    - export MACOS_SIGNED_APP_PATH="$(cat dist-electron/signed-app-path.txt)"
+    - !reference [.macos-signed-app-checkpoint, script]
+  artifacts:
+    name: 'stepcode-signed-app-$CI_COMMIT_SHA-$MACOS_ARCH'
+    paths:
+      - '.macos-signing/'
+    expire_in: 2 weeks
+    when: always
+
+stepcode-desktop-notary-submit:
+  extends:
+    - .macos-notary-submit
+    - .stepcode-macos-signing-rules
+  stage: macos-notary-submit
+  # Another machine, fresh clone: the submission must not rebuild anything.
+  variables:
+    GIT_STRATEGY: 'none'
+  needs:
+    - job: stepcode-desktop-checkpoint
+      artifacts: true
+
+stepcode-desktop-notary-finalize:
+  extends:
+    - .macos-notary-finalize
+    - .stepcode-macos-signing-rules
+  stage: macos-notary-finalize
+  variables:
+    ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
+    ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+  needs:
+    - job: stepcode-desktop-checkpoint
+      artifacts: true
+    - job: stepcode-desktop-notary-submit
+      artifacts: true
+  script:
+    - corepack enable
+    - corepack prepare --activate pnpm@9.15.9
+    - pnpm install --frozen-lockfile
+    # Wrap the app Apple stapled, never rebuild it: that would drop the ticket.
+    - pnpm dist:mac -- --env=prod --arch="${MACOS_ARCH}" --from-app="$(pwd)/.macos-signing/notarized-app/${MACOS_ARCH}/StepCode.app"
+    # Same proof the unsigned job gives: the installer is mounted and started.
+    - !reference [.macos-notary-finalize, script]
+    - |
+      bash -c '
+        set -eo pipefail
+        image="$(ls dist-electron/*-"$(uname -m)".dmg | head -1)"
+        mountpoint="${CI_PROJECT_DIR}/.smoke-mount"
+        mkdir -p "${mountpoint}"
+        cleanup() { hdiutil detach "${mountpoint}" >/dev/null 2>&1 || true; }
+        trap cleanup EXIT
+        hdiutil attach "${image}" -nobrowse -readonly -mountpoint "${mountpoint}" >/dev/null
+        app="$(ls -d "${mountpoint}"/*.app | head -1)"
+        codesign --verify --deep --strict --verbose=2 "${app}"
+        spctl --assess --type execute --verbose=2 "${app}"
+        STEPCODE_DESKTOP_SMOKE=1 STEPCODE_DESKTOP_USER_DATA_DIR="${CI_PROJECT_DIR}/.smoke-userdata" \
+          "${app}/Contents/MacOS/$(ls "${app}/Contents/MacOS/" | head -1)"
+      '
+  artifacts:
+    name: 'stepcode-desktop-macos-notarized-$CI_PIPELINE_IID'
+    paths:
+      - '.macos-signing/manifest.json'
+      - '.macos-signing/submission.json'
+      - '.macos-signing/notarization-log.json'
+      - 'dist-electron/*.dmg'
+      - 'dist-electron/*.zip'
+    expire_in: 2 weeks
+    when: always

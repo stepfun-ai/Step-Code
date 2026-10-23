@@ -55,3 +55,17 @@ include:
     file: 'stages/before_script.yml'
   - local: '.gitlab-ci.desktop-macos.yml'
   - local: '.gitlab-ci.desktop-windows.yml'
+  # Developer ID signing + notarization. Off unless MACOS_SIGNING_ENABLED=true on a
+  # protected ref; it brings its own pinned include of falcon's signing template.
+  - local: '.gitlab-ci.desktop-macos-signing.yml'
+
+# falcon's before_script.yml declares package/upload/test/publish; the notarization
+# topology adds three more, and the last include wins on this key.
+stages:
+  - package
+  - macos-checkpoint
+  - macos-notary-submit
+  - macos-notary-finalize
+  - upload
+  - test
+  - publish

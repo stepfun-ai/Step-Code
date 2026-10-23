@@ -2,9 +2,15 @@
 // Build StepCode Desktop installers with electron-builder.
 //
 //   node scripts/package.mjs [--mac] [--win] [--arch=all|arm64|x64]   (default: both platforms, all arches)
+//   node scripts/package.mjs --mac --app-only --arch=arm64            signed .app only, no dmg
+//   node scripts/package.mjs --from-app=<path> --arch=arm64           dmg + zip from an existing .app
 //
 //   mac: dmg for arm64 (Apple Silicon) and x64 (Intel), or the one named by --arch
 //   win: NSIS installer for x64
+//
+// The two extra modes exist for the notarization pipeline: it needs a signed
+// .app as its input (checkpoint), and it needs the dmg built from the app that
+// Apple stapled (finalize), so neither may rebuild or repack the app itself.
 //
 // Run `pnpm build` at the repo root first: this script packages existing build
 // output and fails when any of it is missing.
@@ -65,14 +71,26 @@ function productVersion() {
 }
 
 const argv = process.argv.slice(2);
-const archArg = argv.find((arg) => arg.startsWith("--arch="))?.slice("--arch=".length) ?? "all";
-const args = new Set(argv.filter((arg) => !arg.startsWith("--arch=")));
-const unknown = [...args].filter((arg) => arg !== "--mac" && arg !== "--win");
+const flag = (name) => argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+const archArg = flag("arch") ?? "all";
+// An .app from a notarized checkpoint: package it, do not rebuild anything.
+const fromApp = flag("from-app");
+const args = new Set(argv.filter((arg) => !arg.startsWith("--arch=") && !arg.startsWith("--from-app=")));
+const unknown = [...args].filter((arg) => arg !== "--mac" && arg !== "--win" && arg !== "--app-only");
 if (unknown.length > 0) throw new Error(`Unknown arguments: ${unknown.join(" ")}`);
 const macArches = { all: [Arch.arm64, Arch.x64], arm64: [Arch.arm64], x64: [Arch.x64] }[archArg];
 if (macArches === undefined) throw new Error(`Unknown architecture: ${archArg}`);
 const wantMac = args.has("--mac") || args.size === 0;
 const wantWin = args.has("--win") || args.size === 0;
+const appOnly = args.has("--app-only");
+if (appOnly && (fromApp !== undefined || wantWin)) throw new Error("--app-only builds one mac .app; drop --win/--from-app");
+if (appOnly && macArches.length !== 1) throw new Error("--app-only needs a single --arch=arm64|x64");
+if (fromApp !== undefined && !existsSync(fromApp)) throw new Error(`--from-app does not exist: ${fromApp}`);
+
+// Developer ID appears when the pipeline hands over a certificate; without one the
+// build keeps the ad-hoc signature Apple Silicon needs to start the app at all.
+const signingIdentity = process.env.CSC_LINK?.trim() ? undefined : "-";
+const signing = signingIdentity === undefined;
 
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
@@ -242,9 +260,16 @@ const config = () => ({
 	mac: {
 		icon: join(resources, "icon.icns"),
 		category: "public.app-category.developer-tools",
-		// Ad-hoc signature: required for Apple Silicon to start the app; not a Developer ID.
-		identity: "-",
-		hardenedRuntime: false,
+		// identity undefined = electron-builder discovers the Developer ID from the
+		// certificate the pipeline imported; "-" is the ad-hoc signature.
+		identity: signingIdentity,
+		hardenedRuntime: signing,
+		...(signing && {
+			entitlements: join(resources, "entitlements.mac.plist"),
+			entitlementsInherit: join(resources, "entitlements.mac.inherit.plist"),
+		}),
+		// Notarization belongs to the pipeline (falcon macos-signing), which submits
+		// the signed app and staples the ticket into the app this script rebuilt.
 		notarize: false,
 	},
 	dmg: { title: "StepCode ${version}" },
@@ -261,14 +286,31 @@ const config = () => ({
 	},
 });
 
-stage();
 const artifacts = [];
+if (fromApp !== undefined) {
+	// The app is already signed (and notarized, possibly stapled); electron-builder
+	// here only writes the dmg/zip around it. No staging, no rebuild.
+	const outDir = join(releaseDir, version);
+	artifacts.push(
+		...(await build({
+			prepackaged: fromApp,
+			config: { ...config(), directories: { output: outDir }, extraMetadata: { version } },
+			targets: Platform.MAC.createTarget(["dmg", "zip"], ...macArches),
+			publish: "never",
+		})),
+	);
+	const summary = artifacts.length > 0 ? artifacts : [join(releaseDir, version)];
+console.log(`[package] artifacts:\n  ${summary.map((path) => relative(repoRoot, path)).join("\n  ")}`);
+	process.exit(0);
+}
+
+stage();
 if (wantMac) {
 	artifacts.push(
 		...(await build({
 			projectDir: appStage,
 			config: config(),
-			targets: Platform.MAC.createTarget(["dmg"], ...macArches),
+			targets: Platform.MAC.createTarget([appOnly ? "dir" : "dmg"], ...macArches),
 			publish: "never",
 		})),
 	);
@@ -278,4 +320,5 @@ if (wantWin) {
 		...(await build({ projectDir: appStage, config: config(), targets: Platform.WINDOWS.createTarget(["nsis"], Arch.x64), publish: "never" })),
 	);
 }
-console.log(`[package] artifacts:\n  ${artifacts.map((path) => relative(repoRoot, path)).join("\n  ")}`);
+const summary = artifacts.length > 0 ? artifacts : [join(releaseDir, version)];
+console.log(`[package] artifacts:\n  ${summary.map((path) => relative(repoRoot, path)).join("\n  ")}`);
