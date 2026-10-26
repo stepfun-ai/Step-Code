@@ -32,19 +32,20 @@
 #    would run as the token's bot user, which cannot read the falcon includes.
 #
 # 2. Ad-hoc packaging through falcon (catalyst/falcon-mobile-pipeline).
-#    Run pipeline with DESKTOP_BUMP=none and
-#      BUILD_PLATFORM=macos | windows
-#      BUILD_PROFILE=fast               (macOS also accepts qa: both arches)
-#    gives unsigned installers as job artifacts. Add MACOS_SIGNING_ENABLED=true
-#    (macOS, protected branch) to get the signed and notarized arm64 + x64 build
-#    instead, at the root package.json version; nothing is uploaded.
+#    Run pipeline with DESKTOP_BUMP=none builds an unsigned macOS arm64 dmg as
+#    a job artifact; nothing is tagged or uploaded. The defaults below pick
+#    that build; to get another one, add the variable by hand in the Run
+#    pipeline form (or pass it through the API):
+#      BUILD_PLATFORM=windows           the unsigned Windows x64 installer
+#      BUILD_PROFILE=qa                 macOS arm64 + x64
+#      MACOS_SIGNING_ENABLED=true       signed + notarized macOS arm64 + x64
+#                                       (protected branch), at the root
+#                                       package.json version
 #
-# The Run pipeline form shows only the variables below that carry a
-# `description`. falcon's stages/variables.yml (the mobile form: iOS/Android
-# profiles, APK channels, market submission, ...) is deliberately not included;
-# the falcon settings its scripts still read are fixed here without a
-# description, so they stay out of the form. The platform's API trigger may
-# still pass any of them. falcon's package.yml / publish.yml are not included
+# The Run pipeline form shows only DESKTOP_BUMP: GitLab lists the variables
+# that carry a `description`, and every other one here is a plain default.
+# falcon's stages/variables.yml (the mobile form: iOS/Android profiles, APK
+# channels, market submission, ...) is deliberately not included. falcon's package.yml / publish.yml are not included
 # either: they add FE callbacks and falcon's own TOS uploads; releases here go
 # through infra/release/desktop-release.mjs.
 #
@@ -85,21 +86,10 @@ include:
   - local: '.gitlab-ci.desktop-release.yml'
 
 variables:
-  # ── Run pipeline form (variables with a description) ─────────────────────
-  # Releases: pick a bump and leave the rest at their defaults.
-  # (DESKTOP_BUMP and MACOS_SIGNING_ENABLED are declared below.)
-  BUILD_PLATFORM:
-    value: 'macos'
-    options:
-      - 'macos'
-      - 'windows'
-    description: 'Ad-hoc packaging only (DESKTOP_BUMP=none): which installer to build. Releases ignore it.'
-  BUILD_PROFILE:
-    value: 'fast'
-    options:
-      - 'fast'
-      - 'qa'
-    description: 'Ad-hoc packaging only: fast = macOS arm64 / Windows x64; qa = macOS arm64 + x64. Unsigned unless MACOS_SIGNING_ENABLED.'
+  # ── Ad-hoc packaging defaults (not in the form; see the header) ──────────
+  BUILD_PLATFORM: 'macos'
+  BUILD_PROFILE: 'fast'
+  MACOS_SIGNING_ENABLED: 'false'
   # ── Fixed falcon settings (no description: not in the form) ──────────────
   # falcon's before_script and package scripts read these; the ad-hoc job rules
   # match TASK_TYPE. Nothing here deploys or notifies through falcon.
@@ -110,8 +100,8 @@ variables:
   CI_PIPELINE_REF: 'main'
   # Branch whose pipelines may create a Desktop tag, besides the default branch.
   DESKTOP_RELEASE_BRANCH: 'feat/stepcode-desktop-ci-pipeline-build'
-  # Inert by default: a release is started explicitly from the Run pipeline
-  # form, which creates the tag and leaves the rest to the tag pipeline.
+  # The only field of the Run pipeline form. Inert by default; a bump starts
+  # a release in the same pipeline (tag, build, sign, upload).
   DESKTOP_BUMP:
     value: 'none'
     options:
@@ -119,13 +109,7 @@ variables:
       - 'patch'
       - 'minor'
       - 'major'
-    description: 'Create the next StepCode Desktop tag (desktop-vX.Y.Z) and release it; leave none for a normal pipeline.'
-  MACOS_SIGNING_ENABLED:
-    value: 'false'
-    options:
-      - 'false'
-      - 'true'
-    description: 'Ad-hoc macOS packaging only: sign with the Developer ID and notarize instead of the unsigned fast/qa build. Needs a protected branch. Release tags always sign.'
+    description: 'Release StepCode Desktop: patch / minor / major creates the next desktop-vX.Y.Z tag, builds the signed macOS installers and uploads them (test bucket automatically, production on a manual click). none builds an unsigned macOS test package only.'
 
 # falcon's before_script.yml declares package/upload/test/publish; the release
 # and notarization topology add their own, and the last declaration wins.

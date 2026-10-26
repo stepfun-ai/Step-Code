@@ -27,7 +27,7 @@ variables:
   STEP_TOS_PROD_ENDPOINT: 'tos-cn-shanghai.ivolces.com'
   # Windows in releases: off while the Windows packager (runner tags windows +
   # bare-metal) cannot run jobs, so a release is macOS only and never waits on
-  # it. Set to 'true' (here, or in the Run pipeline form) to build, EV-sign and
+  # it. Set to 'true' (here, or as an added variable in Run pipeline) to build, EV-sign and
   # publish the Windows installer again. The uploads follow it: without Windows
   # the release's latest.json lists only the mac assets, and Windows clients
   # (none yet) see no update.
