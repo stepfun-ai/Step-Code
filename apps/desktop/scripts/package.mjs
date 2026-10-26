@@ -234,7 +234,12 @@ function copyWorkspacePackage(source, target, manifest) {
 		const fixed = pattern.split("/").filter((segment, index, all) => !all.slice(0, index + 1).some((s) => s.includes("*")));
 		if (fixed.length > 0) entries.add(fixed.join("/"));
 	}
+	// docs and examples are for the package's own consumers; the server this
+	// installer ships imports only `dist`. They are also not signing-safe: signing
+	// walks the bundle and dies on an example's WebAssembly ("codesign ... doom.wasm").
+	const notRuntime = new Set(["docs", "examples"]);
 	for (const entry of entries) {
+		if (notRuntime.has(entry)) continue;
 		const from = join(source, entry);
 		// Nested node_modules (e.g. examples' own installs) are links into this checkout, not published files.
 		if (existsSync(from)) {
