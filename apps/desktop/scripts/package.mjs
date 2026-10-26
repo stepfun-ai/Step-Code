@@ -35,13 +35,17 @@
 // app is signed with hardened runtime and the entitlements in resources/;
 // notarization is a separate pipeline stage (.gitlab-ci.desktop-macos-signing.yml
 // on the CI branch). Without it, macOS gets an ad-hoc signature so Apple
-// Silicon can run the app. Windows executables are not signed.
+// Silicon can run the app. With WIN_SIGN=1 (scripts/pack-win.cjs --sign, on the
+// Windows packager only) every Windows PE file, the installer and its
+// uninstaller are signed with the EV certificate (scripts/win-signer.cjs);
+// otherwise Windows executables are not signed.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import builder from "electron-builder";
+import winSigner from "./win-signer.cjs";
 
 const { Arch, build, Platform } = builder;
 
@@ -192,6 +196,12 @@ const signing = Boolean(process.env.CSC_LINK?.trim() || process.env.CSC_NAME?.tr
 const signingIdentity = signing ? undefined : "-";
 if (appOnly && !signing) {
 	throw new Error("--app-only builds the Developer ID signed app; set CSC_LINK (+ CSC_KEY_PASSWORD) or CSC_NAME");
+}
+
+// Windows Authenticode with the EV token; pack-win.cjs sets it only after probing the token.
+const winSigning = process.env.WIN_SIGN === "1";
+if (winSigning && process.platform !== "win32") {
+	throw new Error("WIN_SIGN=1 signs with the EV token, which only the Windows packager has");
 }
 
 function readJson(path) {
@@ -363,6 +373,9 @@ const config = () => ({
 		const target = join(resourcesDir, "server");
 		rmSync(target, { recursive: true, force: true });
 		cpSync(serverStage, target, { recursive: true, verbatimSymlinks: true });
+		// electron-builder signs the app's own executables after this hook, but not
+		// this tree (node-pty's helpers, native addons): sign those here.
+		if (winSigning && context.electronPlatformName === "win32") winSigner.signTree(target);
 	},
 	mac: {
 		icon: join(resources, "icon.icns"),
@@ -380,7 +393,16 @@ const config = () => ({
 		notarize: false,
 	},
 	dmg: { title: "StepCode ${version}" },
-	win: { icon: join(resources, "icon.ico"), signAndEditExecutable: true },
+	win: {
+		icon: join(resources, "icon.ico"),
+		signAndEditExecutable: true,
+		...(winSigning && {
+			// Every PE electron-builder signs (StepCode.exe, its helpers, the installer
+			// and uninstaller) goes through the EV token; SHA-256 only (Windows 10+).
+			signtoolOptions: { sign: winSigner.electronBuilderSign, signingHashAlgorithms: ["sha256"] },
+			signExts: [".dll", ".node"],
+		}),
+	},
 	nsis: {
 		oneClick: false,
 		perMachine: false,

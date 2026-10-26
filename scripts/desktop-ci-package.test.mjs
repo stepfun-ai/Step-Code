@@ -63,10 +63,22 @@ test("pack:win writes the channel manifest falcon collects from", () => {
 	assert.equal(plan.plan.manifest, "channel-artifacts.json");
 });
 
-test("pack:win fails instead of shipping an installer Phase 1 cannot sign or publish", () => {
-	const sign = dryRun("pack-win.cjs", ["--sign"]);
-	assert.notEqual(sign.status, 0);
-	assert.match(sign.stderr, /--sign is not available yet/u);
+test("pack:win signs only on the Windows packager and keeps one channel", () => {
+	const sign = dryRun("pack-win.cjs", ["--env=prod", "--sign"]);
+	assert.equal(sign.status, 0, sign.stderr);
+	assert.equal(sign.plan.sign, true);
+
+	if (process.platform !== "win32") {
+		// Not a dry run: it must stop before building, because the EV token and
+		// signtool exist only on the Windows packager.
+		const real = spawnSync(process.execPath, [join(repoRoot, "scripts", "pack-win.cjs"), "--sign"], {
+			cwd: repoRoot,
+			encoding: "utf8",
+			env: pipelineEnv,
+		});
+		assert.notEqual(real.status, 0);
+		assert.match(real.stderr, /--sign needs the Windows packager/u);
+	}
 
 	const multi = dryRun("pack-win.cjs", ["--channels=web_website_homepage,appdist_soft_mgr_360"]);
 	assert.notEqual(multi.status, 0);
@@ -208,6 +220,44 @@ test("verify-win-artifact rejects an installer signed by a non-Windows certifica
 
 		const problems = verifyWinArtifact({ dir });
 		assert.ok(problems.some((p) => p.includes("Authenticode signature")), problems.join("\n"));
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("verify-win-artifact --signed requires a non-Apple Authenticode signature", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-win-signed-"));
+	try {
+		const unsigned = await writeFakeInstaller(join(root, "unsigned"));
+		assert.ok(
+			verifyWinArtifact({ dir: unsigned.dir, signed: true }).some((p) => p.includes("no Authenticode signature")),
+		);
+
+		const sign = async (name, subject) => {
+			const { dir, exe } = await writeFakeInstaller(join(root, name));
+			const exePath = join(dir, exe);
+			const bytes = readFileSync(exePath);
+			const cert = Buffer.from(`${subject}\0`, "latin1");
+			const winCert = Buffer.alloc(8);
+			winCert.writeUInt32LE(8 + cert.length, 0);
+			winCert.writeUInt16LE(0x200, 4);
+			winCert.writeUInt16LE(2, 6);
+			bytes.writeUInt32LE(bytes.length, 0x80 + 24 + 96 + 32);
+			bytes.writeUInt32LE(8 + cert.length, 0x80 + 24 + 96 + 36);
+			const signedBytes = Buffer.concat([bytes, winCert, cert]);
+			await writeFile(exePath, signedBytes);
+			// Keep the metadata consistent with the signed bytes.
+			const sha512 = createHash("sha512").update(signedBytes).digest("base64");
+			await writeFile(
+				join(dir, "latest.yml"),
+				`version: 1.2.3\npath: ${exe}\nsha512: ${sha512}\nfiles:\n  - url: ${exe}\n    sha512: ${sha512}\n    size: ${signedBytes.length}\n`,
+			);
+			return dir;
+		};
+		const ev = await sign("ev", "CN=StepFun Example EV Code Signing Subject");
+		assert.deepEqual(verifyWinArtifact({ dir: ev, signed: true }), []);
+		const apple = await sign("apple", "Developer ID Application: StepFun Intelligence Co., Ltd. (H7DGS2BM94)");
+		assert.ok(verifyWinArtifact({ dir: apple, signed: true }).some((p) => p.includes("Apple certificate")));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

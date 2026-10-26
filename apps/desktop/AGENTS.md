@@ -23,7 +23,7 @@ This package only changes when the change needs the OS, the window or the proces
 | Bundler | esbuild 0.28 (`scripts/build.mjs`) | `src/main.ts` -> `dist/main.js` (ESM); `src/preload.ts` -> `dist/preload.cjs` (CJS: sandboxed preloads cannot load ES modules) |
 | Server | `@step-harness/web` (workspace dependency) | Spawned with `ELECTRON_RUN_AS_NODE=1` |
 | Lint / format | Biome (root `biome.json`) | Tabs, indent width 3, line width 120 |
-| Installers | electron-builder 26.15 (dev dependency, `scripts/package.mjs`) | dmg (mac arm64 / x64), NSIS (win x64); unsigned locally, Developer ID signed + notarized mac in release CI |
+| Installers | electron-builder 26.15 (dev dependency, `scripts/package.mjs`) | dmg (mac arm64 / x64), NSIS (win x64); unsigned locally; release CI signs + notarizes mac (Developer ID) and EV-signs Windows |
 
 No other runtime dependencies. Adding one needs the user's approval; pin it to an exact version and install with
 `pnpm install --ignore-scripts`. Do not add a renderer framework, a second web server or native Node modules.
@@ -38,6 +38,7 @@ apps/desktop/
   tsconfig.json
   scripts/build.mjs      esbuild bundle; --ensure-web builds @step-harness/web if its output is missing
   scripts/package.mjs    stage the app and the server's dependency closure, write the release envelope, run electron-builder
+  scripts/win-signer.cjs Windows Authenticode signing with the EV token (Windows packager only)
   scripts/icons.mjs      regenerate resources/icon.{png,icns,ico} from resources/icon.svg (macOS)
   resources/             app icons; icon.svg is the source
   src/
@@ -147,10 +148,14 @@ in release CI on the private CI branch (falcon's macos-signing stages); releases
 uploaded to TOS by `infra/release/desktop-release.mjs`. See README "Signing" and "Releases". Keep `--signed-app` /
 `--from-app` from rebuilding or repacking an app once it is signed: that would drop the notarization ticket.
 
+Windows Authenticode signing (`WIN_SIGN=1`, `scripts/win-signer.cjs`) uses the GlobalSign EV token on the Windows
+packager runner only; never sign a Windows PE with `CSC_LINK` (the Apple certificate). Edit executable resources
+before signing, never after: a modified PE loses its signature.
+
 The bundle id `com.stepfun.stepcode` and Team ID are part of the signing contract; changing the bundle id makes the
 installed app a different application.
 
 ## Not in scope yet
 
-In-app auto-update (reading `desktop/latest.json`) and Windows code signing. Ask before starting either; they need
-decisions from the user (update channel, EV certificate).
+In-app auto-update (reading `desktop/latest.json`). Ask before starting it; it needs decisions from the user (update
+channel).

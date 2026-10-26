@@ -8,11 +8,12 @@
 # into build/ci/ with the build number in the name, rewrites the paths inside
 # latest.yml to match, and records CI_WIN_EXE_PATH and friends.
 #
-# Only fast (unsigned) is offered: qa and release sign the installer with an EV
-# token from build/tools/win/signing/ and Vault, which is not wired up yet (the
-# release-tag installer is unsigned for the same reason). pack-win.cjs
-# itself fails on --sign rather than shipping an unsigned installer under a
-# signed profile's name.
+# Only fast (unsigned) is offered here: this job cross-builds on a macOS runner,
+# and the EV token signing needs (build/tools/win/signing/signtool.exe plus the
+# token) exists only on the Windows packager. pack-win.cjs fails on --sign
+# anywhere but Windows rather than shipping an unsigned installer under a signed
+# profile's name. Signed installers come from the release pipeline's
+# stepcode-desktop-release-windows (.gitlab-ci.desktop-release.yml).
 #
 # This runs on the macOS Tart runner as a cross-build: electron-builder's
 # nsis target is platform independent, and this repo's packer is only

@@ -172,8 +172,17 @@ with hardened runtime and `resources/entitlements.mac.plist` / `entitlements.mac
 done here: on the CI branch, `.gitlab-ci.desktop-macos-signing.yml` runs falcon's macos-signing stages per architecture
 (arm64 and x64): `dist:mac --signed-app` builds the signed app, falcon checks it and submits it to Apple, staples the
 ticket, and `dist:mac --from-app=<stapled .app>` wraps that exact app into the dmg and zip. Release tags always take
-this path; a Run pipeline takes it with `MACOS_SIGNING_ENABLED=true` on a protected branch. The Windows installer is
-still unsigned (EV signing is not wired up).
+this path; a Run pipeline takes it with `MACOS_SIGNING_ENABLED=true` on a protected branch.
+
+Windows signing uses the company's GlobalSign EV certificate on a USB token, the same identity
+`heimdall/stepfun-desktop` signs with. Only the Windows packager runner (tags `windows` + `bare-metal`) holds the
+token, with SafeNet Authentication Client and Single Logon, so no password or certificate variable is involved:
+`node scripts/pack-win.cjs --sign` (sets `WIN_SIGN=1`) probes the token, has electron-builder sign `StepCode.exe`,
+its DLLs, the installer and uninstaller through `scripts/win-signer.cjs`, signs the PE files of the server tree in
+`afterPack`, and checks the app and installer with `signtool verify /pa`. It uses
+`build/tools/win/signing/signtool.exe` (CI branch only), SHA-256 with an RFC 3161 timestamp from GlobalSign, and the
+certificate thumbprint `WIN_EV_THUMBPRINT` (default: the company EV certificate). After the packager reboots, the
+token has to be unlocked once on that machine before CI can sign again. Cross-builds on macOS stay unsigned.
 
 ## Releases
 
@@ -185,7 +194,7 @@ pipeline does all of it:
    `desktop-vX.Y.Z` tag on that commit (the first is `desktop-v0.1.0`) without a pipeline of its own, and passes the
    version to the following jobs.
 2. The same pipeline builds that version (`STEPCODE_BUILD_VERSION=X.Y.Z`): signed and notarized mac arm64 / x64 dmgs
-   and the Windows x64 NSIS installer. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats
+   and the EV-signed Windows x64 NSIS installer. The uploads refuse a Windows installer without a signature. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats
    its release.
 3. `desktop_upload_test` (automatic) and then `desktop_upload_prod` (manual) run
    `infra/release/desktop-release.mjs --upload`: the same installers go to `desktop/<v>/` in the test and the
@@ -196,4 +205,4 @@ Stage a release locally without uploading (after `package`):
 
 ## Not included yet
 
-Auto-update in the app (it does not read `desktop/latest.json` yet) and Windows code signing.
+Auto-update in the app (it does not read `desktop/latest.json` yet).

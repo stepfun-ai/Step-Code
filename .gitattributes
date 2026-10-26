@@ -18,6 +18,7 @@
 *.ico binary
 *.pdf binary
 *.zip binary
+*.exe binary
 *.gz binary
 *.woff binary
 *.woff2 binary

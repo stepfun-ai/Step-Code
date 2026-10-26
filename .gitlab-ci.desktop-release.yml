@@ -12,7 +12,7 @@
 # Bucket layout (prefix STEP_TOS_PREFIX), written by infra/release/desktop-release.mjs:
 #   desktop/<v>/StepCode-<v>-mac-arm64.dmg   immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-x64.dmg     immutable, Developer ID signed + notarized
-#   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, unsigned (no EV token yet)
+#   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, Authenticode signed (GlobalSign EV)
 #   desktop/<v>/SHA256SUMS, manifest.json    immutable
 #   desktop/latest.json                      channel pointer, uploaded last
 
@@ -92,14 +92,29 @@ desktop_tag_release:
 
 # Same cross-build as stepcode-desktop-package-windows, without falcon: a
 # release names its version from the tag and needs no falcon collection.
+# The Windows installer of a release, built and signed on the Windows packager
+# that holds the company's GlobalSign EV USB token (runner tags windows +
+# bare-metal; shared with catalyst/stepfun-desktop, enabled for this project).
+# It is a persistent shell runner (Git Bash, Node and pnpm installed), so:
+#   - no image; the falcon before_script stays off;
+#   - pnpm install goes through powershell.exe: Git Bash pnpm writes POSIX
+#     junctions that electron-builder then fails to stat;
+#   - GIT_CLEAN_FLAGS without -x keeps node_modules warm between runs;
+#   - the runner's pre_get_sources_script drops the largest variables to stay
+#     under the MSYS exec limit (CSC_LINK is the first to go; Windows never uses
+#     it, pack-win strips certificate variables anyway).
+# pack-win --sign probes the token first, signs every PE file (app, helpers,
+# server tree, installer, uninstaller) and verifies the result with signtool.
+# The token signs one thing at a time: a stepfun-desktop pipeline signing at the
+# same moment makes the probe time out, and a retry is the remedy (the
+# resource_group below only serialises this project's own runs).
 stepcode-desktop-release-windows:
   stage: package
-  image: 'hub.i.basemind.com/fe/mobile/sequoia-xcode-26.0.1:latest'
   tags:
     - mobile
     - online
-    - macos
-    - tart
+    - windows
+    - bare-metal
   needs:
     - job: desktop_tag_release
       artifacts: true
@@ -109,19 +124,25 @@ stepcode-desktop-release-windows:
   interruptible: false
   before_script: []
   variables:
+    GIT_CLEAN_FLAGS: '-ffd'
+    GIT_DEPTH: '20'
+    # The runner helper's Go net/http has hit TLS handshake timeouts uploading
+    # artifacts from this machine; HTTP/1.1 avoids them.
+    GODEBUG: 'http2client=0'
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
     ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
   rules: !reference [.desktop-release-rules, rules]
   script:
     - !reference [.desktop-release-version, script]
-    - corepack enable
-    - corepack prepare --activate pnpm@9.15.9
+    - node --version
     # No --ignore-scripts: node-pty and esbuild build their binaries in postinstall.
-    - pnpm install --frozen-lockfile
-    - pnpm pack:win -- --env=prod --no-sign
-    # Static proof only: no Windows machine in this pipeline can install or start
-    # the installer, but a rename or a stale latest.yml must not ship.
-    - node scripts/verify-win-artifact.mjs --unpacked="$(ls -d apps/desktop/release/*/win-unpacked | head -1)"
+    - |
+      workdir="$(cygpath -w "${CI_PROJECT_DIR}")"
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '${workdir}'; pnpm install --frozen-lockfile --config.confirmModulesPurge=false; exit \$LASTEXITCODE"
+    - node scripts/pack-win.cjs --env=prod --sign
+    # The structural half of the check (metadata, payload version, a certificate
+    # table that is not Apple's); signtool already verified the chain in pack-win.
+    - node scripts/verify-win-artifact.mjs --signed --unpacked="$(ls -d apps/desktop/release/*/win-unpacked | head -1)"
   artifacts:
     name: 'stepcode-desktop-windows-$CI_PIPELINE_IID'
     paths:
@@ -138,6 +159,9 @@ stepcode-desktop-release-windows:
   script:
     - !reference [.desktop-release-version, script]
     - pnpm install --frozen-lockfile --ignore-scripts
+    # Nothing unsigned reaches a bucket: the Windows installer must carry the EV
+    # signature (the mac dmgs were checked by codesign/spctl in their finalize jobs).
+    - node scripts/verify-win-artifact.mjs --signed
     - node infra/release/desktop-release.mjs --version "$DESKTOP_VERSION" --base-url "$DESKTOP_BASE_URL" --input dist-electron --upload
     - echo "Channel $DESKTOP_BASE_URL/desktop/latest.json now names StepCode Desktop $DESKTOP_VERSION"
   artifacts:

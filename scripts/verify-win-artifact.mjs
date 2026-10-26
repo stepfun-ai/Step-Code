@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 // Check the Windows installer this pipeline just built, before anything ships it.
 //
-//   node scripts/verify-win-artifact.mjs [--dir dist-electron]
+//   node scripts/verify-win-artifact.mjs [--dir=dist-electron] [--unpacked=<win-unpacked>] [--signed]
+//
+// --signed: the installer must carry an Authenticode signature (the EV-signed
+// release build); without it, it must carry none (the unsigned cross-build).
+// This is a structural check usable on any OS; signtool's chain verdict is
+// pack-win.cjs's job on the Windows packager.
 //
 // There is no Windows machine in this pipeline, so the installer can never be run
 // here. What can be proven without one is that the bytes are a real PE image and
@@ -56,9 +61,10 @@ function asarPackageVersion(asarPath) {
  * @param {string} options.dir         where pack-win wrote the installer + metadata
  * @param {string} [options.unpacked]  electron-builder's win-unpacked, to prove the
  *   payload carries the version the metadata advertises
+ * @param {boolean} [options.signed]   expect an Authenticode signature instead of none
  * @returns {string[]} every problem found; empty means the artifact is sound.
  */
-export function verifyWinArtifact({ dir, unpacked, minBytes = 10_000_000 }) {
+export function verifyWinArtifact({ dir, unpacked, signed = false, minBytes = 10_000_000 }) {
 	const problems = [];
 	if (!existsSync(dir)) return [`no directory at ${dir}`];
 
@@ -84,15 +90,22 @@ export function verifyWinArtifact({ dir, unpacked, minBytes = 10_000_000 }) {
 		problems.push(`${exeName} is only ${bytes.length} bytes; a packaged app is tens of MB`);
 	}
 
-	// Phase 1 ships unsigned. A certificate table here means something signed it —
-	// and the only certificate in the pipeline is the Apple Developer ID, which
-	// Windows does not trust while a naive "is it signed" check would say yes.
+	// An unsigned build must carry no certificate table: the other certificate in
+	// the pipeline is the Apple Developer ID, which Windows does not trust while a
+	// naive "is it signed" check would say yes. A signed build must carry one, and
+	// it must not be that Apple certificate.
 	if (bytes.length >= 0x40 && bytes.toString("latin1", 0, 2) === "MZ") {
 		const signature = authenticodeSignature(bytes);
-		if (signature !== undefined) {
+		if (!signed && signature !== undefined) {
 			problems.push(
 				`${exeName} carries an Authenticode signature (${signature}); this build asks for an unsigned installer, and an Apple certificate is not a Windows identity`,
 			);
+		}
+		if (signed && signature === undefined) {
+			problems.push(`${exeName} carries no Authenticode signature; a release installer must be EV-signed`);
+		}
+		if (signed && signature !== undefined && /Developer ID|Apple/u.test(signature)) {
+			problems.push(`${exeName} is signed with an Apple certificate (${signature}), which Windows does not trust`);
 		}
 	}
 
@@ -162,14 +175,18 @@ function main() {
 	const dirArg = argv.find((arg) => arg.startsWith("--dir="))?.slice("--dir=".length);
 	const dir = dirArg ?? join(repoRoot, "dist-electron");
 	const unpacked = argv.find((arg) => arg.startsWith("--unpacked="))?.slice("--unpacked=".length);
-	const problems = verifyWinArtifact({ dir, unpacked: unpacked || undefined });
+	const signed = argv.includes("--signed");
+	const problems = verifyWinArtifact({ dir, unpacked: unpacked || undefined, signed });
 	if (problems.length > 0) {
 		console.error(`Windows installer check failed (${relative(repoRoot, dir) || dir}):`);
 		for (const problem of problems) console.error(`  ${problem}`);
 		process.exit(1);
 	}
 	const exe = readdirSync(dir).find((name) => name.toLowerCase().endsWith(".exe"));
-	console.log(`Windows installer check passed: ${relative(repoRoot, join(dir, exe))} (${statSync(join(dir, exe)).size} bytes)`);
+	const signature = signed ? authenticodeSignature(readFileSync(join(dir, exe))) : undefined;
+	console.log(
+		`Windows installer check passed: ${relative(repoRoot, join(dir, exe))} (${statSync(join(dir, exe)).size} bytes${signature ? `, signed: ${signature}` : ", unsigned"})`,
+	);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();

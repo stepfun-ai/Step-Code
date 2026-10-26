@@ -13,12 +13,17 @@
 //
 //   node scripts/pack-win.cjs --env=sit --no-sign
 //
-// Phase 1 ships one unsigned channel. Signing (an EV credential plus
-// build/tools/win/signing/signtool.exe) and more channels are Phase 2, so
-// --sign and a multi-channel --channels fail here instead of producing an
-// installer the pipeline cannot sign or publish.
+// --sign signs with the company's GlobalSign EV token through
+// build/tools/win/signing/signtool.exe (apps/desktop/scripts/win-signer.cjs). It
+// runs only on the Windows packager that holds the token (runner tags windows +
+// bare-metal), probes the token before building, and verifies the app and the
+// installer signatures afterwards. --no-sign (the default, and the only mode a
+// macOS cross-build can use) leaves every executable unsigned. One channel is
+// packaged; a multi-channel --channels fails instead of producing installers the
+// pipeline cannot publish.
 
 const crypto = require("node:crypto");
+const winSigner = require("../apps/desktop/scripts/win-signer.cjs");
 const { spawnSync } = require("node:child_process");
 const { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
@@ -53,9 +58,9 @@ for (const arg of process.argv.slice(2)) {
 if (options.env !== "sit" && options.env !== "prod") {
 	throw new Error(`Unsupported --env=${options.env}; expected sit or prod`);
 }
-if (options.sign) {
+if (options.sign && !options.dryRun && process.platform !== "win32") {
 	throw new Error(
-		"--sign is not available yet: Windows signing needs an EV credential and build/tools/win/signing/signtool.exe (Phase 2). Run with --no-sign (BUILD_PROFILE=fast).",
+		"--sign needs the Windows packager: the EV token and signtool exist only there. Cross-builds on macOS run with --no-sign.",
 	);
 }
 if (options.channels.length > 1) {
@@ -122,7 +127,7 @@ if (options.dryRun) {
 			{
 				platform: "windows",
 				env: options.env,
-				sign: false,
+				sign: options.sign,
 				channelId,
 				version,
 				exe: exeName,
@@ -151,14 +156,17 @@ function main() {
 	// environment, and CSC_LINK is the generic variable — with a Developer ID .p12
 	// in the job it happily Authenticode-signed the installer with an Apple
 	// certificate, which Windows does not trust and which looks signed to any check
-	// that only looks for a certificate table. Strip every signing variable unless
-	// signing was asked for; --sign is still Phase 2 and throws above.
+	// that only looks for a certificate table. Strip every certificate variable:
+	// Windows signing never uses them, it goes through the EV token's thumbprint
+	// (WIN_SIGN=1 turns that on in apps/desktop/scripts/package.mjs).
 	const env = { ...process.env };
 	for (const name of ["CSC_LINK", "CSC_KEY_PASSWORD", "CSC_NAME", "WIN_CSC_LINK", "WIN_CSC_KEY_PASSWORD"]) {
 		delete env[name];
 	}
 	env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
-	env.WIN_SIGN = "";
+	env.WIN_SIGN = options.sign ? "1" : "";
+	// A locked or busy token would otherwise fail ten minutes into the build.
+	if (options.sign) winSigner.probeToken();
 
 	for (const step of steps) {
 		console.log(`[pack:win] ${step.label}`);
@@ -193,6 +201,14 @@ function main() {
 		throw new Error(
 			`Expected exactly one Windows installer under ${path.relative(repoRoot, releaseDir)}, found ${installers.length}${installers.length > 0 ? `: ${installers.map((installer) => path.basename(installer)).join(", ")}` : ""}`,
 		);
+	}
+
+	if (options.sign) {
+		// signtool's own verdict (chain to a trusted root, timestamp), not just "a
+		// certificate table exists": the app users start and the installer they run.
+		const unpacked = path.join(path.dirname(installers[0]), "win-unpacked", "StepCode.exe");
+		winSigner.verifySigned(unpacked);
+		winSigner.verifySigned(installers[0]);
 	}
 
 	const exePath = path.join(distDir, exeName);
