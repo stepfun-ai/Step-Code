@@ -3,9 +3,12 @@
  * overflow does not clip it. `top center` shifts it sideways only when a
  * viewport edge leaves no room to center it (keeping an 8px margin), and
  * `flip-block` moves it below only when there is no room above.
+ * Tooltip.tsx opens it as a manual popover (top layer); the declarations below
+ * also override the UA popover styles (inset, margin, border, overflow, colors).
  */
 .root {
 	position: fixed;
+	overflow: visible;
 	position-area: top center;
 	position-try-fallbacks: flip-block;
 	inset: auto;

@@ -278,6 +278,18 @@ editor refocus/disposal callback is cancelled before mounting. This prevents
 an orphaned promise, overlay, or timeout. Ordinary dismissal still allows the
 refocused editor to open the next dialog.
 
+### Change records (`write_file`, `edit_file`)
+
+`edit_file` returns the same `details.patch` as `edit`. `write_file` returns the
+same change record as `write` (`writeChangeDetails`, see the
+[SDK guide](sdk.md)): a unified `patch` from the replaced text to the written
+text, `created` for a new file, `previous` with the overwritten file's line
+ending and BOM, or `untracked` (`too_large`, `binary`) instead of a patch,
+alongside its own `changed`, `bytesWritten` and `charsWritten`. A no-op write
+(`changed: false`) records no patch. Hosts use these records for change
+summaries, undo and per-turn file versions; sessions recorded before this
+`write_file` record carry no patch, and such writes stay untracked.
+
 ### Fused commands (`then_run`)
 
 `edit_file` and `write_file` accept an optional `then_run` shell command. After

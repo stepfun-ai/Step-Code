@@ -55,6 +55,13 @@ interface OwnedTab {
  * on its own. A popup is kept only right after a user gesture in its opener, at most one each.
  */
 const POPUP_GESTURE_MS = 1500;
+/**
+ * Minimum spacing between delivered frames (~60 fps, Chromium's own screencast rate). A lower cap
+ * makes animated pages visibly stutter: at 66 ms a 60 fps canvas showed only ~13 fps. Transport
+ * and decode stay bounded without it: a blocked response drops frames and the client decodes
+ * only the newest one.
+ */
+const FRAME_INTERVAL_MS = 16;
 
 function gesture(tab: OwnedTab): void {
 	tab.gestureAt = Date.now();
@@ -400,7 +407,7 @@ export class WebBrowser {
 				// Detached CDP sessions cannot retain frame buffers.
 			});
 			if (!this.disposed && this.consumer && this.activeId === id && event.data.length <= 2_800_000) {
-				// Cap transport/decode work at 15 fps, including continuously animated websites.
+				// Deliver at most one frame per FRAME_INTERVAL_MS, always the newest one.
 				const surfaceWidth = event.metadata.deviceWidth;
 				const surfaceHeight = event.metadata.deviceHeight;
 				const viewport = page.viewportSize();
@@ -412,10 +419,11 @@ export class WebBrowser {
 					surfaceHeight,
 					data: event.data,
 				};
-				if (Date.now() - lastFrameAt >= 66) {
+				const wait = FRAME_INTERVAL_MS - (Date.now() - lastFrameAt);
+				if (wait <= 0) {
 					clearTimeout(frameTimer);
 					flushFrame();
-				} else if (!frameTimer) frameTimer = setTimeout(flushFrame, 66 - (Date.now() - lastFrameAt));
+				} else if (!frameTimer) frameTimer = setTimeout(flushFrame, wait);
 			}
 		});
 		const refresh = () => {

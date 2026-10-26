@@ -288,8 +288,9 @@ When to add or change one:
   recorded writes and patches, else reverses later patches from disk; never
   write while rebuilding); otherwise it keeps a source action. Every card
   requests its own turn's version. Turn changes recognize the Step tool
-  profile Web sessions use (`edit_file` patches, `write_file` untracked and
-  ignored when `changed: false`) as well as `edit` / `write`.
+  profile Web sessions use (`edit_file` and `write_file` record the same
+  patches as `edit` / `write`; a `write_file` from older sessions has none and
+  stays untracked; `changed: false` is no change) as well as `edit` / `write`.
   Browser-renderable pages open in the
   embedded browser on click, with a system-browser action; both
   browsers load them from `src/site-preview.ts`, a separate token-scoped

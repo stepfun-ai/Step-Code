@@ -46,7 +46,7 @@ import {
 import type { LsToolOptions } from "../core/tools/ls.ts";
 import { pathExists, resolveReadPathAsync, resolveToCwd } from "../core/tools/path-utils.ts";
 import type { ReadToolOptions } from "../core/tools/read.ts";
-import type { WriteToolOptions } from "../core/tools/write.ts";
+import { type WriteToolOptions, writeChangeDetails } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { resolvePath } from "../utils/paths.ts";
 import {
@@ -1069,9 +1069,11 @@ async function executeStepWriteFile(
 	return withFileMutationQueue(absolutePath, async () => {
 		throwIfAborted();
 		let existing: string | undefined;
+		// The bytes as read, for the change record: its size and binary checks need them unconverted.
+		let raw: Buffer | string | undefined;
 		try {
-			const value = await readExisting(absolutePath);
-			existing = Buffer.isBuffer(value) ? value.toString("utf8") : value;
+			raw = await readExisting(absolutePath);
+			existing = Buffer.isBuffer(raw) ? raw.toString("utf8") : raw;
 		} catch (error) {
 			if (!isMissingFileError(error)) throw error;
 		}
@@ -1093,6 +1095,8 @@ async function executeStepWriteFile(
 			} as AnyResult;
 		}
 
+		// Recorded like `write` (patch, created, previous), so diffs, undo and per-turn versions work for it too.
+		const change = writeChangeDetails(args.path, raw, content);
 		await mkdir(path.dirname(absolutePath));
 		throwIfAborted();
 		await write(absolutePath, content);
@@ -1104,6 +1108,7 @@ async function executeStepWriteFile(
 				bytesWritten: Buffer.byteLength(content, "utf8"),
 				charsWritten: content.length,
 				changed: true,
+				...change,
 			},
 		} as AnyResult;
 	});

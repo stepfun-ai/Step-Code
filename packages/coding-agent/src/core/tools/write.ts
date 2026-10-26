@@ -67,6 +67,30 @@ function lfText(content: string): string {
 	return normalizeToLF(splitBom(content).text);
 }
 
+/**
+ * The change record of writing `content` over `previous` (the file's bytes
+ * before the write; `undefined` when it did not exist). Shared by `write` and
+ * Step's `write_file`, so every client reads one change format. The caller
+ * reads `previous` inside the file mutation queue, before writing.
+ */
+export function writeChangeDetails(
+	path: string,
+	previous: Buffer | string | undefined,
+	content: string,
+): WriteToolDetails {
+	if (Buffer.byteLength(content, "utf-8") > MAX_WRITE_PATCH_BYTES) return { untracked: "too_large" };
+	if (previous === undefined) return { patch: generateUnifiedPatch(path, "", lfText(content)), created: true };
+	const size = typeof previous === "string" ? Buffer.byteLength(previous, "utf-8") : previous.length;
+	if (size > MAX_WRITE_PATCH_BYTES) return { untracked: "too_large" };
+	const text = typeof previous === "string" ? previous : previous.toString("utf-8");
+	if (text.includes("\u0000")) return { untracked: "binary" };
+	const { bom, text: body } = splitBom(text);
+	return {
+		patch: generateUnifiedPatch(path, normalizeToLF(body), lfText(content)),
+		previous: { lineEnding: detectLineEnding(body), bom: bom !== "" },
+	};
+}
+
 async function describeWrite(
 	ops: WriteOperations,
 	absolutePath: string,
@@ -80,17 +104,9 @@ async function describeWrite(
 		raw = await ops.readFile(absolutePath);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { untracked: "unreadable" };
-		return { patch: generateUnifiedPatch(path, "", lfText(content)), created: true };
+		return writeChangeDetails(path, undefined, content);
 	}
-	const size = typeof raw === "string" ? Buffer.byteLength(raw, "utf-8") : raw.length;
-	if (size > MAX_WRITE_PATCH_BYTES) return { untracked: "too_large" };
-	const previous = typeof raw === "string" ? raw : raw.toString("utf-8");
-	if (previous.includes("\u0000")) return { untracked: "binary" };
-	const { bom, text } = splitBom(previous);
-	return {
-		patch: generateUnifiedPatch(path, normalizeToLF(text), lfText(content)),
-		previous: { lineEnding: detectLineEnding(text), bom: bom !== "" },
-	};
+	return writeChangeDetails(path, raw, content);
 }
 
 export interface WriteToolOptions {
