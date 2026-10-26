@@ -1516,6 +1516,30 @@ export async function interruptCurrent(): Promise<void> {
 	}
 }
 
+/** True while any known session has a turn running or waiting on the user. */
+export function hasRunningSessions(state: Pick<AppState, "statusById">): boolean {
+	for (const status of state.statusById.values()) {
+		if (status === "running" || status === "waiting") return true;
+	}
+	return false;
+}
+
+/**
+ * Interrupt every running or waiting turn, e.g. before the desktop app
+ * restarts into an update, so each session records a stopped turn instead of
+ * losing its process mid-step. Settles when every request has; a failed
+ * interrupt is not an error here, because the restart stops the host anyway.
+ */
+export async function interruptRunningSessions(): Promise<void> {
+	// The host's answer, not only the rows this page has seen: a session another
+	// window started is running in the same host the update stops.
+	await refreshSessionStatuses().catch(() => undefined);
+	const ids = [...getState().statusById.entries()]
+		.filter(([, status]) => status === "running" || status === "waiting")
+		.map(([id]) => id);
+	await Promise.allSettled(ids.map((id) => apiSend(`/api/v1/sessions/${id}/interrupt`, "POST")));
+}
+
 /* ── Bootstrap (legacy IIFE, 3886-3919, and `exchange`, 694-707) ──────────── */
 
 /** Trade the one-time `#token=` from the launch link for the session cookie. */

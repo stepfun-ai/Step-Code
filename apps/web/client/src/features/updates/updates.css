@@ -136,3 +136,27 @@
 	color: var(--canvas);
 	font-weight: 500;
 }
+
+/* Tasks still running: title with a close button, then two full-width actions. */
+.update-restart-dialog > header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+.update-restart-dialog > header .icon-button {
+	flex: none;
+	margin: -4px -6px 0 0;
+}
+.update-restart-dialog > footer.update-restart-stack {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 10px;
+}
+.update-restart-dialog > footer.update-restart-stack > button {
+	width: 100%;
+}
+#updateRestartNow:disabled {
+	opacity: 0.6;
+	cursor: progress;
+}
