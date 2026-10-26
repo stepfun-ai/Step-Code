@@ -121,7 +121,7 @@ stepcode-desktop-release-windows:
     - pnpm pack:win -- --env=prod --no-sign
     # Static proof only: no Windows machine in this pipeline can install or start
     # the installer, but a rename or a stale latest.yml must not ship.
-    - node scripts/verify-win-artifact.mjs
+    - node scripts/verify-win-artifact.mjs --unpacked="$(ls -d apps/desktop/release/*/win-unpacked | head -1)"
   artifacts:
     name: 'stepcode-desktop-windows-$CI_PIPELINE_IID'
     paths:

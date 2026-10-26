@@ -140,3 +140,44 @@ test("verify-win-artifact rejects a stale or renamed metadata file", async () =>
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+test("verify-win-artifact proves the payload carries the advertised version", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-win-payload-"));
+	try {
+		const { dir, exe } = await writeFakeInstaller(root);
+		const unpacked = join(root, "win-unpacked");
+		await mkdir(join(unpacked, "resources", "server", "node_modules", "@step-harness", "web"), { recursive: true });
+
+		// Minimal asar: 8-byte pickle, header length at 12, header padded to 4.
+		const header = Buffer.from(JSON.stringify({ files: { "package.json": { size: 20, offset: "0" } } }));
+		const padding = (4 - (header.length % 4)) % 4;
+		const body = Buffer.from('{"version": "1.2.3"}');
+		const head = Buffer.alloc(16);
+		head.writeUInt32LE(4, 0);
+		head.writeUInt32LE(header.length + 8, 4);
+		head.writeUInt32LE(header.length + 4, 8);
+		head.writeUInt32LE(header.length, 12);
+		await writeFile(join(unpacked, "resources", "app.asar"), Buffer.concat([head, header, Buffer.alloc(padding), body]));
+		await writeFile(
+			join(unpacked, "resources", "server", "node_modules", "@step-harness", "web", "package.json"),
+			"{}\n",
+		);
+
+		assert.deepEqual(verifyWinArtifact({ dir, unpacked }), [], "matching payload version is accepted");
+
+		// A release that advertises one version but ships another is what makes the
+		// updater skip or loop; it must not pass.
+		const other = join(root, "other");
+		await writeFakeInstaller(other, { exeName: exe });
+		const stale = join(root, "unpacked-stale");
+		await mkdir(join(stale, "resources"), { recursive: true });
+		await writeFile(join(stale, "resources", "app.asar"), Buffer.concat([head, header, Buffer.alloc(padding), body]));
+		const problems = verifyWinArtifact({ dir: other, unpacked: stale });
+		assert.ok(
+			problems.some((p) => p.includes("cannot serve its UI") || p.includes("packaged app is")),
+			problems.join("\n"),
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});

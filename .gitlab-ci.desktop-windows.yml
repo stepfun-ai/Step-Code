@@ -99,7 +99,9 @@ stepcode-desktop-package-windows:
     # are a real PE image and that latest.yml/channel-artifacts.json describe the
     # file that exists. A rename or a stale yml is otherwise a 404 for the user and
     # a green pipeline for us.
-    - node scripts/verify-win-artifact.mjs
+    # --unpacked proves the payload the installer was assembled from carries the
+    # version latest.yml advertises, and that the server tree is in it.
+    - node scripts/verify-win-artifact.mjs --unpacked="$(ls -d apps/desktop/release/*/win-unpacked | head -1)"
   after_script:
     - !reference [.scripts, import-ci-env]
     - bash "${BUILD_SCRIPT_DIR}/package/archive_job_artifacts.sh"

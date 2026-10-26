@@ -15,8 +15,27 @@ import { createHash } from "node:crypto";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** @returns {string[]} every problem found; empty means the artifact is sound. */
-export function verifyWinArtifact({ dir, minBytes = 10_000_000 }) {
+/** The `version` field of a package.json inside an asar archive, without unpacking it. */
+function asarPackageVersion(asarPath) {
+	const bytes = readFileSync(asarPath);
+	// asar layout: uint32 header-pickle size, then a JSON header at offset 16.
+	const headerSize = bytes.readUInt32LE(12);
+	const header = JSON.parse(bytes.toString("utf8", 16, 16 + headerSize).replace(/\0+$/u, ""));
+	const entry = header.files?.["package.json"];
+	if (entry?.size === undefined) return undefined;
+	// File contents start after the header, padded to a 4-byte boundary.
+	const start = 16 + Math.ceil(headerSize / 4) * 4 + Number(entry.offset);
+	return JSON.parse(bytes.toString("utf8", start, start + entry.size)).version;
+}
+
+/**
+ * @param {object} options
+ * @param {string} options.dir         where pack-win wrote the installer + metadata
+ * @param {string} [options.unpacked]  electron-builder's win-unpacked, to prove the
+ *   payload carries the version the metadata advertises
+ * @returns {string[]} every problem found; empty means the artifact is sound.
+ */
+export function verifyWinArtifact({ dir, unpacked, minBytes = 10_000_000 }) {
 	const problems = [];
 	if (!existsSync(dir)) return [`no directory at ${dir}`];
 
@@ -75,6 +94,20 @@ export function verifyWinArtifact({ dir, minBytes = 10_000_000 }) {
 		problems.push(`installer name carries ${named}, latest.yml says ${version}`);
 	}
 
+	// The installer is assembled from win-unpacked in the same run, so this is the
+	// payload it carries. A version mismatch here means the app reports one version
+	// and the updater advertises another.
+	if (unpacked !== undefined) {
+		const asar = join(unpacked, "resources", "app.asar");
+		const server = join(unpacked, "resources", "server", "node_modules", "@step-harness", "web", "package.json");
+		if (!existsSync(asar)) problems.push(`no resources/app.asar in ${unpacked}`);
+		if (!existsSync(server)) problems.push(`no @step-harness/web in ${unpacked}; the packaged app cannot serve its UI`);
+		if (existsSync(asar)) {
+			const packed = asarPackageVersion(asar);
+			if (packed !== version) problems.push(`packaged app is ${packed}, latest.yml says ${version}`);
+		}
+	}
+
 	// falcon collects through this manifest; a channel pointing at a file that is
 	// not there only fails later, on the machine that uploads.
 	const manifestPath = join(dir, "channel-artifacts.json");
@@ -93,7 +126,8 @@ function main() {
 	const argv = process.argv.slice(2);
 	const dirArg = argv.find((arg) => arg.startsWith("--dir="))?.slice("--dir=".length);
 	const dir = dirArg ?? join(repoRoot, "dist-electron");
-	const problems = verifyWinArtifact({ dir });
+	const unpacked = argv.find((arg) => arg.startsWith("--unpacked="))?.slice("--unpacked=".length);
+	const problems = verifyWinArtifact({ dir, unpacked: unpacked || undefined });
 	if (problems.length > 0) {
 		console.error(`Windows installer check failed (${relative(repoRoot, dir) || dir}):`);
 		for (const problem of problems) console.error(`  ${problem}`);
