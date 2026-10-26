@@ -13,7 +13,8 @@
 #   desktop/<v>/StepCode-<v>-mac-arm64.dmg   immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-x64.dmg     immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-<arch>.zip  immutable, the same stapled apps: in-app update payloads
-#   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, Authenticode signed (GlobalSign EV)
+#   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, Authenticode signed (GlobalSign EV);
+#                                            only with DESKTOP_RELEASE_WINDOWS=true
 #   desktop/<v>/SHA256SUMS, manifest.json    immutable
 #   desktop/latest.json                      channel pointer, uploaded last; also the in-app
 #                                            update channel the packaged app reads (electron-updater)
@@ -24,6 +25,13 @@ variables:
   STEP_RELEASE_PROD_BASE_URL: 'https://static-openapi.stepfun.com/stepcode'
   STEP_TOS_PROD_BUCKET: 'devcenter-web-cn-prod'
   STEP_TOS_PROD_ENDPOINT: 'tos-cn-shanghai.ivolces.com'
+  # Windows in releases: off while the Windows packager (runner tags windows +
+  # bare-metal) cannot run jobs, so a release is macOS only and never waits on
+  # it. Set to 'true' (here, or in the Run pipeline form) to build, EV-sign and
+  # publish the Windows installer again. The uploads follow it: without Windows
+  # the release's latest.json lists only the mac assets, and Windows clients
+  # (none yet) see no update.
+  DESKTOP_RELEASE_WINDOWS: 'false'
 
 # Docker jobs: no falcon toolchain, so the global falcon before_script is off.
 .desktop-docker-job:
@@ -137,7 +145,10 @@ stepcode-desktop-release-windows:
     GODEBUG: 'http2client=0'
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
     ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
-  rules: !reference [.desktop-release-rules, rules]
+  rules:
+    - if: '$DESKTOP_RELEASE_WINDOWS != "true"'
+      when: never
+    - !reference [.desktop-release-rules, rules]
   script:
     - !reference [.desktop-release-version, script]
     - node --version
@@ -165,10 +176,17 @@ stepcode-desktop-release-windows:
   script:
     - !reference [.desktop-release-version, script]
     - pnpm install --frozen-lockfile --ignore-scripts
-    # Nothing unsigned reaches a bucket: the Windows installer must carry the EV
-    # signature (the mac dmgs were checked by codesign/spctl in their finalize jobs).
-    - node scripts/verify-win-artifact.mjs --signed
-    - node infra/release/desktop-release.mjs --version "$DESKTOP_VERSION" --base-url "$DESKTOP_BASE_URL" --input dist-electron --upload
+    - |
+      if [ "${DESKTOP_RELEASE_WINDOWS:-false}" = "true" ]; then
+        # Nothing unsigned reaches a bucket: the Windows installer must carry the EV
+        # signature (the mac dmgs were checked by codesign/spctl in their finalize jobs).
+        node scripts/verify-win-artifact.mjs --signed
+        export DESKTOP_PLATFORMS="darwin,win32"
+      else
+        echo "Windows is held back from this release (DESKTOP_RELEASE_WINDOWS=${DESKTOP_RELEASE_WINDOWS:-false}): macOS only."
+        export DESKTOP_PLATFORMS="darwin"
+      fi
+      node infra/release/desktop-release.mjs --version "$DESKTOP_VERSION" --base-url "$DESKTOP_BASE_URL" --input dist-electron --platforms "$DESKTOP_PLATFORMS" --upload
     - echo "Channel $DESKTOP_BASE_URL/desktop/latest.json now names StepCode Desktop $DESKTOP_VERSION"
   artifacts:
     paths:
@@ -189,8 +207,10 @@ desktop_upload_test:
       artifacts: true
     - job: stepcode-desktop-notary-finalize-x64
       artifacts: true
+    # Optional: absent when DESKTOP_RELEASE_WINDOWS is off.
     - job: stepcode-desktop-release-windows
       artifacts: true
+      optional: true
   # Automatic: once every installer is built (and the mac ones notarized), the
   # test bucket gets the release.
   rules: !reference [.desktop-release-rules, rules]
@@ -207,8 +227,10 @@ desktop_upload_prod:
       artifacts: true
     - job: stepcode-desktop-notary-finalize-x64
       artifacts: true
+    # Optional: absent when DESKTOP_RELEASE_WINDOWS is off.
     - job: stepcode-desktop-release-windows
       artifacts: true
+      optional: true
     - job: desktop_upload_test
       artifacts: false
   # Manual: production users see a release only after someone checked the test

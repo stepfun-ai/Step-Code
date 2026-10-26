@@ -43,6 +43,29 @@ export const DESKTOP_TARGETS = [
 	{ platform: "win32", arch: "x64", kind: "nsis", suffix: "win-x64.exe" },
 ];
 
+/** Platforms a release can carry; `--platforms` picks a subset (e.g. macOS only while Windows is held back). */
+export const DESKTOP_PLATFORMS = ["darwin", "win32"];
+
+/** `darwin,win32` (any order, `mac`/`win` accepted) -> validated platform list. */
+export function parseDesktopPlatforms(value) {
+	const aliases = { mac: "darwin", macos: "darwin", darwin: "darwin", win: "win32", windows: "win32", win32: "win32" };
+	const platforms = [
+		...new Set(
+			String(value ?? "")
+				.split(",")
+				.map((item) => item.trim().toLowerCase())
+				.filter(Boolean)
+				.map((item) => {
+					const platform = aliases[item];
+					if (platform === undefined) throw new Error(`unknown platform '${item}'; expected darwin, win32`);
+					return platform;
+				}),
+		),
+	];
+	if (platforms.length === 0) throw new Error("--platforms names no platform");
+	return platforms;
+}
+
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 const POINTER_CACHE = "no-cache, max-age=0";
 
@@ -125,12 +148,20 @@ async function digests(filePath) {
 }
 
 /** Copy every installer into desktop/<v>/ and write SHA256SUMS, manifest.json and latest.json. */
-export async function stageDesktopRelease({ version, baseUrl, inputDir, outDir, commit, publishedAt }) {
+export async function stageDesktopRelease({
+	version,
+	baseUrl,
+	inputDir,
+	outDir,
+	commit,
+	publishedAt,
+	platforms = DESKTOP_PLATFORMS,
+}) {
 	const versionDir = path.join(outDir, "desktop", version);
 	await mkdir(versionDir, { recursive: true });
 	const assets = [];
 	const missing = [];
-	for (const target of DESKTOP_TARGETS) {
+	for (const target of DESKTOP_TARGETS.filter((candidate) => platforms.includes(candidate.platform))) {
 		const fileName = installerFileName(version, target);
 		const source = path.join(inputDir, fileName);
 		const info = await stat(source).catch(() => undefined);
@@ -209,19 +240,23 @@ async function main() {
 	const baseUrl = args.get("base-url");
 	if (args.has("help") || !args.get("version") || typeof baseUrl !== "string") {
 		process.stdout.write(
-			"Usage: node infra/release/desktop-release.mjs --version <desktop-vX.Y.Z|X.Y.Z> --base-url <url> [--input <dir>] [--out <dir>] [--upload]\n" +
+			"Usage: node infra/release/desktop-release.mjs --version <desktop-vX.Y.Z|X.Y.Z> --base-url <url> [--input <dir>] [--out <dir>] [--platforms darwin,win32] [--upload]\n" +
 				"  --input   electron-builder output (default apps/desktop/release/<version>)\n" +
 				"  --out     release root (default dist/release); writes desktop/<version>/ and desktop/latest.json\n" +
+				"  --platforms  darwin,win32 (default); a release without one of them leaves its installers out\n" +
 				"  --upload  Upload to TOS (STEP_TOS_ENDPOINT/REGION/BUCKET/ACCESS_KEY/SECRET_KEY[/PREFIX])\n",
 		);
 		if (!args.has("help")) process.exitCode = 1;
 		return;
 	}
 	const version = normalizeDesktopVersion(args.get("version"));
+	const platforms = args.has("platforms") ? parseDesktopPlatforms(args.get("platforms")) : DESKTOP_PLATFORMS;
 	const uploadConfig = args.has("upload") ? readUploadConfig() : undefined;
 	const inputDir = path.resolve(String(args.get("input") ?? path.join(repoRoot, "apps", "desktop", "release", version)));
 	const outDir = path.resolve(String(args.get("out") ?? path.join(repoRoot, "dist", "release")));
+	process.stdout.write(`[stage] platforms: ${platforms.join(", ")}\n`);
 	const { files } = await stageDesktopRelease({
+		platforms,
 		version,
 		baseUrl,
 		inputDir,

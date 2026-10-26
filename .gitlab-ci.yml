@@ -18,9 +18,10 @@
 #      - signs and notarizes the mac app for arm64 and x64
 #        (.gitlab-ci.desktop-macos-signing.yml) and wraps each stapled app into
 #        a dmg + zip,
-#      - builds the Windows NSIS installer on the Windows packager and signs
-#        it with the GlobalSign EV token (stepcode-desktop-release-windows),
-#      - uploads all three installers to the test bucket automatically
+#      - with DESKTOP_RELEASE_WINDOWS=true (off for now: the Windows packager
+#        is down), builds the Windows NSIS installer on the Windows packager
+#        and signs it with the GlobalSign EV token (stepcode-desktop-release-windows),
+#      - uploads the installers to the test bucket automatically
 #        (desktop_upload_test), and to the production bucket on a manual click
 #        (desktop_upload_prod). desktop/latest.json is uploaded last in each
 #        bucket, so the channel never names a file that is not there yet.

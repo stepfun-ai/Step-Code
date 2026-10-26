@@ -200,7 +200,9 @@ pipeline does all of it:
    `desktop-vX.Y.Z` tag on that commit (the first is `desktop-v0.1.0`) without a pipeline of its own, and passes the
    version to the following jobs.
 2. The same pipeline builds that version (`STEPCODE_BUILD_VERSION=X.Y.Z`): signed and notarized mac arm64 / x64 dmgs
-   and the EV-signed Windows x64 NSIS installer. The uploads refuse a Windows installer without a signature. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats
+   and, with `DESKTOP_RELEASE_WINDOWS=true`, the EV-signed Windows x64 NSIS installer (the uploads refuse one without a
+   signature). Windows is off for now (the Windows packager runner is down), so releases are macOS only and their
+   `latest.json` lists only mac assets. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats
    its release.
 3. `desktop_upload_test` (automatic) and then `desktop_upload_prod` (manual) run
    `infra/release/desktop-release.mjs --upload`: the same installers go to `desktop/<v>/` in the test and the

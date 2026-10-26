@@ -134,3 +134,37 @@ test("desktop tag push: ci.skip, commit to tag ref, token redacted on failure", 
 	);
 	assert.equal(desktopDotenv("desktop-v1.2.3"), "DESKTOP_TAG=desktop-v1.2.3\nDESKTOP_VERSION=1.2.3\n");
 });
+
+test("desktop release: --platforms darwin publishes a macOS-only release", async () => {
+	const { DESKTOP_PLATFORMS, parseDesktopPlatforms } = await import("../infra/release/desktop-release.mjs");
+	assert.deepEqual(DESKTOP_PLATFORMS, ["darwin", "win32"]);
+	assert.deepEqual(parseDesktopPlatforms("darwin"), ["darwin"]);
+	assert.deepEqual(parseDesktopPlatforms("mac, win"), ["darwin", "win32"]);
+	assert.throws(() => parseDesktopPlatforms("linux"), /unknown platform/);
+	assert.throws(() => parseDesktopPlatforms(""), /no platform/);
+
+	const root = await mkdtemp(path.join(tmpdir(), "desktop-release-"));
+	try {
+		const inputDir = path.join(root, "in");
+		const outDir = path.join(root, "out");
+		await mkdir(inputDir);
+		// No Windows installer at all: a macOS-only release must not need one.
+		for (const target of DESKTOP_TARGETS.filter((candidate) => candidate.platform === "darwin")) {
+			await writeFile(path.join(inputDir, installerFileName("1.2.3", target)), target.suffix);
+		}
+		const { files } = await stageDesktopRelease({
+			version: "1.2.3",
+			baseUrl: "https://release.example.test/stepcode",
+			inputDir,
+			outDir,
+			publishedAt: "2026-01-01T00:00:00.000Z",
+			platforms: ["darwin"],
+		});
+		assert.ok(files.every((file) => !file.remoteKey.endsWith(".exe")));
+		assert.equal(files.at(-1).remoteKey, "desktop/latest.json");
+		const manifest = JSON.parse(await readFile(path.join(outDir, "desktop", "latest.json"), "utf8"));
+		assert.deepEqual([...new Set(manifest.assets.map((asset) => asset.platform))], ["darwin"]);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
