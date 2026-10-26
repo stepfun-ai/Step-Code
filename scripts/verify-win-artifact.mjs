@@ -15,6 +15,29 @@ import { createHash } from "node:crypto";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+/**
+ * A short description of the Authenticode signature, or undefined when the PE has
+ * no certificate table. Names whoever signed it closely enough to see which
+ * certificate was used.
+ */
+export function authenticodeSignature(bytes) {
+	const peOffset = bytes.readUInt32LE(0x3c);
+	const magic = bytes.readUInt16LE(peOffset + 24);
+	const dataDir = peOffset + 24 + (magic === 0x10b ? 96 : 112);
+	const offset = bytes.readUInt32LE(dataDir + 32);
+	const size = bytes.readUInt32LE(dataDir + 36);
+	if (size === 0) return undefined;
+	// WIN_CERTIFICATE: dwLength, wRevision, wCertificateType, then a PKCS#7 DER blob.
+	const length = bytes.readUInt32LE(offset);
+	const der = bytes.subarray(offset + 8, Math.min(offset + length, offset + size));
+	// Certificate names sit in the DER as length-prefixed strings, so read the long
+	// printable runs rather than parsing ASN.1: enough to say who signed it.
+	const names = [...der.toString("latin1").matchAll(/[\x20-\x7e]{12,120}/gu)]
+		.map((match) => match[0])
+		.filter((text) => /Developer ID|Apple|DigiCert|StepFun|CN=/u.test(text));
+	return `${size} bytes, ${names.slice(0, 2).join(" | ") || "no readable subject"}`;
+}
+
 /** The `version` field of a package.json inside an asar archive, without unpacking it. */
 function asarPackageVersion(asarPath) {
 	const bytes = readFileSync(asarPath);
@@ -59,6 +82,18 @@ export function verifyWinArtifact({ dir, unpacked, minBytes = 10_000_000 }) {
 	}
 	if (bytes.length < minBytes) {
 		problems.push(`${exeName} is only ${bytes.length} bytes; a packaged app is tens of MB`);
+	}
+
+	// Phase 1 ships unsigned. A certificate table here means something signed it —
+	// and the only certificate in the pipeline is the Apple Developer ID, which
+	// Windows does not trust while a naive "is it signed" check would say yes.
+	if (bytes.length >= 0x40 && bytes.toString("latin1", 0, 2) === "MZ") {
+		const signature = authenticodeSignature(bytes);
+		if (signature !== undefined) {
+			problems.push(
+				`${exeName} carries an Authenticode signature (${signature}); this build asks for an unsigned installer, and an Apple certificate is not a Windows identity`,
+			);
+		}
 	}
 
 	const ymlPath = join(dir, "latest.yml");

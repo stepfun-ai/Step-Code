@@ -147,10 +147,24 @@ function main() {
 	if (options.env === "prod") {
 		console.log("[pack:win] --env=prod has no build-time effect; the app reads its backend from ~/.stepcode at run time");
 	}
+	// electron-builder signs a Windows PE with whatever certificate it finds in the
+	// environment, and CSC_LINK is the generic variable — with a Developer ID .p12
+	// in the job it happily Authenticode-signed the installer with an Apple
+	// certificate, which Windows does not trust and which looks signed to any check
+	// that only looks for a certificate table. Strip every signing variable unless
+	// signing was asked for; --sign is still Phase 2 and throws above.
+	const env = { ...process.env };
+	for (const name of ["CSC_LINK", "CSC_KEY_PASSWORD", "CSC_NAME", "WIN_CSC_LINK", "WIN_CSC_KEY_PASSWORD"]) {
+		delete env[name];
+	}
+	env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+	env.WIN_SIGN = "";
+
 	for (const step of steps) {
 		console.log(`[pack:win] ${step.label}`);
 		const result = spawnSync(step.command, step.args, {
 			cwd: repoRoot,
+			env,
 			stdio: "inherit",
 			shell: process.platform === "win32",
 		});

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
@@ -100,7 +101,12 @@ async function writeFakeInstaller(dir, { exeName, version, corruptYml } = {}) {
 	const data = Buffer.alloc(10_500_000, 7);
 	data.write("MZ", 0, "latin1");
 	data.writeUInt32LE(0x80, 0x3c);
+	// Minimal PE32 header: signature, then the optional-header magic the verifier
+	// reads to locate the data directories. Zero the certificate-table entry so the
+	// image starts out unsigned.
 	data.write("PE\0\0", 0x80, "latin1");
+	data.writeUInt16LE(0x10b, 0x80 + 24);
+	data.fill(0, 0x80 + 24 + 96, 0x80 + 24 + 96 + 8 * 5);
 	await mkdir(dir, { recursive: true });
 	await writeFile(join(dir, exe), data);
 	const sha512 = createHash("sha512").update(data).digest("base64");
@@ -177,6 +183,31 @@ test("verify-win-artifact proves the payload carries the advertised version", as
 			problems.some((p) => p.includes("cannot serve its UI") || p.includes("packaged app is")),
 			problems.join("\n"),
 		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("verify-win-artifact rejects an installer signed by a non-Windows certificate", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-win-sig-"));
+	try {
+		const { dir, exe } = await writeFakeInstaller(root);
+		// Add an Authenticode certificate table: the pipeline's Apple Developer ID
+		// landed in a Windows build once, which looks signed and Windows ignores.
+		const exePath = join(dir, exe);
+		const bytes = readFileSync(exePath);
+		const cert = Buffer.from("Developer ID Application: StepFun Intelligence Co., Ltd. (H7DGS2BM94)\0", "latin1");
+		const winCert = Buffer.alloc(8);
+		winCert.writeUInt32LE(8 + cert.length, 0);
+		winCert.writeUInt16LE(0x200, 4);
+		winCert.writeUInt16LE(2, 6);
+		const tableOffset = bytes.length;
+		bytes.writeUInt32LE(tableOffset, 0x80 + 24 + 96 + 32);
+		bytes.writeUInt32LE(8 + cert.length, 0x80 + 24 + 96 + 36);
+		await writeFile(exePath, Buffer.concat([bytes, winCert, cert]));
+
+		const problems = verifyWinArtifact({ dir });
+		assert.ok(problems.some((p) => p.includes("Authenticode signature")), problems.join("\n"));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
