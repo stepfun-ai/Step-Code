@@ -12,15 +12,19 @@
  * Layout under --out (default dist/release) and in the bucket under
  * STEP_TOS_PREFIX (default stepcode):
  *
- *   desktop/<version>/StepCode-<version>-mac-arm64.dmg   immutable
- *   desktop/<version>/StepCode-<version>-mac-x64.dmg     immutable
- *   desktop/<version>/StepCode-<version>-win-x64.exe     immutable
+ *   desktop/<version>/StepCode-<version>-mac-arm64.dmg   immutable, first install
+ *   desktop/<version>/StepCode-<version>-mac-x64.dmg     immutable, first install
+ *   desktop/<version>/StepCode-<version>-mac-arm64.zip   immutable, in-app update payload (Squirrel.Mac)
+ *   desktop/<version>/StepCode-<version>-mac-x64.zip     immutable, in-app update payload (Squirrel.Mac)
+ *   desktop/<version>/StepCode-<version>-win-x64.exe     immutable, first install and in-app update
  *   desktop/<version>/SHA256SUMS                         immutable
  *   desktop/<version>/manifest.json                      immutable record of the release
  *   desktop/latest.json                                  the channel; a copy of the manifest
  *
  * Uploads run in that order, so latest.json never names a file that is not in
- * the bucket yet.
+ * the bucket yet. latest.json is also the in-app update channel the packaged
+ * app reads (apps/desktop/src/update-feed.ts): every asset carries the base64
+ * SHA-512 electron-updater verifies, besides the hex SHA-256 of SHA256SUMS.
  */
 
 import { createHash } from "node:crypto";
@@ -34,6 +38,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 export const DESKTOP_TARGETS = [
 	{ platform: "darwin", arch: "arm64", kind: "dmg", suffix: "mac-arm64.dmg" },
 	{ platform: "darwin", arch: "x64", kind: "dmg", suffix: "mac-x64.dmg" },
+	{ platform: "darwin", arch: "arm64", kind: "zip", suffix: "mac-arm64.zip" },
+	{ platform: "darwin", arch: "x64", kind: "zip", suffix: "mac-x64.zip" },
 	{ platform: "win32", arch: "x64", kind: "nsis", suffix: "win-x64.exe" },
 ];
 
@@ -79,6 +85,7 @@ export function buildDesktopManifest({ version, baseUrl, assets, commit, publish
 			url: joinUrl(baseUrl, "desktop", version, asset.fileName),
 			size: asset.size,
 			sha256: asset.sha256,
+			sha512: asset.sha512,
 		})),
 	};
 }
@@ -104,13 +111,17 @@ function contentType(fileName) {
 	if (fileName.endsWith("SHA256SUMS")) return "text/plain; charset=utf-8";
 	if (fileName.endsWith(".dmg")) return "application/x-apple-diskimage";
 	if (fileName.endsWith(".exe")) return "application/vnd.microsoft.portable-executable";
+	if (fileName.endsWith(".zip")) return "application/zip";
 	return "application/octet-stream";
 }
 
-async function sha256(filePath) {
-	return createHash("sha256")
-		.update(await readFile(filePath))
-		.digest("hex");
+/** Hex SHA-256 (SHA256SUMS) and base64 SHA-512 (electron-updater) in one read. */
+async function digests(filePath) {
+	const bytes = await readFile(filePath);
+	return {
+		sha256: createHash("sha256").update(bytes).digest("hex"),
+		sha512: createHash("sha512").update(bytes).digest("base64"),
+	};
 }
 
 /** Copy every installer into desktop/<v>/ and write SHA256SUMS, manifest.json and latest.json. */
@@ -129,7 +140,7 @@ export async function stageDesktopRelease({ version, baseUrl, inputDir, outDir, 
 		}
 		const destination = path.join(versionDir, fileName);
 		await copyFile(source, destination);
-		assets.push({ ...target, fileName, size: info.size, sha256: await sha256(destination) });
+		assets.push({ ...target, fileName, size: info.size, ...(await digests(destination)) });
 	}
 	if (missing.length > 0) {
 		throw new Error(`installers missing in ${path.relative(repoRoot, inputDir) || inputDir}: ${missing.join(", ")}`);

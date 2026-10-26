@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -55,6 +56,8 @@ test("desktop release: staged layout, manifest and pointer-last upload order", a
 			[
 				"desktop/1.2.3/StepCode-1.2.3-mac-arm64.dmg",
 				"desktop/1.2.3/StepCode-1.2.3-mac-x64.dmg",
+				"desktop/1.2.3/StepCode-1.2.3-mac-arm64.zip",
+				"desktop/1.2.3/StepCode-1.2.3-mac-x64.zip",
 				"desktop/1.2.3/StepCode-1.2.3-win-x64.exe",
 				"desktop/1.2.3/SHA256SUMS",
 				"desktop/1.2.3/manifest.json",
@@ -67,16 +70,25 @@ test("desktop release: staged layout, manifest and pointer-last upload order", a
 		assert.equal(manifest.version, "1.2.3");
 		assert.equal(manifest.commit, "abc123");
 		assert.equal(
-			manifest.assets[2].url,
+			manifest.assets[4].url,
 			"https://release.example.test/stepcode/desktop/1.2.3/StepCode-1.2.3-win-x64.exe",
 		);
 		assert.match(manifest.assets[0].sha256, /^[a-f0-9]{64}$/);
+		// electron-updater verifies the base64 SHA-512 of the payload it downloads.
+		assert.equal(
+			manifest.assets[4].sha512,
+			createHash("sha512").update("win-x64.exe").digest("base64"),
+		);
+		assert.deepEqual(
+			manifest.assets.map((asset) => `${asset.platform}/${asset.arch}/${asset.kind}`),
+			["darwin/arm64/dmg", "darwin/x64/dmg", "darwin/arm64/zip", "darwin/x64/zip", "win32/x64/nsis"],
+		);
 		assert.equal(
 			await readFile(path.join(outDir, "desktop", "latest.json"), "utf8"),
 			await readFile(path.join(outDir, "desktop", "1.2.3", "manifest.json"), "utf8"),
 		);
 		const sums = await readFile(path.join(outDir, "desktop", "1.2.3", "SHA256SUMS"), "utf8");
-		assert.equal(sums.trim().split("\n").length, 3);
+		assert.equal(sums.trim().split("\n").length, 5);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -96,7 +108,7 @@ test("desktop release: a missing installer fails the release", async () => {
 				outDir: path.join(root, "out"),
 				publishedAt: "2026-01-01T00:00:00.000Z",
 			}),
-			/StepCode-1\.2\.3-mac-x64\.dmg, StepCode-1\.2\.3-win-x64\.exe/,
+			/StepCode-1\.2\.3-mac-x64\.dmg, StepCode-1\.2\.3-mac-arm64\.zip, StepCode-1\.2\.3-mac-x64\.zip, StepCode-1\.2\.3-win-x64\.exe/,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });

@@ -76,7 +76,10 @@ variables:
         export STEPCODE_BUILD_VERSION="${tag#desktop-v}"
         export STEPCODE_BUILD_COMMIT="${CI_COMMIT_SHA}"
       fi
-      echo "StepCode Desktop version: ${STEPCODE_BUILD_VERSION:-root package.json}"
+      # The production channel, baked into the app at checkpoint time (finalize
+      # does not rebuild): every installer, from either bucket, updates from it.
+      export STEPCODE_UPDATE_URL="${STEPCODE_UPDATE_URL:-${STEP_RELEASE_PROD_BASE_URL}/desktop/}"
+      echo "StepCode Desktop version: ${STEPCODE_BUILD_VERSION:-root package.json}, update channel ${STEPCODE_UPDATE_URL}"
 
 .stepcode-desktop-checkpoint:
   extends:

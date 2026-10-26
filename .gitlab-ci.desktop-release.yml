@@ -12,9 +12,11 @@
 # Bucket layout (prefix STEP_TOS_PREFIX), written by infra/release/desktop-release.mjs:
 #   desktop/<v>/StepCode-<v>-mac-arm64.dmg   immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-x64.dmg     immutable, Developer ID signed + notarized
+#   desktop/<v>/StepCode-<v>-mac-<arch>.zip  immutable, the same stapled apps: in-app update payloads
 #   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, Authenticode signed (GlobalSign EV)
 #   desktop/<v>/SHA256SUMS, manifest.json    immutable
-#   desktop/latest.json                      channel pointer, uploaded last
+#   desktop/latest.json                      channel pointer, uploaded last; also the in-app
+#                                            update channel the packaged app reads (electron-updater)
 
 variables:
   RELEASE_BUILDER_IMAGE: 'hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:c6538968b0f1d223b02016bf1689c35a6b26d6945fb273629ce66d1f3e36a7fc'
@@ -55,7 +57,11 @@ variables:
       export DESKTOP_VERSION="${DESKTOP_TAG#desktop-v}"
       export STEPCODE_BUILD_VERSION="$DESKTOP_VERSION"
       export STEPCODE_BUILD_COMMIT="$CI_COMMIT_SHA"
-      echo "StepCode Desktop version: $DESKTOP_VERSION"
+      # In-app update channel baked into the installers (apps/desktop/scripts/package.mjs).
+      # Always production: the test bucket holds the same bytes, and a tester points an
+      # installed app elsewhere with STEPCODE_DESKTOP_UPDATE_URL.
+      export STEPCODE_UPDATE_URL="${STEPCODE_UPDATE_URL:-${STEP_RELEASE_PROD_BASE_URL}/desktop/}"
+      echo "StepCode Desktop version: $DESKTOP_VERSION, update channel $STEPCODE_UPDATE_URL"
 
 # Release-script tests and the desktop typecheck, before a tag is created and
 # before a release is uploaded.
