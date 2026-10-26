@@ -32,23 +32,21 @@
 #    would run as the token's bot user, which cannot read the falcon includes.
 #
 # 2. Ad-hoc packaging through falcon (catalyst/falcon-mobile-pipeline).
-#    Run pipeline with
-#      TASK_TYPE=package
-#      BUILD_PLATFORM=macos | windows   (electron is a legacy alias for macos)
+#    Run pipeline with DESKTOP_BUMP=none and
+#      BUILD_PLATFORM=macos | windows
 #      BUILD_PROFILE=fast               (macOS also accepts qa: both arches)
-#      CI_PKG_SKIP_DEPLOYMENT=1
-#      CI_BUILD_NOTIF=0
-#      CI_PIPELINE_REF=main             (only change it to test a falcon branch)
 #    gives unsigned installers as job artifacts. Add MACOS_SIGNING_ENABLED=true
 #    (macOS, protected branch) to get the signed and notarized arm64 + x64 build
 #    instead, at the root package.json version; nothing is uploaded.
 #
-# TASK_TYPE, BUILD_PLATFORM, BUILD_PROFILE, CI_PKG_SKIP_DEPLOYMENT and
-# CI_BUILD_NOTIF come from falcon's stages/variables.yml. Do not redeclare them
-# in the `variables:` block below: that replaces the upstream entry wholesale
-# and drops the values from the Run pipeline dropdown. falcon's package.yml /
-# publish.yml are not included: they add FE callbacks and falcon's own TOS
-# uploads; releases here go through infra/release/desktop-release.mjs.
+# The Run pipeline form shows only the variables below that carry a
+# `description`. falcon's stages/variables.yml (the mobile form: iOS/Android
+# profiles, APK channels, market submission, ...) is deliberately not included;
+# the falcon settings its scripts still read are fixed here without a
+# description, so they stay out of the form. The platform's API trigger may
+# still pass any of them. falcon's package.yml / publish.yml are not included
+# either: they add FE callbacks and falcon's own TOS uploads; releases here go
+# through infra/release/desktop-release.mjs.
 #
 # Credentials are CI variables, never values in this file:
 #   upload, test bucket:  STEP_TOS_ENDPOINT, STEP_TOS_REGION, STEP_TOS_BUCKET,
@@ -73,9 +71,6 @@ workflow:
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
 
 include:
-  - project: 'catalyst/falcon-mobile-pipeline'
-    ref: main
-    file: 'stages/variables.yml'
   # Brings the global before_script (falcon toolchain clone and prepare.sh), the
   # .scripts.initial-env / .scripts.import-ci-env references and a stages list.
   # Jobs that do not use falcon set `before_script: []`.
@@ -90,6 +85,29 @@ include:
   - local: '.gitlab-ci.desktop-release.yml'
 
 variables:
+  # ── Run pipeline form (variables with a description) ─────────────────────
+  # Releases: pick a bump and leave the rest at their defaults.
+  # (DESKTOP_BUMP and MACOS_SIGNING_ENABLED are declared below.)
+  BUILD_PLATFORM:
+    value: 'macos'
+    options:
+      - 'macos'
+      - 'windows'
+    description: 'Ad-hoc packaging only (DESKTOP_BUMP=none): which installer to build. Releases ignore it.'
+  BUILD_PROFILE:
+    value: 'fast'
+    options:
+      - 'fast'
+      - 'qa'
+    description: 'Ad-hoc packaging only: fast = macOS arm64 / Windows x64; qa = macOS arm64 + x64. Unsigned unless MACOS_SIGNING_ENABLED.'
+  # ── Fixed falcon settings (no description: not in the form) ──────────────
+  # falcon's before_script and package scripts read these; the ad-hoc job rules
+  # match TASK_TYPE. Nothing here deploys or notifies through falcon.
+  TASK_TYPE: 'package'
+  CI_PKG_SKIP_DEPLOYMENT: '1'
+  CI_BUILD_NOTIF: '0'
+  # falcon branch the before_script clones (change only to test a falcon branch).
+  CI_PIPELINE_REF: 'main'
   # Branch whose pipelines may create a Desktop tag, besides the default branch.
   DESKTOP_RELEASE_BRANCH: 'feat/stepcode-desktop-ci-pipeline-build'
   # Inert by default: a release is started explicitly from the Run pipeline
