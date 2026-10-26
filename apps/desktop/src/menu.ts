@@ -10,6 +10,8 @@ export interface MenuActions {
 	readonly restartServer: () => void;
 	/** Open the folder holding web-server.log. */
 	readonly showLogs: () => void;
+	/** Check the update feed now and report the result. */
+	readonly checkForUpdates: () => void;
 }
 
 export function installApplicationMenu(actions: MenuActions): void {
@@ -20,6 +22,7 @@ export function installApplicationMenu(actions: MenuActions): void {
 			label: app.name,
 			submenu: [
 				{ role: "about" },
+				{ label: "Check for Updates…", click: () => actions.checkForUpdates() },
 				{ type: "separator" },
 				{ role: "services" },
 				{ type: "separator" },
@@ -37,6 +40,7 @@ export function installApplicationMenu(actions: MenuActions): void {
 			submenu: [
 				{ label: "Restart Server", click: () => actions.restartServer() },
 				{ label: "Show Server Logs", click: () => actions.showLogs() },
+				...(darwin ? [] : [{ label: "Check for Updates…", click: () => actions.checkForUpdates() }]),
 				{ type: "separator" },
 				darwin ? { role: "close" } : { role: "quit" },
 			],

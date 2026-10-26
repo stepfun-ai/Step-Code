@@ -39,6 +39,12 @@
 // Windows packager only) every Windows PE file, the installer and its
 // uninstaller are signed with the EV certificate (scripts/win-signer.cjs);
 // otherwise Windows executables are not signed.
+//
+// In-app updates (src/updater.ts, electron-updater): STEPCODE_UPDATE_URL names
+// the channel directory the packaged app reads `latest.json` from (https; http
+// only for loopback). Without it the app has no update feed. With it, the app
+// also carries resources/app-update.yml: electron-updater's cache folder and,
+// on Windows, the publisher a downloaded installer must be signed by.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -68,6 +74,11 @@ const MAX_ENDPOINT_LENGTH = 2048;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 /** Must match `RELEASE_ENVELOPE_FILE` in apps/desktop/src/release-envelope.ts. */
 const RELEASE_ENVELOPE_FILE = "stepcode-release.json";
+/**
+ * Subject of the GlobalSign EV certificate scripts/win-signer.cjs signs with.
+ * electron-updater refuses a Windows update whose installer is not signed by it.
+ */
+const WINDOWS_PUBLISHER = "CN=上海阶跃星辰智能科技有限公司, O=上海阶跃星辰智能科技有限公司";
 
 /**
  * The installer carries the product version users see from `step --version`
@@ -169,6 +180,30 @@ function feedbackUrl(name) {
 	}
 	if (typeof value === "string" && value.trim() !== "") console.warn(`[package] ignoring invalid ${name}`);
 	return undefined;
+}
+
+/** Update channel baked into the app; undefined builds an app without in-app updates. */
+function updateFeed() {
+	const value = process.env.STEPCODE_UPDATE_URL?.trim();
+	if (!value) return undefined;
+	const url = new URL(value.endsWith("/") ? value : `${value}/`);
+	const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+	if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+		throw new Error(`STEPCODE_UPDATE_URL must be https (http only for loopback): ${value}`);
+	}
+	return url.href;
+}
+const feed = updateFeed();
+
+/** electron-updater's config file; the provider itself is set at run time (updater.ts). */
+function appUpdateYml(platform) {
+	return [
+		"provider: generic",
+		`url: ${JSON.stringify(feed)}`,
+		"updaterCacheDirName: stepcode-desktop-updater",
+		...(platform === "win32" ? ["publisherName:", `  - ${JSON.stringify(WINDOWS_PUBLISHER)}`] : []),
+		"",
+	].join("\n");
 }
 
 const argv = process.argv.slice(2);
@@ -338,6 +373,7 @@ function stage() {
 				type: "module",
 				main: "dist/main.js",
 				author: "StepFun",
+				...(feed === undefined ? {} : { stepcodeUpdateFeed: feed }),
 			},
 			null,
 			"\t",
@@ -348,6 +384,7 @@ function stage() {
 	writeFileSync(join(serverStage, "package.json"), `${JSON.stringify({ private: true, type: "module" }, null, "\t")}\n`);
 	const count = stageClosure(webRoot, serverStage);
 	console.log(`[package] staged desktop app and server (${count} packages) in ${relative(repoRoot, stageDir)}`);
+	console.log(`[package] update feed: ${feed ?? "none (no in-app updates)"}`);
 }
 
 // A fresh object per build: electron-builder normalizes (mutates) the configuration it is given.
@@ -373,6 +410,8 @@ const config = () => ({
 		const target = join(resourcesDir, "server");
 		rmSync(target, { recursive: true, force: true });
 		cpSync(serverStage, target, { recursive: true, verbatimSymlinks: true });
+		// Before signing, so the mac signature covers it.
+		if (feed !== undefined) writeFileSync(join(resourcesDir, "app-update.yml"), appUpdateYml(context.electronPlatformName));
 		// electron-builder signs the app's own executables after this hook, but not
 		// this tree (node-pty's helpers, native addons): sign those here.
 		if (winSigning && context.electronPlatformName === "win32") winSigner.signTree(target);

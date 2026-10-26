@@ -19,7 +19,8 @@
 		"clean": "shx rm -rf dist release"
 	},
 	"dependencies": {
-		"@step-harness/web": "workspace:*"
+		"@step-harness/web": "workspace:*",
+		"electron-updater": "6.8.11"
 	},
 	"devDependencies": {
 		"electron": "44.7.0",

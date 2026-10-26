@@ -74,6 +74,7 @@ apps/web/
       ui/                reusable primitives, one folder each (Component.tsx + Component.module.css), barrel index.ts
       features/<name>/   index.tsx (public slots), actions.ts (state changes), *.tsx, <name>.css
         composer conversation files login market settings shell sidebar workspace
+        updates (desktop only: the app's own update button and restart prompt, via the bridge)
   test/
     *.test.ts            host unit tests (node:test)
     e2e/web.e2e.mjs      builds the client, starts the host, drives headless Chrome

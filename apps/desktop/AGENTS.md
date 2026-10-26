@@ -24,6 +24,7 @@ This package only changes when the change needs the OS, the window or the proces
 | Server | `@step-harness/web` (workspace dependency) | Spawned with `ELECTRON_RUN_AS_NODE=1` |
 | Lint / format | Biome (root `biome.json`) | Tabs, indent width 3, line width 120 |
 | Installers | electron-builder 26.15 (dev dependency, `scripts/package.mjs`) | dmg (mac arm64 / x64), NSIS (win x64); unsigned locally; release CI signs + notarizes mac (Developer ID) and EV-signs Windows |
+| Updates | electron-updater 6.8 (bundled into `dist/main.js` by esbuild) | Squirrel.Mac (zip) and NSIS; channel is the pipeline's `latest.json` through a custom provider |
 
 No other runtime dependencies. Adding one needs the user's approval; pin it to an exact version and install with
 `pnpm install --ignore-scripts`. Do not add a renderer framework, a second web server or native Node modules.
@@ -54,6 +55,8 @@ apps/desktop/
     shell-environment.ts read the login-shell environment for GUI launches
     node-environment.ts  private Electron-backed node fallback for macOS/Linux child processes
     state.ts             persisted window bounds and last picked folder (<userData>/desktop-state.json)
+    updater.ts           electron-updater wrapper: state for the page, custom provider for latest.json, restart
+    update-feed.ts       channel URL, release-manifest validation, payload selection, install blockers (pure)
   dist/                  build output; never edit
   release/               installers and their staging tree (git-ignored)
 ```
@@ -120,7 +123,7 @@ Run from the repo root.
 | `pnpm --filter @step-harness/desktop dev` | Bundle and launch; builds the web app only when its output is missing |
 | `pnpm --filter @step-harness/desktop build` | esbuild bundle only |
 | `pnpm --filter @step-harness/desktop typecheck` | Type check source and tests (also part of `pnpm run check`) |
-| `pnpm --filter @step-harness/desktop test` | Offline child-process, Node fallback and release-envelope regressions |
+| `pnpm --filter @step-harness/desktop test` | Offline child-process, Node fallback, release-envelope and update-feed regressions |
 | `pnpm --filter @step-harness/desktop package[:mac\|:win]` | Installers in `release/<version>/`, unsigned unless `CSC_LINK` is set (run `pnpm build` first; see README) |
 | `STEPCODE_DESKTOP_SMOKE=1 pnpm --filter @step-harness/desktop dev` | Load hidden, print `STEPCODE_DESKTOP_SMOKE {json}`, exit 0/1 |
 | `pnpm run check` | Required before handing back any code change |
@@ -155,7 +158,20 @@ before signing, never after: a modified PE loses its signature.
 The bundle id `com.stepfun.stepcode` and Team ID are part of the signing contract; changing the bundle id makes the
 installed app a different application.
 
+## Updates
+
+`updater.ts` owns the update state (`DesktopUpdateState` in the bridge contract) and is the only code that talks to
+electron-updater. Keep these invariants:
+
+- The page never names what to install: the update IPC handlers take no arguments, and the payload, SHA-512 and size
+  come only from the channel's `latest.json` (validated in `update-feed.ts`, https only, http for loopback).
+- Background checks never download; installing needs the user's restart, or a quit after a download.
+- Stop the web server before `quitAndInstall` (the installer replaces `resources/server`).
+- Updates rely on signatures: Squirrel.Mac checks the running app's Developer ID, NsisUpdater the publisher in
+  `resources/app-update.yml`. Do not disable either check or install from an unsigned build.
+- Keep `latest.json` (infra/release/desktop-release.mjs) and `update-feed.ts` in step; `test/update-feed.test.ts`
+  parses the manifest the release script builds.
+
 ## Not in scope yet
 
-In-app auto-update (reading `desktop/latest.json`). Ask before starting it; it needs decisions from the user (update
-channel).
+Windows ARM64 and Linux updates (no payloads are published for them).

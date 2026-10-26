@@ -51,6 +51,12 @@ await Promise.all([
 		entryPoints: ["src/main.ts"],
 		outfile: join(outdir, "main.js"),
 		format: "esm",
+		// electron-updater (bundled; the packaged app ships no node_modules for the
+		// shell) is CommonJS and `require`s Node built-ins and electron. An ES module
+		// has no `require`, so give the bundle one.
+		banner: {
+			js: 'import { createRequire as __stepcodeCreateRequire } from "node:module"; const require = __stepcodeCreateRequire(import.meta.url);',
+		},
 	}),
 	build({
 		...shared,

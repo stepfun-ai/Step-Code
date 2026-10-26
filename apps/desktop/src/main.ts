@@ -10,14 +10,16 @@
  *      exchanges the token for its auth cookie and runs exactly as in a browser,
  *      plus window.stepcodeDesktop from the preload.
  *   5. On quit, stop the server (SIGTERM, then SIGKILL after 5 s).
+ *
+ * A packaged app with an update feed also checks for new versions (updater.ts).
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, type BrowserWindow, shell } from "electron";
-import { installDesktopIpc } from "./ipc.ts";
+import { app, type BrowserWindow, dialog, type MessageBoxOptions, shell } from "electron";
+import { type DesktopIpcOptions, installDesktopIpc, publishUpdateState } from "./ipc.ts";
 import { installApplicationMenu } from "./menu.ts";
 import { addBundledNodeToPath } from "./node-environment.ts";
 import { errorPageUrl, loadingPageUrl } from "./pages.ts";
@@ -25,6 +27,8 @@ import { readReleaseEnvelope } from "./release-envelope.ts";
 import { launchWebServer, type RunningWebServer, resolveNodeExecutable, resolveWebServerEntry } from "./server-host.ts";
 import { readShellEnvironment } from "./shell-environment.ts";
 import { DesktopStateStore } from "./state.ts";
+import { assertUpdateUrl } from "./update-feed.ts";
+import { DesktopUpdater } from "./updater.ts";
 import { createMainWindow } from "./window.ts";
 
 const userDataOverride = process.env.STEPCODE_DESKTOP_USER_DATA_DIR?.trim();
@@ -43,6 +47,33 @@ function message(error: unknown): string {
 function positiveInteger(value: string | undefined): number | undefined {
 	const parsed = Number.parseInt(value ?? "", 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * The update channel: STEPCODE_DESKTOP_UPDATE_URL (e.g. the test bucket, or a
+ * loopback server for testing), else the `stepcodeUpdateFeed` scripts/package.mjs
+ * wrote into the packaged app's package.json. Development runs (`electron .`)
+ * never update: they would replace Electron itself.
+ */
+function updateFeed(): { readonly feed?: string; readonly reason?: string } {
+	if (!app.isPackaged) return { reason: "development build" };
+	let feed = process.env.STEPCODE_DESKTOP_UPDATE_URL?.trim();
+	if (!feed) {
+		try {
+			const manifest: unknown = JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8"));
+			const value =
+				typeof manifest === "object" && manifest !== null ? Reflect.get(manifest, "stepcodeUpdateFeed") : undefined;
+			feed = typeof value === "string" ? value.trim() : undefined;
+		} catch (error) {
+			return { reason: `cannot read the app manifest: ${message(error)}` };
+		}
+	}
+	if (!feed) return { reason: "this build has no update feed" };
+	try {
+		return { feed: assertUpdateUrl(feed).href };
+	} catch (error) {
+		return { reason: message(error) };
+	}
 }
 
 async function main(): Promise<void> {
@@ -237,18 +268,98 @@ async function main(): Promise<void> {
 	await app.whenReady();
 	// A packaged app shows the bundle's icon.icns; `electron .` would show Electron's own icon.
 	if (!app.isPackaged && existsSync(icon)) app.dock?.setIcon(icon);
-	installDesktopIpc({
+	const { feed, reason } = updateFeed();
+	const updater: DesktopUpdater = new DesktopUpdater({
+		feed,
+		disabledReason: reason,
+		platform: process.platform,
+		arch: process.arch,
+		executable: process.execPath,
+		configPath: join(process.resourcesPath, "app-update.yml"),
+		logPath: join(app.getPath("logs"), "updater.log"),
+		onState: (update) => publishUpdateState(ipcOptions, update),
+		// The installer replaces resources/server: stop the server (and its children) first,
+		// and let the quit that follows go straight through before-quit.
+		prepareQuit: async () => {
+			quitting = true;
+			const running = server;
+			server = undefined;
+			await running?.stop();
+			shutdownComplete = true;
+		},
+	});
+	const ipcOptions: DesktopIpcOptions = {
 		getWindow: () => window,
 		getServerOrigin: () => server?.origin,
 		onDirectoryPicked: (path) => state.update({ lastWorkspace: path }),
-	});
+		updater,
+	};
+	installDesktopIpc(ipcOptions);
 	installApplicationMenu({
 		restartServer: () => void restartServer(),
 		showLogs: () => void shell.openPath(app.getPath("logs")),
+		checkForUpdates: () => void checkForUpdatesFromMenu(updater, () => window),
 	});
 	const first = openWindow();
 	await restartServer();
-	if (smoke) await runSmoke(first, () => server, logPath);
+	if (smoke) {
+		await runSmoke(first, () => server, logPath);
+		return;
+	}
+	updater.start();
+}
+
+/**
+ * Application menu > Check for Updates: check now and answer in a native
+ * dialog, offering the next step (download, or restart once staged). Progress
+ * shows in the page's update control.
+ */
+async function checkForUpdatesFromMenu(updater: DesktopUpdater, getWindow: () => BrowserWindow | undefined) {
+	const show = (options: MessageBoxOptions) => {
+		const parent = getWindow();
+		return parent !== undefined && !parent.isDestroyed()
+			? dialog.showMessageBox(parent, options)
+			: dialog.showMessageBox(options);
+	};
+	const current = app.getVersion();
+	const update = await updater.check(true);
+	switch (update.phase) {
+		case "available": {
+			const { response } = await show({
+				type: "info",
+				message: `StepCode ${update.version} is available`,
+				detail: `You have ${current}. Download and install it now? StepCode asks before it restarts.`,
+				buttons: ["Download", "Later"],
+				defaultId: 0,
+				cancelId: 1,
+			});
+			if (response === 0) void updater.download().catch(() => undefined);
+			return;
+		}
+		case "ready": {
+			const { response } = await show({
+				type: "info",
+				message: `StepCode ${update.version} is ready to install`,
+				detail: "Restart StepCode to finish the update. Running tasks will be stopped.",
+				buttons: ["Restart Now", "Later"],
+				defaultId: 0,
+				cancelId: 1,
+			});
+			if (response === 0) void updater.restart().catch(() => undefined);
+			return;
+		}
+		case "idle":
+			await show({ type: "info", message: "StepCode is up to date", detail: `Version ${current}` });
+			return;
+		case "error":
+			await show({ type: "warning", message: "Could not check for updates", detail: update.message });
+			return;
+		case "disabled":
+			await show({ type: "info", message: "Updates are not available", detail: update.reason });
+			return;
+		default:
+			await show({ type: "info", message: "An update is already in progress" });
+	}
 }
 
 /**

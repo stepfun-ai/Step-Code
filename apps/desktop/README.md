@@ -23,6 +23,8 @@ What the shell adds on top of the browser version:
   It is not installed globally and does not change shell profiles.
 - Native menus (copy/paste/undo, zoom, fullscreen, DevTools), edit context menu, persisted window bounds,
   single-instance lock, macOS inset traffic lights.
+- In-app updates for packaged release builds (see [Updates](#updates)), shown in the sidebar above the account row
+  and under **StepCode → Check for Updates…** (macOS) / **File → Check for Updates…** (Windows).
 
 ## Architecture
 
@@ -73,6 +75,7 @@ The packages the server imports (`@step-harness/coding-agent` and below) must be
 | `STEPCODE_DESKTOP_SHELL_ENV_TIMEOUT_MS` | Deadline for that read (default 8000). |
 | `STEPCODE_DESKTOP_USER_DATA_DIR` | Isolated Electron profile (window state, logs, single-instance lock). |
 | `STEPCODE_DESKTOP_SMOKE` | `1`: load the app hidden, print `STEPCODE_DESKTOP_SMOKE {json}` (bridge, auth, `/healthz`), exit 0/1. |
+| `STEPCODE_DESKTOP_UPDATE_URL` | Read updates from this channel directory instead of the one built in (e.g. the test bucket's `.../stepcode/desktop/`, or `http://127.0.0.1:<port>/` for a local test). https only, http for loopback. Packaged apps only. |
 
 Packaging reads the release identity and the feedback endpoints from these. An unpackaged run has no envelope, so it
 keeps whatever identity the login shell exported — which is how a source checkout reports something other than the
@@ -96,6 +99,9 @@ Electron switches such as `--remote-debugging-port=9222` can be appended to `ele
   failures are warnings, not host-startup failures. An explicit `STEPCODE_DESKTOP_NODE` bypasses this fallback.
 - Release envelope (packaged app only): `<resources>/server/stepcode-release.json`, written by `scripts/package.mjs`
   beside the staged server. A source checkout has none, so dev runs keep their own identity.
+- Update configuration (packaged with a feed only): `<resources>/app-update.yml`; update log `<logs>/updater.log`;
+  downloads in electron-updater's cache (`~/Library/Caches/stepcode-desktop-updater`,
+  `%LOCALAPPDATA%\stepcode-desktop-updater`).
 
 The CLI still requires Node.js 20+ on PATH for StepPage. Windows keeps its existing behavior: no POSIX wrapper and
 no automatic StepPage installation.
@@ -203,6 +209,29 @@ pipeline does all of it:
 Stage a release locally without uploading (after `package`):
 `node infra/release/desktop-release.mjs --version X.Y.Z --base-url https://example.test/stepcode`.
 
-## Not included yet
+## Updates
 
-Auto-update in the app (it does not read `desktop/latest.json` yet).
+The packaged app updates itself with [electron-updater](https://www.electron.build/auto-update), from the same
+`desktop/latest.json` the release pipeline publishes (one file for every platform; `src/update-feed.ts`):
+
+- macOS: Squirrel.Mac installs the `StepCode-<v>-mac-<arch>.zip` of the notarized app. It only accepts an update
+  signed by the running app's Developer ID, so ad-hoc local builds cannot update; an x64 app on Apple Silicon may
+  move to arm64. A copy run from the disk image or from App Translocation offers no update (move it to Applications).
+- Windows: the NSIS installer `StepCode-<v>-win-x64.exe` runs silently with `--updated` into the same folder and
+  starts the app again. electron-updater refuses an installer not signed by the publisher in `app-update.yml`
+  (the EV certificate subject), so an unsigned build cannot be installed as an update.
+
+The channel is baked in at package time: `STEPCODE_UPDATE_URL=<channel directory>` writes `stepcodeUpdateFeed` into
+the app's `package.json` and `resources/app-update.yml`; release CI always bakes the production channel
+(`https://static-openapi.stepfun.com/stepcode/desktop/`), so installers from the test bucket update from production too
+unless started with `STEPCODE_DESKTOP_UPDATE_URL`. A build without it, and `electron .`, has no updates.
+
+The app checks 15 s after start and then every 4 hours, never downloads on its own, and installs only on
+**Restart now** or when the user quits after a download. Restarting stops the server first (the installer replaces
+`resources/server`), then electron-updater quits into the installer. SHA-512 and size come from `latest.json`; there
+are no blockmaps, so differential download is off.
+
+Test an update locally: package two signed versions with the same feed (e.g. release CI with
+`MACOS_SIGNING_ENABLED=true` and two `STEPCODE_BUILD_VERSION` values), serve a `latest.json` naming the newer one's
+zip/exe from `http://127.0.0.1:<port>/`, install the older one, and start it with
+`STEPCODE_DESKTOP_UPDATE_URL=http://127.0.0.1:<port>/`.

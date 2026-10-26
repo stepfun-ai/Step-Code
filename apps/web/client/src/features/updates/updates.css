@@ -1,0 +1,138 @@
+/*
+ * `#updateNotice`: the desktop update button above the sidebar's account row,
+ * and `#updateRestartDialog` (restart to finish an update).
+ */
+
+.update-notice {
+	flex: none;
+	padding: 0 10px 8px;
+}
+.update-notice-button {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 48px;
+	padding: 8px 10px;
+	overflow: hidden;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-panel);
+	background: var(--surface);
+	color: var(--ink);
+	text-align: left;
+	transition:
+		background-color var(--fast),
+		border-color var(--fast);
+}
+.update-notice-button:hover:not([aria-disabled="true"]) {
+	border-color: var(--line-strong);
+	background: var(--hover);
+}
+.update-notice-button:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 2px;
+}
+.update-notice-button[aria-disabled="true"] {
+	cursor: default;
+}
+.update-notice-icon {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	background: var(--ink);
+	color: var(--canvas);
+}
+/* Busy phases show the spinner on a quiet chip instead of the solid one. */
+.update-notice-button[aria-disabled="true"] .update-notice-icon {
+	background: var(--surface-soft);
+	color: var(--ink-2);
+}
+.update-notice-button[data-phase="error"] .update-notice-icon {
+	background: var(--danger-surface);
+	color: var(--danger);
+}
+.update-notice-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+}
+.update-notice-title,
+.update-notice-detail {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.update-notice-title {
+	font-size: 13px;
+	font-weight: 600;
+}
+.update-notice-detail {
+	color: var(--ink-3);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.update-notice-progress {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	height: 2px;
+	background: var(--surface-soft);
+}
+.update-notice-progress > span {
+	display: block;
+	height: 100%;
+	background: var(--ink);
+	transition: width var(--fast);
+}
+
+.update-restart-dialog {
+	width: min(420px, 100%);
+	padding: 22px 22px 18px;
+}
+.update-restart-dialog h2 {
+	color: var(--ink);
+	font-size: 18px;
+	font-weight: 650;
+	line-height: 1.35;
+}
+.update-restart-dialog > p {
+	margin-top: 10px;
+	color: var(--ink-3);
+	font-size: 14px;
+	line-height: 1.5;
+}
+.update-restart-dialog > footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	margin-top: 22px;
+}
+.update-restart-dialog footer > button {
+	min-height: var(--control-h-lg);
+	padding: 0 14px;
+	border-radius: var(--radius-panel);
+	font-size: 14px;
+}
+.update-restart-dialog footer > button:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 2px;
+}
+#updateRestartLater {
+	background: var(--surface-soft);
+	color: var(--ink);
+}
+#updateRestartLater:hover {
+	background: var(--hover);
+}
+#updateRestartNow {
+	background: var(--ink);
+	color: var(--canvas);
+	font-weight: 500;
+}

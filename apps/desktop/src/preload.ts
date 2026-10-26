@@ -4,10 +4,12 @@
  * Exposes `window.stepcodeDesktop`, the contract defined once in
  * `@step-harness/web/desktop-bridge`. Every operation is an IPC call; the main
  * process checks that it comes from the window's top frame on the server origin.
+ * The only message the main process sends unasked is the update state
+ * (`updates.subscribe`), on its own fixed channel.
  */
 
-import type { StepcodeDesktopBridge } from "@step-harness/web/desktop-bridge";
-import { contextBridge, ipcRenderer } from "electron";
+import type { DesktopUpdateState, StepcodeDesktopBridge } from "@step-harness/web/desktop-bridge";
+import { contextBridge, type IpcRendererEvent, ipcRenderer } from "electron";
 import { DESKTOP_IPC, VERSION_ARGUMENT } from "./ipc-channels.ts";
 
 function hostPlatform(): StepcodeDesktopBridge["platform"] {
@@ -32,6 +34,29 @@ const bridge: StepcodeDesktopBridge = {
 	},
 	revealPath(path) {
 		return ipcRenderer.invoke(DESKTOP_IPC.revealPath, String(path)) as Promise<void>;
+	},
+	updates: {
+		currentVersion: version ?? "",
+		getState() {
+			return ipcRenderer.invoke(DESKTOP_IPC.updateGetState) as Promise<DesktopUpdateState>;
+		},
+		check() {
+			return ipcRenderer.invoke(DESKTOP_IPC.updateCheck) as Promise<DesktopUpdateState>;
+		},
+		download() {
+			return ipcRenderer.invoke(DESKTOP_IPC.updateDownload) as Promise<void>;
+		},
+		restart() {
+			return ipcRenderer.invoke(DESKTOP_IPC.updateRestart) as Promise<void>;
+		},
+		subscribe(listener) {
+			// The page sees only the state, never the IPC event (and with it `sender`).
+			const forward = (_event: IpcRendererEvent, state: DesktopUpdateState) => listener(state);
+			ipcRenderer.on(DESKTOP_IPC.updateState, forward);
+			return () => {
+				ipcRenderer.removeListener(DESKTOP_IPC.updateState, forward);
+			};
+		},
 	},
 };
 

@@ -10,6 +10,7 @@ import { SettingsView } from "./features/settings";
 import { AuthBanner, ErrorToast, LogoutDialog, ShellEffects, SidebarShowButton, UserArea } from "./features/shell";
 import { RenameSessionDialog, SearchModal, SidebarNav, SidebarResizer } from "./features/sidebar";
 import { TerminalDock } from "./features/terminal";
+import { UpdateNotice } from "./features/updates";
 import { RemoveWorkspaceModal, WorkspaceBrowserModal, WorkspaceControl } from "./features/workspace";
 import { I18nProvider } from "./i18n";
 import { cx } from "./lib/format";
@@ -23,7 +24,8 @@ import { IconSprite } from "./ui";
  *
  *   svg.icon-sprite
  *   div.app[.sidebar-hidden][.right-panel-open][.resizing]  (--sidebar-width, --preview-width)
- *     aside.sidebar      sidebar nav | files tree | shell user area (account, remote control, settings gear)
+ *     aside.sidebar      sidebar nav | files tree | updates #updateNotice (desktop only)
+ *                        | shell user area (account, remote control, settings gear)
  *     #sidebarResizer    sidebar
  *     main.main          shell show button | files show button | market cron/market views
  *                        | conversation #sessionHeader (title, project, status, more menu)
@@ -37,7 +39,7 @@ import { IconSprite } from "./ui";
  *   #settingsView      settings: full-window settings page (menu + page) over the workspace
  *   #feedbackModal, #searchModal, #workspaceBrowserModal, #removeWorkspaceModal, #renameSessionDialog (sidebar),
  *   #selectionDialog,
- *   #imagePreview (composer: enlarged image attachment), #logoutDialog (shell)
+ *   #imagePreview (composer: enlarged image attachment), #logoutDialog (shell), #updateRestartDialog (updates)
  *   #loginGate         login: sign-in (or bring your own key), above everything while no model can run
  *   #workspaceMenu, #sessionMenu, #tagPicker: rendered by their sidebar trigger, in a portal on body, only while open
  */
@@ -95,6 +97,7 @@ export function App() {
 				<aside className="sidebar">
 					<SidebarNav />
 					<FileTreePanel />
+					<UpdateNotice />
 					<UserArea />
 				</aside>
 				<SidebarResizer />

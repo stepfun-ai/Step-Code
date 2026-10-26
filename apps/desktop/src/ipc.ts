@@ -8,8 +8,10 @@
 
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
+import type { DesktopUpdateState } from "@step-harness/web/desktop-bridge";
 import { type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
 import { DESKTOP_IPC } from "./ipc-channels.ts";
+import type { DesktopUpdater } from "./updater.ts";
 
 export interface DesktopIpcOptions {
 	/** The window allowed to call the bridge, if one is open. */
@@ -18,6 +20,24 @@ export interface DesktopIpcOptions {
 	readonly getServerOrigin: () => string | undefined;
 	/** Called with every folder the user picks, so the next launch can start there. */
 	readonly onDirectoryPicked: (path: string) => void;
+	readonly updater: DesktopUpdater;
+}
+
+/**
+ * Push an update state to the page, when the window shows the server origin.
+ * The error and loading pages have no bridge, so nothing is sent to them.
+ */
+export function publishUpdateState(options: DesktopIpcOptions, state: DesktopUpdateState): void {
+	const window = options.getWindow();
+	const origin = options.getServerOrigin();
+	if (window === undefined || window.isDestroyed() || origin === undefined) return;
+	let pageOrigin: string;
+	try {
+		pageOrigin = new URL(window.webContents.getURL()).origin;
+	} catch {
+		return;
+	}
+	if (pageOrigin === origin) window.webContents.send(DESKTOP_IPC.updateState, state);
 }
 
 function trustedWindow(event: IpcMainInvokeEvent, options: DesktopIpcOptions): BrowserWindow {
@@ -108,5 +128,24 @@ export function installDesktopIpc(options: DesktopIpcOptions): void {
 		const path = normalize(raw);
 		if (!existsSync(path)) throw new Error(`Path does not exist: ${path}`);
 		shell.showItemInFolder(path);
+	});
+
+	// The updater takes no arguments from the page: it only ever installs what its own feed names.
+	ipcMain.handle(DESKTOP_IPC.updateGetState, (event) => {
+		trustedWindow(event, options);
+		return options.updater.state;
+	});
+	ipcMain.handle(DESKTOP_IPC.updateCheck, (event) => {
+		trustedWindow(event, options);
+		return options.updater.check(true);
+	});
+	ipcMain.handle(DESKTOP_IPC.updateDownload, async (event) => {
+		trustedWindow(event, options);
+		// Failures are reported through the state; the page does not need the rejection.
+		await options.updater.download().catch(() => undefined);
+	});
+	ipcMain.handle(DESKTOP_IPC.updateRestart, (event) => {
+		trustedWindow(event, options);
+		return options.updater.restart();
 	});
 }
