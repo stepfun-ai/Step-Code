@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
@@ -85,4 +88,55 @@ test("updater metadata names the installer that was packaged", () => {
 	assert.deepEqual(JSON.parse(buildChannelManifest({ channelId: "web_website_homepage", exeName, latestYmlName: "latest.yml" })), {
 		channels: [{ channelId: "web_website_homepage", exe: exeName, latestYml: "latest.yml" }],
 	});
+});
+
+// The Windows jobs cannot run the installer (no Windows machine), so the only
+// check available is that the bytes and the updater metadata agree. These cover
+// the failures that used to reach a user as a 404 or a corrupt install.
+const { verifyWinArtifact } = await import("./verify-win-artifact.mjs");
+
+async function writeFakeInstaller(dir, { exeName, version, corruptYml } = {}) {
+	const exe = exeName ?? "StepCode-1.2.3-win-x64.exe";
+	const data = Buffer.alloc(10_500_000, 7);
+	data.write("MZ", 0, "latin1");
+	data.writeUInt32LE(0x80, 0x3c);
+	data.write("PE\0\0", 0x80, "latin1");
+	await mkdir(dir, { recursive: true });
+	await writeFile(join(dir, exe), data);
+	const sha512 = createHash("sha512").update(data).digest("base64");
+	const yml = corruptYml ?? `version: ${version ?? "1.2.3"}\npath: ${exe}\nsha512: ${sha512}\nfiles:\n  - url: ${exe}\n    sha512: ${sha512}\n    size: ${data.length}\n`;
+	await writeFile(join(dir, "latest.yml"), yml);
+	await writeFile(
+		join(dir, "channel-artifacts.json"),
+		`${JSON.stringify({ channels: [{ channelId: "web_website_homepage", exe, latestYml: "latest.yml" }] }, null, 2)}\n`,
+	);
+	return { dir, exe, sha512 };
+}
+
+test("verify-win-artifact accepts a consistent installer", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-win-verify-"));
+	try {
+		const { dir } = await writeFakeInstaller(root);
+		assert.deepEqual(verifyWinArtifact({ dir }), []);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("verify-win-artifact rejects a stale or renamed metadata file", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-win-verify-"));
+	try {
+		const exe = "StepCode-1.2.3-win-x64.exe";
+		// Path names the old file, and the version disagrees with the file name.
+		const stale = await writeFakeInstaller(join(root, "stale"), {
+			exeName: exe,
+			corruptYml: "version: 9.9.9\npath: StepCode-9.9.9-win-x64.exe\nsha512: abc=\nfiles:\n  - url: StepCode-9.9.9-win-x64.exe\n",
+		});
+		const problems = verifyWinArtifact({ dir: stale.dir });
+		assert.ok(problems.some((p) => p.includes("path does not name")), problems.join("\n"));
+		assert.ok(problems.some((p) => p.includes("files[] names")), problems.join("\n"));
+		assert.ok(problems.some((p) => p.includes("latest.yml says 9.9.9")), problems.join("\n"));
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

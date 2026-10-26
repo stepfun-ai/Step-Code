@@ -95,6 +95,11 @@ stepcode-desktop-package-windows:
     - bash "${BUILD_SCRIPT_DIR}/common/run_pnpm.sh" install --frozen-lockfile
     # resolve_windows_package_args → pack-win flags, then `node scripts/pack-win.cjs`.
     - bash "${BUILD_SCRIPT_DIR}/package/windows_build.sh"
+    # No Windows machine here, so the installer cannot be run: check that the bytes
+    # are a real PE image and that latest.yml/channel-artifacts.json describe the
+    # file that exists. A rename or a stale yml is otherwise a 404 for the user and
+    # a green pipeline for us.
+    - node scripts/verify-win-artifact.mjs
   after_script:
     - !reference [.scripts, import-ci-env]
     - bash "${BUILD_SCRIPT_DIR}/package/archive_job_artifacts.sh"

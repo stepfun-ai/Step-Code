@@ -119,6 +119,9 @@ stepcode-desktop-release-windows:
     # No --ignore-scripts: node-pty and esbuild build their binaries in postinstall.
     - pnpm install --frozen-lockfile
     - pnpm pack:win -- --env=prod --no-sign
+    # Static proof only: no Windows machine in this pipeline can install or start
+    # the installer, but a rename or a stale latest.yml must not ship.
+    - node scripts/verify-win-artifact.mjs
   artifacts:
     name: 'stepcode-desktop-windows-$CI_PIPELINE_IID'
     paths:
