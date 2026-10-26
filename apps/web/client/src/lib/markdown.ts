@@ -3,9 +3,9 @@
  * `contentText`, `renderMarkdown`).
  *
  * The renderer is deliberately tiny: fenced code blocks, `#`/`##`/`###`
- * headings, `-` / `*` bullets, GFM pipe tables, links, `**bold**`, inline code,
- * line breaks and paragraph gaps. Everything else is
- * escaped. Its output is an HTML string meant for `dangerouslySetInnerHTML`
+ * headings, `-` / `*` bullets, GFM pipe tables, links, `**bold**`, `*italic*`,
+ * `~~strikethrough~~`, inline code, line breaks and paragraph gaps. Everything
+ * else is escaped. Its output is an HTML string meant for `dangerouslySetInnerHTML`
  * (see ui/MarkdownView, which also wires the `.copy-code` buttons).
  */
 
@@ -55,8 +55,20 @@ export interface MarkdownOptions {
 	readonly highlightCode?: (code: string, language: string) => string;
 }
 
+/**
+ * Bold, italic and strikethrough, in that order: bold consumes its `**` pair
+ * first, so the italic rule only sees single markers. Italic follows the
+ * flanking rule loosely — the opening marker must be preceded by a non-word
+ * character and followed by non-space, the closing one preceded by non-space
+ * and followed by a non-word character — so `2 * 3 * 4`, `a*b*c` and
+ * `snake_case` stay literal. `_italic_` is deliberately unsupported for the
+ * same reason; inline code and links are already protected by the caller.
+ */
 function renderInline(value: string): string {
-	return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+	return escapeHtml(value)
+		.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+		.replace(/(^|[^*\w])\*(?=\S)([^*\n]*\S)\*(?![*\w])/g, "$1<em>$2</em>")
+		.replace(/~~(?=\S)([^~\n]*\S)~~/g, "<del>$1</del>");
 }
 
 /** Inline code/links are already protected; escaped pipes are cell content. */
@@ -189,10 +201,11 @@ export function renderMarkdown(value: unknown, labels: MarkdownLabels, options: 
 	// Protect inline code and links before formatting so URL punctuation and HTML
 	// attributes cannot be interpreted as Markdown. Fenced code is already protected.
 	const inlineSource = source.replace(
-		/`([^`]+)`|\[([^\]\n]+)\]\([ \t]*(<[^<>\n]+>|(?:[^\s()<>]|\([^()\n]*\))+)[ \t]*\)|\[([^\]\n]+)\]\[([^\]\n]*)\]|https?:\/\/[^\s<>\u0000\u0001\u0002，。、；：！？）」』】》]+/g,
+		/(`+)([\s\S]*?[^`])\1(?!`)|\[([^\]\n]+)\]\([ \t]*(<[^<>\n]+>|(?:[^\s()<>]|\([^()\n]*\))+)[ \t]*\)|\[([^\]\n]+)\]\[([^\]\n]*)\]|https?:\/\/[^\s<>\u0000\u0001\u0002，。、；：！？）」』】》]+/g,
 		(
 			match,
-			code: string | undefined,
+			ticks: string | undefined,
+			rawCode: string | undefined,
 			label: string | undefined,
 			destination: string | undefined,
 			referenceLabel: string | undefined,
@@ -200,7 +213,11 @@ export function renderMarkdown(value: unknown, labels: MarkdownLabels, options: 
 		) => {
 			let html: string;
 			let suffix = "";
-			if (code !== undefined) {
+			if (ticks !== undefined && rawCode !== undefined) {
+				// CommonMark: a run of backticks spans code that itself contains backticks,
+				// and one space of padding at both ends is removed.
+				const code =
+					rawCode.startsWith(" ") && rawCode.endsWith(" ") && rawCode.trim() ? rawCode.slice(1, -1) : rawCode;
 				const local = localFileReference(code);
 				if (local) options.onFileReference?.({ path: code, label: code, inlineCode: true });
 				html = `<code>${escapeHtml(code)}</code>`;
@@ -293,6 +310,27 @@ export function skillInvocation(text: string): SkillInvocation | null {
 	if (block) return { name: block[1], request: block[2]?.trim() ?? "" };
 	const command = /^\/skill:(\S+)(?:\s+([\s\S]*))?$/.exec(text);
 	return command ? { name: command[1], request: command[2]?.trim() ?? "" } : null;
+}
+
+/** A quoted other-session context: the source session's name and its capped transcript. */
+export interface SessionContextQuote {
+	readonly title: string;
+	readonly transcript: string;
+}
+
+/**
+ * A quoted other-session context (`packageSessionContext`) rides at the tail of
+ * the message it was sent with: a heading naming the source session followed by
+ * a fenced transcript. Split it off so the bubble shows the user's own words
+ * and the quote collapses into one row.
+ */
+export function sessionContextOf(text: string): { readonly body: string; readonly quote: SessionContextQuote } | null {
+	const match = /\n*# 引用会话「([^」]+)」的上下文\n```session-context\n([\s\S]*?)\n```[ \t]*$/.exec(text);
+	if (!match) return null;
+	return {
+		body: text.slice(0, match.index).trim(),
+		quote: { title: match[1], transcript: match[2] },
+	};
 }
 
 /**

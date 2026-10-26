@@ -70,10 +70,14 @@
   --success: #237a4b;
   --danger-surface: #fdf0ee;
   --attention-surface: #fdf6e2;
+  /* A search match: find-in-page, not a status. Its own wash so scanning results
+     reads like Chrome's highlight, and so neither the accent (focus) nor the
+     attention tint (a warning) is borrowed to mean "your query is here". */
+  --match-surface: #ffe27a;
+  --match-ink: #241c00;
   /* ── Brand and accent ────────────────────────────────────────────── */
-  --brand-violet: #8f7cff;
-  --brand-amber: #f6b73c;
-  --brand-tile: #17161f;
+  --brand-violet: #7c5cff;
+  --brand-amber: #ffc940;
   --accent: #5b47e0;
   --accent-hover: #4b38cc;
   --accent-ink: #ffffff;
@@ -175,10 +179,11 @@
   /* Selected text gets a neutral grey wash, like the rest of the selection language. */
   --selection: rgb(23 23 24 / 12%);
   /* Status badges and the shared focus ring. */
-  --badge-surface: #eeeef0;
-  --attention-ink: #8a5d06;
-  /* A focused field firms its edge in neutral grey; violet is not a border colour. */
-  --focus-border: #9a9aa2;
+  --badge-surface: #eeeeef;
+  --attention-ink: #9a6b12;
+  --focus-border: #9d9da1;
+  --accent: #1677ff;
+  --accent-ring: rgb(22 119 255 / 12%);
   /* ── Session-mode accents ────────────────────────────────────────── */
   /* Shared by the composer (card glow, prompt lead chips, ＋ menu rows) and
      the conversation's command-echo rows: fixed values, mixed with the theme
@@ -230,7 +235,10 @@ html[data-theme="dark"] {
   --success: #62cc8f;
   --danger-surface: #3a2024;
   --attention-surface: #33291a;
-  --brand-tile: #232327;
+  /* The same wash on the dark plane: saturated enough to find at a glance,
+     dark enough that the light ink keeps its contrast on top of it. */
+  --match-surface: #7a5c0e;
+  --match-ink: #ffedb6;
   --accent: #a08fff;
   --accent-hover: #b3a5ff;
   --accent-ink: #15121f;
@@ -471,21 +479,22 @@ html[data-theme="dark"] .sidebar {
 
 /*
  * legacy 248-257: brand mark, shared by the sidebar brand row and the logged-out overlay.
- * The tile stays violet-black in both themes, as on the sign-in screen, so the
- * violet arc and amber chevron of the mark keep their contrast.
+ * A white disc fills the black mark asset's cut-outs, so the mark reads as a
+ * black circle in both themes.
  */
 .brand-mark {
   display: grid;
   place-items: center;
   width: 30px;
   height: var(--control-h-sm);
-  border-radius: var(--radius-row);
-  background: var(--brand-tile);
+  /* The mark is a circle: a white disc under the black asset fills its cut-outs. */
+  border-radius: 50%;
+  background: #ffffff;
   color: var(--brand-violet);
 }
 .brand-mark > .icon {
-  width: 72%;
-  height: 72%;
+  width: 100%;
+  height: 100%;
 }
 
 /*

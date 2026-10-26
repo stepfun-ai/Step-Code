@@ -58,6 +58,21 @@ function toolCallDelta(name, args, id) {
   return { tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
 }
 
+/**
+ * A reply delivered in several chunks, so the page has a live assistant row — one
+ * with no entry id — on screen long enough to inspect while a turn streams.
+ */
+async function slowReply(input, response) {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  for (let index = 0; index < 12; index += 1) {
+    const delta = { content: `streamed reply ${index}\n` };
+    response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } })}\n\n`);
+  response.end("data: [DONE]\n\n");
+}
+
 export async function clarificationCompletion(request, response) {
   let raw = "";
   for await (const chunk of request) raw += chunk;
@@ -69,6 +84,11 @@ export async function clarificationCompletion(request, response) {
   // no tools; they arrive after a turn, sometimes after this suite has finished,
   // so a `.find` on a missing list was an unhandled rejection in the run.
   const tools = Array.isArray(input.tools) ? input.tools : [];
+  // A slow reply: the page must keep one prompt field while the live row exists.
+  if (tools.length && last.role === "user" && text.includes("stream-fixture")) {
+    await slowReply(input, response);
+    return;
+  }
   let delta;
   if (!tools.length) {
     delta = { content: "fixture text reply" };

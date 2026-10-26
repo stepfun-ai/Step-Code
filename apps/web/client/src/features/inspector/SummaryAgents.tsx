@@ -3,8 +3,8 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import { Icon } from "../../ui";
 import { SubagentStatusIcon } from "../conversation";
-import { openChildAgent, openSubagentTask, openWorkflowAgents } from "../conversation/actions";
 import { summaryAgentRecords } from "./model";
+import { openAgentRecord } from "./open-agent";
 
 export function SummaryAgents() {
 	const t = useT();
@@ -28,13 +28,7 @@ export function SummaryAgents() {
 								status: t(`subagentStatus.${record.status}`),
 								task: record.task || t("subagentNoTask"),
 							})}
-							onClick={() => {
-								const target = record.target;
-								if (target.kind === "task") openSubagentTask(target.toolItemId, target.taskIndex);
-								else if (target.kind === "child")
-									openChildAgent(target.sessionId, record.agent || t("subagent"));
-								else openWorkflowAgents(target.runId, record.agent || t("subagents"));
-							}}
+							onClick={() => openAgentRecord(record)}
 						>
 							<Icon name="bot" size="xs" />
 							<SubagentStatusIcon status={record.status} />

@@ -453,7 +453,7 @@ export function McpEditor({
 					</div>
 				) : null}
 				<div className="settings-form-footer">
-					<span className="settings-form-note">{t("settingsAppliesToNewSessions")}</span>
+					<span className="settings-form-note">{t("settingsMcpAppliesNextMessage")}</span>
 					<button type="button" className="settings-btn" onClick={() => onDone(false)}>
 						{t("cancel")}
 					</button>

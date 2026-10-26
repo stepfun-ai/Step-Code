@@ -25,8 +25,13 @@ const DEFAULT_SIZE = { width: 1280, height: 840 };
 const MIN_SIZE = { width: 720, height: 480 };
 /** Where macOS draws the traffic lights; the web client reserves this strip in its desktop CSS. */
 export const TRAFFIC_LIGHT_POSITION = { x: 16, y: 16 };
-/** Permissions the web client uses: navigator.clipboard.writeText and fullscreen. */
-const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen"]);
+/**
+ * Permissions the web client uses: navigator.clipboard.writeText, fullscreen,
+ * and `media` — the composer's microphone button records through getUserMedia,
+ * which Electron denies by default. macOS still shows its own TCC prompt the
+ * first time; that is expected and the client's error text says so.
+ */
+const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen", "media"]);
 
 export interface MainWindowOptions {
 	readonly preload: string;
@@ -76,11 +81,17 @@ let sessionConfigured = false;
 function configureSession(getServerOrigin: () => string | undefined): void {
 	if (sessionConfigured) return;
 	sessionConfigured = true;
-	session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+	// Both handlers answer for our own server origin only: a page from any
+	// other origin gets Electron's default denial.
+	const allowed = (_contents: unknown, permission: string, requestingUrl: string): boolean => {
 		const origin = getServerOrigin();
-		callback(
-			ALLOWED_PERMISSIONS.has(permission) && origin !== undefined && originOf(details.requestingUrl) === origin,
-		);
+		return ALLOWED_PERMISSIONS.has(permission) && origin !== undefined && originOf(requestingUrl) === origin;
+	};
+	session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingUrl) =>
+		allowed(_contents, permission, requestingUrl),
+	);
+	session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+		callback(allowed(_contents, permission, details.requestingUrl));
 	});
 }
 

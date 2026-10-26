@@ -28,6 +28,18 @@ export interface TerminalSnapshot {
 	readonly chunks: readonly { readonly seq: number; readonly data: string }[];
 }
 
+/**
+ * Voice dictation (`/api/v1/voice/*`, host `voice.ts`): the composer's
+ * microphone button. The status snapshot reports where the credential comes
+ * from and which channel it belongs to — never the key itself.
+ */
+export interface VoiceStatus {
+	readonly available: boolean;
+	readonly reason?: "no-credential";
+	readonly channel?: "step_plan" | "platform";
+	readonly keySource?: "environment" | "auth.json";
+}
+
 /** Host-wide embedded-browser projection, independent of model sessions. */
 export interface EmbeddedBrowserTab {
 	readonly id: string;
@@ -216,18 +228,20 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly steeringMessages?: readonly SteeringMessage[];
 	/** The kernel retrying a failed model request right now (runtime.ts `RetryTracker`). */
 	readonly retry?: SessionRetry;
-	/** The session's goal, drawn as the strip above the composer (runtime.ts `projectGoal`). */
+	/** The session's goal, steered from the summary board (runtime.ts `projectGoal`). */
 	readonly goal?: GoalState;
 	/** Plan mode state (runtime.ts `projectPlanMode`). */
 	readonly planMode?: PlanModeState;
 }
 
-/** The goal strip's data (runtime.ts `projectGoal`). */
+/** The summary board's goal section data (runtime.ts `projectGoal`). */
 export interface GoalState {
 	readonly id: string;
 	readonly objective: string;
 	readonly status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
 	readonly tokensUsed: number;
+	/** Active-only elapsed seconds at the last projection; the client ticks from it while active. */
+	readonly timeUsedSeconds: number;
 	readonly tokenBudget?: number;
 	/** Completed agent runs; progress, not a stop condition. */
 	readonly rounds: number;
@@ -448,6 +462,17 @@ export interface ChildAgentLink {
 
 export type SubagentStatus = "queued" | "running" | "completed" | "failed" | "aborted" | "skipped" | "unknown";
 
+/** Token usage one subagent run reported, already summed by the kernel. */
+export interface SubagentUsage {
+	readonly records: number;
+	readonly input: number;
+	readonly output: number;
+	readonly cacheRead: number;
+	readonly cacheWrite: number;
+	readonly total: number;
+	readonly cost?: number;
+}
+
 export interface SubagentTask {
 	readonly agent: string;
 	readonly task: string;
@@ -456,6 +481,8 @@ export interface SubagentTask {
 	readonly backgroundAgentId?: string;
 	readonly model?: string;
 	readonly turns?: number;
+	/** Absent when the run reported no usage, or the details predate the field. */
+	readonly usage?: SubagentUsage;
 	readonly error?: string;
 }
 
@@ -533,7 +560,22 @@ export type TimelineItem =
 	| ApprovalTimelineItem
 	| RetryTimelineItem
 	| CommandTimelineItem
-	| CompactionTimelineItem;
+	| CompactionTimelineItem
+	| GoalRoundTimelineItem;
+
+/**
+ * A goal round separator: the hidden continuation message that starts the
+ * goal's next round, drawn as a quiet divider so a multi-round run reads as
+ * rounds instead of one undifferentiated stream. It comes from the session
+ * entry, so it survives a reload like any other transcript row.
+ */
+export interface GoalRoundTimelineItem {
+	readonly itemId: string;
+	readonly kind: "goal-round";
+	/** The round this separator starts, 1-based (round 1 is the user's own turn). */
+	readonly round: number;
+	readonly timestamp?: string;
+}
 
 /**
  * A kernel slash command the user sent, echoed by the host: the command runs
@@ -544,6 +586,8 @@ export type TimelineItem =
 export interface CommandTimelineItem {
 	readonly itemId: string;
 	readonly kind: "command";
+	/** The echo entry's id: rewriting swaps this row for the edit composer. */
+	readonly entryId?: string;
 	/** The command line as sent, e.g. `/goal 整理文件夹`. */
 	readonly command: string;
 	readonly timestamp?: string;
@@ -637,6 +681,10 @@ export interface BootstrapPayload {
 	readonly login?: LoginReport | null;
 	/** A custom models.json model runs without a Step credential, so no sign-in gate is needed. */
 	readonly customModels?: boolean;
+	/** The running build's product version, e.g. `0.1.0`. */
+	readonly version?: string;
+	/** When the installed build was produced; absent for a source checkout. */
+	readonly buildTime?: string;
 }
 
 export interface TreeEntry {
@@ -718,6 +766,8 @@ export interface McpServerConfig {
 	readonly tool_timeout_sec?: number;
 	readonly enabled_tools?: readonly string[];
 	readonly disabled_tools?: readonly string[];
+	/** False gives every session its own connection instead of the process-wide shared one. */
+	readonly shared?: boolean;
 	readonly oauth?: {
 		readonly client_id?: string;
 		readonly client_secret?: string;

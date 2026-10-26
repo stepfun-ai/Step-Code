@@ -109,9 +109,10 @@
 	background: var(--selected);
 }
 /* Selection is the fill alone: changing weight would reflow the title as the arrow keys move. */
-/* On the selection fill the tint needs more weight to stay visible. */
+/* The match wash is opaque, so it reads the same on the selection fill and on
+   hover; only its weight steps up, to mark which row Enter would open. */
 .search-result.selected .search-result-main mark {
-	background: color-mix(in srgb, var(--ink) 22%, transparent);
+	font-weight: 700;
 }
 .search-result-main {
 	display: grid;
@@ -134,13 +135,16 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-/* A match is ink weight on a neutral tint; violet is kept for focus and progress. */
+/* A match is the one thing in the list the reader is scanning for, so it gets a
+   find-in-page wash rather than a faint ink tint: at 12% ink the mark was
+   invisible between two lines of the same weight. The wash keeps its own colour
+   on the selection fill, so the Enter target does not hide it either. */
 .search-result-main mark {
 	margin: 0 -1px;
-	padding: 0 1px;
+	padding: 0 2px;
 	border-radius: var(--radius-hairline);
-	background: color-mix(in srgb, var(--ink) 12%, transparent);
-	color: var(--ink);
+	background: var(--match-surface);
+	color: var(--match-ink);
 	font-weight: 600;
 }
 .search-result time {

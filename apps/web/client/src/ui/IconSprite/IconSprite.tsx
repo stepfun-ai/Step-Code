@@ -28,6 +28,14 @@ export const MISSING_FROM_LIBRARY = [
 	"layers3",
 	"user",
 	"stepcode",
+	"mic",
+	"code",
+	"browserChrome",
+	"browserSafari",
+	"browserEdge",
+	"browserFirefox",
+	"finder",
+	"folderWindows",
 ] as const;
 
 /*
@@ -43,7 +51,12 @@ export const MISSING_FROM_LIBRARY = [
  * - plug: 插头（当前未被使用）
  * - layers3: 三层图层（当前未被使用）
  * - user: 账号入口（Lucide user-round，与相邻线性图标同粗细）
- * - stepcode: StepCode 品牌标识（紫色圆弧 + 琥珀色提示符），双色，由 --mark-arc / --mark-chevron 着色
+ * - stepcode: StepCode 品牌标识（/brand-mark.png 位图原样使用，深底上反色为白）
+ * - mic: 麦克风（语音听写按钮）。线性风格与相邻图标对齐；库里暂无同粗细对应款
+ * - code: 源码（尖括号 + 斜杠，交付卡片的"查看源码"）。线性风格，与 mic 同粗细
+ * - browserChrome / browserSafari / browserEdge / browserFirefox: 系统浏览器标识（"在 X 中打开"），
+ *   多色简化品牌图形，颜色固定、不随主题变化
+ * - finder: macOS 访达（双色笑脸），folderWindows: Windows 文件资源管理器黄色文件夹；"打开工作区目录"按钮用
  */
 
 export const ICON_NAMES = [
@@ -149,6 +162,14 @@ export const ICON_NAMES = [
 	"layers3",
 	"timer",
 	"database",
+	"mic",
+	"code",
+	"browserChrome",
+	"browserSafari",
+	"browserEdge",
+	"browserFirefox",
+	"finder",
+	"folderWindows",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -180,29 +201,12 @@ export function IconSprite() {
 				<path d="M20 21a8 8 0 0 0-16 0" />
 			</symbol>
 			{/*
-			 * The StepCode mark (the sign-in logo): two colours, so it does not use
-			 * currentColor. `--mark-arc` / `--mark-chevron` recolour it, and
-			 * `--mark-draw` (0..1, registered in stream.css) draws the chevron in.
+			 * The StepCode mark (the sign-in logo): the supplied brand asset,
+			 * `/brand-mark.png`, used as-is — a black disc whose cut-outs read
+			 * as the light brand tile behind it.
 			 */}
-			<symbol id="i-stepcode" viewBox="0 0 48 48" fill="none">
-				<path
-					d="M34.6 13.4A15 15 0 1 0 34.6 34.6"
-					strokeWidth="7"
-					strokeLinecap="round"
-					style={{ stroke: "var(--mark-arc, #8f7cff)" }}
-				/>
-				<path
-					d="m21 17.5 6.5 6.5-6.5 6.5"
-					pathLength={1}
-					strokeWidth="4.2"
-					strokeLinecap="round"
-					strokeLinejoin="round"
-					style={{
-						stroke: "var(--mark-chevron, #f6b73c)",
-						strokeDasharray: 1,
-						strokeDashoffset: "calc(1 - var(--mark-draw, 1))",
-					}}
-				/>
+			<symbol id="i-stepcode" viewBox="0 0 339 339">
+				<image href="/brand-mark.png" width="339" height="339" />
 			</symbol>
 			{/* icon-library.html: ExternalLink */}
 			<symbol id="i-accountExternal" viewBox="0 0 24 24" fill="none">
@@ -279,6 +283,136 @@ export function IconSprite() {
 					strokeLinecap="round"
 					strokeLinejoin="round"
 				/>
+			</symbol>
+			<symbol
+				id="i-code"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="1.8"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<path d="M8.5 7.5 4 12l4.5 4.5M15.5 7.5 20 12l-4.5 4.5M13.4 5.5l-2.8 13" />
+			</symbol>
+			{/* Brand marks: fixed colors (not currentColor), so they read the same in both themes. */}
+			<symbol id="i-browserChrome" viewBox="0 0 24 24" fill="none">
+				<path d="M12 12 3.34 7A10 10 0 0 1 20.66 7Z" fill="#EA4335" />
+				<path d="M12 12 20.66 7A10 10 0 0 1 12 22Z" fill="#FBBC04" />
+				<path d="M12 12 12 22A10 10 0 0 1 3.34 7Z" fill="#34A853" />
+				<circle cx="12" cy="12" r="4.7" fill="#fff" />
+				<circle cx="12" cy="12" r="3.7" fill="#1A73E8" />
+			</symbol>
+			<symbol id="i-browserSafari" viewBox="0 0 24 24" fill="none">
+				<circle cx="12" cy="12" r="10" fill="#1B8CF5" />
+				<circle cx="12" cy="12" r="8.4" fill="#fff" />
+				<circle cx="12" cy="12" r="7.6" fill="#2D9BFF" />
+				<path
+					d="M12 4.9v1.4M12 17.7v1.4M4.9 12h1.4M17.7 12h1.4"
+					stroke="#fff"
+					strokeWidth=".7"
+					strokeLinecap="round"
+					opacity=".85"
+				/>
+				<path d="M17.3 6.7 13.3 13.3 10.7 10.7Z" fill="#FF3B30" />
+				<path d="M6.7 17.3 10.7 10.7 13.3 13.3Z" fill="#fff" />
+			</symbol>
+			<symbol id="i-browserEdge" viewBox="0 0 24 24" fill="none">
+				<defs>
+					<linearGradient id="i-browserEdge-a" x1="4" y1="18" x2="20" y2="6" gradientUnits="userSpaceOnUse">
+						<stop stopColor="#0C59A4" />
+						<stop offset="1" stopColor="#1B9DE2" />
+					</linearGradient>
+					<linearGradient id="i-browserEdge-b" x1="3" y1="10" x2="15" y2="21" gradientUnits="userSpaceOnUse">
+						<stop stopColor="#1B9DE2" />
+						<stop offset=".55" stopColor="#3BC16B" />
+						<stop offset="1" stopColor="#6FD65A" />
+					</linearGradient>
+				</defs>
+				<path
+					d="M21.6 15.2c-.4.2-.8.4-1.3.5-1.4.5-2.9.8-4.4.8-5.1 0-9.5-3.5-9.5-7.9 0-1.3.8-2.4 1.9-3C4.6 5.8 2.4 9.1 2.4 12.1c0 4.9 4.4 9.6 10.8 9.6 3.6 0 6.8-2.6 8.4-6.5Z"
+					fill="url(#i-browserEdge-a)"
+				/>
+				<path
+					d="M10.1 20.7c-1-.6-1.8-1.4-2.4-2.3-2.3-3.2-1.7-7.7 1.6-10.1.3-.2.6-.4.9-.5.2-.1.5-.2.7-.3-.4 0-.8.1-1.2.2C6.2 8.2 3.6 10.8 2.6 14.1c-.1.4-.2.9-.2 1.3.8 2.6 2.5 4.4 4.7 5.4 1 .4 2 .2 3 0Z"
+					fill="url(#i-browserEdge-b)"
+				/>
+				<path
+					d="M14 13.9c-.1.1-.4.3-.4.6 0 .3.2.5.5.7 1.5 1 4.2.9 4.2.9a6.1 6.1 0 0 0 3.1-.8 6.2 6.2 0 0 0 3.1-5.4C24.5 7.1 23.1 4.5 21.7 3.3 19.6 1.4 16.2.4 12.3.4 7.4.4 3.3 3.3 2.6 7.5c0 0 .9-2.4 4.4-3.6 3.5-1.2 7.5-.4 9.6 1.4 2.2 1.8 2.9 4.3 2.9 5.7 0 1.8-1.6 3-2.9 3.3-.9.2-1.8-.1-2-.4Z"
+					fill="#3DB6F2"
+					transform="translate(-.6 1.1) scale(.95)"
+				/>
+			</symbol>
+			<symbol id="i-browserFirefox" viewBox="0 0 24 24" fill="none">
+				<defs>
+					<radialGradient id="i-browserFirefox-a" cx="16" cy="5" r="18" gradientUnits="userSpaceOnUse">
+						<stop stopColor="#FFE226" />
+						<stop offset=".45" stopColor="#FF7139" />
+						<stop offset="1" stopColor="#E31587" />
+					</radialGradient>
+				</defs>
+				<circle cx="12" cy="12" r="10" fill="url(#i-browserFirefox-a)" />
+				<circle cx="11.4" cy="12.8" r="6" fill="#7542E5" />
+				<path
+					d="M5.4 12.8a6 6 0 0 0 11.9 1.1c-1.4 1.6-3.6 2.4-5.9 2-2.7-.5-4.6-2.7-4.9-5.3-.6.6-1 1.4-1.1 2.2Z"
+					fill="#592ACB"
+				/>
+				<path
+					d="M12 2c3.8 0 7 2.3 8.4 5.6-1.9-1.7-4.6-2.4-7.2-1.6C10.6 6.8 8.8 9 8.6 11.6 7.1 9.5 7.3 6.4 9.2 4.4 10 3.6 11 2.6 12 2Z"
+					fill="#FF980E"
+					opacity=".9"
+				/>
+			</symbol>
+			<symbol id="i-finder" viewBox="0 0 24 24" fill="none">
+				<rect x="3" y="3" width="18" height="18" rx="4.5" fill="#E9F4FF" />
+				<path
+					d="M7.5 3h5.3c-.8 3.3-1.3 6.6-1.3 9.8h1.8c-.1 2.8.1 5.5.6 8.2H7.5A4.5 4.5 0 0 1 3 16.5v-9A4.5 4.5 0 0 1 7.5 3Z"
+					fill="#1F8EF1"
+				/>
+				<path
+					d="M8.3 7.8v2.2M16 7.8v2.2M7.1 15.4c3.2 2.3 6.6 2.3 9.8 0"
+					stroke="#123A63"
+					strokeWidth="1.3"
+					strokeLinecap="round"
+				/>
+				<rect
+					x="3.25"
+					y="3.25"
+					width="17.5"
+					height="17.5"
+					rx="4.25"
+					stroke="#000"
+					strokeOpacity=".08"
+					strokeWidth=".5"
+				/>
+			</symbol>
+			<symbol id="i-folderWindows" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.8l1.7 1.8h8.5A1.5 1.5 0 0 1 21 9.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5Z"
+					fill="#E3A21A"
+				/>
+				<path
+					d="M3 10.3A1.3 1.3 0 0 1 4.3 9h15.4a1.3 1.3 0 0 1 1.3 1.3v7.2a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5Z"
+					fill="#FFC83D"
+				/>
+				<path d="M3 11h18" stroke="#fff" strokeOpacity=".35" strokeWidth=".6" />
+			</symbol>
+			<symbol id="i-mic" viewBox="0 0 24 24" fill="none">
+				<path
+					d="M12 4.5A2.5 2.5 0 0 1 14.5 7V12A2.5 2.5 0 0 1 9.5 12V7A2.5 2.5 0 0 1 12 4.5Z"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
+				<path
+					d="M6.75 11.5A5.25 5.25 0 0 0 17.25 11.5"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+				/>
+				<path d="M12 16.75V19.25" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+				<path d="M9 19.25H15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
 			</symbol>
 			{/* icon-library.html: EmptyCircle */}
 			<symbol id="i-summaryRing" viewBox="0 0 24 24" fill="none">

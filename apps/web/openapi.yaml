@@ -123,12 +123,104 @@ paths:
               schema: { type: string }
         "400": { description: Invalid or future cursor }
         "404": { description: Unknown terminal }
+  /api/v1/voice:
+    get:
+      description: |
+        Voice dictation availability for the composer's microphone button:
+        which channel the resolved credential belongs to. The key itself never
+        appears in any response. Unavailable means no credential: an
+        environment key or the stored Step login.
+      responses:
+        "200":
+          description: Availability snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VoiceStatus" }
+        "401": { description: Authentication required }
+  /api/v1/voice/start:
+    post:
+      description: |
+        Open the one buffering session (a second start while one runs answers
+        409; one that outlived its duration limit is dropped first, so a client
+        that vanished cannot lock the endpoint). Chunks are buffered until the
+        stop, which transcribes the whole recording.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sampleRate:
+                  type: number
+                  description: >-
+                    The client's real `AudioContext.sampleRate`, used for the WAV header. A browser may refuse the
+                    requested rate, and a header that disagrees with the samples corrupts the transcript. Omitted or
+                    implausible values fall back to 24000.
+      responses:
+        "200":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId]
+                properties:
+                  sessionId: { type: string }
+        "401": { description: Authentication required }
+        "409": { description: A voice session is already running }
+  /api/v1/voice/audio:
+    post:
+      description: |
+        Buffer one base64 PCM16 chunk (100 ms slices, mono, at the rate the
+        session was started with). At most 512 KiB decoded per chunk and 10
+        minutes of audio per session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: { type: string, description: Base64 PCM16 audio }
+      responses:
+        "202": { description: Chunk buffered }
+        "400": { description: Malformed body }
+        "401": { description: Authentication required }
+        "404": { description: No active voice session }
+        "413": { description: Chunk or session exceeds the size limit }
+  /api/v1/voice/stop:
+    post:
+      description: |
+        Transcribe the buffered recording with the StepFun ASR service and end
+        the session. The complete text comes back in the reply; an empty
+        recording (or one the service recognised nothing in) answers with an
+        empty text.
+      responses:
+        "200":
+          description: Transcript
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [text]
+                properties:
+                  text: { type: string, description: The recognised text, possibly empty }
+        "401": { description: Authentication required }
+        "404": { description: No active voice session }
+        "502": { description: The ASR service could not be reached or failed }
+  /api/v1/voice/cancel:
+    post:
+      description: Discard the buffered recording without transcribing.
+      responses:
+        "200": { description: Session discarded }
+        "401": { description: Authentication required }
   /api/v1/browser:
     get:
       description: Host-wide browser tab snapshot. No engine is launched by reading it. An optional control header renews that page's lease.
       parameters:
-        - { name: x-stepcode-browser-control, in: header, schema: { type: string } }
-      responses:
+        - { name: x-stepcode-browser-control, in: header, schema: { type: string } }      responses:
         "200":
           description: Browser snapshot
           content:
@@ -168,15 +260,18 @@ paths:
   /api/v1/browser/events:
     get:
       description: |
-        Authenticated SSE with snapshot, frame and closed events. Each frame has
+        Authenticated SSE with snapshot, frame, closed and replaced events. Each frame has
         tabId, width, height (remote CSS viewport coordinates), surfaceWidth and
         surfaceHeight (the captured image in the same units; the page is its
         top-left width x height, the rest is unused window area) and base64 JPEG data.
         Chromium frames are ACKed locally; transport is capped at 15 fps with one
         pending latest frame. Network backpressure drops frames and retains only
-        the newest snapshot. Frame payloads are bounded to 2.8 million base64
+        the newest snapshot; closed and replaced are always written because the
+        stream ends right after them. Frame payloads are bounded to 2.8 million base64
         characters. The client renews its lease every five seconds through GET
-        /browser; the stream itself does not renew ownership.
+        /browser; while this stream stays attached its token keeps control past the
+        lease deadline. replaced means another page with the same client id took
+        control; that page must not reconnect by itself.
       parameters:
         - { $ref: "#/components/parameters/BrowserControl" }
       responses:
@@ -450,6 +545,18 @@ paths:
                       A custom (bring-your-own-key) model from models.json is usable
                       without a Step credential. Checked offline. When true, the
                       page does not open the sign-in gate.
+                  version:
+                    type: string
+                    description: |
+                      Product version of the running host build, e.g. `0.1.0`.
+                      Settings shows it so a window can be identified.
+                  buildTime:
+                    type: string
+                    format: date-time
+                    description: |
+                      When the installed build was produced, from the release
+                      envelope staged beside the server entry. Absent for a
+                      source checkout.
   /api/v1/account:
     get:
       description: |
@@ -720,6 +827,30 @@ paths:
         "200": { description: Image bytes }
         "413": { description: Image exceeds the preview limit }
         "415": { description: File is not an image }
+  /api/v1/workspace/open:
+    post:
+      description: >-
+        Show a known workspace folder in the system file manager (Finder on macOS, File Explorer on Windows, the
+        default handler elsewhere). Answers once the launcher has started.
+      parameters:
+        - { name: cwd, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "ok: true" }
+        "403": { description: cwd is not a known workspace }
+        "500": { description: The file manager could not be started }
+  /api/v1/workspace/site:
+    post:
+      description: >-
+        Mint the rendered-preview URL of one workspace file (HTML with its relative CSS, scripts and images). The
+        URL points at a separate loopback origin that serves only that workspace, under an unguessable per-workspace
+        token, GET/HEAD only, without directory listings; the embedded browser or the system browser loads it.
+      parameters:
+        - { name: cwd, in: query, required: true, schema: { type: string } }
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "url: http://127.0.0.1:<preview port>/<token>/<workspace-relative path>" }
+        "400": { description: Path is outside the workspace or is not a file }
+        "403": { description: cwd is not a known workspace }
   /api/v1/workspace/search:
     get:
       parameters:
@@ -905,7 +1036,7 @@ paths:
             Session snapshot including pendingClarifications and pendingSelections (in-memory requests restored after
             page reload). `permissionPreset` is the tier the kernel enforces now, which can differ from the Step
             settings (a "this session" Full Access grant is not persisted).
-            `goal` is the running goal the client draws above the composer (absent when the session has none), and
+            `goal` is the running goal the client steers from the summary board (absent when the session has none), and
             `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
           content:
             application/json:
@@ -923,6 +1054,7 @@ paths:
                         type: string
                         enum: [active, paused, blocked, usage_limited, budget_limited, complete]
                       tokensUsed: { type: integer }
+                      timeUsedSeconds: { type: integer, description: "Active-only elapsed seconds; the client ticks from it between snapshots" }
                       tokenBudget: { type: integer }
                       rounds: { type: integer, description: "Completed agent runs; progress, not a stop condition" }
                   planMode:
@@ -950,6 +1082,13 @@ paths:
                               type: string
                               enum: [background_done, background_failed, background_interrupted, background_progress, background_restarted, background_needs_input]
                             status: { type: string, enum: [running, completed, failed, aborted] }
+                        goalRound:
+                          type: integer
+                          minimum: 1
+                          description: >-
+                            On a step-goal continuation custom_message only: the round (1-based) this
+                            continuation starts, from its validated details.iteration. The client draws
+                            the flow's round separators from it.
                         thinkingTimings:
                           $ref: "#/components/schemas/ThinkingTimings"
                   policies:
@@ -1684,15 +1823,34 @@ paths:
       responses:
         "200": { description: Deleted }
         "404": { description: No such provider }
+  /api/v1/sessions/{id}/turns/{turnId}/site:
+    post:
+      description: >-
+        Mint the rendered-preview URL of a file as the turn left it: the file on disk with every later turn's patches
+        to it reversed (reverted turns skipped). The latest version is the plain site URL; an earlier one is served
+        from memory at the file's URL plus `?rev=<id>`, so relative assets still resolve. `exact` is false when a later
+        change cannot be reversed (no patch, recreated file, or edited outside the session); the URL then shows the
+        current file.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: turnId, in: path, required: true, schema: { type: string } }
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "url, exact" }
+        "400": { description: Path is outside the workspace, is not a file, or the version is too large }
   /api/v1/sessions/{id}/turns/{turnId}/revert:
     post:
       description: >-
         Reverse-apply the edit/write patches (tool result `details.patch`) of the turn that starts at
-        user entry `turnId`. All or nothing over the patched files. Hunks may have moved (later edits elsewhere
+        user entry `turnId`. Every file is checked before anything is written; a refusal (409) writes nothing, but
+        a failure while writing is returned as an error and the files already written stay written. Paths that
+        name the same file (case, symlinks) count as one file. Hunks may have moved (later edits elsewhere
         in the file) and their edge context may have changed, but the lines the turn changed must be intact.
         Successful edit/write calls without a patch (large or binary files) are left as they are and listed in
-        `skipped`; changes made through `bash` are not tracked. A `stepcode-web.turn-revert` custom message then
-        tells the model which files were restored and lists the turn in the snapshot's `revertedTurns`.
+        `skipped`; changes made through `bash` are not tracked, so a file a command changed no longer matches and is
+        refused. A file the turn created is deleted only when reversing reaches that creating write with nothing
+        left and no unpatched change to the same path. A `stepcode-web.turn-revert` custom message then tells the
+        model which files were restored and lists the turn in the snapshot's `revertedTurns`.
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
         - { name: turnId, in: path, required: true, schema: { type: string } }
@@ -1715,15 +1873,20 @@ paths:
                         path: { type: string }
                         reason: { type: string, enum: [too_large, binary, unreadable, unknown] }
         "409":
-          description: The revert was refused and nothing was written.
+          description: >-
+            The revert was refused before any file was written. `modified`: a file no longer matches the turn's
+            patches, and undoing the later turns first, newest first and each as a whole, was not found to help.
+            `conflict`: undoing the later, not yet reverted turns that depend on this turn's files first was
+            checked to let this turn undo.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   error: { type: string }
-                  code: { type: string, enum: [busy, reverted, empty, missing, conflict] }
-                  path: { type: string, description: The file that blocked it (missing, conflict) }
+                  code: { type: string, enum: [busy, reverted, empty, missing, conflict, modified] }
+                  path:
+                    { type: string, description: "The file that blocked it (missing, conflict, modified)" }
   /api/v1/sessions/{id}/policy:
     patch:
       description: >-
@@ -1837,11 +2000,11 @@ paths:
   /api/v1/sessions/{id}/goal:
     patch:
       description: |
-        One control from the goal strip. Each action runs the same `/goal` slash
-        command the CLI issues (`start`, `pause`, `resume`, `edit`, `clear`), so
-        there is one implementation of goal control. Answered 202 because a slash
-        command is a kernel prompt; the resulting goal arrives in the session
-        snapshot's `goal`.
+        One control from the summary board's goal section. Each action runs the
+        same `/goal` slash command the CLI issues (`start`, `pause`, `resume`,
+        `edit`, `clear`), so there is one implementation of goal control.
+        Answered 202 because a slash command is a kernel prompt; the resulting
+        goal arrives in the session snapshot's `goal`.
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
       requestBody:
@@ -1995,6 +2158,14 @@ components:
             properties:
               seq: { type: integer, minimum: 1 }
               data: { type: string, maxLength: 8192 }
+    VoiceStatus:
+      type: object
+      required: [available]
+      properties:
+        available: { type: boolean }
+        reason: { type: string, enum: [no-credential], description: Why dictation is unavailable }
+        channel: { type: string, enum: [step_plan, platform], description: Which StepFun service the credential belongs to }
+        keySource: { type: string, enum: [environment, auth.json], description: Where the credential comes from; never the key }
     EmbeddedBrowserSnapshot:
       type: object
       required: [revision, activeId, tabs]
@@ -2119,6 +2290,7 @@ components:
           type: array
           items: { type: string }
         disabled_tools: { type: array, items: { type: string } }
+        shared: { type: boolean, description: "false gives every session its own connection instead of the shared one" }
         oauth:
           type: object
           properties:

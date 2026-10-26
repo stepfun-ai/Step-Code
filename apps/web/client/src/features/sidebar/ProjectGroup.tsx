@@ -7,6 +7,7 @@ import type { SessionSummary } from "../../state/types";
 import { EmptyState, Icon, IconButton, LEGACY_ICONS, Popover, Tooltip } from "../../ui";
 import { openTree } from "../files/actions";
 import { closeWorkspaceMenu, toggleProjectFolded, toggleWorkspaceMenu } from "./actions";
+import { DraftRow } from "./DraftRow";
 import { SessionRow } from "./SessionRow";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 
@@ -18,10 +19,12 @@ export interface ProjectGroupProps {
 	readonly hiddenIds: ReadonlySet<string>;
 	/** The whole group is hidden by the tag filter. */
 	readonly filteredOut: boolean;
+	/** The group lists the draft placeholder row of a just-started conversation first. */
+	readonly draft?: boolean;
 }
 
 /** `section.project-group[data-cwd]` (legacy `renderSessionLists`, 848-885). */
-export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut }: ProjectGroupProps) {
+export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut, draft = false }: ProjectGroupProps) {
 	const t = useT();
 	const menuOpen = useAppStore((state) => state.ui.workspaceMenu?.cwd === cwd);
 	const action = (run: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
@@ -86,7 +89,7 @@ export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut }: 
 						<IconButton
 							className="project-action new-project-session"
 							aria-label={t("newConversationInWorkspace")}
-							onClick={action(() => startDraft(cwd))}
+							onClick={action(() => startDraft(cwd, { listed: true }))}
 						>
 							<Icon {...LEGACY_ICONS.plus} />
 						</IconButton>
@@ -95,10 +98,13 @@ export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut }: 
 			</div>
 			<div className="project-sessions">
 				<div>
+					{draft ? <DraftRow /> : null}
 					{sessions.map((session) => (
 						<SessionRow key={session.id} session={session} filteredOut={hiddenIds.has(session.id)} />
 					))}
-					{sessions.length ? null : <EmptyState className="project-empty">{t("noConversationsYet")}</EmptyState>}
+					{sessions.length || draft ? null : (
+						<EmptyState className="project-empty">{t("noConversationsYet")}</EmptyState>
+					)}
 				</div>
 			</div>
 		</section>

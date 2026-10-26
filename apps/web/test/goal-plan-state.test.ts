@@ -14,12 +14,13 @@ const goal = {
 	iteration: 3,
 };
 
-test("a goal is projected for the strip without internal fields", () => {
+test("a goal is projected for the summary section without internal fields", () => {
 	assert.deepEqual(projectGoal(goal), {
 		id: "g1",
 		objective: "map the repository",
 		status: "active",
 		tokensUsed: 120,
+		timeUsedSeconds: 30,
 		rounds: 3,
 	});
 });

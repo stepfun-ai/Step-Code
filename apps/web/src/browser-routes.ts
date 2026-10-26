@@ -72,10 +72,12 @@ export async function browserRoute(
 				(event) => {
 					if (response.destroyed || response.writableEnded) return;
 					const payload = `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;
-					// Retain only the newest metadata while blocked; never queue screenshot frames.
-					if (response.writableNeedDrain) {
-						if (event.type === "snapshot") pendingSnapshot = payload;
-					} else response.write(payload);
+					// Retain only the newest metadata while blocked; never queue screenshot frames. A control
+					// event ends the stream right after, so it is always written: a displaced page that saw only
+					// the end would take control back from its replacement.
+					if (!response.writableNeedDrain || event.type === "closed" || event.type === "replaced")
+						response.write(payload);
+					else if (event.type === "snapshot") pendingSnapshot = payload;
 				},
 				() => response.end(),
 			);

@@ -462,7 +462,9 @@ try {
 					delete next[name];
 					return next;
 				});
-				process.stdout.write(`Removed MCP server '${name}'. Restart Step to apply.\n`);
+				process.stdout.write(
+					`Removed MCP server '${name}'. Running sessions apply it before their next request.\n`,
+				);
 			}
 		} else if (subcommand === "add") {
 			const name = args[1];
@@ -514,7 +516,9 @@ try {
 								...(Object.keys(envValues).length ? { env: envValues } : {}),
 							},
 				}));
-				process.stdout.write(`Added MCP server '${name}'. Restart Step to apply.\n`);
+				process.stdout.write(
+					`Added MCP server '${name}'. Running sessions connect it before their next request.\n`,
+				);
 			}
 		} else if (subcommand === "login" || subcommand === "logout") {
 			const name = args[1];

@@ -349,7 +349,7 @@ describe("Step plugin marketplace facade", () => {
 			id: "playwright",
 		});
 		expect(installed.diagnostics.mcpServers).toEqual(["playwright"]);
-		expect(installed.diagnostics.warnings.join(" ")).toContain("server starts after Step restarts");
+		expect(installed.diagnostics.warnings.join(" ")).toContain("start the server before their next request");
 
 		await expect(installMarketplacePlugin(entry!, pluginsDir)).rejects.toThrow("already installed");
 		await expect(diagnoseStepPlugin(installed.installedPath)).resolves.toMatchObject({

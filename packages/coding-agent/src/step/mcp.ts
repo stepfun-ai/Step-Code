@@ -1,4 +1,7 @@
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -7,12 +10,13 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
+import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
 import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
 import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
+import { type StepMcpLease, StepMcpPool } from "./mcp-pool.ts";
 import { isPathContained } from "./path-containment.ts";
 import {
 	defaultStepPluginsDir,
@@ -63,6 +67,8 @@ interface ServerDeclaration {
 	tool_timeout_sec?: number;
 	enabled_tools?: string[];
 	disabled_tools?: string[];
+	/** False keeps one connection per session (stateful servers such as a browser or REPL). */
+	shared?: boolean;
 	oauth?: {
 		client_id?: string;
 		client_secret?: string;
@@ -87,6 +93,7 @@ export interface StepMcpStatus {
 }
 
 let currentMcpStatuses: StepMcpStatus[] = [];
+const sessionMcpStatuses = new WeakMap<object, StepMcpStatus[]>();
 const currentMcpToolOwners = new WeakMap<object, Map<string, string>>();
 export function getStepMcpToolOwner(toolName: string, session: object): string | undefined {
 	return currentMcpToolOwners.get(session)?.get(toolName);
@@ -94,15 +101,21 @@ export function getStepMcpToolOwner(toolName: string, session: object): string |
 function publishMcpToolOwners(
 	owners: Map<string, string>,
 	server: ConnectedServer,
-	tools: McpTool[],
-	previous: McpTool[] = [],
+	tools: readonly McpTool[],
+	previous: readonly McpTool[] = [],
 ): void {
 	for (const tool of previous) owners.delete(remoteToolName(server, tool));
 	if (server.pluginId) for (const tool of tools) owners.set(remoteToolName(server, tool), server.pluginId);
 }
 
-export function getStepMcpStatuses(): StepMcpStatus[] {
-	return currentMcpStatuses.map((status) => ({ ...status }));
+/**
+ * MCP server statuses. With a session (its `sessionManager`), the statuses that
+ * session sees; without one, those of the session that started last in this
+ * process, which is what a single-session host such as the TUI shows.
+ */
+export function getStepMcpStatuses(session?: object): StepMcpStatus[] {
+	const statuses = session ? (sessionMcpStatuses.get(session) ?? []) : currentMcpStatuses;
+	return statuses.map((status) => ({ ...status }));
 }
 
 export function formatStepMcpStatuses(statuses: readonly StepMcpStatus[] = currentMcpStatuses): string {
@@ -118,170 +131,524 @@ export function formatStepMcpStatuses(statuses: readonly StepMcpStatus[] = curre
 	return ["MCP Tools", ...lines].join("\n");
 }
 
-/** Load installed declarative MCP servers and expose their tools to Pi. */
+/**
+ * One connection per server identity for the whole process. Sessions lease
+ * from it, so `/new`, `/resume` and every open Web/Desktop chat reuse the
+ * servers already running instead of spawning another set.
+ */
+const stepMcpPool = new StepMcpPool<DiscoveredServer, ConnectedServer>({
+	key: stepMcpServerKey,
+	connect: async (item, signal, onToolsChanged) => {
+		const server = await connectStepMcpServer(item, signal, onToolsChanged);
+		server.pluginId = item.pluginId;
+		return server;
+	},
+	listTools: async (server, item) =>
+		selectDeclaredTools(
+			await listAllMcpTools(server.client, server.signal, server.catalogTimeoutMs),
+			item.declaration,
+		),
+	close: closeStepMcpServer,
+});
+
+/**
+ * How a session's `quit` shutdown releases its pooled servers. `immediate`
+ * (the default) closes a server no other session holds, which suits a process
+ * about to exit. A host that keeps running after closing one of many sessions
+ * (Web, Desktop) chooses `idle`, so reopening a chat reuses the running servers.
+ * Session replacement (`/new`, `/resume`, `/fork`, reload) always idles.
+ */
+export interface StepMcpPoolPolicy {
+	quitRelease?: "immediate" | "idle";
+	/** Grace before an unused server closes, in milliseconds. */
+	idleMs?: number;
+}
+
+let quitRelease: "immediate" | "idle" = "immediate";
+
+export function configureStepMcpPool(policy: StepMcpPoolPolicy): void {
+	if (policy.quitRelease) quitRelease = policy.quitRelease;
+	if (policy.idleMs !== undefined) stepMcpPool.setIdleMs(policy.idleMs);
+}
+
+/** Close every pooled MCP connection. Hosts call this once on process shutdown. */
+export function closeStepMcpPool(): Promise<void> {
+	return stepMcpPool.closeAll();
+}
+
+/**
+ * Connections a long-running host (Web, Desktop) holds itself, so the global
+ * servers are connected before the first chat starts and stay up between chats.
+ * The host's leases cover user-level servers only: project plugins depend on a
+ * session's folder and trust, and those sessions still lease them on demand.
+ */
+export interface StepMcpHostWarmup {
+	/**
+	 * Connect the global servers `cwd` discovers and drop the ones that are no
+	 * longer configured. Call at startup and after MCP or plugin settings change.
+	 * Failures are not reported here: a session that needs the server retries it
+	 * and reports the error in its own status.
+	 */
+	sync(cwd: string): Promise<void>;
+	/** Release every host lease; idle connections then follow the pool's grace. */
+	release(): Promise<void>;
+}
+
+export function createStepMcpHostWarmup(): StepMcpHostWarmup {
+	const held = new Map<string, StepMcpLease<ConnectedServer>>();
+	let tail: Promise<void> = Promise.resolve();
+	let released = false;
+	const sync = async (cwd: string) => {
+		if (released) return;
+		try {
+			await ensureBuiltinPluginsInstalled();
+		} catch {
+			// Best-effort: discovery still runs with whatever is already installed.
+		}
+		const discovered = (await discoverStepMcpServers(cwd, false)).filter(
+			// A private server is per session by definition; the host has none.
+			(item) => item.declaration.shared !== false,
+		);
+		if (released) return;
+		const wanted = new Map(discovered.map((item) => [stepMcpServerKey(item), item]));
+		for (const [key, lease] of held) {
+			if (wanted.has(key)) continue;
+			held.delete(key);
+			void lease.release();
+		}
+		for (const [key, item] of wanted) {
+			if (held.has(key)) continue;
+			const lease = stepMcpPool.acquire(item, {
+				// A closed connection leaves the pool; the next sync or session reconnects it.
+				onClosed: () => {
+					if (held.get(key) === lease) held.delete(key);
+					void lease.release();
+				},
+			});
+			held.set(key, lease);
+			lease.ready().catch(() => {
+				if (held.get(key) === lease) held.delete(key);
+				void lease.release({ immediate: true });
+			});
+		}
+	};
+	return {
+		// Serialized: a settings change during startup must not race the first sync.
+		sync: (cwd) => {
+			tail = tail.then(() => sync(cwd)).catch(() => undefined);
+			return tail;
+		},
+		release: async () => {
+			released = true;
+			await tail;
+			const leases = [...held.values()];
+			held.clear();
+			await Promise.all(leases.map((lease) => lease.release()));
+		},
+	};
+}
+
+/** Pooled connections and their lease counts; for diagnostics and tests. */
+export function getStepMcpPoolSnapshot(): Array<{ name: string; leases: number; connected: boolean }> {
+	return stepMcpPool.snapshot().map(({ key, leases, connected }) => ({
+		name: (JSON.parse(key.replace(/#[0-9a-f-]+$/u, "")) as { name: string }).name,
+		leases,
+		connected,
+	}));
+}
+
+/**
+ * Identity of a server connection: its published name plus everything that
+ * shapes the process or request. Edited settings produce a new key, so a new
+ * session connects with them while sessions on the old key keep theirs.
+ */
+function stepMcpServerKey(item: DiscoveredServer): string {
+	const identity = stableStringify({
+		name: item.name,
+		declaration: item.declaration,
+		provision: item.provision ?? null,
+		credentials: credentialFingerprint(item),
+	});
+	// An unshared server gets a key no other lease can match: a private connection per session.
+	return item.declaration.shared === false ? `${identity}#${randomUUID()}` : identity;
+}
+
+/**
+ * What a connection was started with beyond its declaration: the resolved
+ * child environment (it carries the Step login key) and whether a stored OAuth
+ * credential applies. A sign-in or `step mcp login` while the process runs then
+ * yields a new key, so later sessions connect with the new credential instead
+ * of reusing one started without it. Only a digest enters the key.
+ */
+function credentialFingerprint(item: DiscoveredServer): string {
+	const material = item.declaration.command
+		? stableStringify(resolveStepMcpEnvironment(item.declaration.env))
+		: item.declaration.url
+			? String(hasStoredMcpOAuthCredential(item.name, item.declaration.url, process.env))
+			: "";
+	return createHash("sha256").update(material).digest("hex").slice(0, 16);
+}
+
+function stableStringify(value: unknown): string {
+	return JSON.stringify(value, (_key, entry: unknown) =>
+		isRecord(entry)
+			? Object.fromEntries(
+					Object.keys(entry)
+						.sort()
+						.map((key) => [key, entry[key]]),
+				)
+			: entry,
+	);
+}
+
+/** One server a session uses: its lease on the pooled connection and what it published from it. */
+interface SessionServer {
+	readonly item: DiscoveredServer;
+	/**
+	 * The server's identity without the per-lease suffix a private server's pool
+	 * key carries; a change re-leases the server under its new identity.
+	 */
+	readonly identity: string;
+	readonly lease: StepMcpLease<ConnectedServer>;
+	readonly shared: boolean;
+	/** Stops this server's wait alone; session shutdown stops it through the session controller. */
+	readonly controller: AbortController;
+	status: StepMcpStatus;
+	/** The pooled connection, once this lease is ready. */
+	server?: ConnectedServer;
+	/** Settles, never rejects, once the lease has published its catalog or failed. */
+	ready: Promise<void>;
+}
+
+/** MCP state owned by one session, from `session_start` until its `session_shutdown`. */
+interface SessionMcpState {
+	readonly controller: AbortController;
+	readonly servers: Map<string, SessionServer>;
+	/** Tools this session registered, per connection, so it removes exactly what it added. */
+	readonly published: Map<ConnectedServer, McpTool[]>;
+	readonly owners: Map<string, string>;
+	/** The array status readers hold; rewritten in place so its identity stays stable. */
+	readonly statuses: StepMcpStatus[];
+	disabled: string[];
+	/** Settles once the initial discovery list is applied; its servers may still be connecting. */
+	listed: Promise<void>;
+	/** Settles once every initially discovered server has published or failed. */
+	startup: Promise<void>;
+	/** Tail of the serialized reconciliation passes. */
+	reconciling: Promise<void>;
+}
+
+function serverIdentity(item: DiscoveredServer): string {
+	return stableStringify({
+		name: item.name,
+		pluginId: item.pluginId ?? null,
+		declaration: item.declaration,
+		provision: item.provision ?? null,
+		credentials: credentialFingerprint(item),
+	});
+}
+
+async function settleServers(servers: Iterable<SessionServer>): Promise<void> {
+	await Promise.all([...servers].map((server) => server.ready));
+}
+
+/** Wait for `work`, but return as soon as `signal` aborts; the work itself keeps running. */
+async function waitUnlessAborted(work: Promise<unknown>, signal: AbortSignal | undefined): Promise<void> {
+	if (!signal) {
+		await work;
+		return;
+	}
+	if (signal.aborted) return;
+	await new Promise<void>((resolve) => {
+		const done = () => {
+			signal.removeEventListener("abort", done);
+			resolve();
+		};
+		signal.addEventListener("abort", done, { once: true });
+		void work.then(done, done);
+	});
+}
+
+/**
+ * Load installed declarative MCP servers and expose their tools to Pi.
+ *
+ * Servers are leased on `session_start`. Before each prompt, and after each
+ * turn that ran tools, the session re-reads the declarations and reconciles:
+ * it leases new servers, re-leases changed ones, and releases removed or
+ * disabled ones. A server installed while the session runs therefore reaches
+ * the next model request without a new session. A request already sent keeps
+ * its tools.
+ */
 export function createStepMcpExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
-		let servers: ConnectedServer[] = [];
-		let owners = new Map<string, string>();
-		let startup: Promise<void> | undefined;
-		let cancellation: AbortController | undefined;
-		let statuses: StepMcpStatus[] = [];
+		let session: SessionMcpState | undefined;
+
+		const publishStatuses = (state: SessionMcpState): void => {
+			state.statuses.splice(
+				0,
+				state.statuses.length,
+				...[...state.servers.values()].map((server) => server.status),
+				...state.disabled.map((name): StepMcpStatus => ({ name, status: "disabled", toolCount: 0 })),
+			);
+		};
+
+		const unpublish = (state: SessionMcpState, connection: ConnectedServer): void => {
+			const tools = state.published.get(connection);
+			if (!tools) return;
+			state.published.delete(connection);
+			publishMcpToolOwners(state.owners, connection, [], tools);
+			pi.registerTools([], { remove: tools.map((tool) => remoteToolName(connection, tool)) });
+		};
+
+		const startServer = (state: SessionMcpState, ctx: ExtensionContext, item: DiscoveredServer): SessionServer => {
+			const controller = new AbortController();
+			const signal = AbortSignal.any([state.controller.signal, controller.signal]);
+			const isCurrent = () => state.servers.get(item.name) === entry && !signal.aborted;
+			const setStatus = (status: StepMcpStatus) => {
+				// A replaced entry must not overwrite its successor's status.
+				if (state.servers.get(item.name) !== entry) return;
+				entry.status = status;
+				publishStatuses(state);
+			};
+			const lease = stepMcpPool.acquire(item, {
+				onToolsChanged: (tools) => {
+					const connection = entry.server;
+					if (!connection || !isCurrent()) return;
+					const previous = state.published.get(connection);
+					if (!previous) return;
+					pi.registerTools(
+						tools.map((tool) => createRemoteTool(connection, tool)),
+						{ remove: previous.map((tool) => remoteToolName(connection, tool)) },
+					);
+					publishMcpToolOwners(state.owners, connection, tools, previous);
+					state.published.set(connection, [...tools]);
+					setStatus({ name: item.name, status: "connected", toolCount: tools.length });
+				},
+				onRefreshFailed: (error) => {
+					if (!isCurrent()) return;
+					ctx.ui.notify(
+						`MCP server '${item.name}' catalog refresh failed; keeping the previous tools: ${error instanceof Error ? error.message : String(error)}`,
+						"warning",
+					);
+				},
+				onClosed: () => {
+					// Shutdown and a reconciliation stop remove the tools themselves.
+					if (!isCurrent()) return;
+					if (entry.server) unpublish(state, entry.server);
+					setStatus({ name: item.name, status: "failed", toolCount: 0 });
+					// The pooled connection is gone; this lease no longer holds anything.
+					void lease.release();
+				},
+			});
+			const entry: SessionServer = {
+				item,
+				identity: serverIdentity(item),
+				lease,
+				shared: item.declaration.shared !== false,
+				controller,
+				status: { name: item.name, status: "connecting", toolCount: 0 },
+				ready: Promise.resolve(),
+			};
+			state.servers.set(item.name, entry);
+			publishStatuses(state);
+			entry.ready = (async () => {
+				try {
+					const server = await lease.ready(signal);
+					entry.server = server;
+					// Publishing a server's catalog refreshes the registry and the
+					// Step prompt once. Yield first so a server that finished while
+					// the loop was busy cannot preempt input or rendering.
+					await yieldToEventLoop();
+					signal.throwIfAborted();
+					server.signal.throwIfAborted();
+					// Read after the yield: a refresh may have replaced the catalog meanwhile.
+					const tools = [...server.tools];
+					pi.registerTools(tools.map((tool) => createRemoteTool(server, tool)));
+					publishMcpToolOwners(state.owners, server, tools);
+					state.published.set(server, tools);
+					setStatus({ name: item.name, status: "connected", toolCount: tools.length });
+				} catch (error) {
+					if (signal.aborted) return;
+					await lease.release({ immediate: true });
+					const failure = describeMcpStartFailure({
+						name: item.name,
+						command: item.declaration.command ?? item.declaration.url ?? "configured server",
+						provision: item.provision,
+						error,
+					});
+					setStatus({ name: item.name, status: "failed", toolCount: 0, error: failure });
+					ctx.ui.notify(failure, "warning");
+				}
+			})();
+			return entry;
+		};
+
+		/**
+		 * Withdraw a server's tools and release its lease at once: its declaration
+		 * is gone or changed, so nothing will lease this identity again. A
+		 * connection another session or the host still holds stays open.
+		 */
+		const stopServer = async (state: SessionMcpState, entry: SessionServer): Promise<void> => {
+			entry.controller.abort();
+			if (entry.server) unpublish(state, entry.server);
+			await entry.ready;
+			await entry.lease.release({ immediate: true });
+		};
+
+		const reconcileNow = async (
+			state: SessionMcpState,
+			ctx: ExtensionContext,
+			signal: AbortSignal | undefined,
+		): Promise<void> => {
+			await state.listed;
+			const cancelled = () => state.controller.signal.aborted || signal?.aborted === true;
+			if (cancelled()) return;
+			const discovered = await discoverStepMcpServers(ctx.cwd, ctx.isProjectTrusted());
+			if (cancelled()) return;
+			const next = new Map(discovered.map((item) => [item.name, item]));
+			const disabled = disabledGlobalServerNames();
+			const stopping: SessionServer[] = [];
+			const restarting: DiscoveredServer[] = [];
+			for (const [name, entry] of state.servers) {
+				const item = next.get(name);
+				if (!item) {
+					stopping.push(entry);
+				} else if (serverIdentity(item) !== entry.identity) {
+					stopping.push(entry);
+					restarting.push(item);
+				}
+			}
+			const added = discovered.filter((item) => !state.servers.has(item.name));
+			const disabledChanged = disabled.join("\0") !== state.disabled.join("\0");
+			// An unchanged declaration set leaves the registry and prompt untouched; a
+			// server that failed with the same declaration is not retried every turn.
+			if (stopping.length === 0 && added.length === 0 && !disabledChanged) return;
+			for (const entry of stopping) if (!next.has(entry.item.name)) state.servers.delete(entry.item.name);
+			state.disabled = disabled;
+			publishStatuses(state);
+			// Withdraw a changed server's tools before its replacement registers the same names.
+			await Promise.all(stopping.map((entry) => stopServer(state, entry)));
+			if (state.controller.signal.aborted) return;
+			const started = [...restarting, ...added].map((item) => startServer(state, ctx, item));
+			if (started.length === 0) return;
+			ctx.ui.notify(`Connecting MCP: ${started.map((entry) => entry.item.name).join(", ")}`, "info");
+			// Only the servers this pass started gate the request; an initial server
+			// still connecting in the background keeps the TUI's non-blocking start.
+			await waitUnlessAborted(settleServers(started), signal);
+		};
+
+		const reconcile = async (ctx: ExtensionContext): Promise<void> => {
+			const state = session;
+			if (!state || state.controller.signal.aborted) return;
+			const run = state.reconciling.then(() => reconcileNow(state, ctx, ctx.signal));
+			state.reconciling = run.catch(() => undefined);
+			try {
+				await run;
+			} catch (error) {
+				if (!state.controller.signal.aborted)
+					ctx.ui.notify(
+						`MCP refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+						"warning",
+					);
+			}
+		};
 
 		pi.on("session_start", async (_event, ctx) => {
-			if (startup) return;
-			const controller = new AbortController();
-			cancellation = controller;
-			statuses = [];
-			currentMcpStatuses = statuses;
-			owners = new Map<string, string>();
-			if (ctx.sessionManager) currentMcpToolOwners.set(ctx.sessionManager, owners);
-			const sessionOwners = owners;
-			startup = (async () => {
+			if (session) return;
+			const state: SessionMcpState = {
+				controller: new AbortController(),
+				servers: new Map(),
+				published: new Map(),
+				owners: new Map(),
+				statuses: [],
+				disabled: [],
+				listed: Promise.resolve(),
+				startup: Promise.resolve(),
+				reconciling: Promise.resolve(),
+			};
+			session = state;
+			currentMcpStatuses = state.statuses;
+			if (ctx.sessionManager) {
+				sessionMcpStatuses.set(ctx.sessionManager, state.statuses);
+				currentMcpToolOwners.set(ctx.sessionManager, state.owners);
+			}
+			const signal = state.controller.signal;
+			state.listed = (async () => {
 				// Finish mounting the interactive session before doing discovery or
 				// spawning processes. Awaiting Promise.all in session_start kept the
 				// entire initialization path behind the slowest server.
 				await yieldToEventLoop();
-				if (controller.signal.aborted) return;
+				if (signal.aborted) return;
 				// The old marker records manifest/uninstall intent only. Executable
 				// readiness is checked for each installed built-in before connecting.
 				try {
 					const preinstalled = await ensureBuiltinPluginsInstalled();
-					if (controller.signal.aborted) return;
+					if (signal.aborted) return;
 					for (const warning of preinstalled.warnings) ctx.ui.notify(warning, "warning");
 				} catch {
 					// Best-effort: discovery still runs with whatever is already installed.
 				}
-				if (controller.signal.aborted) return;
+				if (signal.aborted) return;
 				const discovered = await discoverStepMcpServers(ctx.cwd, ctx.isProjectTrusted());
-				if (controller.signal.aborted) return;
-				statuses.push(
-					...discovered.map(
-						(item): StepMcpStatus => ({
-							name: item.name,
-							status: "connecting",
-							toolCount: 0,
-						}),
-					),
-					// Listed after the discovered servers, whose indexes the startup below writes to.
-					...disabledGlobalServerNames().map(
-						(name): StepMcpStatus => ({ name, status: "disabled", toolCount: 0 }),
-					),
-				);
-				await Promise.all(
-					discovered.map(async (item, index) => {
-						let connected: ConnectedServer | undefined;
-						let published = false;
-						let pending = false;
-						let refreshing = false;
-						const refreshCatalog = async () => {
-							if (refreshing || !published || !connected || connected.signal.aborted) return;
-							const server = connected;
-							refreshing = true;
-							try {
-								while (pending && !server.signal.aborted) {
-									// Coalesce a notification burst before listing, with at most one
-									// more pass when notifications arrive during an in-flight list.
-									await yieldToEventLoop();
-									pending = false;
-									try {
-										const tools = selectDeclaredTools(
-											await listAllMcpTools(server.client, server.signal, server.catalogTimeoutMs),
-											item.declaration,
-										);
-										const remoteTools = tools.map((tool) => createRemoteTool(server, tool));
-										await yieldToEventLoop();
-										if (server.signal.aborted || !published) return;
-										pi.registerTools(remoteTools, {
-											remove: server.tools.map((tool) => remoteToolName(server, tool)),
-										});
-										publishMcpToolOwners(sessionOwners, server, tools, server.tools);
-										server.tools = tools;
-										statuses[index] = { name: item.name, status: "connected", toolCount: tools.length };
-									} catch (error) {
-										if (server.signal.aborted || !published) return;
-										ctx.ui.notify(
-											`MCP server '${item.name}' catalog refresh failed; keeping the previous tools: ${error instanceof Error ? error.message : String(error)}`,
-											"warning",
-										);
-									}
-								}
-							} finally {
-								refreshing = false;
-							}
-						};
-						const onToolsChanged = () => {
-							pending = true;
-							void refreshCatalog();
-						};
-						try {
-							const server = await connectStepMcpServer(item, controller.signal, onToolsChanged);
-							server.pluginId = item.pluginId;
-							connected = server;
-							const remoteTools = server.tools.map((tool) => createRemoteTool(server, tool));
-							// Publishing a server's catalog refreshes the registry and the
-							// Step prompt once. Yield first so a server that finished while
-							// the loop was busy cannot preempt input or rendering.
-							await yieldToEventLoop();
-							server.signal.throwIfAborted();
-							pi.registerTools(remoteTools);
-							publishMcpToolOwners(sessionOwners, server, server.tools);
-							published = true;
-							servers.push(server);
-							server.signal.addEventListener(
-								"abort",
-								() => {
-									published = false;
-									publishMcpToolOwners(sessionOwners, server, [], server.tools);
-									if (controller.signal.aborted) return;
-									pi.registerTools([], { remove: server.tools.map((tool) => remoteToolName(server, tool)) });
-									statuses[index] = { name: item.name, status: "failed", toolCount: 0 };
-								},
-								{ once: true },
-							);
-							statuses[index] = {
-								name: item.name,
-								status: "connected",
-								toolCount: server.tools.length,
-							};
-							void refreshCatalog();
-						} catch (error) {
-							if (connected) await closeStepMcpServer(connected);
-							if (controller.signal.aborted) return;
-							const failure = describeMcpStartFailure({
-								name: item.name,
-								command: item.declaration.command ?? item.declaration.url ?? "configured server",
-								provision: item.provision,
-								error,
-							});
-							statuses[index] = { name: item.name, status: "failed", toolCount: 0, error: failure };
-							ctx.ui.notify(failure, "warning");
-						}
-					}),
-				);
+				if (signal.aborted) return;
+				state.disabled = disabledGlobalServerNames();
+				for (const item of discovered) startServer(state, ctx, item);
+				publishStatuses(state);
 			})().catch((error: unknown) => {
-				if (!controller.signal.aborted)
+				if (!signal.aborted)
 					ctx.ui.notify(
 						`MCP discovery failed: ${error instanceof Error ? error.message : String(error)}`,
 						"warning",
 					);
 			});
+			state.startup = state.listed.then(() => settleServers(state.servers.values()));
 			// Print/RPC callers expect the initial tool catalog before submitting
 			// work. Only the interactive TUI detaches startup from session binding.
-			if (ctx.mode !== "tui") await startup;
+			if (ctx.mode !== "tui") await state.startup;
 		});
 
-		pi.on("session_shutdown", async () => {
-			cancellation?.abort();
-			await startup;
-			const closing = servers;
-			for (const server of closing) publishMcpToolOwners(owners, server, [], server.tools);
-			servers = [];
-			startup = undefined;
-			if (currentMcpStatuses === statuses) currentMcpStatuses = [];
+		// Both events are awaited before the next model request snapshots its tools:
+		// a prompt's first request, and each follow-up request after tool results.
+		pi.on("before_agent_start", async (_event, ctx) => {
+			await reconcile(ctx);
+		});
+		pi.on("turn_end", async (event, ctx) => {
+			// Only a turn that ran tools continues to another request in this run;
+			// changes made outside the session are picked up on the next prompt.
+			if (event.toolResults.length > 0) await reconcile(ctx);
+		});
+
+		pi.on("session_shutdown", async (event) => {
+			const state = session;
+			if (!state) return;
+			state.controller.abort();
+			// Settle the exact promise `session_start` awaits first, then yield a
+			// macrotask, so a binding still waiting on startup resumes and the
+			// runner's later `session_start` handlers run before this shutdown
+			// finishes; finishing first let those handlers start work after their
+			// own shutdown handler had already stopped it.
+			await state.startup;
+			await yieldToEventLoop();
+			await state.reconciling;
+			await settleServers(state.servers.values());
+			const releasing = [...state.servers.values()];
+			const closing = [...state.published];
+			state.published.clear();
+			session = undefined;
+			for (const [server, tools] of closing) publishMcpToolOwners(state.owners, server, [], tools);
+			if (currentMcpStatuses === state.statuses) currentMcpStatuses = [];
 			pi.registerTools([], {
-				remove: closing.flatMap((server) => server.tools.map((tool) => remoteToolName(server, tool))),
+				remove: closing.flatMap(([server, tools]) => tools.map((tool) => remoteToolName(server, tool))),
 			});
-			await Promise.all(closing.map(closeStepMcpServer));
+			// A replacement session in this process is about to lease the same
+			// servers; only a quit may close them at once.
+			const reason = event.reason ?? "quit";
+			const immediate = reason === "quit" && quitRelease === "immediate";
+			// A private connection has nobody to reuse it, so it never idles.
+			await Promise.all(releasing.map(({ lease, shared }) => lease.release({ immediate: immediate || !shared })));
+			// Servers an earlier `/new` or `/resume` left idle would otherwise only
+			// end with the process; close them now. Held connections stay open.
+			if (immediate) await stepMcpPool.closeIdle();
 		});
 	};
 }
@@ -618,6 +985,7 @@ function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration
 				Object.entries(value[key]).filter(([, v]) => typeof v === "string"),
 			) as Record<string, string>;
 	}
+	if (typeof value.shared === "boolean") declaration.shared = value.shared;
 	for (const key of ["enabled_tools", "disabled_tools"] as const) {
 		if (Array.isArray(value[key])) declaration[key] = value[key].filter(isString);
 	}
@@ -654,7 +1022,7 @@ export async function connectStepMcpServer(
 		transport = new StdioClientTransport({
 			command,
 			args: input.declaration.args,
-			cwd: input.declaration.cwd,
+			cwd: input.declaration.cwd ?? stdioServerCwd(),
 			env,
 			stderr: "pipe",
 		});
@@ -702,6 +1070,25 @@ export async function connectStepMcpServer(
 	} finally {
 		signal.removeEventListener("abort", closeOnAbort);
 	}
+}
+
+/**
+ * Working directory for a stdio server that declares none: the host's own, by
+ * path. Inheriting it implicitly breaks once that directory is removed and
+ * recreated (a Desktop dev host runs from apps/web/dist, which every web build
+ * deletes): the child starts inside the deleted directory and Node exits on
+ * its first process.cwd(), so the handshake ends in "MCP connection closed".
+ * Node keeps the cwd path, so passing it re-resolves to the directory there
+ * now; a path that no longer exists falls back to the home directory.
+ */
+export function stdioServerCwd(): string {
+	let cwd: string | undefined;
+	try {
+		cwd = process.cwd();
+	} catch {
+		// uv_cwd fails when the directory is gone and the path was never cached.
+	}
+	return cwd && existsSync(cwd) ? cwd : homedir();
 }
 
 /** Clamp a declared timeout to a usable range, falling back to the product default. */
@@ -763,11 +1150,13 @@ export function describeMcpStartFailure(input: {
 		// plugin servers are namespaced, and `login` accepts either spelling.
 		const bare = bareServerName(input.name);
 		const quoted = /^[\w.-]+$/u.test(bare) ? bare : `'${bare.replace(/'/gu, "'\\''")}'`;
-		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${quoted}, then restart Step.`;
+		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${quoted}, then start a new session or restart Step.`;
 	}
 	if (!isMissingExecutable(input.error)) return `MCP server '${input.name}' could not start: ${detail}`;
 	const install = input.provision ? provisionInstallCommand(input.provision, input.env ?? process.env) : undefined;
-	const remedy = install ? `Install it with: ${install}, then restart Step.` : "Install it, then restart Step.";
+	const remedy = install
+		? `Install it with: ${install}, then start a new session or restart Step.`
+		: "Install it, then start a new session or restart Step.";
 	return `MCP server '${input.name}' could not start: '${input.command}' is not installed or not on PATH. ${remedy}`;
 }
 

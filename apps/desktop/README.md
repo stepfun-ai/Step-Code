@@ -15,7 +15,8 @@ What the shell adds on top of the browser version:
 - No terminal or browser needed: the server runs under Electron's bundled Node (`ELECTRON_RUN_AS_NODE=1`).
 - `window.stepcodeDesktop` (contract: `apps/web/client/src/platform/desktop-bridge.ts`, imported as
   `@step-harness/web/desktop-bridge`): native folder picker, open http(s) links in the system browser, reveal a path
-  in Finder / Explorer. The client checks for it and otherwise falls back to the server's picker / in-page browser.
+  in Finder / Explorer, and name the default browser (name + icon, macOS / Windows) for "open in browser" controls.
+  The client checks for it and otherwise falls back to the server's picker / in-page browser / a generic label.
 - The user's login-shell environment (macOS / Linux GUI launches), so the agent's bash tool finds the same `git`,
   `node`, Homebrew tools, etc. as in a terminal. On macOS/Linux, a private `node` wrapper also makes Electron's
   bundled Node available when no system `node` is on PATH, including to StepPage's installer and MCP launcher.
@@ -41,7 +42,7 @@ Electron main (src/main.ts)
  │     loads http://127.0.0.1:<port>/#token=<token>; the client exchanges it for its auth cookie
  │     navigation pinned to that origin; other http(s) links ──▶ system browser
  ├─ preload.ts (dist/preload.cjs) ── contextBridge ──▶ window.stepcodeDesktop
- └─ ipc.ts ── pickDirectory / openExternal / revealPath
+ └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser
        (only from the window's top frame on the server origin)
 ```
 

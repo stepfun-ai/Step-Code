@@ -5,6 +5,7 @@ import type { SessionInspector } from "../../state/types";
 import { Icon } from "../../ui";
 import { effectiveTaskStatus, sessionIsLive } from "./model";
 import { SummaryAgents } from "./SummaryAgents";
+import { SummaryGoal } from "./SummaryGoal";
 import { SummaryTaskStatus } from "./SummaryTaskStatus";
 
 type Task = SessionInspector["tasks"][number];
@@ -88,6 +89,8 @@ export function SummaryBoard({ data }: { readonly data?: SessionInspector }) {
 	const done = tasks.filter((task) => task.status === "completed");
 	return (
 		<div className="sb-content">
+			{/* The goal is the session's steering surface, so it leads the board. */}
+			<SummaryGoal />
 			<section className="sb-steps">
 				<div className="sb-section-heading">
 					<h3>{t("rightTasks")}</h3>

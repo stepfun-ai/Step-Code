@@ -26,14 +26,13 @@
 	place-items: center;
 	width: 76px;
 	height: 76px;
-	border-radius: 22px;
-	/* Brand tile: stays dark in both themes so the mark keeps its contrast. */
-	background: var(--brand-tile);
+	border-radius: 50%;
+	background: #ffffff;
 }
 
 .login-logo-mark {
-	width: 46px;
-	height: 46px;
+	width: 76px;
+	height: 76px;
 }
 
 .login-title {
@@ -104,10 +103,6 @@
 	width: 22px;
 	height: 22px;
 	flex: none;
-}
-/* On the filled button the arc takes the button's ink so it does not vanish into the fill. */
-.login-button.primary .login-button-mark {
-	--mark-arc: currentColor;
 }
 
 .login-badge {

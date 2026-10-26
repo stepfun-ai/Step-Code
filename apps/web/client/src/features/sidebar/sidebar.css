@@ -147,7 +147,11 @@
   background: linear-gradient(to bottom, transparent, var(--sidebar));
   pointer-events: none;
 }
-/* Frosted glass: rows scrolling under the header blur through the base tint. */
+/*
+ * Opaque, in the sidebar's own tint: a translucent bar let the titles of rows
+ * scrolling under it show through. The box shadow extends the fill over the
+ * list's 2px top padding, so no sliver of a row peeks above the bar either.
+ */
 .list-header-row {
   position: sticky;
   top: 0;
@@ -157,8 +161,8 @@
   gap: 6px;
   margin: 0 2px 8px;
   padding: 2px;
-  background: var(--sidebar-glass);
-  backdrop-filter: blur(14px) saturate(1.35);
+  background: var(--sidebar);
+  box-shadow: 0 -2px 0 var(--sidebar);
 }
 /* Rows scrolling up under the header fade out rather than showing half a row in the gap below it. */
 .list-header-row::after {
@@ -167,7 +171,7 @@
   right: -10px;
   left: -10px;
   height: 14px;
-  background: linear-gradient(var(--sidebar-glass), transparent);
+  background: linear-gradient(var(--sidebar), transparent);
   pointer-events: none;
   content: "";
 }

@@ -11,13 +11,6 @@ import { useSettingsResource } from "./actions";
 import { PageHeader, ResourceState, SectionHeader, StatusDot } from "./parts";
 import "./account.css";
 
-const SESSION_LABELS: Readonly<Record<LoginReport["session"]["state"], string>> = {
-	ready: "settingsAccountSessionReady",
-	expiring: "settingsAccountSessionExpiring",
-	expired: "settingsAccountSessionExpired",
-	missing: "settingsAccountSessionMissing",
-};
-
 const PROFILE_LABELS: Readonly<Record<string, string>> = {
 	step_plan: "settingsAccountStepPlanCn",
 	step_plan_oversea: "settingsAccountStepPlanGlobal",
@@ -172,13 +165,6 @@ export function AccountPage() {
 					/>
 					{login?.userId && (
 						<span className="settings-account-uid">{t("settingsAccountUid", { uid: login.userId })}</span>
-					)}
-					{login?.session && (
-						<span className="settings-account-uid" id="settingsAccountSession">
-							{t("settingsAccountSession", {
-								state: t(SESSION_LABELS[login.session.state]),
-							})}
-						</span>
 					)}
 				</div>
 				{/* Nothing to sign out of without an account. */}

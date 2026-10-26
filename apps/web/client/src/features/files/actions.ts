@@ -301,6 +301,29 @@ export async function toggleDeliveryFile(cwd: string, path: string): Promise<voi
 	await openFile(cwd, path, /\.mdx?$/i.test(path));
 }
 
+/**
+ * The rendered-preview URL of a workspace file: a separate loopback origin the Host serves the workspace from, so
+ * a delivered page loads its relative CSS, scripts and images in the embedded or the system browser.
+ */
+export async function workspaceSiteUrl(cwd: string, path: string): Promise<string> {
+	return (await api<{ url: string }>(workspaceApi(cwd, "/site", { path }), { method: "POST" })).url;
+}
+
+/**
+ * The rendered-preview URL of a file as the turn `turnId` left it, so each turn's delivery shows its own
+ * version. `exact` is false when a later change could not be reversed and the URL shows the current file.
+ */
+export async function turnSiteUrl(
+	sessionId: string,
+	turnId: string,
+	path: string,
+): Promise<{ readonly url: string; readonly exact: boolean }> {
+	const query = new URLSearchParams({ path });
+	return api(`/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/site?${query}`, {
+		method: "POST",
+	});
+}
+
 /* ── Turn changes ────────────────────────────────────────────────────────── */
 
 /**
@@ -323,6 +346,23 @@ export function openTurnChanges(turnId: string, path?: string): void {
 			},
 		};
 	});
+}
+
+/**
+ * A delivery card's "view changes": show its turn's diff unfolded at the file, or close the panel when
+ * that turn's changes are already showing on this file, keeping focus on the card.
+ */
+export function toggleDeliveryChanges(turnId: string, path: string): void {
+	const state = getState();
+	if (
+		activeRightPanel(state) === "changes" &&
+		state.preview.changes?.turnId === turnId &&
+		state.preview.changes.focus === path
+	) {
+		openRightPanel(null);
+		return;
+	}
+	openTurnChanges(turnId, path);
 }
 
 /** Fold or unfold one file's diff in the changes view. */

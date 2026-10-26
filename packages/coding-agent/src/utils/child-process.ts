@@ -1,6 +1,7 @@
 import {
 	type ChildProcess,
 	type ChildProcessByStdio,
+	execFile as nodeExecFile,
 	spawn as nodeSpawn,
 	spawnSync as nodeSpawnSync,
 	type SpawnOptions,
@@ -23,6 +24,45 @@ export function spawnProcess(
 export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess;
 export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess {
 	return process.platform === "win32" ? crossSpawn(command, args, options) : nodeSpawn(command, args, options);
+}
+
+export interface ExecFileTextOptions {
+	cwd?: string;
+	env?: NodeJS.ProcessEnv;
+	signal?: AbortSignal;
+	timeout?: number;
+	maxBuffer?: number;
+}
+
+/** Captured output of a finished `execFileText` call. */
+export interface ExecFileTextResult {
+	stdout: string;
+	stderr: string;
+}
+
+/**
+ * Run an executable and capture its output as UTF-8 text.
+ *
+ * Use this instead of `promisify(execFile)`. The promisified form relies on a
+ * custom-promisify hook that Electron's Node runtime does not honour (the
+ * Desktop host runs as `ELECTRON_RUN_AS_NODE=1`): there it resolves with the
+ * stdout string itself, so `result.stdout` is undefined and every caller that
+ * reads it fails. The callback form passes both streams in every runtime.
+ *
+ * A failure rejects with the original error, carrying `stdout` and `stderr`.
+ */
+export function execFileText(
+	command: string,
+	args: readonly string[],
+	options: ExecFileTextOptions = {},
+): Promise<ExecFileTextResult> {
+	return new Promise((resolve, reject) => {
+		nodeExecFile(command, [...args], { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+			const output = { stdout: String(stdout ?? ""), stderr: String(stderr ?? "") };
+			if (error) reject(Object.assign(error, output));
+			else resolve(output);
+		});
+	});
 }
 
 export function spawnProcessSync(

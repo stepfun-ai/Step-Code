@@ -7,6 +7,8 @@
 import "./files.css";
 // Registers the side-answer tab actions with `state/session.ts` at module load.
 import "./side-answers.ts";
+// Scopes file preview tabs to the session that opened them, also at module load.
+import "./session-scope.ts";
 
 export { FileTreePanel } from "./FileTreePanel";
 /** Code shown outside the preview: a tool call's excerpt and diff use the same tokens and families. */

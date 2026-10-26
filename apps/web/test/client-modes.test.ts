@@ -76,15 +76,16 @@ test("each mode carries its icon, labels and placeholder in every locale", () =>
 
 test("each mode has its accent and lead theme in composer.css", () => {
 	// A mode is one metadata entry plus its CSS accent (see modes.ts): the card
-	// paints through `[data-mode]`, the prompt's lead chip through
-	// `.prompt-mode[data-mode]`, and the ＋ menu row through its per-mode class.
-	// This keeps a new mode from rendering unthemed.
+	// paints through `[data-mode]` (its --mode-accent also colours the chip),
+	// and the ＋ menu row through its per-mode class. Lead chips render in the
+	// sent format's own look — one shared rule, no per-mode chip theming.
 	const css = readFileSync(new URL("../client/src/features/composer/composer.css", import.meta.url), "utf8");
 	for (const mode of MODES) {
 		assert.ok(css.includes(`[data-mode="${mode.id}"]`), `${mode.id}: no composer-card accent block`);
-		assert.ok(css.includes(`.prompt-mode[data-mode="${mode.id}"]`), `${mode.id}: no prompt lead theme`);
-		assert.ok(css.includes(`.control-option--${mode.id}`), `${mode.id}: no ＋ menu row class`);
+		assert.ok(css.includes(".control-option--" + mode.id), `${mode.id}: no ＋ menu row class`);
 	}
+	assert.ok(css.includes(".prompt-mode"), "no mode lead chip rule");
+	assert.ok(css.includes(".prompt-command"), "no plain-command lead chip rule");
 	// Plain leading commands share the lead shape through their own class.
 	assert.ok(css.includes(".prompt-command"), "no plain-command lead class");
 });

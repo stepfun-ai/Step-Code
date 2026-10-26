@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
 	type AgentSession,
@@ -99,6 +99,8 @@ import { projectSubagentNotification } from "./subagent-notification.ts";
 import { TextInputBroker, type TextInputEvent, textInput } from "./text-input.ts";
 import { savedThinkingTimings, THINKING_TIMING_TYPE, ThinkingClock, type ThinkingTimings } from "./thinking-timing.ts";
 import {
+	type FileAtTurn,
+	fileAtTurnEnd,
 	revertedTurnIds,
 	type SkippedChange,
 	TURN_REVERT_TYPE,
@@ -184,11 +186,13 @@ export interface WebQueueState {
 export type WebSessionStatus = "idle" | "running" | "waiting" | "completed" | "failed";
 
 /**
- * MCP servers of the host process. The kernel keeps one status list, written
- * by the session that started last; the Web host renders no `/mcp` notify text.
+ * MCP server statuses. With a session manager, what that session connected;
+ * otherwise the list of the session that started last in this process. Servers
+ * are pooled per process, so sessions share connections, but each session
+ * still discovers its own set (project plugins depend on its cwd and trust).
  */
-export function mcpStatuses(): StepMcpStatus[] {
-	return getStepMcpStatuses();
+export function mcpStatuses(session?: object): StepMcpStatus[] {
+	return getStepMcpStatuses(session);
 }
 
 /** One `/btw` answer as the rail shows it. */
@@ -572,6 +576,20 @@ function modelsMatch(left: { provider: string; id: string }, right: { provider: 
 	return left.provider === right.provider && left.id === right.id;
 }
 
+/**
+ * The round a goal continuation message starts (the extension's
+ * `details.iteration` counts completed runs), for the flow's round separator.
+ * Validated like the subagent notification: a malformed number must not
+ * invent a round.
+ */
+function goalRoundOf(entry: SessionEntry): number | undefined {
+	if (entry.type !== "custom_message" || entry.customType !== "step-goal") return undefined;
+	const iteration = (entry.details as { iteration?: unknown } | undefined)?.iteration;
+	return typeof iteration === "number" && Number.isSafeInteger(iteration) && iteration >= 0
+		? iteration + 1
+		: undefined;
+}
+
 export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 	// Only assistant turns carry usage; other message kinds have none to report.
 	const usage = entry.type === "message" && entry.message.role === "assistant" ? entry.message.usage : undefined;
@@ -579,6 +597,7 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		entry.type === "custom_message" ? projectSubagentNotification(entry.customType, entry.details) : undefined;
 	// The command echo's text rides the custom entry's data.
 	const echo = commandEchoOf(entry);
+	const goalRound = goalRoundOf(entry);
 	return {
 		id: entry.id,
 		type: entry.type,
@@ -587,6 +606,7 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
 		...(notification ? { details: notification } : {}),
+		...(goalRound === undefined ? {} : { goalRound }),
 		...(echo === undefined ? {} : { customType: COMMAND_ECHO_TYPE, command: echo }),
 		// A compaction row shows what it replaced: the summary, the prompt volume
 		// before it, and the entry that stays canonical after it.
@@ -620,7 +640,7 @@ export function projectEntries(entries: readonly SessionEntry[]): Record<string,
 	});
 }
 
-/** The goal strip's data, or undefined when the session has no goal to show. */
+/** The summary board's goal section data, or undefined when the session has no goal to show. */
 export function projectGoal(goal: StepGoalRecord | undefined): Record<string, unknown> | undefined {
 	if (!goal) return undefined;
 	return {
@@ -628,6 +648,8 @@ export function projectGoal(goal: StepGoalRecord | undefined): Record<string, un
 		objective: goal.objective,
 		status: goal.status,
 		tokensUsed: goal.tokensUsed,
+		// Active-only elapsed time; the client ticks from it between refreshes.
+		timeUsedSeconds: goal.timeUsedSeconds,
 		...(goal.tokenBudget === undefined ? {} : { tokenBudget: goal.tokenBudget }),
 		// Completed runs, not a stop condition: the client shows it as progress.
 		rounds: goal.iteration,
@@ -731,6 +753,15 @@ export class WebSession {
 	private lastRunAborted = false;
 	/** The kernel's retry of a failed model request, while one is scheduled or running. */
 	private readonly retry = new RetryTracker();
+	/** Settles when the bound session's `session_start` handlers (MCP startup included) have finished. */
+	private extensionsReady: Promise<void> = Promise.resolve();
+	/** Startup of the bound session; replaced on fork or /new so a stale binding cannot report into it. */
+	private extensionsStartup: { settled: boolean } = { settled: true };
+	/**
+	 * A sent message waiting for extension startup before it becomes a prompt.
+	 * Other messages queue behind it, and `interrupt` cancels it back into the queue.
+	 */
+	private startingPrompt?: { cancelled: boolean };
 	/** One background attempt to name this session after its first prompt has run. */
 	private sessionTitleGenerated = false;
 	/**
@@ -1075,7 +1106,12 @@ export class WebSession {
 				setImmediate(() => this.dispatchQueued());
 			}
 		});
-		void session.bindExtensions({
+		// Extension startup (MCP servers above all) registers tools after binding.
+		// A prompt sent before it settles goes out without them, so the first
+		// message of a new chat could not call any MCP tool. `send` waits on this.
+		const bound = { settled: false };
+		this.extensionsStartup = bound;
+		const binding = session.bindExtensions({
 			mode: "rpc",
 			uiContext: webUiContext(
 				this.broker,
@@ -1095,6 +1131,21 @@ export class WebSession {
 			},
 			onError: (error) => this.emit({ type: "error", message: error.error }),
 		});
+		this.extensionsReady = binding.then(
+			() => {
+				bound.settled = true;
+			},
+			(caught: unknown) => {
+				bound.settled = true;
+				// A failed startup keeps the tools it did register; the session stays
+				// usable, so report it instead of blocking prompts.
+				if (this.extensionsStartup === bound)
+					this.emit({
+						type: "error",
+						message: `Extension startup failed: ${caught instanceof Error ? caught.message : String(caught)}`,
+					});
+			},
+		);
 	}
 
 	private setStatus(status: WebSessionStatus, unread = this.unread): void {
@@ -1193,6 +1244,41 @@ export class WebSession {
 	async send(text: string, attachments: readonly WebAttachment[] = [], followUp = false): Promise<void> {
 		if (this.isReverting()) throw new Error("Wait for the revert to finish");
 		this.unread = false;
+		if (!this.extensionsStartup.settled) {
+			if (this.startingPrompt) {
+				// A second message before the first could start waits behind it.
+				this.queue.add({ text, attachments, files: [] });
+				return;
+			}
+			const starting = { cancelled: false };
+			this.startingPrompt = starting;
+			const before = this.status;
+			// The page already shows the pending turn; report it as running so
+			// further messages queue behind it instead of racing it.
+			if (before !== "waiting") this.setStatus("running", false);
+			try {
+				await this.extensionsReady;
+			} finally {
+				if (this.startingPrompt === starting) this.startingPrompt = undefined;
+			}
+			if (starting.cancelled) {
+				// Stopped before it began: keep what the user sent, like a stopped turn does.
+				this.queue.prepend([{ text, attachments }]);
+				return;
+			}
+			try {
+				await this.promptNow(text, attachments, followUp);
+			} finally {
+				// A message the kernel handled without a run (an extension command)
+				// never emits agent_start/agent_settled; do not leave it "running".
+				if (this.status === "running" && !this.session.isStreaming) this.setStatus(before, false);
+			}
+			return;
+		}
+		await this.promptNow(text, attachments, followUp);
+	}
+
+	private async promptNow(text: string, attachments: readonly WebAttachment[], followUp: boolean): Promise<void> {
 		this.echoCommand(text);
 		this.maybeGenerateSessionTitle(text);
 		const images = imagesOf(attachments);
@@ -1270,7 +1356,13 @@ export class WebSession {
 
 	/** Whether a message sent now has to wait: a run is active, the context is being compacted, or the session waits on the user. */
 	private mustQueue(): boolean {
-		return this.session.isStreaming || this.session.isCompacting || this.status === "waiting" || this.isReverting();
+		return (
+			this.session.isStreaming ||
+			this.session.isCompacting ||
+			this.startingPrompt !== undefined ||
+			this.status === "waiting" ||
+			this.isReverting()
+		);
 	}
 
 	/**
@@ -1582,7 +1674,7 @@ export class WebSession {
 				...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
 				toolCount: this.session.getActiveToolNames().length,
 				skillCount: this.skills().length,
-				mcpServerNames: mcpStatuses().map((status) => status.name),
+				mcpServerNames: mcpStatuses(this.session.sessionManager).map((status) => status.name),
 			},
 		});
 	}
@@ -1699,6 +1791,7 @@ export class WebSession {
 	async interrupt(): Promise<void> {
 		this.clarifications.clear();
 		this.holdQueue = true;
+		if (this.startingPrompt) this.startingPrompt.cancelled = true;
 		await this.session.abort();
 		const pending = this.session.clearQueue();
 		const steering = this.steeringImages.match(pending.steering);
@@ -1841,7 +1934,7 @@ export class WebSession {
 			stats: { tokens: stats.tokens, cost: stats.cost, contextUsage: stats.contextUsage },
 			skillCount: this.skills().length,
 			mcpScope: "process",
-			mcp: mcpStatuses().map(({ name, status }) => ({ name, status })),
+			mcp: mcpStatuses(this.session.sessionManager).map(({ name, status }) => ({ name, status })),
 		};
 	}
 
@@ -1881,6 +1974,11 @@ export class WebSession {
 	 * turn): otherwise it still believes its edits are on disk. The same entry
 	 * marks the turn as reverted, so the state follows the session branch.
 	 */
+	/** `path` as the turn `turnId` left it, for a rendered preview of that turn's delivery. */
+	fileAtTurn(turnId: string, path: string): Promise<FileAtTurn> {
+		return fileAtTurnEnd(this.session.sessionManager.getBranch(), turnId, path, this.cwd);
+	}
+
 	async revertTurn(turnId: string): Promise<{ paths: string[]; skipped: readonly SkippedChange[] }> {
 		if (this.status === "running" || this.status === "waiting")
 			throw new TurnRevertError("busy", "Stop the running turn first");
@@ -1899,6 +1997,7 @@ export class WebSession {
 	}
 
 	async close(): Promise<void> {
+		if (this.startingPrompt) this.startingPrompt.cancelled = true;
 		this.clarifications.clear();
 		this.selections.clear();
 		this.textInputs.clear();
@@ -2123,15 +2222,31 @@ export class WebSessionStore {
 				.filter((session) => !isChildAgentSession(session))
 				.map(async (session) => {
 					let cwdAvailable = false;
-					try {
-						cwdAvailable = session.cwd ? (await stat(session.cwd)).isDirectory() : false;
-					} catch {
-						// A session with a removed cwd remains readable and appears under Recent.
+					// The folder name a session row carries is the key the sidebar groups
+					// by, so it has to be spelled the way the workspace registry stores it.
+					// Otherwise removing a workspace under one name leaves its sessions
+					// grouped under another and the project stays listed.
+					let cwd = session.cwd;
+					if (cwd) {
+						try {
+							cwd = await realpath(cwd);
+							cwdAvailable = (await stat(cwd)).isDirectory();
+						} catch {
+							// A session with a removed cwd remains readable and appears under
+							// Recent; the recorded spelling is all that is left of the folder.
+							cwdAvailable = false;
+						}
 					}
 					// Full message text is for searching only; the session index serves search now.
 					const { allMessagesText: _allMessagesText, ...summary } = session;
 					const live = this.sessions.get(session.id)?.liveStatus();
-					return { ...summary, archived: this.metadata.isArchived(session.id), cwdAvailable, ...live };
+					return {
+						...summary,
+						...(cwd ? { cwd } : {}),
+						archived: this.metadata.isArchived(session.id),
+						cwdAvailable,
+						...live,
+					};
 				}),
 		);
 	}

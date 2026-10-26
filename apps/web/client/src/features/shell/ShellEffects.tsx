@@ -19,6 +19,7 @@ import { openTree, setPreviewOpen } from "../files/actions";
 import { closeTopmostSettingsLayer } from "../settings/actions";
 import { closeSearch, closeWorkspaceMenu, openSearch } from "../sidebar/actions";
 import { toggleTerminalDock } from "../terminal/actions";
+import { requestVoiceStop, voiceRecording } from "../voice/actions";
 import { chooseWorkspaceFolder, closeWorkspaceRemoval } from "../workspace/actions";
 import { closeLogoutConfirm, confirmLogout, toggleSidebar, watchSystemTheme } from "./actions";
 
@@ -32,6 +33,12 @@ import { closeLogoutConfirm, confirmLogout, toggleSidebar, watchSystemTheme } fr
 function handleEscape(): void {
 	const state = getState();
 	const { ui } = state;
+	// A running dictation owns the microphone; Escape ends it before anything
+	// else sees the key, so a stop never also closes an overlay.
+	if (voiceRecording()) {
+		requestVoiceStop();
+		return;
+	}
 	// A kernel question blocks its session and sits above everything else;
 	// Escape dismisses it, which the kernel reads as "cancel".
 	const selection = pendingSelection(state);

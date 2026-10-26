@@ -85,7 +85,8 @@
 	display: none;
 }
 
-.session-row {
+.session-row,
+.draft-row {
 	position: relative;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
@@ -98,21 +99,25 @@
 	cursor: pointer;
 	transition: background-color var(--fast);
 }
-.session-row:hover {
+.session-row:hover,
+.draft-row:hover {
 	background: var(--hover);
 }
 /* Selection is a flat fill: no ring, shadow or spine competing with the row's own rounded edge. */
-.session-row.active {
+.session-row.active,
+.draft-row.active {
 	background: var(--selected);
 }
 /* While the market or cron covers the pane, the sidebar entry for it is the one selection. */
 .sidebar:has(.sidebar-action[aria-current="page"]) .session-row.active {
 	background: none;
 }
-.session-row.active .session-title {
+.session-row.active .session-title,
+.draft-row.active .session-title {
 	color: var(--ink);
 	font-weight: 500;
 }
+
 /* On the selection fill the muted time drops under 4.5:1 in the dark theme; one step up keeps it legible. */
 .session-row.active .session-meta {
 	color: var(--ink-2);
@@ -128,6 +133,8 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
+	/* Grows so the meta column (time + diamond) rides to the row's right end. */
+	flex: 1;
 	min-width: 0;
 }
 .tag-diamond {
@@ -141,10 +148,8 @@
 	transform: rotate(45deg);
 }
 .session-tag-button {
-	display: grid;
-	place-items: center;
-	/* The slot is always reserved so the meta column never changes width on hover. */
-	visibility: hidden;
+	/* Hover-only and takes the time's place; the two never show together. */
+	display: none;
 	width: 22px;
 	height: var(--control-h-xs);
 	border-radius: var(--radius-chip);
@@ -153,7 +158,8 @@
 .session-row:hover .session-tag-button,
 .session-tag-button[aria-expanded="true"],
 .session-tag-button:focus-visible {
-	visibility: visible;
+	display: grid;
+	place-items: center;
 }
 .session-tag-button:hover {
 	background: var(--selected);
@@ -215,10 +221,8 @@
 	background: var(--success);
 }
 .session-menu-button {
-	display: inline-grid;
-	place-items: center;
-	/* Same reserved slot as the tag button: a stable meta column. */
-	visibility: hidden;
+	/* Hover-only, like the tag button: it replaces the time, not sits beside it. */
+	display: none;
 	width: 22px;
 	height: var(--control-h-xs);
 	border-radius: var(--radius-chip);
@@ -228,15 +232,21 @@
 .session-row:hover .session-menu-button,
 .session-menu-button[aria-expanded="true"],
 .session-menu-button:focus-visible {
-	visibility: visible;
+	display: inline-grid;
+	place-items: center;
 }
 .session-time {
 	position: relative;
-    top: 1px;
+	top: 1px;
+}
+/* Hover (or a menu anchored open) swaps the time for the hover actions; the diamond keeps its corner. */
+.session-row:hover .session-time,
+.session-row:has(.session-menu-button[aria-expanded="true"]) .session-time,
+.session-row:has(.session-tag-button[aria-expanded="true"]) .session-time {
+	display: none;
 }
 .session-meta > .session-tag {
 	display: block;
-	margin-left: auto;
 }
 .grouped-view {
 	position: relative;
@@ -315,12 +325,17 @@
 .group-section.folded .group-sessions {
 	display: none;
 }
-.grouped-view .session-row {
-	padding-right: 28px;
-}
+/* In the grouped view the right edge is the status dot's slot; with no dot to show, the time takes it. */
 .grouped-view .session-row .session-dot {
 	right: 10px;
 	left: auto;
+}
+.grouped-view .session-row:is(.running, .waiting, .failed, .unread) .session-time {
+	display: none;
+}
+/* The hover menu takes the dot's corner; the status badge still tells the state. */
+.grouped-view .session-row:hover .session-dot {
+	opacity: 0;
 }
 .grouped-view .session-tag-button,
 .grouped-view .tag-diamond {

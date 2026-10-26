@@ -27,6 +27,18 @@ test("origin-less requests remain compatible with same-origin clients", () => {
 	assert.equal(auth.authorize(cookie, undefined), true);
 });
 
+test("same-site pages on other loopback ports cannot ride the cookie", () => {
+	const auth = new WebAuth(["http://127.0.0.1:3077"]);
+	const cookie = auth.exchange(auth.getLaunchToken(), undefined);
+
+	assert.ok(cookie);
+	assert.equal(auth.authorize(cookie, undefined, "same-origin"), true);
+	assert.equal(auth.authorize(cookie, undefined, "none"), true);
+	// An <img> or navigation from a rendered preview on 127.0.0.1:<other port> sends no Origin.
+	assert.equal(auth.authorize(cookie, undefined, "same-site"), false);
+	assert.equal(auth.authorize(cookie, undefined, "cross-site"), false);
+});
+
 test("a persisted secret keeps issued cookies valid across a restart", () => {
 	const directory = mkdtempSync(join(tmpdir(), "stepcode-web-auth-"));
 	const secretPath = join(directory, "web-auth-secret");

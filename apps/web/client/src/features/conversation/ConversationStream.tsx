@@ -1,12 +1,15 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useLocale, useT } from "../../i18n";
 import { collectTurnChanges } from "../../lib/turn-changes";
+import { showToast } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
-import type { SteeringMessage, TimelineItem } from "../../state/types";
+import type { MessageTimelineItem, SteeringMessage, TimelineItem } from "../../state/types";
 import { Icon } from "../../ui";
+import { Composer } from "../composer";
 import { ClarificationPanel } from "./ClarificationPanel";
 import { CommandRow } from "./CommandRow";
 import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
+import { GoalRoundRow } from "./GoalRoundRow";
 import { MessageActions, MessageItem } from "./MessageItem";
 import { NoticeRow } from "./NoticeRow";
 import { PlanReviewCard } from "./PlanReviewCard";
@@ -21,9 +24,8 @@ import { RetryRow } from "./RetryRow";
 import { ThinkingDisclosure } from "./ThinkingDisclosure";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { ApprovalCard, ToolRow } from "./TimelineRows";
-import { TurnArtifacts } from "./TurnArtifacts";
 import { TurnChangesCard } from "./TurnChangesCard";
-import { turnArtifacts } from "./turn-artifacts";
+import { type TurnArtifact, turnArtifacts, withTurnChanges } from "./turn-artifacts";
 import { collectTurnFooters } from "./turn-footers";
 
 /**
@@ -74,19 +76,21 @@ const STICK_THRESHOLD = 48;
  * Opening a session or sending a message pins it again.
  */
 export function ConversationStream() {
+	const t = useT();
 	const items = useAppStore((state) => state.timelineItems);
 	const pendingTurn = useAppStore((state) => state.pendingTurn);
 	// Sent with "立即" or Cmd/Ctrl+Enter: the kernel reads them after the current tool call; shown already.
 	const steering = useAppStore((state) => state.current?.steeringMessages ?? NO_STEERING);
 	const sessionId = useAppStore((state) => state.current?.id ?? "");
-	const opening = useAppStore((state) => state.ui.openingSession !== null);
+	// Before the first bootstrap pass picks a session or a draft there is no session to draw yet: treat it as
+	// opening, so the pane never paints the centred new-session layout for a conversation that is about to arrive.
+	const opening = useAppStore((state) => !state.booted || state.ui.openingSession !== null);
 	const cwd = useAppStore((state) => state.current?.cwd ?? "");
 	const status = useAppStore((state) => state.current?.status);
 	const compacting = useAppStore((state) => state.compacting);
 	const notices = useAppStore((state) => state.notices);
 	const revertedTurns = useAppStore((state) => state.current?.revertedTurns);
 	// Shown with a sent message's timestamp; the transcript stores no per-message model.
-	const modelId = useAppStore((state) => state.current?.model?.id);
 	// An interrupted turn has no finished reply, so it gets no model and no time.
 	const lastRunAborted = useAppStore((state) => state.current?.lastRunAborted === true);
 	const reveal = useAppStore((state) => state.ui.revealEntry);
@@ -107,10 +111,31 @@ export function ConversationStream() {
 		() => new Map(collectTurnFooters(items, status, pendingTurn !== null).map((turn) => [turn.lastIndex, turn])),
 		[items, status, pendingTurn],
 	);
-	const artifactsAfter = useMemo(
-		() => new Map([...footerAfter].map(([index, footer]) => [index, turnArtifacts(items, footer, cwd)])),
-		[footerAfter, items, cwd],
-	);
+	// Each delivery carries its own turn's change, so its card opens that turn's diff, not the file as it is now.
+	const artifactsAfter = useMemo(() => {
+		const changesByTurn = new Map(turns.map((turn) => [turn.turnId, turn]));
+		return new Map(
+			[...footerAfter].map(([index, footer]) => [
+				index,
+				withTurnChanges(turnArtifacts(items, footer, cwd), changesByTurn.get(footer.turnId), cwd),
+			]),
+		);
+	}, [footerAfter, items, cwd, turns]);
+	/*
+	 * Each turn's deliverables attach to the bubble that closed it, as the
+	 * answer handing its files over, instead of a strip after the whole turn.
+	 */
+	const attachmentsFor = useMemo(() => {
+		const perMessage = new Map<MessageTimelineItem, readonly TurnArtifact[]>();
+		let closing: MessageTimelineItem | null = null;
+		items.forEach((item, index) => {
+			if (item.kind === "message" && item.role === "user") closing = null;
+			if (item.kind === "message" && item.role === "assistant") closing = item;
+			const artifacts = footerAfter.get(index) ? artifactsAfter.get(index) : undefined;
+			if (artifacts?.length && closing) perMessage.set(closing, artifacts);
+		});
+		return perMessage;
+	}, [footerAfter, artifactsAfter, items]);
 
 	// A new session or a sent message: follow the bottom again.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the session id and the pending messages are the triggers.
@@ -123,18 +148,29 @@ export function ConversationStream() {
 		if (stick.current) scrollToEnd(streamRef.current);
 	}, [items, locale]);
 	// A search hit: once its session's timeline is drawn, centre the entry and stop following the end.
+	// The reveal is cleared only after the lookup. Clearing it first and giving up
+	// when the row is absent left the reader at the newest message with no
+	// explanation, which reads as "the jump went to the end".
 	useLayoutEffect(() => {
 		if (!reveal || reveal.sessionId !== sessionId || !items.length) return;
-		setUi({ revealEntry: null });
 		const target = innerRef.current?.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(reveal.entryId)}"]`);
-		if (!target) return;
+		setUi({ revealEntry: null });
+		if (!target) {
+			// A hit can name a row this transcript does not draw: the message belongs
+			// to a branch the user rewound or retried away from (the file keeps those
+			// rows, the page renders the live branch), or the entry is one the index
+			// covers but the transcript has no row for. Say which, and say where the
+			// reader ended up.
+			showToast(t("revealNotFound"));
+			return;
+		}
 		stick.current = false;
 		target.scrollIntoView({ block: reveal.block ?? "center", behavior: reveal.behavior });
 		target.animate([{ backgroundColor: "var(--selection)" }, { backgroundColor: "transparent" }], {
 			duration: 1600,
 			easing: "ease-out",
 		});
-	}, [reveal, sessionId, items]);
+	}, [reveal, sessionId, items, t]);
 	// The live reply grows between store updates (smooth reveal), so watch the size too.
 	useEffect(() => {
 		const inner = innerRef.current;
@@ -167,6 +203,46 @@ export function ConversationStream() {
 		previousRows.current = next;
 		return next;
 	}, [items, running, breaks]);
+	// Rewriting swaps the message for the compact edit composer, in place.
+	const editingPrompt = useAppStore((state) => state.ui.editingPrompt);
+	// A turn that starts under an open editor (a goal round fires at any idle
+	// boundary) leaves its fork stale; close it instead of keeping a dead
+	// composer parked mid-flow.
+	useEffect(() => {
+		if (running && editingPrompt) setUi({ editingPrompt: null });
+	}, [running, editingPrompt]);
+	/*
+	 * The rewrite target is a recorded message. Live rows — the streamed reply and the echo of the prompt being
+	 * sent — carry no entry id yet, and `editingPrompt?.entryId` is `undefined` when nothing is being rewritten:
+	 * comparing the two mounted an empty editor in the middle of every turn, beside the real composer.
+	 */
+	const editingEntryId = editingPrompt?.entryId ?? "";
+	// Only the latest prompt is rewritable: fork to the entry before it.
+	// A command echo is a prompt too: the newest of either kind is rewritable.
+	let lastUserIndex = -1;
+	for (let index = items.length - 1; index >= 0; index -= 1) {
+		const entry = items[index];
+		if (entry.kind === "command" || (entry.kind === "message" && entry.role === "user")) {
+			lastUserIndex = index;
+			break;
+		}
+	}
+	let rewriteBefore: string | undefined;
+	for (let index = lastUserIndex - 1; index >= 0; index -= 1) {
+		const entry = items[index];
+		if (entry.kind === "message" && entry.entryId) {
+			rewriteBefore = entry.entryId;
+			break;
+		}
+	}
+	/*
+	 * Rewriting forks the session back before the latest prompt — only
+	 * coherent once its turn has settled. While a turn runs, the latest prompt
+	 * is a steering message parked mid-flow (a goal round keeps turns busy for
+	 * minutes), and swapping it for an edit composer there reads as an input
+	 * box intruding into the transcript.
+	 */
+	const rewriteClosed = running;
 	return (
 		<div
 			className="stream"
@@ -191,7 +267,23 @@ export function ConversationStream() {
 											revealEntryId={reveal?.sessionId === sessionId ? reveal.entryId : undefined}
 										/>
 									) : row.item.kind === "message" ? (
-										<MessageItem item={row.item} model={modelId} />
+										editingEntryId !== "" && editingEntryId === row.item.entryId ? (
+											<div className="edit-prompt-slot">
+												<Composer variant="edit" />
+											</div>
+										) : (
+											<MessageItem
+												item={row.item}
+												attachments={
+													row.item.role === "assistant" ? attachmentsFor.get(row.item) : undefined
+												}
+												rewritableBefore={
+													!rewriteClosed && items[lastUserIndex] === row.item
+														? (rewriteBefore ?? "")
+														: undefined
+												}
+											/>
+										)
 									) : row.item.kind === "tool" ? (
 										<>
 											<ToolRow item={row.item} />
@@ -202,29 +294,32 @@ export function ConversationStream() {
 									) : row.item.kind === "retry" ? (
 										<RetryRow item={row.item} />
 									) : row.item.kind === "command" ? (
-										<CommandRow item={row.item} />
+										editingEntryId !== "" && editingEntryId === row.item.entryId ? (
+											<div className="edit-prompt-slot">
+												<Composer variant="edit" />
+											</div>
+										) : (
+											<CommandRow
+												item={row.item}
+												rewritableBefore={
+													!rewriteClosed && items[lastUserIndex] === row.item
+														? (rewriteBefore ?? "")
+														: undefined
+												}
+											/>
+										)
 									) : row.item.kind === "compaction" ? (
 										<CompactionRow item={row.item} />
+									) : row.item.kind === "goal-round" ? (
+										<GoalRoundRow item={row.item} />
 									) : (
 										<ApprovalCard approval={row.item.approval} />
 									)}
-									{footer ? (
-										<TurnArtifacts
-											key={`outputs-${sessionId}-${footer.turnId}`}
-											artifacts={artifactsAfter.get(row.lastIndex) ?? []}
-											cwd={cwd}
-										/>
-									) : null}
 									{card ? (
 										<TurnChangesCard turn={card} reverted={Boolean(revertedTurns?.includes(card.turnId))} />
 									) : null}
 									{footer ? (
-										<MessageActions
-											key={footer.turnId}
-											messages={footer.messages}
-											model={modelId}
-											aborted={lastRunAborted}
-										/>
+										<MessageActions key={footer.turnId} messages={footer.messages} aborted={lastRunAborted} />
 									) : null}
 								</Fragment>
 							);
@@ -254,7 +349,6 @@ export function ConversationStream() {
 									images: pendingTurn.images,
 								}}
 								files={pendingTurn.files}
-								model={modelId}
 							/>
 						) : null}
 						{thinking ? <ThinkingIndicator /> : null}

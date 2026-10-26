@@ -55,7 +55,12 @@ async function startFixture(base: string): Promise<Fixture> {
 			);
 		};
 		chunk({ content: "working " });
-		markStarted();
+		// The session's title request also reaches this endpoint, and it can arrive first:
+		// the turn waits for the awaited `before_agent_start` hooks (MCP reconciliation)
+		// before its own request. Only the turn's request carries the tool catalog, and the
+		// interrupt must land while that request streams, or no assistant message exists yet.
+		const body = JSON.parse(raw) as { tools?: unknown };
+		if (Array.isArray(body.tools) && body.tools.length > 0) markStarted();
 		const timer = setInterval(() => chunk({ content: "still working " }), 100);
 		request.on("close", () => clearInterval(timer));
 		response.on("close", () => clearInterval(timer));

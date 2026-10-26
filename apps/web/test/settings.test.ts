@@ -100,6 +100,18 @@ test("replacing a server keeps the tool lists, env headers and OAuth it was give
 	deleteMcpServer("guarded");
 });
 
+test("a server's shared flag is accepted and kept when the form edits it without one", async () => {
+	assert.deepEqual(parseMcpServerConfig({ command: "node", shared: false }), { command: "node", shared: false });
+	assert.throws(() => parseMcpServerConfig({ command: "node", shared: "no" }), SettingsError);
+	saveMcpServer("browser", { command: "node", shared: false }, { replace: false });
+	// The settings form has no sharing switch, so its edit carries no `shared`.
+	saveMcpServer("browser", { command: "node", args: ["server.js"] }, { replace: true });
+	const saved = (await listMcpServers()).find((server) => server.name === "browser")?.config;
+	assert.equal(saved?.shared, false);
+	assert.deepEqual(saved?.args, ["server.js"]);
+	deleteMcpServer("browser");
+});
+
 test("user MCP servers are added, replaced, switched off and deleted in config.toml", async () => {
 	saveMcpServer("files", { command: "node", args: ["server.js"] }, { replace: false });
 	await rejectsWith(() => saveMcpServer("files", { command: "node" }, { replace: false }), 409);

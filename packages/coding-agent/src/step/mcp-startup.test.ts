@@ -84,6 +84,7 @@ async function slowServer(toolCount = 1) {
 		release = resolve;
 	});
 	let requested = false;
+	let initialized = 0;
 	const server = createServer(async (req, res) => {
 		if (req.method !== "POST") {
 			res.writeHead(405).end();
@@ -98,6 +99,7 @@ async function slowServer(toolCount = 1) {
 		}
 		let result: unknown;
 		if (message.method === "initialize") {
+			initialized++;
 			result = {
 				protocolVersion: "2025-03-26",
 				capabilities: { tools: {} },
@@ -124,7 +126,12 @@ async function slowServer(toolCount = 1) {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
-	return { url: `http://127.0.0.1:${address.port}/mcp`, release, requested: () => requested };
+	return {
+		url: `http://127.0.0.1:${address.port}/mcp`,
+		release,
+		requested: () => requested,
+		initialized: () => initialized,
+	};
 }
 
 /** The literal `${VAR}` / `${VAR:-fallback}` text a plugin writes in a header value. */
@@ -142,8 +149,13 @@ async function setup(mode: ExtensionMode) {
 	const stop = async () => {
 		await extension.handlers.get("session_shutdown")![0]({ type: "session_shutdown" }, ctx);
 	};
+	// The two awaited points where an existing session reconciles its servers.
+	const beforeAgentStart = (signal?: AbortSignal) =>
+		extension.handlers.get("before_agent_start")![0]({ type: "before_agent_start" }, { ...ctx, signal });
+	const turnEnd = (toolResults: unknown[], signal?: AbortSignal) =>
+		extension.handlers.get("turn_end")![0]({ type: "turn_end", toolResults }, { ...ctx, signal });
 	cleanups.push(stop);
-	return { start, stop, extension, runtime, notify };
+	return { start, stop, beforeAgentStart, turnEnd, extension, runtime, notify };
 }
 
 test("TUI binding returns before slow discovery finishes and publishes fast peers independently", async () => {
@@ -547,7 +559,7 @@ test("the auth hint prints the bare server name", () => {
 		command: "https://mcp.context7.com/mcp",
 		error: new StreamableHTTPError(401, "Authentication required."),
 	});
-	expect(hint).toContain("step mcp login context7, then restart Step.");
+	expect(hint).toContain("step mcp login context7, then start a new session or restart Step.");
 
 	// An unrelated server keeps its own name unchanged.
 	expect(bareServerName("figma-mcp")).toBe("figma-mcp");
@@ -705,4 +717,171 @@ test("shutdown suppresses late warnings from manifest preinstallation", async ()
 	release({ installed: [], warnings: ["late manifest warning"] });
 	await shutdown;
 	expect(harness.notify).not.toHaveBeenCalled();
+});
+
+test("a server added after session start is connected before the next prompt's request", async () => {
+	const harness = await setup("tui");
+	await harness.start();
+	await harness.beforeAgentStart();
+	expect(harness.extension.tools.size).toBe(0);
+
+	const server = await slowServer(2);
+	server.release();
+	config.value = { mcp_servers: { late: { url: server.url } } };
+	await harness.beforeAgentStart();
+	// No waiting: the reconciliation awaited the new connection before returning.
+	expect([...harness.extension.tools.keys()].sort()).toEqual(["late__tool_0", "late__tool_1"]);
+	expect(getStepMcpStatuses()).toEqual([{ name: "late", status: "connected", toolCount: 2 }]);
+});
+
+test("a turn that ran tools picks up a server installed during the run; a turn without tools does not", async () => {
+	const harness = await setup("tui");
+	await harness.start();
+	await harness.beforeAgentStart();
+	const server = await slowServer();
+	server.release();
+	config.value = { mcp_servers: { installed: { url: server.url } } };
+
+	await harness.turnEnd([]);
+	expect(harness.extension.tools.size).toBe(0);
+	await harness.turnEnd([{ role: "toolResult" }]);
+	expect([...harness.extension.tools.keys()]).toEqual(["installed__tool_0"]);
+});
+
+test("a removed or disabled server withdraws its tools", async () => {
+	const first = await slowServer();
+	const second = await slowServer();
+	first.release();
+	second.release();
+	config.value = { mcp_servers: { first: { url: first.url }, second: { url: second.url } } };
+	const harness = await setup("rpc");
+	await harness.start();
+	expect(harness.extension.tools.size).toBe(2);
+
+	config.value = { mcp_servers: { second: { url: second.url, enabled: false } } };
+	await harness.beforeAgentStart();
+	expect(harness.extension.tools.size).toBe(0);
+	expect(getStepMcpStatuses()).toEqual([{ name: "second", status: "disabled", toolCount: 0 }]);
+});
+
+test("a changed declaration restarts the server and replaces its tools", async () => {
+	const before = await slowServer(1);
+	const after = await slowServer(3);
+	before.release();
+	after.release();
+	config.value = { mcp_servers: { swap: { url: before.url } } };
+	const harness = await setup("rpc");
+	await harness.start();
+	expect([...harness.extension.tools.keys()]).toEqual(["swap__tool_0"]);
+
+	config.value = { mcp_servers: { swap: { url: after.url } } };
+	await harness.beforeAgentStart();
+	expect([...harness.extension.tools.keys()].sort()).toEqual(["swap__tool_0", "swap__tool_1", "swap__tool_2"]);
+	expect(getStepMcpStatuses()).toEqual([{ name: "swap", status: "connected", toolCount: 3 }]);
+	expect(after.initialized()).toBe(1);
+});
+
+test("unchanged declarations neither refresh tools nor reconnect, and a failed server is not retried", async () => {
+	const server = await slowServer();
+	server.release();
+	config.value = {
+		mcp_servers: {
+			ok: { url: server.url },
+			broken: { url: server.url, env_http_headers: { "X-Api-Key": "STEP_TEST_ABSENT_HEADER" } },
+		},
+	};
+	const harness = await setup("rpc");
+	await harness.start();
+	expect(getStepMcpStatuses().map((status) => status.status)).toEqual(["connected", "failed"]);
+	let refreshes = 0;
+	harness.runtime.refreshTools = () => {
+		refreshes++;
+	};
+	const warnings = harness.notify.mock.calls.length;
+
+	await harness.beforeAgentStart();
+	await harness.turnEnd([{ role: "toolResult" }]);
+	await harness.beforeAgentStart();
+	expect(refreshes).toBe(0);
+	expect(server.initialized()).toBe(1);
+	expect(harness.notify).toHaveBeenCalledTimes(warnings);
+	expect(getStepMcpStatuses().map((status) => status.status)).toEqual(["connected", "failed"]);
+});
+
+test("an initial server still connecting neither blocks a prompt nor starts twice", async () => {
+	const slow = await slowServer();
+	config.value = { mcp_servers: { slow: { url: slow.url } } };
+	const harness = await setup("tui");
+	await harness.start();
+	await vi.waitFor(() => expect(slow.requested()).toBe(true));
+	await harness.beforeAgentStart();
+	expect(getStepMcpStatuses()).toEqual([{ name: "slow", status: "connecting", toolCount: 0 }]);
+	expect(slow.initialized()).toBe(1);
+	slow.release();
+	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(1));
+});
+
+test("an aborted request stops waiting for a new server, which still publishes later", async () => {
+	const harness = await setup("tui");
+	await harness.start();
+	await harness.beforeAgentStart();
+	const slow = await slowServer();
+	config.value = { mcp_servers: { slow: { url: slow.url } } };
+	const controller = new AbortController();
+	const waiting = harness.beforeAgentStart(controller.signal);
+	await vi.waitFor(() => expect(slow.requested()).toBe(true));
+	controller.abort();
+	await waiting;
+	expect(harness.extension.tools.size).toBe(0);
+	slow.release();
+	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(1));
+});
+
+test("shutdown during a reconciliation prevents late publication", async () => {
+	const harness = await setup("tui");
+	await harness.start();
+	await harness.beforeAgentStart();
+	const slow = await slowServer();
+	config.value = { mcp_servers: { slow: { url: slow.url } } };
+	const waiting = harness.beforeAgentStart();
+	await vi.waitFor(() => expect(slow.requested()).toBe(true));
+	await harness.stop();
+	await waiting;
+	slow.release();
+	await yieldToEventLoop();
+	expect(harness.extension.tools.size).toBe(0);
+	expect(getStepMcpStatuses()).toEqual([]);
+	expect(harness.notify).not.toHaveBeenCalledWith(expect.anything(), "warning");
+});
+
+test("a plugin installed into the plugin root during a session is discovered on the next prompt", async () => {
+	const harness = await setup("tui");
+	await harness.start();
+	await harness.beforeAgentStart();
+	const server = await slowServer(2);
+	server.release();
+	const dir = "/mock-plugins/playwright";
+	pluginMocks.dirs = [dir];
+	pluginMocks.manifests.set(dir, { id: "playwright", mcpServers: { playwright: { type: "http", url: server.url } } });
+	await harness.beforeAgentStart();
+	expect(getStepMcpStatuses()).toEqual([{ name: "playwright__playwright", status: "connected", toolCount: 2 }]);
+});
+
+test("shutdown finishes only after a binding still awaiting startup has resumed", async () => {
+	const slow = await slowServer();
+	config.value = { mcp_servers: { slow: { url: slow.url } } };
+	const harness = await setup("rpc");
+	const order: string[] = [];
+	// The Web host does not await binding, so a session can shut down while
+	// session_start still waits; handlers after this one must not run after
+	// their own shutdown has already finished.
+	const binding = harness.start().then(async () => {
+		// The runner reaches the next extension's handler a few microtasks later.
+		for (let hop = 0; hop < 20; hop++) await Promise.resolve();
+		order.push("start");
+	});
+	await vi.waitFor(() => expect(slow.requested()).toBe(true));
+	const shutdown = harness.stop().then(() => order.push("stop"));
+	await Promise.all([binding, shutdown]);
+	expect(order).toEqual(["start", "stop"]);
 });

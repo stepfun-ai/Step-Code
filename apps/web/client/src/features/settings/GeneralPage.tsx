@@ -15,9 +15,18 @@ const LANGUAGE_CHOICES: ReadonlyArray<{ readonly value: Locale; readonly label: 
 	{ value: "en-US", label: "English" },
 ];
 
+/** `2026-10-26T09:02:22.531Z` → `2026-10-26 17:02`, in the reader's own time zone. */
+function buildStamp(value: string): string {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return value;
+	const pad = (part: number) => String(part).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function GeneralPage() {
 	const t = useT();
 	const locale = useAppStore((state) => state.locale);
+	const build = useAppStore((state) => state.build);
 	return (
 		<>
 			<PageHeader title={t("settingsGeneral")} description={t("settingsGeneralDesc")} />
@@ -43,6 +52,25 @@ export function GeneralPage() {
 					}
 				/>
 			</SettingsCard>
+			{/*
+			 * Which build this window is running. An installed copy and a source
+			 * checkout look identical otherwise, and "did the update take?" was
+			 * otherwise only answerable from a terminal.
+			 */}
+			{build.version || build.madeAt ? (
+				<SettingsCard>
+					<SettingRow
+						title={t("settingsBuild")}
+						description={build.madeAt ? t("settingsBuildMadeAt") : t("settingsBuildDev")}
+						control={
+							<span className="settings-build" id="settingsBuild">
+								{build.version ? <span className="settings-build-version">v{build.version}</span> : null}
+								{build.madeAt ? <span className="settings-build-time">{buildStamp(build.madeAt)}</span> : null}
+							</span>
+						}
+					/>
+				</SettingsCard>
+			) : null}
 		</>
 	);
 }

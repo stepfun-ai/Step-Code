@@ -156,7 +156,13 @@ function Questionnaire({ request }: { readonly request: ClarificationRequest }) 
 					>
 						{t("clarificationSkip")}
 					</button>
-					<button type="button" className="clarification-skip" disabled={busy} onClick={() => void send([], true)}>
+					<button
+						type="button"
+						className="clarification-skip"
+						id="clarificationClose"
+						disabled={busy}
+						onClick={() => void send([], true)}
+					>
 						{t("clarificationClose")}
 					</button>
 					<button type="button" className="clarification-confirm" disabled={busy || !canConfirm} onClick={confirm}>

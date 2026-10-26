@@ -275,6 +275,25 @@
 	border-radius: var(--radius-menu);
 	background: var(--surface-soft);
 }
+/* The running build: a version chip, then when it was made, in tabular figures. */
+.settings-build {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.settings-build-version {
+	padding: 1px 7px;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	color: var(--ink-2);
+	font-weight: 500;
+}
+.settings-build-time {
+	color: var(--ink-3);
+}
 .settings-choice {
 	min-width: 84px;
 	height: 30px;
@@ -1207,8 +1226,8 @@
 }
 
 /* One catalog row: a card of labelled fields — id, display name, context window,
-   input types — with its remove action beside them. Every field carries its own
-   title, so an empty row still says what goes where. */
+   max output, input types — with its remove action beside them. Every field
+   carries its own title, so an empty row still says what goes where. */
 .settings-model-rows {
 	display: grid;
 	gap: 10px;
@@ -1218,7 +1237,9 @@
 }
 .settings-model-row {
 	display: grid;
-	grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 0.9fr) auto auto auto;
+	grid-template-columns:
+		minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.9fr)
+		auto auto auto;
 	align-items: start;
 	gap: 10px;
 	padding: 12px;
@@ -1329,10 +1350,14 @@
 
 @media (max-width: 1180px) {
 	.settings-model-row {
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 	}
+	/* Five fields do not fit three columns: the two row actions move to a line of
+	 * their own instead of sharing a field's cell. */
+	.settings-model-row > .settings-model-test,
 	.settings-model-row > .settings-icon-action {
-		grid-row: 1;
-		grid-column: 4;
+		grid-row: 3;
+		margin-top: 0;
+		justify-self: start;
 	}
 }

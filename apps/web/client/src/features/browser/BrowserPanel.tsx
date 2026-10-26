@@ -3,24 +3,50 @@ import { useT } from "../../i18n";
 import { ApiError, errorMessage } from "../../lib/api";
 import { writeClipboard } from "../../lib/clipboard";
 import { isMacPlatform } from "../../lib/format";
+import { useAppStore } from "../../state/store";
 import type { EmbeddedBrowserFrame, EmbeddedBrowserSnapshot } from "../../state/types";
 import { Button, Icon, IconButton, type IconName, Tooltip } from "../../ui";
-import { BrowserConnection, browserKeyRoute } from "./actions";
+import {
+	BrowserConnection,
+	BrowserDisconnect,
+	type BrowserPointerMove,
+	browserKeyRoute,
+	browserRetryable,
+} from "./actions";
 
 const EMPTY: EmbeddedBrowserSnapshot = { revision: 0, activeId: null, tabs: [] };
+/** Backoff for an unexpected stream drop; a manual Reconnect starts over. */
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 8000];
+/**
+ * A connection must stay up this long before its retry budget is restored. A stream that opens and
+ * drops at once is not healthy: resetting on every open would retry it every second forever.
+ */
+const HEALTHY_AFTER_MS = 10_000;
 
 export function BrowserPanel({ open }: { open: boolean }) {
 	const t = useT();
 	const [snapshot, setSnapshot] = useState(EMPTY);
 	const [error, setError] = useState("");
-	/* The host refuses a second page with 409; say so in the UI language instead of echoing its English. */
+	/*
+	 * The host refuses a second page with 409, and tells a displaced duplicate page it was replaced; say
+	 * so in the UI language instead of echoing its English.
+	 */
 	const failureText = (failure: unknown) =>
-		failure instanceof ApiError && failure.status === 409 ? t("browserBusy") : errorMessage(failure);
+		(failure instanceof ApiError && failure.status === 409) ||
+		(failure instanceof BrowserDisconnect && failure.reason === "replaced")
+			? t("browserBusy")
+			: errorMessage(failure);
 	const [ready, setReady] = useState(false);
 	const [retry, setRetry] = useState(0);
 	const [frame, setFrame] = useState<EmbeddedBrowserFrame>();
 	const [address, setAddress] = useState("");
 	const connection = useRef<BrowserConnection>(null);
+	/**
+	 * The connection that finished connecting. `ready` still reads true from the previous connection in the
+	 * render that reopens the panel, while the new one has no control token yet and drops what it is sent.
+	 */
+	const connected = useRef<BrowserConnection>(null);
+	const attempts = useRef(0);
 	const surface = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLTextAreaElement>(null);
 	const addressInput = useRef<HTMLInputElement>(null);
@@ -28,6 +54,10 @@ export function BrowserPanel({ open }: { open: boolean }) {
 	const clicks = useRef({ at: 0, x: 0, y: 0, button: 0, count: 1 });
 	const active = snapshot.tabs.find((tab) => tab.id === snapshot.activeId);
 	const activeId = active?.id;
+	const openRequest = useAppStore((state) => state.ui.browserOpenRequest);
+	const handledRequest = useRef(0);
+	const tabs = useRef(snapshot.tabs);
+	tabs.current = snapshot.tabs;
 	useEffect(() => {
 		setAddress(active?.url === "about:blank" ? "" : (active?.url ?? ""));
 	}, [active?.url]);
@@ -35,6 +65,8 @@ export function BrowserPanel({ open }: { open: boolean }) {
 	useEffect(() => {
 		if (!open) return;
 		let disposed = false;
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		let healthyTimer: ReturnType<typeof setTimeout> | undefined;
 		let decoding = false;
 		let latest: EmbeddedBrowserFrame | undefined;
 		const display = async (value: EmbeddedBrowserFrame) => {
@@ -56,6 +88,19 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				decoding = false;
 			}
 		};
+		// A lost stream (a stalled renderer, a Host restart) reconnects by itself with backoff. A competing
+		// page, a displaced duplicate page and a stopping Host keep the manual Reconnect button instead,
+		// so two pages never take control from each other in a loop.
+		const reconnect = (failure: unknown) => {
+			if (disposed || retryTimer || !browserRetryable(failure)) return;
+			const attempt = attempts.current;
+			if (attempt >= RECONNECT_DELAYS_MS.length) return;
+			attempts.current = attempt + 1;
+			retryTimer = setTimeout(() => {
+				retryTimer = undefined;
+				setRetry((value) => value + 1);
+			}, RECONNECT_DELAYS_MS[attempt]);
+		};
 		const client = new BrowserConnection(
 			(value) => {
 				if (!disposed) setSnapshot(value);
@@ -64,9 +109,13 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				void display(value);
 			},
 			(failure, disconnected) => {
-				if (!disposed) {
-					setError(failureText(failure));
-					if (disconnected) setReady(false);
+				if (disposed) return;
+				setError(failureText(failure));
+				if (disconnected) {
+					clearTimeout(healthyTimer);
+					if (connected.current === client) connected.current = null;
+					setReady(false);
+					reconnect(failure);
 				}
 			},
 		);
@@ -76,18 +125,41 @@ export function BrowserPanel({ open }: { open: boolean }) {
 		void client
 			.connect()
 			.then(() => {
-				if (!disposed) setReady(true);
+				if (disposed) return;
+				connected.current = client;
+				setReady(true);
+				healthyTimer = setTimeout(() => {
+					attempts.current = 0;
+				}, HEALTHY_AFTER_MS);
 			})
 			.catch((failure: unknown) => {
-				if (!disposed) setError(failureText(failure));
+				if (disposed) return;
+				setError(failureText(failure));
 				client.close();
+				reconnect(failure);
 			});
 		return () => {
 			disposed = true;
+			clearTimeout(retryTimer);
+			clearTimeout(healthyTimer);
 			client.close();
 			connection.current = null;
+			if (connected.current === client) connected.current = null;
 		};
 	}, [open, retry]);
+	// Another feature asked for a page (a delivered file's preview): reuse a tab already on it, reloaded so a
+	// rewritten file shows its new content, or open a new one. Each request is handled once, once connected.
+	useEffect(() => {
+		const client = connected.current;
+		if (!open || !ready || !client || !openRequest || openRequest.seq <= handledRequest.current) return;
+		handledRequest.current = openRequest.seq;
+		setError("");
+		const existing = tabs.current.find((tab) => tab.url === openRequest.url);
+		if (existing) {
+			client.send(`/tabs/${existing.id}/select`);
+			client.send(`/tabs/${existing.id}/action`, { action: "reload" });
+		} else client.send("/tabs", { url: openRequest.url });
+	}, [open, ready, openRequest]);
 	useEffect(() => {
 		const element = surface.current;
 		if (!open || !ready || !element) return;
@@ -112,11 +184,13 @@ export function BrowserPanel({ open }: { open: boolean }) {
 	const action = (name: string, value?: unknown) => {
 		if (activeId) connection.current?.send(`/tabs/${activeId}/action`, { action: name, value });
 	};
-	const sendInput = (event: unknown, move = false) => {
+	const sendInput = (event: unknown) => {
 		if (!activeId || !ready) return;
-		const path = `/tabs/${activeId}/input`;
-		if (move) connection.current?.move(path, event);
-		else connection.current?.send(path, event);
+		connection.current?.send(`/tabs/${activeId}/input`, event);
+	};
+	const moveInput = (event: BrowserPointerMove) => {
+		if (!activeId || !ready) return;
+		connection.current?.move(`/tabs/${activeId}/input`, event);
 	};
 	const copy = () => {
 		if (!activeId) return;
@@ -158,16 +232,10 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				input.current.focus({ preventScroll: true });
 			}
 		}
-		sendInput(
-			{
-				kind: "pointer",
-				phase,
-				...point(event.clientX, event.clientY),
-				button: event.button === 2 ? "right" : event.button === 1 ? "middle" : "left",
-				clicks: clicks.current.count,
-			},
-			phase === "move",
-		);
+		const position = point(event.clientX, event.clientY);
+		const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
+		if (phase === "move") moveInput({ kind: "pointer", phase, ...position, button, clicks: clicks.current.count });
+		else sendInput({ kind: "pointer", phase, ...position, button, clicks: clicks.current.count });
 	};
 	const key = (event: KeyboardEvent<HTMLTextAreaElement>) => {
 		event.stopPropagation();
@@ -286,7 +354,10 @@ export function BrowserPanel({ open }: { open: boolean }) {
 						<IconButton
 							icon="refresh"
 							aria-label={t("browserReconnect")}
-							onClick={() => setRetry((value) => value + 1)}
+							onClick={() => {
+								attempts.current = 0;
+								setRetry((value) => value + 1);
+							}}
 						/>
 					</Tooltip>
 				</div>
@@ -309,8 +380,8 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				onContextMenu={(event) => event.preventDefault()}
 				onWheel={(event) => {
 					event.stopPropagation();
-					sendInput({
-						kind: "wheel",
+					if (!activeId || !ready) return;
+					connection.current?.wheel(`/tabs/${activeId}/input`, {
 						...point(event.clientX, event.clientY),
 						deltaX: Math.max(-4000, Math.min(4000, event.deltaX)),
 						deltaY: Math.max(-4000, Math.min(4000, event.deltaY)),

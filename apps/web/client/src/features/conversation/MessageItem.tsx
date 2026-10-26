@@ -6,6 +6,8 @@ import {
 	escapeHtml,
 	pluginInstallInvocation,
 	renderMarkdown,
+	type SessionContextQuote,
+	sessionContextOf,
 	skillInvocation,
 	ultraloopInvocation,
 } from "../../lib/markdown";
@@ -20,6 +22,8 @@ import { openFeedback, type Sentiment } from "./feedback";
 import { clockTime } from "./message-meta";
 import { useFadeIn, useSmoothText } from "./streaming";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { MessageAttachments } from "./TurnArtifacts";
+import type { TurnArtifact } from "./turn-artifacts";
 
 /** Same markup as the composer's chip (`prompt-editor.ts` `createChip`), so a sent message reads like its draft. */
 function fileChipHtml(file: AttachedFile | undefined): string {
@@ -35,12 +39,18 @@ function fileChipHtml(file: AttachedFile | undefined): string {
 export const MessageItem = memo(function MessageItem({
 	item,
 	files: pendingFiles,
+	attachments,
 	fileCwd,
-	model,
+	rewritableBefore,
 }: {
 	readonly item: MessageTimelineItem;
 	/** The pending bubble's files: the host has not echoed the message (and its file blocks) yet. */
 	readonly files?: readonly AttachedFile[];
+	/**
+	 * The turn's deliverables, attached under this bubble when it is the reply
+	 * that closed the turn: the answer hands its files over where it ends.
+	 */
+	readonly attachments?: readonly TurnArtifact[];
 	/** Read-only child transcripts resolve references against their own workspace. */
 	readonly fileCwd?: string;
 	/**
@@ -48,6 +58,13 @@ export const MessageItem = memo(function MessageItem({
 	 * model per message, so the caller passes the one the session ran on.
 	 */
 	readonly model?: string;
+	/**
+	 * Present only on the latest user message: the entry a rewrite forks to
+	 * ("" forks from the head). Its presence makes the bubble editable in place.
+	 * A row without an entry id (the echo of a prompt still being sent) has no
+	 * recorded message to rewrite, so it offers no action even when it is latest.
+	 */
+	readonly rewritableBefore?: string;
 }) {
 	const t = useT();
 	const role = item.role === "user" ? "user" : "assistant";
@@ -63,15 +80,15 @@ export const MessageItem = memo(function MessageItem({
 		() => (role === "user" ? splitAttachedFiles(item.content) : { text: item.content, files: [] }),
 		[role, item.content],
 	);
-	const skill = role === "user" ? skillInvocation(attached.text) : null;
+	// A quoted other-session context rides at the tail; peel it before any invocation match.
+	const quoted = role === "user" ? sessionContextOf(attached.text) : null;
+	const messageText = quoted ? quoted.body : attached.text;
+	const skill = role === "user" ? skillInvocation(messageText) : null;
 	/** The install command a plugin pick chip sent; badge only, no body change. */
-	const pluginInstall = role === "user" && !skill ? pluginInstallInvocation(attached.text) : null;
+	const pluginInstall = role === "user" && !skill ? pluginInstallInvocation(messageText) : null;
 	/** The ultraloop keyword form rides the message as ordinary text; its badge mirrors the skill one. */
-	const ultraloop = role === "user" && !skill && !pluginInstall ? ultraloopInvocation(attached.text) : null;
-	const content = useSmoothText(
-		skill || ultraloop ? (skill?.request ?? ultraloop?.request ?? "") : attached.text,
-		live,
-	);
+	const ultraloop = role === "user" && !skill && !pluginInstall ? ultraloopInvocation(messageText) : null;
+	const content = useSmoothText(skill || ultraloop ? (skill?.request ?? ultraloop?.request ?? "") : messageText, live);
 	const images = role === "user" ? (item.images ?? []) : [];
 	// Memoised: a streaming turn re-renders the timeline per frame, and parsing every earlier message each time made long sessions crawl.
 	const files = pendingFiles ?? attached.files;
@@ -88,6 +105,18 @@ export const MessageItem = memo(function MessageItem({
 			{ highlightCode: highlightFence },
 		).replace(FILE_MARKER, (_match, index: string) => fileChipHtml(files[Number(index)]));
 	}, [content, files, codeLabel, copyLabel, tableLabel, role, cwd]);
+	/*
+	 * An invoked message carries its badge inline at the head of the markdown's
+	 * first line — prepended into the rendered html, so the command chip and
+	 * the prompt share one bubble with native typography.
+	 */
+	const badgeLabel = skill?.name ?? pluginInstall?.name ?? t("modeUltraloop");
+	const badgeIcon = skill ? "wrench" : ultraloop ? "orbit" : "puzzle";
+	const badgeKind = skill ? "skill" : ultraloop ? "ultraloop" : "plugin";
+	const invokedHtml =
+		(skill || ultraloop || pluginInstall) && html
+			? `<span class="message-skill message-skill--${badgeKind}" title="${escapeHtml(badgeLabel)}"><span class="tool-glyph" aria-hidden="true"><svg class="icon icon--xs tool-kind-icon" aria-hidden="true"><use href="#i-${badgeIcon}"></use></svg></span>${escapeHtml(badgeLabel)}</span>${html}`
+			: html;
 	useFadeIn(bodyRef, html, live);
 	if (item.error) return <MessageError entryId={item.entryId} error={item.error} />;
 	// The live turn before its first text (reasoning, or waiting on the first token).
@@ -97,54 +126,82 @@ export const MessageItem = memo(function MessageItem({
 	 * before the text — the command and the prompt share one bubble, exactly
 	 * like the composer showed them.
 	 */
-	const invoked = Boolean(skill || ultraloop || pluginInstall);
 	return (
 		<article className={`message ${role}`} data-content={item.content || ""} data-entry-id={item.entryId}>
 			{/* A user message can be images only; it still opens a turn, so it gets a row. */}
 			{images.length ? <MessageImages images={images} /> : null}
 			{content ? (
-				invoked ? (
-					<div className="message-body message-body--invoked">
-						{skill ? (
-							<span className="message-skill message-skill--skill" title={skill.name}>
-								<Icon name="wrench" size="xs" />
-								{skill.name}
-							</span>
-						) : null}
-						{ultraloop ? (
-							<span className="message-skill message-skill--ultraloop">
-								<Icon name="orbit" size="xs" />
-								{t("modeUltraloop")}
-							</span>
-						) : null}
-						{pluginInstall ? (
-							<span className="message-skill message-skill--plugin" title={pluginInstall.name}>
-								<Icon name="puzzle" size="xs" />
-								{pluginInstall.name}
-							</span>
-						) : null}
-						<MarkdownView
-							ref={bodyRef}
-							className="message-md"
-							html={html}
-							onCopyCode={(code) => void copyText(code)}
-							onFileReference={(path) => void openFileReference(cwd, path)}
-						/>
-					</div>
-				) : (
-					<MarkdownView
-						ref={bodyRef}
-						className="message-body"
-						html={html}
-						onCopyCode={(code) => void copyText(code)}
-						onFileReference={(path) => void openFileReference(cwd, path)}
-					/>
-				)
+				<MarkdownView
+					ref={bodyRef}
+					className="message-body"
+					html={invokedHtml}
+					onCopyCode={(code) => void copyText(code)}
+					onFileReference={(path) => void openFileReference(cwd, path)}
+				/>
 			) : null}
-			{role === "user" && item.timestamp ? <MessageMeta model={model} timestamp={item.timestamp} /> : null}
+			{attachments?.length ? <MessageAttachments artifacts={attachments} cwd={cwd} /> : null}
+			{quoted ? <QuotedContext quote={quoted.quote} /> : null}
+			{role === "user" && item.content ? (
+				<div className="prompt-actions">
+					<button
+						type="button"
+						className="message-action"
+						title={t("copy")}
+						aria-label={t("copy")}
+						onClick={() => void copyText(content)}
+					>
+						<Icon {...LEGACY_ICONS.copy} />
+					</button>
+					{rewritableBefore !== undefined && item.entryId ? (
+						<button
+							type="button"
+							className="message-action"
+							title={t("promptRewrite")}
+							aria-label={t("promptRewrite")}
+							onClick={() =>
+								setUi({
+									editingPrompt: {
+										entryId: item.entryId ?? "",
+										before: rewritableBefore || undefined,
+										text: item.content,
+									},
+								})
+							}
+						>
+							<Icon name="squarePen" size="xs" />
+						</button>
+					) : null}
+				</div>
+			) : null}
 		</article>
 	);
 });
+
+/**
+ * The quoted other-session context of a sent message: one collapsed row naming
+ * the source session, expanded on demand to the capped transcript.
+ */
+function QuotedContext({ quote }: { readonly quote: SessionContextQuote }) {
+	const t = useT();
+	const [open, setOpen] = useState(false);
+	const label = t("quotedSessionContextTitle", { title: quote.title });
+	return (
+		<div className="message-quote">
+			<button
+				type="button"
+				className="message-quote-toggle"
+				aria-expanded={open}
+				aria-label={t("quotedSessionContext")}
+				title={label}
+				onClick={() => setOpen((value) => !value)}
+			>
+				<Icon name="layers" size="2xs" />
+				<span className="message-quote-title">{label}</span>
+			</button>
+			{open ? <pre className="message-quote-body">{quote.transcript}</pre> : null}
+		</div>
+	);
+}
 
 /**
  * What a message was and when: the model and the clock time (`14:05`), as plain
@@ -152,13 +209,11 @@ export const MessageItem = memo(function MessageItem({
  * once, on the row under the turn that settled. An entry without a timestamp (an
  * optimistic pending bubble) shows nothing.
  */
-function MessageMeta({ model, timestamp }: { readonly model?: string; readonly timestamp: string }) {
-	const clock = clockTime(timestamp);
+function MessageMeta({ timestamp }: { readonly timestamp: string }) {
 	return (
-		<span className="message-meta" data-model={model || undefined}>
-			{model ? <span className="message-meta-model">{model}</span> : null}
+		<span className="message-meta">
 			<time className="message-meta-time" dateTime={timestamp}>
-				{clock}
+				{clockTime(timestamp)}
 			</time>
 		</span>
 	);
@@ -237,7 +292,6 @@ function MessageError({ entryId, error }: { readonly entryId?: string; readonly 
  */
 export function MessageActions({
 	messages,
-	model,
 	aborted = false,
 }: {
 	readonly messages: readonly MessageTimelineItem[];
@@ -308,7 +362,8 @@ export function MessageActions({
 			) : null}
 			{/* The model and clock time belong to the turn that settled here, not to
 			    every step of it: only this row carries them. */}
-			{last?.timestamp && !aborted ? <MessageMeta model={model} timestamp={last.timestamp} /> : null}
+			{/* Only the clock, and only on hover: the model name is noise here. */}
+			{last?.timestamp && !aborted ? <MessageMeta timestamp={last.timestamp} /> : null}
 		</div>
 	);
 }

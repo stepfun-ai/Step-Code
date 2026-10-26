@@ -742,7 +742,10 @@ test(
       `unexpected skill location: ${skills.location}`,
     )
 
-    // The plugin page lists the built-in marketplace and says so when nothing is installed.
+    // The plugin page lists the built-in marketplace. A fresh install is not
+    // empty any more: the host's MCP warmup pre-installs the built-in StepPage
+    // plugin, so the check is that nothing *else* leaked in from the developer's
+    // own plugin root.
     const plugins = await browser.run(`
 		$("[data-settings-page='plugins']").click();
 		await until(() => $("[data-settings-page='plugins']").getAttribute("aria-current") === "page", "plugins page");
@@ -753,12 +756,16 @@ test(
 		const catalog = await (await fetch("/api/v1/settings/plugins")).json();
 		return {
 			marketplaces: catalog.marketplaces.map((entry) => entry.name),
-			installed: catalog.installed.length,
+			installed: catalog.installed.map((plugin) => ({ id: plugin.id, name: plugin.name })),
 			builtinKind: $("[data-marketplace='builtin']").textContent.includes("内置"),
 		};
 	`)
     assert.ok(plugins.marketplaces.includes("builtin"), "the built-in marketplace is listed")
-    assert.equal(plugins.installed, 0)
+    assert.deepEqual(
+      plugins.installed.map((plugin) => plugin.id),
+      ["steppage"],
+      "only the pre-installed built-in plugin is present in a fresh agent directory",
+    )
     assert.equal(plugins.builtinKind, true)
   },
 )
@@ -808,6 +815,40 @@ test(
     assert.equal(listed.custom, true)
     assert.equal(listed.keyed, true)
     assert.equal(listed.addRow, true, "the add row sits at the bottom of the list")
+
+    // The catalog row exposes the max-output cap: a model saved without one reads
+    // back blank, a typed one is written to models.json and read back by the form.
+    const maxOutput = await browser.run(`
+		const openEditor = async () => {
+			$("[data-model-provider='e2e-gw'] button[aria-label='编辑']").click();
+			return until(() => $("[data-model-row='e2e-model-large'] [data-model-field='maxTokens']"), "the max-output field");
+		};
+		const first = await openEditor();
+		const before = {
+			value: first.value,
+			placeholder: first.placeholder,
+			title: first.closest("label").querySelector("span").textContent,
+		};
+		// React's onChange listens for a bubbling input event; a plain value assignment would be missed.
+		Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(first, "64000");
+		first.dispatchEvent(new Event("input", { bubbles: true }));
+		await until(() => first.value === "64000", "the typed max-output value");
+		$("#settingsModelEditor button[type='submit']").click();
+		await until(() => !$("#settingsModelEditor"), "the editor to close after saving");
+		const saved = (await (await fetch("/api/v1/settings/models")).json()).providers
+			.find((entry) => entry.id === "e2e-gw").models
+			.find((entry) => entry.id === "e2e-model-large").maxTokens;
+		const again = await openEditor();
+		const reopened = again.value;
+		$("#settingsModelEditor .settings-form-footer button[type='button']").click();
+		await until(() => !$("#settingsModelEditor"), "the editor to close after cancelling");
+		return { before, saved, reopened };
+	`)
+    assert.equal(maxOutput.before.value, "", "a model saved without a cap keeps the field empty")
+    assert.equal(maxOutput.before.title, "最大输出")
+    assert.match(maxOutput.before.placeholder, /16384/u, "the placeholder names the kernel default")
+    assert.equal(maxOutput.saved, 64000, "the typed cap reaches models.json")
+    assert.equal(maxOutput.reopened, "64000", "the stored cap comes back into the form")
 
     // Discovery asks the provider's endpoint, and the endpoint's refusal is reported.
     const discovered = await browser.run(`
@@ -1345,6 +1386,34 @@ test("workspace @ completion is authenticated, scoped, and used by the real comp
   assert.deepEqual(picked, { text: "参考 @src/deep/needle-file.ts ", selectedWithFocus: true });
 });
 
+test("the voice button sits in the composer and its status never carries the key", async () => {
+  await browser.goto(`${origin}/`);
+  const voice = await browser.run(`
+    await until(() => $("#workspaceButtonName").textContent === "project", "bootstrap workspace");
+    const button = await until(() => $("#voiceButton"), "voice button");
+    const status = await (await fetch("/api/v1/voice")).json();
+    return {
+      inRightCluster: $(".composer-right").contains(button),
+      isButton: button.tagName === "BUTTON" && button.getAttribute("type") === "button",
+      disabled: button.disabled,
+      label: button.getAttribute("aria-label"),
+      status,
+      serialized: JSON.stringify(status),
+    };
+  `);
+  assert.equal(voice.isButton, true);
+  assert.equal(voice.inRightCluster, true);
+  // The fixture stores a Step Plan credential, so dictation is available.
+  assert.equal(voice.disabled, false);
+  assert.equal(voice.label, "语音听写");
+  assert.deepEqual(voice.status, {
+    available: true,
+    channel: "step_plan",
+    keySource: "auth.json",
+  });
+  assert.ok(!voice.serialized.includes("e2e-not-a-real-token"), "the status must not carry the credential");
+});
+
 test("the composer sends a completed @ reference as text through the real agent to a scratch file", { skip }, async () => {
   await browser.goto(`${origin}/`);
   const result = await browser.run(`
@@ -1438,7 +1507,9 @@ test("clarification close cancels the pending tool and a single freeform answer 
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture again" }) });
     await until(() => !$(".clarification-panel").hidden, "new questions");
-    $("[aria-label='关闭问题']").click();
+    // Closing the round lives with the footer text actions since the panel lost
+    // its card header, so the affordance is a button id, not an icon label.
+    $("#clarificationClose").click();
     await until(() => $(".clarification-panel").hidden, "cancelled card");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "cancelled turn settles");
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "freeform-only" }) });
@@ -1857,6 +1928,172 @@ test(
 )
 
 test(
+  "the session menu renames through an in-app dialog, which the desktop shell needs instead of window.prompt",
+  { skip },
+  async () => {
+    // Electron has no `window.prompt`: the renderer throws "prompt() is not supported."
+    // and the rename never reaches the host. The dialog renames in both hosts.
+    const renamed = await browser.run(`
+		const row = await until(() => $("#projectGroups .session-row, #recentTasks .session-row"), "a session row");
+		row.click();
+		const id = await until(() => $(".session-row.active")?.dataset.sessionId, "open conversation");
+		const titleBefore = await until(() => {
+			const text = $("#sessionHeader .session-header-title")?.textContent;
+			return text && text !== "新建会话" ? text : null;
+		}, "conversation header title");
+		const activeRow = () => $("#projectView .session-row[data-session-id='" + id + "']");
+		activeRow().querySelector(".session-menu-button").click();
+		await until(() => $("#sessionMenu"), "session menu");
+		$("#sessionMenu [data-action='rename']").click();
+		await until(() => !$("#renameSessionDialog").hidden, "rename dialog");
+		const input = $("#renameSessionInput");
+		const opened = {
+			focus: document.activeElement === input,
+			value: input.value,
+			selected: input.selectionStart === 0 && input.selectionEnd === input.value.length,
+			title: $("#renameSessionTitle").textContent,
+			confirmDisabled: $("#renameSessionConfirm").disabled,
+			modal: $("#renameSessionDialog [role='dialog']").getAttribute("aria-modal"),
+			menuClosed: !$("#sessionMenu"),
+		};
+		// React's onChange listens for a bubbling input event; a plain value assignment would be missed.
+		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+		setter.call(input, "renamed-session-e2e");
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		await until(() => !$("#renameSessionConfirm").disabled, "confirm enabled by a new name");
+		$("#renameSessionConfirm").click();
+		await until(() => $("#renameSessionDialog").hidden, "dialog closes after saving");
+		const header = await until(() => {
+			const text = $("#sessionHeader .session-header-title").textContent;
+			return text === "renamed-session-e2e" ? text : null;
+		}, "header title after rename");
+		const rowTitle = await until(() => {
+			const text = activeRow()?.querySelector(".session-title")?.textContent;
+			return text === "renamed-session-e2e" ? text : null;
+		}, "sidebar row title after rename");
+		const stored = await (await fetch("/api/v1/sessions/" + id)).json();
+		return { id, titleBefore, opened, header, rowTitle, storedName: stored.name };
+	`)
+    assert.equal(renamed.opened.focus, true, "the name field takes focus")
+    assert.equal(renamed.opened.selected, true, "the current title is selected for replacement")
+    assert.equal(renamed.opened.value, renamed.titleBefore)
+    assert.equal(renamed.opened.title, "重命名会话")
+    assert.equal(renamed.opened.confirmDisabled, true, "an unchanged name cannot be saved again")
+    assert.equal(renamed.opened.modal, "true")
+    assert.equal(renamed.opened.menuClosed, true, "the row menu closes behind the dialog")
+    assert.equal(renamed.header, "renamed-session-e2e", "the header shows the new name")
+    assert.equal(renamed.rowTitle, "renamed-session-e2e", "the sidebar row shows the new name")
+    assert.equal(renamed.storedName, "renamed-session-e2e", "the host persisted the new name")
+
+    await browser.goto(`${origin}/`)
+    const reloaded = await browser.run(`
+		const row = await until(() => document.querySelector('#projectView .session-row[data-session-id="${renamed.id}"]'), "renamed session after reload");
+		return row.querySelector(".session-title").textContent;
+	`)
+    assert.equal(reloaded, "renamed-session-e2e")
+
+    // Escape from the focused field is the shell chain's: the edited text is dropped, the saved name kept.
+    await browser.run(`
+		const row = await until(() => document.querySelector('#projectView .session-row[data-session-id="${renamed.id}"]'), "row for Escape");
+		row.querySelector(".session-menu-button").click();
+		await until(() => $("#sessionMenu"), "menu before Escape");
+		$("#sessionMenu [data-action='rename']").click();
+		const field = await until(() => !$("#renameSessionDialog").hidden && $("#renameSessionInput"), "dialog before Escape");
+		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+		setter.call(field, "discarded-by-escape");
+		field.dispatchEvent(new Event("input", { bubbles: true }));
+		await until(() => !$("#renameSessionConfirm").disabled, "edited name before Escape");
+	`)
+    await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    await browser.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    const escaped = await browser.run(`
+		await until(() => $("#renameSessionDialog").hidden, "Escape to close the rename dialog");
+		const stored = (await (await fetch("/api/v1/sessions/${renamed.id}")).json()).name;
+		const reopened = $("#renameSessionInput")?.value ?? null;
+		return { stored, reopened };
+	`)
+    assert.deepEqual(escaped, { stored: "renamed-session-e2e", reopened: null })
+
+    // A refused save keeps the dialog and its text open, and clears the pending state.
+    const refused = await browser.run(`
+		const row = await until(() => document.querySelector('#projectView .session-row[data-session-id="${renamed.id}"]'), "row for refusal");
+		row.querySelector(".session-menu-button").click();
+		await until(() => $("#sessionMenu"), "menu for refusal");
+		$("#sessionMenu [data-action='rename']").click();
+		const field = await until(() => !$("#renameSessionDialog").hidden && $("#renameSessionInput"), "dialog for refusal");
+		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+		const type = (text) => { setter.call(field, text); field.dispatchEvent(new Event("input", { bubbles: true })); };
+		type("refused-name-e2e");
+		await until(() => !$("#renameSessionConfirm").disabled, "refusal name typed");
+		const original = window.fetch; let calls = 0;
+		window.fetch = (...args) => {
+			if (String(args[0]).endsWith("/name") && args[1]?.method === "PATCH") {
+				calls++;
+				return Promise.resolve(new Response(JSON.stringify({error:"rename fixture refusal"}), {status:500, headers:{"content-type":"application/json"}}));
+			}
+			return original(...args);
+		};
+		$("#renameSessionConfirm").click();
+		await until(() => $("#errorToast").textContent.includes("rename fixture refusal"), "refusal toast");
+		const during = {
+			open: !$("#renameSessionDialog").hidden,
+			text: field.value,
+			busy: $("#renameSessionDialog [role='dialog']").getAttribute("aria-busy"),
+		};
+		// The refused name is not the stored one, and the field is editable again.
+		await until(() => document.activeElement === field, "focus back on the field after a refusal");
+		window.fetch = original;
+		type("retried-name-e2e");
+		$("#renameSessionConfirm").click();
+		await until(() => $("#renameSessionDialog").hidden, "retry saves");
+		return { calls, during, stored: (await (await fetch("/api/v1/sessions/${renamed.id}")).json()).name };
+	`)
+    assert.equal(refused.calls, 1)
+    assert.deepEqual(refused.during, { open: true, text: "refused-name-e2e", busy: "false" })
+    assert.equal(refused.stored, "retried-name-e2e", "the retry after a refusal is the name stored")
+
+    // While the save is in flight the dialog cannot be dismissed, and focus does not
+    // fall out of it: Escape is read, the request still lands.
+    await browser.run(`
+		const row = await until(() => document.querySelector('#projectView .session-row[data-session-id="${renamed.id}"]'), "row for pending Escape");
+		row.querySelector(".session-menu-button").click();
+		await until(() => $("#sessionMenu"), "menu for pending Escape");
+		$("#sessionMenu [data-action='rename']").click();
+		const field = await until(() => !$("#renameSessionDialog").hidden && $("#renameSessionInput"), "dialog for pending Escape");
+		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+		setter.call(field, "pending-escape-e2e");
+		field.dispatchEvent(new Event("input", { bubbles: true }));
+		const original = window.fetch;
+		window.fetch = (...args) => {
+			if (String(args[0]).endsWith("/name") && args[1]?.method === "PATCH") {
+				return new Promise((resolve, reject) => setTimeout(() => original(...args).then(resolve, reject), 1500));
+			}
+			return original(...args);
+		};
+		window.__renameRestore = original;
+		$("#renameSessionConfirm").click();
+		await until(() => $("#renameSessionDialog [role='dialog']").getAttribute("aria-busy") === "true", "pending rename");
+	`)
+    await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    await browser.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    const duringPending = await browser.run(`
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		const dialog = $("#renameSessionDialog [role='dialog']");
+		const held = {
+			open: !$("#renameSessionDialog").hidden,
+			busy: dialog.getAttribute("aria-busy"),
+			focus: document.activeElement === dialog,
+		};
+		await until(() => $("#renameSessionDialog").hidden, "pending save to land and close");
+		window.fetch = window.__renameRestore;
+		return { held, stored: (await (await fetch("/api/v1/sessions/${renamed.id}")).json()).name };
+	`)
+    assert.deepEqual(duringPending.held, { open: true, busy: "true", focus: true })
+    assert.equal(duringPending.stored, "pending-escape-e2e", "Escape during the save must not cancel it")
+  },
+)
+
+test(
   "the workspace more menu stays visible in a narrow sidebar without folding the project",
   { skip },
   async () => {
@@ -1990,6 +2227,116 @@ test("workspaces with chats can be removed through the dialog, retained after re
   assert.deepEqual(restored, [workspace]);
 });
 
+test("rewriting a message leaves one input box, not two", { skip }, async () => {
+  // Rewriting happens in place, above the conversation. The bottom composer used
+  // to stay mounted beside it, so the page showed two prompt fields at once.
+  const sessionId = "e2e-rewrite-session"
+  const now = new Date().toISOString()
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const lines = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "rw-u", parentId: null, timestamp: now, message: { role: "user", content: "rewrite fixture", timestamp: Date.now() } },
+    {
+      type: "message", id: "rw-a", parentId: "rw-u", timestamp: now,
+      message: { role: "assistant", content: [{ type: "text", text: "ok" }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "stop", timestamp: Date.now() },
+    },
+  ]
+  const dir = join(base, "agent", "sessions", "--e2e-rewrite--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, `${sessionId}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  const seen = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "rewrite session row");
+    row.click();
+    const pencil = await until(() => $$(".message.user .prompt-actions .message-action").find((button) => button.getAttribute("aria-label") === "重写"), "rewrite action");
+    pencil.click();
+    const editor = await until(() => $("#editComposer"), "in-place editor");
+    // The bottom composer stays mounted (its draft survives), but must not be visible.
+    const visible = () => $$("[contenteditable='true']").filter((element) => element.getClientRects().length > 0).map((element) => element.id);
+    const editing = {
+      editPlaceholder: $("#editPrompt").getAttribute("data-placeholder"),
+      // One visible editable field: the rewritten draft.
+      editable: visible(),
+      bottomHidden: getComputedStyle($(".composer-zone")).display === "none",
+      // The editor rewrites one message; it is not a second run surface.
+      hasPlusMenu: Boolean(editor.querySelector("[aria-label='添加']")),
+      hasPerformanceBar: Boolean(editor.querySelector(".performance-bar")),
+      hasStop: Boolean(editor.querySelector("#stopRun")),
+      controls: $$("#editComposer .composer-controls button").map((button) => button.textContent || button.getAttribute("aria-label")),
+    };
+    $$("#editComposer .composer-controls button").find((button) => button.textContent.includes("取消编辑")).click();
+    await until(() => !$("#editComposer"), "editor closed");
+    const restored = {
+      bottomVisible: getComputedStyle($(".composer-zone")).display !== "none",
+      editable: visible(),
+    };
+    return { editing, restored };
+  `)
+  assert.deepEqual(seen, {
+    editing: {
+      editPlaceholder: "编辑消息…",
+      editable: ["editPrompt"],
+      bottomHidden: true,
+      hasPlusMenu: false,
+      hasPerformanceBar: false,
+      hasStop: false,
+      controls: ["取消编辑", "发送"],
+    },
+    restored: { bottomVisible: true, editable: ["prompt"] },
+  })
+})
+
+test("a group stops being offered once its last session drops it", { skip }, async () => {
+  // A group is a projection of the tags on listed sessions: with no member it is
+  // invisible in the grouped view, so the row's picker must not offer it either
+  // (and its colour must become free again). Its own session keeps the case
+  // independent of what earlier tests left in the sidebar.
+  const sessionId = "e2e-tag-group-session"
+  const now = new Date().toISOString()
+  const lines = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "e2e-tag-user", parentId: null, timestamp: now, message: { role: "user", content: "tag group fixture", timestamp: Date.now() } },
+  ]
+  const dir = join(base, "agent", "sessions", "--e2e-tag-group--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, `${sessionId}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  const seen = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "tag group session row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "tag picker");
+    const before = [...picker.querySelectorAll("[data-tag]")].map((item) => item.textContent);
+    picker.querySelector("[data-new-tag='red']").click();
+    const input = await until(() => $("#tagNameInput"), "group name input");
+    input.value = "E2E 分组";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#tagNameConfirm").click();
+    await until(() => !$("#tagPicker"), "picker closed after create");
+
+    row.querySelector(".session-tag-button").click();
+    const created = await until(() => $("#tagPicker"), "picker after create");
+    const withGroup = [...created.querySelectorAll("[data-tag]")].map((item) => item.textContent);
+    const colourTaken = !created.querySelector("[data-new-tag='red']");
+    // Untag the group's only member: the group has no session left.
+    created.querySelector("[data-tag='red']").click();
+    await until(() => !$("#tagPicker"), "picker closed after untag");
+
+    row.querySelector(".session-tag-button").click();
+    const after = await until(() => $("#tagPicker"), "picker after untag");
+    const withoutGroup = [...after.querySelectorAll("[data-tag]")].map((item) => item.textContent);
+    const colourFree = Boolean(after.querySelector("[data-new-tag='red']"));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return { before, withGroup, colourTaken, withoutGroup, colourFree };
+  `)
+  assert.deepEqual(seen, {
+    before: ["无分类"],
+    withGroup: ["E2E 分组", "无分类"],
+    colourTaken: true,
+    withoutGroup: ["无分类"],
+    colourFree: true,
+  })
+})
+
 test("conversation search finds message content written outside the page and opens the matching message", { skip }, async () => {
   // A session another process (the CLI) wrote: the host's index picks it up without a notification.
   const sessionId = "e2e-search-session"
@@ -2120,6 +2467,113 @@ test("the conversation locator rail jumps to a query and follows the viewport", 
   assert.equal(located.jump, "跳转到第 1 条提问")
 })
 
+test("a content hit in the middle of a long session jumps to that message", { skip }, async () => {
+  // The first search case matched the session's LAST message, so "scrolled to the
+  // entry" and "scrolled to the end" were indistinguishable. This one puts the
+  // match in the middle, with plenty of turns after it.
+  const sessionId = "e2e-search-middle"
+  const now = new Date().toISOString()
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const user = (id, parent, text) => ({ type: "message", id, parentId: parent, timestamp: now, message: { role: "user", content: text, timestamp: Date.now() } })
+  const reply = (id, parent, text) => ({
+    type: "message", id, parentId: parent, timestamp: now,
+    message: { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "stop", timestamp: Date.now() },
+  })
+  const call = (id, parent, toolId) => ({
+    type: "message", id, parentId: parent, timestamp: now,
+    message: { role: "assistant", content: [{ type: "toolCall", id: toolId, name: "run_command", arguments: { command: "cat config/quokka.toml" } }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "toolUse", timestamp: Date.now() },
+  })
+  const result = (id, parent, toolId) => ({
+    type: "message", id, parentId: parent, timestamp: now,
+    message: { role: "toolResult", toolCallId: toolId, toolName: "run_command", content: [{ type: "text", text: "quokkaquarantine = \"/srv/quokka\"" }], isError: false, timestamp: Date.now() },
+  })
+  const lines = [{ type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace }]
+  // 12 turns of filler, with a message target at turn 3 and a tool-output target at turn 8.
+  for (let turn = 1; turn <= 12; turn += 1) {
+    const answer = turn === 3 ? "The wombatregistry lives in config/quokka.toml." : `Filler answer number ${turn}, with enough words to take up vertical space in the transcript.`
+    const parent = turn === 1 ? null : `e2e-m${turn - 1}-a`
+    lines.push(user(`e2e-m${turn}-u`, parent, `question ${turn}: please explain something at length`))
+    if (turn === 8) {
+      lines.push(call(`e2e-m${turn}-tool`, `e2e-m${turn}-u`, `tool-${turn}`), result(`e2e-m${turn}-toolr`, `e2e-m${turn}-tool`, `tool-${turn}`), reply(`e2e-m${turn}-a`, `e2e-m${turn}-toolr`, answer))
+    } else {
+      lines.push(reply(`e2e-m${turn}-a`, `e2e-m${turn}-u`, answer))
+    }
+  }
+  const dir = join(base, "agent", "sessions", "--e2e-search-middle--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, `${sessionId}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+
+  const jumped = await browser.run(`
+    $("#searchPlaceholder").click();
+    await until(() => !$("#searchModal").hidden, "search modal");
+    const input = $("#globalSearchInput");
+    input.value = "wombatregistry";
+    input.dispatchEvent(new Event("input"));
+    const result = await until(() => $$(".search-result").find((row) => row.dataset.entryId === "e2e-m3-a"), "middle hit");
+    // The match must be findable at a glance: a real wash, not a faint tint.
+    const mark = result.querySelector("mark");
+    const painted = getComputedStyle(mark);
+    const highlight = { background: painted.backgroundColor, color: painted.color, weight: painted.fontWeight };
+    result.click();
+    await until(() => $("#searchModal").hidden, "modal to close");
+    await until(() => $('#streamInner [data-entry-id="e2e-m3-a"]'), "target message");
+    // Let the scroll settle.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const stream = $("#stream");
+    const message = $('#streamInner [data-entry-id="e2e-m3-a"]');
+    const streamBox = stream.getBoundingClientRect();
+    const box = message.getBoundingClientRect();
+    const atEnd = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 8;
+    return {
+      inViewport: box.bottom > streamBox.top && box.top < streamBox.bottom,
+      atEnd,
+      matchedLast: $('#streamInner [data-entry-id="e2e-m12-a"]').getBoundingClientRect().top <= streamBox.top + 4,
+      highlight,
+    };
+  `)
+  assert.deepEqual(
+    { inViewport: jumped.inViewport, atEnd: jumped.atEnd, matchedLast: jumped.matchedLast },
+    { inViewport: true, atEnd: false, matchedLast: false },
+  )
+  // A find-in-page wash, not the browser default and not the surface itself.
+  assert.notEqual(jumped.highlight.background, "rgba(0, 0, 0, 0)")
+  assert.match(jumped.highlight.background, /^rgb\(255, 226, 122\)$/, `match background: ${jumped.highlight.background}`)
+  // 600 in a plain row, 700 on the Enter target: either way it is bolder than the snippet.
+  assert.ok(Number(jumped.highlight.weight) >= 600, `match weight: ${jumped.highlight.weight}`)
+
+  // A hit on a message the user rewound or retried away: the file keeps those
+  // rows, the page renders only the live branch. The jump must say so instead of
+  // silently landing at the end of the conversation.
+  const abandonedId = "e2e-abandoned-session"
+  const abandoned = [
+    { type: "session", version: 3, id: abandonedId, timestamp: now, cwd: workspace },
+    user("a1", null, "first question"),
+    reply("a2", "a1", "The wombatcryptid answer that was later retried."),
+    user("a3", "a1", "first question, retried"),
+    reply("a4", "a3", "The second, kept answer."),
+  ]
+  await writeFile(join(dir, `${abandonedId}.jsonl`), abandoned.map((line) => JSON.stringify(line)).join("\n") + "\n")
+
+  const abandonedJump = await browser.run(`
+    $("#searchPlaceholder").click();
+    await until(() => !$("#searchModal").hidden, "search modal");
+    const input = $("#globalSearchInput");
+    input.value = "wombatcryptid";
+    input.dispatchEvent(new Event("input"));
+    const row = await until(() => $$(".search-result").find((item) => item.dataset.entryId === "a2"), "abandoned hit");
+    row.click();
+    await until(() => $("#searchModal").hidden, "modal to close");
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    return {
+      landed: Boolean($('#streamInner [data-entry-id="a4"]')),
+      told: $("#errorToast").hidden === false,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+    };
+  `)
+  assert.equal(abandonedJump.landed, true, "the session opened")
+  assert.equal(abandonedJump.told, true, "a hit outside the live branch was not reported")
+})
+
 test("a subagent or workflow call opens its child agents' transcripts read-only over the conversation", { skip }, async () => {
   const now = new Date().toISOString()
   const stamp = now.replace(/[:.]/g, "-")
@@ -2144,10 +2598,37 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     { type: "session", version: 3, id: parentId, timestamp: now, cwd: workspace },
     user("p1", null, "delegate the wombat audit"),
     call("p2", "p1", "t1", "subagent"),
-    result("p3", "p2", "t1", "subagent", { mode: "single", results: [{ agent: "explore", task: "audit wombat", sessionId: subagentId }] }),
-    call("p4", "p3", "t2", "workflow"),
-    result("p5", "p4", "t2", "workflow", { schemaVersion: 1, runId: run, name: "e2e" }),
-    reply("p6", "p5", "All delegated."),
+    result("p3", "p2", "t1", "subagent", {
+      mode: "single",
+      results: [{
+        agent: "explore",
+        task: "audit wombat",
+        sessionId: subagentId,
+        model: "e2e",
+        // 8000 cache reads of 9100 sent context = 87.9%, and 8000/9300 total = 86.0%.
+        usage: { input: 1000, output: 200, cacheRead: 8000, cacheWrite: 100, cost: 0.02, contextTokens: 9300, turns: 3 },
+      }],
+    }),
+    // A dispatch the kernel refused before starting a child: no per-task result
+    // exists, and the attempt must still be recorded as failed with its reason.
+    {
+      type: "message", id: "p4", parentId: "p3", timestamp: now,
+      message: {
+        role: "assistant", api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "toolUse", timestamp: Date.now(),
+        content: [{ type: "toolCall", id: "t1b", name: "subagent", arguments: { task: "rejected audit" } }],
+      },
+    },
+    {
+      type: "message", id: "p5", parentId: "p4", timestamp: now,
+      message: {
+        role: "toolResult", toolCallId: "t1b", toolName: "subagent", isError: true, timestamp: Date.now(),
+        content: [{ type: "text", text: "Invalid parameters. Provide exactly one mode." }],
+        details: { mode: "single", results: [] },
+      },
+    },
+    call("p6", "p5", "t2", "workflow"),
+    result("p7", "p6", "t2", "workflow", { schemaVersion: 1, runId: run, name: "e2e" }),
+    reply("p8", "p7", "All delegated."),
   ]
   const childLines = (id, task, answer) => [
     { type: "session", version: 3, id, timestamp: now, cwd: workspace, origin: "subagent", parentSessionId: parentId },
@@ -2168,17 +2649,76 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     const listedChildren = $$(".session-row").filter((item) => /^(subagent|workflow)-/.test(item.dataset.sessionId)).length;
     row.click();
     const link = await until(() => $('.tool-child-link[data-child-session-id="${subagentId}"]'), "subagent link");
+
     link.click();
     const view = $("#childAgentView");
     await until(() => !view.hidden && view.textContent.includes("Wombat audit finished."), "child transcript");
+    const usageStrip = $("#subagentUsage");
+    // A subagent is context the main agent wrote: the reader only looks, so the
+    // parent's prompt deck must be gone while this read-only record is open.
+    const composer = $(".composer-zone");
     const single = {
       listedChildren,
       readOnlyBadge: Boolean(view.querySelector(".child-agent-badge")),
       actions: view.querySelectorAll(".message-actions, textarea, input").length,
       activeRow: $(".session-row.active")?.dataset.sessionId,
+      composerHidden: getComputedStyle(composer).display === "none",
+      // The child's input is a collapsed "message received" receipt, never a
+      // bubble (which reads as an input field in this read-only panel).
+      taskCopiesBeforeOpen: (view.textContent.match(/audit wombat/g) ?? []).length,
+      inputRow: (() => {
+        const row = view.querySelector(".subagent-input-toggle");
+        return row ? { label: row.textContent, expanded: row.getAttribute("aria-expanded") } : null;
+      })(),
+      userBubbles: view.querySelectorAll(".message.user").length,
+      // Overview, then the parent's input, then the model's execution.
+      sections: [...view.querySelectorAll(".subagent-overview, .subagent-input, .subagent-execution")].map(
+        (section) => section.className,
+      ),
+      usage: usageStrip
+        ? {
+            input: usageStrip.querySelector("[data-usage='input']")?.textContent ?? "",
+            cacheRead: usageStrip.querySelector("[data-usage='cache-read']")?.textContent ?? "",
+            contextRate: usageStrip.querySelector("[data-usage='context-rate']")?.textContent ?? "",
+            totalRate: usageStrip.querySelector("[data-usage='total-rate']")?.textContent ?? "",
+          }
+        : null,
     };
+    // Opening the receipt shows the task exactly once, as prose.
+    view.querySelector(".subagent-input-toggle").click();
+    await until(() => view.querySelector(".subagent-input .subagent-task"), "opened task receipt");
+    single.taskCopiesOpen = (view.textContent.match(/audit wombat/g) ?? []).length;
+    single.taskBlock = Boolean(view.querySelector(".subagent-input .subagent-task"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "child view closed by Escape");
+    single.composerRestored = getComputedStyle(composer).display !== "none";
+
+    // A refused dispatch has no per-task result; it must still be a failed
+    // record carrying the tool's own reason, not a nameless "status unknown" row.
+    const failedLane = await until(() => $('.lane-row[data-subagent-tool-id="tool-t1b"]'), "rejected dispatch lane");
+    const rejected = {
+      laneState: failedLane.dataset.toolState,
+      laneText: failedLane.textContent,
+      summaryFailed: $$(".sb-agent-row[data-agent-status='failed']").map((row) => row.textContent),
+      summaryUnknownHasAttempt: $$(".sb-agent-row[data-agent-status='unknown']").some((row) =>
+        row.textContent.includes("rejected audit"),
+      ),
+    };
+    failedLane.click();
+    await until(() => !view.hidden && view.textContent.includes("Invalid parameters"), "rejected dispatch details");
+    view.querySelector(".subagent-input-toggle")?.click();
+    await until(() => view.querySelector(".subagent-input .subagent-task"), "opened rejected task receipt");
+    rejected.panel = {
+      error: view.querySelector(".subagent-error")?.textContent ?? "",
+      status: view.querySelector(".subagent-state-label")?.textContent ?? "",
+      task: view.querySelector(".subagent-task")?.textContent ?? "",
+      empty: view.querySelector(".subagent-execution .child-agent-empty")?.textContent ?? "",
+      inputs: view.querySelectorAll("input, textarea, [contenteditable='true']").length,
+      userBubbles: view.querySelectorAll(".message.user").length,
+      composerHidden: getComputedStyle(composer).display === "none",
+    };
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(() => view.hidden, "rejected view closed by Escape");
 
     $('.tool-child-link[data-workflow-run="${run}"]').click();
     await until(() => !view.hidden && view.textContent.includes("First agent answer."), "first workflow agent");
@@ -2188,15 +2728,65 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     await until(() => view.textContent.includes("Second agent answer."), "second workflow agent");
     $("#childAgentBack").click();
     await until(() => view.hidden, "child view closed");
-    return { ...single, tabs: agentTabs, tabHints };
+
+    // The rail opens this panel on its own: without selecting an agent, the
+    // button used to show an empty panel while the summary listed several.
+    $('[data-right-panel="subagent"]').click();
+    const rail = await until(() => !view.hidden && (view.textContent.includes("First agent answer.") || view.textContent.includes("Wombat audit finished.")), "child transcript from the rail");
+    const railOpened = { visible: !view.hidden, text: view.textContent.includes("First agent answer.") || view.textContent.includes("Wombat audit finished.") };
+    $('[data-right-panel="subagent"]').click();
+    await until(() => view.hidden, "rail closes the panel");
+    return { ...single, rejected, tabs: agentTabs, tabHints, railOpened };
   `)
-  assert.deepEqual(seen, {
+  assert.equal(seen.composerHidden, true, "the parent composer still shows beside the read-only subagent record")
+  assert.equal(seen.composerRestored, true, "closing the record does not restore the parent composer")
+  assert.equal(seen.taskCopiesBeforeOpen, 0, "the task is printed before its receipt is opened")
+  assert.match(seen.inputRow?.label ?? "", /^收到任务消息/, "the receipt is not labelled")
+  assert.equal(seen.inputRow?.expanded, "false", "the task receipt starts closed")
+  assert.equal(seen.taskCopiesOpen, 1, `the task was printed ${seen.taskCopiesOpen} times`)
+  assert.equal(seen.taskBlock, true, "the opened receipt has no task text")
+  assert.equal(seen.userBubbles, 0, "the task is drawn as a chat bubble, which reads as an input box")
+  assert.deepEqual(seen.sections, ["subagent-overview", "subagent-input", "subagent-execution"])
+  assert.equal(seen.rejected.laneState, "failed", "a refused dispatch is not a failed lane")
+  assert.match(seen.rejected.laneText, /rejected audit/)
+  assert.equal(seen.rejected.summaryUnknownHasAttempt, false, "a refused dispatch is recorded as status unknown")
+  assert.match(seen.rejected.summaryFailed.join(" | "), /rejected audit/)
+  assert.deepEqual(seen.rejected.panel, {
+    error: "Invalid parameters. Provide exactly one mode.",
+    status: "已失败",
+    task: "rejected audit",
+    empty: "派发失败，子会话未创建",
+    inputs: 0,
+    userBubbles: 0,
+    composerHidden: true,
+  })
+  assert.deepEqual(seen.usage, {
+    input: "输入 1k",
+    cacheRead: "缓存读 8k",
+    contextRate: "上下文命中率 87.9%",
+    totalRate: "总 Token 命中率 86.0%",
+  })
+  const {
+    usage: _usage,
+    taskCopiesBeforeOpen: _before,
+    taskCopiesOpen: _open,
+    taskBlock: _taskBlock,
+    userBubbles: _userBubbles,
+    sections: _sections,
+    rejected: _rejected,
+    inputRow: _inputRow,
+    composerHidden: _composerHidden,
+    composerRestored: _composerRestored,
+    ...rest
+  } = seen
+  assert.deepEqual(rest, {
     listedChildren: 0,
     readOnlyBadge: true,
     actions: 0,
     activeRow: parentId,
     tabs: ["#1first workflow agent", "#2second workflow agent"],
     tabHints: ["first workflow agent", "second workflow agent"],
+    railOpened: { visible: true, text: true },
   })
 
   const refused = await browser.run(`
@@ -2370,4 +2960,70 @@ test("an empty conversation switches and creates git branches without losing unc
   // On disk: the new branch is checked out and the uncommitted edit came along.
   assert.equal((await git("branch", "--show-current")).stdout.trim(), "feat/e2e-new")
   assert.equal(await readFile(join(repo, "a.txt"), "utf8"), "local edit\n")
+})
+
+test("a streaming reply never turns into a second prompt field", { skip }, async () => {
+  // The live assistant row has no entry id yet. The rewrite slot used to compare
+  // `editingPrompt?.entryId` (undefined when nothing is being rewritten) with that
+  // missing id, so every turn mounted an empty "编辑消息…" editor over the reply,
+  // beside the composer — two prompt fields, and the one that vanished when the
+  // turn settled read as the input drifting between the transcript and the bottom.
+  await browser.goto(`${origin}/`)
+  const seen = await browser.run(`
+    await until(() => $("#newSession"), "shell");
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "new draft");
+    const editor = $("#prompt");
+    editor.textContent = "stream-fixture"; editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    // Only the conversation with content is measured: a draft is deliberately centred.
+    await until(() => $("#stream .message.user"), "sent message");
+    const frames = [];
+    for (let index = 0; index < 40; index += 1) {
+      const prompt = $("#prompt");
+      frames.push({
+        slot: Boolean($(".edit-prompt-slot")),
+        edit: Boolean($("#editComposer")),
+        visible: $$("[contenteditable='true']").filter((element) => element.getClientRects().length > 0).map((element) => element.id),
+        zone: Math.round($(".composer-zone").getBoundingClientRect().top),
+        promptTop: prompt ? Math.round(prompt.getBoundingClientRect().top) : null,
+        zoneDisplay: getComputedStyle($(".composer-zone")).display,
+        live: $$("#stream .message.assistant").some((row) => row.textContent.includes("streamed reply")),
+        promptHeight: prompt ? Math.round(prompt.getBoundingClientRect().height) : null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+    const id = await until(() => $(".session-row.active")?.dataset.sessionId, "created session");
+    await until(async () => (await (await fetch("/api/v1/sessions/" + id)).json()).status === "completed", "turn settles");
+    // After the turn the composer is back, at the height the stream ended on.
+    frames.push({
+      slot: Boolean($(".edit-prompt-slot")),
+      edit: Boolean($("#editComposer")),
+      visible: $$("[contenteditable='true']").filter((element) => element.getClientRects().length > 0).map((element) => element.id),
+      zone: Math.round($(".composer-zone").getBoundingClientRect().top),
+      promptTop: $("#prompt") ? Math.round($("#prompt").getBoundingClientRect().top) : null,
+      zoneDisplay: getComputedStyle($(".composer-zone")).display,
+      live: false,
+      promptHeight: $("#prompt") ? Math.round($("#prompt").getBoundingClientRect().height) : null,
+    });
+    return { frames, reply: $("#stream").textContent.includes("streamed reply 11") };
+  `)
+  assert.equal(seen.reply, true, "the streamed reply is rendered, not replaced by an editor")
+  // Every sample, including the ones where the composer would be hidden: the
+  // page keeps the one prompt field, and it keeps its place.
+  for (const frame of seen.frames) {
+    assert.deepEqual(frame.visible, ["prompt"], `exactly one prompt field per frame: ${JSON.stringify(frame)}`)
+    assert.equal(frame.slot, false)
+    assert.equal(frame.edit, false)
+    assert.equal(frame.zoneDisplay, "block")
+    assert.ok(frame.promptHeight > 0, `the composer stays laid out: ${JSON.stringify(frame)}`)
+  }
+  // The first samples may still catch the session's own chrome settling in (the
+  // performance bar appears with the session). Streaming must not move the field.
+  const settled = seen.frames.slice(5)
+  const tops = [...new Set(settled.map((frame) => frame.promptTop))]
+  assert.equal(tops.length, 1, `the prompt moved while the reply streamed: ${tops.join(",")}`)
+  const zones = [...new Set(settled.map((frame) => frame.zone))]
+  assert.equal(zones.length, 1, `the composer moved while the reply streamed: ${zones.join(",")}`)
 })

@@ -1,5 +1,5 @@
 import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 
 export interface WebWorkspace {
 	readonly path: string;
@@ -19,6 +19,30 @@ async function isDirectory(path: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * One spelling per folder.
+ *
+ * A folder reaches this registry by more than one name — a symlink, macOS's
+ * `/var` and `/private/var`, a trailing slash left by a launcher — and two
+ * spellings of one folder are not two workspaces. Removing by one name while
+ * the other stayed registered left the workspace listed and usable after it was
+ * deleted, so every comparison goes through this.
+ *
+ * A folder that no longer exists cannot be resolved; its normalized path is the
+ * only spelling left, and the entries recorded for it still have to match.
+ */
+async function canonicalPath(path: string): Promise<string> {
+	try {
+		return await realpath(path);
+	} catch {
+		return resolve(path);
+	}
+}
+
+function unique(values: readonly string[]): string[] {
+	return [...new Set(values)];
 }
 
 /**
@@ -46,16 +70,21 @@ export class WorkspaceRegistry {
 		try {
 			const parsed: unknown = JSON.parse(await readFile(this.file, "utf8"));
 			const stored = (parsed as { workspaces?: unknown } | null)?.workspaces;
-			if (Array.isArray(stored)) {
-				this.paths = [...new Set(stored.filter((entry): entry is string => typeof entry === "string" && !!entry))];
-			}
-			const removed = (parsed as { removedWorkspaces?: unknown } | null)?.removedWorkspaces;
-			if (Array.isArray(removed)) {
-				this.removed = [
-					...new Set(removed.filter((entry): entry is string => typeof entry === "string" && isAbsolute(entry))),
-				];
-				this.paths = this.paths.filter((path) => !this.removed.includes(path));
-			}
+			const removable = (parsed as { removedWorkspaces?: unknown } | null)?.removedWorkspaces;
+			const paths: string[] = Array.isArray(stored)
+				? unique(stored.filter((entry): entry is string => typeof entry === "string" && !!entry))
+				: [];
+			const removed: string[] = Array.isArray(removable)
+				? unique(removable.filter((entry): entry is string => typeof entry === "string" && isAbsolute(entry)))
+				: [];
+			// Registered folders are compared canonically, and a removal recorded
+			// under another spelling of the same folder still hides it. A file
+			// written by the buggy version held both spellings — one visible, one
+			// hidden — so this also repairs that state on the next read.
+			const canonicalRemoved = await Promise.all(removed.map(canonicalPath));
+			const canonicalPaths = await Promise.all(paths.map(canonicalPath));
+			this.removed = unique([...removed, ...canonicalRemoved]);
+			this.paths = unique(canonicalPaths).filter((path) => !this.removed.includes(path));
 		} catch {
 			// Missing or malformed metadata must not stop the host; start empty.
 		}
@@ -74,19 +103,27 @@ export class WorkspaceRegistry {
 
 	async list(): Promise<WebWorkspace[]> {
 		await this.load();
+		// One entry per folder: a folder recorded under two spellings is hidden
+		// once, not listed twice. Removed spellings are kept as the client matches
+		// them against the folder names its session rows still carry.
+		const paths = unique(this.paths);
+		const removed = unique([...this.removed]).filter((path) => !paths.includes(path));
 		return Promise.all(
-			[...this.paths, ...this.removed].map(async (path) => ({
+			[...paths, ...removed].map(async (path) => ({
 				path,
 				name: basename(path) || path,
 				available: await isDirectory(path),
-				...(this.removed.includes(path) ? { hidden: true } : {}),
+				...(removed.includes(path) ? { hidden: true } : {}),
 			})),
 		);
 	}
 
 	async has(path: string): Promise<boolean> {
 		await this.load();
-		return this.paths.includes(path);
+		if (!isAbsolute(path)) return false;
+		const canonical = await canonicalPath(path);
+		if (this.removed.includes(canonical)) return false;
+		return this.paths.includes(canonical);
 	}
 
 	/** Register a folder by its real path, so two spellings cannot list it twice. */
@@ -100,12 +137,14 @@ export class WorkspaceRegistry {
 			throw new Error("Folder does not exist");
 		}
 		if (!(await isDirectory(path))) throw new Error("Path is not a directory");
+		// Re-adding restores a removed folder, whichever spelling the removal used.
+		const previousPaths = this.paths;
+		const previousRemoved = this.removed;
+		const restored = await Promise.all(this.removed.map(canonicalPath));
+		this.removed = this.removed.filter((_entry, index) => restored[index] !== path);
 		// Newest first: the folder just added is the one the user wants to see at the top of the sidebar.
-		if (this.paths[0] !== path) {
-			const previousPaths = this.paths;
-			const previousRemoved = this.removed;
-			this.removed = this.removed.filter((entry) => entry !== path);
-			this.paths = [path, ...this.paths.filter((entry) => entry !== path)];
+		this.paths = [path, ...this.paths.filter((entry) => entry !== path)];
+		if (this.removed.length !== previousRemoved.length || this.paths[0] !== previousPaths[0]) {
 			try {
 				await this.save();
 			} catch (error) {
@@ -121,15 +160,22 @@ export class WorkspaceRegistry {
 	async remove(path: string): Promise<boolean> {
 		await this.load();
 		if (!isAbsolute(path)) return false;
-		if (this.removed.includes(path)) return true;
-		const previous = this.paths;
-		this.paths = this.paths.filter((entry) => entry !== path);
-		this.removed = [...this.removed, path];
+		const canonical = await canonicalPath(path);
+		// Both spellings are recorded. The canonical one owns the registered entry
+		// (so the folder cannot stay listed), and the caller's spelling is what the
+		// client compares session rows against, which may be another name for the
+		// same folder.
+		const additions = unique([path, canonical]).filter((entry) => !this.removed.includes(entry));
+		if (additions.length === 0) return true;
+		const previousPaths = this.paths;
+		const previousRemoved = this.removed;
+		this.paths = this.paths.filter((entry) => entry !== canonical);
+		this.removed = [...this.removed, ...additions];
 		try {
 			await this.save();
 		} catch (error) {
-			this.paths = previous;
-			this.removed = this.removed.filter((entry) => entry !== path);
+			this.paths = previousPaths;
+			this.removed = previousRemoved;
 			throw error;
 		}
 		return true;

@@ -7,6 +7,9 @@ import { dirname, extname, join, normalize, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url";
 import type { StepPermissionPresetId } from "@step-harness/coding-agent";
 import {
+	closeStepMcpPool,
+	configureStepMcpPool,
+	createStepMcpHostWarmup,
 	getStepAccountProfile,
 	getStepAuthPath,
 	getStepLoginStatus,
@@ -47,6 +50,7 @@ import {
 	saveModelProvider,
 	testProviderModel,
 } from "./model-providers.ts";
+import { openFolder } from "./open-folder.ts";
 import {
 	classifyAttachment,
 	defaultWorkspace,
@@ -76,6 +80,7 @@ import {
 	setSkillEnabled,
 	updateMarketplace,
 } from "./settings.ts";
+import { SitePreviewServer } from "./site-preview.ts";
 import { WebTerminals } from "./terminal.ts";
 import { terminalRoute } from "./terminal-routes.ts";
 import { TurnRevertError } from "./turn-changes.ts";
@@ -87,6 +92,8 @@ import {
 	UploadTooLargeError,
 	withUploadedFiles,
 } from "./uploads.ts";
+import { VoiceRelay } from "./voice.ts";
+import { voiceRoute } from "./voice-routes.ts";
 import { WORKSPACES_FILE, WorkspaceRegistry } from "./workspaces.ts";
 
 const moduleRoot = resolve(fileURLToPath(new URL(".", import.meta.url)));
@@ -122,6 +129,18 @@ const directoryPicker: DirectoryPickerMode = resolveDirectoryPickerMode({
 	platform: process.platform,
 	env: process.env,
 });
+/**
+ * When this build was made, from the installer's release envelope
+ * (`apps/desktop/src/release-envelope.ts`). A source checkout has none.
+ */
+const buildTime = normalizeBuildTime(process.env.STEPCODE_BUILD_TIME);
+
+/** A parseable ISO timestamp, or undefined: the page only formats what it can trust. */
+function normalizeBuildTime(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed || Number.isNaN(Date.parse(trimmed))) return undefined;
+	return new Date(trimmed).toISOString();
+}
 /** One system dialog at a time; a second would stack invisibly behind the first. */
 let pickerOpen = false;
 const auth = new WebAuth([`http://127.0.0.1:${port}`, `http://localhost:${port}`], authSecretPath);
@@ -199,7 +218,8 @@ function authorized(request: IncomingMessage): boolean {
 		.map((part) => part.trim())
 		.find((part) => part.startsWith("stepcode_web="))
 		?.slice("stepcode_web=".length);
-	return auth.authorize(cookie, request.headers.origin);
+	const fetchSite = request.headers["sec-fetch-site"];
+	return auth.authorize(cookie, request.headers.origin, typeof fetchSite === "string" ? fetchSite : undefined);
 }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -264,11 +284,24 @@ async function directoryList(inputPath: string): Promise<unknown> {
 	};
 }
 
+// Closing one chat must not stop servers the next chat would start again:
+// released MCP connections idle in the process pool, and shutdown closes them.
+configureStepMcpPool({ quitRelease: "idle" });
+/**
+ * The host holds the global MCP servers itself, connected from startup, so a
+ * new chat's first message already has their tools instead of waiting for them.
+ * Re-synced after anything that changes which servers exist or how they start.
+ */
+const mcpWarmup = createStepMcpHostWarmup();
+const resyncMcp = (): void => void mcpWarmup.sync(defaultWorkspace());
 const sessionSearch = new WebSessionSearch(resolveStepAgentDir());
 const store = new WebSessionStore({ index: sessionSearch });
 const workspaces = new WorkspaceRegistry(join(resolveStepAgentDir(), WORKSPACES_FILE));
 const embeddedBrowser = new WebBrowser([port, launchPort]);
+/** Rendered previews of workspace files, on their own origin (see site-preview.ts). */
+const sitePreview = new SitePreviewServer();
 const terminals = new WebTerminals();
+const voice = new VoiceRelay();
 
 /**
  * Resolve the `cwd` of a workspace-scoped request, or undefined when the folder
@@ -345,6 +378,8 @@ const login = new WebLoginController({
 		loginCache = undefined;
 		account.invalidate();
 		void store.reloadCredentials();
+		// The Step login key is part of a server's environment: reconnect with it.
+		resyncMcp();
 	},
 });
 
@@ -380,6 +415,7 @@ async function signOutOfStep(response: ServerResponse): Promise<void> {
 	});
 	loginCache = undefined;
 	account.invalidate();
+	resyncMcp();
 	const [report, customModels] = await Promise.all([loginReport(), hasUsableCustomModel()]);
 	return json(response, 200, { ...outcome, customModels, login: report });
 }
@@ -462,6 +498,7 @@ async function settingsRoute(
 	response: ServerResponse,
 ): Promise<void> {
 	const [area, name, action] = parts;
+	const changesMcp = method !== "GET" && (area === "mcp" || area === "plugins" || area === "marketplaces");
 	try {
 		if (area === "mcp") {
 			if (!name && method === "GET") return json(response, 200, { servers: await listMcpServers() });
@@ -571,6 +608,9 @@ async function settingsRoute(
 	} catch (caught) {
 		if (caught instanceof SettingsError) return error(response, caught.status, caught.message);
 		throw caught;
+	} finally {
+		// Connect what was added or enabled now; what was removed closes once no chat uses it.
+		if (changesMcp && response.statusCode < 400) resyncMcp();
 	}
 }
 
@@ -675,9 +715,20 @@ const server = createServer(async (request, response) => {
 		if (parts[2] === "browser") return await browserRoute(embeddedBrowser, parts.slice(3), request, response);
 		if (parts[2] === "terminals")
 			return await terminalRoute(terminals, parts.slice(3), url, request, response, knownWorkspace);
+		if (parts[2] === "voice") return await voiceRoute(voice, parts.slice(3), request, response);
 		if (parts[2] === "bootstrap" && method === "GET") {
 			const [report, customModels] = await Promise.all([loginReport(), hasUsableCustomModel()]);
-			return json(response, 200, { cwd: defaultWorkspace(), directoryPicker, login: report, customModels });
+			// The identity of the running build, so a page (and the person looking at
+			// it) can tell which build it is talking to. `buildTime` is staged beside
+			// the server entry by the installer; a source checkout reports none.
+			return json(response, 200, {
+				cwd: defaultWorkspace(),
+				directoryPicker,
+				login: report,
+				customModels,
+				version: resolveStepCodeVersion().value,
+				...(buildTime ? { buildTime } : {}),
+			});
 		}
 		if (parts[2] === "account" && parts.length === 3 && method === "GET") {
 			return json(response, 200, await account.get());
@@ -755,6 +806,26 @@ const server = createServer(async (request, response) => {
 			try {
 				if (parts.length === 4) return await serveLocalImage(response, inputPath);
 				return json(response, 200, await readLocalFile(inputPath));
+			} catch (caught) {
+				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
+			}
+		}
+		// Show the workspace folder in Finder / File Explorer: only a folder this Host already works in.
+		if (parts[2] === "workspace" && parts[3] === "open" && parts.length === 4 && method === "POST") {
+			const cwd = await knownWorkspace(url.searchParams.get("cwd"));
+			if (!cwd) return error(response, 403, "Folder is not a known workspace");
+			try {
+				await openFolder(cwd);
+				return json(response, 200, { ok: true });
+			} catch (caught) {
+				return error(response, 500, caught instanceof Error ? caught.message : String(caught));
+			}
+		}
+		if (parts[2] === "workspace" && parts[3] === "site" && parts.length === 4 && method === "POST") {
+			const cwd = await knownWorkspace(url.searchParams.get("cwd"));
+			if (!cwd) return error(response, 403, "Folder is not a known workspace");
+			try {
+				return json(response, 200, { url: await sitePreview.url(cwd, url.searchParams.get("path") ?? "") });
 			} catch (caught) {
 				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
 			}
@@ -976,6 +1047,21 @@ const server = createServer(async (request, response) => {
 			if (parts[4] === "skills" && parts.length === 5 && method === "GET") {
 				return json(response, 200, { skills: session.skills() });
 			}
+			// A delivered page as its turn left it: later turns' patches reversed, served beside the
+			// workspace on the site preview origin. Falls back to the current file when that is not exact.
+			if (parts[4] === "turns" && parts[5] && parts[6] === "site" && parts.length === 7 && method === "POST") {
+				const path = url.searchParams.get("path") ?? "";
+				try {
+					const version = await session.fileAtTurn(decodeURIComponent(parts[5]), path);
+					const target =
+						version.text === undefined
+							? await sitePreview.url(session.cwd, path)
+							: await sitePreview.versionUrl(session.cwd, path, version.text);
+					return json(response, 200, { url: target, exact: version.exact });
+				} catch (caught) {
+					return error(response, 400, caught instanceof Error ? caught.message : String(caught));
+				}
+			}
 			if (parts[4] === "turns" && parts[5] && parts[6] === "revert" && parts.length === 7 && method === "POST") {
 				try {
 					const { paths, skipped } = await session.revertTurn(decodeURIComponent(parts[5]));
@@ -1134,6 +1220,8 @@ const server = createServer(async (request, response) => {
 // models page and the first session already see them. It runs once per
 // installation and never rejects; listening must not wait on anything else.
 void importLocalStepgoModels().finally(() => {
+	// Connect in the background: listening must not wait on slow servers.
+	resyncMcp();
 	server.listen(port, bindHost, () => {
 		console.log(
 			formatStartupBanner({
@@ -1159,13 +1247,17 @@ const shutdown = async (): Promise<void> => {
 	try {
 		const results = await Promise.allSettled([
 			embeddedBrowser.close(),
+			sitePreview.close(),
 			terminals.stopAll(),
+			voice.stopAll(),
 			(async () => {
 				try {
 					await store.close();
 				} finally {
 					// Flush sessions before stopping their index, even if session teardown fails.
-					await sessionSearch.close();
+					// Sessions only release their MCP leases; the pool owns the server processes.
+					await mcpWarmup.release();
+					await Promise.all([sessionSearch.close(), closeStepMcpPool()]);
 				}
 			})(),
 		]);

@@ -73,7 +73,7 @@ export type ThemeChoice = "system" | "light" | "dark" | "violet";
 export type ConversationView = "project" | "group";
 export type ModeId = "goal" | "plan" | "ultraloop";
 export type DirectoryPickerMode = "native" | "browse";
-export type RightPanelId = "summary" | "context" | "goal" | "changes" | "files" | "subagent" | "browser";
+export type RightPanelId = "summary" | "context" | "changes" | "files" | "subagent" | "browser";
 
 /** Lazy file tree of one workspace (legacy `state.tree`). */
 export interface TreeState {
@@ -220,16 +220,30 @@ export interface UiState {
 	readonly loginRequired: boolean;
 	/** Incremented to ask the composer to focus `#prompt` (legacy `$("#prompt").focus()`). */
 	readonly promptFocusRequest: number;
+	/** The user message being rewritten in place: its entry, the fork point, and its text. */
+	readonly editingPrompt: { readonly entryId: string; readonly before?: string; readonly text: string } | null;
+	/** A message's text loaded back into the prompt for rewriting; `seq` re-fires for the same text. */
+	readonly promptDraftRequest?: { readonly text: string; readonly seq: number };
 	/** Mid-pane view covering the conversation: `#cronView` or `#marketView` (`.market-view.open`). */
 	readonly midView: "cron" | "market" | null;
 	/** Session whose snapshot is loading after a pick: its row highlights and the stream shows progress at once. */
 	readonly openingSession: string | null;
+	/**
+	 * Workspace of a conversation the user just started with a "new conversation" control, listed as a
+	 * placeholder sidebar row until its session exists (it is created on the first send). Null otherwise.
+	 */
+	readonly draftRow: string | null;
 	/** Open menu of the changes view: `turn`, `more`, or `file:<shown path>`. */
 	readonly changesMenu: string | null;
 	/** The composer's slash menu: matching commands, or the MCP server list picked from it. */
 	readonly slashMenu: "commands" | "mcp" | null;
 	/** `#fileCompletionMenu`: workspace @path candidates; Escape closes it without interrupting a turn. */
 	readonly fileCompletionOpen: boolean;
+	/**
+	 * A page another feature asked the embedded browser to show (a delivered HTML file's preview URL). `seq`
+	 * re-fires the same URL; the browser panel handles each request once, after its connection is ready.
+	 */
+	readonly browserOpenRequest: { readonly url: string; readonly seq: number } | null;
 	/**
 	 * A search hit to scroll to once its session is shown; cleared when done.
 	 * `behavior`/`block` let a caller ask for a smooth scroll or a top-aligned
@@ -293,6 +307,11 @@ export interface AppState {
 	 */
 	readonly pendingTurn: PendingTurn | null;
 	readonly bootstrapCwd: string;
+	/**
+	 * The first bootstrap pass finished: a session or a draft has been chosen.
+	 * Until then the pane is still loading, not an empty new conversation.
+	 */
+	readonly booted: boolean;
 	readonly draftCwd: string;
 	readonly draftPolicy: string;
 	/**
@@ -332,6 +351,12 @@ export interface AppState {
 	/** The in-page workspace browser (legacy workspaceBrowserPath/Parent, workspaceDirectories). */
 	readonly workspaceBrowser: DirectoryListing;
 	readonly directoryPicker: DirectoryPickerMode;
+	/**
+	 * The running build's identity, as the host reported it in the bootstrap
+	 * payload: the product version and, for an installed build, when it was made.
+	 * Settings shows it so anyone can tell which build a window is running.
+	 */
+	readonly build: { readonly version?: string; readonly madeAt?: string };
 	/** The system folder chooser request is pending (`#addWorkspace[aria-busy]`). */
 	readonly pickingFolder: boolean;
 	readonly tree: TreeState;
@@ -390,6 +415,7 @@ export function createInitialState(): AppState {
 		compacting: false,
 		pendingTurn: null,
 		bootstrapCwd: "",
+		booted: false,
 		draftCwd: "",
 		draftPolicy: "approve-for-me",
 		draftSelection: null,
@@ -409,6 +435,7 @@ export function createInitialState(): AppState {
 		account: null,
 		workspaceBrowser: { path: "", parent: "", directories: [] },
 		directoryPicker: "browse",
+		build: {},
 		pickingFolder: false,
 		tree: emptyTree(),
 		treeExpandedByCwd: new Map(),
@@ -458,11 +485,14 @@ export function createInitialState(): AppState {
 			logoutConfirm: null,
 			loginRequired: false,
 			promptFocusRequest: 0,
+			editingPrompt: null,
 			midView: null,
 			openingSession: null,
+			draftRow: null,
 			changesMenu: null,
 			slashMenu: null,
 			fileCompletionOpen: false,
+			browserOpenRequest: null,
 			revealEntry: null,
 			childView: null,
 			imagePreview: null,

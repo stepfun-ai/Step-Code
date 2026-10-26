@@ -127,6 +127,17 @@
 	font-size: 13px;
 }
 
+/*
+ * While a subagent's read-only record is open, the parent prompt deck steps
+ * aside. A subagent runs on context the main agent handed it, so the reader is
+ * only looking; leaving the composer beside the record made it read as that
+ * record's input — the field this surface deliberately does not have. Closing
+ * the panel restores the parent's composer.
+ */
+.app:has(#childAgentView.open) .composer-zone {
+	display: none;
+}
+
 .main {
 	container-type: inline-size;
 	container-name: conversation;
@@ -252,12 +263,35 @@
 .lane-row:focus-visible .subagent-status-icon::after {
 	display: block;
 }
+/*
+ * The inspector's reading order: overview (what ran, what it cost), input (the
+ * task the parent sent), execution (what the model did). Each section names
+ * itself so a long dispatch prompt cannot be mistaken for the panel's content.
+ */
+.subagent-overview {
+	display: grid;
+	gap: 8px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--line);
+}
+.subagent-overview .subagent-usage {
+	margin-bottom: 0;
+}
+.subagent-section-title {
+	margin: 0;
+	color: var(--ink-2);
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	line-height: 1.5;
+	text-transform: uppercase;
+}
 .subagent-head {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 7px;
-	margin-bottom: 8px;
+	margin-bottom: 0;
 }
 .subagent-state-label {
 	color: var(--ink-2);
@@ -274,18 +308,88 @@
 	font-variant-numeric: tabular-nums;
 	overflow-wrap: anywhere;
 }
-.subagent-task-detail {
+/*
+ * The child's input is context the parent wrote, not a place to type. It reads
+ * as a one-line receipt — the same shape as a forwarded message — that opens on
+ * demand; a bubble or a boxed paragraph here would look like a prompt field.
+ */
+.subagent-input,
+.subagent-execution {
+	display: grid;
+	gap: 8px;
+}
+.subagent-input {
 	padding-bottom: 12px;
 	border-bottom: 1px solid var(--line);
+}
+.subagent-input-block {
+	min-width: 0;
+}
+.subagent-input-block.is-follow-up {
+	margin-top: 2px;
+}
+/*
+ * A disclosure line, not a field: no border, no fill, no placeholder weight.
+ * A bordered full-width row read as a disabled input in this panel.
+ */
+.subagent-input-toggle {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	width: 100%;
+	min-height: 28px;
+	padding: 2px 4px;
+	border: 0;
+	border-radius: var(--radius-inline-code);
+	background: transparent;
+	color: var(--ink-2);
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+}
+.subagent-input-toggle:hover {
+	background: var(--surface-soft);
+	color: var(--ink);
+}
+.subagent-input-toggle:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 1px;
+}
+.subagent-input-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.subagent-input-time {
+	flex: none;
+	color: var(--ink-3);
+	font-variant-numeric: tabular-nums;
+}
+.subagent-input-chevron {
+	flex: none;
+	transition: transform 160ms ease;
+}
+.subagent-input-toggle[aria-expanded="true"] .subagent-input-chevron {
+	transform: rotate(180deg);
+}
+.subagent-input-block .subagent-task {
+	margin-top: 8px;
 }
 .subagent-task {
 	color: var(--ink);
 	font-size: 13px;
+	line-height: 1.65;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
+.subagent-execution .message,
+.subagent-execution .tool-call,
+.subagent-execution .thinking {
+	min-width: 0;
+}
 .subagent-error {
-	margin-top: 8px;
 	color: var(--danger);
 	font-size: 12px;
 	white-space: pre-wrap;
@@ -302,4 +406,63 @@
 	.subagent-status-icon[data-state="running"] > .icon {
 		animation: none;
 	}
+}
+
+/*
+ * `.subagent-usage`: what the run cost.
+ *
+ * A bordered block like the dispatch header above it, so the figures read as
+ * part of that run rather than as page furniture. Tabular numerals keep the
+ * columns aligned as the numbers change while a lane is still running.
+ */
+.subagent-usage {
+	display: grid;
+	gap: 7px;
+	margin-bottom: 12px;
+	padding: 9px 11px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-soft);
+	font-variant-numeric: tabular-nums;
+}
+.subagent-usage-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 10px;
+}
+.subagent-usage-head h3 {
+	color: var(--ink-2);
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+.subagent-usage-run {
+	color: var(--ink-2);
+	font-size: 12px;
+}
+.subagent-usage-figures {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 14px;
+	color: var(--ink-2);
+	font-size: 12px;
+}
+.subagent-usage-aggregate {
+	padding-top: 6px;
+	border-top: 1px solid var(--line);
+	color: var(--ink-3);
+}
+.subagent-usage-rates {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	color: var(--ink-2);
+	font-size: 12px;
+}
+.subagent-usage-rates strong {
+	color: var(--ink);
+	font-size: 13px;
+	font-weight: 600;
 }

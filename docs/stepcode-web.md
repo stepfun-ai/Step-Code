@@ -406,24 +406,64 @@ Task summaries live in the DFSC-style floating Summary board instead of the orig
 floating banner. Task completion comes from canonical task state, not completed
 `task_create` / `task_update` calls.
 
-Settled turns also expose a compact Outputs strip for supported document,
-image, website, spreadsheet, presentation, audio and video references.
-It combines explicit local Markdown links with successful structured
-write/edit paths. Code-styled basenames qualify only when they identify an
-unambiguous observed output; fenced examples, failed tools, reads and shell
-prose do not prove delivery. The strip initially shows three entries and can
-expand. These are references or observed writes, not proof that files still
-exist; opening a missing file shows the existing preview error.
+A settled turn's deliverables render as file cards under the answer that
+closed it: a type tile, the file name, and its Markdown link label (or kind and
+folder) as the description, one full-width card or a two-column grid. The
+recognized kinds are supported document, image, website, spreadsheet,
+presentation, audio and video references. Recognition combines explicit local
+Markdown links with successful structured write/edit paths. Code-styled
+basenames qualify only when they identify an unambiguous observed output;
+fenced examples, failed tools, reads and shell prose do not prove delivery.
+The grid initially shows four cards and can expand. These are references or
+observed writes, not proof that files still exist; opening a missing file
+shows the existing preview error.
 
-Assistant local links and delivery buttons open the same workspace-bound
-Files inspector. Repeating a delivery button closes its selected preview
+A page the embedded browser can render (`.html`, `.htm`, `.xhtml`, `.svg`)
+opens there when its card is clicked. When the card's turn changed the file,
+the card shows that turn's `+added -removed` lines, its first action opens the
+turn's diff in the changes view unfolded at the file (the same records as the
+"Edited N files" card). Every card opens its page as its own turn left the
+file (`POST /api/v1/sessions/{id}/turns/{turnId}/site`), served from memory
+beside the file, so successive edits of one page each show their own version.
+The Host replays the session's records up to the end of that turn: the latest
+full content a write recorded (Step's `write_file` included, even when the
+file already held it), then each later patch applied forward. That does not
+depend on what the file holds now. Without such a write (the file predates the
+session) it reverses later turns' patches from the file on disk instead; when
+neither reaches the version (an untracked change, a recreated file, or an edit
+outside the session), a card whose turn changed the file opens the current file
+with a notice. Changes count Step's `edit_file` (a patch) and `write_file` (no
+patch, so untracked for undo; nothing when it changed nothing) as well as
+`edit` and `write`. A card whose turn only referenced the file keeps a source
+action instead of the diff. The pill also opens
+the page in the system browser, named and shown
+with its icon: on Desktop the system default browser with its OS icon (macOS
+and Windows), in Web a new tab of the browser showing the page, detected from
+its user agent and Client Hints (Chrome, Safari, Edge and Firefox get bundled
+brand marks; other or unknown browsers a generic glyph). PDF
+cards keep the system-browser action only, because headless Chromium does not
+render PDF. Both browsers load the page from the Host's site preview
+(`POST /api/v1/workspace/site`, `apps/web/src/site-preview.ts`): a separate
+loopback origin that serves one known workspace under an unguessable token,
+GET/HEAD only, with workspace containment and no directory listings, so a
+page's relative CSS, scripts and images load. Agent-written HTML never runs on
+the client's origin, and the Host refuses `Sec-Fetch-Site: same-site` and
+`cross-site` requests, so a previewed page cannot use the page cookie.
+
+Assistant local links and other cards open the same workspace-bound Files
+inspector. Repeating a card (or its source or changes action) closes its selected preview
 while preserving tabs and trigger focus; selecting another file switches the
 preview. Markdown opens rendered, and links inside it resolve relative to the
 document. Windows paths, encoded file URLs and line suffixes normalize before
 the existing file API is called. Paths outside the workspace are rejected;
 the Host remains responsible for realpath and symlink checks. There are no
-automatic historical content reads, native-app actions, or new Office/PDF
-renderers. HTML delivery recognition alone does not enable live HTML preview.
+automatic historical content reads or new Office/PDF renderers.
+
+The conversation header ends with a button that shows the workspace folder
+in the system file manager: Finder (with its icon) on macOS, File Explorer
+(a folder icon) on Windows, the default handler elsewhere. The Host launches it
+through `POST /api/v1/workspace/open` for a known workspace only, without a
+shell (`apps/web/src/open-folder.ts`), so Web and Desktop behave the same.
 
 Each finished turn (one user message up to the next, including a message with
 images only) that changed files gets a card under its last row: "Edited N
@@ -443,14 +483,27 @@ only its own turn: the turn's patches are reverse-applied newest first, and
 nothing is written unless all of them apply. Like `patch -R`, a hunk may have
 moved (later turns added lines elsewhere in the file) and its unchanged context
 lines may have been edited since; only the lines the turn itself changed must be
-intact. Otherwise the request is refused with 409 and a `code` (`conflict` with
-the file's path, `missing`, `busy` while a turn runs or another revert of the
-session is in progress, `reverted`), and the card tells the user to undo the
-later turns that touched the file first; a prompt sent during a revert also gets
-409. Undoing turns newest-first therefore always works. Files the turn created
-are deleted, and an overwritten file gets its previous line ending and BOM back.
-Files without a patch are left alone and listed in the response's `skipped`,
-which the toast names.
+intact. Otherwise the request is refused with 409 before anything is written,
+with a `code`: `conflict` only when undoing later turns first was simulated to
+work: the later turns not yet reverted that changed one of this turn's files
+(and, transitively, the turns that changed one of theirs), one of them having
+changed the blocking file, are reverted newest first, each as a whole, and then
+this turn, all in memory against the files as they are now; the card then tells
+the user to undo the later turns first, newest first. Otherwise the code is
+`modified` with the file's path: the file does not match and that order of
+undoing does not help (a `bash` command or an outside edit changed it). Also
+`missing`, `busy` while a turn runs or another revert of the session is in
+progress, and `reverted`. A prompt sent during a revert also gets 409. What a
+command changed cannot be undone, so a turn whose file a command rewrote stays
+refused. A failure while writing is reported as an error and is not rolled
+back. Paths that name the same file (letter case on a case-insensitive disk, a
+symlink) are reverted as one file. A file the turn created is deleted only when
+reversing reaches the `write` that created it with nothing left and the turn has
+no unpatched change to the same file (`created` describes that one write, not
+the whole turn); an overwritten file gets its previous line ending and BOM back.
+Patches compare LF text without a BOM, so a change to only the line endings, the
+BOM or the final newline is not detected. Files without a patch are left alone
+and listed in the response's `skipped`, which the toast names.
 A successful undo appends a `stepcode-web.turn-revert` custom message (in the
 model's context, not a new turn) naming the request and the restored files, so
 the model does not assume its edits are still on disk; the snapshot's
@@ -788,9 +841,26 @@ Crash recovery and durable site-profile persistence are not implemented.
 page at a time owns a 15-second input lease; polling every five seconds renews
 it. The page's sessionStorage client id allows refresh to rotate the token,
 and a late old-page release cannot remove its replacement. A competing page
-gets 409 rather than silently moving another page's tabs or viewport. Closing
-or hiding the inspector releases input/stream ownership, not tabs. A lost
-connection exposes Reconnect; its lease expires if the page cannot release it.
+gets 409 rather than silently moving another page's tabs or viewport. The
+attached frame stream is the page's own connection, so it keeps control past
+the lease deadline: a sleeping window, a stalled renderer or a busy Host can
+outlast the heartbeat interval, and frames resume when the page does. Requests,
+competing pages and the expiry timer share that one rule, so a request served
+before the timer runs gets the same answer. A page whose stream closed keeps
+control only until the deadline. Closing or hiding the inspector releases
+input/stream ownership, not tabs.
+
+A duplicated browser tab copies sessionStorage, so two live pages can share a
+client id. The newer page takes control as a refresh would, and the displaced
+page receives a `replaced` event before its stream ends; it shows the busy
+message and does not reconnect by itself, so the two pages never take control
+from each other in a loop. A connection counts as established only once its
+frame stream opens. A lost or unopened stream, network errors and three
+consecutive missed heartbeats reconnect with 1, 2, 4, 8 and 8 second backoff;
+the retry budget is restored only after the connection stays up for ten
+seconds, so a stream that opens and drops at once stops after five retries. A
+competing page (409), a stopping Host and a displaced page wait for the manual
+Reconnect control.
 Initial reads, command replies, heartbeat reads and SSE snapshots share one
 revision gate per connection. Duplicate/older revisions and replies arriving
 after connection close cannot replace current state.
@@ -821,8 +891,15 @@ it. The host ACKs Chromium frames locally,
 caps delivery at 15 fps and keeps at most one newest scheduled frame. A blocked
 response drops frames and keeps only the newest metadata; the client keeps
 one decoding image plus one pending latest frame. Input is serialized and
-bounded (48 client / 64 host operations); pointer moves are coalesced. Hidden
-inspectors disconnect the stream instead of decoding background frames.
+bounded (48 client / 64 host operations). Pointer moves and wheel deltas are
+coalesced for one 40 ms frame in the order they happened: Chromium needs about
+two frames per wheel dispatch, so a fast trackpad would otherwise fill the
+queue and lose scroll distance. Wheels are summed only when they scroll the
+same way within 16 CSS pixels of where the batch started: a wheel elsewhere may
+reach another scroll container, and up-then-down at a scroll boundary still
+scrolls down. A wheel replaces an earlier pending move because the Host moves
+the remote pointer to the wheel first; a later move is sent after the wheel.
+Hidden inspectors disconnect the stream instead of decoding background frames.
 
 Mouse clicks/dragging, wheel, editing/navigation keys, text paste and committed
 Chinese composition text are forwarded. Copy selection reads selected text in
@@ -970,7 +1047,7 @@ available in expanded multi-thought groups.
 Prose, images, failures, approvals, retry rows and dedicated Subagent/workflow,
 plan and clarification calls end a process group. Calls awaiting approval and
 unresolved historical calls are never summarized as completed or running.
-User-turn boundaries, file-delivery strips, change cards and settled footers
+User-turn boundaries, reply attachment areas, change cards and settled footers
 remain outside process folds. Search can reveal recorded thinking inside a
 folded group. This grouping changes no session entries or model context.
 

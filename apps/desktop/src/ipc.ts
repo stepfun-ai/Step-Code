@@ -8,8 +8,8 @@
 
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
-import type { DesktopUpdateState } from "@step-harness/web/desktop-bridge";
-import { type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
+import type { DesktopBrowserInfo, DesktopUpdateState } from "@step-harness/web/desktop-bridge";
+import { app, type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
 import { DESKTOP_IPC } from "./ipc-channels.ts";
 import type { DesktopUpdater } from "./updater.ts";
 
@@ -120,6 +120,27 @@ export function installDesktopIpc(options: DesktopIpcOptions): void {
 			throw new Error(`Only http and https URLs can be opened externally (got ${url.protocol})`);
 		}
 		await shell.openExternal(url.href);
+	});
+
+	// The default browser rarely changes while the app runs, and the lookup reads the OS registry or
+	// Launch Services; one answer per launch is enough. A failed lookup is retried on the next call.
+	let defaultBrowser: Promise<DesktopBrowserInfo | null> | undefined;
+	ipcMain.handle(DESKTOP_IPC.defaultBrowser, (event) => {
+		trustedWindow(event, options);
+		// Electron documents this lookup for macOS and Windows only.
+		if (process.platform !== "darwin" && process.platform !== "win32") return null;
+		defaultBrowser ??= app
+			.getApplicationInfoForProtocol("https://example.com")
+			.then(({ name, icon }): DesktopBrowserInfo | null => {
+				const label = name.replace(/\.app$/i, "").trim();
+				if (!label) return null;
+				return { name: label, icon: icon.isEmpty() ? "" : icon.resize({ width: 32, height: 32 }).toDataURL() };
+			})
+			.catch((error: unknown) => {
+				defaultBrowser = undefined;
+				throw error;
+			});
+		return defaultBrowser;
 	});
 
 	ipcMain.handle(DESKTOP_IPC.revealPath, (event, raw: unknown) => {

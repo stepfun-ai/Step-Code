@@ -20,6 +20,11 @@ export interface StepcodeDesktopBridge {
 	revealPath(path: string): Promise<void>;
 	/** The desktop app's own updates (see apps/desktop/src/updater.ts). */
 	readonly updates: DesktopUpdatesBridge;
+	/**
+	 * The system's default web browser, as `openExternal` would launch it: its display name and a PNG data URL of
+	 * its icon (empty when the OS has none). Resolves to null where the OS cannot tell (Linux).
+	 */
+	defaultBrowser(): Promise<DesktopBrowserInfo | null>;
 }
 
 /**
@@ -71,6 +76,13 @@ export interface DesktopUpdatesBridge {
 	restart(): Promise<void>;
 	/** Receive every state change. Returns the unsubscribe function. */
 	subscribe(listener: (state: DesktopUpdateState) => void): () => void;
+}
+
+/** Display identity of the system's default browser. */
+export interface DesktopBrowserInfo {
+	readonly name: string;
+	/** `data:image/png;base64,...`, or "" without an icon. */
+	readonly icon: string;
 }
 
 declare global {

@@ -14,6 +14,7 @@
 import type { AttachedFile } from "../../lib/attached-files";
 import type { UploadedFile } from "../../state/types";
 import { type FileCompletionText, type FileQuery, fileQuery, sameFileQuery } from "./file-completion";
+import type { PlannedEdit, PromptEditRun, PromptRange } from "./markdown-format";
 
 const CHIP_CLASS = "prompt-file";
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -40,9 +41,8 @@ function serialize(parent: Node): string {
 			if (child.classList.contains(CHIP_CLASS)) out += chipText(child);
 			// A plain command chip is the inline rendering of the command text itself.
 			else if (child.classList.contains(COMMAND_LEAD_CLASS)) out += child.dataset.text ?? "";
-			// The staged mode's lead is the inline rendering of its command; the
-			// outgoing message gets that command from `modePrefix`, not the chip.
-			else if (child.classList.contains(MODE_LEAD_CLASS)) continue;
+			// Every lead chip carries its exact command text, modes included.
+			else if (child.classList.contains(MODE_LEAD_CLASS)) out += child.dataset.text ?? "";
 			else if (child.tagName === "BR") out += "\n";
 			else if (child.tagName === "DIV" || child.tagName === "P") {
 				// A block starts a new line unless one just ended.
@@ -315,6 +315,153 @@ export async function waitForUploads(): Promise<void> {
 	await Promise.all(pendingUploads.values());
 }
 
+/* ── Markdown formatting ─────────────────────────────────────────────────── */
+
+/**
+ * Plain-text offset of a DOM boundary, using the same projection as
+ * `completionProjection`: chips are one U+FFFC and a block start begins a line.
+ * `null` means the boundary is outside the prompt.
+ */
+function promptOffset(root: HTMLElement, node: Node, offset: number): number | null {
+	if (node !== root && !root.contains(node)) return null;
+	let total = 0;
+	let last: string | null = null;
+	let found: number | null = null;
+	const walk = (parent: Node): boolean => {
+		for (let index = 0; index < parent.childNodes.length; index += 1) {
+			if (parent === node && index === offset) {
+				found = total;
+				return true;
+			}
+			const child = parent.childNodes[index];
+			if (child instanceof Text) {
+				if (child === node) {
+					found = total + Math.min(offset, child.data.length);
+					return true;
+				}
+				const value = child.data.replace(/\u00a0/g, " ");
+				total += value.length;
+				last = value.slice(-1) || last;
+				continue;
+			}
+			if (!(child instanceof HTMLElement)) continue;
+			if (child.classList.contains(CHIP_CLASS) || child.contentEditable === "false") {
+				if (child === node) {
+					found = total;
+					return true;
+				}
+				total += 1;
+				last = "\ufffc";
+				continue;
+			}
+			if (child.tagName === "BR") {
+				if (child === node) {
+					found = total;
+					return true;
+				}
+				total += 1;
+				last = "\n";
+				continue;
+			}
+			// A block starts a new line unless one just ended (the projection's rule).
+			if ((child.tagName === "DIV" || child.tagName === "P") && total > 0 && last !== "\n") {
+				total += 1;
+				last = "\n";
+			}
+			if (walk(child)) return true;
+		}
+		if (parent === node && offset >= parent.childNodes.length) {
+			found = total;
+			return true;
+		}
+		return false;
+	};
+	walk(root);
+	return found;
+}
+
+/** The current selection as plain-text offsets, with the prompt's projected text. */
+export function promptSelection(root: HTMLElement): PromptRange | null {
+	const selection = getSelection();
+	if (!selection?.rangeCount) return null;
+	const range = selection.getRangeAt(0);
+	if (!root.contains(range.commonAncestorContainer)) return null;
+	const start = promptOffset(root, range.startContainer, range.startOffset);
+	const end = promptOffset(root, range.endContainer, range.endOffset);
+	if (start === null || end === null || start > end) return null;
+	return { text: completionProjection(root).text, start, end };
+}
+
+/** Select the projected text between two offsets; an empty prompt has only its start. */
+function selectPromptRange(root: HTMLElement, start: number, end: number): boolean {
+	const projection = completionProjection(root);
+	const empty = root.childNodes.length === 0;
+	const from = projectionPoint(projection, start) ?? (empty && start === 0 ? { node: root, offset: 0 } : null);
+	const to = projectionPoint(projection, end) ?? (empty && end === 0 ? { node: root, offset: 0 } : null);
+	if (!from || !to) return false;
+	const range = document.createRange();
+	range.setStart(from.node, from.offset);
+	range.setEnd(to.node, to.offset);
+	select(range);
+	return true;
+}
+
+/**
+ * Apply a planned Markdown edit. A change that stays inside one text node goes
+ * through a single `execCommand`, so one formatting action is one undo step; a
+ * change that crosses a line break or a chip falls back to per-run edits.
+ * `execCommand` keeps the browser's undo history, and the fallback only inserts
+ * or deletes markers — the selected content is never rewritten.
+ */
+export function applyPromptEdit(root: HTMLElement, edit: PlannedEdit): boolean {
+	const runs = [...edit.runs].sort((left, right) => left.start - right.start);
+	const applied =
+		runs.length > 1 && applyInOneStep(root, edit, runs[0].start, runs[runs.length - 1].end)
+			? true
+			: applyRuns(root, runs);
+	if (!applied) return false;
+	// The restored selection follows the edits above; the composer reads the
+	// prompt's text on this event (the last execCommand's input ran first).
+	selectPromptRange(root, edit.selectionStart, edit.selectionEnd);
+	root.dispatchEvent(new InputEvent("input", { bubbles: true }));
+	return true;
+}
+
+function applyRuns(root: HTMLElement, runs: readonly PromptEditRun[]): boolean {
+	for (const run of [...runs].sort((left, right) => right.start - left.start)) {
+		if (!selectPromptRange(root, run.start, run.end)) return false;
+		const applied =
+			run.start === run.end ? document.execCommand("insertText", false, run.text) : document.execCommand("delete");
+		if (!applied) return false;
+	}
+	return true;
+}
+
+/**
+ * Replace the whole changed span in one command when it lives in a single text
+ * node. The replacement is the plan's own result for that span, so markers and
+ * text stay identical to the per-run application.
+ */
+function applyInOneStep(root: HTMLElement, edit: PlannedEdit, start: number, end: number): boolean {
+	const projection = completionProjection(root);
+	const from = projectionPoint(projection, start);
+	const to = projectionPoint(projection, end);
+	if (!from || !to || from.node !== to.node) return false;
+	const removed = end - start;
+	const replacementLength = edit.text.length - (projection.text.length - removed);
+	const replacement = edit.text.slice(start, start + replacementLength);
+	if (!selectPromptRange(root, start, end)) return false;
+	return document.execCommand("insertText", false, replacement);
+}
+
+/** Insert a marker pair around the selection (or drop an existing one). */
+export function formatPromptSelection(root: HTMLElement, plan: (range: PromptRange) => PlannedEdit | null): boolean {
+	const range = promptSelection(root);
+	if (!range) return false;
+	const edit = plan(range);
+	return edit ? applyPromptEdit(root, edit) : false;
+}
+
 /* ── The staged session mode's lead chip ─────────────────────────────────── */
 
 /** What `insertModeLead` renders: the mode's icon, its label and the command the send will run. */
@@ -333,26 +480,61 @@ export interface ModeLead {
  * mode replaces the chip in place.
  */
 export function insertModeLead(root: HTMLElement, lead: ModeLead): void {
-	const existing = root.querySelector<HTMLElement>(`.${MODE_LEAD_CLASS}`);
-	if (existing?.dataset.mode === lead.id && existing.textContent === lead.label) return;
-	existing?.remove();
+	const existing = root.querySelector<HTMLElement>(`.${MODE_LEAD_CLASS}[data-mode="${lead.id}"]`);
+	if (existing) return;
+	insertLeadChip(root, MODE_LEAD_CLASS, lead.id, lead.icon, lead.label, `${lead.command} `);
+}
+
+/**
+ * Drop one mode's lead chip (toggling it off, a wiped prompt); without `id`,
+ * every mode chip goes — commands stack, so they each own their lifecycle.
+ */
+export function removeModeLead(root: HTMLElement, id?: string): void {
+	for (const chip of [...root.querySelectorAll<HTMLElement>(`.${MODE_LEAD_CLASS}`)]) {
+		if (id && chip.dataset.mode !== id) continue;
+		if (chip.nextSibling?.textContent === " ") chip.nextSibling.remove();
+		chip.remove();
+	}
+	refreshPlaceholderHint(root);
+}
+
+/**
+ * A lead chip, shared by modes and plain commands: the sent format's own look
+ * (tool-glyph + label, no pill), its exact command text on `dataset.text`, and
+ * it APPENDS after any leads already staged — one input can carry several
+ * commands, in the order they were staged.
+ */
+function insertLeadChip(
+	root: HTMLElement,
+	className: string,
+	mode: string | undefined,
+	icon: string,
+	label: string,
+	text: string,
+): void {
 	const chip = document.createElement("span");
-	chip.className = MODE_LEAD_CLASS;
+	chip.className = className;
 	chip.contentEditable = "false";
-	chip.dataset.mode = lead.id;
-	chip.title = lead.command;
-	const icon = document.createElementNS(SVG_NS, "svg");
-	icon.setAttribute("class", `icon icon--xs ${MODE_LEAD_CLASS}-icon`);
-	icon.setAttribute("aria-hidden", "true");
+	if (mode) chip.dataset.mode = mode;
+	chip.dataset.text = text;
+	chip.title = text.trim();
+	const glyph = document.createElement("span");
+	glyph.className = "tool-glyph";
+	const svg = document.createElementNS(SVG_NS, "svg");
+	svg.setAttribute("class", "icon icon--xs tool-kind-icon");
+	svg.setAttribute("aria-hidden", "true");
 	const use = document.createElementNS(SVG_NS, "use");
-	use.setAttribute("href", `#i-${lead.icon}`);
-	icon.append(use);
-	const label = document.createElement("span");
-	label.className = `${MODE_LEAD_CLASS}-label`;
-	label.textContent = lead.label;
-	chip.append(icon, label);
-	root.insertBefore(chip, root.firstChild ?? null);
-	// The space after it is where the caret sits and what separates the chip from the typed text.
+	use.setAttribute("href", `#i-${icon}`);
+	svg.append(use);
+	glyph.append(svg);
+	const labelText = document.createElement("span");
+	labelText.className = `${className}-label`;
+	labelText.textContent = label;
+	chip.append(glyph, labelText);
+	// Append after the last lead chip already staged, keeping the stack in order.
+	const leads = root.querySelectorAll(`.${MODE_LEAD_CLASS}, .${COMMAND_LEAD_CLASS}`);
+	const anchor = leads.length ? (leads[leads.length - 1] as HTMLElement).nextSibling : (root.firstChild ?? null);
+	root.insertBefore(chip, anchor);
 	root.insertBefore(document.createTextNode(" "), chip.nextSibling);
 	if (document.activeElement === root) {
 		const range = document.createRange();
@@ -360,15 +542,6 @@ export function insertModeLead(root: HTMLElement, lead: ModeLead): void {
 		range.collapse(true);
 		select(range);
 	}
-	refreshPlaceholderHint(root);
-}
-
-/** Drop the lead chip and its separating space (toggling the mode off, or a wiped prompt). */
-export function removeModeLead(root: HTMLElement): void {
-	const chip = root.querySelector(`.${MODE_LEAD_CLASS}`);
-	if (!chip) return;
-	if (chip.nextSibling?.textContent === " ") chip.nextSibling.remove();
-	chip.remove();
 	refreshPlaceholderHint(root);
 }
 
@@ -395,30 +568,7 @@ export interface CommandLead {
  * command text, so the message the kernel receives is unchanged.
  */
 export function insertCommandLead(root: HTMLElement, lead: CommandLead): void {
-	root.querySelector(`.${COMMAND_LEAD_CLASS}`)?.remove();
-	const chip = document.createElement("span");
-	chip.className = COMMAND_LEAD_CLASS;
-	chip.contentEditable = "false";
-	chip.dataset.text = `${lead.command} `;
-	chip.title = lead.command;
-	const icon = document.createElementNS(SVG_NS, "svg");
-	icon.setAttribute("class", `icon icon--xs ${COMMAND_LEAD_CLASS}-icon`);
-	icon.setAttribute("aria-hidden", "true");
-	const use = document.createElementNS(SVG_NS, "use");
-	use.setAttribute("href", `#i-${lead.icon}`);
-	icon.append(use);
-	const label = document.createElement("span");
-	label.className = `${COMMAND_LEAD_CLASS}-label`;
-	label.textContent = lead.command;
-	chip.append(icon, label);
-	root.insertBefore(chip, root.firstChild ?? null);
-	root.insertBefore(document.createTextNode(" "), chip.nextSibling);
-	if (document.activeElement === root) {
-		const range = document.createRange();
-		range.setStart(chip.nextSibling ?? chip, chip.nextSibling ? 1 : 0);
-		range.collapse(true);
-		select(range);
-	}
+	insertLeadChip(root, COMMAND_LEAD_CLASS, undefined, lead.icon, lead.command, `${lead.command} `);
 }
 
 /**

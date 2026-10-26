@@ -1,6 +1,7 @@
 import { type ArtifactKind, artifactKind, workspaceFilePath, workspaceFileReference } from "../../lib/file-references";
 import { basename } from "../../lib/format";
 import { markdownFileReferences } from "../../lib/markdown";
+import type { ChangedFile, TurnChanges } from "../../lib/turn-changes";
 import type { TimelineItem } from "../../state/types";
 import type { TurnFooter } from "./turn-footers";
 
@@ -8,6 +9,13 @@ export interface TurnArtifact {
 	readonly path: string;
 	readonly label: string;
 	readonly kind: ArtifactKind;
+	/** The turn that delivered it: its page renders as this turn left the file. */
+	readonly turnId: string;
+	/**
+	 * This turn's recorded change of the file (the same entry its "Edited N files" card lists), so the
+	 * delivery can open that turn's diff. Absent when the turn only referenced the file.
+	 */
+	readonly change?: { readonly turnId: string; readonly file: ChangedFile };
 }
 
 // Streaming updates regroup history; unchanged settled turns must not reparse Markdown each frame.
@@ -38,7 +46,12 @@ export function turnArtifacts(
 	const found = new Map<string, TurnArtifact>();
 	const add = (path: string, label: string) => {
 		if (found.size >= 12 || artifactKind(path) === "file" || found.has(keyOf(path))) return;
-		found.set(keyOf(path), { path, label: label.slice(0, 160) || basename(path), kind: artifactKind(path) });
+		found.set(keyOf(path), {
+			path,
+			label: label.slice(0, 160) || basename(path),
+			kind: artifactKind(path),
+			turnId: footer.turnId,
+		});
 	};
 	const text = footer.messages
 		.filter((message) => !message.error)
@@ -76,4 +89,46 @@ export function turnArtifacts(
 
 function opensTurn(item: TimelineItem, turnId: string): boolean {
 	return item.kind === "message" && item.role === "user" && (item.entryId ?? item.itemId) === turnId;
+}
+
+/**
+ * Attach the turn's own change records to its deliveries. Both sides name the file relative to the
+ * workspace, but changes keep the tool's spelling (a backslash, a leading `./`), so they meet on the
+ * same normalized key the recognition uses. Unchanged artifacts keep their object.
+ */
+export function withTurnChanges(
+	artifacts: readonly TurnArtifact[],
+	turn: TurnChanges | undefined,
+	cwd: string,
+): readonly TurnArtifact[] {
+	if (!turn || !artifacts.length) return artifacts;
+	// Both inputs keep their identity while the turn is unchanged (see their caches), so the result can too.
+	const cached = attachedCache.get(artifacts);
+	if (cached?.turn === turn && cached.cwd === cwd) return cached.result;
+	const result = attachChanges(artifacts, turn, cwd);
+	attachedCache.set(artifacts, { turn, cwd, result });
+	return result;
+}
+
+const attachedCache = new WeakMap<
+	readonly TurnArtifact[],
+	{ readonly turn: TurnChanges; readonly cwd: string; readonly result: readonly TurnArtifact[] }
+>();
+
+function attachChanges(artifacts: readonly TurnArtifact[], turn: TurnChanges, cwd: string): readonly TurnArtifact[] {
+	const windows = /^[a-z]:[\\/]/i.test(cwd);
+	const keyOf = (path: string) => (windows ? path.toLowerCase() : path);
+	const changed = new Map<string, ChangedFile>();
+	for (const file of turn.files) {
+		const path = workspaceFilePath(cwd, file.path) ?? file.path.replace(/\\/g, "/");
+		changed.set(keyOf(path), file);
+	}
+	let attached = false;
+	const result = artifacts.map((artifact) => {
+		const file = changed.get(keyOf(artifact.path));
+		if (!file) return artifact;
+		attached = true;
+		return { ...artifact, change: { turnId: turn.turnId, file } };
+	});
+	return attached ? result : artifacts;
 }

@@ -58,6 +58,9 @@ const bridge: StepcodeDesktopBridge = {
 			};
 		},
 	},
+	defaultBrowser() {
+		return ipcRenderer.invoke(DESKTOP_IPC.defaultBrowser) as ReturnType<StepcodeDesktopBridge["defaultBrowser"]>;
+	},
 };
 
 contextBridge.exposeInMainWorld("stepcodeDesktop", bridge);

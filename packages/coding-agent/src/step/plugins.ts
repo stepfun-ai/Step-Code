@@ -13,17 +13,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { BorderedLoader } from "../components/bordered-loader.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../core/extensions/types.ts";
+import { execFileText } from "../utils/child-process.ts";
 import { resolveStepConfigDir } from "./environment.ts";
 import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
 import { isPathContained } from "./path-containment.ts";
 import { ensureStepPageReady, stepPageInstallerUrl } from "./steppage-provision.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
-
-const execFileAsync = promisify(execFile);
 
 export const STEP_PLUGIN_MANIFEST_FILE = "step.plugin.json";
 export const PLUGIN_MANIFEST_FILE_NAME = STEP_PLUGIN_MANIFEST_FILE;
@@ -642,7 +640,9 @@ export async function diagnoseStepPlugin(
 		}
 	}
 	if (mcpServers.length > 0) {
-		warnings.push(`MCP declarations saved for ${mcpServers.join(", ")}; the server starts after Step restarts.`);
+		warnings.push(
+			`MCP declarations saved for ${mcpServers.join(", ")}; running sessions start the server before their next request.`,
+		);
 	}
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
@@ -1156,7 +1156,7 @@ export async function updateMarketplaceSource(input: {
 		return { warnings: [`Marketplace '${name}' is a local checkout and cannot be updated automatically.`] };
 	}
 	try {
-		await execFileAsync("git", ["-C", target, "pull", "--ff-only", "--quiet"], { timeout: 120_000 });
+		await execFileText("git", ["-C", target, "pull", "--ff-only", "--quiet"], { timeout: 120_000 });
 	} catch (error) {
 		return { warnings: [`Could not update marketplace '${name}': ${describe(error)}`] };
 	}
@@ -1305,7 +1305,7 @@ async function openInstalledPluginDetails(
 	}
 	try {
 		await uninstallPlugin(path.dirname(plugin.rootPath), plugin.id);
-		say(`Uninstalled '${plugin.name}'. Restart Step to unload it.`);
+		say(`Uninstalled '${plugin.name}'. Running sessions unload its MCP servers before their next request.`);
 	} catch (error) {
 		say(describe(error), "error");
 	}
@@ -1365,7 +1365,7 @@ async function openMarketplacePluginDetails(
 		say(
 			[
 				`Installed '${entry.name}' from ${entry.marketplace}.`,
-				"Restart Step to activate plugin contributions.",
+				"Its MCP servers connect before the next request; skills and commands load in new sessions.",
 				...result.warnings,
 			].join("\n"),
 			result.warnings.length > 0 ? "warning" : "info",
@@ -1584,7 +1584,7 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 						say(
 							[
 								`Installed ${entry.name} from ${entry.marketplace} to ${installed.installedPath}.`,
-								"Restart Step to start the plugin's MCP server.",
+								"Its MCP servers connect before the next request.",
 								...installed.warnings,
 							].join("\n"),
 							installed.warnings.length > 0 ? "warning" : "info",
@@ -1603,7 +1603,9 @@ export function registerStepPluginCommand(pi: ExtensionAPI, options: StepPluginC
 							return;
 						}
 						const removed = await uninstallPlugin(pluginsDir, name);
-						say(`Removed ${removed.removedPath}. Restart Step to unload it.`);
+						say(
+							`Removed ${removed.removedPath}. Running sessions unload its MCP servers before their next request.`,
+						);
 						return;
 					}
 					case "marketplace": {
@@ -1747,7 +1749,7 @@ function deriveMarketplaceName(source: string): string | undefined {
 
 async function readGitOrigin(dir: string): Promise<string | null> {
 	try {
-		const result = await execFileAsync("git", ["-C", dir, "remote", "get-url", "origin"], { timeout: 10_000 });
+		const result = await execFileText("git", ["-C", dir, "remote", "get-url", "origin"], { timeout: 10_000 });
 		return result.stdout.trim() || null;
 	} catch {
 		return null;

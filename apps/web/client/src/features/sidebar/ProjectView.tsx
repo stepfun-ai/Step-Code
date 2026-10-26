@@ -2,6 +2,7 @@ import { useT } from "../../i18n";
 import { shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
 import { EmptyState, Icon } from "../../ui";
+import { DraftRow, draftRowCwd } from "./DraftRow";
 import { ProjectGroup } from "./ProjectGroup";
 import { SessionRow } from "./SessionRow";
 
@@ -24,9 +25,10 @@ export function ProjectView() {
 		}),
 		shallowEqual,
 	);
+	const draftCwd = useAppStore(draftRowCwd);
 	const { showArchived, filter } = view;
 
-	const projects = new Map<string, SessionSummary[]>();
+	let projects = new Map<string, SessionSummary[]>();
 	const recent: SessionSummary[] = [];
 	const removed = new Set(view.workspaces.filter((workspace) => workspace.hidden).map((workspace) => workspace.path));
 	// Registered workspaces stay listed even before their first conversation,
@@ -51,6 +53,13 @@ export function ProjectView() {
 		projects.set(session.cwd, sessions);
 	}
 
+	// The draft placeholder joins its workspace's group, opening one for a workspace without
+	// conversations; a draft in a removed workspace shows under Recent.
+	const draftInRecent = draftCwd !== null && removed.has(draftCwd);
+	if (draftCwd !== null && !draftInRecent && !projects.has(draftCwd)) {
+		projects = new Map([[draftCwd, []], ...projects]);
+	}
+
 	const hiddenIds = new Set<string>();
 	if (filter) {
 		for (const session of view.sessions) if (view.tags.get(session.id) !== filter) hiddenIds.add(session.id);
@@ -66,8 +75,11 @@ export function ProjectView() {
 						sessions={sessions}
 						folded={view.foldedProjects.has(cwd)}
 						hiddenIds={hiddenIds}
+						draft={cwd === draftCwd}
 						// With a filter, a group without a matching row is hidden (legacy applyTagFilter).
-						filteredOut={Boolean(filter) && sessions.every((session) => hiddenIds.has(session.id))}
+						filteredOut={
+							Boolean(filter) && cwd !== draftCwd && sessions.every((session) => hiddenIds.has(session.id))
+						}
 					/>
 				))}
 				{projects.size ? null : (
@@ -76,12 +88,13 @@ export function ProjectView() {
 					</EmptyState>
 				)}
 			</div>
-			<div className="recent-group" id="recentGroup" hidden={recent.length === 0}>
+			<div className="recent-group" id="recentGroup" hidden={recent.length === 0 && !draftInRecent}>
 				<div className="project-label">
 					<Icon name="clock" />
 					<span>{t("recent")}</span>
 				</div>
 				<div id="recentTasks">
+					{draftInRecent ? <DraftRow /> : null}
 					{recent.map((session) => (
 						<SessionRow key={session.id} session={session} filteredOut={hiddenIds.has(session.id)} />
 					))}

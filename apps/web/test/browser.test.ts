@@ -59,6 +59,114 @@ test("browser command queue is bounded and revalidates control before mutations"
 	} finally { await browser.close(); }
 });
 
+test("an attached stream outlives a missed heartbeat; a closed page loses control", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+	const browser = new WebBrowser([3077]);
+	try {
+		const { token } = browser.acquire("client-111111111111");
+		let closed = 0;
+		const stop = browser.subscribe(token, () => {}, () => closed++);
+		t.mock.timers.tick(15_001);
+		assert.equal(closed, 0, "the open stream must not be ended by a missed heartbeat");
+		browser.touch(token);
+		stop();
+		t.mock.timers.tick(15_001);
+		assert.throws(() => browser.touch(token), /expired/);
+	} finally {
+		await browser.close();
+	}
+});
+
+test("an explicit release still ends the attached stream and drops control", async () => {
+	const browser = new WebBrowser([3077]);
+	try {
+		const { token } = browser.acquire("client-111111111111");
+		let closed = 0;
+		browser.subscribe(token, () => {}, () => closed++);
+		browser.release(token);
+		assert.equal(closed, 1);
+		assert.throws(() => browser.command(token, async () => 1), /expired/);
+	} finally {
+		await browser.close();
+	}
+});
+
+test("an attached stream keeps control even when a request beats the expiry callback", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+	const browser = new WebBrowser([3077]);
+	try {
+		const { token } = browser.acquire("client-111111111111");
+		let closed = 0;
+		browser.subscribe(token, () => {}, () => closed++);
+		// A busy Host resumes past the deadline and serves the page's request before its timers.
+		t.mock.timers.setTime(16_000);
+		browser.touch(token);
+		assert.throws(() => browser.acquire("client-222222222222"), /another StepCode page/);
+		assert.equal(closed, 0);
+	} finally {
+		await browser.close();
+	}
+});
+
+test("a same-id replacement tells the displaced stream before closing it", async () => {
+	const browser = new WebBrowser([3077]);
+	try {
+		const { token } = browser.acquire("client-111111111111");
+		const events: string[] = [];
+		browser.subscribe(token, (event) => events.push(event.type), () => events.push("end"));
+		browser.acquire("client-111111111111");
+		assert.deepEqual(events, ["snapshot", "replaced", "end"]);
+	} finally {
+		await browser.close();
+	}
+});
+
+test("the event route writes control events even while frames are dropped for backpressure", async () => {
+	const browser = new WebBrowser([3077]);
+	const written: string[] = [];
+	const listeners = new Map<string, () => void>();
+	// A response whose socket never drains: snapshots are held back, frames dropped.
+	const response = {
+		headersSent: false,
+		destroyed: false,
+		writableEnded: false,
+		writableNeedDrain: true,
+		writeHead() {
+			this.headersSent = true;
+		},
+		write(chunk: string) {
+			written.push(chunk);
+			return false;
+		},
+		end() {
+			this.writableEnded = true;
+			listeners.get("close")?.();
+		},
+		on(name: string, listener: () => void) {
+			listeners.set(name, listener);
+		},
+		once(name: string, listener: () => void) {
+			listeners.set(name, listener);
+		},
+		off() {},
+	};
+	try {
+		const { token } = browser.acquire("client-111111111111");
+		const request = { method: "GET", headers: { "x-stepcode-browser-control": token } };
+		await browserRoute(
+			browser,
+			["events"],
+			request as unknown as Parameters<typeof browserRoute>[2],
+			response as unknown as Parameters<typeof browserRoute>[3],
+		);
+		browser.acquire("client-111111111111");
+		assert.ok(written.some((chunk) => chunk.startsWith("event: replaced")), JSON.stringify(written));
+		assert.equal(response.writableEnded, true);
+	} finally {
+		await browser.close();
+	}
+});
+
 test("a browser command that never settles times out and does not block the next one", async () => {
 	const browser = new WebBrowser([3077]);
 	try {

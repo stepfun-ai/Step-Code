@@ -8,6 +8,7 @@ import { closeRightPanel, openRightPanel } from "../../state/right-panel";
 import { forgetApproval, openSession, refreshSessions, renderSnapshot, showError } from "../../state/session";
 import { getState, setUi } from "../../state/store";
 import type { TurnRevertResult } from "../../state/types";
+import type { PromptFile } from "../composer/prompt-editor";
 
 export type ApprovalVerdict = "deny" | "approve" | "approve_for_session";
 
@@ -106,10 +107,11 @@ export async function decideApproval(approvalId: string, verdict: ApprovalVerdic
 }
 
 /** The toast for a refused revert (host `TurnRevertError` codes). */
-function revertFailure(error: unknown): string {
+export function revertFailure(error: unknown): string {
 	const body = error instanceof ApiError ? error.body : {};
 	const path = typeof body.path === "string" ? body.path : "";
 	if (body.code === "conflict") return t("turnRevertConflict", { path });
+	if (body.code === "modified") return t("turnRevertModified", { path });
 	if (body.code === "missing") return t("turnRevertMissing", { path });
 	if (body.code === "busy") return t("turnRevertBusy");
 	return t("turnRevertFailed", { reason: errorMessage(error) });
@@ -141,5 +143,29 @@ export async function revertTurn(turnId: string): Promise<boolean> {
 	} catch (error) {
 		showError(revertFailure(error));
 		return false;
+	}
+}
+
+/**
+ * Rewrite the latest prompt: fork the session to just before it, then send
+ * the edited text — the model answers the reworked prompt on a fresh branch.
+ * `before` is the entry the fork ends on (undefined forks from the head).
+ */
+export async function rewritePrompt(
+	before: string | undefined,
+	text: string,
+	files?: readonly PromptFile[],
+): Promise<void> {
+	const current = getState().current;
+	if (!current || !text.trim()) return;
+	try {
+		const result = await apiSend<{ sessionId: string }>(`/api/v1/sessions/${current.id}/fork`, "POST", {
+			...(before ? { entryId: before } : {}),
+		});
+		await openSession(result.sessionId);
+		const { sendMessage } = await import("../composer/actions");
+		await sendMessage(text, files);
+	} catch (error) {
+		showError(errorMessage(error));
 	}
 }

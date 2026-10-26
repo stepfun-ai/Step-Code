@@ -1,15 +1,25 @@
 import { useT } from "../../i18n";
 import { basename } from "../../lib/format";
+import { hostPlatform } from "../../platform/host";
 import { sessionTitle } from "../../state/session";
 import { setUi, shallowEqual, useAppStore } from "../../state/store";
 import { Icon, IconButton, LEGACY_ICONS, Popover, Tooltip } from "../../ui";
 import { SessionMenu } from "../sidebar/SessionMenu";
+import { openWorkspaceFolder } from "../workspace/actions";
+
+/** The file manager's own icon and name: Finder, File Explorer, or a plain folder elsewhere. */
+const FILE_MANAGER = {
+	darwin: { icon: "finder", label: "openWorkspaceInFinder" },
+	win32: { icon: "folderWindows", label: "openWorkspaceInExplorer" },
+	linux: { icon: "folder", label: "openWorkspaceFolder" },
+} as const;
 
 /**
  * `#sessionHeader`: the conversation's fixed title bar — what this session is, which project
  * folder it runs in and whether it is working. The branch is the composer's branch picker's job.
  * The more button after the title opens the rename / archive / delete menu (`#streamMenu`);
- * a draft has no session to act on yet, so it waits for the first real session.
+ * a draft has no session to act on yet, so it waits for the first real session. The trailing
+ * button shows the project folder in Finder / File Explorer.
  */
 export function SessionHeader() {
 	const t = useT();
@@ -26,6 +36,8 @@ export function SessionHeader() {
 		};
 	}, shallowEqual);
 	const project = basename(view.cwd);
+	const platform = hostPlatform();
+	const manager = FILE_MANAGER[platform];
 	return (
 		<header className="session-header" id="sessionHeader">
 			<h1 className="session-header-title" title={view.title}>
@@ -79,6 +91,18 @@ export function SessionHeader() {
 					<i aria-hidden="true" />
 					{t(view.status)}
 				</span>
+			) : null}
+			{view.cwd ? (
+				<Tooltip content={t(manager.label)}>
+					<IconButton
+						className="session-header-open-folder"
+						data-file-manager={platform}
+						icon={manager.icon}
+						iconSize="md"
+						aria-label={`${t(manager.label)}: ${view.cwd}`}
+						onClick={() => void openWorkspaceFolder(view.cwd)}
+					/>
+				</Tooltip>
 			) : null}
 		</header>
 	);

@@ -6,6 +6,7 @@
 import type { TagColor } from "../../i18n";
 import { api } from "../../lib/api";
 import { type ConversationView, getState, setState, setToggled, setUi } from "../../state/store";
+import { withoutSessionTag } from "../../state/tag-groups";
 import type { SessionSearchResult } from "../../state/types";
 
 /* ── Global search (legacy 1199-1211) ────────────────────────────────────── */
@@ -121,20 +122,34 @@ export function toggleSidebar(): void {
 	setUi((ui) => ({ sidebarHidden: !ui.sidebarHidden }));
 }
 
-/** Tag a session with `color`, or untag it with null. Tags are client-only, as in the legacy code. */
+/**
+ * Tag a session with `color`, or untag it with null. Tags are client-only, as in
+ * the legacy code.
+ *
+ * Untagging the last session of a group also removes that group: a group that
+ * no session carries is invisible in the grouped view, so leaving its record
+ * behind only made the picker offer a group that no longer exists.
+ */
 export function setSessionTag(sessionId: string, color: TagColor | null): void {
 	setState((state) => {
+		if (!color) return withoutSessionTag(state, sessionId);
 		const tags = new Map(state.tags);
-		if (color) tags.set(sessionId, color);
-		else tags.delete(sessionId);
+		tags.set(sessionId, color);
 		return { tags };
 	});
 }
 
-/** Create a group for an unused colour and tag `sessionId` with it (legacy `showTagNameInput` accept, 1066-1071). */
+/**
+ * Create a group for an unused colour and tag `sessionId` with it (legacy
+ * `showTagNameInput` accept, 1066-1071). One commit, so a group and the tag
+ * that keeps it alive never appear apart.
+ */
 export function createGroupAndTag(sessionId: string, color: TagColor, name: string): void {
-	setState((state) => ({ groups: [...state.groups, { key: color, name }] }));
-	setSessionTag(sessionId, color);
+	setState((state) => {
+		const tags = new Map(state.tags);
+		tags.set(sessionId, color);
+		return { groups: [...state.groups, { key: color, name }], tags };
+	});
 }
 
 /** Rename the group a tag colour stands for; rows and the filter chip follow the colour, not the name. */

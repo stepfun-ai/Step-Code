@@ -149,13 +149,12 @@ function checkWebClientSurface() {
   if (hasClass("topbar") || styles.includes(".topbar {")) {
     throw new Error("apps/web/client still contains the removed main-area header")
   }
-  // Attachments shipped, so the guard that kept them out of the first release
-  // no longer applies. The rest are still unbuilt.
+  // Attachments and voice dictation shipped, so the guards that kept them out
+  // of the first release no longer apply. The rest are still unbuilt.
   for (const forbidden of [
     "hudToggle",
     'className="hud"',
     'class="hud"',
-    "voiceButton",
     "cronPlaceholder",
   ]) {
     if (index.includes(forbidden) || source.includes(forbidden)) {

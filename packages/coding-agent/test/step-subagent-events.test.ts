@@ -873,7 +873,7 @@ test("status reports state, usage, child sessions, and the output tail without w
 		runner: async (input) => {
 			input.onUpdate?.({ ...textResult(""), exitCode: -1, messages: [] });
 			await gate.promise;
-			return { ...textResult("x".repeat(40_000) + "THE END"), sessionFile: "/sessions/child.jsonl" };
+			return { ...textResult(`${"x".repeat(40_000)}THE END`), sessionFile: "/sessions/child.jsonl" };
 		},
 	})(api);
 	const lane = laneIdOf(await startLane(tools, { agent: "general", task: "long" }));

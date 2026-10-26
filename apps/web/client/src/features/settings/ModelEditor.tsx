@@ -232,7 +232,16 @@ function formFromProvider(provider: SettingsModelProvider | undefined): FormStat
  */
 const DEFAULT_CONTEXT_WINDOW = 1_000_000;
 
-/** The request body: rows without an id are dropped rather than rejected. */
+/**
+ * The request body: rows without an id are dropped rather than rejected.
+ *
+ * A blank max-output field is written as no `maxTokens` at all, unlike the
+ * context window: the kernel then applies its own 16384-token default, which is
+ * also what a hand-declared model without the field gets. The field exists
+ * because that default is a ceiling on one reply and the thinking budget is
+ * spent from the same ceiling, so a long answer or a high effort can end in
+ * `stopReason: "length"` until the user raises it.
+ */
 function modelsPayload(rows: readonly ModelRowState[]): Array<Record<string, unknown>> {
 	return rows
 		.filter((row) => row.id.trim())
@@ -693,6 +702,7 @@ export function ModelEditor({
 										<span>{t("settingsModelsModelId")}</span>
 										<input
 											className="mono"
+											data-model-field="id"
 											value={row.id}
 											placeholder="model-id"
 											spellCheck={false}
@@ -702,6 +712,7 @@ export function ModelEditor({
 									<label className="settings-model-field">
 										<span>{t("settingsModelsModelName")}</span>
 										<input
+											data-model-field="name"
 											value={row.name}
 											placeholder={t("settingsModelsModelName")}
 											onChange={(event) => updateRow(row.key, { name: event.target.value })}
@@ -712,9 +723,25 @@ export function ModelEditor({
 										<input
 											type="number"
 											min="1"
+											data-model-field="contextWindow"
 											value={row.contextWindow}
 											placeholder={t("settingsModelsContextWindowPlaceholder")}
 											onChange={(event) => updateRow(row.key, { contextWindow: event.target.value })}
+										/>
+									</label>
+									{/* The kernel's own default is smaller than a long answer needs,
+									    and it is shared with the thinking budget; say so once, here. */}
+									<label className="settings-model-field">
+										<Tooltip content={t("settingsModelsMaxTokensHint")}>
+											<span>{t("settingsModelsMaxTokens")}</span>
+										</Tooltip>
+										<input
+											type="number"
+											min="1"
+											data-model-field="maxTokens"
+											value={row.maxTokens}
+											placeholder={t("settingsModelsMaxTokensPlaceholder")}
+											onChange={(event) => updateRow(row.key, { maxTokens: event.target.value })}
 										/>
 									</label>
 									<div className="settings-model-field">

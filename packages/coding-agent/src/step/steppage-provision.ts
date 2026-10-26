@@ -1,13 +1,12 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
+import { execFileText } from "../utils/child-process.ts";
 import { resolveStepHomeDir } from "./environment.ts";
 import type { StepPluginProvision } from "./plugins.ts";
 
-const execFileAsync = promisify(execFile);
 export const DEFAULT_STEPPAGE_INSTALLER_URL = "https://dl.stepfun.com/steppage-mcp/p/install.sh";
 
 export interface StepPageReadiness {
@@ -82,9 +81,10 @@ async function findHealthyStepPage(env: NodeJS.ProcessEnv, signal?: AbortSignal)
 	for (const command of ["steppage-mcp", managed]) {
 		signal?.throwIfAborted();
 		try {
-			const result = await execFileAsync(command, ["--version"], { env, signal, timeout: 5_000, maxBuffer: 8_192 });
+			const result = await execFileText(command, ["--version"], { env, signal, timeout: 5_000, maxBuffer: 8_192 });
 			if (/^v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/u.test(result.stdout.trim())) return command;
 		} catch {
+			// A missing or broken executable is the expected "not healthy" answer.
 			signal?.throwIfAborted();
 		}
 	}
@@ -132,16 +132,19 @@ export async function ensureStepPageReady(
 		if (available) return { command: available, installed: false };
 		let nodeVersion: string;
 		try {
-			nodeVersion = (await execFileAsync("node", ["--version"], { env, signal, timeout: 5_000 })).stdout.trim();
-		} catch {
+			nodeVersion = (await execFileText("node", ["--version"], { env, signal, timeout: 5_000 })).stdout.trim();
+		} catch (error) {
 			signal?.throwIfAborted();
-			throw new Error("Node.js >= 20 is required for StepPage; install Node.js and retry.");
+			// Keep the cause: "Node is missing" and "Node could not be run" need
+			// different fixes, and a guessed reason sends the user the wrong way.
+			const cause = isRecord(error) && error.code === "ENOENT" ? "node was not found on PATH" : describe(error);
+			throw new Error(`Node.js >= 20 is required for StepPage; ${cause}. Install Node.js and retry.`);
 		}
 		const major = /^v(\d+)\./u.exec(nodeVersion)?.[1];
 		if (!major || Number(major) < 20)
-			throw new Error(`Node.js >= 20 is required for StepPage; found ${nodeVersion}.`);
+			throw new Error(`Node.js >= 20 is required for StepPage; found ${nodeVersion || "no version"}.`);
 		// Download before executing so a failed curl cannot be hidden by `| sh`.
-		const script = await execFileAsync("curl", ["-fsSL", "--max-time", "30", stepPageInstallerUrl(env)], {
+		const script = await execFileText("curl", ["-fsSL", "--max-time", "30", stepPageInstallerUrl(env)], {
 			env,
 			signal,
 			timeout: 35_000,
@@ -167,4 +170,12 @@ export async function ensureStepPageReady(
 	} finally {
 		await release?.().catch(() => undefined);
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function describe(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

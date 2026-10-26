@@ -55,7 +55,16 @@ export class WebAuth {
 		return this.cookieValue(randomBytes(16).toString("hex"));
 	}
 
-	authorize(cookie: string | undefined, origin: string | undefined): boolean {
+	/**
+	 * `fetchSite` is the request's `Sec-Fetch-Site`. Pages on another loopback
+	 * port (a rendered workspace preview, any local dev server) are same-site with
+	 * the Host, so SameSite=Strict still sends the cookie on their navigations and
+	 * subresource loads, which carry no Origin. Only the client's own page
+	 * (`same-origin`), a typed or opened URL (`none`) or a client that sends no
+	 * fetch metadata is accepted.
+	 */
+	authorize(cookie: string | undefined, origin: string | undefined, fetchSite?: string): boolean {
+		if (fetchSite === "same-site" || fetchSite === "cross-site") return false;
 		if (!this.isAllowedOrigin(origin) || !cookie) return false;
 		const [payload, signature] = cookie.split(".");
 		if (!payload || !signature) return false;

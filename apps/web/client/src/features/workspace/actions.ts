@@ -4,7 +4,7 @@
  */
 
 import { t } from "../../i18n";
-import { api, apiSend, errorMessage } from "../../lib/api";
+import { api, apiSend, errorMessage, workspaceApi } from "../../lib/api";
 import { getDesktopBridge } from "../../platform/host";
 import { refreshWorkspaces, showError, startDraft } from "../../state/session";
 import { getState, setState, setUi, setWithout } from "../../state/store";
@@ -136,5 +136,14 @@ export async function chooseWorkspaceFolder(): Promise<void> {
 		await openWorkspaceBrowser();
 	} finally {
 		setState({ pickingFolder: false });
+	}
+}
+
+/** Show a workspace folder in Finder / File Explorer; the Host opens it, so Web and Desktop behave the same. */
+export async function openWorkspaceFolder(cwd: string): Promise<void> {
+	try {
+		await api(workspaceApi(cwd, "/open"), { method: "POST" });
+	} catch (error) {
+		showError(t("workspaceOpenFolderFailed", { error: errorMessage(error) }));
 	}
 }

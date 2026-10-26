@@ -40,6 +40,11 @@ Title rules:
 /** A skill the composer sends whole, in either form the client's `skillInvocation` knows. */
 const SKILL_BLOCK = /^<skill name="([^"]+)" location="[^"]+">\n[\s\S]*?\n<\/skill>(?:\n\n([\s\S]+))?$/;
 const SKILL_COMMAND = /^\/skill:(\S+)(?:\s+([\s\S]+))?$/;
+/**
+ * A quoted other-session context riding the prompt's tail; keep this in sync
+ * with the client's `sessionContextOf` (the host must not import the client).
+ */
+const QUOTED_CONTEXT = /\n*# 引用会话「[^」]+」的上下文\n```session-context\n[\s\S]*?\n```[ \t]*$/;
 
 /** Collapse whitespace and cap the length, so a giant prompt cannot price up the call. */
 function normalizeTitleInput(input: string): string {
@@ -55,6 +60,7 @@ function normalizeTitleInput(input: string): string {
  * first-message fallback is already the better title for them.
  */
 export function sessionTitleInput(prompt: string): string | null {
+	prompt = prompt.replace(QUOTED_CONTEXT, "").trim();
 	const invocation = SKILL_BLOCK.exec(prompt) ?? (prompt.startsWith("/") ? SKILL_COMMAND.exec(prompt) : null);
 	if (invocation) {
 		const request = invocation[2]?.trim() ?? "";

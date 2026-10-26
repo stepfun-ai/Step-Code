@@ -39,7 +39,6 @@ import {
 	insertModeLead,
 	MODE_LEAD_CLASS,
 	type PromptFile,
-	removeModeLead,
 	stripLeadingCommand,
 } from "./prompt-editor";
 
@@ -267,6 +266,7 @@ export function clearModes(): void {
  */
 export function syncStagedModeLead(editor: HTMLElement): void {
 	const staged = (Object.keys(getState().modes) as ModeId[]).some((id) => getState().modes[id]);
+	// Commands stack: a mode survives while its chip is in the DOM, even beside others.
 	if (staged && !editor.querySelector(`.${MODE_LEAD_CLASS}`)) clearModes();
 }
 
@@ -283,10 +283,8 @@ export function stageCommandLead(editor: HTMLElement, command: string): void {
 	const meta = mode ? MODES.find((entry) => entry.id === mode) : undefined;
 	if (mode && meta) {
 		chooseMode(mode);
-		// Insert the chip synchronously, not through the composer's render
-		// effect: the input sync that follows this very edit reads the DOM, and
-		// a staged mode without its chip yet would be dropped again at once.
-		// The effect's idempotence guard then skips the duplicate insert.
+		// Insert the chip synchronously (see the input sync note): it APPENDS to
+		// any leads already staged — commands stack, one input may carry several.
 		insertModeLead(editor, {
 			id: mode,
 			icon: meta.icon,
@@ -295,8 +293,6 @@ export function stageCommandLead(editor: HTMLElement, command: string): void {
 		});
 		return;
 	}
-	clearModes();
-	removeModeLead(editor);
 	insertCommandLead(editor, { command, icon: commandLeadIcon(name) });
 }
 

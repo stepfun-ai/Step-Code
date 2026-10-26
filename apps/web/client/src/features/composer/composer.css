@@ -101,6 +101,38 @@
 	cursor: not-allowed;
 	opacity: 0.6;
 }
+/*
+ * The prompt deck: the rendered Markdown preview lies over the editor in the
+ * same box. The editor keeps its place via `visibility` (not `display`), so the
+ * draft still sizes the card and the send path can still read it while the
+ * preview is shown.
+ */
+.prompt-deck {
+	position: relative;
+}
+.prompt-deck[data-preview] .prompt-editor {
+	visibility: hidden;
+}
+.prompt-preview {
+	position: absolute;
+	inset: 0;
+	padding: 2px var(--textarea-pad-x);
+	overflow-y: auto;
+	outline: 0;
+	cursor: text;
+}
+/* The preview reads at the composer's size, not the conversation's. */
+.prompt-preview.message-body {
+	font-size: 15px;
+	line-height: 1.65;
+}
+.prompt-preview.message-body > :first-child {
+	margin-top: 0;
+}
+.prompt-preview.message-body :is(h2, h3, h4) {
+	font-size: 17px;
+	margin: 14px 0 6px;
+}
 /* A pasted or dropped file, inline in the text; the message names its stored path. */
 .prompt-file {
 	display: inline-flex;
@@ -1223,81 +1255,31 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	}
 }
 /*
- * 命令前缀 chip：暂存模式（`.prompt-mode`，三色主题+动效）与普通命令
- * （`.prompt-command`，中性紫、静态）都是 #prompt 行首的行内渲染——退格即
- * 删；模式 chip 不产生文本（发送由 modePrefix 补命令），普通命令 chip 序列
- * 化回它的命令文本，内核收到的消息不变。
+ * 命令前缀 chip：与发送后的消息格式完全一致（tool-glyph 图标 + 加粗彩色
+ * 文字，无胶囊无动效），可叠加——一条输入可带多个命令，按暂存顺序排列，
+ * 退格即删。每个 chip 携带自己的命令文本，发送时按序进入消息。
  */
 .prompt-mode,
 .prompt-command {
-	--lead-accent: var(--ink-3);
+	--lead-accent: var(--command-accent);
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	margin: 0 2px;
-	padding: 1px 7px;
-	vertical-align: baseline;
-	border: 1px solid color-mix(in srgb, var(--lead-accent) 35%, transparent);
-	border-radius: var(--radius-chip);
-	background: color-mix(in srgb, var(--lead-accent) 10%, transparent);
+	gap: 5px;
+	margin: 0 4px 0 0;
+	vertical-align: middle;
 	color: var(--lead-accent);
-	font-weight: 500;
+	font-size: 13px;
+	font-weight: 600;
 	white-space: nowrap;
 	user-select: all;
 	cursor: default;
 }
 .prompt-mode {
-	--lead-accent: var(--mode-accent, var(--ink-3));
+	--lead-accent: var(--mode-accent, var(--command-accent));
 }
-.prompt-command {
-	--lead-accent: var(--command-accent);
-}
-.prompt-mode-icon,
-.prompt-command-icon {
-	display: inline-flex;
-}
-.prompt-mode[data-mode="goal"] .prompt-mode-icon {
-	animation: mode-icon-breathe 2.4s ease-in-out infinite;
-}
-.prompt-mode[data-mode="ultraloop"] .prompt-mode-icon {
-	animation: mode-icon-spin 3.6s linear infinite;
-}
-.prompt-mode[data-mode="plan"] .prompt-mode-label {
-	background: linear-gradient(
-		100deg,
-		currentColor 0 42%,
-		color-mix(in srgb, currentColor 40%, var(--ink)) 50%,
-		currentColor 58% 100%
-	);
-	background-size: 300% 100%;
-	-webkit-background-clip: text;
-	background-clip: text;
-	-webkit-text-fill-color: transparent;
-	animation: mode-label-sweep 2.4s linear infinite;
-}
-@keyframes mode-icon-breathe {
-	0%,
-	100% {
-		opacity: 0.8;
-		transform: scale(1);
-	}
-	50% {
-		opacity: 1;
-		transform: scale(1.12);
-	}
-}
-@keyframes mode-icon-spin {
-	to {
-		transform: rotate(360deg);
-	}
-}
-@keyframes mode-label-sweep {
-	from {
-		background-position: 100% 0;
-	}
-	to {
-		background-position: 0% 0;
-	}
+.prompt-mode .tool-glyph,
+.prompt-command .tool-glyph {
+	color: inherit;
 }
 /*
  * ＋ 菜单的模式行：图标常显模式色（选没选都看得见主题），选中的标题也染
@@ -1544,4 +1526,24 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
   white-space: nowrap;
   color: var(--ink-3);
   text-align: right;
+}
+
+/*
+ * The in-place edit composer: a smaller sibling of the bottom one — narrower,
+ * tighter padding, a shorter editor — right where the message sits.
+ */
+.composer--edit {
+	max-width: min(100%, 560px);
+	margin-left: auto;
+}
+.composer--edit .composer-card {
+	padding: 10px 12px 8px;
+	border-radius: var(--radius-surface);
+}
+.composer--edit .prompt-editor {
+	min-height: 40px;
+	max-height: 200px;
+}
+.composer--edit .composer-controls {
+	margin-top: 6px;
 }

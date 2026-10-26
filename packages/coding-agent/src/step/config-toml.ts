@@ -20,6 +20,8 @@ export interface StepMcpServerConfig {
 	tool_timeout_sec?: number;
 	enabled_tools?: string[];
 	disabled_tools?: string[];
+	/** False gives every session its own connection instead of the process-wide shared one. */
+	shared?: boolean;
 	oauth?: { client_id?: string; client_secret?: string; scopes?: string[]; callback_port?: number };
 }
 

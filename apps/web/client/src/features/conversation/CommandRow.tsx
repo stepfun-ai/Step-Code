@@ -9,12 +9,19 @@
  */
 
 import { useT } from "../../i18n";
+import { copyText } from "../../state/session";
+import { setUi } from "../../state/store";
 import type { CommandTimelineItem } from "../../state/types";
-import { Icon } from "../../ui";
+import { Icon, LEGACY_ICONS } from "../../ui";
 import { commandLeadIcon, MODES, modeFromCommand } from "../composer";
-import { clockTime } from "./message-meta";
 
-export function CommandRow({ item }: { readonly item: CommandTimelineItem }) {
+export function CommandRow({
+	item,
+	rewritableBefore,
+}: {
+	readonly item: CommandTimelineItem;
+	readonly rewritableBefore?: string;
+}) {
 	const t = useT();
 	const match = /^\/([A-Za-z0-9][\w.:-]*)\s*([\s\S]*)$/u.exec(item.command);
 	const name = match?.[1] ?? "";
@@ -23,7 +30,10 @@ export function CommandRow({ item }: { readonly item: CommandTimelineItem }) {
 	const meta = mode ? MODES.find((entry) => entry.id === mode) : undefined;
 	const badge = (
 		<span className={mode ? `message-skill message-skill--${mode}` : "message-skill message-skill--command"}>
-			<Icon name={meta?.icon ?? commandLeadIcon(name)} size="xs" />
+			{/* The model output's own glyph: the tool rows' 16px grid, not bespoke markup. */}
+			<span className="tool-glyph" aria-hidden="true">
+				<Icon className="tool-kind-icon" name={meta?.icon ?? commandLeadIcon(name)} size="xs" />
+			</span>
 			{meta ? t(meta.labelKey) : `/${name}`}
 		</span>
 	);
@@ -37,13 +47,39 @@ export function CommandRow({ item }: { readonly item: CommandTimelineItem }) {
 				{badge}
 				{args}
 			</div>
-			{item.timestamp ? (
-				<span className="message-meta">
-					<time className="message-meta-time" dateTime={item.timestamp}>
-						{clockTime(item.timestamp)}
-					</time>
-				</span>
-			) : null}
+			{/* The same action row an ordinary user bubble carries: copy what was sent. */}
+			<div className="prompt-actions">
+				<button
+					type="button"
+					className="message-action"
+					title={t("copy")}
+					aria-label={t("copy")}
+					onClick={() => void copyText(item.command)}
+				>
+					<Icon {...LEGACY_ICONS.copy} />
+				</button>
+				{rewritableBefore !== undefined ? (
+					<button
+						type="button"
+						className="message-action"
+						title={t("promptRewrite")}
+						aria-label={t("promptRewrite")}
+						onClick={() =>
+							item.entryId
+								? setUi({
+										editingPrompt: {
+											entryId: item.entryId,
+											before: rewritableBefore || undefined,
+											text: item.command,
+										},
+									})
+								: undefined
+						}
+					>
+						<Icon name="squarePen" size="xs" />
+					</button>
+				) : null}
+			</div>
 		</article>
 	);
 }

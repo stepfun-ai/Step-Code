@@ -42,7 +42,13 @@
 .right-panel .preview-path > strong { min-width: 0; flex-shrink: 1; }
 .right-panel .preview-toolbar { flex-wrap: wrap; padding-block: 6px; }
 .right-panel .preview-tools { margin-left: auto; }
-.app.right-panel-expanded .right-panel { position: absolute; top: 0; bottom: 0; left: 0; right: var(--rail-width); width: auto; z-index: 24; }
+/*
+ * Maximized, the panel covers the workbench. An absolutely positioned grid item
+ * is contained by its grid *area*, not the app, so the span must be restated:
+ * without it `left: 0; right: …` resolved inside column 3 and the panel stayed
+ * as narrow as its dock.
+ */
+.app.right-panel-expanded .right-panel { position: absolute; grid-column: 1 / -1; grid-row: 1; top: 0; bottom: 0; left: 0; right: var(--rail-width); width: auto; z-index: 24; }
 .app.right-panel-expanded .right-panel > .preview-resizer { display: none; }
 .sb-content { padding: 16px 0 8px; font-size: 12px; line-height: 1.65; }
 .sb-content h3 { font-size: 13px; font-weight: 600; margin: 0; }
@@ -283,33 +289,26 @@
 	.sb-status-spinner { animation: none !important; }
 }
 
-/* ── 目标面板：goal lifecycle ─────────────────────────────────────────── */
+/* ── 摘要目标区：goal lifecycle ──────────────────────────────────────── */
 /*
- * The goal's status chip carries the state colour: running green, held states
- * attention, finished neutral. The rail button wears a dot while a goal runs.
+ * The status chip carries the state colour: running green, held states
+ * attention, finished neutral. The rail's summary button wears the same
+ * state as a dot, so a held goal is findable without opening the board.
  */
-.goal-panel {
+.sb-goal {
 	--goal-accent: var(--ink-3);
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	padding: 14px;
+	padding: 14px 12px 2px;
 }
-.goal-panel[data-status="active"] {
+.sb-goal[data-status="active"] {
 	--goal-accent: var(--mode-goal);
 }
-.goal-panel[data-status="paused"],
-.goal-panel[data-status="blocked"],
-.goal-panel[data-status="usage_limited"],
-.goal-panel[data-status="budget_limited"] {
+.sb-goal[data-status="paused"],
+.sb-goal[data-status="blocked"],
+.sb-goal[data-status="usage_limited"],
+.sb-goal[data-status="budget_limited"] {
 	--goal-accent: var(--attention);
 }
-.goal-panel-head {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-.goal-panel-status {
+.sb-goal-status {
 	padding: 2px 9px;
 	border: 1px solid color-mix(in srgb, var(--goal-accent) 35%, var(--line));
 	border-radius: var(--radius-pill);
@@ -318,28 +317,53 @@
 	font-size: 12px;
 	font-weight: 500;
 }
-.goal-panel-rounds {
-	color: var(--ink-3);
-	font-size: 12px;
+/* The full objective clamps to three lines; the summary line above carries the gist. */
+.sb-goal-summary {
+	margin: 0 0 4px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
 }
-.goal-panel-objective {
-	margin: 0;
+.sb-goal-objective {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+	margin: 0 0 2px;
 	color: var(--ink);
-	font-size: 14px;
+	font-size: 13px;
 	line-height: 1.6;
 	overflow-wrap: anywhere;
 }
-.goal-panel-stats {
+.sb-goal-stats {
 	margin: 0;
 	color: var(--ink-3);
-	font-size: 12px;
+	font-variant-numeric: tabular-nums;
 }
-.goal-panel-edit {
+.sb-goal-progress {
+	height: 4px;
+	margin: 8px 0 2px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: var(--line);
+}
+.sb-goal-progress-fill {
+	height: 100%;
+	border-radius: inherit;
+	background: var(--goal-accent);
+	transition: width 300ms cubic-bezier(.215,.61,.355,1);
+}
+/* Within 20% of the budget the bar warns before the goal is stopped by it. */
+.sb-goal-progress[data-tight] .sb-goal-progress-fill {
+	background: var(--attention);
+}
+.sb-goal-edit {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
 }
-.goal-panel-input {
+.sb-goal-input {
 	width: 100%;
 	height: var(--control-h-md);
 	padding: 0 8px;
@@ -350,24 +374,35 @@
 	font: inherit;
 	font-size: 13px;
 }
-.goal-panel-input:focus {
+.sb-goal-input:focus {
 	border-color: var(--focus-border);
 	outline: none;
 }
-.goal-panel-actions {
+.sb-goal-actions {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
+	margin: 10px 0 6px;
 }
-.goal-panel-empty {
-	padding: 18px 14px;
-	color: var(--ink-3);
-	font-size: 13px;
+.sb-goal-fold {
+	border: 0;
+	padding: 2px;
+	background: transparent;
+	color: var(--ink-2);
+}
+/* A finished goal is history: the completed-tasks trigger carries the layout;
+ * the meta only clamps long lines and keeps the figures aligned. */
+.sb-goal-done-meta {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 .right-tool-rail .icon-button {
 	position: relative;
 }
-.right-tool-rail .icon-button.rail-goal-active::after {
+.right-tool-rail .icon-button.rail-goal-active::after,
+.right-tool-rail .icon-button.rail-goal-held::after {
 	content: "";
 	position: absolute;
 	top: 5px;
@@ -375,6 +410,30 @@
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
-	background: var(--mode-goal);
 	box-shadow: 0 0 0 2px var(--surface);
+}
+.right-tool-rail .icon-button.rail-goal-active::after {
+	background: var(--mode-goal);
+}
+.right-tool-rail .icon-button.rail-goal-held::after {
+	background: var(--attention);
+}
+
+/* Pause / resume beside the 目标 label. */
+.sb-goal-toggle {
+	display: grid;
+	place-items: center;
+	width: 22px;
+	height: 22px;
+	margin-left: 2px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: var(--ink-3);
+	cursor: pointer;
+}
+.sb-goal-toggle:hover {
+	background: var(--surface-soft);
+	color: var(--ink);
 }

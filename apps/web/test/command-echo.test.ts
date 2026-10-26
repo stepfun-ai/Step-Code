@@ -63,3 +63,30 @@ test("the echo entry projects its command, other custom entries stay opaque", ()
 	const empty = projectEntry({ id: "e3", type: "custom", customType: COMMAND_ECHO_TYPE, data: {} });
 	assert.equal("command" in empty, false);
 });
+
+test("a goal continuation message projects the round it starts", () => {
+	const continuation = projectEntry({
+		id: "c1",
+		type: "custom_message",
+		customType: "step-goal",
+		content: [{ type: "text", text: "Continue working toward the active thread goal." }],
+		details: { goalId: "g1", iteration: 1 },
+		timestamp: "2026-10-26T00:00:00.000Z",
+	});
+	// One completed run queued this continuation, so it starts round 2.
+	assert.equal(continuation.goalRound, 2);
+
+	// A malformed or missing iteration projects no round: the client falls
+	// back to counting separators instead of trusting a bad number.
+	assert.equal(projectEntry({ id: "c2", type: "custom_message", customType: "step-goal" }).goalRound, undefined);
+	assert.equal(
+		projectEntry({ id: "c3", type: "custom_message", customType: "step-goal", details: { iteration: "two" } })
+			.goalRound,
+		undefined,
+	);
+	// Only the continuation carries a round; the persisted snapshot stays opaque.
+	assert.equal(
+		projectEntry({ id: "e4", type: "custom", customType: "step-goal", data: { iteration: 5 } }).goalRound,
+		undefined,
+	);
+});

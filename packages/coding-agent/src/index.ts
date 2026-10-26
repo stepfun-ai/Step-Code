@@ -726,9 +726,15 @@ export {
 } from "./step/login-status.ts";
 export {
 	ambiguousPluginServerNames,
+	closeStepMcpPool,
+	configureStepMcpPool,
+	createStepMcpHostWarmup,
+	getStepMcpPoolSnapshot,
 	getStepMcpStatuses,
 	listStepPluginMcpServers,
 	resolveStepMcpServer,
+	type StepMcpHostWarmup,
+	type StepMcpPoolPolicy,
 	type StepMcpStatus,
 	type StepPluginMcpServerEntry,
 } from "./step/mcp.ts";

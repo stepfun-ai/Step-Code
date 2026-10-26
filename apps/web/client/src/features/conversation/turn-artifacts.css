@@ -1,21 +1,57 @@
-.turn-artifacts { display: flex; align-items: center; gap: 12px; min-height: 44px; margin-top: 20px; padding: 5px 0; }
-.artifact-strip-label { color: var(--ink-2); font-size: 12px; flex: none; }
-.artifact-entries { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 8px; flex: 1; min-width: 0; }
-.artifact-row { display: flex; align-items: center; min-width: 0; max-width: 100%; padding: 2px 3px 2px 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
-.artifact-row:hover { border-color: var(--ink-2); }
-.artifact-row:has(.artifact-main[aria-expanded="true"]) { border-color: var(--focus-border); background: var(--selection); }
-.artifact-main { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 28px; padding: 5px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font-size: 12px; text-align: left; }
-.artifact-main > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 230px; }
-.artifact-main > .icon { color: var(--ink-2); }
-.artifact-row .artifact-copy { flex: none; width: 26px; height: 24px; margin-left: 3px; padding: 0; border: 0; border-left: 1px solid var(--line); border-radius: 0 3px 3px 0; background: transparent; color: var(--ink-2); }
-.artifact-count { flex: none; font-size: 12px; color: var(--ink-2); }
-.artifact-more { padding: 3px 5px; min-height: 26px; border: 0; font-size: 12px; color: var(--ink-2); background: transparent; }
-.turn-artifacts + .turn-changes { margin-top: 6px; }
+/*
+ * The finished answer's deliverables (MessageAttachments, TurnArtifacts.tsx):
+ * file cards under the closing reply bubble, one full-width card or a
+ * two-column grid. The card itself is the primary action (render a page in the
+ * embedded browser, otherwise preview the file); its trailing actions show the
+ * source and open the system browser.
+ */
+.message-attachments { container-type: inline-size; display: flex; flex-direction: column; gap: 6px; width: 100%; margin-top: 12px; }
+.attachment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.attachment-grid[data-single] { grid-template-columns: minmax(0, 1fr); }
+@container (max-width: 520px) { .attachment-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.attachment-card { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; height: 58px; padding: 0 8px 0 0; border: 1px solid var(--line); border-radius: var(--radius-surface); background: var(--surface-soft); transition: background-color var(--fast), border-color var(--fast); }
+.attachment-card:hover { background: var(--hover); border-color: var(--line-strong); }
+.attachment-card[data-active] { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.attachment-card[data-pending] .attachment-main { cursor: progress; }
+
+.attachment-main { display: flex; flex: 1; align-items: center; gap: 10px; align-self: stretch; min-width: 0; padding: 0 4px 0 9px; border: 0; border-radius: inherit; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.attachment-main:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent-ring), inset 0 0 0 1px var(--focus-border); }
+
+.attachment-icon { display: grid; flex: none; place-items: center; width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink-2); }
+.attachment-card[data-kind="website"] .attachment-icon { color: var(--accent); }
+.attachment-card[data-kind="image"] .attachment-icon { color: var(--success); }
+.attachment-card[data-kind="document"] .attachment-icon { color: var(--term-blue); }
+
+.attachment-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.attachment-name { overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-meta { overflow: hidden; color: var(--ink-3); font-size: 11.5px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-diffstat { margin-left: 6px; font-size: 11px; }
+/* Hovering the card says what clicking it does, in place of the description. */
+.attachment-hint { display: none; color: var(--ink-2); }
+.attachment-main:hover .attachment-meta-text, .attachment-main:focus-visible .attachment-meta-text { display: none; }
+.attachment-main:hover .attachment-hint, .attachment-main:focus-visible .attachment-hint { display: inline; }
+
+
+/* Source and system-browser buttons share one hairline pill, like a split button. */
+.attachment-open-group { display: inline-flex; flex: none; align-items: stretch; height: 28px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-input); background: var(--surface); }
+.attachment-open-group .attachment-source, .attachment-open-group .attachment-changes, .attachment-system { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink-2); cursor: pointer; }
+.attachment-open-group > * + * { border-left: 1px solid var(--line); }
+.attachment-open-group .attachment-source:hover, .attachment-open-group .attachment-changes:hover, .attachment-system:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.attachment-open-group .attachment-source[aria-expanded="true"], .attachment-open-group .attachment-changes[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+.attachment-open-group .attachment-source:focus-visible, .attachment-open-group .attachment-changes:focus-visible, .attachment-system:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent-ring); }
+.attachment-system:disabled { cursor: progress; opacity: 0.6; }
+.attachment-system > img, .attachment-system > .icon:not(.icon--xs) { display: block; width: 16px; height: 16px; object-fit: contain; }
+
+.attachment-more { display: inline-flex; align-items: center; gap: 4px; align-self: center; min-height: 24px; padding: 0 10px; border: 0; border-radius: var(--radius-chip); background: transparent; color: var(--ink-3); font-size: 12px; }
+.attachment-more:hover { background: var(--hover); color: var(--ink-2); }
+.attachment-more > .icon { transition: transform var(--fast) var(--ease-out); }
+.attachment-more[aria-expanded="true"] > .icon { transform: rotate(180deg); }
+
+/* The cards end the answer; the changes card below is a different thing and keeps its own distance. */
+.message:has(.message-attachments) + .turn-changes { margin-top: 12px; }
 .md-file-reference { display: inline; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; overflow-wrap: anywhere; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 .md-file-reference:hover { text-decoration-color: currentColor; }
-@media (max-width: 650px) {
-	.turn-artifacts { gap: 8px; }
-	.artifact-entries { gap: 3px 8px; }
-	.artifact-count { display: none; }
-	.artifact-main > span { max-width: 160px; }
+@media (prefers-reduced-motion: reduce) {
+	.attachment-card, .attachment-more > .icon { transition: none; }
 }

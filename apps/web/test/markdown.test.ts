@@ -191,3 +191,43 @@ test("ends a bare URL where the sentence resumes after its query", () => {
 	const html = renderMarkdown("看 https://git.example.com/a/tree/x?ref_type=heads这个分支上，然后加一个流水线", labels);
 	assert.match(html, /href="https:\/\/git.example.com\/a\/tree\/x\?ref_type=heads"[^>]*>[^<]*<\/a>这个分支上，然后/);
 });
+
+test("renders italic and strikethrough around prose and inside blocks", () => {
+	assert.equal(renderMarkdown("*斜体*", labels), "<em>斜体</em>");
+	assert.equal(renderMarkdown("中文*斜体*文本", labels), "中文<em>斜体</em>文本");
+	assert.equal(renderMarkdown("~~删除~~", labels), "<del>删除</del>");
+	assert.equal(
+		renderMarkdown("**粗** 与 *斜* 与 ~~删~~", labels),
+		"<strong>粗</strong> 与 <em>斜</em> 与 <del>删</del>",
+	);
+	const quote = renderMarkdown("> *引用里的斜体*", labels);
+	assert.match(quote, /<blockquote><em>引用里的斜体<\/em><\/blockquote>/);
+});
+
+test("single asterisks in arithmetic, identifiers and code stay literal", () => {
+	for (const text of ["2 * 3 * 4", "a*b*c", "snake_case_value", "x *y", "*a *", "**"]) {
+		const html = renderMarkdown(text, labels);
+		assert.doesNotMatch(html, /<em>/, text);
+	}
+	assert.equal(renderMarkdown("`*not italic*` 和 *yes*", labels), "<code>*not italic*</code> 和 <em>yes</em>");
+	assert.equal(renderMarkdown("```\n*a* ~~b~~\n```", labels), '<div class="code-block"><div class="code-block-header"><span>Code</span><button class="copy-code" type="button">Copy</button></div><pre><code>*a* ~~b~~</code></pre></div>');
+});
+
+test("emphasis markers never swallow inline links or HTML-escaped text", () => {
+	const html = renderMarkdown("*看[文档](https://example.com)* 和 <b>x</b>", labels);
+	assert.match(html, /<em>看<a href="https:\/\/example.com"[^>]*>文档<\/a><\/em>/);
+	assert.match(html, /&lt;b&gt;x&lt;\/b&gt;/);
+});
+
+test("multi-backtick code spans keep inner backticks and drop one padding space", () => {
+	assert.equal(renderMarkdown("``a`b``", labels), "<code>a`b</code>");
+	assert.equal(renderMarkdown("`` `x` ``", labels), "<code>`x`</code>");
+	assert.equal(renderMarkdown("`` a ` b ``", labels), "<code>a ` b</code>");
+	// A shorter run never closes a longer one, so an unpaired marker stays literal.
+	assert.equal(renderMarkdown("`a```", labels), "`a```");
+	// Links and emphasis inside a span stay literal.
+	assert.equal(
+		renderMarkdown("``[**x**](https://example.com)``", labels),
+		"<code>[**x**](https://example.com)</code>",
+	);
+});

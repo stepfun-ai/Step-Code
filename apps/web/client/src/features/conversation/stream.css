@@ -1,4 +1,111 @@
 /* Conversation stream: legacy styles.css 685-704, 706-707 (.message-body itself is shared, styles/global.css). */
+/* The conversation's fixed title bar (SessionHeader.tsx). */
+.session-header {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	height: var(--session-header-h);
+	/* 12px end: the status ends on the summary card's right edge below it. */
+	padding: 0 12px 0 var(--gutter);
+	border-bottom: 1px solid var(--line);
+	background: var(--canvas);
+	position: relative;
+	z-index: 3;
+}
+/* The floating show-sidebar button sits over the bar's start. */
+.app.sidebar-hidden .session-header {
+	padding-left: 60px;
+}
+.session-header-title {
+	/* A long first message must not squeeze the project and branch chips: the title gives way first. */
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: min(28em, 55%);
+	margin: 0 6px 0 0;
+	overflow: hidden;
+	color: var(--ink);
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 20px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.session-header-chip {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 5px;
+	max-width: 240px;
+	height: 22px;
+	padding: 0 8px;
+	border-radius: var(--radius-chip);
+	background: var(--surface-soft);
+	color: var(--ink-2);
+	font-size: 12px;
+	font-weight: 500;
+}
+.session-header-chip .icon {
+	flex: none;
+	color: var(--ink-3);
+}
+.session-header-status {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	/* Never closer than 16px to the chips, however narrow the bar gets. */
+	margin-left: auto;
+	padding-left: 16px;
+	color: var(--ink-3);
+	font-size: 12px;
+}
+/* Finder / File Explorer: the bar's last control, after the status (or at the end on its own). */
+.session-header .session-header-open-folder {
+	flex: none;
+	width: 28px;
+	height: 28px;
+	margin-left: auto;
+	border-radius: var(--radius-control);
+}
+.session-header-status ~ .session-header-open-folder {
+	margin-left: 6px;
+}
+/* A docked panel narrows the bar: the title keeps its room, and the project chip (also in the sidebar) goes. */
+.session-header {
+	container-type: inline-size;
+}
+@container (max-width: 760px) {
+	.session-header-chip {
+		display: none;
+	}
+}
+.session-header-status i {
+	width: 6px;
+	height: 6px;
+	border: 1px solid currentColor;
+	border-radius: 50%;
+}
+.session-header-status[data-status="running"] {
+	color: var(--ink-2);
+}
+.session-header-status[data-status="running"] i {
+	border-color: var(--ink);
+	background: var(--ink);
+	animation: pulse 1.4s ease-in-out infinite;
+}
+.session-header-status[data-status="waiting"] {
+	color: var(--ink);
+}
+.session-header-status[data-status="waiting"] i {
+	background: currentColor;
+}
+.session-header-status[data-status="failed"] {
+	color: var(--danger);
+}
+.session-header-status[data-status="failed"] i {
+	background: currentColor;
+}
 .stream {
 	flex: 1;
 	min-height: 0;
@@ -14,34 +121,80 @@
 	min-height: 100%;
 	margin: 0 auto;
 }
+/*
+ * The new-session moment. The question sits just above the composer, centred on
+ * the column, so the empty pane has one balanced focal point instead of a block
+ * hugging its left edge. One sequence on mount: the tile settles, the amber
+ * chevron draws in, then the words arrive.
+ */
+/*
+ * A new session centres the mark and the composer together in the pane. Both
+ * the stream and the composer zone size to their content and split the spare
+ * height evenly, so the question ends where the composer starts and the pair
+ * sits on the pane's middle. Once the session has content (or while a history
+ * session is loading into it), the composer returns to the bottom.
+ */
+.main:has(.empty-state):not(:has(.stream[data-opening])) > .stream {
+	flex: 1 1 auto;
+}
+.main:has(.empty-state):not(:has(.stream[data-opening])) > .composer-zone {
+	flex: 1 1 auto;
+}
+/* The mark leads the question on one line, centred on the column, just above the composer. */
 .empty-state {
-	display: grid;
-	place-items: center;
-	align-content: center;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	gap: 14px;
 	flex: 1;
-	min-height: 320px;
-	color: var(--ink-3);
+	padding: 0 2px 16px;
+	color: var(--ink-2);
 	text-align: center;
 }
-.empty-wordmark {
-	display: flex;
-	align-items: baseline;
-	gap: 5px;
+.empty-mark {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	background: #ffffff;
+}
+.empty-mark > .icon {
+	width: 44px;
+	height: 44px;
+}
+.empty-title {
+	/* Centre the line box on the 44px mark beside it. */
+	align-self: flex-end;
+	margin-bottom: 2px;
+	max-width: 20ch;
 	color: var(--ink);
-	letter-spacing: -0.06em;
+	font-size: clamp(26px, 3.2vw, 34px);
+	font-weight: 600;
+	letter-spacing: -0.022em;
+	line-height: 1.16;
+	text-wrap: balance;
 }
-.empty-wordmark span {
-	font-size: 34px;
-	font-weight: 300;
+@media (prefers-reduced-motion: no-preference) {
+	.empty-mark {
+		animation: empty-mark-settle 520ms var(--ease-out) both;
+	}
+	.empty-title {
+		animation: empty-rise 560ms var(--ease-out) both;
+		animation-delay: 40ms;
+	}
 }
-.empty-wordmark strong {
-	font-size: 38px;
-	font-weight: 800;
+@keyframes empty-mark-settle {
+	from {
+		opacity: 0;
+		transform: translateY(6px) scale(0.94);
+	}
 }
-.empty-state p {
-	margin-top: 9px;
-	font-size: 13px;
-	letter-spacing: 0.01em;
+@keyframes empty-rise {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
 }
 
 .message {
@@ -61,20 +214,19 @@
  * instead of the raw command — the same hues the composer's pick chips use:
  * the wrench (skills) is light blue, the puzzle (plugins) light purple.
  */
+/* An svg has no text baseline: without help its bottom edge rests ON the
+ * baseline, which reads low. Lift it onto the x-height instead. */
 .message-skill {
 	--message-kind-accent: var(--ink-2);
 	display: inline-flex;
+	/* Centre the chip on the line's x-height; the label rides the text. */
 	align-items: center;
+	vertical-align: middle;
 	gap: 5px;
 	max-width: 100%;
-	margin-bottom: 6px;
-	padding: 3px 9px;
-	border: 1px solid color-mix(in srgb, var(--message-kind-accent) 35%, var(--line));
-	border-radius: var(--radius-pill);
-	background: color-mix(in srgb, var(--message-kind-accent) 10%, var(--surface));
 	color: var(--message-kind-accent);
-	font-size: 12px;
-	font-weight: 500;
+	font-size: 13px;
+	font-weight: 600;
 }
 .message-skill--skill {
 	--message-kind-accent: #3b82f6;
@@ -97,6 +249,7 @@
 .message-skill--command {
 	--message-kind-accent: var(--command-accent);
 }
+
 /*
  * A command echo's badge sits inside the user bubble, inline before the text
  * (the same prefix position the composer's lead chip had), not above it: drop
@@ -105,6 +258,53 @@
 .message-body > .message-skill {
 	margin: 0 7px 0 0;
 	vertical-align: baseline;
+}
+/*
+ * A quoted other-session context collapses into one quiet chip under the
+ * bubble's text — text-height, no border box; expanding shows the capped
+ * transcript in a bounded block, never the full-width sprawl the fence had.
+ */
+.message-quote {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 5px;
+	max-width: 100%;
+	margin-top: 4px;
+}
+.message-quote-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	max-width: 100%;
+	min-height: 18px;
+	padding: 0 2px;
+	border-radius: var(--radius-chip);
+	color: var(--ink-3);
+	font-size: 11px;
+}
+.message-quote-toggle:hover {
+	background: var(--hover);
+	color: var(--ink-2);
+}
+.message-quote-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.message-quote-body {
+	align-self: stretch;
+	max-height: 220px;
+	overflow: auto;
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-input);
+	background: var(--surface-soft);
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 /* A user message's images, above its text, right-aligned like the bubble. */
 .message-images {
@@ -173,6 +373,18 @@
  * hovered or focused, so the transcript stays quiet; it reserves no space when
  * absent (a pending bubble has no timestamp yet).
  */
+/* A user bubble's copy / rewrite affordances, quiet until hovered. */
+.prompt-actions {
+	display: inline-flex;
+	gap: 2px;
+	margin-top: 3px;
+	opacity: 0;
+	transition: opacity var(--fast);
+}
+.message:hover .prompt-actions,
+.prompt-actions:focus-within {
+	opacity: 1;
+}
 .message-meta {
 	display: inline-flex;
 	align-items: center;
@@ -189,19 +401,24 @@
 .message:focus-within .message-meta {
 	opacity: 1;
 }
-.message-meta-model {
-	max-width: 24ch;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	color: var(--ink-2);
+/* A user bubble's copy / rewrite affordances, quiet until hovered. */
+.prompt-actions {
+	display: inline-flex;
+	gap: 2px;
+	margin-top: 3px;
+	opacity: 0;
+	transition: opacity var(--fast);
+}
+.message:hover .prompt-actions,
+.prompt-actions:focus-within {
+	opacity: 1;
 }
 .message-meta-time {
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 }
 /* The turn row keeps it at the end of the actions, not under a step of the turn. */
-.message-meta {
+.message-actions .message-meta {
 	margin-top: 0;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -226,8 +443,7 @@
 /* The Markdown body is block-level, so the badge floats to stay on the first
  * text line, in front of the words — the input box's chip position. */
 .message-body--invoked > .message-skill {
-	float: left;
-	margin: 1px 7px 1px 0;
+	margin: 0 6px 0 0;
 }
 .message .message-md {
 	min-width: 0;
@@ -1474,6 +1690,31 @@ button.compaction-head:focus-visible {
 }
 
 /*
+ * A goal round separator: the continuation that starts the next round, drawn
+ * as a quiet centred divider between the rounds' process groups. Hairlines on
+ * both sides, the same --line the stream's other boundaries use.
+ */
+.goal-round-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 14px 0 6px;
+	font-size: 11px;
+	color: var(--ink-3);
+}
+.goal-round-row::before,
+.goal-round-row::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--line);
+}
+.goal-round-label {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/*
  * Command output (`ui.notify`): a page-local note, dismissable, never part of
  * the session. Markdown notices read like message text; plain ones keep their
  * spacing because they can be aligned output.
@@ -1523,3 +1764,21 @@ button.compaction-head:focus-visible {
 	margin: -2px -4px 0 0;
 	color: var(--ink-3);
 }
+
+.edit-prompt-slot {
+	margin: 6px 0 14px;
+}
+/*
+ * Rewriting a message happens in place, so the bottom composer is a second,
+ * competing input while it is open: two editable boxes, one above the other.
+ * The rewritten draft is the only input then; cancelling or sending brings the
+ * composer back.
+ */
+.main:has(.edit-prompt-slot) > .composer-zone {
+	display: none;
+}
+
+.message-skill .tool-glyph {
+	color: inherit;
+}
+

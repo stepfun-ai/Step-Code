@@ -19,7 +19,7 @@ test.each([
 		error,
 	});
 	expect(message).toContain(error.message);
-	expect(message).toContain("Authenticate with: step mcp login figma, then restart Step.");
+	expect(message).toContain("Authenticate with: step mcp login figma, then start a new session or restart Step.");
 });
 
 test("HTTP permission failures do not suggest login", () => {

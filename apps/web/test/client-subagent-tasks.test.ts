@@ -46,13 +46,40 @@ test("missing or invalid statuses are unknown, regardless of output or exit code
 	}
 });
 
-test("dispatch rejection discards planned running rows and preserves the ordinary tool error", () => {
+test("a rejected dispatch keeps its planned rows as failed attempts carrying the tool's error", () => {
 	const previous = subagentTasks(planned, undefined, "pending");
-	assert.deepEqual(subagentTasks(planned, {}, "failed", previous), []);
+	const rejected = subagentTasks(planned, {}, "failed", previous, "Invalid parameters. Provide exactly one mode.");
+	assert.deepEqual(rejected.map(task => task.status), ["failed", "failed"]);
+	assert.deepEqual(rejected.map(task => task.error), [
+		"Invalid parameters. Provide exactly one mode.",
+		"Invalid parameters. Provide exactly one mode.",
+	]);
+	// The same projection without earlier rows still names the attempt from its arguments.
+	const [single] = subagentTasks({ agent: "general", task: "Audit" }, {}, "failed", [], "Invalid parameters.");
+	assert.equal(single?.status, "failed");
+	assert.equal(single?.error, "Invalid parameters.");
 	const [row] = timelineFromEntries(entries({}, true));
 	assert.equal(row?.kind === "tool" && row.state, "failed");
 	assert.equal(row?.kind === "tool" && row.outputDetail, "original output");
-	assert.deepEqual(row?.kind === "tool" && row.subagentTasks, []);
+	assert.deepEqual(
+		row?.kind === "tool" && row.subagentTasks?.map(task => [task.status, task.error]),
+		[
+			["failed", "original output"],
+			["failed", "original output"],
+		],
+	);
+});
+
+test("a dispatch that fails mid-chain fails only the steps that never settled", () => {
+	const previous = subagentTasks(planned, undefined, "pending");
+	const settled = previous.map((task, index) => (index === 0 ? { ...task, status: "completed" as const } : task));
+	assert.deepEqual(
+		subagentTasks(planned, undefined, "failed", settled, "dispatch aborted").map(task => [task.status, task.error]),
+		[
+			["completed", undefined],
+			["failed", "dispatch aborted"],
+		],
+	);
 });
 
 test("history keeps per-task failures distinct from the aggregate dispatch status", () => {

@@ -41,7 +41,7 @@ export function SidebarActions() {
 				className="sidebar-action primary"
 				id="newSession"
 				type="button"
-				onClick={() => startDraft(activeCwd())}
+				onClick={() => startDraft(activeCwd(), { listed: true })}
 			>
 				<Icon name="newChat" />
 				<span>{t("newConversation")}</span>

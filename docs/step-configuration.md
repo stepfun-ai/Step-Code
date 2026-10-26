@@ -198,6 +198,20 @@ the prompt; deleting that line asks again. `/theme` changes the theme later, and
 launches that already carry work (an initial prompt, a resumed session) skip the
 prompt entirely.
 
+## Shared MCP connections
+
+All sessions in one Step process share one connection per MCP server: `/new`, `/resume` and every Web or Desktop chat reuse the servers already running instead of starting another set. The Web and Desktop hosts connect the global servers when they start and keep them until they exit, so the first message of a new chat already has their tools; a chat's first message also waits for its session's MCP startup to finish. Project plugin servers connect when the first session in that project needs them.
+
+Set `shared = false` on a server that keeps per-session state (for example a browser or REPL) to give every session its own connection:
+
+```toml
+[mcp_servers.node_repl]
+command = "node_repl"
+shared = false
+```
+
+Subagents run as separate processes and still start their own MCP connections.
+
 ## MCP startup in the terminal
 
 Interactive Step sessions start MCP discovery and connections in the background.
@@ -217,6 +231,15 @@ requests. Print and RPC sessions still wait for the initial tool catalog before
 accepting work.
 Closing or replacing a session cancels pending MCP connections and prevents their
 late tools or warnings from reaching the new session.
+
+A running session also picks up MCP declarations that change while it runs:
+`/plugin install` or `/plugin remove`, `step mcp add` or `step mcp remove` in
+another terminal, the Web or Desktop settings screen, or a command the agent runs
+itself. Before each prompt, and after each turn that ran tools, the session
+leases new servers, re-leases changed ones, and releases removed or disabled
+ones, so the next model request already has the new tools. A failed server is retried
+only when its declaration changes or a new session starts. See
+[MCP catalogs](../packages/coding-agent/docs/mcp-catalog.md#changes-during-a-session).
 
 The macOS/Linux installer and `step update` run `step mcp prepare` after
 installing the new binary. This prepares the built-in StepPage executable before

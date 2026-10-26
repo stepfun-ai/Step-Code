@@ -80,6 +80,21 @@ export function finiteAmount(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/**
+ * The agent a subagent panel opens on when it is opened without a target.
+ *
+ * The rail's button has no row to name, so it asks for a default: the newest
+ * agent still working, otherwise the newest record at all. A running agent is
+ * what someone opening the panel cold is watching; a finished one is what they
+ * come back to read. Records are in timeline order, so the last match is the
+ * most recent.
+ */
+export function latestAgentRecord(items: readonly TimelineItem[]): SummaryAgentRecord | undefined {
+	const records = summaryAgentRecords(items);
+	const live = records.filter((record) => record.status === "queued" || record.status === "running");
+	return live.at(-1) ?? records.at(-1);
+}
+
 /** Only readable message blocks; opaque signatures and provider transport data stay out. */
 export function recordedMessage(entry: SessionEntry): { role: string; content: unknown } | undefined {
 	const message = entry.message;

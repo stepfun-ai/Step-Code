@@ -1,4 +1,5 @@
-import type { SessionEntry, SubagentStatus, SubagentTask, ToolState } from "./types";
+import { readMessageUsage } from "./subagent-usage";
+import type { SessionEntry, SubagentStatus, SubagentTask, SubagentUsage, ToolState } from "./types";
 
 function record(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -18,12 +19,38 @@ function status(value: unknown): SubagentStatus {
 	}
 }
 
-/** Only structured tool records define task state; prose and exit codes are not a lifecycle protocol. */
+/**
+ * The run's own totals, read from the tool result.
+ *
+ * `usage` is the kernel's `StepSubagentUsage`: `turns` plus the token counts. The
+ * client keeps the tokens under `SubagentUsage` (with a `records` count standing
+ * in for how many turns reported them), because the panel reports cache rates
+ * over them and must not invent a rate from a zero denominator.
+ */
+function subagentUsage(usage: Record<string, unknown> | undefined): { usage?: SubagentUsage } {
+	if (!usage) return {};
+	const totals = readMessageUsage(usage);
+	if (!totals) return {};
+	// `records` is how many turns reported usage; the kernel's `turns` is that count.
+	const records =
+		typeof usage.turns === "number" && Number.isSafeInteger(usage.turns) && usage.turns >= 0 ? usage.turns : 0;
+	return { usage: { ...totals, records } };
+}
+
+/**
+ * Only structured tool records define task state; prose and exit codes are not a
+ * lifecycle protocol. One exception: a dispatch the kernel *rejected* never
+ * started a child, so there are no structured per-task results — the planned
+ * rows are kept, as failed attempts carrying the tool's own error, instead of
+ * disappearing from the agent list as if nothing had been asked for.
+ */
 export function subagentTasks(
 	input: unknown,
 	details: unknown,
 	toolState: ToolState,
 	previous: readonly SubagentTask[] = [],
+	/** The tool result's text when the dispatch itself failed; ignored otherwise. */
+	failure?: string,
 ): readonly SubagentTask[] {
 	const value = record(details);
 	const backgroundAgentId = typeof value?.agentId === "string" ? value.agentId : undefined;
@@ -43,13 +70,26 @@ export function subagentTasks(
 				...(typeof usage?.turns === "number" && Number.isSafeInteger(usage.turns) && usage.turns >= 0
 					? { turns: usage.turns }
 					: {}),
+				// What the run cost: the kernel already summed its turns, so the panel
+				// does not have to re-add a transcript it may only partly read.
+				...subagentUsage(usage),
 				...(typeof item.errorMessage === "string" && item.errorMessage ? { error: item.errorMessage } : {}),
 			},
 		];
 	});
 	if (tasks.length) return tasks;
-	// A rejected dispatch must remain an ordinary failed tool, including its original error.
-	if (toolState === "failed") return [];
+	const rejected = toolState === "failed";
+	const error = rejected ? failure?.trim() : "";
+	if (rejected) {
+		// Only a step that never settled can be called failed; a chain step that
+		// already completed stays completed, and its own result is untouched.
+		const carried = previous.map((task) =>
+			task.status === "queued" || task.status === "running"
+				? { ...task, status: "failed" as const, ...(error ? { error } : {}) }
+				: task,
+		);
+		if (carried.length) return carried;
+	}
 	if (previous.length)
 		return previous.map((task) => ({
 			...task,
@@ -73,8 +113,10 @@ export function subagentTasks(
 			{
 				agent: typeof task.agent === "string" ? task.agent : "",
 				task: typeof task.task === "string" ? task.task : "",
-				// Planned arguments do not prove execution started.
-				status: toolState === "pending" ? "queued" : "unknown",
+				// Planned arguments do not prove execution started; a rejected dispatch
+				// proves it did not finish, and its own error is the reason.
+				status: toolState === "pending" ? "queued" : rejected ? "failed" : "unknown",
+				...(error ? { error } : {}),
 			},
 		];
 	});

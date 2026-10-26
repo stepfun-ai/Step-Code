@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -121,6 +121,96 @@ test("failed persistence leaves removal and restoration retryable", async () => 
 		await rm(`${file}.${process.pid}.tmp`, { recursive: true });
 		await registry.add(base);
 		assert.equal(await new WorkspaceRegistry(file).has(base), true);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A folder reaches this registry under more than one name: a symlink, macOS's
+ * `/var` and `/private/var`, a launcher's trailing slash. Two spellings are one
+ * workspace, so removing it under either name has to hide it — otherwise it
+ * stays in the sidebar and in the composer's list, and using it is refused by
+ * the host as "not a known workspace".
+ */
+test("removing a workspace by another spelling of its folder hides it", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-spelling-")));
+	try {
+		const file = join(base, "web-workspaces.json");
+		const folder = join(base, "project");
+		await mkdir(folder);
+		const registry = new WorkspaceRegistry(file);
+		const added = await registry.add(folder);
+
+		// The second name a session or a launcher would carry for the same folder.
+		const link = join(base, "project-link");
+		await symlink(folder, link);
+		const alternate = await realpath(link);
+		assert.equal(alternate, added.path);
+
+		await registry.remove(link);
+
+		// After a reload, as the page does.
+		const reopened = new WorkspaceRegistry(file);
+		const listed = await reopened.list();
+		assert.deepEqual(
+			listed.filter((workspace) => !workspace.hidden),
+			[],
+			"the workspace is still listed after being removed under another spelling",
+		);
+		assert.equal(await reopened.has(folder), false, "the folder is still a known workspace");
+		assert.equal(await reopened.has(link), false);
+
+		// Removing again is a no-op, and re-registering restores it.
+		assert.equal(await reopened.remove(link), true);
+		await reopened.add(folder);
+		assert.deepEqual(
+			(await new WorkspaceRegistry(file).list()).filter((workspace) => !workspace.hidden).map((w) => w.path),
+			[added.path],
+		);
+		assert.equal(await reopened.has(link), true);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a registry file left with one spelling visible and another hidden is repaired on read", async () => {
+	// Exactly what the previous version wrote when a workspace was removed under
+	// an alternate spelling: the registered entry stayed visible forever.
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-repair-")));
+	try {
+		const file = join(base, "web-workspaces.json");
+		const folder = join(base, "project");
+		await mkdir(folder);
+		// The two entries are different strings for one folder; `path.join` would
+		// normalize them back together, so the file is written verbatim.
+		await writeFile(
+			file,
+			JSON.stringify({ workspaces: [folder], removedWorkspaces: [`${folder}/.`] }, null, 2),
+		);
+		const listed = await new WorkspaceRegistry(file).list();
+		assert.deepEqual(
+			listed.filter((workspace) => !workspace.hidden).map((workspace) => workspace.path),
+			[],
+			"the stale visible entry survived the read",
+		);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a folder recorded under two spellings is listed once", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-duplicate-")));
+	try {
+		const file = join(base, "web-workspaces.json");
+		const folder = join(base, "project");
+		await mkdir(folder);
+		const link = join(base, "project-link");
+		await symlink(folder, link);
+		// A file written by an older build could hold both names.
+		await writeFile(file, JSON.stringify({ workspaces: [folder, link], removedWorkspaces: [] }, null, 2));
+		const listed = await new WorkspaceRegistry(file).list();
+		assert.equal(listed.filter((workspace) => !workspace.hidden).length, 1);
 	} finally {
 		await rm(base, { recursive: true, force: true });
 	}

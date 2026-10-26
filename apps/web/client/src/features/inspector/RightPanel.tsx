@@ -19,14 +19,14 @@ import { applyPreviewWidth, PREVIEW_DEFAULT, restorePreviewWidth } from "../file
 import { useActiveTab } from "../files/PreviewBody";
 import { toggleTerminalDock } from "../terminal/actions";
 import { ContextPanel } from "./ContextPanel";
-import { GoalPanel } from "./GoalPanel";
+import { latestAgentRecord } from "./model";
+import { openAgentRecord } from "./open-agent";
 import { SummaryBoard } from "./SummaryBoard";
 import { SummaryHeader } from "./SummaryHeader";
 
 const PANELS: readonly { id: RightPanelId; icon: IconName; label: string }[] = [
 	{ id: "summary", icon: "layers", label: "rightSummary" },
 	{ id: "context", icon: "scanLine", label: "rightContext" },
-	{ id: "goal", icon: "target", label: "rightGoal" },
 	{ id: "changes", icon: "fileDiff", label: "rightChanges" },
 	{ id: "files", icon: "fileText", label: "filePreview" },
 	{ id: "subagent", icon: "bot", label: "subagents" },
@@ -40,16 +40,22 @@ export function RightToolRail() {
 	/* The floating summary card is hidden under a mid view (market, cron), so its button must not read as pressed there. */
 	const summaryCovered = useAppStore((state) => Boolean(state.ui.midView));
 	const pressed = (id: RightPanelId) => active === id && !(id === "summary" && summaryCovered);
-	// The rail marks a goal that is still running, so the lifecycle GUI is findable.
-	const goalActive = useAppStore((state) => {
+	/*
+	 * The goal is steered from the summary board, so the summary button wears
+	 * its state: a green dot while it runs, an attention dot while it is held
+	 * (paused, blocked, limited) — the one state worth being found without
+	 * opening the board.
+	 */
+	const goalRailClass = useAppStore((state) => {
 		const goal = state.current?.goal;
-		return goal !== undefined && goal.status !== "complete";
+		if (!goal || goal.status === "complete") return undefined;
+		return goal.status === "active" ? "rail-goal-active" : "rail-goal-held";
 	});
 	const button = (panel: (typeof PANELS)[number]) => (
 		<Tooltip key={panel.id} content={t(panel.label)}>
 			<IconButton
 				data-right-panel={panel.id}
-				className={panel.id === "goal" && goalActive ? "rail-goal-active" : undefined}
+				className={panel.id === "summary" ? goalRailClass : undefined}
 				icon={panel.icon}
 				aria-label={t(panel.label)}
 				aria-controls="rightPanel"
@@ -92,12 +98,24 @@ export function RightPanel() {
 	const activitySeen = useRef<{ sessionId?: string; turn?: string }>({});
 	const childParentId = useAppStore((state) => state.ui.childView?.parentId);
 	const status = useAppStore((state) => state.current?.status);
+	const items = useAppStore((state) => state.timelineItems);
 	const [result, setResult] = useState<{ id: string; data?: SessionInspector; error?: string }>();
 	const [revision, setRevision] = useState(0);
 	const widthOpen = useAppStore((state) => state.ui.rightPanelMenu);
 	const ref = useRef<HTMLElement>(null);
 	const showStats = panel === "summary" || panel === "context";
 	const summary = panel === "summary";
+	/**
+	 * The rail button opens this panel without naming an agent, and the panel used
+	 * to render nothing until a Summary row was clicked — which read as "this
+	 * conversation has no subagent" while the board listed several. Select a
+	 * default whenever the panel is open with no view of *this* session.
+	 */
+	useEffect(() => {
+		if (panel !== "subagent" || !currentId || childParentId === currentId) return;
+		const latest = latestAgentRecord(items);
+		if (latest) openAgentRecord(latest);
+	}, [panel, currentId, childParentId, items]);
 	useEffect(() => {
 		if (activitySeen.current.sessionId !== currentId) activitySeen.current = { sessionId: currentId };
 		if (!activityTurn || activitySeen.current.turn === activityTurn) return;
@@ -223,9 +241,6 @@ export function RightPanel() {
 			</div>
 			<div className="right-panel-scroll" hidden={panel !== "context"}>
 				<ContextPanel key={`context-${currentId ?? ""}`} data={data} />
-			</div>
-			<div className="right-panel-scroll" hidden={panel !== "goal"}>
-				<GoalPanel key={`goal-${currentId ?? ""}`} />
 			</div>
 			<PreviewPanel embedded />
 			<ChildAgentView embedded />

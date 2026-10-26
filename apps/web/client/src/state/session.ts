@@ -20,6 +20,7 @@ import { assistantBlocks } from "./assistant-content";
 import { observePerformance } from "./performance";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
 import { backgroundSubagentStatuses, subagentTasks } from "./subagent-tasks";
+import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
 import type {
 	AccountReport,
@@ -123,6 +124,22 @@ export function installSideAnswerTabs(actions: {
 	openSideAnswerTab = actions.open;
 	syncSideAnswerTabs = actions.sync;
 	dropSideAnswerTabs = actions.drop;
+}
+
+/**
+ * What scopes file preview tabs to their session (`features/files/session-scope.ts`).
+ * Installed by the files feature for the same reason as the side-answer actions.
+ */
+let switchPreviewSession: (previousId: string | undefined, nextId: string | undefined) => void = () => {};
+let forgetPreviewSession: (sessionId: string) => void = () => {};
+
+/** Called once by `features/files/session-scope.ts`. */
+export function installPreviewSessionScope(actions: {
+	switch: (previousId: string | undefined, nextId: string | undefined) => void;
+	forget: (sessionId: string) => void;
+}): void {
+	switchPreviewSession = actions.switch;
+	forgetPreviewSession = actions.forget;
 }
 
 /**
@@ -247,16 +264,23 @@ export function mergeSessionSummary(
 	return next;
 }
 
+/** File-changing tools: the built-in names and the Step tool profile's, which Web sessions use. */
+const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_file", "write_file"]);
+
 /**
- * The file change of a finished edit/write call: both tools record a unified
- * patch in their result details; `write` says why when it recorded none.
+ * The file change of a finished edit/write call. `edit`, `write` and Step's
+ * `edit_file` record a unified patch in their result details; `write` says why
+ * when it recorded none. Step's `write_file` records no patch (an untracked
+ * change), and `changed: false` when the file already held the content.
  */
 function fileChange(name: string, args: unknown, result: AgentMessage | undefined): FileChange | undefined {
-	if ((name !== "edit" && name !== "write") || !result || result.isError) return undefined;
+	if (!FILE_CHANGE_TOOLS.has(name) || !result || result.isError) return undefined;
 	const details = (result.details ?? {}) as {
 		patch?: unknown;
 		untracked?: unknown;
+		changed?: unknown;
 	};
+	if (details.changed === false) return undefined;
 	const input = (args ?? {}) as { path?: unknown; file_path?: unknown };
 	const path = typeof input.path === "string" ? input.path : input.file_path;
 	if (typeof path !== "string" || !path.trim()) return undefined;
@@ -400,6 +424,8 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 	 * it is dropped from the timeline (it stays journaled for the model).
 	 */
 	let echoArgs: string | null = null;
+	// Separators seen so far, for labelling a round whose projected number is missing.
+	let goalRounds = 0;
 	const toolResults = new Map<string, NonNullable<SessionEntry["message"]>>();
 	for (const entry of entries) {
 		if (entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolCallId) {
@@ -427,11 +453,25 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 				items.push({
 					itemId: `command-${entry.id}`,
 					kind: "command",
+					entryId: entry.id,
 					command,
 					...(typeof entry.timestamp === "string" ? { timestamp: entry.timestamp } : {}),
 				});
 				echoArgs = /^\/[A-Za-z0-9][\w.:-]*\s*([\s\S]*)$/u.exec(command)?.[1]?.trim() || null;
 			}
+			continue;
+		}
+		// The goal's continuation message starts the next round; the flow marks
+		// it with a separator so a run reads as rounds, not one long stream.
+		if (entry.type === "custom_message" && entry.customType === "step-goal") {
+			goalRounds += 1;
+			const projected = entry.goalRound;
+			items.push({
+				itemId: `goal-round-${entry.id}`,
+				kind: "goal-round",
+				round: typeof projected === "number" && projected > 0 ? projected : goalRounds + 1,
+				...(typeof entry.timestamp === "string" ? { timestamp: entry.timestamp } : {}),
+			});
 			continue;
 		}
 		if (entry.type !== "message") continue;
@@ -526,6 +566,10 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 									block.arguments,
 									result?.details,
 									result?.isError ? "failed" : result ? "completed" : "pending",
+									[],
+									// A rejected dispatch reports no per-task result: its error is the
+									// only account of why the run did not happen.
+									result?.isError ? clipDetail(contentText(result.content)) : undefined,
 								),
 							}
 						: {}),
@@ -635,8 +679,10 @@ function approvalItems(snapshot: SessionSnapshot): TimelineItem[] {
 /**
  * Make `snapshot` the current session (legacy `renderSnapshot`, 2992-3011).
  * Everything the legacy function painted is derived from these fields.
+ * `adoptDraft` marks the session a draft just became: what the draft opened in
+ * the rail (files, a waiting side answer) is that session's, so it stays.
  */
-export function renderSnapshot(snapshot: SessionSnapshot): void {
+export function renderSnapshot(snapshot: SessionSnapshot, options: { readonly adoptDraft?: boolean } = {}): void {
 	const pending = new Map((snapshot.pendingClarifications ?? []).map((request) => [request.id, request]));
 	for (const request of liveClarifications.values()) {
 		if (request.sessionId === snapshot.id) pending.set(request.id, request);
@@ -677,10 +723,14 @@ export function renderSnapshot(snapshot: SessionSnapshot): void {
 			compacting: snapshot.compacting === true,
 		};
 	});
-	// Side answers belong to one session, so tabs from the previous one are dropped
-	// before this session's are restored. A reloaded page then shows the history
-	// again; an open file tab stays in front.
-	if (previousSessionId !== snapshot.id) dropSideAnswerTabs();
+	// File tabs and side answers belong to one session, so the previous session's
+	// are put away before this session's are restored; another session's file
+	// must never sit beside this conversation as if it were its output. A
+	// reloaded page then shows the side-answer history again.
+	if (previousSessionId !== snapshot.id && !options.adoptDraft) {
+		switchPreviewSession(previousSessionId, snapshot.id);
+		dropSideAnswerTabs();
+	}
 	syncSideAnswerTabs(restorableSideAnswers(snapshot.sideAnswers ?? []));
 }
 
@@ -973,6 +1023,7 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 							agentEvent.result?.details,
 							agentEvent.isError ? "failed" : "completed",
 							item.subagentTasks,
+							agentEvent.isError ? clipDetail(output) : undefined,
 						),
 					}
 				: {}),
@@ -1199,6 +1250,16 @@ export function forgetUnlistedSession(id: string): void {
 	unlistedSessions.delete(id);
 }
 
+/**
+ * A session the host deleted is forgotten completely: its optimistic row and
+ * the group tag it carried. The tag is a record about that session, so leaving
+ * it behind kept a group in the picker that no session could ever name again.
+ */
+export function forgetDeletedSession(id: string): void {
+	forgetUnlistedSession(id);
+	setState((state) => withoutSessionTag(state, id));
+}
+
 /** Reload the session list (legacy `refreshSessions`, 3111-3115). */
 export async function refreshSessions(): Promise<void> {
 	const data = await api<{ sessions: SessionSummary[] }>("/api/v1/sessions");
@@ -1209,7 +1270,16 @@ export async function refreshSessions(): Promise<void> {
 		const live = data.sessions.flatMap((session): SessionLiveStatus[] =>
 			session.status ? [{ id: session.id, status: session.status, unread: session.unread === true }] : [],
 		);
-		return { sessions: [...kept, ...data.sessions], ...foldLiveStatuses(state, live, listed) };
+		// A session the host no longer lists is gone for good; its group tag has to
+		// go with it, or the group stays in the picker with no session anywhere. The
+		// open session counts as listed even if this answer omitted it.
+		const present = new Set([...kept, ...data.sessions].map((session) => session.id));
+		if (state.current) present.add(state.current.id);
+		return {
+			sessions: [...kept, ...data.sessions],
+			...pruneTagGroups(state, present),
+			...foldLiveStatuses(state, live, listed),
+		};
 	});
 }
 
@@ -1228,7 +1298,8 @@ export function closeRenameSession(): void {
 
 /**
  * Submit `#renameSessionDialog`. The dialog closes once the host accepted the name; a failure keeps it
- * open with the typed name so the user can retry, and reports the error in the toast.
+ * open with the typed name so the user can retry, and reports the error in the toast. A late success
+ * only closes the dialog it belongs to, and a failed list refresh does not turn into a failed rename.
  */
 export async function renameSession(name: string): Promise<void> {
 	const target = getState().ui.renameSession;
@@ -1236,23 +1307,29 @@ export async function renameSession(name: string): Promise<void> {
 	if (!target || target.pending || !trimmed) return;
 	setUi({ renameSession: { ...target, pending: true } });
 	try {
-		await apiSend(`/api/v1/sessions/${target.sessionId}/name`, "PATCH", { name: trimmed });
-		patchCurrentSession(target.sessionId, { name: trimmed });
-		setUi((ui) => (ui.renameSession?.sessionId === target.sessionId ? { renameSession: null } : {}));
-		await refreshSessions();
+		// The host trims the name to its own limit; the returned snapshot is what it stored.
+		const saved = await apiSend<SessionSummary>(`/api/v1/sessions/${target.sessionId}/name`, "PATCH", {
+			name: trimmed,
+		});
+		patchCurrentSession(target.sessionId, { name: saved.name?.trim() || trimmed });
 	} catch (error) {
 		setUi((ui) =>
 			ui.renameSession?.sessionId === target.sessionId ? { renameSession: { ...target, pending: false } } : {},
 		);
 		showError(errorMessage(error));
+		return;
 	}
+	setUi((ui) => (ui.renameSession?.sessionId === target.sessionId ? { renameSession: null } : {}));
+	// The rename already succeeded; a failed list refresh must not report it as a failure.
+	await refreshSessions().catch(() => {});
 }
 
 /**
  * Rename / archive / delete one session (legacy `openSessionMenu` click
  * handler, 1297-1328). Called from the sidebar's row menu and the
- * conversation header's menu; the open session's snapshot follows along so
- * the header title does not wait for the next SSE snapshot.
+ * conversation header's menu. Rename only opens `#renameSessionDialog`
+ * (`renameSession` saves); archive and delete patch the open session's
+ * snapshot so the header does not wait for the next SSE snapshot.
  */
 export async function runSessionAction(action: SessionAction, session: SessionSummary): Promise<void> {
 	try {
@@ -1268,9 +1345,11 @@ export async function runSessionAction(action: SessionAction, session: SessionSu
 		}
 		if (action === "delete" && window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) {
 			await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
-			forgetUnlistedSession(session.id);
+			forgetDeletedSession(session.id);
 			const state = getState();
 			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
+			// After leaving it: leaving a session stashes its tabs.
+			forgetPreviewSession(session.id);
 		}
 		await refreshSessions();
 	} catch (error) {
@@ -1346,7 +1425,9 @@ export async function refreshWorkspaces(): Promise<void> {
 /** Open a session and follow its stream (legacy `openSession`, 3122-3130). */
 export async function openSession(id: string): Promise<void> {
 	choseSession = true;
-	setUi({ midView: null, childView: null, openingSession: id });
+	// The draft this page left behind is gone: it was never a session, so its
+	// placeholder row must not survive under the workspace it named.
+	setUi({ midView: null, childView: null, openingSession: id, draftRow: null });
 	setState({ pendingTurn: null });
 	try {
 		const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${id}`);
@@ -1369,10 +1450,18 @@ export function requestPromptFocus(): void {
 /**
  * Leave the current session and start an unsaved draft in `cwd` (legacy
  * `startDraft`, 3132-3151). The session is created on the first send.
+ * `listed` marks a conversation the user asked for, so the sidebar shows a
+ * placeholder row for it right away instead of only after the first send.
  */
-export function startDraft(cwd: string = getState().bootstrapCwd): void {
+export function startDraft(cwd: string = getState().bootstrapCwd, options: { readonly listed?: boolean } = {}): void {
 	choseSession = true;
 	closeStream();
+	// A new conversation shows none of the session it leaves in the rail.
+	const leaving = getState().current?.id;
+	if (leaving) {
+		switchPreviewSession(leaving, undefined);
+		dropSideAnswerTabs();
+	}
 	const draftCwd = cwd || getState().bootstrapCwd;
 	setState((state) => {
 		const current = state.current;
@@ -1393,7 +1482,7 @@ export function startDraft(cwd: string = getState().bootstrapCwd): void {
 	});
 	// A new conversation replaces whatever covers the pane (cron / plugin market, a child agent),
 	// and a session still loading from an earlier pick.
-	setUi({ midView: null, childView: null, openingSession: null });
+	setUi({ midView: null, childView: null, openingSession: null, draftRow: options.listed ? draftCwd : null });
 	requestPromptFocus();
 	void loadDraftModels(draftCwd);
 }
@@ -1499,7 +1588,9 @@ export async function createSessionIfNeeded(firstMessage?: string): Promise<Sess
 			...(firstMessage ? { firstMessage } : {}),
 		}),
 	}));
-	renderSnapshot(snapshot);
+	// The real row replaces the draft placeholder.
+	setUi({ draftRow: null });
+	renderSnapshot(snapshot, { adoptDraft: true });
 	connectStream(snapshot.id);
 	void refreshSessions().catch(() => {});
 	return snapshot;
@@ -1653,6 +1744,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 			directoryPicker: boot.directoryPicker === "native" ? "native" : "browse",
 			login: boot.login ?? null,
 			draftCwd: boot.cwd,
+			// Only what the host actually reported: an absent field stays absent
+			// rather than being invented from the page's own bundle.
+			build: {
+				...(typeof boot.version === "string" && boot.version ? { version: boot.version } : {}),
+				...(typeof boot.buildTime === "string" && !Number.isNaN(Date.parse(boot.buildTime))
+					? { madeAt: boot.buildTime }
+					: {}),
+			},
 		});
 		if (boot.login?.configured) void refreshAccount();
 		// An explicit Step sign-out in plain Web sets this so the page asks for a
@@ -1696,5 +1795,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 		}
 	} catch (error) {
 		showError(errorMessage(error));
+	} finally {
+		// The pane stops loading here even when a step failed: from now on an empty stream is an empty conversation.
+		setState({ booted: true });
 	}
 }

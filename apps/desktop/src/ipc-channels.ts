@@ -14,6 +14,7 @@ export const DESKTOP_IPC = {
 	updateRestart: "stepcode-desktop:update-restart",
 	/** Main -> page push: the new `DesktopUpdateState`. The only channel the page listens on. */
 	updateState: "stepcode-desktop:update-state",
+	defaultBrowser: "stepcode-desktop:default-browser",
 } as const;
 
 /** Argument the main process passes to the preload so the bridge can report the app version synchronously. */

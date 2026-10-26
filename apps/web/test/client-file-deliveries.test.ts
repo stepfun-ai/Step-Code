@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { artifactKind, localFileReference, workspaceFilePath, workspaceFileReference } from "../client/src/lib/file-references.ts";
 import { markdownFileReferences, renderMarkdown } from "../client/src/lib/markdown.ts";
-import { turnArtifacts } from "../client/src/features/conversation/turn-artifacts.ts";
+import { turnArtifacts, withTurnChanges } from "../client/src/features/conversation/turn-artifacts.ts";
 import { collectTurnFooters } from "../client/src/features/conversation/turn-footers.ts";
 import { openFileReference, toggleDeliveryFile } from "../client/src/features/files/actions.ts";
 import { activeRightPanel, openRightPanel } from "../client/src/state/right-panel.ts";
@@ -66,8 +66,8 @@ test("recognizes bounded turn outputs from explicit references and successful st
 	];
 	const [footer] = collectTurnFooters(items, "idle", false);
 	assert.deepEqual(turnArtifacts(items, footer, "D:/Work"), [
-		{ path: "output/report.md", label: "report.md", kind: "document" },
-		{ path: "output/chart.png", label: "Image", kind: "image" },
+		{ path: "output/report.md", label: "report.md", kind: "document", turnId: "u1" },
+		{ path: "output/chart.png", label: "Image", kind: "image", turnId: "u1" },
 	]);
 	assert.equal(artifactKind("slides.PPTX"), "presentation");
 	assert.equal(artifactKind("data.csv"), "spreadsheet");
@@ -152,4 +152,20 @@ test("artifact recognition keeps one cached result per turn, even past dozens of
 	assert.deepEqual(first.map((artifacts) => artifacts.map((artifact) => artifact.path)), footers.map((_footer, turn) => [`out/report-${turn}.md`]));
 	// The same arrays come back: no turn was evicted and re-parsed.
 	for (const [index, artifacts] of again.entries()) assert.equal(artifacts, first[index]);
+});
+
+test("a delivery carries its own turn's change, matched across the tool's path spelling", () => {
+	const file = { path: ".\\site\\index.html", patches: ["@@ -1 +1 @@\n-a\n+b\n"], additions: 1, deletions: 1 };
+	const turn = { turnId: "u2", ordinal: 2, latest: true, lastIndex: 5, files: [file], additions: 1, deletions: 1 };
+	const artifacts = [
+		{ path: "site/index.html", label: "Snake", kind: "website" as const, turnId: "u2" },
+		{ path: "notes.md", label: "notes.md", kind: "document" as const, turnId: "u2" },
+	];
+	const attached = withTurnChanges(artifacts, turn, "D:/Work");
+	assert.deepEqual(attached[0]?.change, { turnId: "u2", file });
+	assert.equal(attached[1], artifacts[1], "a file the turn only referenced keeps no change");
+	// Stream frames reuse the inputs, and then the result too.
+	assert.equal(withTurnChanges(artifacts, turn, "D:/Work"), attached);
+	assert.equal(withTurnChanges(artifacts, undefined, "D:/Work"), artifacts);
+	assert.equal(withTurnChanges(artifacts, { ...turn, files: [] }, "D:/Work"), artifacts);
 });

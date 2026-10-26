@@ -1,0 +1,113 @@
+/*
+ * The composer's microphone button and its recording pill. The button sits
+ * in `.composer-right` beside the model menu and the send button, so it
+ * inherits their row; the pill floats above it, anchored right, without
+ * touching the composer's layout. `prefers-reduced-motion` is handled by
+ * the global rule in styles/global.css, which stops every animation.
+ */
+
+.voice-anchor {
+	position: relative;
+	display: inline-flex;
+	flex: none;
+}
+
+.voice-button {
+	color: var(--ink-2);
+}
+
+/* Listening is the loud state: red, slightly larger, gently pulsing. */
+.voice-button--listening {
+	color: var(--danger);
+	animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.45;
+	}
+}
+
+/* The recording pill: waveform, elapsed time, cancel and done. */
+.voice-pill {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	right: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: var(--control-h);
+	padding: 0 6px 0 12px;
+	border: 1px solid var(--line);
+	border-radius: calc(var(--control-h) / 2);
+	background: var(--surface);
+	box-shadow: var(--elev-2);
+	white-space: nowrap;
+	z-index: 5;
+}
+
+.voice-pill-label {
+	font-size: 12px;
+	color: var(--ink-2);
+}
+
+/* Five bars driven by the live input level; gains differ so the row ripples. */
+.voice-wave {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	height: 18px;
+}
+
+.voice-wave span {
+	width: 3px;
+	height: 100%;
+	border-radius: 2px;
+	background: var(--danger);
+	transform-origin: center;
+	/* Floor 0.12 keeps a resting bar visible; the level scales the gain. */
+	transform: scaleY(calc(0.12 + var(--bar-level, 0) * var(--bar-gain, 1)));
+	transition: transform 90ms linear;
+}
+
+.voice-elapsed {
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	color: var(--ink-2);
+	min-width: 38px;
+}
+
+/* Cancel and done: small round targets at the pill's right end. */
+.voice-pill-action {
+	display: inline-grid;
+	place-items: center;
+	width: 26px;
+	height: 26px;
+	border: 0;
+	border-radius: 50%;
+	background: var(--hover);
+	color: var(--ink-2);
+	cursor: pointer;
+	transition:
+		background-color var(--fast),
+		color var(--fast);
+}
+
+.voice-pill-action:hover {
+	color: var(--ink);
+}
+
+.voice-pill-done {
+	background: var(--danger);
+	color: #fff;
+}
+
+.voice-pill-done:hover {
+	color: #fff;
+	background: var(--danger);
+	filter: brightness(1.1);
+}
