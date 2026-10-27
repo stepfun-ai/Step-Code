@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { resolveFeedbackEndpoint } from "@step-harness/coding-agent";
 import { WebSessionStore } from "../src/runtime.ts";
 
 /**
@@ -241,15 +242,17 @@ test("a report carries the session evidence, the archive and this host's surface
 	}
 });
 
-test("without a bundle endpoint the report says the transcript is not attached", { timeout: 60_000 }, async () => {
+test("with no bundle endpoint configured the built-in route carries the transcript", { timeout: 60_000 }, async () => {
 	const previous = snapshotEnvironment();
 	const fixture = await startFixture();
-	const collector = await startCollector();
 	const home = await startHome(fixture.baseUrl);
 	const store = new WebSessionStore();
 	try {
 		isolate(home);
-		process.env.STEPCODE_FEEDBACK_ENDPOINT = collector.endpoint;
+		// Feedback adopts the built-in routes on every channel, so an unconfigured
+		// host still has somewhere to send the archive. Preparing evidence stays
+		// local: the archive is built, and nothing is uploaded until a submit.
+		delete process.env.STEPCODE_FEEDBACK_ENDPOINT;
 		delete process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
 
 		const session = await store.create(home);
@@ -257,17 +260,14 @@ test("without a bundle endpoint the report says the transcript is not attached",
 		await waitForIdle(session);
 
 		const draft = await session.prepareFeedback();
-		assert.equal(draft.preview.archive, undefined, "an archive is promised with nowhere to send it");
-		assert.match(draft.preview.archiveNote ?? "", /bundle endpoint/i);
-		const result = await session.submitFeedback({ sentiment: "up", comment: "fine", token: draft.token });
-		assert.equal(result.ok, true, result.message);
-		assert.equal(collector.archives.length, 0, "an archive was uploaded without an endpoint");
-		// The summary still travels: it is the part that needs no archive endpoint.
-		assert.equal(collector.bodies[0]?.sessionSummary?.counts?.turns, 1);
+		assert.ok(
+			draft.preview.archive?.some((file) => file.name === "events.jsonl"),
+			"the built-in bundle route left the transcript behind",
+		);
+		assert.equal(draft.preview.archiveNote, undefined, "an attached archive was reported as missing");
 	} finally {
 		await store.interruptAndClose().catch(() => {});
 		await fixture.stop();
-		await collector.stop();
 		await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 		restoreEnvironment(previous);
 	}
@@ -298,7 +298,7 @@ test("an undeliverable report is reported as pending, not as submitted", { timeo
 	}
 });
 
-test("feedback without an endpoint is refused and nothing is prepared", { timeout: 60_000 }, async () => {
+test("feedback needs no host configuration to resolve its routes", { timeout: 60_000 }, async () => {
 	const previous = snapshotEnvironment();
 	const fixture = await startFixture();
 	const home = await startHome(fixture.baseUrl);
@@ -308,14 +308,15 @@ test("feedback without an endpoint is refused and nothing is prepared", { timeou
 		delete process.env.STEPCODE_FEEDBACK_ENDPOINT;
 		delete process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
 
+		// The kernel resolves a built-in summary route and bundle route on both
+		// channels, so "Feedback is not configured for this build" is no longer
+		// reachable from this host; the documented opt-out above is the way a host
+		// refuses a report.
+		assert.match(resolveFeedbackEndpoint(), /^https:\/\//u);
+		assert.match(resolveFeedbackEndpoint(process.env, true), /^https:\/\//u);
+
 		const session = await store.create(home);
-		await assert.rejects(
-			() => session.prepareFeedback(),
-			/Feedback is not configured/,
-			"preparing evidence must fail when nothing can receive the report",
-		);
-		const result = await session.submitFeedback({ sentiment: "up", comment: "hello" });
-		assert.deepEqual(result, { ok: false, message: "Feedback is not configured for this build." });
+		await session.prepareFeedback();
 	} finally {
 		await store.interruptAndClose().catch(() => {});
 		await fixture.stop();

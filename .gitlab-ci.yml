@@ -1,11 +1,13 @@
 # StepCode Desktop: installers (macOS dmg, Windows NSIS), Developer ID signing
-# and notarization, and tag-driven releases to TOS.
+# and notarization, and tag-driven releases to TOS. The CLI/TUI lint, test,
+# tag, package, publish and notify jobs come from the default branch.
 #
-# This file lives only on CI branches: scripts/check-public-boundary.mjs forbids
-# .gitlab-ci.yml and object-store upload code in the public tree, exactly as
-# feat/stepcode-web-mvp-gh-build and feat/stepcode-desktop-mvp-build do, and
-# those branches drop `pnpm run check:public-boundary` from `check` for the
-# same reason.
+# This file lives only on CI branches: it carries .gitlab-ci.yml and
+# object-store upload code, exactly as feat/stepcode-web-mvp-gh-build and
+# feat/stepcode-desktop-mvp-build do. Those branches also dropped
+# `pnpm run check:public-boundary` and the public-tree observability guard from
+# `check`; after merging the default branch this tree also carries the internal
+# telemetry implementation, so neither guard ships here.
 #
 # Two ways in:
 #
@@ -42,10 +44,10 @@
 #                                       (protected branch), at the root
 #                                       package.json version
 #
-# The Run pipeline form shows only DESKTOP_BUMP: GitLab lists the variables
-# that carry a `description`, and every other one here is a plain default.
-# falcon's stages/variables.yml (the mobile form: iOS/Android profiles, APK
-# channels, market submission, ...) is deliberately not included. falcon's package.yml / publish.yml are not included
+# The Run pipeline form shows only DESKTOP_BUMP and BUMP: GitLab lists the
+# variables that carry a `description`, and every other one here is a plain
+# default. falcon's stages/variables.yml (the mobile form: iOS/Android profiles,
+# APK channels, market submission, ...) is deliberately not included. falcon's package.yml / publish.yml are not included
 # either: they add FE callbacks and falcon's own TOS uploads; releases here go
 # through infra/release/desktop-release.mjs.
 #
@@ -55,21 +57,26 @@
 #   upload, production:   STEP_TOS_PROD_ACCESS_KEY, STEP_TOS_PROD_SECRET_KEY
 #                         (bucket and endpoint below)
 #   tagging:              STEP_RELEASE_TOKEN (protected; api + write_repository
-#                         scopes, allowed to create the protected desktop-v* tags)
+#                         scopes, allowed to create the protected desktop-v* and
+#                         v* tags)
 #   signing/notarization: see .gitlab-ci.desktop-macos-signing.yml
+#   npm publishing:       NPM_TOKEN (masked, deploy rights on STEP_NPM_REGISTRY)
 #   usage telemetry:      config/usage-telemetry.yaml (collector endpoint + internal
 #                         gateway hosts), committed with no values in the public
 #                         tree. A GitLab File variable STEPCODE_USAGE_TELEMETRY_CONFIG
 #                         overrides it for one job. Empty means the build reports nothing.
 #
-# The default branch's version of this file also runs the CLI/TUI lint, test,
-# tag, package, publish and notify jobs. When merging, keep those jobs and the
-# workflow rules below, and carry these includes with them.
+# Ported CLI/TUI jobs: the desktop jobs below and the CLI jobs share this file.
+# A CLI job never uses falcon, so each one gets `before_script: []` through
+# `.cli-docker-job`; without it the falcon include's global before_script would
+# clone the falcon toolchain in the release-builder image.
 
 workflow:
   rules:
-    # A pipeline on an existing release tag (a pushed tag, or Run pipeline on it).
+    # A pipeline on an existing desktop release tag (a pushed tag, or Run pipeline on it).
     - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
+    # A CLI/TUI release tag runs the ported default-branch release jobs.
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
     # Everything else starts from Run pipeline or the platform's API trigger. A
     # branch push would create a pipeline whose jobs are all ruled out, which
     # GitLab reports as failed and which then blocks the merge request.
@@ -115,15 +122,463 @@ variables:
       - 'major'
     description: 'Release StepCode Desktop: patch / minor / major creates the next desktop-vX.Y.Z tag, builds the signed macOS installers and uploads them (test bucket automatically, production on a manual click). none builds an unsigned macOS test package only.'
 
+  # ── CLI/TUI release variables (ported from the default branch) ───────────
+  # RELEASE_BUILDER_IMAGE, STEP_RELEASE_BASE_URL, STEP_RELEASE_PROD_BASE_URL,
+  # STEP_TOS_PROD_BUCKET and STEP_TOS_PROD_ENDPOINT are already declared by
+  # .gitlab-ci.desktop-release.yml with the same values.
+  RELEASE_BUNDLE_VERSION: "v0.3.1"
+  # Internal mirror for the rg/fd search-tool binaries: this project's own GitLab
+  # generic package registry. scripts/copy-search-tools.mjs fetches from here
+  # (authenticating with the runner's CI_JOB_TOKEN) so the release archive bundles
+  # rg/fd without reaching github.com. Falls back to GitHub if unset/unreachable.
+  STEP_TOOLS_BASE_URL: "https://gitlab.basemind.com/api/v4/projects/10933/packages/generic/search-tools/1.0.0"
+  # Local artifactory repo that receives @stepfun/stepcode (see release_npm_publish).
+  # The virtual npm-public repo has no default deployment repo and rejects
+  # publishes; it aggregates stepai-npm-release, so users install from npm-public.
+  STEP_NPM_REGISTRY: "https://artifactory.stepfun-inc.com/artifactory/api/npm/stepai-npm-release/"
+  STEPCODE_BUILD_COMMIT: $CI_COMMIT_SHORT_SHA
+  # Test release notifications use the same built-in token as stepcli-bot when
+  # ENV_NAME=test. Both values may be overridden by masked CI variables for
+  # other environments or during token rotation.
+  STEP_RELEASE_BOT_WEBHOOK_URL: "https://test-openapi-stepcli-bot.c.stepfun-inc.net/webhooks/step-harness/release"
+  STEP_RELEASE_BOT_WEBHOOK_TOKEN: "EprwvGGOL6hOSkpROGZZOOhg9H0ghnw8IJVmNsMcieh+oazfgy9Ey0X0wo/CDYBz"
+  # The default is intentionally inert. A real bump is selected explicitly in
+  # GitLab's Run pipeline form on the default branch.
+  BUMP:
+    value: "none"
+    options:
+      - "none"
+      - "patch"
+      - "minor"
+      - "major"
+    description: "Select a release bump for the default branch; leave none for a normal pipeline."
+
 # falcon's before_script.yml declares package/upload/test/publish; the release
-# and notarization topology add their own, and the last declaration wins.
+# and notarization topology add their own, and the last declaration wins. The
+# lint stage and the CLI release stages come from the default branch.
 stages:
+  - lint
   - verify
+  - test
   - tag
   - package
   - macos-checkpoint
   - macos-notary-submit
   - macos-notary-finalize
   - upload
-  - test
   - publish
+  - notify
+
+# ── CLI/TUI jobs (ported from the default branch) ─────────────────────────
+# Docker jobs: no falcon toolchain, so the global falcon before_script is off.
+.cli-docker-job:
+  tags:
+    - docker
+  before_script: []
+  interruptible: true
+
+# The pinned release-builder digest predates the Dockerfile change that added
+# git (and the search tools used by the coding-agent). Keep this short-lived
+# bootstrap while the image is rebuilt and repinned; it is a no-op once the
+# image contains the dependencies.
+.release_builder_dependencies:
+  variables:
+    RELEASE_BUILDER_GIT: "false"
+    RELEASE_BUILDER_SEARCH_TOOLS: "false"
+  before_script:
+    - |
+      packages=""
+      if [ "${RELEASE_BUILDER_GIT:-false}" = "true" ] && ! command -v git >/dev/null 2>&1; then
+        packages="$packages git"
+      fi
+      if [ "${RELEASE_BUILDER_SEARCH_TOOLS:-false}" = "true" ]; then
+        if ! command -v fd >/dev/null 2>&1 && ! command -v fdfind >/dev/null 2>&1; then
+          packages="$packages fd-find"
+        fi
+        if ! command -v rg >/dev/null 2>&1; then
+          packages="$packages ripgrep"
+        fi
+      fi
+      if [ -n "$packages" ]; then
+        echo "Installing missing release-builder dependencies:$packages" >&2
+        if ! { apt-get update -qq && apt-get install -y -qq --no-install-recommends $packages; }; then
+          echo "Could not install release-builder dependencies:$packages." >&2
+          echo "Rebuild infra/release/release-builder, publish the image, and update RELEASE_BUILDER_IMAGE." >&2
+          exit 1
+        fi
+      fi
+    - |
+      if [ "${RELEASE_BUILDER_GIT:-false}" = "true" ]; then
+        git --version
+      fi
+
+# The ported CLI/TUI jobs keep the default branch's job definitions but not its
+# workflow: a branch push or merge request here starts no pipeline, and a
+# desktop-v* release pipeline must not wait on CLI lint/test. They therefore run
+# on a CLI release tag (vX.Y.Z), or on a manual/api pipeline that sets
+# STEP_RUN_CLI_JOBS=true to validate the CLI against this branch.
+.cli-check-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+    - if: '$STEP_RUN_CLI_JOBS == "true" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger")'
+    - when: never
+
+lint:
+  stage: lint
+  image: "$RELEASE_BUILDER_IMAGE"
+  extends:
+    - .cli-docker-job
+    - .release_builder_dependencies
+    - .cli-check-rules
+  script:
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    - pnpm run check
+  cache:
+    key: "npm-$CI_COMMIT_REF_SLUG"
+    paths:
+      - node_modules/
+      - .npm/
+    policy: pull-push
+
+test:
+  stage: test
+  image: "$RELEASE_BUILDER_IMAGE"
+  extends:
+    - .cli-docker-job
+    - .release_builder_dependencies
+    - .cli-check-rules
+  variables:
+    RELEASE_BUILDER_GIT: "true"
+    RELEASE_BUILDER_SEARCH_TOOLS: "true"
+  script:
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    # Workspace packages expose their dist entrypoints through package.json.
+    # Build them before Vitest starts child processes that import those entrypoints.
+    - pnpm run build:offline
+    - pnpm test
+  cache:
+    key: "npm-$CI_COMMIT_REF_SLUG"
+    paths:
+      - node_modules/
+      - .npm/
+    policy: pull
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+
+# Keep native smoke tests opt-in until matching GitLab runners are provisioned.
+# A permanently pending job would block every merge request.
+.native_test:
+  extends: .cli-docker-job
+  stage: test
+  rules:
+    - if: '$STEP_ENABLE_NATIVE_RUNNERS != "true"'
+      when: never
+    - !reference [.cli-check-rules, rules]
+  script:
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    - pnpm run build:offline
+    - pnpm test
+
+test:windows:
+  extends: .native_test
+  tags:
+    - windows
+
+test:macos:
+  extends: .native_test
+  tags:
+    - macos
+
+tag_release:
+  stage: tag
+  image: "$RELEASE_BUILDER_IMAGE"
+  extends:
+    - .cli-docker-job
+    - .release_builder_dependencies
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$BUMP != "none" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: on_success
+    - when: never
+  script:
+    - |
+      if [ -z "${STEP_RELEASE_TOKEN:-}" ]; then
+        echo "STEP_RELEASE_TOKEN is not set." >&2
+        echo "Add a masked project access token with the api scope." >&2
+        exit 1
+      fi
+    - node infra/release/tag-release.mjs --bump "$BUMP"
+
+# The ported CLI/TUI release jobs belong to the CLI's own vX.Y.Z tags only. A
+# desktop-v* tag also sets CI_COMMIT_TAG, so matching on it alone would offer
+# CLI bundle uploads that read the desktop version.
+.cli-tag-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+    - when: never
+
+# Build all six platform archives, generate latest.json/manifest.json and
+# upload the bundle plus installers to the configured TOS bucket. This remains
+# manual on tag pipelines so a tag can be validated before publication.
+release_bundle_upload:
+  stage: package
+  image: "$RELEASE_BUILDER_IMAGE"
+  extends:
+    - .cli-docker-job
+    - .release_builder_dependencies
+    - .cli-tag-rules
+  needs:
+    - job: lint
+    - job: test
+  script:
+    - export STEP_RELEASE_VERSION="${CI_COMMIT_TAG:-$RELEASE_BUNDLE_VERSION}"
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_BASE_URL" --upload
+    - |
+      base="${STEP_RELEASE_BASE_URL%/}"
+      version="${STEP_RELEASE_VERSION#v}"
+      cat > dist/release/publish.env <<EOF
+      STEP_RELEASE_VERSION=$version
+      STEP_RELEASE_TAG=${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_NAME=stepcode ${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_INSTALL_URL=$base/install.sh
+      STEP_RELEASE_INSTALL_PS1_URL=$base/install.ps1
+      STEP_RELEASE_LATEST_URL=$base/latest.json
+      STEP_RELEASE_MANIFEST_URL=$base/$version/manifest.json
+      STEP_RELEASE_DARWIN_ARM64_URL=$base/$version/step-$version-darwin-arm64.tar.gz
+      STEP_RELEASE_DARWIN_X64_URL=$base/$version/step-$version-darwin-x64.tar.gz
+      STEP_RELEASE_LINUX_ARM64_URL=$base/$version/step-$version-linux-arm64.tar.gz
+      STEP_RELEASE_LINUX_X64_URL=$base/$version/step-$version-linux-x64.tar.gz
+      STEP_RELEASE_WINDOWS_ARM64_URL=$base/$version/step-$version-windows-arm64.zip
+      STEP_RELEASE_WINDOWS_X64_URL=$base/$version/step-$version-windows-x64.zip
+      EOF
+  artifacts:
+    reports:
+      dotenv: dist/release/publish.env
+    paths:
+      - dist/release/
+    expire_in: 7 days
+
+# Production uses the same byte-identical bundle and only changes the TOS
+# destination and public base URL. Credentials are masked project variables.
+release_bundle_upload_prod:
+  stage: package
+  image: "$RELEASE_BUILDER_IMAGE"
+  extends:
+    - .cli-docker-job
+    - .release_builder_dependencies
+    - .cli-tag-rules
+  needs:
+    - job: lint
+    - job: test
+  script:
+    - |
+      if [ -z "${STEP_TOS_PROD_ACCESS_KEY:-}" ] || [ -z "${STEP_TOS_PROD_SECRET_KEY:-}" ]; then
+        echo "STEP_TOS_PROD_ACCESS_KEY and STEP_TOS_PROD_SECRET_KEY are required." >&2
+        exit 1
+      fi
+    - export STEP_RELEASE_VERSION="${CI_COMMIT_TAG:-$RELEASE_BUNDLE_VERSION}"
+    - export STEP_TOS_BUCKET="$STEP_TOS_PROD_BUCKET"
+    - export STEP_TOS_ENDPOINT="$STEP_TOS_PROD_ENDPOINT"
+    - export STEP_TOS_ACCESS_KEY="$STEP_TOS_PROD_ACCESS_KEY"
+    - export STEP_TOS_SECRET_KEY="$STEP_TOS_PROD_SECRET_KEY"
+    - pnpm install --frozen-lockfile --ignore-scripts
+    - pnpm run hydrate:model-data
+    - node infra/release/release-bundle.mjs --version "$STEP_RELEASE_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --upload
+    - |
+      base="${STEP_RELEASE_PROD_BASE_URL%/}"
+      version="${STEP_RELEASE_VERSION#v}"
+      cat > dist/release/publish.env <<EOF
+      STEP_RELEASE_VERSION=$version
+      STEP_RELEASE_TAG=${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_NAME=stepcode ${CI_COMMIT_TAG:-v$version}
+      STEP_RELEASE_INSTALL_URL=$base/install.sh
+      STEP_RELEASE_INSTALL_PS1_URL=$base/install.ps1
+      STEP_RELEASE_LATEST_URL=$base/latest.json
+      STEP_RELEASE_MANIFEST_URL=$base/$version/manifest.json
+      STEP_RELEASE_DARWIN_ARM64_URL=$base/$version/step-$version-darwin-arm64.tar.gz
+      STEP_RELEASE_DARWIN_X64_URL=$base/$version/step-$version-darwin-x64.tar.gz
+      STEP_RELEASE_LINUX_ARM64_URL=$base/$version/step-$version-linux-arm64.tar.gz
+      STEP_RELEASE_LINUX_X64_URL=$base/$version/step-$version-linux-x64.tar.gz
+      STEP_RELEASE_WINDOWS_ARM64_URL=$base/$version/step-$version-windows-arm64.zip
+      STEP_RELEASE_WINDOWS_X64_URL=$base/$version/step-$version-windows-x64.zip
+      EOF
+  artifacts:
+    reports:
+      dotenv: dist/release/publish.env
+    expire_in: 7 days
+
+publish_release:
+  stage: publish
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  extends:
+    - .cli-docker-job
+    - .cli-tag-rules
+  needs:
+    - job: release_bundle_upload_prod
+      artifacts: true
+  script:
+    - echo "Publishing StepCode release $STEP_RELEASE_TAG"
+  release:
+    tag_name: "$STEP_RELEASE_TAG"
+    ref: "$CI_COMMIT_SHA"
+    name: "$STEP_RELEASE_NAME"
+    description: |
+      StepCode release artifacts uploaded to the public object store.
+
+      Install:
+      - $STEP_RELEASE_INSTALL_URL
+      - $STEP_RELEASE_INSTALL_PS1_URL
+
+      Metadata:
+      - $STEP_RELEASE_LATEST_URL
+      - $STEP_RELEASE_MANIFEST_URL
+    assets:
+      links:
+        - name: install.sh
+          url: "$STEP_RELEASE_INSTALL_URL"
+        - name: install.ps1
+          url: "$STEP_RELEASE_INSTALL_PS1_URL"
+        - name: latest.json
+          url: "$STEP_RELEASE_LATEST_URL"
+        - name: manifest.json
+          url: "$STEP_RELEASE_MANIFEST_URL"
+        - name: step-darwin-arm64.tar.gz
+          url: "$STEP_RELEASE_DARWIN_ARM64_URL"
+        - name: step-darwin-x64.tar.gz
+          url: "$STEP_RELEASE_DARWIN_X64_URL"
+        - name: step-linux-arm64.tar.gz
+          url: "$STEP_RELEASE_LINUX_ARM64_URL"
+        - name: step-linux-x64.tar.gz
+          url: "$STEP_RELEASE_LINUX_X64_URL"
+        - name: step-windows-arm64.zip
+          url: "$STEP_RELEASE_WINDOWS_ARM64_URL"
+        - name: step-windows-x64.zip
+          url: "$STEP_RELEASE_WINDOWS_X64_URL"
+
+# Publish @stepfun/stepcode and its six platform packages to the internal npm
+# registry. Repackages the exact archives on the prod CDN (checksums verified
+# against manifest.json), so npm and install.sh ship identical binaries.
+# Already-published versions are skipped, so a failed job can be retried.
+# NPM_TOKEN is a masked registry token with deploy rights on STEP_NPM_REGISTRY.
+.release_npm_publish:
+  extends: .cli-docker-job
+  stage: publish
+  image: "$RELEASE_BUILDER_IMAGE"
+  script:
+    - |
+      if [ -z "${NPM_TOKEN:-}" ]; then
+        echo "NPM_TOKEN is not set." >&2
+        echo "Add a masked npm token with deploy rights on $STEP_NPM_REGISTRY." >&2
+        exit 1
+      fi
+    - node infra/release/npm-packages.mjs --version "$STEP_NPM_PUBLISH_VERSION" --base-url "$STEP_RELEASE_PROD_BASE_URL" --registry "$STEP_NPM_REGISTRY" --publish
+
+# Runs automatically once the prod upload of a release tag succeeds.
+release_npm_publish:
+  extends: .release_npm_publish
+  needs:
+    - job: release_bundle_upload_prod
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: on_success
+    - when: never
+  variables:
+    STEP_NPM_PUBLISH_VERSION: "$CI_COMMIT_TAG"
+
+# Backfill: publish an already-released version from any branch pipeline by
+# setting STEP_NPM_PUBLISH_VERSION (e.g. v0.1.2) in the Run pipeline form. Only
+# reads the prod CDN; never rebuilds or touches TOS.
+release_npm_backfill:
+  extends: .release_npm_publish
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$STEP_NPM_PUBLISH_VERSION'
+      when: on_success
+    - when: never
+
+# GitLab evaluates a job's `release:` block after its script succeeds. Keeping
+# this webhook in a dependent job guarantees both publish_release and the
+# GitLab Release creation completed before the bot starts writing the Wiki page.
+notify_release:
+  stage: notify
+  image: "$RELEASE_BUILDER_IMAGE"
+  extends:
+    - .cli-docker-job
+    - .cli-tag-rules
+  needs:
+    - job: publish_release
+      artifacts: false
+  script:
+    - |
+      node --input-type=module <<'NODE'
+      const requiredEnv = [
+        "STEP_RELEASE_BOT_WEBHOOK_URL",
+        "STEP_RELEASE_BOT_WEBHOOK_TOKEN",
+        "CI_COMMIT_TAG",
+        "CI_COMMIT_SHA",
+        "CI_PIPELINE_URL",
+        "CI_PROJECT_URL",
+        "CI_PROJECT_PATH",
+      ];
+      const missing = requiredEnv.filter((name) => !process.env[name]?.trim());
+      if (missing.length > 0) {
+        throw new Error(`Missing required release notification variables: ${missing.join(", ")}`);
+      }
+
+      let webhookURL;
+      try {
+        webhookURL = new URL(process.env.STEP_RELEASE_BOT_WEBHOOK_URL);
+      } catch {
+        throw new Error("STEP_RELEASE_BOT_WEBHOOK_URL must be a valid absolute URL");
+      }
+      if (
+        webhookURL.protocol !== "https:" ||
+        webhookURL.username ||
+        webhookURL.password ||
+        webhookURL.search ||
+        webhookURL.hash
+      ) {
+        throw new Error("STEP_RELEASE_BOT_WEBHOOK_URL must be HTTPS without user info, query, or fragment");
+      }
+
+      const payload = {
+        version: process.env.CI_COMMIT_TAG,
+        commit_sha: process.env.CI_COMMIT_SHA,
+        pipeline_url: process.env.CI_PIPELINE_URL,
+        release_url: `${process.env.CI_PROJECT_URL}/-/releases/${process.env.CI_COMMIT_TAG}`,
+        project_path: process.env.CI_PROJECT_PATH,
+      };
+      const response = await fetch(webhookURL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${process.env.STEP_RELEASE_BOT_WEBHOOK_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const responseBody = (await response.text()).slice(0, 1000);
+      if (!response.ok) {
+        throw new Error(`Release notification webhook returned HTTP ${response.status}: ${responseBody}`);
+      }
+      let result;
+      try {
+        result = JSON.parse(responseBody);
+      } catch {
+        throw new Error("Release notification webhook returned invalid JSON");
+      }
+      if (result.status !== "accepted" && result.status !== "duplicate") {
+        throw new Error(`Release notification webhook returned unexpected status: ${String(result.status)}`);
+      }
+      console.log(`Release notification accepted for ${payload.version}: ${result.status}`);
+      NODE

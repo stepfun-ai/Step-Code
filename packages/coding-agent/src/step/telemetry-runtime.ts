@@ -5,6 +5,7 @@ import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
 import { normalizeStepCommit, readStepBuildIdentity } from "./build-identity.ts";
 import { resolveStepStorageRoot } from "./device-id.ts";
+import { readEndpointEnvOverride } from "./observer-endpoints.ts";
 import type {
 	StepTelemetryContextPatch,
 	StepTelemetryEventName,
@@ -619,64 +620,41 @@ function safeTrackRuntime(
 	}
 }
 
-/** Resolve the endpoint from the environment, the usage config, or the release build. */
+/**
+ * Resolve the collector endpoint. There is no built-in default: without an
+ * explicit source the CLI reports nowhere, so a build from a tree whose
+ * `config/usage-telemetry.yaml` is blank sends nothing.
+ *
+ * Precedence: environment endpoint > runtime usage config > `config.toml`
+ * endpoint (release builds only) > the usage config embedded at build time.
+ */
 export function readTelemetryEndpoint(
 	env: NodeJS.ProcessEnv = process.env,
 	config?: StepTelemetryRuntimeOptions["config"],
 ): string | undefined {
-	const explicit = readTelemetryEndpointEnvOverride(env);
+	const explicit = readEndpointEnvOverride("telemetry", env);
 	if (explicit) return explicit;
-	// An operator-supplied runtime config is an explicit action, so it applies on
+	// An operator-supplied usage config is an explicit action, so it applies on
 	// any channel: testing an installed build against a collector needs no rebuild.
-	const runtimeEndpoint = normalizeEndpoint(readRuntimeStepUsageTelemetryConfig(env)?.endpoint);
-	if (runtimeEndpoint) return runtimeEndpoint;
-	// The committed usage config is an explicit product decision, so it applies on
-	// every channel too: local source runs, test builds, and releases report to the
-	// same collector, which is what makes local verification meaningful.
-	const usageEndpoint = normalizeEndpoint(readBuildStepUsageTelemetryConfig(env)?.endpoint);
-	if (usageEndpoint) return usageEndpoint;
-	// Everything below keeps the old build-supplied boundary: release builds only.
-	// A source checkout may spool locally, while an explicit environment endpoint
-	// remains the documented dev test escape hatch.
-	if (readStepBuildIdentity(env).channel !== "release") return undefined;
-	// An unset/unknown channel resolves to dev above, so source checkouts keep
-	// spooling locally. Released binaries embed the channel and the config file at
-	// build time.
-	return normalizeEndpoint(config?.endpoint) ?? normalizeEndpoint(readBuildTelemetryEndpoint(env));
-}
-
-/** Runtime overrides, highest precedence first. The legacy names keep operator runbooks working. */
-const TELEMETRY_ENDPOINT_ENV_NAMES = [
-	"STEPCODE_TELEMETRY_ENDPOINT",
-	"STEP_CLI_TELEMETRY_ENDPOINT",
-	"STEPCLI_TELEMETRY_ENDPOINT",
-] as const;
-
-// Legacy single-value form of the build config. `config/usage-telemetry.yaml`
-// is the supported input now, but a build that still sets only this variable
-// keeps working.
-const INLINED_BUILD_TELEMETRY_ENDPOINT = process.env.STEPCODE_BUILD_TELEMETRY_ENDPOINT;
-
-function readTelemetryEndpointEnvOverride(env: NodeJS.ProcessEnv): string | undefined {
-	for (const name of TELEMETRY_ENDPOINT_ENV_NAMES) {
-		const value = env[name]?.trim();
-		if (value) return value;
+	const runtimeUsage = normalizeEndpoint(readRuntimeStepUsageTelemetryConfig(env)?.endpoint);
+	if (runtimeUsage) return runtimeUsage;
+	// A persisted endpoint is honored only by release builds, and there it wins
+	// over the embedded config. An unset/unknown channel resolves to dev, so a
+	// source checkout ignores it; released binaries embed the channel.
+	if (readStepBuildIdentity(env).channel === "release") {
+		const persisted = normalizeEndpoint(config?.endpoint);
+		if (persisted) return persisted;
 	}
-	return undefined;
-}
-
-function readBuildTelemetryEndpoint(env: NodeJS.ProcessEnv): string | undefined {
-	const value = env.STEPCODE_BUILD_TELEMETRY_ENDPOINT?.trim();
-	if (value) return value;
-	return env === process.env ? INLINED_BUILD_TELEMETRY_ENDPOINT?.trim() || undefined : undefined;
+	// The committed usage config applies on every channel, so local, test, and
+	// release builds report to the same collector.
+	return normalizeEndpoint(readBuildStepUsageTelemetryConfig(env)?.endpoint);
 }
 
 /**
  * Resolve Step's telemetry gates in the same order as the legacy runtime:
  * test runtime, environment opt-out, persistent opt-out, then endpoint
- * precedence (environment > release config > release default). A dev build
- * still records to its local spool, but never reaches a collector unless an
- * endpoint is explicitly supplied through the environment or call options.
+ * precedence (see {@link readTelemetryEndpoint}). Without a resolved endpoint
+ * the runtime records only to its local spool and never reaches a collector.
  */
 export function resolveStepTelemetrySettings(
 	env: NodeJS.ProcessEnv = process.env,
@@ -691,10 +669,11 @@ export function resolveStepTelemetrySettings(
 		return { enabled: false, spoolEnabled: false, reason: "env-opt-out" };
 	}
 	if (config?.enabled === false) return { enabled: false, spoolEnabled: false, reason: "config-opt-out" };
+	const endpoint = readTelemetryEndpoint(env, config);
 	return {
 		enabled: true,
 		spoolEnabled: config?.spool !== false,
-		...(readTelemetryEndpoint(env, config) ? { endpoint: readTelemetryEndpoint(env, config) } : undefined),
+		...(endpoint ? { endpoint } : undefined),
 	};
 }
 

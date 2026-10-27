@@ -159,27 +159,30 @@ it.
 
 The CLI, Web host, and desktop app report two events through the Step telemetry
 runtime (`src/step/telemetry-runtime.ts`), and nothing else. The observability
-provider in `src/step/usage-telemetry.ts` drops every other `track()` call.
+provider in `src/step/usage-telemetry.ts` drops every other `track()` call;
+every host that ships the CLI, web, or desktop front end reuses that provider.
 
 | Event | When | Main fields |
 | --- | --- | --- |
 | `device_daily_active` | A session starts on, or switches to, a usable model, and on the first response from an endpoint in a UTC+8 day; at most once per process, day, and user type | `user_type` (`internal` / `external`), `provider_kind`, `provider`, `model`, `local_day`, `client`, `opened_at` |
-| `session_trace_recorded` | Every model HTTP response carrying an `x-trace-id` header, including error responses and attempts the provider retries | `session_id`, `trace_id`, `user_type`, `provider_kind`, `provider`, `model`, `status_code`, `attempt`, `local_day`, `client` |
+| `session_trace_recorded` | Every model HTTP response carrying an `x-trace-id` header, including error responses and attempts the provider retries | `session_id`, `trace_id`, `user_type`, `provider_kind`, `provider`, `model`, `status_code`, `attempt` (response count within one provider call; session-level auto-retries each start at 1), `local_day`, `client` |
 
 `provider_kind` is `internal` for a configured internal gateway, the Step login
 profile id (`step_plan`, `step_plan_oversea`, `platform_cn`, `platform_oversea`)
-for a Step endpoint, or the configured provider id otherwise; endpoint
+for a Step endpoint matching a login profile, or the configured provider id
+otherwise (including a Step host on a path no profile uses); endpoint
 addresses are never sent. A Step endpoint counts toward `device_daily_active`
 only once a credential is configured; an internal gateway counts without one.
-Envelopes carry the device id, the `auth.json` Step `uid` when present, and the
-session id for trace records. `opened_at` is the process start time, so a launch
+Envelopes carry the device id, the `auth.json` Step `uid` when present (not when
+the process runs on `--api-key` or `STEP_API_KEY`, which is a different
+credential), and the session id for trace records. `opened_at` is the process start time, so a launch
 that signs in later still reports the time the app was opened; the field is
 omitted when the process started on an earlier UTC+8 day, and the collector then
 uses the record time. Prompts, responses, tool arguments, and API keys
 are never reported.
 
-Reporting is off unless a collector is configured, and then nothing is sent or
-spooled. The configuration is one YAML document, identical for test and release
+Reporting is off unless a collector is configured (there is no built-in
+default), and then nothing is sent or spooled. The configuration is one YAML document, identical for test and release
 builds:
 
 ```yaml
@@ -204,9 +207,10 @@ Precedence, highest first:
 | Source | Applies to |
 | --- | --- |
 | `STEPCODE_TELEMETRY_ENDPOINT`, `STEPCODE_INTERNAL_PROVIDER_HOSTS` | Explicit operator override, any build |
-| `STEPCODE_USAGE_TELEMETRY` (JSON) or `STEPCODE_USAGE_TELEMETRY_CONFIG` (JSON file) | Running an installed build without rebuilding |
-| The committed YAML above, embedded by the build | Every channel, so local, test, and release report to the same collector |
-| `STEPCODE_BUILD_TELEMETRY_ENDPOINT`, `STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS` | Legacy single-value build variables; release builds only |
+| `STEPCODE_USAGE_TELEMETRY` (JSON) or `STEPCODE_USAGE_TELEMETRY_CONFIG` (YAML or JSON file) | Running an installed build without rebuilding |
+| `config.toml` `[telemetry] endpoint` | Release builds only; wins over the embedded config |
+| The embedded config from the YAML above | Every channel, so local, test, and release report to the same collector |
+| `STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS` | Legacy single-value build variable, still honored |
 
 A source run has no embedded build config, so it must load the YAML explicitly:
 

@@ -159,6 +159,17 @@ else
     echo "==> Skipping pnpm install (--skip-install)"
 fi
 
+# Usage telemetry: one YAML document (config/usage-telemetry.yaml, or the path in
+# STEPCODE_USAGE_TELEMETRY_CONFIG, which a GitLab File variable supplies) becomes
+# a JSON define inlined by `bun build --env=STEPCODE_BUILD_*`. A build without
+# it reports nothing. A malformed field fails the build rather than shipping a
+# release that silently sends nothing. The loader needs the `yaml` package, so
+# this runs after the install step.
+STEPCODE_BUILD_USAGE_TELEMETRY="$(node scripts/load-usage-telemetry-config.mjs)"
+if [[ -n "$STEPCODE_BUILD_USAGE_TELEMETRY" && "$STEPCODE_BUILD_USAGE_TELEMETRY" != "{}" ]]; then
+    export STEPCODE_BUILD_USAGE_TELEMETRY
+fi
+
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
@@ -330,6 +341,11 @@ for platform in "${PLATFORMS[@]}"; do
         cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir/"
     fi
 
+    # Pre-fetch the ripgrep/fd search binaries for this target into tools/ so the
+    # archive ships them and the installer copies (not downloads) them into the
+    # runtime tools dir. Set STEP_SKIP_BUNDLED_TOOLS=1 for offline builds; the
+    # installer/runtime GitHub download then remains the only source.
+    node ../../scripts/copy-search-tools.mjs --target "$platform" --out "$OUTPUT_DIR/$platform"
 done
 
 # Create archives

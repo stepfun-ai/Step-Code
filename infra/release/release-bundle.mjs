@@ -75,10 +75,49 @@ async function sha256(filePath) {
 	return digest.digest("hex");
 }
 
+function objectKey(...parts) {
+	return parts.map((part) => String(part).replace(/^\/+|\/+$/gu, "")).filter(Boolean).join("/");
+}
+
+function contentType(fileName) {
+	if (fileName.endsWith(".json")) return "application/json; charset=utf-8";
+	if (fileName.endsWith(".sh")) return "text/x-shellscript; charset=utf-8";
+	if (fileName.endsWith(".ps1")) return "text/plain; charset=utf-8";
+	if (fileName.endsWith(".zip")) return "application/zip";
+	if (fileName.endsWith(".tar.gz")) return "application/gzip";
+	return "application/octet-stream";
+}
+
+async function uploadFiles(files, config) {
+	const { TosClient } = await import("@volcengine/tos-sdk");
+	const client = new TosClient({
+		endpoint: config.endpoint,
+		region: config.region,
+		accessKeyId: config.accessKeyId,
+		accessKeySecret: config.accessKeySecret,
+	});
+	for (const file of files) {
+		const key = objectKey(config.prefix, file.remoteKey);
+		process.stdout.write(`[upload] ${file.localPath} -> tos://${config.bucket}/${key}\n`);
+		await client.putObjectFromFile({
+			bucket: config.bucket,
+			key,
+			filePath: file.localPath,
+			contentType: contentType(file.localPath),
+		});
+	}
+}
+
+function requiredEnv(name) {
+	const value = process.env[name]?.trim();
+	if (!value) throw new Error(`${name} is required for release upload`);
+	return value;
+}
+
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
 	if (args.has("help")) {
-		process.stdout.write("Usage: node infra/release/release-bundle.mjs --version <vX.Y.Z> --base-url <url> [--dry-run]\n");
+		process.stdout.write("Usage: node infra/release/release-bundle.mjs --version <vX.Y.Z> --base-url <url> [--upload] [--dry-run]\n");
 		return;
 	}
 	const version = normalizeReleaseVersion(args.get("version") ?? process.env.CI_COMMIT_TAG ?? process.env.RELEASE_BUNDLE_VERSION);
@@ -126,6 +165,25 @@ async function main() {
 			});
 		}
 
+		if (args.has("upload")) {
+			const config = {
+				endpoint: requiredEnv("STEP_TOS_ENDPOINT"),
+				region: requiredEnv("STEP_TOS_REGION"),
+				bucket: requiredEnv("STEP_TOS_BUCKET"),
+				accessKeyId: requiredEnv("STEP_TOS_ACCESS_KEY"),
+				accessKeySecret: requiredEnv("STEP_TOS_SECRET_KEY"),
+				prefix: process.env.STEP_TOS_PREFIX ?? "stepcode",
+			};
+			const files = [
+				...artifacts.map((artifact) => ({ localPath: path.join(versionDir, artifact.fileName), remoteKey: objectKey(version, artifact.fileName) })),
+				{ localPath: checksumsPath, remoteKey: objectKey(version, "SHA256SUMS") },
+				{ localPath: manifestPath, remoteKey: objectKey(version, "manifest.json") },
+				{ localPath: latestPath, remoteKey: "latest.json" },
+				{ localPath: path.join(releaseDir, "install.sh"), remoteKey: "install.sh" },
+				{ localPath: path.join(releaseDir, "install.ps1"), remoteKey: "install.ps1" },
+			];
+			await uploadFiles(files, config);
+		}
 		process.stdout.write(`StepCode ${version} bundle ready at ${releaseDir}\n`);
 	} finally {
 		await rm(buildDir, { recursive: true, force: true });

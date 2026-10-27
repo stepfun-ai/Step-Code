@@ -9,8 +9,8 @@
 # STEPCODE_USAGE_TELEMETRY_CONFIG at another file (a GitLab File variable works).
 #
 # This copy carries the internal values. The public tree ships the same file with
-# every key commented out, so a build from that tree reports nothing; blank this
-# file before publishing a branch.
+# every key commented out, so a build from that tree reports nothing (there is no
+# built-in collector); blank this file before publishing a branch.
 #
 # A malformed known key fails the build rather than shipping a release that
 # silently sends nothing. Unknown keys are passed through untouched.

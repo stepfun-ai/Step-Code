@@ -882,7 +882,13 @@ export {
 } from "./step/system-prompt.ts";
 export {
 	classifyStepEndpoint,
+	createStepLifecycleTelemetry,
+	createStepModelRequestObserver,
+	type StepLifecycleTelemetry,
+	type StepLifecycleTelemetryHandlers,
+	type StepLifecycleTelemetryOptions,
 	type StepModelRequestEventName,
+	type StepModelRequestObserverOptions,
 	type StepPermissionApprovalTelemetry,
 	type StepPermissionDecisionTelemetry,
 	type StepTelemetryContextPatch,
@@ -906,12 +912,23 @@ export {
 	type StepTelemetryKnownEventName,
 } from "./step/telemetry-events.ts";
 export {
+	createStepSystemMetricsCollector,
 	createStepTelemetryRuntime,
+	installStepTelemetryCrashHandlers,
 	readTelemetryEndpoint,
+	redactTelemetryString,
 	resolveStepTelemetrySettings,
 	type StepResolvedTelemetrySettings,
+	type StepSystemMetricsCollector,
+	type StepSystemMetricsCollectorOptions,
+	type StepTelemetryContext,
+	type StepTelemetryCrashHandlers,
+	type StepTelemetryDisabledReason,
+	type StepTelemetryRecord,
 	type StepTelemetryRuntime,
 	type StepTelemetryRuntimeOptions,
+	trackStepTelemetryCrash,
+	trackStepTelemetryError,
 } from "./step/telemetry-runtime.ts";
 export { buildStepThemeOptions, runStepThemePrompt, type StepThemeOption } from "./step/theme-prompt.ts";
 export { createStepToolProfile } from "./step/tool-profile.ts";

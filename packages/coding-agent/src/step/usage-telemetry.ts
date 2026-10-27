@@ -12,8 +12,9 @@
  * producers in the codebase keep calling the reporter and are dropped here),
  * classifies endpoints, and turns model-request traces into records.
  *
- * Nothing here names a collector or an internal gateway. Both come from the
- * build or the environment, so a build without them reports nothing.
+ * Nothing here names a collector or an internal gateway. Both come from
+ * `config/usage-telemetry.yaml` (embedded by the build) or the environment, so
+ * a build without them reports nothing.
  */
 
 import type { Api, Model } from "@step-harness/providers";
@@ -67,8 +68,8 @@ export interface StepUsageClassifierOptions {
 
 const INTERNAL_HOSTS_ENV = "STEPCODE_INTERNAL_PROVIDER_HOSTS";
 const BUILD_INTERNAL_HOSTS_ENV = "STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS";
-// Substituted by `bun build --env=STEPCODE_BUILD_*` in release binaries, so the
-// internal gateway list ships with the build and never appears in source.
+// Legacy single-value build variable, substituted by `bun build
+// --env=STEPCODE_BUILD_*`; the YAML config is the primary source.
 const INLINED_BUILD_INTERNAL_HOSTS = process.env.STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -196,6 +197,11 @@ export interface StepUsageObservabilityOptions {
 	readonly processStartedAt?: Date;
 	/** Credential file whose `step.uid` identifies the signed-in account. */
 	readonly authPath?: () => string;
+	/**
+	 * The process runs on an explicitly supplied key (`--api-key`, `STEP_API_KEY`).
+	 * The stored account then is not the one being used, so its uid is not attached.
+	 */
+	readonly explicitCredential?: boolean;
 	/** Runtime seams for tests and embedders (fetch, clock, spool directory, intervals). */
 	readonly runtime?: Omit<StepTelemetryRuntimeOptions, "env" | "config" | "context" | "enabled">;
 	/** Clock for the UTC+8 day; injectable for tests. */
@@ -216,8 +222,9 @@ interface DailyActivity {
 /**
  * The usage-telemetry implementation of the observability seam.
  *
- * Reporting is off unless a collector endpoint resolves (environment, or the
- * build-time default on release builds). Without one the reporter is the
+ * Reporting is off unless a collector endpoint resolves (environment, runtime
+ * or embedded usage config, or a release `config.toml`; there is no built-in
+ * default). Without one the reporter is the
  * public no-op, so nothing is sent and nothing is spooled.
  */
 export function createStepUsageObservabilityProvider(
@@ -243,6 +250,7 @@ export function createStepUsageObservabilityProvider(
 		return activity;
 	};
 	const readUid = (): string | undefined => {
+		if (options.explicitCredential) return undefined;
 		try {
 			const credential = readStoredCredential("step", (options.authPath ?? (() => getStepAuthPath(env)))());
 			return normalizeStepUid(credential && "uid" in credential ? credential.uid : undefined);

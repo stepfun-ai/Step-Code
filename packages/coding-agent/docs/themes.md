@@ -89,7 +89,7 @@ vim ~/.stepcode/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://github.com/stepfun-ai/step-harness/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://gitlab.basemind.com/aiagent/step-harness/-/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -163,7 +163,7 @@ vim ~/.stepcode/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://github.com/stepfun-ai/step-harness/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://gitlab.basemind.com/aiagent/step-harness/-/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",

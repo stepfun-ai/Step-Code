@@ -491,6 +491,10 @@ describe("Step Pi slash command adapters", () => {
 		temporaryRoots.push(root);
 		vi.stubEnv("STEPCODE_STORAGE_ROOT_DIR", root);
 		vi.stubEnv("STEPCODE_FEEDBACK_ENDPOINT", "https://feedback.test/feedback");
+		// This session has a file, so the report ships a bundle as well. The
+		// bundle endpoint must be fake too: the internal default resolves to a
+		// real collector and delivery refuses that under test.
+		vi.stubEnv("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT", "https://feedback.test/bundle");
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
 		const sessionFile = join(root, "20260831_session-1.jsonl");
@@ -511,11 +515,17 @@ describe("Step Pi slash command adapters", () => {
 		// The category and comment come from the command; everything else is the
 		// same evidence the guided flow submits, behind the same consent page.
 		expect(confirm).toHaveBeenCalledOnce();
-		expect(fetchMock).toHaveBeenCalledOnce();
+		// Two calls: the report body, then the session bundle the internal
+		// branch always attaches.
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("https://feedback.test/feedback");
 		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
 		expect(body).toMatchObject({ comment: "the composer dropped a key", category: "other", surface: "tui" });
 		expect(body.sessionSummary).toBeDefined();
+		const bundleUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
+		expect(bundleUrl.origin + bundleUrl.pathname).toBe("https://feedback.test/bundle");
 		const feedbackId = String(body.feedbackId);
+		expect(bundleUrl.searchParams.get("feedbackId")).toBe(feedbackId);
 		expect(notify).toHaveBeenCalledWith(
 			`Submitted. Feedback ID: ${feedbackId} — include this ID when contacting support.`,
 			"info",
@@ -531,8 +541,8 @@ describe("Step Pi slash command adapters", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const feedbackIdentity = vi
 			.fn()
-			.mockReturnValueOnce({ uid: "uid-before", username: "before@example.test" })
-			.mockReturnValueOnce({ uid: "uid-current", username: "account@example.test" });
+			.mockReturnValueOnce({ uid: "uid-before", username: "before@stepfun.com" })
+			.mockReturnValueOnce({ uid: "uid-current", username: "kris@stepfun.com" });
 		const { commands } = registerCommands({ feedbackIdentity });
 
 		const context = {
@@ -550,11 +560,11 @@ describe("Step Pi slash command adapters", () => {
 		const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
 			context: Record<string, unknown>;
 		};
-		expect(firstBody.context).toMatchObject({ uid: "uid-before", username: "before@example.test" });
+		expect(firstBody.context).toMatchObject({ uid: "uid-before", username: "before@stepfun.com" });
 		expect(secondBody.context).toMatchObject({
 			sessionId: "session-1",
 			uid: "uid-current",
-			username: "account@example.test",
+			username: "kris@stepfun.com",
 		});
 	});
 

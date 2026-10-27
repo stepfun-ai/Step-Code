@@ -1,11 +1,11 @@
 # Development
 
-See [AGENTS.md](https://github.com/stepfun-ai/step-harness/blob/main/AGENTS.md) for additional guidelines.
+See [AGENTS.md](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/AGENTS.md) for additional guidelines.
 
 ## Setup
 
 ```bash
-git clone https://github.com/stepfun-ai/step-harness
+git clone https://gitlab.basemind.com/aiagent/step-harness
 cd step-harness
 npm install
 npm run build

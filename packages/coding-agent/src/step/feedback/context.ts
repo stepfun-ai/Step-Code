@@ -8,9 +8,18 @@ import type { FeedbackContext, FeedbackRuntime } from "./types.ts";
 const MAX_USERNAME_LENGTH = 64;
 const PLAUSIBLE_USERNAME = /^[\w.@:-]+$/u;
 
-/** Read the launcher username within the feedback context boundary. */
+/**
+ * Read the launcher username within the feedback context boundary.
+ *
+ * The name is injected by whatever wrapper launched the CLI, never resolved
+ * here — it is what makes the collector's "使用者" dimension readable without a
+ * join against an account table. The shipping launcher sets `STEP_CLI_USER`
+ * (the only spelling the previous CLI ever read), so that alias has to stay
+ * accepted alongside the current one; dropping it would silently blank the
+ * username on feedback envelopes while telemetry envelopes still carried it.
+ */
 export function readFeedbackUsername(env: NodeJS.ProcessEnv = process.env, explicit?: string): string | undefined {
-	const value = explicit ?? env.STEPCODE_USER;
+	const value = explicit ?? env.STEPCODE_USER ?? env.STEP_CLI_USER;
 	if (typeof value !== "string") return undefined;
 	const raw = value.trim();
 	return raw && raw.length <= MAX_USERNAME_LENGTH && PLAUSIBLE_USERNAME.test(raw) ? raw : undefined;

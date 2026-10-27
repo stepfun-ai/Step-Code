@@ -329,6 +329,8 @@ main() {
 		printf 'warning: StepPage is not ready; Step remains usable. Run step mcp prepare after upgrading.\n' >&2
 	fi
 	printf 'installed StepCode %s to %s\n' "$VERSION" "$destination"
+	printf '\nDone. Run: step\n'
+
 }
 
 main "$@"

@@ -75,7 +75,7 @@ describe("usage endpoint classification", () => {
 });
 
 describe("usage telemetry config", () => {
-	it("uses the embedded YAML config on every channel, so local and release agree", () => {
+	it("embeds the YAML config on every channel, so local and release agree", () => {
 		const buildConfig = JSON.stringify({ endpoint: "https://collector.test/config" });
 		expect(
 			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release", STEPCODE_BUILD_USAGE_TELEMETRY: buildConfig }),
@@ -83,21 +83,6 @@ describe("usage telemetry config", () => {
 		expect(
 			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev", STEPCODE_BUILD_USAGE_TELEMETRY: buildConfig }),
 		).toBe("https://collector.test/config");
-	});
-
-	it("keeps the legacy build variable release-gated", () => {
-		expect(
-			readTelemetryEndpoint({
-				STEPCODE_BUILD_CHANNEL: "dev",
-				STEPCODE_BUILD_TELEMETRY_ENDPOINT: "https://legacy.test/ingest",
-			}),
-		).toBeUndefined();
-		expect(
-			readTelemetryEndpoint({
-				STEPCODE_BUILD_CHANNEL: "release",
-				STEPCODE_BUILD_TELEMETRY_ENDPOINT: "https://legacy.test/ingest",
-			}),
-		).toBe("https://legacy.test/ingest");
 	});
 
 	it("lets an operator point an installed build at another collector without rebuilding", () => {
@@ -114,6 +99,19 @@ describe("usage telemetry config", () => {
 				STEPCODE_USAGE_TELEMETRY: '{"endpoint":"https://tester.test/ingest"}',
 			}),
 		).toBe("https://env.test/ingest");
+	});
+
+	it("reads a runtime override file in the same YAML form the build reads", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "step-usage-config-"));
+		try {
+			const path = join(directory, "usage-telemetry.yaml");
+			await writeFile(path, "endpoint: https://tester.test/yaml\ninternalProviderHosts:\n  - yaml.test\n");
+			const env = { STEPCODE_BUILD_CHANNEL: "dev", STEPCODE_USAGE_TELEMETRY_CONFIG: path };
+			expect(readTelemetryEndpoint(env)).toBe("https://tester.test/yaml");
+			expect(readInternalProviderHosts(env)).toEqual(["yaml.test"]);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("takes internal hosts from the config and keeps explicit variables first", () => {
@@ -147,24 +145,42 @@ describe("usage telemetry config", () => {
 });
 
 describe("telemetry endpoint resolution", () => {
-	it("takes the collector from the environment or the release build, never from source", () => {
-		expect(readTelemetryEndpoint({ STEPCODE_TELEMETRY_ENDPOINT: "https://collector.test/ingest" })).toBe(
-			"https://collector.test/ingest",
-		);
-		expect(
-			readTelemetryEndpoint({
-				STEPCODE_BUILD_CHANNEL: "release",
-				STEPCODE_BUILD_TELEMETRY_ENDPOINT: "https://collector.test/release",
-			}),
-		).toBe("https://collector.test/release");
-		// A dev build ignores the build-time default; a release build without one reports nowhere.
-		expect(
-			readTelemetryEndpoint({
-				STEPCODE_BUILD_CHANNEL: "dev",
-				STEPCODE_BUILD_TELEMETRY_ENDPOINT: "https://collector.test/release",
-			}),
-		).toBeUndefined();
+	it("reports nowhere without the YAML: there is no built-in collector", () => {
 		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" })).toBeUndefined();
+		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev" })).toBeUndefined();
+		expect(readTelemetryEndpoint({})).toBeUndefined();
+		const provider = createStepUsageObservabilityProvider({
+			client: "cli",
+			env: { STEPCODE_BUILD_CHANNEL: "release" },
+		});
+		expect(provider.createReporter().enabled).toBe(false);
+	});
+
+	it("lets a release config.toml endpoint win over the embedded config", () => {
+		const env = {
+			STEPCODE_BUILD_CHANNEL: "release",
+			STEPCODE_BUILD_USAGE_TELEMETRY: '{"endpoint":"https://collector.test/yaml"}',
+		};
+		expect(readTelemetryEndpoint(env, { endpoint: "https://collector.test/toml" })).toBe(
+			"https://collector.test/toml",
+		);
+		// Dev builds keep ignoring a persisted endpoint, and fall back to the YAML.
+		expect(
+			readTelemetryEndpoint({ ...env, STEPCODE_BUILD_CHANNEL: "dev" }, { endpoint: "https://collector.test/toml" }),
+		).toBe("https://collector.test/yaml");
+		// The runtime override and the environment variable still come first.
+		expect(
+			readTelemetryEndpoint(
+				{ ...env, STEPCODE_USAGE_TELEMETRY: '{"endpoint":"https://collector.test/runtime"}' },
+				{ endpoint: "https://collector.test/toml" },
+			),
+		).toBe("https://collector.test/runtime");
+		expect(
+			readTelemetryEndpoint(
+				{ ...env, STEPCODE_TELEMETRY_ENDPOINT: "https://collector.test/env" },
+				{ endpoint: "https://collector.test/toml" },
+			),
+		).toBe("https://collector.test/env");
 	});
 });
 
@@ -180,7 +196,7 @@ describe("usage observability provider", () => {
 		await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 	});
 
-	async function setup(extraEnv: NodeJS.ProcessEnv = {}) {
+	async function setup(extraEnv: NodeJS.ProcessEnv = {}, explicitCredential = false) {
 		const root = await mkdtemp(join(tmpdir(), "step-usage-telemetry-"));
 		directories.push(root);
 		const authPath = join(root, "auth.json");
@@ -204,6 +220,7 @@ describe("usage observability provider", () => {
 		const provider = createStepUsageObservabilityProvider({
 			client: "cli",
 			env,
+			explicitCredential,
 			now: () => now,
 			runtime: { fetchImpl, spoolDirectory: join(root, "telemetry"), flushIntervalMs: 0, retryBackoffsMs: [] },
 		});
@@ -214,6 +231,15 @@ describe("usage observability provider", () => {
 		};
 		return { root, provider, reporter, observer, posted, setNow };
 	}
+
+	it("does not attach the stored account uid when the process runs on an explicit key", async () => {
+		const { provider, reporter, observer, posted } = await setup({}, true);
+		provider.refreshIdentity(reporter);
+		await observer?.onTraceId?.(trace());
+		await reporter.flush?.();
+		expect(posted.length).toBeGreaterThan(0);
+		for (const record of posted) expect(record.context.uid).toBeUndefined();
+	});
 
 	function trace(overrides: Partial<ModelRequestTrace> = {}): ModelRequestTrace {
 		return {

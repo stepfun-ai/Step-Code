@@ -1,3 +1,4 @@
+import { isBuiltInFeedbackEndpoint } from "./endpoints.ts";
 import {
 	listPendingFeedback,
 	normalizePendingFeedbackBundle,
@@ -324,6 +325,7 @@ async function postJson(options: {
 	retryBackoffsMs?: readonly number[];
 	requestTimeoutMs?: number;
 }): Promise<PostResult> {
+	assertNoRealCollectorUnderTest(options.endpoint, false);
 	return post(options.endpoint, JSON.stringify(options.submission), "application/json", options, classifyStatus);
 }
 
@@ -338,6 +340,7 @@ async function postBundle(
 	},
 ): Promise<BundlePostResult> {
 	if (!bundle.endpoint) return { ok: false, reason: "unsupported-endpoint" };
+	assertNoRealCollectorUnderTest(bundle.endpoint, true);
 	let endpoint: string;
 	try {
 		const url = new URL(bundle.endpoint);
@@ -425,6 +428,14 @@ async function post(
 			return { ok: false, reason: "unreachable" };
 		}
 	}
+}
+
+function assertNoRealCollectorUnderTest(endpoint: string, bundle: boolean): void {
+	if (process.env.NODE_ENV !== "test" && process.env.VITEST === undefined) return;
+	if (!isBuiltInFeedbackEndpoint(endpoint, bundle)) return;
+	throw new Error(
+		`feedback delivery refused: a test would have posted to the real collector at ${endpoint}. Point the endpoint at a local address, or inject fetchImpl.`,
+	);
 }
 
 function classifyStatus(status: number): FeedbackDeliveryFailureReason {

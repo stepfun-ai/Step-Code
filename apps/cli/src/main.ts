@@ -300,6 +300,8 @@ const stepMainOptions: MainOptions = {
 		},
 		onCredentialAuthenticated: ({ uid }) => {
 			if (uid) telemetryReporter.setContext?.({ uid });
+			// Re-read auth.json so later records carry the signed-in account.
+			observability.refreshIdentity(telemetryReporter);
 		},
 		onStartup: async ({ ui, stop, dispose }) => {
 			// Auth-only startup uses the same InteractiveMode for its OAuth dialog,

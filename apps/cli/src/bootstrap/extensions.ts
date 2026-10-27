@@ -32,7 +32,7 @@ export interface StepExtensionFactoryDeps {
 	usageHost?: StepExtensionOptions["usageHost"];
 	/** Optional StepCode provider extension, present only when configured. */
 	stepCodeProviderExtension: InlineExtension | undefined;
-	/** Usage-telemetry activity hook (session start / model switch), from the observability provider. */
+	/** Usage-telemetry activity hook (session start / model switch). */
 	usageActivityExtension?: InlineExtension;
 }
 

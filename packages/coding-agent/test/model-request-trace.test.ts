@@ -54,6 +54,26 @@ describe("model request trace capture", () => {
 		]);
 	});
 
+	it("ignores malformed responses from extension providers instead of failing the request", () => {
+		const onTraceId = vi.fn();
+		const capture = createModelRequestTraceCapture({ onTraceId }, "session-1");
+		const malformed = [
+			{ status: 200 },
+			{ status: 200, headers: null },
+			{ status: 200, headers: { "x-trace-id": 42 } },
+			{ status: 200, headers: { "X-Trace-Id": ["t1"] } },
+			undefined,
+		] as unknown as Parameters<NonNullable<typeof capture>["onResponse"]>[0][];
+		for (const response of malformed) {
+			expect(() => capture?.onResponse(response, model)).not.toThrow();
+			expect(() => capture?.onErrorResponse(response, model)).not.toThrow();
+		}
+		expect(onTraceId).not.toHaveBeenCalled();
+		expect(readResponseTraceId(undefined)).toBeUndefined();
+		capture?.onResponse({ status: "200", headers: { "x-trace-id": "t9" } } as never, model);
+		expect(onTraceId).toHaveBeenCalledWith(expect.objectContaining({ traceId: "t9", statusCode: 0 }));
+	});
+
 	it("never lets an observer failure reach the provider response path", async () => {
 		const rejected = vi.fn(async () => {
 			throw new Error("reporter down");

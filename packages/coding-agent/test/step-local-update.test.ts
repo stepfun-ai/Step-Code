@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { StepUpdateInstallInput } from "../src/step/local-update.ts";
 import {
 	compareStepReleaseVersions,
+	isNpmManagedStepInstall,
 	maybeUpdateStep,
 	readStepSkippedUpdateVersion,
 	resolveStepUpdateInstallerSpec,
@@ -88,6 +89,46 @@ describe("Step binary updater", () => {
 			expect(beforeRelaunch).toHaveBeenCalledOnce();
 			expect(relaunch).toHaveBeenCalledWith(
 				expect.objectContaining({ binaryPath: path.join(root, "bin", "step"), argv: ["--no-update-check"] }),
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("detects npm-managed installs from the launcher marker or the platform package path", () => {
+		expect(isNpmManagedStepInstall("/usr/local/bin/step", { STEPCODE_INSTALL_METHOD: "npm" })).toBe(true);
+		expect(isNpmManagedStepInstall("/usr/lib/node_modules/@stepfun/stepcode-linux-x64/vendor/step", {})).toBe(true);
+		expect(
+			isNpmManagedStepInstall(
+				"C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@stepfun\\stepcode-win32-x64\\vendor\\step.exe",
+				{},
+			),
+		).toBe(true);
+		expect(isNpmManagedStepInstall("/home/me/.local/bin/step", {})).toBe(false);
+	});
+
+	test("points npm-managed installs at npm instead of replacing files", async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), "step-update-npm-"));
+		try {
+			const select = vi.fn();
+			const notify = vi.fn();
+			const install = vi.fn();
+			const outcome = await maybeUpdateStep({
+				version: embeddedVersion,
+				storageRootDir: root,
+				executablePath: path.join(root, "node_modules", "@stepfun", "stepcode-linux-x64", "vendor", "step"),
+				interactive: true,
+				env: {},
+				ui: { select, notify },
+				fetchLatestVersion: vi.fn(async () => "v0.4.0"),
+				installUpdate: install,
+			});
+			expect(outcome).toBe("npm-managed");
+			expect(select).not.toHaveBeenCalled();
+			expect(install).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledWith(
+				expect.stringContaining("npm install -g @stepfun/stepcode@latest"),
+				"info",
 			);
 		} finally {
 			await rm(root, { recursive: true, force: true });

@@ -30,7 +30,7 @@ import {
 import { createStepPluginResourcesExtension } from "../step/plugins.ts";
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
-import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import { createStepLifecycleTelemetry, type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
 import { getThenRunCommand } from "../step/then-run.ts";
 import { applyStepTraceHeaders } from "../step/trace-headers.ts";
@@ -166,6 +166,10 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			recordStepSlashCommand(options.telemetry, token, builtInSlashCommands.has(name));
 		});
 		let permissions = new StepPermissionController(resolvePermissionOptions(options));
+		const lifecycle = options.telemetry ? createStepLifecycleTelemetry(options.telemetry) : undefined;
+		// Register before the permission hook: blocked calls short-circuit later
+		// tool_call handlers, but still need a start paired with their result.
+		lifecycle?.register(pi);
 		let notify: ((message: string, type?: "info" | "warning" | "error") => void) | undefined;
 		let autoResumeAllowed = false;
 		let nativeRetryPreference: boolean | undefined;
@@ -407,8 +411,44 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				toolName: event.toolName,
 				input: event.input,
 			});
-			if (planDecision?.block) return planDecision.block;
-			return await permissions.handleToolCall(event, ctx);
+			if (planDecision?.block) {
+				// The tool never runs, so the lifecycle must not count it as executed.
+				lifecycle?.markToolBlocked(event.toolCallId);
+				return planDecision.block;
+			}
+			let approvalRisk: string | undefined;
+			try {
+				const result = await permissions.handleToolCall(event, ctx, (decision) => {
+					const risk = decision.hazardous ? "high" : decision.action === "allow" ? "low" : "normal";
+					// Observe the exact decision used by the controller, without running
+					// shell analysis or resolving mutable settings a second time.
+					lifecycle?.recordPermissionDecision({
+						toolName: event.toolName,
+						mode: decision.action,
+						risk,
+						hazardous: decision.hazardous,
+					});
+					if (decision.action === "confirm" && ctx.hasUI) approvalRisk = risk;
+				});
+				if (approvalRisk) {
+					lifecycle?.recordPermissionApproval({
+						toolName: event.toolName,
+						decision: result?.block ? "deny" : "allow",
+						risk: approvalRisk,
+					});
+				}
+				if (result?.block) lifecycle?.markToolBlocked(event.toolCallId);
+				return result;
+			} catch (error) {
+				if (approvalRisk) {
+					lifecycle?.recordPermissionApproval({
+						toolName: event.toolName,
+						decision: "error",
+						risk: approvalRisk,
+					});
+				}
+				throw error;
+			}
 		});
 
 		pi.on("before_agent_start", (event) => {
@@ -432,11 +472,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		pi.on("before_provider_headers", (event, ctx) => {
 			const model = ctx.model;
 			if (!model) return;
-			// x-step-client marks every request. The session/workspace/provider
-			// attribution follows only Step-owned providers (native step + product
-			// proxies), keyed by provider id, so it never egresses to a distinct
-			// third-party provider. Caveat: overriding STEP_BASE_URL under the
-			// "step" id points that provider at another host and attribution follows.
+			// x-step-client marks every request. The session id additionally rides
+			// every request to a Step first-party host (api.stepfun.com / .ai), keyed
+			// by the request URL host regardless of provider id. The remaining
+			// workspace/goal/provider attribution is policy-gated (allowlist +
+			// highSensitivityFields), so it never egresses to a third-party endpoint.
 			applyStepTraceHeaders(
 				event.headers,
 				{

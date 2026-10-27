@@ -396,12 +396,12 @@ interface OAuthCredentials {
 For providers with non-standard APIs, implement `streamSimple`. Study the existing API implementations before writing your own:
 
 **Reference implementations:**
-- [anthropic-messages.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/api/anthropic-messages.ts) - Anthropic Messages API
-- [mistral-conversations.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/api/mistral-conversations.ts) - Mistral Conversations API
-- [openai-completions.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/api/openai-completions.ts) - OpenAI Chat Completions
-- [openai-responses.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/api/openai-responses.ts) - OpenAI Responses API
-- [google-generative-ai.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/api/google-generative-ai.ts) - Google Generative AI
-- [bedrock-converse-stream.ts](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/api/bedrock-converse-stream.ts) - AWS Bedrock
+- [anthropic-messages.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/anthropic-messages.ts) - Anthropic Messages API
+- [mistral-conversations.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/mistral-conversations.ts) - Mistral Conversations API
+- [openai-completions.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/openai-completions.ts) - OpenAI Chat Completions
+- [openai-responses.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/openai-responses.ts) - OpenAI Responses API
+- [google-generative-ai.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/google-generative-ai.ts) - Google Generative AI
+- [bedrock-converse-stream.ts](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/api/bedrock-converse-stream.ts) - AWS Bedrock
 
 ### Stream Pattern
 
@@ -570,7 +570,7 @@ When a request exceeds the model's context window, step can recover automaticall
 Detection runs on the finalized assistant message:
 
 - `stopReason === "error"`
-- `errorMessage` matches one of step's known overflow patterns (see [`packages/providers/src/utils/overflow.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/utils/overflow.ts))
+- `errorMessage` matches one of step's known overflow patterns (see [`packages/providers/src/utils/overflow.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/utils/overflow.ts))
 
 If your provider returns overflow errors with a message step does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase step recognizes. The generic fallback `context_length_exceeded` is the safest choice.
 
@@ -633,7 +633,7 @@ pi.registerProvider("my-provider", {
 
 ## Testing Your Implementation
 
-Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/providers/test/](https://github.com/stepfun-ai/step-harness/tree/main/packages/providers/test):
+Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/providers/test/](https://gitlab.basemind.com/aiagent/step-harness/-/tree/main/packages/providers/test):
 
 | Test | Purpose |
 |------|---------|

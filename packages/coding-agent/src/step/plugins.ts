@@ -696,7 +696,6 @@ function provisionedServerEnvironments(manifest: StepPluginManifest): Array<Reco
 	});
 	return declared.length > 0 ? declared : [undefined];
 }
-
 /**
  * Resolve the skill and command directories contributed by installed plugins.
  *

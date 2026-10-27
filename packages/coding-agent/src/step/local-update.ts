@@ -12,6 +12,10 @@ import { STEPCODE_VERSION, type StepCodeVersion } from "./version.ts";
 /** Public release bucket used by the Step installer when no override is set. */
 export const DEFAULT_STEP_RELEASE_BASE_URL = "https://static-openapi.stepfun.com/stepcode";
 
+/** npm package that installs the same Step binary through a platform optional dependency. */
+export const STEP_NPM_PACKAGE = "@stepfun/stepcode";
+const NPM_PLATFORM_PACKAGE_PATH = /[\\/]node_modules[\\/]@stepfun[\\/]stepcode-[^\\/]+[\\/]/u;
+
 const UPDATE_CHECK_TIMEOUT_MS = 1_500;
 const UPDATE_INSTALL_TIMEOUT_MS = 120_000;
 const UPDATE_STATE_FILE = "tui-update-state.json";
@@ -48,6 +52,11 @@ export interface StepUpdateCommandInput {
 export async function runStepUpdateCommand(input: StepUpdateCommandInput = {}): Promise<number> {
 	const env = input.env ?? process.env;
 	const executablePath = await resolveUpdateExecutablePath(input.executablePath, env);
+	if (isNpmManagedStepInstall(executablePath ?? input.executablePath, env)) {
+		process.stderr.write("This Step installation is managed by npm. Update it with:\n");
+		process.stderr.write(`  ${formatStepNpmUpdateCommand(input.version)}\n`);
+		return 1;
+	}
 	if (!executablePath) {
 		process.stderr.write("This installation is not a standalone Step binary and cannot self-update.\n");
 		process.stderr.write("Re-run the Step installer or update the package/source that provides this command.\n");
@@ -161,6 +170,7 @@ export type StepUpdateOutcome =
 	| "up-to-date"
 	| "skipped-version"
 	| "skipped"
+	| "npm-managed"
 	| "deferred"
 	| "restarted"
 	| "update-failed";
@@ -294,6 +304,16 @@ export async function maybeUpdateStep(input: StepUpdateInput): Promise<StepUpdat
 	const skippedVersion = await readStepSkippedUpdateVersion(input.storageRootDir);
 	if (skippedVersion === latestVersion) return "skipped-version";
 
+	// Replacing files inside node_modules would desynchronize npm's view of the
+	// install, so npm-managed copies only point at the npm upgrade command.
+	if (isNpmManagedStepInstall(executablePath, env)) {
+		input.ui?.notify(
+			`Step ${latestVersion} is available (current ${currentVersion}). Update with: ${formatStepNpmUpdateCommand()}`,
+			"info",
+		);
+		return "npm-managed";
+	}
+
 	const installDir = path.dirname(executablePath);
 	const choice = await chooseStepUpdate(input, currentVersion, latestVersion, installDir);
 	if (choice === "skip") return "skipped";
@@ -380,6 +400,24 @@ export function resolveStepExecutablePath(env: NodeJS.ProcessEnv = process.env):
 		}
 	}
 	return undefined;
+}
+
+/**
+ * True when Step runs from an npm platform package. The npm launcher sets
+ * STEPCODE_INSTALL_METHOD=npm; the path check covers direct invocations of the
+ * vendored binary.
+ */
+export function isNpmManagedStepInstall(
+	executablePath: string | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	if (env.STEPCODE_INSTALL_METHOD?.trim().toLowerCase() === "npm") return true;
+	return executablePath !== undefined && NPM_PLATFORM_PACKAGE_PATH.test(executablePath);
+}
+
+function formatStepNpmUpdateCommand(version?: string): string {
+	const target = version ? normalizeStepStableVersion(version) : null;
+	return `npm install -g ${STEP_NPM_PACKAGE}@${target ?? "latest"}`;
 }
 
 function resolveStepAgentDirForUpdate(env: NodeJS.ProcessEnv): string | undefined {

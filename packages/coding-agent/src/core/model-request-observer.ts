@@ -97,8 +97,10 @@ const PRINTABLE_TOKEN = /^[\x21-\x7e]+$/u;
  * the lookup is case-insensitive. A value that is not a short printable token
  * is ignored rather than forwarded.
  */
-export function readResponseTraceId(headers: Readonly<Record<string, string>>): string | undefined {
-	let raw = headers[TRACE_ID_HEADER];
+export function readResponseTraceId(headers: Readonly<Record<string, string>> | undefined): string | undefined {
+	// Extension providers build this object themselves, so do not trust its shape.
+	if (!headers || typeof headers !== "object") return undefined;
+	let raw: unknown = headers[TRACE_ID_HEADER];
 	if (raw === undefined) {
 		for (const [name, value] of Object.entries(headers)) {
 			if (name.toLowerCase() === TRACE_ID_HEADER) {
@@ -107,7 +109,8 @@ export function readResponseTraceId(headers: Readonly<Record<string, string>>): 
 			}
 		}
 	}
-	const value = raw?.trim();
+	if (typeof raw !== "string") return undefined;
+	const value = raw.trim();
 	return value && value.length <= MAX_TRACE_ID_LENGTH && PRINTABLE_TOKEN.test(value) ? value : undefined;
 }
 
@@ -131,17 +134,24 @@ export function createModelRequestTraceCapture(
 	let attempt = 0;
 	const report = (response: ProviderResponse, model: Model<Api>): void => {
 		attempt += 1;
-		const traceId = readResponseTraceId(response.headers);
-		if (!traceId) return;
-		notifyTraceId(observer, {
-			traceId,
-			sessionId,
-			provider: model.provider,
-			model: model.id,
-			baseUrl: model.baseUrl,
-			statusCode: response.status,
-			attempt,
-		});
+		// Capturing runs inside the provider's response callback: a malformed
+		// response from an extension provider must not fail the request.
+		try {
+			const traceId = readResponseTraceId(response?.headers);
+			if (!traceId) return;
+			notifyTraceId(observer, {
+				traceId,
+				sessionId,
+				provider: model.provider,
+				model: model.id,
+				baseUrl: model.baseUrl,
+				// The collector stores an integer; an extension provider may hand over anything.
+				statusCode: Number.isInteger(response.status) ? response.status : 0,
+				attempt,
+			});
+		} catch {
+			// Trace capture is diagnostic only.
+		}
 	};
 	return { onResponse: report, onErrorResponse: report };
 }

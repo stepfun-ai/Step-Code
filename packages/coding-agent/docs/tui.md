@@ -4,7 +4,7 @@
 
 Extensions and custom tools can render custom TUI components for interactive user interfaces. This page covers the component system and available building blocks.
 
-**Source:** [`@step-harness/pi-tui`](https://github.com/stepfun-ai/step-harness/tree/main/packages/tui)
+**Source:** [`@step-harness/pi-tui`](https://gitlab.basemind.com/aiagent/step-harness/-/tree/main/packages/tui)
 
 ## Component Interface
 

@@ -616,11 +616,20 @@ export class StepPermissionController {
 	}
 
 	/** Apply the policy through Pi's before-tool-call result contract. */
-	async handleToolCall(event: ToolCallEvent, context: ExtensionContext): Promise<ToolCallEventResult | undefined> {
+	async handleToolCall(
+		event: ToolCallEvent,
+		context: ExtensionContext,
+		onDecision?: (decision: Readonly<StepToolDecision>) => void,
+	): Promise<ToolCallEventResult | undefined> {
 		const input = event.input;
 		const cause = this.unattendedCause(context.hasUI);
 		const state = this.effectiveState(cause);
 		const decision = decideStepToolCall(event.toolName, input, state, this.toolOverrides, this.shellContext());
+		try {
+			onDecision?.(decision);
+		} catch {
+			// A diagnostic observer must never change approval or execution behavior.
+		}
 		if (decision.action === "allow") return undefined;
 
 		if (decision.action === "deny") {
