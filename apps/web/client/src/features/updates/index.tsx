@@ -1,7 +1,7 @@
 /**
- * Updates feature slot, mounted by App.tsx in the sidebar above the account
- * row: `UpdateNotice` (`#updateNotice`, plus `#updateRestartDialog`). Desktop
- * only; renders hidden in a browser.
+ * Updates feature slot, mounted by App.tsx as the trailing item of the
+ * sidebar's account row: `UpdateNotice` (`#updateNotice`, plus
+ * `#updateRestartDialog`). Desktop only; renders hidden in a browser.
  */
 
 import "./updates.css";

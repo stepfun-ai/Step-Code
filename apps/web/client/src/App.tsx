@@ -24,8 +24,9 @@ import { IconSprite } from "./ui";
  *
  *   svg.icon-sprite
  *   div.app[.sidebar-hidden][.right-panel-open][.resizing]  (--sidebar-width, --preview-width)
- *     aside.sidebar      sidebar nav | files tree | updates #updateNotice (desktop only)
- *                        | shell user area (account, remote control, settings gear)
+ *     aside.sidebar      sidebar nav | files tree
+ *                        | shell user area (account, remote control, settings gear,
+ *                          then updates #updateNotice, desktop only)
  *     #sidebarResizer    sidebar
  *     main.main          shell show button | files show button | market cron/market views
  *                        | conversation #sessionHeader (title, project, status, more menu)
@@ -97,8 +98,7 @@ export function App() {
 				<aside className="sidebar">
 					<SidebarNav />
 					<FileTreePanel />
-					<UpdateNotice />
-					<UserArea />
+					<UserArea trailing={<UpdateNotice />} />
 				</aside>
 				<SidebarResizer />
 				<main className="main">

@@ -1,12 +1,14 @@
 /**
- * `#updateNotice`, above the account row at the foot of the sidebar: the
- * desktop app's own update, driven by `window.stepcodeDesktop.updates`.
+ * `#updateNotice`, the last icon of the account row at the foot of the sidebar
+ * (after the settings gear): the desktop app's own update, driven by
+ * `window.stepcodeDesktop.updates`.
  *
  * Hidden in a browser and while there is nothing to do (up to date, checking,
- * updates disabled). Otherwise one button that names the next step:
+ * updates disabled), so the row keeps its usual layout. Otherwise one bare
+ * icon button, like the gear beside it, whose hover hint names the next step:
  *
  *   available    "New version 0.1.1" -> download, verify and install
- *   downloading  progress bar and percentage (not clickable)
+ *   downloading  spinner, a progress line under it, percentage and bytes in the hint (not clickable)
  *   installing   "Installing…" (verify the SHA-512, stage the update; not clickable)
  *   ready        "Restart to update" -> `#updateRestartDialog`
  *   error        "Update failed · Retry" -> repeats the failed step
@@ -20,7 +22,7 @@
  * turns it back into the plain restart prompt.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { type TranslateFn, useT } from "../../i18n";
 import { formatBytes } from "../../lib/format";
 import type { DesktopUpdateState, DesktopUpdatesBridge } from "../../platform/desktop-bridge";
@@ -129,40 +131,45 @@ export function UpdateNotice() {
 	const progress = state?.phase === "downloading" ? percent(state.received, state.size) : undefined;
 	const icon = state?.phase === "error" ? "triangleAlert" : state?.phase === "ready" ? "refresh" : "download";
 
-	const button = (
-		<button
-			type="button"
-			className="update-notice-button"
-			data-phase={state?.phase}
-			aria-disabled={busy}
-			onClick={busy ? undefined : onClick}
-		>
-			<span className="update-notice-icon" aria-hidden="true">
-				{busy ? <Spinner /> : <Icon name={icon} size="sm" />}
-			</span>
-			<span className="update-notice-text">
-				<span className="update-notice-title">{text?.title}</span>
-				<span className="update-notice-detail">{text?.detail}</span>
-			</span>
-			{progress !== undefined ? (
-				<span
-					className="update-notice-progress"
-					role="progressbar"
-					aria-label={t("updateDownloadProgress")}
-					aria-valuemin={0}
-					aria-valuemax={100}
-					aria-valuenow={progress}
-				>
-					<span style={{ width: `${progress}%` }} />
-				</span>
-			) : null}
-		</button>
-	);
+	const hint =
+		text === undefined ? null : (
+			<>
+				<strong className="update-notice-title">{text.title}</strong>
+				<span className="update-notice-detail">{text.detail}</span>
+				{state?.phase === "error" && state.message ? (
+					<span className="update-notice-message">{state.message}</span>
+				) : null}
+			</>
+		);
 
 	return (
 		<>
 			<div className="update-notice" id="updateNotice" hidden={text === undefined} aria-live="polite">
-				{state?.phase === "error" ? <Tooltip content={state.message}>{button}</Tooltip> : button}
+				<Tooltip className="update-notice-tooltip" content={hint}>
+					<button
+						type="button"
+						className="update-notice-button"
+						data-phase={state?.phase}
+						aria-label={text?.title}
+						aria-disabled={busy}
+						onClick={busy ? undefined : onClick}
+					>
+						<span className="update-notice-icon" aria-hidden="true">
+							{busy ? <Spinner /> : <Icon name={icon} size="md" />}
+						</span>
+						{progress !== undefined ? (
+							<span
+								className="update-notice-progress"
+								role="progressbar"
+								aria-label={t("updateDownloadProgress")}
+								aria-valuemin={0}
+								aria-valuemax={100}
+								aria-valuenow={progress}
+								style={{ "--update-progress": `${progress}%` } as CSSProperties}
+							/>
+						) : null}
+					</button>
+				</Tooltip>
 			</div>
 			<Modal
 				id="updateRestartDialog"

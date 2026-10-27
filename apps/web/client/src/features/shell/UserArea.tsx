@@ -2,6 +2,8 @@
  * `.user-area` at the foot of the sidebar: the signed-in account on the left,
  * and two icon buttons on the right. The phone button is a placeholder for
  * mobile remote control (not available yet); the gear opens the settings view.
+ * `trailing` is a slot after the gear (the desktop update icon, `#updateNotice`),
+ * which hides itself when there is nothing to show.
  *
  * The account shows the nickname and avatar the host reads from the account
  * session (`GET /api/v1/account`). Without one (API-key sign-in, or the
@@ -11,7 +13,7 @@
  * to show, so the button opens Settings > Account, the in-app sign-in, directly.
  */
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { type TranslateFn, useT } from "../../i18n";
 import { copyText } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
@@ -131,7 +133,7 @@ function AccountMenu({
 	);
 }
 
-export function UserArea() {
+export function UserArea({ trailing }: { trailing?: ReactNode }) {
 	const t = useT();
 	const login = useAppStore((state) => state.login);
 	const account = useAppStore((state) => state.account);
@@ -209,6 +211,7 @@ export function UserArea() {
 						<Icon name="cog" size="md" />
 					</button>
 				</Tooltip>
+				{trailing}
 			</div>
 		</div>
 	);

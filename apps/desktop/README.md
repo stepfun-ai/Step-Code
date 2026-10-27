@@ -24,7 +24,8 @@ What the shell adds on top of the browser version:
   It is not installed globally and does not change shell profiles.
 - Native menus (copy/paste/undo, zoom, fullscreen, DevTools), edit context menu, persisted window bounds,
   single-instance lock, macOS inset traffic lights.
-- In-app updates for packaged release builds (see [Updates](#updates)), shown in the sidebar above the account row
+- In-app updates for packaged release builds (see [Updates](#updates)), shown as a download icon after the settings
+  gear in the sidebar's account row (hover for the version and next step)
   and under **StepCode → Check for Updates…** (macOS) / **File → Check for Updates…** (Windows).
 
 ## Architecture
