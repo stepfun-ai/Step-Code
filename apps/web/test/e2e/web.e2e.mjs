@@ -267,480 +267,6 @@ const tabs = () => $$("#previewTabs .preview-tab").map((tab) => tab.textContent.
 const ALT_META = 1 | 4
 const SHIFT_META = 8 | 4
 
-test("session migration imports reviewed snapshots while sources continue writing", { skip }, async () => {
-  const codexRoot = join(base, "migration-codex")
-  const claudeRoot = join(base, "migration-claude", "projects")
-  await mkdir(join(codexRoot, "sessions"), { recursive: true })
-  await mkdir(join(codexRoot, "archived_sessions"), { recursive: true })
-  await mkdir(claudeRoot, { recursive: true })
-  const timestamp = "2026-10-22T00:00:00.000Z"
-  const sourcePath = join(codexRoot, "sessions", "rollout-migration.jsonl")
-  const input = [
-    { type: "session_meta", timestamp, payload: { id: "migration-codex", cwd: workspace, cli_version: "0.163.0-alpha.11", history_mode: "paginated" } },
-    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<user_query>Migration acceptance quokkabridge</user_query>" }] } },
-    { type: "response_item", timestamp, payload: { type: "function_call", call_id: "migration-tool", name: "exec_command", arguments: '{"cmd":"never execute this historical call"}' } },
-  ].map(JSON.stringify).join("\n") + "\n"
-  await writeFile(sourcePath, input)
-  // An unreadable archive must not even produce a scan/parse failure by default.
-  await writeFile(join(codexRoot, "archived_sessions", "rollout-archive.jsonl"), "{")
-  await writeFile(join(claudeRoot, "migration-claude.jsonl"), [
-    { type: "user", uuid: "cc-user", parentUuid: null, sessionId: "migration-claude", cwd: workspace, timestamp, message: { content: "<user_query>Claude migration acceptance</user_query>" } },
-    { type: "assistant", uuid: "cc-assistant", parentUuid: "cc-user", sessionId: "migration-claude", timestamp, message: { content: [{ type: "text", text: "Historical CC reply" }] } },
-  ].map(JSON.stringify).join("\n") + "\n")
-  const scanned = await browser.run(`
-    if ($("#settingsView").hidden) $("#settingsButton").click();
-    await until(() => !$("#settingsView").hidden, "settings");
-    $("[data-settings-page='migration']").click();
-    await until(() => $("#importScan"), "migration page");
-    if ($('#importCustomToggle') || $('#importCustomPath')) throw new Error('Custom paths must be unavailable');
-    if ($('#importIncludeArchived')) throw new Error('Archive option must be absent');
-    const archived = false;
-    await until(() => $$(".session-import-row").length === 2, "two active source sessions");
-    await until(() => $$('[data-import-app] .session-import-logo').every(img => img.complete && img.naturalWidth > 0), 'platform logos loaded');
-    if (!$('[data-import-app="codex"] .session-import-logo').getAttribute('src').endsWith('/codex.svg')) throw new Error('Codex logo mismatch');
-    if (!$('[data-import-app="claude-code"] .session-import-logo').getAttribute('src').endsWith('/claudecode.svg')) throw new Error('Claude logo mismatch');
-    if ($$('[data-import-app]').some(group => group.open)) throw new Error('Applications must start collapsed');
-    if ($$('[data-import-project]').some(group => group.open)) throw new Error('Projects must start collapsed');
-    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
-    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
-    return { archived, errors: !!$(".session-import-errors"), sources: $$(".session-import-row").map(row => row.dataset.importSource).sort() };
-  `)
-  assert.deepEqual(scanned, { archived: false, errors: false, sources: ["claude-code", "codex"] })
-  const grouping = await browser.run(`
-    const groups = $$('[data-import-app]').map(node => node.dataset.importApp);
-    let codex = $('[data-import-app="codex"]');
-    const titles = $$('.session-import-section-head h1, .session-import-section-head h2').map(node => node.textContent);
-    const pathVisible = codex.textContent.includes(${JSON.stringify(sourcePath)});
-    codex.querySelector('summary').click();
-    const collapsed = !codex.open;
-    const search = $('.session-import-toolbar input[type="search"]');
-    search.value = 'rollout-migration.jsonl';
-    search.dispatchEvent(new Event('input'));
-    await until(() => $$('.session-import-row').length === 1, 'source path search');
-    codex = $('[data-import-app="codex"]');
-    const staysCollapsed = !codex.open;
-    codex.querySelector('summary').click();
-    const expanded = codex.open;
-    search.value = 'no-matching-migration-session';
-    search.dispatchEvent(new Event('input'));
-    await until(() => $$('.session-import-row').length === 0, 'empty search');
-    const emptyCards = $$('[data-import-app]').length;
-    const emptyHints = $$('.session-import-list .empty-list').length;
-    search.value = '';
-    search.dispatchEvent(new Event('input'));
-    await until(() => $$('.session-import-row').length === 2, 'cleared search');
-    return { apps: groups, titles, pathVisible, collapsed, staysCollapsed, expanded, emptyCards, emptyHints };
-  `)
-  assert.deepEqual(grouping.apps, ["codex", "claude-code"])
-  assert.equal(grouping.titles.length, 2)
-  assert.equal(grouping.pathVisible, false)
-  assert.equal(grouping.collapsed, true)
-  assert.equal(grouping.staysCollapsed, true)
-  assert.equal(grouping.expanded, true)
-  assert.equal(grouping.emptyCards, 0)
-  assert.equal(grouping.emptyHints, 0)
-  await browser.run(`
-    await until(() => $$('.session-import-report').length === 2 && !$('#importScan').disabled, 'automatic preview statistics');
-    const oldRow = $('.session-import-row');
-    $('#importScan').click();
-    await until(() => $('.session-import-row') !== oldRow && !$('#importScan').disabled, 'manual rescan completed');
-    if ($$('[data-import-app]').some(group => group.open)) throw new Error('Rescan must collapse cards');
-    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
-    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
-    for (const key of ['customRoot', 'codexRoot', 'claudeRoot', 'workbuddyRoot', 'qoderRoot']) {
-      const response = await fetch('/api/v1/session-imports/scan', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({[key]: '/must-not-scan'}) });
-      if (response.status !== 400) throw new Error('Custom path override was accepted: ' + key);
-    }
-
-    if ($('.session-import-excerpt')) throw new Error('Preview body must not appear in list');
-    if ($('#importSelectAll')) throw new Error('Global select all must be absent');
-    const appOpen = $('[data-import-app="codex"]').open;
-    $('[data-import-select="codex"]').click();
-    await until(() => $('[data-import-source="codex"] input[type="checkbox"]').checked, 'app selected');
-    if ($('[data-import-select="codex"]').type !== 'checkbox' || $('[data-import-app="codex"]').open !== appOpen) throw new Error('Checkbox must not toggle application folding');
-    const selectedRow = $('[data-import-source="codex"]');
-    const unselectedRow = $('[data-import-source="claude-code"]');
-    await until(() => getComputedStyle(selectedRow).backgroundColor !== getComputedStyle(unselectedRow).backgroundColor, 'selected row highlight');
-    if (getComputedStyle($('.session-import-toolbar .search-input')).borderTopStyle !== 'solid') throw new Error('Search input has no border');
-    if ($('[data-import-source="claude-code"] input[type="checkbox"]').checked) throw new Error('App select leaked');
-    const projectSelect = $('[data-import-app="claude-code"] .session-import-select-group[data-import-select^="claude-code:"]');
-    const projectOpen = projectSelect.closest('details').open;
-    projectSelect.click();
-    await until(() => $('[data-import-source="claude-code"] input[type="checkbox"]').checked, 'project selected');
-    if (projectSelect.type !== 'checkbox' || projectSelect.closest('details').open !== projectOpen) throw new Error('Project checkbox must not toggle folding');
-    if ($('#importConfirm') || !$('[data-import-app="codex"] > summary [data-import-confirm="codex"]')) throw new Error('Import must be platform-scoped');
-    if ($('.session-import-row .session-import-path')) throw new Error('Session paths visible');
-    if ($('[data-import-project] summary .session-import-project-path')) throw new Error('Project path must be hidden');
-    if (!/已选.*1|1.*selected/i.test($('[data-import-app="codex"] > summary').textContent)) throw new Error('App selected count missing');
-    if (!/已选.*1|1.*selected/i.test($('[data-import-app="claude-code"] [data-import-project] > summary').textContent)) throw new Error('Project selected count missing');
-    if ($('[data-import-app="codex"] input:not([type="checkbox"])')) throw new Error('Scanned path must not be editable');
-    if ($('.session-import-root')) throw new Error('Source paths must be hidden');
-    await until(() => !$('[data-import-confirm="codex"]').disabled, "preview completion");
-    if ($('.session-import-target') || $('#importReviewSelected')) throw new Error('Obsolete target or review controls');
-    const button = $('[data-import-source="codex"] button');
-    button.click();
-    await until(() => $('.session-import-preview-popover'), 'floating preview');
-    await until(() => !button.disabled, 'preview check complete');
-    if (!$('.session-import-preview-popover').textContent.includes('Migration acceptance')) throw new Error('Missing preview content');
-    const panel = $('.session-import-preview-popover');
-    const rect = panel.getBoundingClientRect();
-    const top = document.elementFromPoint(Math.min(innerWidth - 1, rect.left + rect.width / 2), Math.min(innerHeight - 1, rect.top + 20));
-    if (!panel.contains(top)) throw new Error('Preview is covered by settings');
-    button.click();
-    await until(() => !$('.session-import-preview-popover'), 'closed preview');
-    return true;
-  `)
-  await browser.send("Emulation.setDeviceMetricsOverride", {
-    width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
-  })
-  try {
-    const layout = await browser.run(`
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      const content = $(".settings-content");
-      const buttons = $$("[data-import-confirm]").map(node => node.getBoundingClientRect());
-      return {
-        contentWidth: content.getBoundingClientRect().width,
-        overflowing: content.scrollWidth > content.clientWidth,
-        offenders: [...content.querySelectorAll('*')].filter(node => node.getBoundingClientRect().right > innerWidth).slice(0, 12).map(node => ({class: node.className, width: node.getBoundingClientRect().width})),
-        buttonsFit: buttons.every(rect => rect.left >= 0 && rect.right <= innerWidth),
-      };
-    `)
-    assert.ok(layout.contentWidth >= 280, JSON.stringify(layout))
-    assert.equal(layout.overflowing, false, JSON.stringify(layout))
-    assert.equal(layout.buttonsFit, true)
-  } finally {
-    await browser.send("Emulation.setDeviceMetricsOverride", {
-      width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
-    })
-  }
-  const updatedInput = input + [
-    { type: "event_msg", timestamp, payload: { type: "token_count", info: {} } },
-    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Unreviewed source append" }] } },
-  ].map(JSON.stringify).join("\n") + "\n"
-  await writeFile(sourcePath, updatedInput)
-  await browser.run(`
-    $('[data-import-confirm="codex"]').click();
-    await until(() => $$('.session-import-result').length === 1 && !$('[data-import-confirm="claude-code"]').disabled, 'Codex imported separately');
-    if ($('[data-import-source="codex"]') || $('[data-import-app="codex"]')) throw new Error('Imported Codex session or empty card still appears in source list');
-    if (!$('[data-import-source="claude-code"] input').checked) throw new Error('Other platform selection was cleared');
-    $('[data-import-confirm="claude-code"]').click();
-    await until(() => $$(".session-import-result").length === 2, "completed imports");
-    if ($('.session-import-row') || $('[data-import-app]')) throw new Error('Imported sessions must exist only in history, without empty source cards');
-    await migrationScanCompleted(() => $('#importScan').click(), 'rescan with imported history');
-    if ($('.session-import-row') || $('[data-import-app]') || $$('.session-import-result').length !== 2) throw new Error('Rescan restored imported source sessions or empty cards');
-    const jobs = await (await fetch("/api/v1/session-imports")).json();
-    if (jobs.jobs.length !== 2 || jobs.jobs.some(job => job.results.length !== 1 || job.results[0].status !== 'imported')) throw new Error('Jobs must be per-platform');
-    window.migrationJob = { results: jobs.jobs.flatMap(job => job.results) };
-    const history = $$('[data-import-history-app]');
-    if (history.length !== 2 || history.some(group => group.querySelectorAll('.session-import-result').length !== 1)) {
-      throw new Error('Import history is not grouped by app');
-    }
-    if ($('.session-import-result .session-import-path')) throw new Error('History session paths visible');
-    if (history[0].open) throw new Error('Import history must start collapsed');
-    for (const group of history) group.querySelector('summary').click();
-    for (const group of $$('[data-import-history-project]')) group.querySelector('summary').click();
-    return true;
-  `)
-  const imported = await browser.run(`
-    const job = window.migrationJob;
-    const sessions = (await (await fetch("/api/v1/sessions")).json()).sessions;
-    const codex = sessions.find(session => job.results.some(result => result.sessionId === session.id) && session.name.startsWith("[codex]"));
-    if (!codex) throw new Error("Codex import missing from native sessions");
-    const snapshot = await (await fetch("/api/v1/sessions/" + codex.id)).json();
-    if (!snapshot.entries.some(entry => entry.imported)) throw new Error("Missing source provenance");
-    if (JSON.stringify(snapshot.entries).includes("Unreviewed source append")) throw new Error("Imported unreviewed content");
-    const result = job.results.find(result => result.sessionId === codex.id);
-    // Grouped history renders rows per app, so select by the imported session id, not DOM order.
-    document.querySelector('.session-import-result[data-import-result="' + codex.id + '"] button').click();
-    await until(() => $("#settingsView").hidden, "opened native import");
-    await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "imported history");
-    return { id: codex.id, hasUnknown: !!$("[data-tool-state='unknown']") };
-  `)
-  assert.equal(imported.hasUnknown, true)
-  assert.equal(await readFile(sourcePath, "utf8"), updatedInput)
-  await browser.send("Page.reload")
-  await browser.run(`await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "reopened after refresh");`)
-  const search = await browser.run(`
-    const result = await (await fetch("/api/v1/search?q=quokkabridge")).json();
-    return result.hits.some(hit => hit.sessionId === ${JSON.stringify(imported.id)});
-  `)
-  assert.equal(search, true)
-  await browser.run(`
-    await migrationScanCompleted(async () => {
-      $('#settingsButton').click();
-      $('[data-settings-page="general"]').click();
-      await until(() => !$('.session-import-page'), 'general page before migration reopen');
-      $('[data-settings-page="migration"]').click();
-    }, 'migration reopened with persisted history');
-    await until(() => $$('.session-import-result').length === 2, 'persisted history rows');
-    if ($('.session-import-row') || $('[data-import-app]')) throw new Error('Reopening migration restored imported sessions or empty cards');
-    $('#settingsBack').click();
-  `)
-})
-
-test("session migration failures stay silent and preserve truthful job state", { skip }, async () => {
-  await browser.run(`
-    await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated page');
-    if ($('#settingsView').hidden) $('#settingsButton').click();
-    $('[data-settings-page="general"]').click();
-    await until(() => !$('.session-import-page'), 'previous migration unmounted');
-    const originalFetch = window.fetch;
-    const path = '/api/v1/session-imports';
-    const diagnostic = '__migration_diagnostic__';
-    const expiredId = 'migration-fixture-expired-session';
-    const createdAt = '2026-10-22T00:00:00.000Z';
-    const candidate = (id, source, title) => ({
-      id, source, title, sessionId: id, cwd: ${JSON.stringify(workspace)},
-      modified: createdAt, archived: false, version: 'fixture',
-      sourcePath: ${JSON.stringify(join(base, "mock-imports"))} + '/' + id + '.jsonl',
-    });
-    const healthy = candidate('healthy', 'codex', 'Healthy migration fixture');
-    const broken = candidate('broken', 'qoder', 'Broken migration fixture');
-    const saved = { id: 'saved', createdAt, status: 'completed', total: 1, results: [{
-      candidateId: 'saved-candidate', source: 'claude-code', title: 'Saved migration fixture',
-      status: 'imported', sessionId: expiredId,
-    }] };
-    let history = [saved];
-    let scanFailure = false;
-    let historyFailure = false;
-    let sourceErrors = true;
-    let brokenPreview = true;
-    let healthyPreviewFailure = false;
-    let startFailure = true;
-    let pollFailure = true;
-    let running;
-    const calls = { history: 0, scan: 0, previews: [], start: [], cancel: 0, poll: 0, open: 0 };
-    const leaks = new Set();
-    const inspect = (node) => {
-      if ((node.textContent ?? '').includes(diagnostic)) leaks.add('technical diagnostic entered DOM');
-    };
-    const observer = new MutationObserver(records => {
-      inspect(document.body);
-      for (const record of records) {
-        inspect(record.target);
-        for (const node of record.addedNodes) inspect(node);
-      }
-    });
-    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-    const response = (body, status = 200) => new Response(JSON.stringify(body), {
-      status, headers: { 'content-type': 'application/json' },
-    });
-    const failure = stage => response({ error: diagnostic + stage }, 500);
-    window.fetch = async (input, init) => {
-      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
-      const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
-      if (url.origin !== location.origin) return originalFetch(input, init);
-      if (url.pathname === '/api/v1/sessions/' + expiredId && method === 'GET') {
-        calls.open++;
-        return failure('open');
-      }
-      if (url.pathname !== path && !url.pathname.startsWith(path + '/')) return originalFetch(input, init);
-      if (url.pathname === path && method === 'GET') {
-        calls.history++;
-        return historyFailure ? failure('history') : response({ jobs: history });
-      }
-      if (url.pathname === path + '/scan' && method === 'POST') {
-        calls.scan++;
-        return scanFailure ? failure('scan') : response({
-          roots: { codex: '/fixture/codex', qoder: '/fixture/qoder', 'claude-code': '/fixture/claude' },
-          candidates: [healthy, broken],
-          errors: sourceErrors ? [{ source: 'claude-code', message: diagnostic + 'source' }] : [],
-        });
-      }
-      if (url.pathname === path + '/preview' && method === 'POST') {
-        const { candidateId } = JSON.parse(init.body);
-        calls.previews.push(candidateId);
-        if ((candidateId === broken.id && brokenPreview) || (candidateId === healthy.id && healthyPreviewFailure)) return failure('preview');
-        const item = candidateId === healthy.id ? healthy : broken;
-        return response({ ...item, fingerprint: 'fixture-' + item.id, messageCount: 2, toolCount: 1,
-          warnings: [{ code: 'unsupported_content', count: 73519 }], excerpt: item.title + ' preview',
-        });
-      }
-      if (url.pathname === path && method === 'POST') {
-        calls.start.push(JSON.parse(init.body));
-        if (startFailure) return failure('start');
-        running = { id: 'fixture-running', createdAt, status: 'running', total: 1, results: [] };
-        history = [running, ...history];
-        return response(running);
-      }
-      if (url.pathname === path + '/fixture-running' && method === 'DELETE') {
-        calls.cancel++;
-        return failure('cancel');
-      }
-      if (url.pathname === path + '/fixture-running' && method === 'GET') {
-        calls.poll++;
-        return pollFailure ? failure('poll') : response(running);
-      }
-      throw new Error('Unexpected migration fixture request: ' + method + ' ' + url.pathname);
-    };
-    try {
-      const painted = async () => {
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      };
-      const silent = async stage => {
-        await painted();
-        inspect(document.body);
-        if (leaks.size) throw new Error(stage + ': ' + [...leaks].join(', '));
-        if ($('.session-import-error, .session-import-errors, .session-import-row-failure, .session-import-list .empty-list')) throw new Error(stage + ': diagnostic or empty-result UI remains');
-        if (!$('#errorToast').hidden) throw new Error(stage + ': unexpected error toast');
-        if ($$('.session-import-report').some(report => report.querySelectorAll('span').length !== 1)) throw new Error(stage + ': preview compatibility warnings remain');
-      };
-      const expand = () => {
-        for (const group of $$('[data-import-app], [data-import-project], [data-import-history-app], [data-import-history-project]')) group.open = true;
-      };
-      const ready = async label => {
-        await until(() => $('#importScan') && !$('#importScan').disabled, label);
-        await painted();
-      };
-      const rescan = async label => {
-        const previous = calls.history;
-        $('#importScan').click();
-        await until(() => calls.history > previous, label + ' request');
-        await ready(label);
-      };
-      const savedRemains = () => {
-        if (!$('[data-import-result="' + expiredId + '"]')) throw new Error('Successful saved history disappeared');
-      };
-      const healthyOnly = () => {
-        const rows = $$('.session-import-row');
-        if (rows.length !== 1 || rows[0].querySelector('strong').textContent !== healthy.title) throw new Error('Only the healthy candidate should be displayed');
-        if ($('[data-import-app="qoder"], [data-import-app="claude-code"]')) throw new Error('Failed or empty source card remains');
-        if (rows[0].querySelector('input').disabled) throw new Error('Healthy candidate is not selectable');
-      };
-      $('[data-settings-page="migration"]').click();
-      await until(() => calls.scan === 1 && calls.previews.length === 2, 'injected scan and previews');
-      await ready('initial scan complete');
-      await silent('per-source scan errors and partial preview failure');
-      healthyOnly();
-      savedRemains();
-      expand();
-      const search = $('.session-import-toolbar input[type="search"]');
-      search.value = 'no-matching-fixture';
-      search.dispatchEvent(new Event('input'));
-      await until(() => !$('.session-import-row'), 'no search matches');
-      if ($('[data-import-app]')) throw new Error('Empty search left an application card');
-      await silent('empty search');
-      savedRemains();
-      search.value = '';
-      search.dispatchEvent(new Event('input'));
-      await until(() => $('.session-import-row'), 'healthy search restored');
-      healthyOnly();
-      sourceErrors = false;
-      brokenPreview = false;
-      await rescan('successful rescan recovery');
-      if ($$('.session-import-row').length !== 2) throw new Error('Rescan did not restore recovered candidate');
-      await silent('recovered preview');
-      expand();
-      const row = $$('.session-import-row').find(node => node.querySelector('strong').textContent === healthy.title);
-      row.querySelector('input').click();
-      row.querySelector('button').click();
-      await until(() => $('.session-import-preview-popover') && !row.querySelector('button').disabled, 'healthy preview opened');
-      row.querySelector('button').click();
-      await until(() => !$('.session-import-preview-popover'), 'healthy preview closed');
-      healthyPreviewFailure = true;
-      row.querySelector('button').click();
-      await until(() => !$('#importScan').disabled && !row.isConnected, 'previously selected preview removed after failure');
-      if ($('.session-import-preview-popover')) throw new Error('Failed preview left stale content open');
-      if ($('[data-import-confirm="codex"]')) throw new Error('Failed selected candidate can still be submitted');
-      await silent('selected preview failure');
-      healthyPreviewFailure = false;
-      await rescan('restore selected preview');
-      saved.results[0].warning = diagnostic + 'saved-warning';
-      const failedHistory = { id: 'persisted-failed', createdAt, status: 'completed', total: 1, results: [{
-        candidateId: 'persisted-failed-candidate', source: 'qoder', title: 'Failed saved fixture',
-        status: 'failed', error: diagnostic + 'result-error', warning: diagnostic + 'result-warning',
-      }] };
-      history = [saved, failedHistory];
-      await rescan('persistent result diagnostics');
-      const failedStatus = () => {
-        const result = $('[data-import-result="persisted-failed-candidate"]');
-        if (!result || !/未导入|Not imported/i.test(result.textContent)) throw new Error('Real failed history must remain as Not imported');
-        if (result.querySelector('button')) throw new Error('Failed history must not offer a successful session');
-      };
-      failedStatus();
-      await silent('persistent result error and warning');
-      scanFailure = true;
-      await rescan('whole scan failure');
-      if ($('.session-import-row, [data-import-app]')) throw new Error('Failed scan retained source candidates or empty cards');
-      savedRemains();
-      failedStatus();
-      await silent('whole scan failure');
-      scanFailure = false;
-      await rescan('scan recovery');
-      if ($$('.session-import-row').length !== 2) throw new Error('Healthy candidates did not recover after scan failure');
-      historyFailure = true;
-      const scansBeforeHistoryFailure = calls.scan;
-      await rescan('history GET failure');
-      if (calls.scan !== scansBeforeHistoryFailure) throw new Error('Scan continued after failed history read');
-      if ($('.session-import-row, [data-import-app]')) throw new Error('Failed history read retained candidates');
-      savedRemains();
-      failedStatus();
-      await silent('history GET failure');
-      historyFailure = false;
-      await rescan('history recovery');
-      if ($$('.session-import-row').length !== 2) throw new Error('History recovery lost healthy candidates');
-      expand();
-      $('[data-import-select="codex"]').click();
-      await until(() => !$('[data-import-confirm="codex"]').disabled, 'healthy selection ready');
-      const resultsBeforeStart = $$('.session-import-result').length;
-      $('[data-import-confirm="codex"]').click();
-      await until(() => calls.start.length === 1 && !$('[data-import-confirm="codex"]').disabled, 'start POST failure settled');
-      if ($$('.session-import-result').length !== resultsBeforeStart) throw new Error('Failed submission fabricated an import result');
-      if (!$('[data-import-source="codex"] input').checked) throw new Error('Failed submission discarded retryable selection');
-      if ($('.session-import-history > header button')) throw new Error('Failed submission fabricated a running job');
-      if (calls.start[0].selections.length !== 1 || calls.start[0].selections[0].candidateId !== healthy.id) throw new Error('Submission included an unselected or failed candidate');
-      await silent('start POST failure');
-      startFailure = false;
-      $('[data-import-confirm="codex"]').click();
-      await until(() => calls.start.length === 2 && calls.poll >= 2, 'running job and failed poll retry');
-      const stillRunning = () => {
-        if (!$('#importScan').disabled || !$('.session-import-history > header button')) throw new Error('Uncertain running job became completed or cancelled');
-        if (!/正在导入|Importing/i.test($('.session-import-history > .settings-page-desc').textContent)) throw new Error('Last known running status was lost');
-        if ($$('.session-import-result').length !== resultsBeforeStart) throw new Error('Uncertain running job fabricated a result');
-        savedRemains();
-        failedStatus();
-      };
-      stillRunning();
-      await silent('poll GET failure');
-      const pollsBeforeCancel = calls.poll;
-      $('.session-import-history > header button').click();
-      await until(() => calls.cancel === 1 && calls.poll > pollsBeforeCancel, 'cancel DELETE failure and subsequent poll');
-      stillRunning();
-      if (calls.start.length !== 2 || calls.cancel !== 1) throw new Error('Failed mutation was automatically retried');
-      await silent('cancel DELETE failure');
-      running = { ...running, status: 'completed', results: [{
-        candidateId: healthy.id, source: healthy.source, title: healthy.title, cwd: healthy.cwd,
-        status: 'failed', error: diagnostic + 'job-result-error', warning: diagnostic + 'job-result-warning',
-      }] };
-      history = [running, ...history.filter(job => job.id !== running.id)];
-      pollFailure = false;
-      await until(() => !$('#importScan').disabled && $('[data-import-result="healthy"]'), 'poll recovery with real failed result');
-      const failedImport = $('[data-import-result="healthy"]');
-      if (!/未导入|Not imported/i.test(failedImport.textContent) || failedImport.querySelector('button')) throw new Error('Failed job result masquerades as an imported session');
-      if ($('.session-import-history > header button')) throw new Error('Completed job still offers cancellation');
-      if (!$('[data-import-source="codex"] input').checked) throw new Error('Failed result lost retryable selection');
-      if (calls.start.length !== 2 || calls.cancel !== 1) throw new Error('Mutation retried during poll recovery');
-      await silent('poll recovery and real failed result');
-      await rescan('rescan after failed import');
-      if ($$('.session-import-row').length !== 2) throw new Error('Failed import incorrectly hid healthy candidate as imported');
-      savedRemains();
-      expand();
-      $('[data-import-result="' + expiredId + '"] button').click();
-      await until(() => calls.open === 1 && $('#settingsView').hidden, 'failed history session open');
-      await silent('invalid imported session open');
-    } finally {
-      try {
-        $('[data-settings-page="general"]').click();
-        await until(() => !$('.session-import-page'), 'migration fixture unmounted');
-      } finally {
-        observer.disconnect();
-        window.fetch = originalFetch;
-        if (!$('#settingsView').hidden) $('#settingsBack').click();
-      }
-    }
-  `)
-})
-
 let base
 let workspace
 let extra
@@ -763,6 +289,7 @@ before(async () => {
   await mkdir(join(workspace, "src", "deep"), { recursive: true })
   await mkdir(join(workspace, "docs"), { recursive: true })
   await mkdir(join(extra, "lib"), { recursive: true })
+  await mkdir(join(base, "scan-home"), { recursive: true })
   await writeFile(
     join(workspace, "README.md"),
     "# Title\n\nSome **bold** text.\n",
@@ -2001,8 +1528,7 @@ test("clarification close cancels the pending tool and a single freeform answer 
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture again" }) });
     await until(() => !$(".clarification-panel").hidden, "new questions");
-    // Closing the round lives with the footer text actions since the panel lost
-    // its card header, so the affordance is a button id, not an icon label.
+    // The close control is targeted by its stable id, not its icon label.
     $("#clarificationClose").click();
     await until(() => $(".clarification-panel").hidden, "cancelled card");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "cancelled turn settles");
@@ -2742,7 +2268,7 @@ test("workspaces with chats can be removed through the dialog, retained after re
     await until(() => !$("#removeWorkspaceConfirm").disabled && $("#errorToast").textContent.includes("removal fixture retry"), "retryable failure");
     const kept = !$("#removeWorkspaceModal").hidden;
     $("#removeWorkspaceConfirm").click(); $("#removeWorkspaceConfirm").click();
-    await until(() => $("#removeWorkspaceModal").hidden && !projects().length, "confirmed removal");
+    await until(() => $("#removeWorkspaceModal").hidden && !projects().includes(${JSON.stringify(workspace)}), "confirmed removal");
     window.fetch = original;
     return { calls, kept, session: $("#recentTasks .session-row.active")?.dataset.sessionId };
   `);
@@ -2750,9 +2276,18 @@ test("workspaces with chats can be removed through the dialog, retained after re
   await browser.goto(`${origin}/`);
   const reloaded = await browser.run(`
     await until(() => $("#recentTasks .session-row"), "retained chats after reload");
-    return { projects: projects(), session: (await (await fetch("/api/v1/sessions/${before.session}")).json()).id };
+    return {
+      projects: projects(),
+      name: $("#projectGroups .project-name").textContent,
+      session: (await (await fetch("/api/v1/sessions/${before.session}")).json()).id,
+    };
   `);
-  assert.deepEqual(reloaded, { projects: [], session: before.session });
+  // The workspace just removed was the launch folder, so new work falls back to
+  // the host's default folder. The page lists it as "默认项目" instead of leaving
+  // an empty project list: the user still needs a target for the next
+  // conversation, and it must not be the deleted folder.
+  const fallback = await realpath(join(base, "scan-home"));
+  assert.deepEqual(reloaded, { projects: [fallback], name: "默认项目", session: before.session });
   assert.ok(existsSync(join(workspace, "README.md")));
   await browser.run(`
     await fetch("/api/v1/workspaces", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({path:${JSON.stringify(workspace)}}) });
@@ -3346,15 +2881,23 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     const view = $("#childAgentView");
     await until(() => !view.hidden && view.textContent.includes("Wombat audit finished."), "child transcript");
     const usageStrip = $("#subagentUsage");
-    // A subagent is context the main agent wrote: the reader only looks, so the
-    // parent's prompt deck must be gone while this read-only record is open.
+    // A subagent is context the main agent wrote, but only the record is
+    // read-only: the parent conversation keeps its one prompt field while the
+    // panel is open, so typing, stop and queued messages stay reachable.
     const composer = $(".composer-zone");
+    const promptVisible = (() => {
+      const prompt = $("#prompt");
+      if (!prompt) return false;
+      const box = prompt.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    })();
     const single = {
       listedChildren,
       readOnlyBadge: Boolean(view.querySelector(".child-agent-badge")),
       actions: view.querySelectorAll(".message-actions, textarea, input").length,
       activeRow: $(".session-row.active")?.dataset.sessionId,
-      composerHidden: getComputedStyle(composer).display === "none",
+      composerVisible: getComputedStyle(composer).display !== "none",
+      promptVisible,
       // The child's input is a collapsed "message received" receipt, never a
       // bubble (which reads as an input field in this read-only panel).
       taskCopiesBeforeOpen: (view.textContent.match(/audit wombat/g) ?? []).length,
@@ -3383,7 +2926,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     single.taskBlock = Boolean(view.querySelector(".subagent-input .subagent-task"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "child view closed by Escape");
-    single.composerRestored = getComputedStyle(composer).display !== "none";
+    single.composerAfterClose = getComputedStyle(composer).display !== "none";
 
     // A refused dispatch has no per-task result; it must still be a failed
     // record carrying the tool's own reason, not a nameless "status unknown" row.
@@ -3407,7 +2950,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
       empty: view.querySelector(".subagent-execution .child-agent-empty")?.textContent ?? "",
       inputs: view.querySelectorAll("input, textarea, [contenteditable='true']").length,
       userBubbles: view.querySelectorAll(".message.user").length,
-      composerHidden: getComputedStyle(composer).display === "none",
+      composerVisible: getComputedStyle(composer).display !== "none",
     };
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "rejected view closed by Escape");
@@ -3430,8 +2973,9 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     await until(() => view.hidden, "rail closes the panel");
     return { ...single, rejected, tabs: agentTabs, tabHints, railOpened };
   `)
-  assert.equal(seen.composerHidden, true, "the parent composer still shows beside the read-only subagent record")
-  assert.equal(seen.composerRestored, true, "closing the record does not restore the parent composer")
+  assert.equal(seen.composerVisible, true, "opening a subagent record took the parent composer away")
+  assert.equal(seen.promptVisible, true, "the parent prompt field is not usable beside the read-only subagent record")
+  assert.equal(seen.composerAfterClose, true, "closing the record broke the parent composer")
   assert.equal(seen.taskCopiesBeforeOpen, 0, "the task is printed before its receipt is opened")
   assert.match(seen.inputRow?.label ?? "", /^收到任务消息/, "the receipt is not labelled")
   assert.equal(seen.inputRow?.expanded, "false", "the task receipt starts closed")
@@ -3450,7 +2994,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     empty: "派发失败，子会话未创建",
     inputs: 0,
     userBubbles: 0,
-    composerHidden: true,
+    composerVisible: true,
   })
   assert.deepEqual(seen.usage, {
     input: "输入 1k",
@@ -3467,8 +3011,9 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     sections: _sections,
     rejected: _rejected,
     inputRow: _inputRow,
-    composerHidden: _composerHidden,
-    composerRestored: _composerRestored,
+    composerVisible: _composerVisible,
+    promptVisible: _promptVisible,
+    composerAfterClose: _composerAfterClose,
     ...rest
   } = seen
   assert.deepEqual(rest, {
@@ -4010,6 +3555,480 @@ test("forking from the middle of a conversation branches there and leaves the pa
   // continued turn appends after that prefix, so only the prefix is compared.
   const after = await readFile(join(base, "agent", "sessions", "--e2e-fork-here--", sessionId + ".jsonl"), "utf8")
   assert.ok(after.startsWith(before), "the parent's transcript kept every original record")
+})
+
+test("session migration imports reviewed snapshots while sources continue writing", { skip }, async () => {
+  const codexRoot = join(base, "migration-codex")
+  const claudeRoot = join(base, "migration-claude", "projects")
+  await mkdir(join(codexRoot, "sessions"), { recursive: true })
+  await mkdir(join(codexRoot, "archived_sessions"), { recursive: true })
+  await mkdir(claudeRoot, { recursive: true })
+  const timestamp = "2026-10-22T00:00:00.000Z"
+  const sourcePath = join(codexRoot, "sessions", "rollout-migration.jsonl")
+  const input = [
+    { type: "session_meta", timestamp, payload: { id: "migration-codex", cwd: workspace, cli_version: "0.163.0-alpha.11", history_mode: "paginated" } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<user_query>Migration acceptance quokkabridge</user_query>" }] } },
+    { type: "response_item", timestamp, payload: { type: "function_call", call_id: "migration-tool", name: "exec_command", arguments: '{"cmd":"never execute this historical call"}' } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, input)
+  // An unreadable archive must not even produce a scan/parse failure by default.
+  await writeFile(join(codexRoot, "archived_sessions", "rollout-archive.jsonl"), "{")
+  await writeFile(join(claudeRoot, "migration-claude.jsonl"), [
+    { type: "user", uuid: "cc-user", parentUuid: null, sessionId: "migration-claude", cwd: workspace, timestamp, message: { content: "<user_query>Claude migration acceptance</user_query>" } },
+    { type: "assistant", uuid: "cc-assistant", parentUuid: "cc-user", sessionId: "migration-claude", timestamp, message: { content: [{ type: "text", text: "Historical CC reply" }] } },
+  ].map(JSON.stringify).join("\n") + "\n")
+  const scanned = await browser.run(`
+    if ($("#settingsView").hidden) $("#settingsButton").click();
+    await until(() => !$("#settingsView").hidden, "settings");
+    $("[data-settings-page='migration']").click();
+    await until(() => $("#importScan"), "migration page");
+    if ($('#importCustomToggle') || $('#importCustomPath')) throw new Error('Custom paths must be unavailable');
+    if ($('#importIncludeArchived')) throw new Error('Archive option must be absent');
+    const archived = false;
+    await until(() => $$(".session-import-row").length === 2, "two active source sessions");
+    await until(() => $$('[data-import-app] .session-import-logo').every(img => img.complete && img.naturalWidth > 0), 'platform logos loaded');
+    if (!$('[data-import-app="codex"] .session-import-logo').getAttribute('src').endsWith('/codex.svg')) throw new Error('Codex logo mismatch');
+    if (!$('[data-import-app="claude-code"] .session-import-logo').getAttribute('src').endsWith('/claudecode.svg')) throw new Error('Claude logo mismatch');
+    if ($$('[data-import-app]').some(group => group.open)) throw new Error('Applications must start collapsed');
+    if ($$('[data-import-project]').some(group => group.open)) throw new Error('Projects must start collapsed');
+    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
+    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
+    return { archived, errors: !!$(".session-import-errors"), sources: $$(".session-import-row").map(row => row.dataset.importSource).sort() };
+  `)
+  assert.deepEqual(scanned, { archived: false, errors: false, sources: ["claude-code", "codex"] })
+  const grouping = await browser.run(`
+    const groups = $$('[data-import-app]').map(node => node.dataset.importApp);
+    let codex = $('[data-import-app="codex"]');
+    const titles = $$('.session-import-section-head h1, .session-import-section-head h2').map(node => node.textContent);
+    const pathVisible = codex.textContent.includes(${JSON.stringify(sourcePath)});
+    codex.querySelector('summary').click();
+    const collapsed = !codex.open;
+    const search = $('.session-import-toolbar input[type="search"]');
+    search.value = 'rollout-migration.jsonl';
+    search.dispatchEvent(new Event('input'));
+    await until(() => $$('.session-import-row').length === 1, 'source path search');
+    codex = $('[data-import-app="codex"]');
+    const staysCollapsed = !codex.open;
+    codex.querySelector('summary').click();
+    const expanded = codex.open;
+    search.value = 'no-matching-migration-session';
+    search.dispatchEvent(new Event('input'));
+    await until(() => $$('.session-import-row').length === 0, 'empty search');
+    const emptyCards = $$('[data-import-app]').length;
+    const emptyHints = $$('.session-import-list .empty-list').length;
+    search.value = '';
+    search.dispatchEvent(new Event('input'));
+    await until(() => $$('.session-import-row').length === 2, 'cleared search');
+    return { apps: groups, titles, pathVisible, collapsed, staysCollapsed, expanded, emptyCards, emptyHints };
+  `)
+  assert.deepEqual(grouping.apps, ["codex", "claude-code"])
+  assert.equal(grouping.titles.length, 2)
+  assert.equal(grouping.pathVisible, false)
+  assert.equal(grouping.collapsed, true)
+  assert.equal(grouping.staysCollapsed, true)
+  assert.equal(grouping.expanded, true)
+  assert.equal(grouping.emptyCards, 0)
+  assert.equal(grouping.emptyHints, 0)
+  await browser.run(`
+    await until(() => $$('.session-import-report').length === 2 && !$('#importScan').disabled, 'automatic preview statistics');
+    const oldRow = $('.session-import-row');
+    $('#importScan').click();
+    await until(() => $('.session-import-row') !== oldRow && !$('#importScan').disabled, 'manual rescan completed');
+    if ($$('[data-import-app]').some(group => group.open)) throw new Error('Rescan must collapse cards');
+    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
+    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
+    for (const key of ['customRoot', 'codexRoot', 'claudeRoot', 'workbuddyRoot', 'qoderRoot']) {
+      const response = await fetch('/api/v1/session-imports/scan', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({[key]: '/must-not-scan'}) });
+      if (response.status !== 400) throw new Error('Custom path override was accepted: ' + key);
+    }
+
+    if ($('.session-import-excerpt')) throw new Error('Preview body must not appear in list');
+    if ($('#importSelectAll')) throw new Error('Global select all must be absent');
+    const appOpen = $('[data-import-app="codex"]').open;
+    $('[data-import-select="codex"]').click();
+    await until(() => $('[data-import-source="codex"] input[type="checkbox"]').checked, 'app selected');
+    if ($('[data-import-select="codex"]').type !== 'checkbox' || $('[data-import-app="codex"]').open !== appOpen) throw new Error('Checkbox must not toggle application folding');
+    const selectedRow = $('[data-import-source="codex"]');
+    const unselectedRow = $('[data-import-source="claude-code"]');
+    await until(() => getComputedStyle(selectedRow).backgroundColor !== getComputedStyle(unselectedRow).backgroundColor, 'selected row highlight');
+    if (getComputedStyle($('.session-import-toolbar .search-input')).borderTopStyle !== 'solid') throw new Error('Search input has no border');
+    if ($('[data-import-source="claude-code"] input[type="checkbox"]').checked) throw new Error('App select leaked');
+    const projectSelect = $('[data-import-app="claude-code"] .session-import-select-group[data-import-select^="claude-code:"]');
+    const projectOpen = projectSelect.closest('details').open;
+    projectSelect.click();
+    await until(() => $('[data-import-source="claude-code"] input[type="checkbox"]').checked, 'project selected');
+    if (projectSelect.type !== 'checkbox' || projectSelect.closest('details').open !== projectOpen) throw new Error('Project checkbox must not toggle folding');
+    if ($('#importConfirm') || !$('[data-import-app="codex"] > summary [data-import-confirm="codex"]')) throw new Error('Import must be platform-scoped');
+    if ($('.session-import-row .session-import-path')) throw new Error('Session paths visible');
+    if ($('[data-import-project] summary .session-import-project-path')) throw new Error('Project path must be hidden');
+    if (!/已选.*1|1.*selected/i.test($('[data-import-app="codex"] > summary').textContent)) throw new Error('App selected count missing');
+    if (!/已选.*1|1.*selected/i.test($('[data-import-app="claude-code"] [data-import-project] > summary').textContent)) throw new Error('Project selected count missing');
+    if ($('[data-import-app="codex"] input:not([type="checkbox"])')) throw new Error('Scanned path must not be editable');
+    if ($('.session-import-root')) throw new Error('Source paths must be hidden');
+    await until(() => !$('[data-import-confirm="codex"]').disabled, "preview completion");
+    if ($('.session-import-target') || $('#importReviewSelected')) throw new Error('Obsolete target or review controls');
+    const button = $('[data-import-source="codex"] button');
+    button.click();
+    await until(() => $('.session-import-preview-popover'), 'floating preview');
+    await until(() => !button.disabled, 'preview check complete');
+    if (!$('.session-import-preview-popover').textContent.includes('Migration acceptance')) throw new Error('Missing preview content');
+    const panel = $('.session-import-preview-popover');
+    const rect = panel.getBoundingClientRect();
+    const top = document.elementFromPoint(Math.min(innerWidth - 1, rect.left + rect.width / 2), Math.min(innerHeight - 1, rect.top + 20));
+    if (!panel.contains(top)) throw new Error('Preview is covered by settings');
+    button.click();
+    await until(() => !$('.session-import-preview-popover'), 'closed preview');
+    return true;
+  `)
+  await browser.send("Emulation.setDeviceMetricsOverride", {
+    width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
+  })
+  try {
+    const layout = await browser.run(`
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const content = $(".settings-content");
+      const buttons = $$("[data-import-confirm]").map(node => node.getBoundingClientRect());
+      return {
+        contentWidth: content.getBoundingClientRect().width,
+        overflowing: content.scrollWidth > content.clientWidth,
+        offenders: [...content.querySelectorAll('*')].filter(node => node.getBoundingClientRect().right > innerWidth).slice(0, 12).map(node => ({class: node.className, width: node.getBoundingClientRect().width})),
+        buttonsFit: buttons.every(rect => rect.left >= 0 && rect.right <= innerWidth),
+      };
+    `)
+    assert.ok(layout.contentWidth >= 280, JSON.stringify(layout))
+    assert.equal(layout.overflowing, false, JSON.stringify(layout))
+    assert.equal(layout.buttonsFit, true)
+  } finally {
+    await browser.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
+    })
+  }
+  const updatedInput = input + [
+    { type: "event_msg", timestamp, payload: { type: "token_count", info: {} } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Unreviewed source append" }] } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, updatedInput)
+  await browser.run(`
+    $('[data-import-confirm="codex"]').click();
+    await until(() => $$('.session-import-result').length === 1 && !$('[data-import-confirm="claude-code"]').disabled, 'Codex imported separately');
+    if ($('[data-import-source="codex"]') || $('[data-import-app="codex"]')) throw new Error('Imported Codex session or empty card still appears in source list');
+    if (!$('[data-import-source="claude-code"] input').checked) throw new Error('Other platform selection was cleared');
+    $('[data-import-confirm="claude-code"]').click();
+    await until(() => $$(".session-import-result").length === 2, "completed imports");
+    if ($('.session-import-row') || $('[data-import-app]')) throw new Error('Imported sessions must exist only in history, without empty source cards');
+    await migrationScanCompleted(() => $('#importScan').click(), 'rescan with imported history');
+    if ($('.session-import-row') || $('[data-import-app]') || $$('.session-import-result').length !== 2) throw new Error('Rescan restored imported source sessions or empty cards');
+    const jobs = await (await fetch("/api/v1/session-imports")).json();
+    if (jobs.jobs.length !== 2 || jobs.jobs.some(job => job.results.length !== 1 || job.results[0].status !== 'imported')) throw new Error('Jobs must be per-platform');
+    window.migrationJob = { results: jobs.jobs.flatMap(job => job.results) };
+    const history = $$('[data-import-history-app]');
+    if (history.length !== 2 || history.some(group => group.querySelectorAll('.session-import-result').length !== 1)) {
+      throw new Error('Import history is not grouped by app');
+    }
+    if ($('.session-import-result .session-import-path')) throw new Error('History session paths visible');
+    if (history[0].open) throw new Error('Import history must start collapsed');
+    for (const group of history) group.querySelector('summary').click();
+    for (const group of $$('[data-import-history-project]')) group.querySelector('summary').click();
+    return true;
+  `)
+  const imported = await browser.run(`
+    const job = window.migrationJob;
+    const sessions = (await (await fetch("/api/v1/sessions")).json()).sessions;
+    const codex = sessions.find(session => job.results.some(result => result.sessionId === session.id) && session.name.startsWith("[codex]"));
+    if (!codex) throw new Error("Codex import missing from native sessions");
+    const snapshot = await (await fetch("/api/v1/sessions/" + codex.id)).json();
+    if (!snapshot.entries.some(entry => entry.imported)) throw new Error("Missing source provenance");
+    if (JSON.stringify(snapshot.entries).includes("Unreviewed source append")) throw new Error("Imported unreviewed content");
+    const result = job.results.find(result => result.sessionId === codex.id);
+    // Grouped history renders rows per app, so select by the imported session id, not DOM order.
+    document.querySelector('.session-import-result[data-import-result="' + codex.id + '"] button').click();
+    await until(() => $("#settingsView").hidden, "opened native import");
+    await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "imported history");
+    return { id: codex.id, hasUnknown: !!$("[data-tool-state='unknown']") };
+  `)
+  assert.equal(imported.hasUnknown, true)
+  assert.equal(await readFile(sourcePath, "utf8"), updatedInput)
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "reopened after refresh");`)
+  const search = await browser.run(`
+    const result = await (await fetch("/api/v1/search?q=quokkabridge")).json();
+    return result.hits.some(hit => hit.sessionId === ${JSON.stringify(imported.id)});
+  `)
+  assert.equal(search, true)
+  await browser.run(`
+    await migrationScanCompleted(async () => {
+      $('#settingsButton').click();
+      $('[data-settings-page="general"]').click();
+      await until(() => !$('.session-import-page'), 'general page before migration reopen');
+      $('[data-settings-page="migration"]').click();
+    }, 'migration reopened with persisted history');
+    await until(() => $$('.session-import-result').length === 2, 'persisted history rows');
+    if ($('.session-import-row') || $('[data-import-app]')) throw new Error('Reopening migration restored imported sessions or empty cards');
+    $('#settingsBack').click();
+  `)
+})
+
+test("session migration failures stay silent and preserve truthful job state", { skip }, async () => {
+  await browser.run(`
+    await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated page');
+    if ($('#settingsView').hidden) $('#settingsButton').click();
+    $('[data-settings-page="general"]').click();
+    await until(() => !$('.session-import-page'), 'previous migration unmounted');
+    const originalFetch = window.fetch;
+    const path = '/api/v1/session-imports';
+    const diagnostic = '__migration_diagnostic__';
+    const expiredId = 'migration-fixture-expired-session';
+    const createdAt = '2026-10-22T00:00:00.000Z';
+    const candidate = (id, source, title) => ({
+      id, source, title, sessionId: id, cwd: ${JSON.stringify(workspace)},
+      modified: createdAt, archived: false, version: 'fixture',
+      sourcePath: ${JSON.stringify(join(base, "mock-imports"))} + '/' + id + '.jsonl',
+    });
+    const healthy = candidate('healthy', 'codex', 'Healthy migration fixture');
+    const broken = candidate('broken', 'qoder', 'Broken migration fixture');
+    const saved = { id: 'saved', createdAt, status: 'completed', total: 1, results: [{
+      candidateId: 'saved-candidate', source: 'claude-code', title: 'Saved migration fixture',
+      status: 'imported', sessionId: expiredId,
+    }] };
+    let history = [saved];
+    let scanFailure = false;
+    let historyFailure = false;
+    let sourceErrors = true;
+    let brokenPreview = true;
+    let healthyPreviewFailure = false;
+    let startFailure = true;
+    let pollFailure = true;
+    let running;
+    const calls = { history: 0, scan: 0, previews: [], start: [], cancel: 0, poll: 0, open: 0 };
+    const leaks = new Set();
+    const inspect = (node) => {
+      if ((node.textContent ?? '').includes(diagnostic)) leaks.add('technical diagnostic entered DOM');
+    };
+    const observer = new MutationObserver(records => {
+      inspect(document.body);
+      for (const record of records) {
+        inspect(record.target);
+        for (const node of record.addedNodes) inspect(node);
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    const response = (body, status = 200) => new Response(JSON.stringify(body), {
+      status, headers: { 'content-type': 'application/json' },
+    });
+    const failure = stage => response({ error: diagnostic + stage }, 500);
+    window.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+      if (url.origin !== location.origin) return originalFetch(input, init);
+      if (url.pathname === '/api/v1/sessions/' + expiredId && method === 'GET') {
+        calls.open++;
+        return failure('open');
+      }
+      if (url.pathname !== path && !url.pathname.startsWith(path + '/')) return originalFetch(input, init);
+      if (url.pathname === path && method === 'GET') {
+        calls.history++;
+        return historyFailure ? failure('history') : response({ jobs: history });
+      }
+      if (url.pathname === path + '/scan' && method === 'POST') {
+        calls.scan++;
+        return scanFailure ? failure('scan') : response({
+          roots: { codex: '/fixture/codex', qoder: '/fixture/qoder', 'claude-code': '/fixture/claude' },
+          candidates: [healthy, broken],
+          errors: sourceErrors ? [{ source: 'claude-code', message: diagnostic + 'source' }] : [],
+        });
+      }
+      if (url.pathname === path + '/preview' && method === 'POST') {
+        const { candidateId } = JSON.parse(init.body);
+        calls.previews.push(candidateId);
+        if ((candidateId === broken.id && brokenPreview) || (candidateId === healthy.id && healthyPreviewFailure)) return failure('preview');
+        const item = candidateId === healthy.id ? healthy : broken;
+        return response({ ...item, fingerprint: 'fixture-' + item.id, messageCount: 2, toolCount: 1,
+          warnings: [{ code: 'unsupported_content', count: 73519 }], excerpt: item.title + ' preview',
+        });
+      }
+      if (url.pathname === path && method === 'POST') {
+        calls.start.push(JSON.parse(init.body));
+        if (startFailure) return failure('start');
+        running = { id: 'fixture-running', createdAt, status: 'running', total: 1, results: [] };
+        history = [running, ...history];
+        return response(running);
+      }
+      if (url.pathname === path + '/fixture-running' && method === 'DELETE') {
+        calls.cancel++;
+        return failure('cancel');
+      }
+      if (url.pathname === path + '/fixture-running' && method === 'GET') {
+        calls.poll++;
+        return pollFailure ? failure('poll') : response(running);
+      }
+      throw new Error('Unexpected migration fixture request: ' + method + ' ' + url.pathname);
+    };
+    try {
+      const painted = async () => {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      };
+      const silent = async stage => {
+        await painted();
+        inspect(document.body);
+        if (leaks.size) throw new Error(stage + ': ' + [...leaks].join(', '));
+        if ($('.session-import-error, .session-import-errors, .session-import-row-failure, .session-import-list .empty-list')) throw new Error(stage + ': diagnostic or empty-result UI remains');
+        if (!$('#errorToast').hidden) throw new Error(stage + ': unexpected error toast');
+        if ($$('.session-import-report').some(report => report.querySelectorAll('span').length !== 1)) throw new Error(stage + ': preview compatibility warnings remain');
+      };
+      const expand = () => {
+        for (const group of $$('[data-import-app], [data-import-project], [data-import-history-app], [data-import-history-project]')) group.open = true;
+      };
+      const ready = async label => {
+        await until(() => $('#importScan') && !$('#importScan').disabled, label);
+        await painted();
+      };
+      const rescan = async label => {
+        const previous = calls.history;
+        $('#importScan').click();
+        await until(() => calls.history > previous, label + ' request');
+        await ready(label);
+      };
+      const savedRemains = () => {
+        if (!$('[data-import-result="' + expiredId + '"]')) throw new Error('Successful saved history disappeared');
+      };
+      const healthyOnly = () => {
+        const rows = $$('.session-import-row');
+        if (rows.length !== 1 || rows[0].querySelector('strong').textContent !== healthy.title) throw new Error('Only the healthy candidate should be displayed');
+        if ($('[data-import-app="qoder"], [data-import-app="claude-code"]')) throw new Error('Failed or empty source card remains');
+        if (rows[0].querySelector('input').disabled) throw new Error('Healthy candidate is not selectable');
+      };
+      $('[data-settings-page="migration"]').click();
+      await until(() => calls.scan === 1 && calls.previews.length === 2, 'injected scan and previews');
+      await ready('initial scan complete');
+      await silent('per-source scan errors and partial preview failure');
+      healthyOnly();
+      savedRemains();
+      expand();
+      const search = $('.session-import-toolbar input[type="search"]');
+      search.value = 'no-matching-fixture';
+      search.dispatchEvent(new Event('input'));
+      await until(() => !$('.session-import-row'), 'no search matches');
+      if ($('[data-import-app]')) throw new Error('Empty search left an application card');
+      await silent('empty search');
+      savedRemains();
+      search.value = '';
+      search.dispatchEvent(new Event('input'));
+      await until(() => $('.session-import-row'), 'healthy search restored');
+      healthyOnly();
+      sourceErrors = false;
+      brokenPreview = false;
+      await rescan('successful rescan recovery');
+      if ($$('.session-import-row').length !== 2) throw new Error('Rescan did not restore recovered candidate');
+      await silent('recovered preview');
+      expand();
+      const row = $$('.session-import-row').find(node => node.querySelector('strong').textContent === healthy.title);
+      row.querySelector('input').click();
+      row.querySelector('button').click();
+      await until(() => $('.session-import-preview-popover') && !row.querySelector('button').disabled, 'healthy preview opened');
+      row.querySelector('button').click();
+      await until(() => !$('.session-import-preview-popover'), 'healthy preview closed');
+      healthyPreviewFailure = true;
+      row.querySelector('button').click();
+      await until(() => !$('#importScan').disabled && !row.isConnected, 'previously selected preview removed after failure');
+      if ($('.session-import-preview-popover')) throw new Error('Failed preview left stale content open');
+      if ($('[data-import-confirm="codex"]')) throw new Error('Failed selected candidate can still be submitted');
+      await silent('selected preview failure');
+      healthyPreviewFailure = false;
+      await rescan('restore selected preview');
+      saved.results[0].warning = diagnostic + 'saved-warning';
+      const failedHistory = { id: 'persisted-failed', createdAt, status: 'completed', total: 1, results: [{
+        candidateId: 'persisted-failed-candidate', source: 'qoder', title: 'Failed saved fixture',
+        status: 'failed', error: diagnostic + 'result-error', warning: diagnostic + 'result-warning',
+      }] };
+      history = [saved, failedHistory];
+      await rescan('persistent result diagnostics');
+      const failedStatus = () => {
+        const result = $('[data-import-result="persisted-failed-candidate"]');
+        if (!result || !/未导入|Not imported/i.test(result.textContent)) throw new Error('Real failed history must remain as Not imported');
+        if (result.querySelector('button')) throw new Error('Failed history must not offer a successful session');
+      };
+      failedStatus();
+      await silent('persistent result error and warning');
+      scanFailure = true;
+      await rescan('whole scan failure');
+      if ($('.session-import-row, [data-import-app]')) throw new Error('Failed scan retained source candidates or empty cards');
+      savedRemains();
+      failedStatus();
+      await silent('whole scan failure');
+      scanFailure = false;
+      await rescan('scan recovery');
+      if ($$('.session-import-row').length !== 2) throw new Error('Healthy candidates did not recover after scan failure');
+      historyFailure = true;
+      const scansBeforeHistoryFailure = calls.scan;
+      await rescan('history GET failure');
+      if (calls.scan !== scansBeforeHistoryFailure) throw new Error('Scan continued after failed history read');
+      if ($('.session-import-row, [data-import-app]')) throw new Error('Failed history read retained candidates');
+      savedRemains();
+      failedStatus();
+      await silent('history GET failure');
+      historyFailure = false;
+      await rescan('history recovery');
+      if ($$('.session-import-row').length !== 2) throw new Error('History recovery lost healthy candidates');
+      expand();
+      $('[data-import-select="codex"]').click();
+      await until(() => !$('[data-import-confirm="codex"]').disabled, 'healthy selection ready');
+      const resultsBeforeStart = $$('.session-import-result').length;
+      $('[data-import-confirm="codex"]').click();
+      await until(() => calls.start.length === 1 && !$('[data-import-confirm="codex"]').disabled, 'start POST failure settled');
+      if ($$('.session-import-result').length !== resultsBeforeStart) throw new Error('Failed submission fabricated an import result');
+      if (!$('[data-import-source="codex"] input').checked) throw new Error('Failed submission discarded retryable selection');
+      if ($('.session-import-history > header button')) throw new Error('Failed submission fabricated a running job');
+      if (calls.start[0].selections.length !== 1 || calls.start[0].selections[0].candidateId !== healthy.id) throw new Error('Submission included an unselected or failed candidate');
+      await silent('start POST failure');
+      startFailure = false;
+      $('[data-import-confirm="codex"]').click();
+      await until(() => calls.start.length === 2 && calls.poll >= 2, 'running job and failed poll retry');
+      const stillRunning = () => {
+        if (!$('#importScan').disabled || !$('.session-import-history > header button')) throw new Error('Uncertain running job became completed or cancelled');
+        if (!/正在导入|Importing/i.test($('.session-import-history > .settings-page-desc').textContent)) throw new Error('Last known running status was lost');
+        if ($$('.session-import-result').length !== resultsBeforeStart) throw new Error('Uncertain running job fabricated a result');
+        savedRemains();
+        failedStatus();
+      };
+      stillRunning();
+      await silent('poll GET failure');
+      const pollsBeforeCancel = calls.poll;
+      $('.session-import-history > header button').click();
+      await until(() => calls.cancel === 1 && calls.poll > pollsBeforeCancel, 'cancel DELETE failure and subsequent poll');
+      stillRunning();
+      if (calls.start.length !== 2 || calls.cancel !== 1) throw new Error('Failed mutation was automatically retried');
+      await silent('cancel DELETE failure');
+      running = { ...running, status: 'completed', results: [{
+        candidateId: healthy.id, source: healthy.source, title: healthy.title, cwd: healthy.cwd,
+        status: 'failed', error: diagnostic + 'job-result-error', warning: diagnostic + 'job-result-warning',
+      }] };
+      history = [running, ...history.filter(job => job.id !== running.id)];
+      pollFailure = false;
+      await until(() => !$('#importScan').disabled && $('[data-import-result="healthy"]'), 'poll recovery with real failed result');
+      const failedImport = $('[data-import-result="healthy"]');
+      if (!/未导入|Not imported/i.test(failedImport.textContent) || failedImport.querySelector('button')) throw new Error('Failed job result masquerades as an imported session');
+      if ($('.session-import-history > header button')) throw new Error('Completed job still offers cancellation');
+      if (!$('[data-import-source="codex"] input').checked) throw new Error('Failed result lost retryable selection');
+      if (calls.start.length !== 2 || calls.cancel !== 1) throw new Error('Mutation retried during poll recovery');
+      await silent('poll recovery and real failed result');
+      await rescan('rescan after failed import');
+      if ($$('.session-import-row').length !== 2) throw new Error('Failed import incorrectly hid healthy candidate as imported');
+      savedRemains();
+      expand();
+      $('[data-import-result="' + expiredId + '"] button').click();
+      await until(() => calls.open === 1 && $('#settingsView').hidden, 'failed history session open');
+      await silent('invalid imported session open');
+    } finally {
+      try {
+        $('[data-settings-page="general"]').click();
+        await until(() => !$('.session-import-page'), 'migration fixture unmounted');
+      } finally {
+        observer.disconnect();
+        window.fetch = originalFetch;
+        if (!$('#settingsView').hidden) $('#settingsBack').click();
+      }
+    }
+  `)
 })
 
 test("WorkBuddy and Qoder sessions are identified and imported through the migration UI", { skip }, async () => {

@@ -263,6 +263,12 @@ export interface SessionSnapshot extends SessionSummary {
 	 */
 	readonly lastRunAborted?: boolean;
 	/**
+	 * The newest turn was cut off rather than finished (runtime.ts
+	 * `hasInterruptedTurn`): a prompt with no reply after a crash, or a reply the
+	 * kernel recorded as aborted. Derived from entries, so it survives a restart.
+	 */
+	readonly interruptedTurn?: boolean;
+	/**
 	 * The host's newest published revision when this snapshot was serialized
 	 * (runtime.ts `revision`). A read answered after a newer event describes an
 	 * older state and must not be painted over it.
@@ -729,6 +735,13 @@ export interface BrowserLoginState {
 
 export interface BootstrapPayload {
 	readonly cwd: string;
+	/**
+	 * Where a new conversation starts when no workspace is on offer: the launch
+	 * folder, or the home folder when the launch folder was removed.
+	 */
+	readonly defaultCwd?: string;
+	/** `defaultCwd` is the home fallback because the launch folder was removed. */
+	readonly defaultCwdFallback?: boolean;
 	readonly directoryPicker?: string;
 	readonly login?: LoginReport | null;
 	/** A custom models.json model runs without a Step credential, so no sign-in gate is needed. */

@@ -224,7 +224,12 @@ test("a file is classified as text, image, binary or too large", async () => {
 		assert.equal(big.kind, "too-large");
 		assert.equal("content" in big, false);
 		// An image over the raw limit is "too large", not a preview that would
-		// render as a broken image: the client shows the reason instead.
+		// render as a broken image: the client shows the reason instead. The
+		// limit is exactly 10 MiB — the size the page prints as "10.0 MB" — and
+		// a file of exactly that size still previews.
+		assert.equal(MAX_IMAGE_BYTES, 10 * 1024 * 1024);
+		await writeFile(join(root, "at-limit.png"), Buffer.alloc(MAX_IMAGE_BYTES, 0x50));
+		assert.equal((await readWorkspaceFile(root, "at-limit.png")).kind, "image");
 		await writeFile(join(root, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1, 0x50));
 		const huge = await readWorkspaceFile(root, "huge.png");
 		assert.equal(huge.kind, "too-large");

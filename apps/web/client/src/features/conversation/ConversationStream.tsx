@@ -108,6 +108,9 @@ export function ConversationStream() {
 	// Shown with a sent message's timestamp; the transcript stores no per-message model.
 	// An interrupted turn has no finished reply, so it gets no model and no time.
 	const lastRunAborted = useAppStore((state) => state.current?.lastRunAborted === true);
+	// The newest turn was cut off (a stopped run, or a host that exited mid-stream).
+	// The host derives it from the recorded entries, so a reopened session says it too.
+	const interrupted = useAppStore((state) => state.current?.interruptedTurn === true);
 	const reveal = useAppStore((state) => state.ui.revealEntry);
 	const running = status === "running";
 	const busy = running || status === "waiting";
@@ -340,6 +343,11 @@ export function ConversationStream() {
 							);
 						})}
 						{compacting ? <CompactionRunningRow /> : null}
+						{interrupted ? (
+							<div className="interrupted-row">
+								<span className="interrupted-label">{t("interruptedTurn")}</span>
+							</div>
+						) : null}
 						{steering.map((message, index) => (
 							<MessageItem
 								// Kernel texts carry no id; equal texts are interchangeable here.

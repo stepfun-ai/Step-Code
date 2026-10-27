@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { canonicalWorkspacePath, WorkspaceRegistry } from "../src/workspaces.ts";
+import { canonicalWorkspacePath, resolveDefaultWorkspace, WorkspaceRegistry } from "../src/workspaces.ts";
 import { WebSessionStore } from "../src/runtime.ts";
 
 test("workspaces persist across registry instances and can be removed", async () => {
@@ -30,6 +30,31 @@ test("workspaces persist across registry instances and can be removed", async ()
 		assert.equal(await reopened.remove(folder), true);
 		assert.equal(await reopened.remove(folder), true);
 		assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { workspaces: [], removedWorkspaces: [folder] });
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a removed launch folder makes the home folder the default workspace", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-workspaces-")));
+	try {
+		const registry = new WorkspaceRegistry(join(base, "agent", "web-workspaces.json"));
+		const launch = join(base, "project");
+		const home = join(base, "home");
+		await mkdir(launch);
+		await mkdir(home);
+
+		// A usable launch folder is the default: the user opened it.
+		assert.deepEqual(await resolveDefaultWorkspace(registry, launch, home), { path: launch, fallback: false });
+
+		// Removing it from navigation must not leave it as the target for new
+		// work; the host reports the home fallback instead.
+		await registry.remove(launch);
+		assert.deepEqual(await resolveDefaultWorkspace(registry, launch, home), { path: home, fallback: true });
+
+		// Re-adding the folder clears the removal, so it is the default again.
+		await registry.add(launch);
+		assert.deepEqual(await resolveDefaultWorkspace(registry, launch, home), { path: launch, fallback: false });
 	} finally {
 		await rm(base, { recursive: true, force: true });
 	}

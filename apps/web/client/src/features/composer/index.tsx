@@ -44,6 +44,7 @@ import {
 	packageSessionContext,
 	type StagedPick,
 	sendMessage,
+	stageCommandAtSlashToken,
 	stageCommandLead,
 	syncStagedModeLead,
 	turnActive,
@@ -67,8 +68,11 @@ import {
 	promptBodyText,
 	promptFileQuery,
 	promptFiles,
+	promptMessageText,
+	promptSlashToken,
 	promptText,
 	removeModeLead,
+	removeSlashToken,
 	replaceFileQuery,
 	restorePrompt,
 	setPromptText,
@@ -290,8 +294,11 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 				if (value.trim()) setPreviewSource(value);
 				else closePreview();
 			}
-			// Commands stack: a `/word` typed after the staged lead chips opens the menu again.
-			const next = slashQuery(prompt.current ? promptBodyText(prompt.current) : value);
+			// A `/word` at the caret opens the menu wherever it is typed: at the start,
+			// after the staged lead chips (commands stack), or after a space mid-text.
+			// Without a caret in the editor (a programmatic fill) the whole body decides.
+			const token = prompt.current ? promptSlashToken(prompt.current) : null;
+			const next = token ? token.query : slashQuery(prompt.current ? promptBodyText(prompt.current) : value);
 			setQuery(next);
 			const view = getState().ui.slashMenu;
 			if (next !== null) setUi({ slashMenu: "commands", fileCompletionOpen: false });
@@ -346,30 +353,46 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 			setPathQuery(null);
 			lastPathQuery.current = null;
 			setUi({ fileCompletionOpen: false });
-			if (item.kind === "mcp") {
-				// A status view, not a prompt: nothing is sent.
-				setPromptText(editor, "");
-				setHasText(false);
-				setUi({ slashMenu: "mcp" });
-				clearModes();
-			} else if (item.kind === "feedback") {
-				// The product's own feedback dialog, which POSTs to the same kernel
-				// submission the `/feedback` command uses. Nothing is sent as a prompt.
-				setPromptText(editor, "");
-				setHasText(false);
-				setUi({ slashMenu: null });
-				clearModes();
-				openFeedback();
+			// The `/word` being completed, at the caret; without one (a programmatic
+			// fill) the body as a whole was the query.
+			const token = promptSlashToken(editor);
+			/** Remove only the typed `/word`; true when the rest of the prompt keeps text. */
+			const dropTypedWord = (): boolean => {
+				if (!token || !removeSlashToken(editor, token)) clearPromptBody(editor);
+				return Boolean(promptBodyText(editor).trim());
+			};
+			if (item.kind === "mcp" || item.kind === "feedback") {
+				// A status view or the product's own feedback dialog: nothing is sent.
+				// What the user wrote around a mid-text `/mcp` stays; a prompt that was
+				// only the command is cleared, as before.
+				if (!dropTypedWord()) {
+					setPromptText(editor, "");
+					clearModes();
+				}
+				syncHasText();
+				setUi({ slashMenu: item.kind === "mcp" ? "mcp" : null });
+				if (item.kind === "feedback") openFeedback();
 			} else {
 				// The kernel runs `/<command> [args]`, expands a prompt command
 				// `/<name> [args]` into its template and `/skill:<name> [request]` into
-				// the skill's instructions on send. The pick becomes the prompt's
-				// lead chip — the same chip typing that command produces — appended after
-				// the leads already staged; only the typed `/word` goes.
-				clearPromptBody(editor);
-				stageCommandLead(editor, item.kind === "skill" ? `/skill:${item.key}` : `/${item.key}`);
+				// the skill's instructions on send — only at the start of the message.
+				// A `/word` typed mid-text after a leading command stays where it was
+				// typed (only the first command runs, so moving it would only reorder
+				// the words); otherwise the pick becomes the prompt's lead chip, and the
+				// text typed before it (as in `fix /commit`) becomes its arguments.
+				const command = item.kind === "skill" ? `/skill:${item.key}` : `/${item.key}`;
+				const placed = token ? stageCommandAtSlashToken(editor, token, command) : false;
+				if (!placed) {
+					clearPromptBody(editor);
+					stageCommandLead(editor, command);
+				}
 				syncHasText();
 				setUi({ slashMenu: null });
+				// The caret stays just after the chip it placed, where typing continues.
+				if (placed) {
+					editor.focus();
+					return;
+				}
 			}
 			editor.focus();
 			placeCaretAtEnd(editor);
@@ -386,7 +409,8 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 		try {
 			// A chip has its upload id only once its upload settles; a failed one is removed.
 			await waitForUploads();
-			const text = promptText(editor).trim();
+			// A command chip placed mid-text is sent first, where the kernel runs it.
+			const text = promptMessageText(editor).trim();
 			const files = promptFiles(editor);
 			if (!text) return;
 			// A send starts from the draft, not from its render: the preview goes either way.

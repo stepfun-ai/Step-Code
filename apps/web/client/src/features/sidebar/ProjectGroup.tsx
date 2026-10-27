@@ -21,10 +21,24 @@ export interface ProjectGroupProps {
 	readonly filteredOut: boolean;
 	/** The group lists the draft placeholder row of a just-started conversation first. */
 	readonly draft?: boolean;
+	/**
+	 * This group is the folder new work falls back to, not a workspace the user
+	 * registered. It is named "默认项目" and cannot be removed: removal would only
+	 * move the fallback, never the work already recorded here.
+	 */
+	readonly defaultProject?: boolean;
 }
 
 /** `section.project-group[data-cwd]` (legacy `renderSessionLists`, 848-885). */
-export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut, draft = false }: ProjectGroupProps) {
+export function ProjectGroup({
+	cwd,
+	sessions,
+	folded,
+	hiddenIds,
+	filteredOut,
+	draft = false,
+	defaultProject = false,
+}: ProjectGroupProps) {
 	const t = useT();
 	const menuOpen = useAppStore((state) => state.ui.workspaceMenu?.cwd === cwd);
 	const action = (run: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
@@ -43,39 +57,43 @@ export function ProjectGroup({ cwd, sessions, folded, hiddenIds, filteredOut, dr
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents: see above. */}
 			<div className="project-header" onClick={() => toggleProjectFolded(cwd)}>
 				<Icon {...LEGACY_ICONS.folder} />
-				<span className="project-name">{basename(cwd)}</span>
+				<span className="project-name">{defaultProject ? t("defaultProject") : basename(cwd)}</span>
 				<span className={cx("project-actions", menuOpen && "menu-open")}>
 					{/* Escape belongs to the shell's chain, which also refocuses this button. */}
-					<Popover
-						bare
-						className="sidebar-menu"
-						id="workspaceMenu"
-						role="menu"
-						aria-label={t("moreActions")}
-						placement="bottom-end"
-						open={menuOpen}
-						onClose={() => closeWorkspaceMenu()}
-						dismissOn="click"
-						closeOnEscape={false}
-						content={<WorkspaceMenu cwd={cwd} />}
-					>
-						{/* No hint while its menu is open: the menu already says what the button did. */}
-						<Tooltip content={menuOpen ? null : t("moreActions")}>
-							<IconButton
-								className="project-action workspace-menu-button"
-								aria-label={t("moreActions")}
-								aria-haspopup="menu"
-								aria-expanded={menuOpen}
-								aria-controls="workspaceMenu"
-								onClick={(event) => {
-									event.stopPropagation();
-									toggleWorkspaceMenu(cwd);
-								}}
-							>
-								<Icon {...LEGACY_ICONS.more} />
-							</IconButton>
-						</Tooltip>
-					</Popover>
+					{/* The fallback folder is not a registered workspace, so there is nothing
+					    to remove; its other actions stay. */}
+					{defaultProject ? null : (
+						<Popover
+							bare
+							className="sidebar-menu"
+							id="workspaceMenu"
+							role="menu"
+							aria-label={t("moreActions")}
+							placement="bottom-end"
+							open={menuOpen}
+							onClose={() => closeWorkspaceMenu()}
+							dismissOn="click"
+							closeOnEscape={false}
+							content={<WorkspaceMenu cwd={cwd} />}
+						>
+							{/* No hint while its menu is open: the menu already says what the button did. */}
+							<Tooltip content={menuOpen ? null : t("moreActions")}>
+								<IconButton
+									className="project-action workspace-menu-button"
+									aria-label={t("moreActions")}
+									aria-haspopup="menu"
+									aria-expanded={menuOpen}
+									aria-controls="workspaceMenu"
+									onClick={(event) => {
+										event.stopPropagation();
+										toggleWorkspaceMenu(cwd);
+									}}
+								>
+									<Icon {...LEGACY_ICONS.more} />
+								</IconButton>
+							</Tooltip>
+						</Popover>
+					)}
 					<Tooltip content={t("fileTree")}>
 						<IconButton
 							className="project-action tree-button"

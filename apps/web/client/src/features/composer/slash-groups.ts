@@ -49,6 +49,31 @@ export function slashQuery(value: string): string | null {
 	return match ? match[1] : null;
 }
 
+/** The `/word` being typed at the caret; offsets are UTF-16 into the prompt's projected text. */
+export interface SlashToken {
+	readonly start: number;
+	/** End of the whole word, including what follows the caret inside it. */
+	readonly end: number;
+	/** What was typed after the slash, up to the caret: what the menu matches. */
+	readonly query: string;
+}
+
+/**
+ * The `/word` at a collapsed caret, wherever it sits in the prompt: the slash
+ * must start the text or follow whitespace, so `a/b`, `and/or` and URLs never
+ * open the menu, and a second slash (`/usr/bin`) ends the match. A chip
+ * (`\ufffc` in the projection) is neither part of a word nor a separator.
+ */
+export function slashTokenAt(text: string, cursor: number): SlashToken | null {
+	if (cursor < 0 || cursor > text.length) return null;
+	const match = /(?:^|\s)\/([^\s/\ufffc]*)$/.exec(text.slice(0, cursor));
+	if (!match) return null;
+	const start = cursor - match[1].length - 1;
+	let end = cursor;
+	while (end < text.length && !/[\s/\ufffc]/.test(text[end])) end += 1;
+	return { start, end, query: match[1] };
+}
+
 /** The part of a slash query the items are matched against. */
 export function matchText(query: string): string {
 	return query.replace(/^skill:/i, "");

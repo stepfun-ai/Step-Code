@@ -134,9 +134,9 @@ test("a fork returns the new session id, and that id resolves", { timeout: 120_0
 		assert.equal(store.statuses().some((entry) => entry.id === parentId), false);
 		assert.equal(reopened.snapshot().name, "Alpha_fork");
 
-		// Forking the fork appends again rather than counting or replacing. A
-		// branched session has no file until its first reply, and the kernel
-		// refuses to branch one, so continue the child first.
+		// Forking the fork appends again rather than counting or replacing. The
+		// implicit fork branches *before* the newest prompt, so an untouched branch
+		// has nothing to keep; continue the child first.
 		await reopened.send("hello again");
 		await waitFor(() => !reopened.isBusy());
 		const second = await reopened.fork();

@@ -15,6 +15,7 @@ import type { AttachedFile } from "../../lib/attached-files";
 import type { UploadedFile } from "../../state/types";
 import { type FileCompletionText, type FileQuery, fileQuery, sameFileQuery } from "./file-completion";
 import type { PlannedEdit, PromptEditRun, PromptRange } from "./markdown-format";
+import { type SlashToken, slashTokenAt } from "./slash-groups";
 
 const CHIP_CLASS = "prompt-file";
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -64,6 +65,28 @@ function serialize(parent: Node, withLeads = true): string {
 /** The prompt as message text: chips become their file names. */
 export function promptText(root: HTMLElement): string {
 	return serialize(root);
+}
+
+/**
+ * The prompt as the message to send. A command chip sits where its `/word` was
+ * typed, but the kernel runs only a command that leads the message: when no
+ * chip leads it, the first command chip moves to the front (with one of the
+ * spaces around it), so `111 /skill:x` is sent as `/skill:x 111` and the skill
+ * runs with the text as its request. The editor's order is left as typed.
+ */
+export function promptMessageText(root: HTMLElement): string {
+	if (leadingChips(root).length > 0) return serialize(root);
+	const copy = root.cloneNode(true) as HTMLElement;
+	const chip = copy.querySelector<HTMLElement>(`.${COMMAND_LEAD_CLASS}`);
+	if (!chip) return serialize(root);
+	const command = chip.dataset.text ?? "";
+	const after = chip.nextSibling;
+	const before = chip.previousSibling;
+	if (after instanceof Text && /^[\s\u00a0]/.test(after.data)) after.data = after.data.slice(1);
+	else if (before instanceof Text && /[\s\u00a0]$/.test(before.data)) before.data = before.data.slice(0, -1);
+	chip.remove();
+	const rest = serialize(copy).replace(/^\s+/, "");
+	return rest ? `${command} ${rest}` : command;
 }
 
 /**
@@ -181,6 +204,40 @@ export function replaceFileQuery(root: HTMLElement, expected: FileQuery, complet
 	}
 	// The insertion's input precedes the caret adjustment for a quoted directory drill.
 	root.dispatchEvent(new Event("input", { bubbles: true }));
+	return true;
+}
+
+/** The `/word` at the actual collapsed caret inside the editor (see `slashTokenAt`), or null. */
+export function promptSlashToken(root: HTMLElement): SlashToken | null {
+	const projection = completionProjection(root);
+	return projection.cursor === null ? null : slashTokenAt(projection.text, projection.cursor);
+}
+
+/**
+ * Remove only the still-active `/word` — the command it named becomes a lead
+ * chip — keeping every other word, chip and line around it. One space goes
+ * with it when it sat between two words, so `fix /commit it` leaves
+ * `fix it`, not a double space. A moved caret or edited word rejects it.
+ */
+export function removeSlashToken(root: HTMLElement, expected: SlashToken): boolean {
+	const projection = completionProjection(root);
+	if (projection.cursor === null) return false;
+	const current = slashTokenAt(projection.text, projection.cursor);
+	if (!current || current.start !== expected.start || current.end !== expected.end) return false;
+	const before = projection.text[current.start - 1];
+	const end =
+		projection.text[current.end] === " " && (before === undefined || /\s/.test(before))
+			? current.end + 1
+			: current.end;
+	const start = projectionPoint(projection, current.start);
+	const stop = projectionPoint(projection, end);
+	if (!start || !stop) return false;
+	const range = document.createRange();
+	range.setStart(start.node, start.offset);
+	range.setEnd(stop.node, stop.offset);
+	range.deleteContents();
+	range.collapse(true);
+	select(range);
 	return true;
 }
 
@@ -578,13 +635,27 @@ function buildLeadChip(
  * after setting one — and carries its own space after.
  */
 function appendLeadChip(root: HTMLElement, chip: HTMLElement): void {
-	const leads = root.querySelectorAll(`.${MODE_LEAD_CLASS}, .${COMMAND_LEAD_CLASS}`);
-	const last = leads.length ? (leads[leads.length - 1] as HTMLElement) : null;
+	const leads = leadingChips(root);
+	const last = leads.at(-1) ?? null;
 	let anchor = last ? last.nextSibling : (root.firstChild ?? null);
 	if (last && anchor?.textContent === " ") anchor = anchor.nextSibling ?? null;
 	if (last && anchor === last.nextSibling) root.insertBefore(document.createTextNode(" "), anchor);
 	root.insertBefore(chip, anchor);
 	root.insertBefore(document.createTextNode(" "), chip.nextSibling);
+}
+
+/**
+ * The lead chips that start the prompt, in order: the run of chips before the
+ * first text. A command chip placed mid-text (`replaceSlashTokenWithCommand`)
+ * is not part of it, so a later lead still stacks at the front.
+ */
+function leadingChips(root: HTMLElement): HTMLElement[] {
+	const leads: HTMLElement[] = [];
+	for (const child of root.childNodes) {
+		if (isLeadChip(child)) leads.push(child as HTMLElement);
+		else if (!(child instanceof Text && !child.data.replace(/\u00a0/g, " ").trim())) break;
+	}
+	return leads;
 }
 
 /** Park the caret just after `chip`'s trailing space, where typing continues, when the editor holds focus. */
@@ -638,6 +709,41 @@ export interface CommandLead {
  */
 export function insertCommandLead(root: HTMLElement, lead: CommandLead): void {
 	insertLeadChip(root, COMMAND_LEAD_CLASS, undefined, lead.icon, lead.command, lead.command);
+}
+
+/**
+ * Turn the still-active `/word` into `lead`'s command chip where it was typed,
+ * keeping the words around it in order (`111 /` -> `111 /skill:x`,
+ * `/skill:a 和 /` -> `/skill:a 和 /skill:b`). The chip serializes back to its
+ * command text in place; `promptMessageText` moves the first one to the front
+ * of a sent message that no command leads. A moved caret or edited word
+ * rejects it.
+ */
+export function replaceSlashTokenWithCommand(root: HTMLElement, expected: SlashToken, lead: CommandLead): boolean {
+	const projection = completionProjection(root);
+	if (projection.cursor === null) return false;
+	const current = slashTokenAt(projection.text, projection.cursor);
+	if (!current || current.start !== expected.start || current.end !== expected.end) return false;
+	const start = projectionPoint(projection, current.start);
+	const stop = projectionPoint(projection, current.end);
+	if (!start || !stop) return false;
+	const range = document.createRange();
+	range.setStart(start.node, start.offset);
+	range.setEnd(stop.node, stop.offset);
+	range.deleteContents();
+	const chip = buildLeadChip(COMMAND_LEAD_CLASS, undefined, lead.icon, lead.command, lead.command);
+	range.insertNode(chip);
+	// The chip carries a separating space after it, unless the text already has one.
+	const next = chip.nextSibling;
+	const spaced = next instanceof Text && /^[\s\u00a0]/.test(next.data);
+	const space = spaced ? next : document.createTextNode(" ");
+	if (!spaced) chip.after(space);
+	const caret = document.createRange();
+	caret.setStart(space, 1);
+	caret.collapse(true);
+	select(caret);
+	refreshPlaceholderHint(root);
+	return true;
 }
 
 /**

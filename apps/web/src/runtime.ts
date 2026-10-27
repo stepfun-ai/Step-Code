@@ -103,7 +103,7 @@ import {
 } from "./prompt-commands.ts";
 import { RetryTracker } from "./retry-state.ts";
 import { SelectionBroker, type SelectionEvent, type SelectionRequest, selectionSelect } from "./selection.ts";
-import { generateSessionTitle, sessionTitleInput } from "./session-title.ts";
+import { generateSessionTitle, type SlashCommandKind, sessionTitleInput } from "./session-title.ts";
 import { type WebSkill, webSkills } from "./skills.ts";
 import { resolveSubagentCliPath } from "./subagent-cli.ts";
 import { projectSubagentNotification } from "./subagent-notification.ts";
@@ -613,6 +613,9 @@ function isReservedCommandName(name: string): boolean {
 	return ECHOED_COMMANDS.has(name) || name === "mcp" || name === "btw" || name === "feedback";
 }
 
+/** Commands `AgentSession` handles itself, before any extension command (`_handleLiveContextCommand`). */
+const LIVE_CONTEXT_COMMANDS: ReadonlySet<string> = new Set(["clm", "clm-compact"]);
+
 /** Same provider and model id, which is all a resolved model needs to match. */
 function modelsMatch(left: { provider: string; id: string }, right: { provider: string; id: string }): boolean {
 	return left.provider === right.provider && left.id === right.id;
@@ -672,6 +675,37 @@ function commandEchoOf(entry: SessionEntry): string | undefined {
 	if (entry.type !== "custom" || entry.customType !== COMMAND_ECHO_TYPE) return undefined;
 	const text = (entry.data as { text?: unknown } | undefined)?.text;
 	return typeof text === "string" && text ? text : undefined;
+}
+
+/**
+ * Whether the newest turn on this branch was cut off rather than finished.
+ *
+ * A host that stops mid-turn now records the partial reply as `aborted`, and a
+ * crash leaves the branch ending in something only an unfinished turn produces.
+ * Both used to read as a conversation that simply ended early; this lets the
+ * page say a run was interrupted. Derived from entries so the answer survives a
+ * restart, and false while a turn runs, where an unanswered prompt is just the
+ * turn still starting.
+ *
+ * The loop always follows a tool batch with another assistant reply, so a branch
+ * whose newest message is a tool result, or an assistant that stopped with tool
+ * calls, was cut off during tool work — a stopped run records `aborted` there,
+ * but a killed host leaves exactly this shape. Errors and truncated replies are
+ * not "interrupted": they are rendered as what they are.
+ */
+export function hasInterruptedTurn(entries: readonly SessionEntry[], running: boolean): boolean {
+	if (running) return false;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry?.type !== "message") continue;
+		// Imported tails are source snapshots, not evidence of a stopped native turn.
+		if (entry.imported) return false;
+		const message = entry.message;
+		if (message.role === "user") return true;
+		if (message.role === "toolResult") return true;
+		if (message.role === "assistant") return message.stopReason === "aborted" || message.stopReason === "toolUse";
+	}
+	return false;
 }
 
 /**
@@ -765,6 +799,23 @@ export class WebSession {
 	private status: WebSessionStatus = "idle";
 	private readonly closeListeners = new Set<() => void>();
 	private unread = false;
+	/**
+	 * Set once `close` starts. Anything that would start work must check it: a
+	 * queued dispatch or a request already parsed when shutdown began would
+	 * otherwise start a turn on a disposed session, spending a model call whose
+	 * reply has nowhere to land.
+	 */
+	private closing = false;
+	/**
+	 * Prompts accepted but not yet running.
+	 *
+	 * The kernel only starts a run after its pre-run work (auth, compaction
+	 * check, `before_agent_start` hooks such as MCP reconciliation), and until
+	 * then neither its run state nor this session's status says "busy". A
+	 * shutdown in that window would dispose the session with the prompt still in
+	 * memory, so the count is part of `isBusy` and shutdown waits for the run.
+	 */
+	private pendingPrompts = 0;
 	/** Pages following this session's event stream right now; a run that ends in front of one is already seen. */
 	private viewers = 0;
 	private unsubscribeSession?: () => void;
@@ -1280,9 +1331,9 @@ export class WebSession {
 		return () => this.closeListeners.delete(listener);
 	}
 
-	/** A turn is running or waiting on the user; closing now would cut it off. */
+	/** A turn is running, waiting on the user, or accepted and still being set up. */
 	isBusy(): boolean {
-		return this.status === "running" || this.status === "waiting";
+		return this.status === "running" || this.status === "waiting" || this.pendingPrompts > 0;
 	}
 
 	/**
@@ -1322,8 +1373,18 @@ export class WebSession {
 	 * it instead of rejecting it.
 	 */
 	async send(text: string, attachments: readonly WebAttachment[] = [], followUp = false): Promise<void> {
+		if (this.closing) throw new Error("This session is closing");
 		if (this.isReverting()) throw new Error("Wait for the revert to finish");
 		this.unread = false;
+		this.pendingPrompts += 1;
+		try {
+			await this.sendWithinTurn(text, attachments, followUp);
+		} finally {
+			this.pendingPrompts -= 1;
+		}
+	}
+
+	private async sendWithinTurn(text: string, attachments: readonly WebAttachment[], followUp: boolean): Promise<void> {
 		if (!this.extensionsStartup.settled) {
 			if (this.startingPrompt) {
 				// A second message before the first could start waits behind it.
@@ -1420,18 +1481,18 @@ export class WebSession {
 	}
 
 	/**
-	 * Name the session after its first prompt, with a fire-and-forget sidecar
-	 * call on the session's own model. The sidebar already titles a nameless
-	 * session by its first message, so the generated title only has to beat
-	 * that raw prefix; a failure is dropped and the fallback stays. One
-	 * attempt per open session, and a name set while it runs (the user
-	 * renamed) always wins.
+	 * Name the session after its first input, whatever that input triggers (a
+	 * plain prompt, a `/goal` objective, a skill), with a fire-and-forget
+	 * sidecar call on the session's own model. A goal session journals no user
+	 * message, so without this its sidebar row has no title at all. A failure
+	 * is dropped. One attempt per open session, and a name set while it runs
+	 * (the user renamed) always wins.
 	 */
 	private maybeGenerateSessionTitle(text: string): void {
 		if (this.sessionTitleGenerated || this.session.sessionName) return;
 		// A user message already on the branch means this send is not the first prompt.
 		if (this.session.sessionManager.getBranch().some(isUserEntry)) return;
-		const input = sessionTitleInput(text);
+		const input = sessionTitleInput(text, (name) => this.slashCommandKind(name));
 		if (!input) return;
 		const model = this.session.model;
 		if (!model) return;
@@ -1447,6 +1508,19 @@ export class WebSession {
 			.catch(() => {
 				// Decoration only: a failed sidecar must not surface as a session error.
 			});
+	}
+
+	/**
+	 * What the kernel does with a leading `/name`, in its own dispatch order:
+	 * a registered command (extension commands, the kernel's built-in
+	 * live-context commands, and the reserved names the composer reaches) runs
+	 * first, then a prompt template expands; anything else is plain prompt text.
+	 */
+	private slashCommandKind(name: string): SlashCommandKind {
+		if (LIVE_CONTEXT_COMMANDS.has(name) || isReservedCommandName(name)) return "command";
+		if (this.session.extensionRunner.getCommand(name)) return "command";
+		if (this.session.promptTemplates.some((template) => template.name === name)) return "template";
+		return undefined;
 	}
 
 	/** Hand `text` to the running turn, read before its next model call; refused for extension commands. */
@@ -1493,6 +1567,8 @@ export class WebSession {
 	 * was in flight) and nothing is queued before it, it starts at once.
 	 */
 	enqueue(input: { text: string; attachments: readonly WebAttachment[]; files: readonly QueuedFile[] }): void {
+		// Shutdown is in progress: nothing queued now will ever run.
+		if (this.closing) return;
 		const item = this.queue.add(input);
 		if (!this.mustQueue() && this.queue.size === 1) this.dispatchQueued(item.id);
 	}
@@ -1510,6 +1586,8 @@ export class WebSession {
 	 * still wait. Its run's settle dispatches the one after it.
 	 */
 	private dispatchQueued(id?: string): boolean {
+		// Shutdown is in progress: a turn started now would be disposed mid-stream.
+		if (this.closing) return false;
 		if (this.mustQueue()) return false;
 		const item = id ? this.queue.take(id) : this.queue.shift();
 		if (!item) return false;
@@ -1908,6 +1986,9 @@ export class WebSession {
 		this.holdQueue = true;
 		if (this.startingPrompt) this.startingPrompt.cancelled = true;
 		await this.session.abort();
+		// Closed while the abort was settling: the queue and status belong to a
+		// session nobody is reading any more.
+		if (this.closing) return;
 		const pending = this.session.clearQueue();
 		const steering = this.steeringImages.match(pending.steering);
 		this.steeringImages.clear();
@@ -1916,6 +1997,57 @@ export class WebSession {
 			...pending.followUp.map((text) => ({ text, attachments: [] })),
 		]);
 		this.setStatus("idle");
+	}
+
+	/**
+	 * Wait, bounded by `deadline`, for an accepted prompt to reach its run.
+	 *
+	 * `AgentSession.abort()` only cancels a run that has started: the prompt's
+	 * pre-run work (auth, compaction check, `before_agent_start` hooks such as MCP
+	 * reconciliation) happens first and leaves nothing to abort. Stopping during
+	 * that window used to dispose the session with the prompt still in memory.
+	 * Waiting for the run — not the whole turn — means the abort then lands on a
+	 * real controller; if the pre-run work outlasts the deadline there is nothing
+	 * left to wait for.
+	 */
+	private async awaitRunStart(deadline: number): Promise<void> {
+		while (this.pendingPrompts > 0 && !this.session.isStreaming) {
+			if (Date.now() >= deadline) return;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+	}
+
+	/**
+	 * `interrupt`, but the host stops waiting after `graceMs`.
+	 *
+	 * A turn that settles in time leaves its partial reply on disk. One that
+	 * does not is abandoned so shutdown can finish; the session is closed right
+	 * after, and a stream that ignored the abort has nothing left to write to.
+	 */
+	async stopTurnWithin(graceMs: number): Promise<void> {
+		if (!Number.isFinite(graceMs)) {
+			await this.awaitRunStart(Number.POSITIVE_INFINITY);
+			await this.interrupt();
+			return;
+		}
+		const deadline = Date.now() + graceMs;
+		await this.awaitRunStart(deadline);
+		const remaining = Math.max(0, deadline - Date.now());
+		let timer: NodeJS.Timeout | undefined;
+		const expiry = new Promise<"timeout">((resolveTimeout) => {
+			timer = setTimeout(() => resolveTimeout("timeout"), remaining);
+			timer.unref();
+		});
+		try {
+			const outcome = await Promise.race([this.interrupt().then(() => "stopped" as const), expiry]);
+			if (outcome === "timeout") {
+				console.error(
+					`Stopped waiting for a running turn after ${String(graceMs)} ms; closing the session anyway.`,
+				);
+			}
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
 	}
 
 	async setModel(provider: string, modelId: string): Promise<void> {
@@ -1971,6 +2103,8 @@ export class WebSession {
 					: enabled
 						? `/goal ${(goal ?? "").trim()}`
 						: "/goal clear";
+		// Starting a goal is user input; the other toggles carry no text to title.
+		if (mode === "goal" && enabled) this.maybeGenerateSessionTitle(prompt);
 		await this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
 	}
 
@@ -1996,11 +2130,13 @@ export class WebSession {
 						: action === "resume"
 							? "/goal resume"
 							: "/goal clear";
+		if (action === "start") this.maybeGenerateSessionTitle(prompt);
 		await this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
 	}
 
 	snapshot(): Record<string, unknown> {
 		const manager = this.session.sessionManager;
+		const branch = manager.getBranch();
 		return {
 			id: this.id,
 			cwd: this.cwd,
@@ -2010,10 +2146,15 @@ export class WebSession {
 			revision: this.revision,
 			sessionFile: manager.getSessionFile(),
 			archived: this.archived,
-			revertedTurns: revertedTurnIds(manager.getBranch()),
+			revertedTurns: revertedTurnIds(branch),
 			lastRunAborted: this.lastRunAborted,
+			// The newest turn was cut off (a stopped run, or a host that exited
+			// mid-stream). Entries carry it, so a page opened after a restart says
+			// the same thing the live page did. A turn still in flight is not
+			// interrupted: its reply simply has not arrived yet.
+			interruptedTurn: hasInterruptedTurn(branch, this.isBusy()),
 			compacting: this.session.isCompacting,
-			entries: projectEntries(manager.getBranch()),
+			entries: projectEntries(branch),
 			pendingApprovals: this.broker.pendingRequests(),
 			pendingClarifications: this.clarifications.pendingRequests(),
 			pendingSelections: this.selections.pendingRequests(),
@@ -2127,7 +2268,21 @@ export class WebSession {
 		);
 	}
 
+	/**
+	 * Stop accepting new work, without closing yet.
+	 *
+	 * Shutdown marks every session before it stops the running turns, so a queued
+	 * dispatch or a request racing the shutdown cannot start one more run in the
+	 * gap between the busy scan and `close`.
+	 */
+	beginClosing(): void {
+		this.closing = true;
+	}
+
 	async close(): Promise<void> {
+		// Refuse new work first: a queued dispatch or an in-flight request must not
+		// start a turn whose reply the disposed session could never persist.
+		this.closing = true;
 		if (this.startingPrompt) this.startingPrompt.cancelled = true;
 		this.clarifications.clear();
 		this.selections.clear();
@@ -2471,16 +2626,29 @@ export class WebSessionStore {
 
 	/**
 	 * Stop every running turn the way the Stop button does, then close all
-	 * sessions. Used by a Step sign-out: interrupting first records the turn as
-	 * aborted and keeps the prompt and partial reply on disk, which a bare
-	 * `close()` (disposal mid-stream) would lose. A session that fails to stop
-	 * is still closed.
+	 * sessions. Used by a Step sign-out and by host shutdown.
+	 *
+	 * Stopping first is what keeps the transcript complete: the kernel writes an
+	 * assistant message on `message_end`, and disposal mid-stream never produces
+	 * one, so a bare `close()` drops the reply the page had already been shown
+	 * (thinking included). An interrupted turn instead records an `aborted`
+	 * message carrying everything that streamed.
+	 *
+	 * `graceMs` bounds each stop: a provider that stops answering must not hold
+	 * process exit past the desktop's SIGKILL window, and an abandoned stream is
+	 * still better than a host that never exits. Unbounded without it, which is
+	 * what a sign-out wants.
 	 */
-	async interruptAndClose(): Promise<void> {
+	async interruptAndClose(options: { graceMs?: number; reason?: string } = {}): Promise<void> {
+		const reason = options.reason ?? "signing out";
 		await Promise.allSettled(this.openings.values());
+		// Refuse new work before the busy scan, so nothing can start a turn in the
+		// gap between looking and closing.
+		for (const session of this.sessions.values()) session.beginClosing();
 		const busy = [...this.sessions.values()].filter((session) => session.isBusy());
-		for (const result of await Promise.allSettled(busy.map((session) => session.interrupt()))) {
-			if (result.status === "rejected") console.error("Could not stop a turn before signing out:", result.reason);
+		const stops = busy.map((session) => session.stopTurnWithin(options.graceMs ?? Number.POSITIVE_INFINITY));
+		for (const result of await Promise.allSettled(stops)) {
+			if (result.status === "rejected") console.error(`Could not stop a turn before ${reason}:`, result.reason);
 		}
 		await this.close();
 	}

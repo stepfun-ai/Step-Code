@@ -1034,7 +1034,7 @@
 	color: var(--ink-3);
 }
 
-/* DFSC Simple folds consecutive thoughts and ordinary tools into one process range. */
+/* Fold consecutive thoughts and ordinary tools into one process range. */
 .process-tool-group {
 	min-width: 0;
 	margin: 4px 0;
@@ -1738,6 +1738,31 @@ button.compaction-head:focus-visible {
 }
 .goal-round-label {
 	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/*
+ * The newest turn was cut off (a stopped run, or a host that exited mid-stream).
+ * It closes the transcript: the reply it belongs to is above it, and it is the
+ * last row until the user writes again. A queued message or a still-running turn
+ * cannot be present at the same time (`interruptedTurn` is false while busy).
+ */
+.interrupted-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 14px 0 6px;
+	font-size: 11px;
+	color: var(--ink-3);
+}
+.interrupted-row::before,
+.interrupted-row::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--line);
+}
+.interrupted-label {
 	white-space: nowrap;
 }
 

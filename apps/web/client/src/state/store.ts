@@ -308,6 +308,18 @@ export interface AppState {
 	readonly pendingTurn: PendingTurn | null;
 	readonly bootstrapCwd: string;
 	/**
+	 * The host's default workspace: where a new conversation starts when no
+	 * workspace is on offer. It is the launch folder unless that folder was
+	 * removed from workspace navigation, in which case the host reports the home
+	 * fallback — a removed folder must not become the target of new work.
+	 */
+	readonly defaultCwd: string;
+	/**
+	 * `defaultCwd` is the home fallback because the launch folder was removed,
+	 * so the page names it "默认项目" instead of the last path segment.
+	 */
+	readonly defaultCwdFallback: boolean;
+	/**
 	 * The first bootstrap pass finished: a session or a draft has been chosen.
 	 * Until then the pane is still loading, not an empty new conversation.
 	 */
@@ -415,6 +427,8 @@ export function createInitialState(): AppState {
 		compacting: false,
 		pendingTurn: null,
 		bootstrapCwd: "",
+		defaultCwd: "",
+		defaultCwdFallback: false,
 		booted: false,
 		draftCwd: "",
 		draftPolicy: "approve-for-me",

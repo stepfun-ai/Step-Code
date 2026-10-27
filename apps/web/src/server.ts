@@ -3,6 +3,7 @@ import "./bootstrap.ts";
 import { createReadStream, existsSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { homedir } from "node:os";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StepPermissionPresetId } from "@step-harness/coding-agent";
@@ -97,7 +98,13 @@ import {
 } from "./uploads.ts";
 import { VoiceRelay } from "./voice.ts";
 import { voiceRoute } from "./voice-routes.ts";
-import { canonicalWorkspacePath, WORKSPACES_FILE, WorkspaceRegistry } from "./workspaces.ts";
+import {
+	canonicalWorkspacePath,
+	type DefaultWorkspace,
+	resolveDefaultWorkspace,
+	WORKSPACES_FILE,
+	WorkspaceRegistry,
+} from "./workspaces.ts";
 
 const moduleRoot = resolve(fileURLToPath(new URL(".", import.meta.url)));
 /**
@@ -123,6 +130,13 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
 const port = Number.parseInt(process.env.STEPCODE_WEB_PORT ?? "3077", 10);
 /** Where the launch link points: this host, or the Vite dev server in `pnpm web:watch`. */
 const launchPort = resolveLaunchPort(process.env, port);
+/**
+ * How long shutdown waits for each running turn to record its interrupted
+ * reply. The desktop sends SIGKILL 5s after SIGTERM, so this must stay under it:
+ * a turn that outlasts the bound is abandoned instead of taking the whole
+ * transcript down with an unhandled kill.
+ */
+const SHUTDOWN_TURN_GRACE_MS = 3_000;
 const SECRET_FILE = "web-auth-secret";
 const authSecretPath = process.env.STEPCODE_WEB_AUTH_SECRET?.trim() || join(resolveStepConfigRoot(), SECRET_FILE);
 const bindHost = "127.0.0.1";
@@ -312,13 +326,22 @@ const terminals = new WebTerminals();
 const voice = new VoiceRelay();
 
 /**
+ * The default workspace: the folder a new conversation falls back to when no
+ * workspace is on offer, and whether it is the home fallback (see
+ * `resolveDefaultWorkspace`).
+ */
+const defaultWorkspaceInfo = (): Promise<DefaultWorkspace> =>
+	resolveDefaultWorkspace(workspaces, defaultWorkspace(), homedir());
+
+/**
  * Resolve the `cwd` of a workspace-scoped request, or undefined when the folder
  * is not one this host already works in.
  *
  * File browsing is keyed by folder rather than by session so that a workspace
  * with no conversation yet can still be browsed. That makes the folder a
  * caller-supplied path, so it is checked against what the host already knows:
- * the launch folder, registered workspaces, and the cwd of existing sessions.
+ * the launch folder, the default workspace, registered workspaces, and the cwd
+ * of existing sessions.
  */
 async function knownWorkspace(input: string | null): Promise<string | undefined> {
 	if (!input) return undefined;
@@ -329,7 +352,11 @@ async function knownWorkspace(input: string | null): Promise<string | undefined>
 		return undefined;
 	}
 	if (await workspaces.has(cwd)) return cwd;
-	const candidates = [defaultWorkspace(), ...(await store.list()).map((session) => session.cwd)];
+	const candidates = [
+		defaultWorkspace(),
+		(await defaultWorkspaceInfo()).path,
+		...(await store.list()).map((session) => session.cwd),
+	];
 	for (const candidate of new Set(candidates)) {
 		if (!candidate) continue;
 		try {
@@ -743,7 +770,11 @@ const server = createServer(async (request, response) => {
 			return await terminalRoute(terminals, parts.slice(3), url, request, response, knownWorkspace);
 		if (parts[2] === "voice") return await voiceRoute(voice, parts.slice(3), request, response);
 		if (parts[2] === "bootstrap" && method === "GET") {
-			const [report, customModels] = await Promise.all([loginReport(), hasUsableCustomModel()]);
+			const [report, customModels, defaultInfo] = await Promise.all([
+				loginReport(),
+				hasUsableCustomModel(),
+				defaultWorkspaceInfo(),
+			]);
 			// The identity of the running build, so a page (and the person looking at
 			// it) can tell which build it is talking to. `buildTime` is staged beside
 			// the server entry by the installer; a source checkout reports none.
@@ -754,6 +785,11 @@ const server = createServer(async (request, response) => {
 				// slash) made the removed real folder keep appearing in the composer's
 				// picker, because only the canonical spelling was marked hidden.
 				cwd: await canonicalWorkspacePath(defaultWorkspace()),
+				// Where a new conversation starts when the launch folder has been
+				// removed from workspace navigation (see `defaultWorkspaceInfo`), and
+				// whether that folder is the fallback the page names "默认项目".
+				defaultCwd: await canonicalWorkspacePath(defaultInfo.path),
+				defaultCwdFallback: defaultInfo.fallback,
 				directoryPicker,
 				login: report,
 				customModels,
@@ -808,7 +844,17 @@ const server = createServer(async (request, response) => {
 			return json(response, 200, await directoryList(url.searchParams.get("path") ?? defaultWorkspace()));
 		}
 		if (parts[2] === "workspaces" && parts.length === 3) {
-			if (method === "GET") return json(response, 200, { workspaces: await workspaces.list() });
+			if (method === "GET") {
+				// Kept fresh here as well as at bootstrap: removing the launch folder
+				// changes this answer mid-session, and the reroute that follows a
+				// removal reads it.
+				const [list, info] = await Promise.all([workspaces.list(), defaultWorkspaceInfo()]);
+				return json(response, 200, {
+					workspaces: list,
+					defaultCwd: await canonicalWorkspacePath(info.path),
+					defaultCwdFallback: info.fallback,
+				});
+			}
 			if (method === "POST") {
 				const input = await body(request);
 				if (typeof input.path !== "string") return error(response, 400, "path is required");
@@ -1337,8 +1383,16 @@ const shutdown = async (): Promise<void> => {
 			voice.stopAll(),
 			(async () => {
 				try {
-					await sessionImports.close();
-					await store.close();
+					// Stop live turns immediately; draining imports must not delay recording
+					// their partial replies before Desktop's 5s SIGKILL. Both finish before
+					// the session index is closed, including when either cleanup fails.
+					const results = await Promise.allSettled([
+						sessionImports.close(),
+						store.interruptAndClose({ graceMs: SHUTDOWN_TURN_GRACE_MS, reason: "host shutdown" }),
+					]);
+					for (const result of results) {
+						if (result.status === "rejected") throw result.reason;
+					}
 				} finally {
 					// Flush sessions before stopping their index, even if session teardown fails.
 					// Sessions only release their MCP leases; the pool owns the server processes.

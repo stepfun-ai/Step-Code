@@ -257,6 +257,38 @@ export function activeCwd(state: AppState = getState()): string {
 }
 
 /**
+ * The folder the host falls back to for new work when no workspace is on offer.
+ * It is the launch folder, or the home folder when the user removed the launch
+ * folder from navigation (see the host's `defaultCwd`).
+ */
+export function defaultProjectCwd(state: AppState = getState()): string {
+	return state.defaultCwd || state.bootstrapCwd;
+}
+
+/**
+ * Whether `path` is the implicit default project instead of a workspace the user
+ * registered. That is the home fallback the host reports after the launch folder
+ * was removed: the page names it "默认项目" rather than the last user name.
+ * Registering the folder turns it back into a normal workspace with its own name.
+ */
+export function isDefaultProject(state: AppState, path: string | undefined): boolean {
+	if (!path || !state.defaultCwdFallback || !state.defaultCwd) return false;
+	if (path !== state.defaultCwd) return false;
+	return !state.workspaces.some(
+		(workspace) => workspace.available && workspace.hidden !== true && workspace.path === path,
+	);
+}
+
+/**
+ * The name to show for a workspace folder: "默认项目" for the fallback folder,
+ * otherwise the folder's own name. Without this the fallback was presented under
+ * the last user name, which named neither a workspace nor a project.
+ */
+export function workspaceLabel(state: AppState, path: string): string {
+	return isDefaultProject(state, path) ? t("defaultProject") : basename(path);
+}
+
+/**
  * Where a new conversation may start when the folder it would have used has
  * been removed from workspace navigation.
  *
@@ -266,14 +298,22 @@ export function activeCwd(state: AppState = getState()): string {
  * workspace the user had deleted and sent a message into it — and any
  * folder-scoped request (the file tree, git, `@` completion) came back with
  * "Folder is not a known workspace". Prefer the launch folder, then any
- * workspace still on offer; the launch folder is the last resort because the
- * host always works somewhere.
+ * workspace still on offer.
+ *
+ * When none of those is on offer the fallback is the host's default workspace
+ * (`state.defaultCwd`), not the launch folder: the launch folder is Desktop's
+ * last picked folder, which is exactly the folder the user may have just
+ * removed, so reusing it made every "New conversation" in an empty workspace
+ * list start in the deleted folder. The default is the home folder there.
  */
 export function workspaceForNewConversation(state: AppState = getState()): string {
 	const wanted = activeCwd(state);
 	if (!isHiddenWorkspace(state, wanted)) return wanted;
 	if (state.bootstrapCwd && !isHiddenWorkspace(state, state.bootstrapCwd)) return state.bootstrapCwd;
-	return knownWorkspaces(state)[0] ?? state.bootstrapCwd;
+	const offered = knownWorkspaces(state)[0];
+	if (offered) return offered;
+	if (state.defaultCwd && !isHiddenWorkspace(state, state.defaultCwd)) return state.defaultCwd;
+	return state.bootstrapCwd;
 }
 
 /** `${provider}\u0000${id}` key of a model (legacy `modelKey`). */
@@ -1363,8 +1403,8 @@ export function connectStream(id: string): void {
 
 /**
  * Sessions this page created that the host does not list yet. The host lists
- * session files, and a session's file is written only with its first assistant
- * reply; until then a list refresh would drop the new conversation's row.
+ * session files, so a session appears as soon as its first prompt is written;
+ * a draft that was created but never sent still needs the optimistic row.
  */
 const unlistedSessions = new Set<string>();
 
@@ -1539,10 +1579,24 @@ export async function refreshCurrent(): Promise<void> {
 	if (getState().current?.id === current.id) renderSnapshot(snapshot);
 }
 
-/** Reload the registered workspaces (legacy `refreshWorkspaces`, 1984-1987). */
+/**
+ * Reload the registered workspaces and the host's default workspace (legacy
+ * `refreshWorkspaces`, 1984-1987). The default comes along because removing the
+ * launch folder changes it mid-session, and the reroute that follows a removal
+ * has to land in the folder that replaced it.
+ */
 export async function refreshWorkspaces(): Promise<void> {
-	const data = await api<{ workspaces: WebWorkspace[] }>("/api/v1/workspaces");
-	setState({ workspaces: data.workspaces });
+	const data = await api<{
+		workspaces: WebWorkspace[];
+		defaultCwd?: string;
+		defaultCwdFallback?: boolean;
+	}>("/api/v1/workspaces");
+	setState((state) => ({
+		workspaces: data.workspaces,
+		defaultCwd: typeof data.defaultCwd === "string" && data.defaultCwd ? data.defaultCwd : state.defaultCwd,
+		defaultCwdFallback:
+			typeof data.defaultCwdFallback === "boolean" ? data.defaultCwdFallback : state.defaultCwdFallback,
+	}));
 }
 
 /** Open a session and follow its stream; optional discovery links can suppress technical error toasts. */
@@ -1704,7 +1758,7 @@ export async function createSessionIfNeeded(firstMessage?: string): Promise<Sess
 		});
 	}
 	// Show the row now, titled by the message being sent; the host lists the
-	// session only after its first reply is saved (see `unlistedSessions`).
+	// session once its first prompt is written (see `unlistedSessions`).
 	unlistedSessions.add(snapshot.id);
 	const now = new Date().toISOString();
 	setState((current) => ({
@@ -1845,6 +1899,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 		const boot = await api<BootstrapPayload>("/api/v1/bootstrap");
 		setState({
 			bootstrapCwd: boot.cwd,
+			// The launch folder unless the user removed it; then the host reports
+			// the home fallback the page names "默认项目".
+			defaultCwd: boot.defaultCwd || boot.cwd,
+			defaultCwdFallback: boot.defaultCwdFallback === true,
 			directoryPicker: boot.directoryPicker === "native" ? "native" : "browse",
 			login: boot.login ?? null,
 			draftCwd: boot.cwd,

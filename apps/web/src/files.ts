@@ -5,8 +5,15 @@ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 export const MAX_DIRECTORY_ENTRIES = 1000;
 /** Largest file the preview will load as text. */
 export const MAX_PREVIEW_BYTES = 1_000_000;
-/** Largest image the raw endpoint will stream. */
-export const MAX_IMAGE_BYTES = 10_000_000;
+/**
+ * Largest image the raw endpoint will stream: 10 MiB.
+ *
+ * The page formats sizes with 1024-based units (`lib/format.ts`), so a decimal
+ * 10,000,000-byte cap showed a refused file as "9.5 MB" — under the limit it
+ * claimed. 10 * 1024 * 1024 makes the number the reader is shown and the number
+ * the host enforces the same.
+ */
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 /** How many directories a name search may visit before giving up. */
 const MAX_SEARCH_DIRECTORIES = 4000;
 /** Maximum candidates returned by the composer's workspace file completion. */

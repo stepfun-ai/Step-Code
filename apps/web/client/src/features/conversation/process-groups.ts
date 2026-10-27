@@ -109,7 +109,7 @@ export function reuseUnchangedRows(
 	});
 }
 
-/** DFSC Simple uses the current tool subject, or the latest paragraph of live thinking. */
+/** Summarizes the current tool subject, or the latest paragraph of live thinking. */
 export function processGroupSummary(
 	group: ProcessGroup,
 	t: TranslateFn,

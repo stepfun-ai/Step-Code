@@ -39,8 +39,11 @@ import {
 	insertModeLead,
 	MODE_LEAD_CLASS,
 	type PromptFile,
+	removeSlashToken,
+	replaceSlashTokenWithCommand,
 	stripLeadingCommand,
 } from "./prompt-editor";
+import type { SlashToken } from "./slash-groups";
 
 export async function replyToClarification(
 	request: ClarificationRequest,
@@ -309,6 +312,24 @@ export function stageCommandLead(editor: HTMLElement, command: string): void {
 }
 
 /**
+ * Place a command picked for a `/word`: the chip goes exactly where the word
+ * was typed, so the words around it keep their order (`111 /` -> `111
+ * /skill:x`, `/skill:a 和 /` -> `/skill:a 和 /skill:b`). The kernel runs only
+ * a leading command; `promptMessageText` moves the first command to the front
+ * when the message is sent. Modes always lead. False when the `/word` is no
+ * longer at the caret.
+ */
+export function stageCommandAtSlashToken(editor: HTMLElement, token: SlashToken, command: string): boolean {
+	const name = command.replace(/^\//u, "");
+	if (!modeFromCommand(name.replace(/:$/u, ""))) {
+		return replaceSlashTokenWithCommand(editor, token, { command, icon: commandLeadIcon(name) });
+	}
+	if (!removeSlashToken(editor, token)) return false;
+	stageCommandLead(editor, command);
+	return true;
+}
+
+/**
  * After every prompt edit: a completed leading command (name plus its space)
  * leaves the text and becomes its lead chip, so every command line shows the
  * same icon and theme from the moment it is recognizable.
@@ -323,7 +344,7 @@ export function applyLeadingCommand(editor: HTMLElement): void {
 
 /**
  * A skill or plugin picked from `#plusMenu`, staged as one light-purple icon
- * chip above `#prompt` (ZCode-style): `prefix` commands lead the next message
+ * chip above `#prompt`: `prefix` commands lead the next message
  * (one slash command per message, so a command pick replaces the previous
  * one), `note` picks ride at its tail.
  */
@@ -345,13 +366,13 @@ export interface ContextPackage {
 	readonly block: string;
 }
 
-/** Caps the packaged transcript, ZCode's selection limits shrunk to one pick. */
+/** Caps the transcript packaged by one other-session pick. */
 const SESSION_CONTEXT_MAX_CHARS = 4000;
 const SESSION_CONTEXT_MAX_MESSAGES = 20;
 
 /**
- * Package another session's conversation as a prompt tail block (ZCode's
- * `# userselect:` pattern): a heading naming the source session and a fenced
+ * Package another session's conversation as a prompt tail block: a heading
+ * naming the source session and a fenced
  * transcript of its user/assistant messages, oldest first, capped. The block
  * is ordinary prompt text — editable before sending, visible in the composer.
  */

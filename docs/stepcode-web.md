@@ -47,7 +47,7 @@ credential itself is never part of the response. A separate Account settings
 page shows the channel, region and credential verdict. Optional `userId` is a  
 bounded stored OAuth UID matching the kernel's valid checked account; profile  
 labels and environment keys never stand in for an identity. General settings  
-retain language only. Account uses the DFSC Step platform mark and four  
+retain language only. Account uses the Step platform mark and four\
 channel choices, without balance or allowance placeholders.
 
 The Account page reuses the existing browser/API-key sign-in routes, including  
@@ -184,6 +184,46 @@ while a turn ran would otherwise repaint the running status, the stop control
 and a live thought after the reader stopped that turn. Each stream connection
 starts a new order — its opening snapshot is authoritative — so a reconnected
 page, a restarted Host and a host that predates revisions all still render.
+
+### Restarting with a turn in flight
+
+The kernel writes an assistant message on `message_end`, so a turn that is only
+half-streamed exists on no disk until it ends. Host shutdown therefore refuses new
+work and stops running turns before closing sessions
+(`WebSessionStore.interruptAndClose`, called from the SIGINT / SIGTERM / SIGHUP
+handler with a 3s bound): the abort records the reply as `aborted` with everything
+that had streamed, thinking included, and the page shows the same transcript it
+already had. The bound covers each turn stop, not the rest of shutdown — session
+disposal, MCP release and terminal cleanup stay unbounded, so Desktop's SIGKILL
+lands mid-teardown only if one of those blocks. A Step sign-out calls the same
+method without a bound, because nothing kills it.
+
+A prompt accepted but not yet running — the kernel is still doing auth, the
+compaction check, or `before_agent_start` hooks such as MCP reconciliation — is
+not a run yet, so `abort()` has nothing to cancel. The host counts those prompts
+as busy and waits for the run to start before aborting it; otherwise a shutdown in
+that window disposed the session with the prompt still in memory, and the model
+request fired with nowhere to write. A turn that ignores the abort — or a host
+that is killed outright — still loses its partial reply; there is no per-delta
+write to fall back on.
+
+`interruptedTurn` in the snapshot tells the client the newest turn was cut off,
+derived from the entries (`hasInterruptedTurn`): a prompt with no reply, a branch
+ending in tool work (a tool result, or an assistant that stopped with calls), or a
+reply recorded as `aborted`. Errors and truncated replies are not interrupted; the
+transcript already renders them. It is false while a turn runs or is starting, so
+a prompt waiting for its first token is not called interrupted. The client draws
+it as a quiet divider under the transcript. Because it is read from the file, a
+reopened session says the same thing a live page did, instead of the run silently
+disappearing. Imported message tails are source snapshots with unobserved outcomes,
+not evidence of native interruption; later native continuation messages still use
+the same interruption checks. Shutdown drains imports alongside stopping live turns,
+then closes their shared session index after both cleanup operations settle.
+
+The transcript file itself starts at the first prompt, not at the first reply
+(`SessionManager`'s conversation guard), so a first turn cut off by a restart
+still appears in the sidebar: previously the header had never been written and
+the whole conversation vanished with the process.
 
 ### Plan review card
 
@@ -376,14 +416,19 @@ inherits the folder of the conversation on screen, so starting one from a remove
 folder's retained chat used to create a session there — in a workspace the picker
 could no longer even list, where folder-scoped requests (file tree, git, `@`
 completion) then answered "Folder is not a known workspace". `startDraft` reroutes
-a hidden cwd to the launch folder, else to a workspace still on offer, and a draft
-open in the folder being removed is moved the same way. Only the last resort —
-every workspace removed — keeps the launch folder, because the host still has to
-run somewhere. Existing sessions keep their folder and stay fully usable.
-`bootstrap.cwd` is the launch folder's resolved path, so it matches the cwd a
-session header records and the paths the registry stores; a launch spelling that
-differed (a symlink, a trailing slash) would otherwise keep the removed real
-folder in the picker.
+a hidden cwd to the launch folder, else to a workspace still on offer, then to the
+host's default workspace: the launch folder, or the home folder when the launch
+folder itself was removed. A draft open in the folder being removed is moved the
+same way. Desktop launches the host in the folder it last picked and stores that
+pick, so removing that folder used to leave it as the launch folder and every
+"New conversation" with an empty workspace list started in the deleted folder;
+the host now reports `defaultCwd` and `defaultCwdFallback` (on bootstrap and
+`GET /api/v1/workspaces`) and the page names the fallback "默认项目" in the
+composer's folder pill and the sidebar's project list. A usable launch folder
+keeps its own name. `bootstrap.cwd` is the launch folder's resolved path, so it
+matches the cwd a session header records and the paths the registry stores; a
+launch spelling that differed (a symlink, a trailing slash) would otherwise keep
+the removed real folder in the picker.
 
 Every project header offers removal, with or without conversations. An in-app  
 dialog names the project and explains that files and existing chats are retained.  
@@ -418,7 +463,9 @@ point out of the workspace.
   not labelled complete. Candidate queries never read file contents.
 - `file` classifies a file as `text` (up to 1 MB, returned as UTF-8), `image`,  
   `binary` (NUL byte in the first 8 KB), or `too-large`; only `text` carries  
-  content. `raw` streams images, and nothing else, for the preview.
+  content. Images over 10 MiB (`MAX_IMAGE_BYTES`, the size the page prints as
+  "10.0 MB") are `too-large` instead of a broken image. `raw` streams images,
+  and nothing else, for the preview.
 
 An empty workspace also shows a branch switcher beside the folder pill, above  
 the composer card. Both pickers choose where the next conversation starts, so  
@@ -447,7 +494,7 @@ it; Alt+Cmd+P opens the tree for the current workspace.
 
 The token indicator left of the model picker derives input/output totals from  
 the usage each assistant turn reports and hides until a turn reports usage.  
-Task summaries live in the DFSC-style floating Summary board instead of the original  
+Task summaries live in the content-height floating Summary board instead of the original\
 floating banner. Task completion comes from canonical task state, not completed  
 `task_create` / `task_update` calls.
 
@@ -593,10 +640,11 @@ response's `sessionId` is that new id, and the store is re-keyed in the same
 step, so the client's next read and the inspector resolve instead of 404ing. The  
 branch is titled `<parent title>_fork`, derived from the parent's current title,  
 so forking a fork gives `<title>_fork_fork`. A fork is refused while a turn runs,  
-while the context is compacting, or while another fork is in flight. A branch has  
-no file until its first reply, so an untouched fork has nothing to branch yet:  
-the implicit fork reports "cancelled" (the client's generic notice), and an  
-explicit entry on such a branch is refused by the kernel.
+while the context is compacting, or while another fork is in flight. A branch
+gets its file with its first prompt, so an explicit fork at a recorded user
+message works as soon as that message is on the branch; the implicit fork
+branches *before* the newest prompt, so an untouched branch has nothing to keep
+and reports "cancelled" (the client's generic notice).
 
 `/btw` is the one command that bypasses the queue: asking a side question while  
 the main task runs is its purpose, and the kernel runs extension commands before  
@@ -702,7 +750,7 @@ The production build emits `apps/web/dist/server.js`, the browser assets, and
 `apps/web/dist/openapi.yaml`.
 
 The browser UI retains its cwd-grouped conversations and centered composer.  
-The local DFSC presentation migration adds a right tool rail and a mutually  
+The local presentation update adds a right tool rail and a mutually\
 exclusive inspector area; it does not add a main-area header or Goal HUD.
 
 The first release connects sessions, message/tool streaming, approvals, status,  
@@ -759,7 +807,7 @@ through coding-agent's public `models.json` / `auth.json` APIs.
 
 ## Subagent presentation
 
-The Web client uses the DFSC Standard task rows: a persistent Bot icon, a  
+The Web client uses fixed task rows: a persistent Bot icon, a\
 separate status icon, an agent label, task summary and trailing disclosure.  
 Structured `details.results` own the six task states; missing legacy statuses  
 remain unknown. Planned single, parallel and chain calls show queued tasks,  
@@ -831,7 +879,7 @@ The trigger is consumed once per selected session/turn: same-turn updates do
 not undo manual dismissal, and activity never displaces another inspector.  
 Tool outcomes only trigger presentation; they do not determine task completion.
 
-Summary uses DFSC's local light/dark neutral palette, rose running tint, green  
+Summary uses a scoped light/dark neutral palette, rose running tint, green\
 completion and amber MCP failure status. Task and MCP disclosures animate their  
 height; task chevrons appear on hover, focus or expansion. A live task completion  
 contracts and regrows its fixed icon slot over 660ms, then draws the check mark;  
@@ -870,7 +918,7 @@ or package is changed.
 
 The Browser inspector uses a host-owned Chromium process controlled through  
 `playwright-core`. This is streamed webpage rendering and input forwarding,  
-not DFSC's native Electron WebContentsView. The dependency includes no browser  
+not a native Electron WebContentsView. The dependency includes no browser\
 binary. Install compatible Chrome, Edge or Chromium, or set  
 `STEPCODE_WEB_BROWSER_PATH` to its executable. Detection covers common Windows,  
 macOS and Linux locations; only Windows Chrome has been exercised locally.  
@@ -965,7 +1013,7 @@ Agent model context, tool execution or the user's provider credentials.
 
 ## Composer performance
 
-A compact DFSC-style row below the composer shows run elapsed time, average  
+A compact performance row below the composer shows run elapsed time, average\
 output throughput, cumulative session input/output tokens and cache hit rate.  
 The existing usage menu remains available. Tokens come from the SDK statistics  
 on the existing inspector endpoint, not rendered message rows; input includes  
@@ -1082,7 +1130,7 @@ Non-redacted thinking supplied by the provider remains expandable in history;
 sessions without thinking blocks do not acquire invented records. Opaque  
 thinking signatures and redacted blocks are never rendered.
 
-The main transcript uses DFSC Simple as a fixed presentation default, without  
+The main transcript uses compact process groups as a fixed presentation default, without\
 a complexity setting. A single thinking or ordinary tool record shows only its  
 own disclosure, without a second group heading or group indentation. Two or more  
 consecutive records share one folded process row. Member components retain their  
@@ -1109,7 +1157,7 @@ and a short content preview. Text/tool output, message completion or a settled
 session stops the running state and folds an open live thought. A settled  
 thought can be reopened manually. Reduced-motion skips folding/shimmer effects.  
 The host observes each block's structured thinking start/delta/end events.  
-The label shows DFSC-style elapsed seconds, ticks once per second only while  
+The label shows elapsed seconds, ticks once per second only while\
 that block is active, and freezes before prose or tool arguments start.  
 Each assistant message's completed observations are saved through  
 `SessionManager.appendCustomEntry` as `stepcode-web.thinking-timing` metadata  

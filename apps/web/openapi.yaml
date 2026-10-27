@@ -653,6 +653,17 @@ paths:
                 type: object
                 properties:
                   cwd: { type: string, description: Launch working directory }
+                  defaultCwd:
+                    type: string
+                    description: |
+                      Where a new conversation starts when no workspace is on offer.
+                      The launch folder, or the home folder when the launch folder
+                      was removed from workspace navigation.
+                  defaultCwdFallback:
+                    type: boolean
+                    description: |
+                      True when `defaultCwd` is the home fallback because the launch
+                      folder was removed. The page names that folder "默认项目".
                   directoryPicker: { type: string, enum: [native, browse] }
                   login: { $ref: "#/components/schemas/LoginReport" }
                   customModels:
@@ -800,7 +811,7 @@ paths:
   /api/v1/workspaces:
     get:
       responses:
-        "200": { description: "Workspace navigation entries: path, name, available, optional hidden=true for explicitly removed folders. Hidden entries persist across reload; chats remain searchable and appear under Recent. Adding the folder clears hidden." }
+        "200": { description: "Workspace navigation entries (workspaces: path, name, available, optional hidden=true for explicitly removed folders) plus defaultCwd and defaultCwdFallback, which report the folder a new conversation uses when no workspace is on offer. Hidden entries persist across reload; chats remain searchable and appear under Recent. Adding the folder clears hidden." }
     post:
       requestBody:
         required: true
@@ -1156,6 +1167,8 @@ paths:
             `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
             `revision` is the newest event revision the host had published when this snapshot was serialized; a client
             that has already applied a newer stream event must ignore this answer.
+            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, or a reply the
+            kernel recorded as `aborted` — and false while a turn is still running.
           content:
             application/json:
               schema:
@@ -1164,6 +1177,14 @@ paths:
                   revision:
                     type: integer
                     description: Newest published event revision at serialization time (see the SSE `agent`/`status` events)
+                  interruptedTurn:
+                    type: boolean
+                    description: >-
+                      The newest turn did not finish (runtime.ts `hasInterruptedTurn`): derived from the session
+                      entries, so it survives a host restart. False while a turn runs or is starting.
+                  lastRunAborted:
+                    type: boolean
+                    description: The last run was stopped by the user (runtime.ts `lastRunAborted`), so it has no finished reply to credit.
                   permissionPreset: { type: string, enum: [ask, approve-for-me, full-access] }
                   goal:
                     type: object

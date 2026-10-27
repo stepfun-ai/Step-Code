@@ -202,11 +202,20 @@ When to add or change one:
   authoritative. Never apply an HTTP snapshot without that gate.
 - Anything a reloaded page must show again belongs in the session snapshot (e.g. `pendingApprovals`), not only in
   an SSE event.
+- The kernel persists an assistant message only on `message_end`, so a turn that is still streaming lives nowhere but
+  process memory. Shutdown must refuse new work and stop running turns before closing their sessions
+  (`WebSessionStore.interruptAndClose`, bounded below Desktop's 5s SIGKILL) so the partial reply and its thinking reach
+  the transcript as `aborted`; a bare `close()` disposes mid-stream and drops what the page already showed. A prompt the
+  kernel has accepted but not started is not a run yet — `abort()` cannot cancel it — so it counts as busy and the stop
+  waits for the run first (`pendingPrompts` / `stopTurnWithin`). Applying the same rule to a new host path (another
+  embedding, a CLI quit) is a session-lifecycle change: stop, wait for idle, then dispose.
+- `interruptedTurn` is derived from the recorded entries (`hasInterruptedTurn`), never from a process flag, so a
+  reopened session reports the same thing a live page did. Do not infer it from UI text or from a missing live row.
 - Thinking elapsed time is host-observed presentation metadata (`src/thinking-timing.ts`), persisted through
   the session manager's `stepcode-web.thinking-timing` custom entries outside model context. Snapshots and agent
   envelopes project validated `thinkingTimings` by original content index. Never infer durations for unobserved
   history or start clocks from browser receipt times.
-- The main transcript uses fixed DFSC Simple process groups, not a complexity
+- The main transcript uses fixed compact process groups, not a complexity
   setting. Group consecutive thinking and ordinary tools only; singleton groups
   show the member's own disclosure without a group heading or indentation.
   Retain keyed member components and a manually opened singleton when siblings
@@ -218,9 +227,10 @@ When to add or change one:
   containing unconfirmed results uses a neutral recorded-call summary, never a
   completion claim. Historical tool calls cannot make a group running.
 - A subagent record is context the main agent produced, so its inspector has no prompt surface:
-  the child's input is a collapsed "task message received" receipt, never a bubble or box, and the parent
-  composer is hidden while the record is open (closing it restores the composer). Do not add a composer,
-  inline editor or send control to the child view.
+  the child's input is a collapsed "task message received" receipt, never a bubble or box. Do not add a
+  composer, inline editor or send control to the child view. Inspection is read-only; the session is not.
+  The parent composer stays mounted and usable underneath the record (the "read-only" badge, not a hidden
+  field, marks the panel), because inspecting a subagent must not take away typing, stop or queued messages.
 - Subagent rows project structured per-task results and use the existing read-only child transcript API.
   Planned arguments mean queued, not running; missing legacy statuses stay unknown. A dispatch the kernel
   rejected never started a child, so its planned rows stay as failed attempts carrying the tool result's own
@@ -229,11 +239,11 @@ When to add or change one:
   expose only validated agentId/event/status fields through `src/subagent-notification.ts`. Do not parse
   notification prose, infer per-task success from the parent tool, or add child execution controls in the inspector.
 - `features/inspector` owns the shared right rail, Summary and Context views.
-  Summary uses DFSC's independent content-height floating board with a close-only
+  Summary uses an independent content-height floating board with a close-only
   header and fixed compact width. It floats over the conversation and reserves no
   grid space; where there is room the reading column slides aside without
   narrowing. Do not wrap it in the full-height inspector chrome used by the other panels.
-  Summary's DFSC colors are scoped to that surface. Keep grid disclosures,
+  Summary's neutral colors are scoped to that surface. Keep grid disclosures,
   fixed-slot completion motion and reduced-motion support; never replay a
   live completion animation for initially loaded completed history.
   Its MCP switch-shaped indicators are decorative, not configuration controls.
@@ -321,8 +331,11 @@ When to add or change one:
   and explicit `removedWorkspaces`. Removed entries are returned with `hidden: true`; clients must not recreate
   their project groups from session cwd values. Re-adding restores the group; removal never deletes chats or files.
   A removed folder also stops being a *target*: its chats stay readable, but `startDraft` reroutes any request for a
-  hidden cwd to `workspaceForNewConversation` (launch folder, else a workspace still on offer), so "New conversation"
+  hidden cwd to `workspaceForNewConversation` (launch folder, then a workspace still on offer, then the host's
+  `defaultCwd` — the home folder when the launch folder itself was removed), so "New conversation"
   from one of those chats — and a draft open in the folder being removed — never creates a session in it. The host
+  reports `defaultCwd` / `defaultCwdFallback` alongside the workspace list, and the client names that fallback
+  "默认项目" in the composer pill and the sidebar instead of the last path segment. The host
   refuses folder-scoped requests for a folder it no longer knows (`Folder is not a known workspace`), which is what a
   draft pinned to a removed folder used to hit.
 - Session tag groups are derived, not stored: a group exists exactly as long as a listed session carries its tag

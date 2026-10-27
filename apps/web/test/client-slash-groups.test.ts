@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { slashGroups, slashSections } from "../client/src/features/composer/slash-groups.ts";
+import { slashGroups, slashSections, slashTokenAt } from "../client/src/features/composer/slash-groups.ts";
 import type { TranslateFn } from "../client/src/i18n/index.ts";
 
 const t = ((key: string) => key) as TranslateFn;
@@ -56,4 +56,24 @@ test("a prompt command named like a built-in command is not offered, so it canno
 		sections.map((section) => section.id),
 		["commands"],
 	);
+});
+
+test("a /word opens the menu at the start, after chips and after a space mid-text", () => {
+	assert.deepEqual(slashTokenAt("/co", 3), { start: 0, end: 3, query: "co" });
+	assert.deepEqual(slashTokenAt("111 /", 5), { start: 4, end: 5, query: "" });
+	assert.deepEqual(slashTokenAt("fix /comm it", 9), { start: 4, end: 9, query: "comm" });
+	// After a staged lead chip (projected as U+FFFC) and its separating space.
+	assert.deepEqual(slashTokenAt("\ufffc /sk", 5), { start: 2, end: 5, query: "sk" });
+	// The caret inside the word: the query is what precedes it, the word runs on.
+	assert.deepEqual(slashTokenAt("say /commit now", 7), { start: 4, end: 11, query: "co" });
+	assert.deepEqual(slashTokenAt("line one\n/pl", 12), { start: 9, end: 12, query: "pl" });
+});
+
+test("slashes inside words, paths and URLs do not open the menu", () => {
+	assert.equal(slashTokenAt("and/or", 6), null);
+	assert.equal(slashTokenAt("see https://x.dev/a", 19), null);
+	assert.equal(slashTokenAt("open /usr/bin", 13), null);
+	assert.equal(slashTokenAt("\ufffc/x", 3), null);
+	// The caret has left the word.
+	assert.equal(slashTokenAt("fix /commit it", 14), null);
 });
