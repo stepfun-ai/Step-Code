@@ -9,12 +9,14 @@
  * Precedence, highest first:
  *   1. the dedicated environment variables documented in
  *      `docs/step-integration.md` (`STEPCODE_TELEMETRY_ENDPOINT`, ...);
- *   2. a runtime config (`STEPCODE_USAGE_TELEMETRY` JSON, or a JSON file named by
- *      `STEPCODE_USAGE_TELEMETRY_CONFIG`), for operating an installed build;
+ *   2. a runtime config (`STEPCODE_USAGE_TELEMETRY` JSON, or a YAML/JSON file named
+ *      by `STEPCODE_USAGE_TELEMETRY_CONFIG`, the same file format the build reads),
+ *      for operating an installed build;
  *   3. the build config embedded above.
  */
 
 import { readFileSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
 
 /** Known fields. Unknown keys are kept so a newer build can read a newer file. */
 export interface StepUsageTelemetryConfig {
@@ -64,7 +66,7 @@ export function readBuildStepUsageTelemetryConfig(
 	return env === process.env ? parseStepUsageTelemetryConfig(INLINED_BUILD_CONFIG) : undefined;
 }
 
-/** An operator-supplied override for an installed build (JSON inline or a JSON file). */
+/** An operator-supplied override for an installed build (JSON inline, or a YAML/JSON file). */
 export function readRuntimeStepUsageTelemetryConfig(
 	env: NodeJS.ProcessEnv = process.env,
 ): StepUsageTelemetryConfig | undefined {
@@ -73,7 +75,8 @@ export function readRuntimeStepUsageTelemetryConfig(
 	const path = env[RUNTIME_FILE_ENV]?.trim();
 	if (!path) return undefined;
 	try {
-		return parseStepUsageTelemetryConfig(readFileSync(path, "utf8"));
+		// YAML is a superset of JSON, so one parser accepts both file forms.
+		return parseStepUsageTelemetryConfig(parseYaml(readFileSync(path, "utf8")) as unknown);
 	} catch {
 		// An unreadable override falls back to the build config rather than
 		// disabling a build that was shipped with a valid one.

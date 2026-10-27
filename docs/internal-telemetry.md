@@ -5,6 +5,8 @@
 内部 `main` 在 `apps/cli/src/observability.ts` 注入真实 reporter；公开分支使用 NOOP。
 生命周期适配器、权限投影、投递实现和采集端配置保留在内部，不能随修复反向同步到公开分支。
 
+CLI 的 reporter 只放行 `device_daily_active` 和 `session_trace_recorded` 两个事件（见 `packages/coding-agent/docs/step-integration.md` 的 Usage telemetry）。下文的生命周期事件仍由适配器产生，但不会被上报；采集端地址只来自 `config/usage-telemetry.yaml` 或显式覆盖，没有内置默认值。
+
 ## 实际生产路径
 
 `apps/cli/src/bootstrap/extensions.ts` 注册 Step 扩展并传入共享 reporter。
@@ -24,7 +26,7 @@
 
 1. `session_start`（启动、新建、恢复、分叉、重载）从会话管理器读取 ID，并同步 reporter 的前台 session。
 2. `session_shutdown` 清除适配器聚合状态及 reporter 的前台 session。读取不到新 ID 时同样清除旧值；现有 runtime 用 `{ sessionId: "" }` 明确清理，省略字段不会清理。
-3. `model_request_completed` 只显式携带该请求自己的 session，不更新 reporter 的前台 session。A 的迟到请求可以记到 A，但不能把 B 随后的命令归属改回 A。
+3. `session_trace_recorded`（模型响应的 trace id）只显式携带该请求自己的 session，不更新 reporter 的前台 session。A 的迟到请求可以记到 A，但不能把 B 随后的命令归属改回 A。
 4. runtime 在 `track()` 时快照 session；切换或退出后的 flush 不改变已排队事件的归属。
 
 ## 回归门禁

@@ -40,7 +40,9 @@ export function readUsageTelemetryConfig(options = {}) {
 	const explicit = options.file ?? process.env[USAGE_TELEMETRY_CONFIG_ENV]?.trim();
 	const path = explicit ? resolve(options.cwd ?? process.cwd(), explicit) : resolve(repoRoot, USAGE_TELEMETRY_CONFIG_PATH);
 	if (!existsSync(path)) {
-		if (options.require === true) throw new Error(`usage telemetry config not found: ${path}`);
+		// A path someone named on purpose must exist: a typo would otherwise ship a
+		// build without the config, which looks fine and classifies nobody as internal.
+		if (options.require === true || explicit) throw new Error(`usage telemetry config not found: ${path}`);
 		return {};
 	}
 	const text = readFileSync(path, "utf8");

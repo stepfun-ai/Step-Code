@@ -45,9 +45,13 @@ test("hosts may be a comma-separated string", () => {
 	]);
 });
 
-test("no file means no reporting rather than a failed build", () => {
-	assert.deepEqual(readUsageTelemetryConfig({ file: join(tmpdir(), "does-not-exist.yaml") }), {});
-	assert.throws(() => readUsageTelemetryConfig({ file: join(tmpdir(), "does-not-exist.yaml"), require: true }), /not found/u);
+test("a file named on purpose must exist, so a typo cannot ship a build without the config", () => {
+	const missing = join(tmpdir(), "does-not-exist.yaml");
+	assert.throws(() => readUsageTelemetryConfig({ file: missing }), /not found/u);
+	assert.throws(
+		() => execFileSync(process.execPath, [script], { env: { ...process.env, STEPCODE_USAGE_TELEMETRY_CONFIG: missing }, stdio: "pipe" }),
+		/Command failed/u,
+	);
 });
 
 test("a malformed known field fails instead of silently disabling reporting", () => {
@@ -69,5 +73,5 @@ test("a malformed known field fails instead of silently disabling reporting", ()
 test("the CLI prints compact JSON and fails on an unreadable file", () => {
 	const path = fileWith("endpoint: https://collector.example.test/ingest\n");
 	assert.equal(execFileSync(process.execPath, [script, "--file", path], { encoding: "utf8" }), '{"endpoint":"https://collector.example.test/ingest"}');
-	assert.throws(() => execFileSync(process.execPath, [script, "--file", join(tmpdir(), "missing.yaml"), "--require"], { stdio: "pipe" }), /Command failed/u);
+	assert.throws(() => execFileSync(process.execPath, [script, "--file", join(tmpdir(), "missing.yaml")], { stdio: "pipe" }), /Command failed/u);
 });

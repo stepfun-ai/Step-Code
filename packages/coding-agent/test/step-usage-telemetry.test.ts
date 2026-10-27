@@ -101,6 +101,19 @@ describe("usage telemetry config", () => {
 		).toBe("https://env.test/ingest");
 	});
 
+	it("reads a runtime override file in the same YAML form the build reads", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "step-usage-config-"));
+		try {
+			const path = join(directory, "usage-telemetry.yaml");
+			await writeFile(path, "endpoint: https://tester.test/yaml\ninternalProviderHosts:\n  - yaml.test\n");
+			const env = { STEPCODE_BUILD_CHANNEL: "dev", STEPCODE_USAGE_TELEMETRY_CONFIG: path };
+			expect(readTelemetryEndpoint(env)).toBe("https://tester.test/yaml");
+			expect(readInternalProviderHosts(env)).toEqual(["yaml.test"]);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("takes internal hosts from the config and keeps explicit variables first", () => {
 		const config = JSON.stringify({ internalProviderHosts: ["config.test"] });
 		expect(readInternalProviderHosts({ STEPCODE_BUILD_USAGE_TELEMETRY: config })).toEqual(["config.test"]);
@@ -132,15 +145,42 @@ describe("usage telemetry config", () => {
 });
 
 describe("telemetry endpoint resolution", () => {
-	it("keeps the release collector default while dev builds stay local", () => {
-		// The committed usage config wins on every channel (covered above); without
-		// it, main keeps the old boundary: releases use the built-in collector and
-		// a source checkout reports nowhere.
-		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" })).toBe(
-			"https://api.stepfun.com/stepcliobserserver/api/v1/events",
-		);
+	it("reports nowhere without the YAML: there is no built-in collector", () => {
+		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" })).toBeUndefined();
 		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev" })).toBeUndefined();
 		expect(readTelemetryEndpoint({})).toBeUndefined();
+		const provider = createStepUsageObservabilityProvider({
+			client: "cli",
+			env: { STEPCODE_BUILD_CHANNEL: "release" },
+		});
+		expect(provider.createReporter().enabled).toBe(false);
+	});
+
+	it("lets a release config.toml endpoint win over the embedded config", () => {
+		const env = {
+			STEPCODE_BUILD_CHANNEL: "release",
+			STEPCODE_BUILD_USAGE_TELEMETRY: '{"endpoint":"https://collector.test/yaml"}',
+		};
+		expect(readTelemetryEndpoint(env, { endpoint: "https://collector.test/toml" })).toBe(
+			"https://collector.test/toml",
+		);
+		// Dev builds keep ignoring a persisted endpoint, and fall back to the YAML.
+		expect(
+			readTelemetryEndpoint({ ...env, STEPCODE_BUILD_CHANNEL: "dev" }, { endpoint: "https://collector.test/toml" }),
+		).toBe("https://collector.test/yaml");
+		// The runtime override and the environment variable still come first.
+		expect(
+			readTelemetryEndpoint(
+				{ ...env, STEPCODE_USAGE_TELEMETRY: '{"endpoint":"https://collector.test/runtime"}' },
+				{ endpoint: "https://collector.test/toml" },
+			),
+		).toBe("https://collector.test/runtime");
+		expect(
+			readTelemetryEndpoint(
+				{ ...env, STEPCODE_TELEMETRY_ENDPOINT: "https://collector.test/env" },
+				{ endpoint: "https://collector.test/toml" },
+			),
+		).toBe("https://collector.test/env");
 	});
 });
 
@@ -156,7 +196,7 @@ describe("usage observability provider", () => {
 		await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 	});
 
-	async function setup(extraEnv: NodeJS.ProcessEnv = {}) {
+	async function setup(extraEnv: NodeJS.ProcessEnv = {}, explicitCredential = false) {
 		const root = await mkdtemp(join(tmpdir(), "step-usage-telemetry-"));
 		directories.push(root);
 		const authPath = join(root, "auth.json");
@@ -180,6 +220,7 @@ describe("usage observability provider", () => {
 		const provider = createStepUsageObservabilityProvider({
 			client: "cli",
 			env,
+			explicitCredential,
 			now: () => now,
 			runtime: { fetchImpl, spoolDirectory: join(root, "telemetry"), flushIntervalMs: 0, retryBackoffsMs: [] },
 		});
@@ -190,6 +231,15 @@ describe("usage observability provider", () => {
 		};
 		return { root, provider, reporter, observer, posted, setNow };
 	}
+
+	it("does not attach the stored account uid when the process runs on an explicit key", async () => {
+		const { provider, reporter, observer, posted } = await setup({}, true);
+		provider.refreshIdentity(reporter);
+		await observer?.onTraceId?.(trace());
+		await reporter.flush?.();
+		expect(posted.length).toBeGreaterThan(0);
+		for (const record of posted) expect(record.context.uid).toBeUndefined();
+	});
 
 	function trace(overrides: Partial<ModelRequestTrace> = {}): ModelRequestTrace {
 		return {

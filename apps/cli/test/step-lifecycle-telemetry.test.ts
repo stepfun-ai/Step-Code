@@ -233,21 +233,14 @@ describe("internal CLI lifecycle telemetry wiring", () => {
 		await second.session.prompt("/permissions read-only");
 		const observer = observability.createModelRequestObserver(reporter);
 		expect(observer).toBeDefined();
-		await observer?.onRequestCompleted?.({
+		await observer?.onTraceId?.({
+			traceId: "0123456789abcdef0123456789abcdef",
+			sessionId: sessionA,
 			provider: "faux",
 			model: "faux-model",
-			api: "faux",
 			baseUrl: "https://model.invalid/v1",
-			streamed: true,
-			sessionId: sessionA,
-			startedAt: 0,
-			completedAt: 100,
-			durationMs: 100,
-			ttftMs: 10,
 			statusCode: 200,
-			outcome: "ok",
-			stopReason: "stop",
-			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+			attempt: 1,
 		});
 		await second.session.prompt("/permissions ask");
 		await second.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
@@ -260,7 +253,8 @@ describe("internal CLI lifecycle telemetry wiring", () => {
 		expect(events("permission_mode_toggled").map((record) => record.context.sessionId)).toEqual([
 			sessionA, sessionB, sessionB,
 		]);
-		expect(events("model_request_completed").map((record) => record.context.sessionId)).toEqual([sessionA]);
+		// A late response carries its own session and does not move the foreground one.
+		expect(events("session_trace_recorded").map((record) => record.context.sessionId)).toEqual([sessionA]);
 		expect(events("cli_exited")[0]?.context.sessionId).toBeUndefined();
 	});
 

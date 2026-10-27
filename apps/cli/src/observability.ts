@@ -18,10 +18,28 @@ import {
 	type StepUsageObservabilityProvider,
 } from "@step-harness/coding-agent";
 
-const usage = createStepUsageObservabilityProvider({ client: "cli" });
+// Same rule as the entrypoint's feedback identity: an explicit key is not the
+// stored account, so records must not carry the stored uid.
+const explicitCredential =
+	process.argv.slice(2).some((arg) => arg === "--api-key" || arg.startsWith("--api-key=")) ||
+	Boolean(process.env.STEP_API_KEY?.trim());
+
+const usage = createStepUsageObservabilityProvider({ client: "cli", explicitCredential });
 
 export const observability: StepUsageObservabilityProvider = {
 	...usage,
+	installCrashHandlers() {
+		// Usage telemetry does not report crashes, but a registered listener is
+		// what keeps an unhandled rejection from terminating the CLI; the former
+		// crash reporter provided it, so keep that process behavior.
+		const onUnhandledRejection = (): void => {};
+		process.on("unhandledRejection", onUnhandledRejection);
+		return {
+			dispose() {
+				process.off("unhandledRejection", onUnhandledRejection);
+			},
+		};
+	},
 	traceHeaderPolicy() {
 		return { allowedBaseUrls: resolveStepTraceHeaderBaseUrls(), highSensitivityFields: [] };
 	},
