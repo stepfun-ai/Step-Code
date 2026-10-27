@@ -9,11 +9,11 @@
  */
 
 import { useT } from "../../i18n";
-import { copyText } from "../../state/session";
 import { setUi } from "../../state/store";
 import type { CommandTimelineItem } from "../../state/types";
-import { Icon, LEGACY_ICONS } from "../../ui";
+import { Icon } from "../../ui";
 import { commandLeadIcon, MODES, modeFromCommand } from "../composer";
+import { CopyAction } from "./CopyAction";
 
 export function CommandRow({
 	item,
@@ -49,15 +49,7 @@ export function CommandRow({
 			</div>
 			{/* The same action row an ordinary user bubble carries: copy what was sent. */}
 			<div className="prompt-actions">
-				<button
-					type="button"
-					className="message-action"
-					title={t("copy")}
-					aria-label={t("copy")}
-					onClick={() => void copyText(item.command)}
-				>
-					<Icon {...LEGACY_ICONS.copy} />
-				</button>
+				<CopyAction value={item.command} />
 				{rewritableBefore !== undefined ? (
 					<button
 						type="button"

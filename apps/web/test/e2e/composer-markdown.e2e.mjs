@@ -366,3 +366,62 @@ test("pasted inline code with backticks renders, and italic-only text previews",
 		assert.equal(await preview(page).locator("em").textContent(), "italic");
 	} finally { await page.close(); }
 });
+
+/** Open the ＋ menu and pick a mode row; the menu closes on the pick. */
+async function pickMode(page, id) {
+	await page.locator("#plusTrigger").click();
+	await page.locator(`.control-option--${id}`).click();
+}
+
+test("staging another mode replaces the staged one — modes are mutually exclusive", { skip }, async () => {
+	const page = await pageFixture();
+	try {
+		// From the ＋ menu: Goal then Plan — one mode chip stands, in the staged mode's own text.
+		await pickMode(page, "goal");
+		await page.waitForFunction(() => document.querySelector(".prompt-mode")?.dataset.mode === "goal");
+		await pickMode(page, "plan");
+		await page.waitForFunction(() => document.querySelector(".prompt-mode")?.dataset.mode === "plan");
+		assert.equal(await page.evaluate(() => document.querySelectorAll(".prompt-mode").length), 1);
+		assert.equal(await promptValue(page), "/plan ");
+
+		// The ＋ menu marks only the staged mode selected.
+		await page.locator("#plusTrigger").click();
+		assert.equal(await page.locator(".control-option--plan").getAttribute("aria-selected"), "true");
+		assert.equal(await page.locator(".control-option--goal").getAttribute("aria-selected"), "false");
+		assert.equal(await page.locator(".control-option--ultraloop").getAttribute("aria-selected"), "false");
+		await page.keyboard.press("Escape");
+		await page.waitForFunction(() => !document.querySelector(".control-popover"));
+
+		// Typing another mode's command replaces the chip the same way — it does not stack.
+		await page.locator("#prompt").focus();
+		await page.keyboard.type("ultracode: ");
+		await page.waitForFunction(() => document.querySelector(".prompt-mode")?.dataset.mode === "ultraloop");
+		assert.equal(await page.evaluate(() => document.querySelectorAll(".prompt-mode").length), 1);
+		assert.equal(await promptValue(page), "ultracode: ");
+
+		// A plain command still stacks beside the mode; only modes replace modes.
+		await page.keyboard.type("/feedback ");
+		await page.waitForFunction(() => document.querySelectorAll(".prompt-command").length === 1);
+		assert.equal(await page.evaluate(() => document.querySelectorAll(".prompt-mode").length), 1);
+		assert.equal(await promptValue(page), "ultracode: /feedback ");
+	} finally { await page.close(); }
+});
+
+test("backspacing over the mode chip unstages it everywhere", { skip }, async () => {
+	const page = await pageFixture();
+	try {
+		await pickMode(page, "goal");
+		await page.waitForFunction(() => document.querySelector(".prompt-mode")?.dataset.mode === "goal");
+		// Backspacing over the chip removes it like a word (the first takes the
+		// separating space, the second the chip); the store and menu follow.
+		await page.keyboard.press("Backspace");
+		await page.keyboard.press("Backspace");
+		await page.waitForFunction(() => !document.querySelector(".prompt-mode"));
+		assert.deepEqual(
+			await page.evaluate(() => window.fixture.getState().modes),
+			{ goal: false, plan: false, ultraloop: false },
+		);
+		await page.locator("#plusTrigger").click();
+		assert.equal(await page.locator(".control-option--goal").getAttribute("aria-selected"), "false");
+	} finally { await page.close(); }
+});

@@ -129,7 +129,7 @@ export async function revertTurn(turnId: string): Promise<boolean> {
 			`/api/v1/sessions/${current.id}/turns/${encodeURIComponent(turnId)}/revert`,
 			"POST",
 		);
-		if (getState().current?.id === current.id) renderSnapshot(result.snapshot);
+		if (getState().current?.id === current.id) renderSnapshot(result.snapshot, { fromAction: true });
 		const count = result.paths.length;
 		const skipped = [...new Set(result.skipped.map((change) => change.path))];
 		// Files without a recorded diff stay as they are; say so instead of a plain success.

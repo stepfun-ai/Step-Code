@@ -31,6 +31,15 @@
 .message-action[aria-pressed="true"] {
 	color: var(--ink);
 }
+/* A copy button confirming in place: green check, and its hover-revealed row stays visible meanwhile. */
+.message-action[data-copied],
+.tool-cx-action[data-copied] {
+	color: var(--success);
+}
+.message-actions:has([data-copied]),
+.prompt-actions:has([data-copied]) {
+	opacity: 1;
+}
 .message-actions .message-usage,
 .message-actions .message-time {
 	padding: 0 6px;

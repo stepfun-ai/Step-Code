@@ -1,4 +1,5 @@
 import { useT } from "../../i18n";
+import { defaultProjectCwd } from "../../state/session";
 import { shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
 import { EmptyState, Icon } from "../../ui";
@@ -26,6 +27,8 @@ export function ProjectView() {
 		shallowEqual,
 	);
 	const draftCwd = useAppStore(draftRowCwd);
+	const fallbackCwd = useAppStore(defaultProjectCwd);
+	const fallbackInUse = useAppStore((state) => state.defaultCwdFallback);
 	const { showArchived, filter } = view;
 
 	let projects = new Map<string, SessionSummary[]>();
@@ -60,6 +63,16 @@ export function ProjectView() {
 		projects = new Map([[draftCwd, []], ...projects]);
 	}
 
+	// The launch folder was removed, so new work runs in the host's fallback
+	// folder. Listing it as "默认项目" is what tells the user where the next
+	// conversation goes; the empty "no workspace" line named neither the folder
+	// nor the project. A usable launch folder keeps its own name and the
+	// existing empty state.
+	const defaultProject = !showArchived && fallbackInUse && registered.size === 0 && fallbackCwd ? fallbackCwd : "";
+	if (defaultProject && !projects.has(defaultProject)) {
+		projects = new Map([[defaultProject, []], ...projects]);
+	}
+
 	const hiddenIds = new Set<string>();
 	if (filter) {
 		for (const session of view.sessions) if (view.tags.get(session.id) !== filter) hiddenIds.add(session.id);
@@ -85,6 +98,9 @@ export function ProjectView() {
 						folded={view.foldedProjects.has(cwd)}
 						hiddenIds={hiddenIds}
 						draft={cwd === draftCwd}
+						// The fallback folder is the default project, not a workspace the
+						// user registered: it says so, and it offers no removal.
+						defaultProject={cwd === defaultProject}
 						// With a filter, a group without a matching row is hidden (legacy applyTagFilter).
 						filteredOut={
 							Boolean(filter) && cwd !== draftCwd && sessions.every((session) => hiddenIds.has(session.id))

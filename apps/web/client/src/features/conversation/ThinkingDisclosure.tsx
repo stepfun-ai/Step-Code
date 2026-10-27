@@ -79,7 +79,8 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 						ref={bodyRef}
 						className="message-body"
 						html={html}
-						onCopyCode={(value) => void copyText(value)}
+						onCopyCode={(value) => copyText(value, null)}
+						copiedLabel={t("copied")}
 					/>
 				</div>
 			</div>

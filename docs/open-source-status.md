@@ -12,8 +12,13 @@ The following responsibilities stay outside this repository:
 - creating protected release tags;
 - uploading binaries, manifests, or model catalogs to object storage;
 - publishing release announcements through private services;
-- private observability implementations and private endpoint values;
+- private observability implementations and private telemetry endpoints;
 - internal execution plans and repository-only release instructions.
+
+User-initiated feedback is not part of that boundary: its collector route is a
+product default in source (see [feedback report](feedback-report.md#delivery-and-retry)),
+like the other `api.stepfun.com` routes, and operators can still override it by
+environment. Telemetry exporters and their routes stay outside this repository.
 
 The public tree may still build a bundle locally. `infra/release/release-bundle.mjs`
 only creates local archives, checksums, manifests, and rendered installer

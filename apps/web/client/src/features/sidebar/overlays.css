@@ -254,6 +254,8 @@
 	position: absolute;
 	top: 50%;
 	right: 5px;
+	/* Centres the pencil on the row's axis, level with the group name. */
+	transform: translateY(-50%);
 	display: none;
 	place-items: center;
 	width: 20px;

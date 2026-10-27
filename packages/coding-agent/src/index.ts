@@ -308,6 +308,8 @@ export type {
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
 export type { AppMode } from "./core/project-trust.ts";
+/** How `AgentSession.prompt` turns `/<template> args` into a prompt; hosts use it to recognise what was sent. */
+export { expandPromptTemplate } from "./core/prompt-templates.ts";
 export type {
 	ResourceCollision,
 	ResourceDiagnostic,

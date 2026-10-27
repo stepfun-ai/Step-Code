@@ -6,7 +6,7 @@ import { displayPath, parsedPatch } from "../../lib/turn-changes";
 import { copyText } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { FileChange, ToolArgs, ToolTimelineItem } from "../../state/types";
-import { DiffStat, Icon, type IconName, Tooltip } from "../../ui";
+import { DiffStat, Icon, type IconName, Tooltip, useCopiedFlag } from "../../ui";
 import { openFile } from "../files/actions";
 import { fileLanguage, highlightLines } from "../files/index";
 import { openChildAgent, openWorkflowAgents } from "./actions";
@@ -283,7 +283,13 @@ function CardHead({
 				</Tooltip>
 			) : null}
 			<Tooltip content={copyLabel}>
-				<button type="button" className="tool-cx-action" aria-label={copyLabel} onClick={onCopy}>
+				<button
+					type="button"
+					className="tool-cx-action"
+					aria-label={copyLabel}
+					data-copied={copied || undefined}
+					onClick={onCopy}
+				>
 					<Icon name={copied ? "check" : "copy"} size="xs" />
 				</button>
 			</Tooltip>
@@ -304,12 +310,10 @@ function ToolCard({
 	readonly copyValue: string;
 }) {
 	const t = useT();
-	const [copied, setCopied] = useState(false);
+	const [copied, flashCopied] = useCopiedFlag();
 	const [wrap, setWrap] = useState(false);
 	const copy = async () => {
-		await copyText(copyValue);
-		setCopied(true);
-		setTimeout(() => setCopied(false), 1200);
+		if (await copyText(copyValue, null)) flashCopied();
 	};
 	const command = toolKind(item) === "bash";
 	const head = command ? item.args?.command || item.inputSummary : path || item.inputSummary;
@@ -402,13 +406,11 @@ function ChangeCard({
 	readonly openable: string | null;
 }) {
 	const t = useT();
-	const [copied, setCopied] = useState(false);
+	const [copied, flashCopied] = useCopiedFlag();
 	const patch = item.change?.patch;
 	const diff = useMemo(() => (patch ? diffRows(patch, path) : null), [patch, path]);
 	const copy = async () => {
-		await copyText(patch ?? item.inputDetail ?? "");
-		setCopied(true);
-		setTimeout(() => setCopied(false), 1200);
+		if (await copyText(patch ?? item.inputDetail ?? "", null)) flashCopied();
 	};
 	return (
 		<>

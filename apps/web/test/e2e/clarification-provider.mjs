@@ -73,6 +73,34 @@ async function slowReply(input, response) {
   response.end("data: [DONE]\n\n");
 }
 
+/**
+ * A reply that never finishes on its own: a thinking block followed by prose,
+ * both streamed slowly until the client stops the turn. The request's own close
+ * ends it, so an aborted turn does not keep the fixture writing.
+ */
+async function endlessReply(request, response, input) {
+  response.writeHead(200, { "content-type": "text/event-stream" })
+  let closed = false
+  request.on("close", () => {
+    closed = true
+  })
+  const chunk = (delta) =>
+    response.write(
+      `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
+    )
+  for (let index = 0; index < 600 && !closed; index += 1) {
+    chunk(
+      index < 8
+        ? { reasoning_content: `thought ${index} ` }
+        : { content: `reply ${index} ${"lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(2)}\n` },
+    )
+    await new Promise((resolve) => setTimeout(resolve, index < 8 ? 60 : 8))
+  }
+  if (closed) return
+  response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`)
+  response.end("data: [DONE]\n\n")
+}
+
 export async function clarificationCompletion(request, response) {
   let raw = "";
   for await (const chunk of request) raw += chunk;
@@ -87,6 +115,22 @@ export async function clarificationCompletion(request, response) {
   // A slow reply: the page must keep one prompt field while the live row exists.
   if (tools.length && last.role === "user" && text.includes("stream-fixture")) {
     await slowReply(input, response);
+    return;
+  }
+  // A reply long enough to stop. The turn inspects the folder first, the way a
+  // "explain this repository" prompt does, so the answer is the turn's second
+  // assistant message and the page refreshes its snapshot mid-run: that read is
+  // the one that can be overtaken by the stop.
+  if (tools.length && input.messages.some((message) => messageText(message).includes("stop-fixture"))) {
+    const read = tools.find((item) => item.function.name === "list_directory");
+    if (last.role === "user" && read) {
+      const call = toolCallDelta(read.function.name, { path: "." }, "stop-prelude");
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta: call, finish_reason: "tool_calls" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+      return;
+    }
+    await endlessReply(request, response, input);
     return;
   }
   let delta;

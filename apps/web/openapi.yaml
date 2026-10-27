@@ -537,6 +537,17 @@ paths:
                 type: object
                 properties:
                   cwd: { type: string, description: Launch working directory }
+                  defaultCwd:
+                    type: string
+                    description: |
+                      Where a new conversation starts when no workspace is on offer.
+                      The launch folder, or the home folder when the launch folder
+                      was removed from workspace navigation.
+                  defaultCwdFallback:
+                    type: boolean
+                    description: |
+                      True when `defaultCwd` is the home fallback because the launch
+                      folder was removed. The page names that folder "默认项目".
                   directoryPicker: { type: string, enum: [native, browse] }
                   login: { $ref: "#/components/schemas/LoginReport" }
                   customModels:
@@ -684,7 +695,7 @@ paths:
   /api/v1/workspaces:
     get:
       responses:
-        "200": { description: "Workspace navigation entries: path, name, available, optional hidden=true for explicitly removed folders. Hidden entries persist across reload; chats remain searchable and appear under Recent. Adding the folder clears hidden." }
+        "200": { description: "Workspace navigation entries (workspaces: path, name, available, optional hidden=true for explicitly removed folders) plus defaultCwd and defaultCwdFallback, which report the folder a new conversation uses when no workspace is on offer. Hidden entries persist across reload; chats remain searchable and appear under Recent. Adding the folder clears hidden." }
     post:
       requestBody:
         required: true
@@ -1038,11 +1049,26 @@ paths:
             settings (a "this session" Full Access grant is not persisted).
             `goal` is the running goal the client steers from the summary board (absent when the session has none), and
             `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
+            `revision` is the newest event revision the host had published when this snapshot was serialized; a client
+            that has already applied a newer stream event must ignore this answer.
+            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, or a reply the
+            kernel recorded as `aborted` — and false while a turn is still running.
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  revision:
+                    type: integer
+                    description: Newest published event revision at serialization time (see the SSE `agent`/`status` events)
+                  interruptedTurn:
+                    type: boolean
+                    description: >-
+                      The newest turn did not finish (runtime.ts `hasInterruptedTurn`): derived from the session
+                      entries, so it survives a host restart. False while a turn runs or is starting.
+                  lastRunAborted:
+                    type: boolean
+                    description: The last run was stopped by the user (runtime.ts `lastRunAborted`), so it has no finished reply to credit.
                   permissionPreset: { type: string, enum: [ask, approve-for-me, full-access] }
                   goal:
                     type: object
@@ -1091,6 +1117,12 @@ paths:
                             the flow's round separators from it.
                         thinkingTimings:
                           $ref: "#/components/schemas/ThinkingTimings"
+                        promptCommand:
+                          type: string
+                          description: >-
+                            On a user message only: the prompt-command line (`/<template> args`) the user typed,
+                            when this message is its expansion. Paired by content from a host-recorded
+                            `stepcode-web.prompt-command` custom entry; never part of the model's context.
                   policies:
                     type: array
                     items: { $ref: "#/components/schemas/PolicyPreset" }
@@ -1201,6 +1233,9 @@ paths:
             a message. queue carries a QueueState (queued, steering).
             Agent envelopes optionally carry thinkingTimings, keyed by original content-block index, with host-observed
             epoch-millisecond startedAt/endedAt fields. Live intervals may omit endedAt; saved intervals are complete.
+            A user message_start envelope may carry promptCommand: the prompt-command line its text expanded from.
+            Every event (and the session snapshot) carries `revision`, monotonic per bound session; a snapshot whose
+            revision is older than an event the page has already applied describes a state it has left.
   /api/v1/sessions/{id}/messages:
     post:
       parameters:
@@ -1400,12 +1435,16 @@ paths:
         "404": { description: Approval no longer pending }
   /api/v1/sessions/{id}/skills:
     get:
-      description: Skills the composer offers as `/skill:<name>` (empty when skill commands are disabled).
+      description: >-
+        What the composer's slash menu offers for this session: skills as `/skill:<name>` (empty when skill
+        commands are disabled) and prompt commands as `/<name>` — prompt templates, plugin `commands/*.md`
+        included, that the kernel expands on send. A template named like a registered extension command or a
+        Web surface (`mcp`, `btw`, `feedback`) never expands and is not listed.
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
       responses:
         "200":
-          description: Skills by name
+          description: Skills and prompt commands, each by name
           content:
             application/json:
               schema:
@@ -1418,11 +1457,21 @@ paths:
                       properties:
                         name: { type: string }
                         description: { type: string }
+                  commands:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, description]
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+                        argumentHint: { type: string, description: "The template's `argument-hint` frontmatter" }
   /api/v1/workspace/skills:
     get:
       description: >-
-        Skills for a folder without a session yet. Uses an open session in the same folder; otherwise resolves
-        the folder's skill resources as a session would, without extensions (plugin skills are then missing).
+        Skills and prompt commands for a folder without a session yet: what a new session there would load. The
+        folder's resources are resolved as a session would, without extensions; installed plugins' skills and
+        commands are added from plugin discovery, so a plugin installed a moment ago is listed at once.
       parameters:
         - { name: cwd, in: query, required: true, schema: { type: string } }
       responses:
@@ -2086,8 +2135,9 @@ paths:
     post:
       description: >-
         File feedback about this session. The kernel assembles the body and the session archive, redacts them, and
-        delivers both; the host never assembles its own payload. Without a feedback endpoint configured the host
-        answers 400 with the reason.
+        delivers both; the host never assembles its own payload. The built-in collector route is used unless
+        `STEPCODE_FEEDBACK_ENDPOINT` overrides it. A report the kernel rejects (unknown category, invalid body) answers
+        400 with the reason.
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
       requestBody:
@@ -2104,7 +2154,7 @@ paths:
                 token: { type: string, description: "The token of the evidence the dialog displayed" }
       responses:
         "200": { description: Submitted; `message` states the feedback id and any skipped archive }
-        "400": { description: "Feedback is not configured, the category is unknown, or the kernel rejected the body" }
+        "400": { description: "The kernel rejected the report, or delivery failed and the outcome is not a submission" }
   /api/v1/sessions/{id}/model:
     patch:
       parameters:

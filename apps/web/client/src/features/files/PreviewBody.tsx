@@ -116,7 +116,8 @@ function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 			<MarkdownView
 				className="side-answer-body message-body"
 				html={html}
-				onCopyCode={(code) => void copyText(code)}
+				onCopyCode={(code) => copyText(code, null)}
+				copiedLabel={t("copied")}
 			/>
 			<p className="side-answer-note">{t("btwNotSaved")}</p>
 		</div>
@@ -156,7 +157,8 @@ function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 					{ code: t("code"), copy: t("copy"), table: t("markdownTable") },
 					{ localFiles: true },
 				)}
-				onCopyCode={(code) => void copyText(code)}
+				onCopyCode={(code) => copyText(code, null)}
+				copiedLabel={t("copied")}
 				onFileReference={(path) => void openFileReference(tab.cwd, path, tab.path)}
 			/>
 		);

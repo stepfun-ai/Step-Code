@@ -759,6 +759,13 @@ html[data-theme="dark"] .sidebar {
 .copy-code:hover {
   background: var(--hover);
 }
+/* Set by MarkdownView for a moment after a successful copy. */
+.copy-code[data-copied] {
+  color: var(--success);
+}
+.copy-code[data-copied]::before {
+  content: "✓ ";
+}
 .code-block pre {
   /* No height cap: a reply's code is read whole, and a clipped block hid its last lines. */
   overflow-x: auto;

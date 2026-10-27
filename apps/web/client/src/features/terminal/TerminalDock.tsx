@@ -17,6 +17,7 @@ import {
 	terminalWorkspaceKey,
 	toggleTerminalDock,
 } from "./actions";
+import { pasteExceedsLimit, terminalKeyAction } from "./input";
 import "@xterm/xterm/css/xterm.css";
 import "./terminal.css";
 
@@ -151,20 +152,20 @@ export function TerminalDock() {
 			setError(t("terminalClipboardFailed"));
 		}
 	};
-	const paste = async () => {
-		if (!selectedId || !connected || selected?.status !== "running") return;
-		try {
-			const text = await navigator.clipboard.readText();
-			if (selectedInfo.current?.id !== selectedId || !current.current.open) return;
-			if (new TextEncoder().encode(text).byteLength > 65536) {
-				setError(t("terminalPasteLimit"));
-				return;
-			}
-			views.current.get(selectedId)?.terminal.paste(text);
-			views.current.get(selectedId)?.terminal.focus();
-		} catch {
-			setError(t("terminalClipboardFailed"));
-		}
+	/**
+	 * xterm's paste listener forwards the whole clipboard, but the Host rejects one
+	 * input request over 64 KiB and closes the stream. Refuse an oversized paste before
+	 * xterm reads it; the browser's own paste stays the only way text gets in, so no
+	 * clipboard read permission is involved.
+	 */
+	const guardPaste = (event: ClipboardEvent): void => {
+		if (!pasteExceedsLimit(event.clipboardData?.getData("text/plain") ?? "")) return;
+		event.preventDefault();
+		// Capture phase on the dock's wrapper: stopping here keeps xterm's listener from
+		// forwarding the oversized text to the PTY.
+		event.stopPropagation();
+		// A stopped or disconnected shell takes no input, so the limit is not its problem.
+		if (selectedInfo.current?.status === "running") setError(t("terminalPasteLimit"));
 	};
 	const create = async () => {
 		if (pendingRef.current || !cwd) return;
@@ -213,8 +214,8 @@ export function TerminalDock() {
 			setPending(false);
 		}
 	};
-	const actions = useRef({ copy, paste, create });
-	actions.current = { copy, paste, create };
+	const actions = useRef({ copy, guardPaste, create });
+	actions.current = { copy, guardPaste, create };
 
 	useEffect(() => {
 		autoStart.current = open;
@@ -295,27 +296,19 @@ export function TerminalDock() {
 					connection.current.value.send("input", { data });
 			});
 			terminal.attachCustomKeyEventHandler((event) => {
-				if (event.type !== "keydown") return true;
-				// The dock toggle belongs to the shell's shortcut table, not to the PTY.
-				if (event.ctrlKey && event.code === "Backquote") return false;
-				const key = event.key.toLowerCase();
-				if (
-					(event.ctrlKey || event.metaKey) &&
-					!event.altKey &&
-					key === "c" &&
-					(event.shiftKey || terminal.hasSelection())
-				) {
+				const action = terminalKeyAction(event, terminal.hasSelection());
+				if (action === "forward") return true;
+				if (action === "copy") {
 					event.preventDefault();
 					void actions.current.copy();
-					return false;
 				}
-				if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "v") {
-					event.preventDefault();
-					void actions.current.paste();
-					return false;
-				}
-				return true;
+				// "dock" and "paste" stay uncancelled: the shell shortcut table sees the
+				// dock chord, and cancelling the paste key would also cancel the browser's
+				// native paste event, which is how clipboard text reaches xterm.
+				return false;
 			});
+			// Capture on the wrapper runs before xterm's own paste listener on the textarea.
+			element.addEventListener("paste", (event) => actions.current.guardPaste(event), true);
 			view = { terminal, fit, element, seq: 0, truncated: false };
 			views.current.set(id, view);
 		}

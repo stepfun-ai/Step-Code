@@ -129,6 +129,19 @@ export class WorkspaceRegistry {
 		return this.paths.includes(canonical);
 	}
 
+	/**
+	 * Whether the user removed this folder from workspace navigation. Both
+	 * spellings are recorded by `remove`, so either one answers for the folder.
+	 * Only removal matters here — a folder that was never registered is left
+	 * alone, which is what keeps an untouched launch folder usable.
+	 */
+	async isRemoved(path: string): Promise<boolean> {
+		await this.load();
+		if (!isAbsolute(path)) return false;
+		const canonical = await canonicalWorkspacePath(path);
+		return this.removed.includes(canonical) || this.removed.includes(path);
+	}
+
 	/** Register a folder by its real path, so two spellings cannot list it twice. */
 	async add(inputPath: string): Promise<WebWorkspace> {
 		await this.load();
@@ -183,4 +196,32 @@ export class WorkspaceRegistry {
 		}
 		return true;
 	}
+}
+
+/**
+ * The folder new work falls back to when no workspace is on offer, and whether
+ * it is a fallback rather than the launch folder itself.
+ *
+ * `launched` is where the host started (`STEPCODE_WEB_CWD`, else the process
+ * cwd), which Desktop sets to the folder the user last picked. That folder is
+ * exactly the one a user may have just removed from navigation, and a removed
+ * folder is not a target for new work: falling back to it made every "New
+ * conversation" with an empty workspace list start in the folder the user had
+ * deleted. So a removed launch folder yields `fallback` (the home folder) and
+ * reports `fallback: true`, which the page renders as the default project.
+ * Re-adding the folder clears the removal and the launch folder is used again.
+ */
+export interface DefaultWorkspace {
+	readonly path: string;
+	/** True when `path` is the home fallback because the launch folder was removed. */
+	readonly fallback: boolean;
+}
+
+export async function resolveDefaultWorkspace(
+	registry: WorkspaceRegistry,
+	launched: string,
+	fallback: string,
+): Promise<DefaultWorkspace> {
+	const removed = await registry.isRemoved(launched);
+	return { path: removed ? fallback : launched, fallback: removed };
 }

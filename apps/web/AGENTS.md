@@ -172,8 +172,9 @@ keep only the classes passed in. Read the component's doc comment before using i
 | `ShimmerText` | Animated "working on it" label | Put it in a status region to announce it |
 | `Kbd` | Keyboard shortcut hints | |
 | `DiffStat` | `+12 -3` line counts (`additions`, `deletions`) | |
-| `MarkdownView` | Rendering `lib/markdown` output (`html`), with code-block copy buttons (`onCopyCode`) | Only HTML from `renderMarkdown`; never other HTML |
+| `MarkdownView` | Rendering `lib/markdown` output (`html`), with code-block copy buttons (`onCopyCode`; unless it resolves `false`, the button shows `copiedLabel` briefly) | Only HTML from `renderMarkdown`; never other HTML |
 | `ResizeHandle` | Draggable / keyboard splitter between panels | Holds no size: `getSize`, `onResize` (live), `onCommit` (persist), `onReset`; `orientation="horizontal"` for stacked panels |
+| `useCopiedFlag` | `[copied, flash]` for a copy button that confirms in place | Pair with `copyText(value, null)` to skip the toast |
 | `useDismiss` | Outside-press and Escape dismissal for a mounted overlay | Include the trigger in `insideRefs` |
 | `useMergedRef` | One ref callback feeding two refs (own + forwarded) | |
 
@@ -191,8 +192,21 @@ When to add or change one:
   `server.ts`; the server listens on `127.0.0.1` only. Never log the launch token or the cookie secret.
 - Adding or changing a route or payload: update `openapi.yaml` in the same change, update `client/src/state/types.ts`,
   and add a unit test.
+- Session snapshots and every SSE event carry `revision`, monotonic per bound session. `renderSnapshot` ignores a
+  snapshot older than the newest revision the page has applied, so a read answered late cannot repaint a stopped turn
+  as running (or restore its stop control); each stream connection starts a new order, and its opening snapshot is
+  authoritative. Never apply an HTTP snapshot without that gate.
 - Anything a reloaded page must show again belongs in the session snapshot (e.g. `pendingApprovals`), not only in
   an SSE event.
+- The kernel persists an assistant message only on `message_end`, so a turn that is still streaming lives nowhere but
+  process memory. Shutdown must refuse new work and stop running turns before closing their sessions
+  (`WebSessionStore.interruptAndClose`, bounded below Desktop's 5s SIGKILL) so the partial reply and its thinking reach
+  the transcript as `aborted`; a bare `close()` disposes mid-stream and drops what the page already showed. A prompt the
+  kernel has accepted but not started is not a run yet — `abort()` cannot cancel it — so it counts as busy and the stop
+  waits for the run first (`pendingPrompts` / `stopTurnWithin`). Applying the same rule to a new host path (another
+  embedding, a CLI quit) is a session-lifecycle change: stop, wait for idle, then dispose.
+- `interruptedTurn` is derived from the recorded entries (`hasInterruptedTurn`), never from a process flag, so a
+  reopened session reports the same thing a live page did. Do not infer it from UI text or from a missing live row.
 - Thinking elapsed time is host-observed presentation metadata (`src/thinking-timing.ts`), persisted through
   the session manager's `stepcode-web.thinking-timing` custom entries outside model context. Snapshots and agent
   envelopes project validated `thinkingTimings` by original content index. Never infer durations for unobserved
@@ -206,9 +220,10 @@ When to add or change one:
   timeline indices for turn footers, file deliveries and search reveal. Group
   completion counts tool results, never canonical Tasks or child-agent success.
 - A subagent record is context the main agent produced, so its inspector has no prompt surface:
-  the child's input is a collapsed "task message received" receipt, never a bubble or box, and the parent
-  composer is hidden while the record is open (closing it restores the composer). Do not add a composer,
-  inline editor or send control to the child view.
+  the child's input is a collapsed "task message received" receipt, never a bubble or box. Do not add a
+  composer, inline editor or send control to the child view. Inspection is read-only; the session is not.
+  The parent composer stays mounted and usable underneath the record (the "read-only" badge, not a hidden
+  field, marks the panel), because inspecting a subagent must not take away typing, stop or queued messages.
 - Subagent rows project structured per-task results and use the existing read-only child transcript API.
   Planned arguments mean queued, not running; missing legacy statuses stay unknown. A dispatch the kernel
   rejected never started a child, so its planned rows stay as failed attempts carrying the tool result's own
@@ -241,11 +256,14 @@ When to add or change one:
   `features/terminal` renders xterm in `#terminalDock`, a resizable bottom dock
   under the conversation toggled from the rail (`data-terminal-toggle`) or
   Ctrl+`; it is independent of the exclusive inspector. Keys typed in the shell
-  stay there (Escape, Ctrl chords). Only opening an empty dock or explicit tab
-  creation starts a shell; ending the last tab hides the dock. Hiding/switching tabs
-  disconnects streams without killing processes; closing a tab awaits owned
-  process-tree cleanup. Refresh replays bounded sequenced output, never creates
-  replacement shells. Shell exit retains helper ownership until Host cleanup;
+  stay there (Escape, Ctrl chords). Cmd/Ctrl+V is left to the browser's native
+  paste event — the dock never reads the clipboard, so no clipboard-read
+  permission is needed — and an oversized paste is refused before xterm sends
+  it. Only opening an empty dock or explicit tab creation starts a shell;
+  ending the last tab hides the dock. Hiding/switching tabs disconnects streams
+  without killing processes; closing a tab awaits owned process-tree cleanup.
+  Refresh replays bounded sequenced output, never creates replacement shells.
+  Shell exit retains helper ownership until Host cleanup;
   Windows descendant discovery checks creation times, not just reusable PIDs.
   Startup cancellation waits for a shell identity or startup failure before
   terminating the helper. Retention gaps must be visible; do not claim full-screen
@@ -306,8 +324,11 @@ When to add or change one:
   and explicit `removedWorkspaces`. Removed entries are returned with `hidden: true`; clients must not recreate
   their project groups from session cwd values. Re-adding restores the group; removal never deletes chats or files.
   A removed folder also stops being a *target*: its chats stay readable, but `startDraft` reroutes any request for a
-  hidden cwd to `workspaceForNewConversation` (launch folder, else a workspace still on offer), so "New conversation"
+  hidden cwd to `workspaceForNewConversation` (launch folder, then a workspace still on offer, then the host's
+  `defaultCwd` — the home folder when the launch folder itself was removed), so "New conversation"
   from one of those chats — and a draft open in the folder being removed — never creates a session in it. The host
+  reports `defaultCwd` / `defaultCwdFallback` alongside the workspace list, and the client names that fallback
+  "默认项目" in the composer pill and the sidebar instead of the last path segment. The host
   refuses folder-scoped requests for a folder it no longer knows (`Folder is not a known workspace`), which is what a
   draft pinned to a removed folder used to hit.
 - Session tag groups are derived, not stored: a group exists exactly as long as a listed session carries its tag

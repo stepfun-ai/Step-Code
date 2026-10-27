@@ -198,13 +198,9 @@ export async function runFeedbackCommand(
 	const bundleEndpoint = resolveFeedbackEndpoint(env, true);
 	const canPrompt = dependencies.interactive ?? (isTerminal(stdin) && isTerminal(stdout) && !parsed.json);
 	if (parsed.retry) {
-		if (!endpoint) {
-			write(stderr, "step feedback: no feedback endpoint configured\n");
-			return 1;
-		}
 		const results = await retryPendingFeedback({
 			endpoint,
-			...(bundleEndpoint ? { bundleEndpoint } : {}),
+			bundleEndpoint,
 			storageRootDir,
 			...(dependencies.fetchImpl ? { fetchImpl: dependencies.fetchImpl } : {}),
 		});
@@ -243,10 +239,6 @@ export async function runFeedbackCommand(
 		return failed.length ? 1 : 0;
 	}
 
-	if (!endpoint) {
-		write(stderr, "step feedback: no feedback endpoint configured\n");
-		return 1;
-	}
 	let category = parsed.category;
 	let comment = (parsed.message ?? parsed.positional.join(" ")).trim();
 	const hasExplicitComment = parsed.message !== undefined || parsed.positional.length > 0;
@@ -285,9 +277,9 @@ export async function runFeedbackCommand(
 			sessionId: parsed.session ?? dependencies.sessionId,
 			at: readAt,
 			env,
-			// A bundle that cannot be uploaded is 24 MiB of reading and gzip for
-			// nothing, and it would be announced on the consent page.
-			withoutBundle: parsed.sessionBundle === false || bundleEndpoint === undefined,
+			// `--no-session-bundle` is the only way to skip the archive now: the
+			// built-in bundle route always exists.
+			withoutBundle: parsed.sessionBundle === false,
 			withoutDiagnostics: parsed.diagnostics === false,
 			...(dependencies.runtime
 				? {
@@ -333,7 +325,7 @@ export async function runFeedbackCommand(
 			...(dependencies.uid ? { uid: dependencies.uid } : {}),
 			...(dependencies.username ? { username: dependencies.username } : {}),
 			endpoint,
-			...(bundleEndpoint ? { bundleEndpoint } : {}),
+			bundleEndpoint,
 			telemetry: dependencies.telemetry,
 			...(dependencies.fetchImpl ? { fetchImpl: dependencies.fetchImpl } : {}),
 			env,

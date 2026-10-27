@@ -24,7 +24,7 @@ import {
 } from "node:fs/promises"
 import { createServer as createHttpServer } from "node:http"
 import { createServer } from "node:net"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { delimiter, dirname, join } from "node:path"
 import { after, before, test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -1507,8 +1507,7 @@ test("clarification close cancels the pending tool and a single freeform answer 
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture again" }) });
     await until(() => !$(".clarification-panel").hidden, "new questions");
-    // Closing the round lives with the footer text actions since the panel lost
-    // its card header, so the affordance is a button id, not an icon label.
+    // The close control is targeted by its stable id, not its icon label.
     $("#clarificationClose").click();
     await until(() => $(".clarification-panel").hidden, "cancelled card");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "cancelled turn settles");
@@ -2248,7 +2247,7 @@ test("workspaces with chats can be removed through the dialog, retained after re
     await until(() => !$("#removeWorkspaceConfirm").disabled && $("#errorToast").textContent.includes("removal fixture retry"), "retryable failure");
     const kept = !$("#removeWorkspaceModal").hidden;
     $("#removeWorkspaceConfirm").click(); $("#removeWorkspaceConfirm").click();
-    await until(() => $("#removeWorkspaceModal").hidden && !projects().length, "confirmed removal");
+    await until(() => $("#removeWorkspaceModal").hidden && !projects().includes(${JSON.stringify(workspace)}), "confirmed removal");
     window.fetch = original;
     return { calls, kept, session: $("#recentTasks .session-row.active")?.dataset.sessionId };
   `);
@@ -2256,9 +2255,18 @@ test("workspaces with chats can be removed through the dialog, retained after re
   await browser.goto(`${origin}/`);
   const reloaded = await browser.run(`
     await until(() => $("#recentTasks .session-row"), "retained chats after reload");
-    return { projects: projects(), session: (await (await fetch("/api/v1/sessions/${before.session}")).json()).id };
+    return {
+      projects: projects(),
+      name: $("#projectGroups .project-name").textContent,
+      session: (await (await fetch("/api/v1/sessions/${before.session}")).json()).id,
+    };
   `);
-  assert.deepEqual(reloaded, { projects: [], session: before.session });
+  // The workspace just removed was the launch folder, so new work falls back to
+  // the host's default folder. The page lists it as "默认项目" instead of leaving
+  // an empty project list: the user still needs a target for the next
+  // conversation, and it must not be the deleted folder.
+  const fallback = await realpath(homedir());
+  assert.deepEqual(reloaded, { projects: [fallback], name: "默认项目", session: before.session });
   assert.ok(existsSync(join(workspace, "README.md")));
   await browser.run(`
     await fetch("/api/v1/workspaces", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({path:${JSON.stringify(workspace)}}) });
@@ -2852,15 +2860,23 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     const view = $("#childAgentView");
     await until(() => !view.hidden && view.textContent.includes("Wombat audit finished."), "child transcript");
     const usageStrip = $("#subagentUsage");
-    // A subagent is context the main agent wrote: the reader only looks, so the
-    // parent's prompt deck must be gone while this read-only record is open.
+    // A subagent is context the main agent wrote, but only the record is
+    // read-only: the parent conversation keeps its one prompt field while the
+    // panel is open, so typing, stop and queued messages stay reachable.
     const composer = $(".composer-zone");
+    const promptVisible = (() => {
+      const prompt = $("#prompt");
+      if (!prompt) return false;
+      const box = prompt.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    })();
     const single = {
       listedChildren,
       readOnlyBadge: Boolean(view.querySelector(".child-agent-badge")),
       actions: view.querySelectorAll(".message-actions, textarea, input").length,
       activeRow: $(".session-row.active")?.dataset.sessionId,
-      composerHidden: getComputedStyle(composer).display === "none",
+      composerVisible: getComputedStyle(composer).display !== "none",
+      promptVisible,
       // The child's input is a collapsed "message received" receipt, never a
       // bubble (which reads as an input field in this read-only panel).
       taskCopiesBeforeOpen: (view.textContent.match(/audit wombat/g) ?? []).length,
@@ -2889,7 +2905,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     single.taskBlock = Boolean(view.querySelector(".subagent-input .subagent-task"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "child view closed by Escape");
-    single.composerRestored = getComputedStyle(composer).display !== "none";
+    single.composerAfterClose = getComputedStyle(composer).display !== "none";
 
     // A refused dispatch has no per-task result; it must still be a failed
     // record carrying the tool's own reason, not a nameless "status unknown" row.
@@ -2913,7 +2929,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
       empty: view.querySelector(".subagent-execution .child-agent-empty")?.textContent ?? "",
       inputs: view.querySelectorAll("input, textarea, [contenteditable='true']").length,
       userBubbles: view.querySelectorAll(".message.user").length,
-      composerHidden: getComputedStyle(composer).display === "none",
+      composerVisible: getComputedStyle(composer).display !== "none",
     };
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "rejected view closed by Escape");
@@ -2936,8 +2952,9 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     await until(() => view.hidden, "rail closes the panel");
     return { ...single, rejected, tabs: agentTabs, tabHints, railOpened };
   `)
-  assert.equal(seen.composerHidden, true, "the parent composer still shows beside the read-only subagent record")
-  assert.equal(seen.composerRestored, true, "closing the record does not restore the parent composer")
+  assert.equal(seen.composerVisible, true, "opening a subagent record took the parent composer away")
+  assert.equal(seen.promptVisible, true, "the parent prompt field is not usable beside the read-only subagent record")
+  assert.equal(seen.composerAfterClose, true, "closing the record broke the parent composer")
   assert.equal(seen.taskCopiesBeforeOpen, 0, "the task is printed before its receipt is opened")
   assert.match(seen.inputRow?.label ?? "", /^收到任务消息/, "the receipt is not labelled")
   assert.equal(seen.inputRow?.expanded, "false", "the task receipt starts closed")
@@ -2956,7 +2973,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     empty: "派发失败，子会话未创建",
     inputs: 0,
     userBubbles: 0,
-    composerHidden: true,
+    composerVisible: true,
   })
   assert.deepEqual(seen.usage, {
     input: "输入 1k",
@@ -2973,8 +2990,9 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     sections: _sections,
     rejected: _rejected,
     inputRow: _inputRow,
-    composerHidden: _composerHidden,
-    composerRestored: _composerRestored,
+    composerVisible: _composerVisible,
+    promptVisible: _promptVisible,
+    composerAfterClose: _composerAfterClose,
     ...rest
   } = seen
   assert.deepEqual(rest, {
@@ -3224,4 +3242,296 @@ test("a streaming reply never turns into a second prompt field", { skip }, async
   assert.equal(tops.length, 1, `the prompt moved while the reply streamed: ${tops.join(",")}`)
   const zones = [...new Set(settled.map((frame) => frame.zone))]
   assert.equal(zones.length, 1, `the composer moved while the reply streamed: ${zones.join(",")}`)
+})
+
+test(
+  "the terminal pastes the clipboard without reading it from script",
+  { skip },
+  async (t) => {
+    // The dock cannot be opened at all when the native PTY is unavailable.
+    const support = await browser.run(`
+      const cwd = (await (await fetch("/api/v1/bootstrap")).json()).cwd;
+      const list = await (await fetch("/api/v1/terminals?" + new URLSearchParams({ cwd }))).json();
+      return list.support;
+    `)
+    if (!support.available) {
+      t.skip(`terminal unavailable: ${support.reason}`)
+      return
+    }
+
+    // The page may put text on the clipboard, but a scripted read stays denied,
+    // as it always is in Desktop. Granting read back would hide the regression:
+    // the dock used to call navigator.clipboard.readText() inside the keydown
+    // handler and showed a red error when the browser refused.
+    await browser.send(
+      "Browser.grantPermissions",
+      { origin, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] },
+      false,
+    )
+    await browser.goto(`${origin}/`)
+    await browser.run(`
+      await until(() => $("#newSession"), "shell");
+      await navigator.clipboard.writeText("echo PASTE_MARKER");
+      $("[data-terminal-toggle]").click();
+      await until(() => !$("#terminalDock").hidden, "terminal dock");
+      await until(() => !$("#terminalDock .terminal-status"), "terminal connection");
+      // The shell process is connected before its login files have drawn a
+      // prompt; text sent into that gap is swallowed by the line editor.
+      const rows = () => $$("#terminalDock .xterm-rows > div").map((row) => row.textContent.trim());
+      await until(() => rows().some((row) => row.length > 1 && /[$%#>]$/.test(row)), "shell prompt");
+      await until(() => document.activeElement?.classList.contains("xterm-helper-textarea"), "terminal focus");
+      return true;
+    `)
+    await browser.send(
+      "Browser.grantPermissions",
+      { origin, permissions: ["clipboardSanitizedWrite"] },
+      false,
+    )
+    // Headless CDP cannot press the OS paste accelerator (that lives in the
+    // browser process), so the edit command rides on the same key event. It runs
+    // only when the page leaves the keydown uncancelled — which is the fix.
+    const pasteKey = {
+      code: "KeyV",
+      key: "v",
+      modifiers: 4,
+      windowsVirtualKeyCode: 86,
+    }
+    await browser.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      ...pasteKey,
+      commands: ["paste"],
+    })
+    await browser.send("Input.dispatchKeyEvent", { type: "keyUp", ...pasteKey })
+    await browser.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      code: "Enter",
+      key: "Enter",
+      windowsVirtualKeyCode: 13,
+    })
+    await browser.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      code: "Enter",
+      key: "Enter",
+      windowsVirtualKeyCode: 13,
+    })
+    const seen = await browser.run(`
+      const rows = () => $$("#terminalDock .xterm-rows > div").map((row) => row.textContent);
+      const output = await until(
+        () => rows().some((row) => row.trim() === "PASTE_MARKER"),
+        "pasted command output",
+      ).catch(() => false);
+      return {
+        output,
+        screen: rows().join("\\n"),
+        error: $("#terminalDock .terminal-error")?.textContent ?? "",
+      };
+    `)
+    assert.equal(seen.error, "", `no clipboard error: ${seen.screen}`)
+    assert.equal(seen.output, true, `the pasted command ran: ${seen.screen}`)
+  },
+)
+
+test("stopping a long streaming turn settles it and a late snapshot cannot restart it", { skip }, async () => {
+  // A turn that inspects the folder, then streams thinking and a long reply.
+  // While it runs the page reads a snapshot; the host answers it late, after the
+  // reader stopped the turn. Such an answer describes the running turn, so it
+  // must not repaint the status, the stop control or a live thought back.
+  await browser.goto(`${origin}/`)
+  const seen = await browser.run(`
+    await until(() => $("#newSession"), "shell");
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "new draft");
+    // Hold each snapshot read the page issues while the turn runs, the way a
+    // large transcript answers slowly, and release it only after the stop has
+    // settled in the page. The answer therefore describes the running turn and
+    // arrives when the page has already left it.
+    const reads = [];
+    let clickedAt = Number.NaN;
+    const gate = { holding: true };
+    let releaseHeld;
+    const released = new Promise((resolve) => { releaseHeld = resolve; });
+    const realFetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = String(typeof input === "string" ? input : input.url);
+      const read = /\\/api\\/v1\\/sessions\\/[^/?]+$/.test(url);
+      if (!read || (init && init.method && init.method !== "GET") || !gate.holding) return realFetch(input, init);
+      const issuedAt = Math.round(performance.now());
+      return realFetch(input, init).then(async (response) => {
+        const body = await response.clone().json();
+        await released;
+        reads.push({ issuedAt, status: body.status, revision: body.revision, deliveredAt: Math.round(performance.now() - clickedAt) });
+        return response;
+      });
+    };
+    const editor = $("#prompt");
+    editor.textContent = "stop-fixture"; editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    // The stop control replaces the send arrow for the whole run, thinking included.
+    const stop = await until(() => $("#stopRun"), "stop button during the turn");
+    const thinking = await until(() => $(".thinking[data-running='true']"), "live thinking block");
+    const running = {
+      sendButton: Boolean($("#sendButton")),
+      stopLabel: stop.getAttribute("aria-label"),
+      header: $(".session-header-status")?.textContent ?? "",
+      thinking: thinking.querySelector(".tool-verb")?.textContent ?? "",
+    };
+    await until(() => $$("#stream .message.assistant").some((row) => row.textContent.length > 300), "streamed prose");
+    const id = await until(() => $(".session-row.active")?.dataset.sessionId, "created session");
+    clickedAt = performance.now();
+    gate.holding = false;
+    $("#stopRun").click();
+    // Let the stop reach the page first: the held answers must arrive after it.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    releaseHeld();
+    await until(() => !$("#stopRun") && $("#sendButton"), "send button returns", 1500);
+    const settledIn = Math.round(performance.now() - clickedAt);
+    const tokensOf = (snapshot) =>
+      snapshot.entries
+        .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
+        .map((entry) => entry.message.content.map((part) => part.text ?? part.thinking ?? "").join(""))
+        .join("\\n");
+    const tokensAtStop = tokensOf(await (await fetch("/api/v1/sessions/" + id)).json()).length;
+    // What the page already showed: a snapshot from before the stop would roll
+    // the transcript back to a shorter reply.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const shownAtStop = $$("#stream .message.assistant").map((row) => row.textContent).join("\\n");
+    // Watch past the late answers: the stopped turn must stay stopped.
+    const samples = [];
+    for (let index = 0; index < 40; index += 1) {
+      const snapshot = await (await fetch("/api/v1/sessions/" + id)).json();
+      samples.push({
+        at: Math.round(performance.now() - clickedAt),
+        stop: Boolean($("#stopRun")),
+        send: Boolean($("#sendButton")),
+        header: $(".session-header-status")?.textContent ?? "",
+        runningThinking: $$(".thinking[data-running='true']").length,
+        tokens: tokensOf(snapshot).length,
+        chars: $$("#stream .message.assistant, #stream .thinking-body").reduce((total, row) => total + row.textContent.length, 0),
+        keptShown: $$("#stream .message.assistant").map((row) => row.textContent).join("\\n").includes(shownAtStop),
+        revision: snapshot.revision,
+        status: snapshot.status,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { running, settledIn, tokensAtStop, samples, reads, shownLength: shownAtStop.length };
+  `)
+  assert.deepEqual(seen.running, { sendButton: false, stopLabel: "停止", header: "运行中", thinking: "正在思考" })
+  assert.ok(seen.settledIn <= 1000, `the turn stopped in ${seen.settledIn}ms`)
+  // The scenario is the reported one only if a read issued during the run was
+  // answered after the stop: the fixture's tool prelude makes the page refresh
+  // its snapshot mid-turn, and that read is held until past the click.
+  const inFlight = seen.reads.filter((read) => read.status === "running")
+  assert.ok(
+    inFlight.length > 0,
+    `a read issued during the run must be answered late: ${JSON.stringify(seen.reads)}`,
+  )
+  assert.ok(
+    inFlight.every((read) => read.deliveredAt > 0 && read.revision < seen.samples.at(-1).revision),
+    `the late reads must arrive after the stop and describe an older state: ${JSON.stringify(seen.reads)}`,
+  )
+  assert.ok(seen.shownLength > 300, "the page had rendered the reply before the stop")
+  const after = seen.samples.at(-1)
+  assert.ok(after && after.at > 3000, "the page was watched past the late answer")
+  assert.equal(after.tokens, seen.tokensAtStop, "no new tokens arrived after the stop")
+  assert.equal(after.send, true, "the send arrow is back")
+  const rendered = seen.samples.find((sample) => sample.at >= 1000)
+  for (const sample of seen.samples) {
+    assert.equal(sample.stop, false, `the stop control stayed gone: ${JSON.stringify(sample)}`)
+    assert.equal(sample.header, "空闲", `the header reports idle: ${JSON.stringify(sample)}`)
+    assert.equal(sample.status, "idle", `the host stays idle: ${JSON.stringify(sample)}`)
+    assert.equal(sample.tokens, seen.tokensAtStop, `the transcript kept growing: ${JSON.stringify(sample)}`)
+    assert.equal(sample.keptShown, true, `the transcript was rolled back: ${JSON.stringify(sample)}`)
+    assert.equal(sample.runningThinking, 0, `the stop left a thought running: ${JSON.stringify(sample)}`)
+    // The already-received text may finish revealing, but it must stop within 1s.
+    if (rendered && sample.at >= rendered.at)
+      assert.equal(sample.chars, rendered.chars, `the reply kept rendering: ${JSON.stringify(sample)}`)
+  }
+})
+
+test("forking from the middle of a conversation branches there and leaves the parent usable", { skip }, async () => {
+  // The reported regression: clicking 「从此处分叉」 on an earlier turn produced a
+  // conversation the page could not open (a toast instead), and the original
+  // stopped answering. The branch must end at the clicked turn, and the parent
+  // must keep its own history, file and ability to take another turn.
+  const sessionId = "e2e-fork-here"
+  const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const now = new Date().toISOString()
+  const lines = [{ type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace }]
+  let leaf = null
+  for (let turn = 1; turn <= 4; turn += 1) {
+    lines.push({ type: "message", id: "fork-u" + turn, parentId: leaf, timestamp: now, message: { role: "user", content: "question " + turn, timestamp: Date.now() } })
+    lines.push({ type: "message", id: "fork-a" + turn, parentId: "fork-u" + turn, timestamp: now, message: { role: "assistant", content: [{ type: "text", text: "answer " + turn }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "stop", timestamp: Date.now() } })
+    leaf = "fork-a" + turn
+  }
+  const dir = join(base, "agent", "sessions", "--e2e-fork-here--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, sessionId + ".jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+  const before = await readFile(join(dir, sessionId + ".jsonl"), "utf8")
+  await browser.goto(`${origin}/`)
+  const idLiteral = JSON.stringify(sessionId)
+  const seen = await browser.run(`
+    const parentId = ${idLiteral};
+    const parentRow = () => $(".session-row[data-session-id='" + parentId + "']");
+    (await until(() => parentRow(), "seeded row")).click();
+    await until(() => $$("#stream .message").length === 8, "eight messages");
+    const original = {
+      count: $$("#stream .message").length,
+      last: $$("#stream .message").at(-1).textContent,
+    };
+    // The second turn's footer carries the fork action for that turn.
+    const button = await until(() => $$(".fork-message")[1], "fork action on the second turn");
+    button.click();
+    await until(() => {
+      const id = $(".session-row.active")?.dataset.sessionId;
+      return Boolean(id) && id !== parentId;
+    }, "the branch opens in the page");
+    await until(() => $$("#stream .message").length === 4, "the branch ends at the clicked turn");
+    const branch = {
+      count: $$("#stream .message").length,
+      last: $$("#stream .message").at(-1).textContent,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+      title: $("#sessionHeader .session-header-title")?.textContent,
+      hasComposer: Boolean($("#prompt")),
+    };
+    parentRow().click();
+    await until(() => $(".session-row.active")?.dataset.sessionId === parentId, "the parent opens again");
+    await until(() => $$("#stream .message").length === 8, "the parent keeps its history");
+    const back = {
+      count: $$("#stream .message").length,
+      last: $$("#stream .message").at(-1).textContent,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+    };
+    const editor = $("#prompt");
+    editor.textContent = "stream-fixture after fork";
+    editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    // The parent answers again: the turn really runs in the original conversation.
+    await until(() => $("#stream").textContent.includes("streamed reply 11"), "the parent's own reply");
+    await until(
+      async () => (await (await fetch("/api/v1/sessions/" + parentId)).json()).status === "completed",
+      "the parent's turn settles",
+    );
+    const continued = {
+      count: $$("#stream .message").length,
+      reply: $$("#stream .message.assistant").at(-1).textContent.includes("streamed reply 11"),
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+    };
+    return { original, branch, back, continued };
+  `)
+  assert.deepEqual(seen.original, { count: 8, last: "answer 4" })
+  assert.deepEqual(seen.branch, {
+    count: 4,
+    last: "answer 2",
+    toast: "",
+    title: "question 1_fork",
+    hasComposer: true,
+  })
+  assert.deepEqual(seen.back, { count: 8, last: "answer 4", toast: "" })
+  assert.deepEqual(seen.continued, { count: 10, reply: true, toast: "" })
+  // Forking writes a new file; the parent's own transcript keeps its bytes. The
+  // continued turn appends after that prefix, so only the prefix is compared.
+  const after = await readFile(join(base, "agent", "sessions", "--e2e-fork-here--", sessionId + ".jsonl"), "utf8")
+  assert.ok(after.startsWith(before), "the parent's transcript kept every original record")
 })

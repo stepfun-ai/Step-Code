@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test, type TestContext } from "node:test";
-import { knownWorkspaces, startDraft, workspaceForNewConversation } from "../client/src/state/session.ts";
+import { knownWorkspaces, isDefaultProject, startDraft, workspaceForNewConversation } from "../client/src/state/session.ts";
 import { removeWorkspace } from "../client/src/features/workspace/actions.ts";
 import { createInitialState, getState, setState, setUi } from "../client/src/state/store.ts";
 import type { SessionSummary, WebWorkspace } from "../client/src/state/types.ts";
@@ -98,12 +98,54 @@ test("a removed launch folder falls back to a workspace that is still on offer",
 
 test("the launch folder is the last resort when every workspace was removed", () => {
 	// The host still has to work somewhere; naming no folder would leave the
-	// composer unable to start a session at all.
+	// composer unable to start a session at all. The host normally reports a
+	// `defaultCwd` in this situation — see the next test — so this only covers a
+	// page that has not learned one yet.
 	setState({
 		bootstrapCwd: "/work/project",
 		workspaces: [workspace("/work/project", { hidden: true })],
 	});
 	assert.equal(workspaceForNewConversation(getState()), "/work/project");
+});
+
+test("a removed launch folder sends new work to the host's default folder, not the deleted one", async (t) => {
+	// Desktop launches the host in the folder it last picked and stores that
+	// pick. Removing that folder from navigation left it as the launch folder,
+	// so "New conversation" with an empty workspace list kept starting there —
+	// in a workspace the picker could no longer even list. The host answers with
+	// a home fallback instead, and the page uses it.
+	stubFetch(t);
+	setState({
+		bootstrapCwd: "/work/project",
+		defaultCwd: "/home/me",
+		defaultCwdFallback: true,
+		workspaces: [workspace("/work/project", { hidden: true })],
+	});
+	assert.equal(workspaceForNewConversation(getState()), "/home/me");
+	startDraft("/work/project");
+	assert.equal(getState().draftCwd, "/home/me");
+	assert.equal(getState().ui.draftRow, null);
+	await settle();
+});
+
+test("only the fallback folder is presented as the default project", () => {
+	setState({
+		bootstrapCwd: "/work/project",
+		defaultCwd: "/home/me",
+		defaultCwdFallback: true,
+		workspaces: [workspace("/work/project", { hidden: true })],
+	});
+	assert.equal(isDefaultProject(getState(), "/home/me"), true, "the home fallback is the default project");
+	assert.equal(isDefaultProject(getState(), "/work/project"), false, "the deleted folder is not");
+
+	// A usable launch folder keeps its own name: the label must not rename a
+	// real project the user opened.
+	setState({ defaultCwd: "/work/project", defaultCwdFallback: false });
+	assert.equal(isDefaultProject(getState(), "/work/project"), false);
+
+	// Registering the fallback folder makes it a workspace with its own name again.
+	setState({ defaultCwd: "/home/me", defaultCwdFallback: true, workspaces: [workspace("/home/me")] });
+	assert.equal(isDefaultProject(getState(), "/home/me"), false);
 });
 
 test("a visible draft folder is left alone", async (t) => {

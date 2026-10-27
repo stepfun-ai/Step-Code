@@ -159,6 +159,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Hold the action buttons' height so the list does not shift when the grouped view hides them. */
+  min-height: calc(var(--control-h) + 4px);
   margin: 0 2px 8px;
   padding: 2px;
   background: var(--sidebar);

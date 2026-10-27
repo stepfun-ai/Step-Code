@@ -144,6 +144,8 @@ export interface SessionEntry {
 	readonly message?: AgentMessage;
 	readonly usage?: Usage;
 	readonly thinkingTimings?: ThinkingTimings;
+	/** On a user message: the prompt-command line it expanded from (runtime.ts `projectEntries`). */
+	readonly promptCommand?: string;
 	/** Lifecycle-only metadata on custom_message / agent-notification entries. */
 	readonly details?: unknown;
 	readonly [key: string]: unknown;
@@ -222,6 +224,18 @@ export interface SessionSnapshot extends SessionSummary {
 	 * `lastRunAborted`). Such a turn has no finished reply to credit.
 	 */
 	readonly lastRunAborted?: boolean;
+	/**
+	 * The newest turn was cut off rather than finished (runtime.ts
+	 * `hasInterruptedTurn`): a prompt with no reply after a crash, or a reply the
+	 * kernel recorded as aborted. Derived from entries, so it survives a restart.
+	 */
+	readonly interruptedTurn?: boolean;
+	/**
+	 * The host's newest published revision when this snapshot was serialized
+	 * (runtime.ts `revision`). A read answered after a newer event describes an
+	 * older state and must not be painted over it.
+	 */
+	readonly revision?: number;
 	/** Messages sent during a turn, waiting for it to end (src/message-queue.ts). */
 	readonly queuedMessages?: readonly QueuedMessage[];
 	/** Steered messages the kernel has not delivered to the running turn yet. */
@@ -395,6 +409,11 @@ export interface MessageTimelineItem {
 	readonly timestamp?: string;
 	/** The model request failed (assistant `stopReason: "error"`); the provider's message. */
 	readonly error?: string;
+	/**
+	 * A user message the kernel expanded from a prompt command: `content` is the
+	 * line the user typed (`/<name> args`), not the template it became.
+	 */
+	readonly promptCommand?: boolean;
 }
 
 export type ToolState = "pending" | "completed" | "failed";
@@ -677,6 +696,13 @@ export interface BrowserLoginState {
 
 export interface BootstrapPayload {
 	readonly cwd: string;
+	/**
+	 * Where a new conversation starts when no workspace is on offer: the launch
+	 * folder, or the home folder when the launch folder was removed.
+	 */
+	readonly defaultCwd?: string;
+	/** `defaultCwd` is the home fallback because the launch folder was removed. */
+	readonly defaultCwdFallback?: boolean;
 	readonly directoryPicker?: string;
 	readonly login?: LoginReport | null;
 	/** A custom models.json model runs without a Step credential, so no sign-in gate is needed. */
@@ -739,6 +765,13 @@ export interface UploadedFile {
 export interface WebSkill {
 	readonly name: string;
 	readonly description: string;
+}
+
+/** The `commands` of the same routes: prompt templates the kernel expands from `/<name>` (prompt-commands.ts). */
+export interface WebPromptCommand {
+	readonly name: string;
+	readonly description: string;
+	readonly argumentHint?: string;
 }
 
 /** GET /api/v1/mcp (coding-agent `StepMcpStatus`). */

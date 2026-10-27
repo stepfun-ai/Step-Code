@@ -86,8 +86,8 @@ keeps whatever identity the login shell exported — which is how a source check
 | --- | --- |
 | `STEPCODE_BUILD_VERSION` | Product version in the staged app and the envelope (a `v0.2.0` tag is accepted). |
 | `STEPCODE_BUILD_COMMIT` / `STEP_HARNESS_BUILD_COMMIT` | Commit recorded in the release envelope. |
-| `STEPCODE_FEEDBACK_ENDPOINT` | Feedback API URL written into the envelope (http/https, no credentials). |
-| `STEPCODE_FEEDBACK_BUNDLE_ENDPOINT` | Feedback bundle URL written into the envelope (http/https, no credentials). |
+| `STEPCODE_FEEDBACK_ENDPOINT` | Optional override for the feedback API URL written into the envelope (http/https, no credentials). Without it the build's own collector route is used. |
+| `STEPCODE_FEEDBACK_BUNDLE_ENDPOINT` | Optional override for the feedback bundle URL written into the envelope (http/https, no credentials). |
 
 Electron switches such as `--remote-debugging-port=9222` can be appended to `electron .`.
 
@@ -153,7 +153,7 @@ over-long strings), so a bad value never reaches a report. The file exists only 
 commits an endpoint. Its values replace inherited `STEPCODE_BUILD_*`/`STEPCODE_FEEDBACK_*` identity (and
 `STEPCODE_VERSION_OVERRIDE`), so a shell exported for a source build cannot change what a packaged app reports.
 Without the file (source checkout, `pnpm dev`) the server keeps the inherited environment: the dev/fallback identity
-unless the shell exports `STEPCODE_BUILD_*`/`STEPCODE_FEEDBACK_*`.
+and the built-in feedback collector route, unless the shell exports `STEPCODE_BUILD_*`/`STEPCODE_FEEDBACK_*`.
 
 `scripts/package.mjs` stages two trees under `release/stage/` and hands them to electron-builder (appId
 `com.stepfun.stepcode`):

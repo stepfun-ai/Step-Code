@@ -10,6 +10,15 @@ Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with
 
 Where `<path>` is the working directory with `/` replaced by `-`.
 
+The file is created with the first entry a reader would miss: the first user
+prompt, or the first assistant reply when a prompt is absent. Session settings
+(`model_change`, `thinking_level_change`, `active_tools_change`, custom entries)
+alone do not create it, and neither does a branch that only holds a tool result,
+a bash execution, a compaction or a branch summary — they are written with the
+first prompt or reply. A cancelled or interrupted turn therefore still has a
+transcript: the prompt, and an assistant message with `stopReason: "aborted"`
+carrying whatever had streamed.
+
 ## Deleting Sessions
 
 Sessions can be removed by deleting their `.jsonl` files under `~/.stepcode/agent/sessions/`.

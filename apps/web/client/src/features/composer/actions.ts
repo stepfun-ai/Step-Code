@@ -39,8 +39,11 @@ import {
 	insertModeLead,
 	MODE_LEAD_CLASS,
 	type PromptFile,
+	removeSlashToken,
+	replaceSlashTokenWithCommand,
 	stripLeadingCommand,
 } from "./prompt-editor";
+import type { SlashToken } from "./slash-groups";
 
 export async function replyToClarification(
 	request: ClarificationRequest,
@@ -83,7 +86,9 @@ export async function selectPolicy(preset: string): Promise<void> {
 	}
 	setState({ draftPolicy: preset });
 	try {
-		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/policy`, "PATCH", { preset }));
+		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/policy`, "PATCH", { preset }), {
+			fromAction: true,
+		});
 	} catch (error) {
 		showError(errorMessage(error));
 	}
@@ -130,7 +135,7 @@ export async function answerSelection(request: SelectionRequest, value: string |
 			{ id: request.id, ...(value === undefined ? {} : { value }) },
 		);
 		forgetSelection(request.id);
-		renderSnapshot(snapshot);
+		renderSnapshot(snapshot, { fromAction: true });
 		return true;
 	} catch (error) {
 		showError(errorMessage(error));
@@ -164,7 +169,7 @@ export async function answerTextInput(request: TextInputRequest, value: string |
 			"POST",
 			{ id: request.id, ...(value === undefined ? {} : { value }) },
 		);
-		renderSnapshot(snapshot);
+		renderSnapshot(snapshot, { fromAction: true });
 		return true;
 	} catch (error) {
 		showError(errorMessage(error));
@@ -189,6 +194,7 @@ export async function selectModel(value: string): Promise<boolean> {
 	try {
 		renderSnapshot(
 			await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/model`, "PATCH", { provider, modelId }),
+			{ fromAction: true },
 		);
 		return true;
 	} catch (error) {
@@ -205,7 +211,9 @@ export async function selectEffort(level: string): Promise<boolean> {
 		return true;
 	}
 	try {
-		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/thinking`, "PATCH", { level }));
+		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/thinking`, "PATCH", { level }), {
+			fromAction: true,
+		});
 		return true;
 	} catch (error) {
 		showError(errorMessage(error));
@@ -262,20 +270,27 @@ export function clearModes(): void {
 /**
  * The staged mode renders as the prompt's leading chip, so deleting that chip
  * (a backspace over it) is how the user drops the mode — exactly like deleting
- * the command text it stands for. Call after every prompt edit.
+ * the command text it stands for. The chip is the source of truth: the modes
+ * are mutually exclusive, so at most one stands, and the staged state mirrors
+ * whichever mode's chip survives the edit (if any). Call after every prompt
+ * edit.
  */
 export function syncStagedModeLead(editor: HTMLElement): void {
-	const staged = (Object.keys(getState().modes) as ModeId[]).some((id) => getState().modes[id]);
-	// Commands stack: a mode survives while its chip is in the DOM, even beside others.
-	if (staged && !editor.querySelector(`.${MODE_LEAD_CLASS}`)) clearModes();
+	const chip = editor.querySelector<HTMLElement>(`.${MODE_LEAD_CLASS}`);
+	const staged = (Object.keys(getState().modes) as ModeId[]).find((id) => getState().modes[id]) ?? null;
+	const leading = (chip?.dataset.mode as ModeId | undefined) ?? null;
+	if (staged === leading) return;
+	if (leading) chooseMode(leading);
+	else clearModes();
 }
 
 /**
  * Stage `command` (with its slash or keyword form, no trailing space) as the
  * prompt's lead. The three mode commands stage their mode — the same chip and
  * theme as picking them from the ＋ menu — so typing `/goal` and picking Goal
- * look identical. Any other command replaces whatever was staged: the kernel
- * runs one leading command per message.
+ * look identical. Typing another mode's command replaces the staged one (the
+ * modes are mutually exclusive); any other command appends — commands stack,
+ * one input may carry several.
  */
 export function stageCommandLead(editor: HTMLElement, command: string): void {
 	const name = command.replace(/^\//u, "");
@@ -283,8 +298,8 @@ export function stageCommandLead(editor: HTMLElement, command: string): void {
 	const meta = mode ? MODES.find((entry) => entry.id === mode) : undefined;
 	if (mode && meta) {
 		chooseMode(mode);
-		// Insert the chip synchronously (see the input sync note): it APPENDS to
-		// any leads already staged — commands stack, one input may carry several.
+		// Insert the chip synchronously (see the input sync note): another mode's
+		// chip yields its place — one mode rides a message.
 		insertModeLead(editor, {
 			id: mode,
 			icon: meta.icon,
@@ -294,6 +309,24 @@ export function stageCommandLead(editor: HTMLElement, command: string): void {
 		return;
 	}
 	insertCommandLead(editor, { command, icon: commandLeadIcon(name) });
+}
+
+/**
+ * Place a command picked for a `/word`: the chip goes exactly where the word
+ * was typed, so the words around it keep their order (`111 /` -> `111
+ * /skill:x`, `/skill:a 和 /` -> `/skill:a 和 /skill:b`). The kernel runs only
+ * a leading command; `promptMessageText` moves the first command to the front
+ * when the message is sent. Modes always lead. False when the `/word` is no
+ * longer at the caret.
+ */
+export function stageCommandAtSlashToken(editor: HTMLElement, token: SlashToken, command: string): boolean {
+	const name = command.replace(/^\//u, "");
+	if (!modeFromCommand(name.replace(/:$/u, ""))) {
+		return replaceSlashTokenWithCommand(editor, token, { command, icon: commandLeadIcon(name) });
+	}
+	if (!removeSlashToken(editor, token)) return false;
+	stageCommandLead(editor, command);
+	return true;
 }
 
 /**

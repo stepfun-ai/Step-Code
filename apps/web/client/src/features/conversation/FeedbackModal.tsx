@@ -125,7 +125,9 @@ function FeedbackAttachments() {
 	if (!draft) {
 		return (
 			<p className="feedback-attachments" id="feedbackAttachments">
-				{feedback.previewError ? t("feedbackPreviewFailed") : t("feedbackPreparing")}
+				{feedback.previewError
+					? t("feedbackPreviewFailed", { reason: feedback.previewError })
+					: t("feedbackPreparing")}
 			</p>
 		);
 	}

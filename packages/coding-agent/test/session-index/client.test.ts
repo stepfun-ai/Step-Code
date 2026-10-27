@@ -164,7 +164,8 @@ describe("SessionManager file persisted listener", () => {
 				throw new Error("listener failures must not break writes");
 			});
 			manager.appendMessage({ role: "user", content: "hello", timestamp: NOW });
-			expect(events).toEqual([]);
+			// The prompt is the first thing worth indexing: it creates the file.
+			expect(events).toEqual(["create"]);
 			manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "hi" }],
@@ -183,7 +184,7 @@ describe("SessionManager file persisted listener", () => {
 				timestamp: NOW,
 			} as never);
 			manager.appendSessionInfo("named");
-			expect(events).toEqual(["create", "append"]);
+			expect(events).toEqual(["create", "append", "append"]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

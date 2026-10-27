@@ -177,6 +177,51 @@ session answers correctly before the extension replays `session_start`.
 Both are read from `getStepGoal` / `getStepPlanState` in the package, never  
 inferred from UI text.
 
+Snapshots and every SSE event carry `revision`, monotonic per bound session. The
+client keeps the newest revision it has applied, stream events included, and
+ignores a snapshot that was serialized before it: a slow read that was issued
+while a turn ran would otherwise repaint the running status, the stop control
+and a live thought after the reader stopped that turn. Each stream connection
+starts a new order — its opening snapshot is authoritative — so a reconnected
+page, a restarted Host and a host that predates revisions all still render.
+
+### Restarting with a turn in flight
+
+The kernel writes an assistant message on `message_end`, so a turn that is only
+half-streamed exists on no disk until it ends. Host shutdown therefore refuses new
+work and stops running turns before closing sessions
+(`WebSessionStore.interruptAndClose`, called from the SIGINT / SIGTERM / SIGHUP
+handler with a 3s bound): the abort records the reply as `aborted` with everything
+that had streamed, thinking included, and the page shows the same transcript it
+already had. The bound covers each turn stop, not the rest of shutdown — session
+disposal, MCP release and terminal cleanup stay unbounded, so Desktop's SIGKILL
+lands mid-teardown only if one of those blocks. A Step sign-out calls the same
+method without a bound, because nothing kills it.
+
+A prompt accepted but not yet running — the kernel is still doing auth, the
+compaction check, or `before_agent_start` hooks such as MCP reconciliation — is
+not a run yet, so `abort()` has nothing to cancel. The host counts those prompts
+as busy and waits for the run to start before aborting it; otherwise a shutdown in
+that window disposed the session with the prompt still in memory, and the model
+request fired with nowhere to write. A turn that ignores the abort — or a host
+that is killed outright — still loses its partial reply; there is no per-delta
+write to fall back on.
+
+`interruptedTurn` in the snapshot tells the client the newest turn was cut off,
+derived from the entries (`hasInterruptedTurn`): a prompt with no reply, a branch
+ending in tool work (a tool result, or an assistant that stopped with calls), or a
+reply recorded as `aborted`. Errors and truncated replies are not interrupted; the
+transcript already renders them. It is false while a turn runs or is starting, so
+a prompt waiting for its first token is not called interrupted. The client draws
+it as a quiet divider under the transcript. Because it is read from the file, a
+reopened session says the same thing a live page did, instead of the run silently
+disappearing.
+
+The transcript file itself starts at the first prompt, not at the first reply
+(`SessionManager`'s conversation guard), so a first turn cut off by a restart
+still appears in the sidebar: previously the header had never been written and
+the whole conversation vanished with the process.
+
 ### Plan review card
 
 An `exit_plan_mode` result without a host dialog is a decision waiting for the  
@@ -368,14 +413,19 @@ inherits the folder of the conversation on screen, so starting one from a remove
 folder's retained chat used to create a session there — in a workspace the picker
 could no longer even list, where folder-scoped requests (file tree, git, `@`
 completion) then answered "Folder is not a known workspace". `startDraft` reroutes
-a hidden cwd to the launch folder, else to a workspace still on offer, and a draft
-open in the folder being removed is moved the same way. Only the last resort —
-every workspace removed — keeps the launch folder, because the host still has to
-run somewhere. Existing sessions keep their folder and stay fully usable.
-`bootstrap.cwd` is the launch folder's resolved path, so it matches the cwd a
-session header records and the paths the registry stores; a launch spelling that
-differed (a symlink, a trailing slash) would otherwise keep the removed real
-folder in the picker.
+a hidden cwd to the launch folder, else to a workspace still on offer, then to the
+host's default workspace: the launch folder, or the home folder when the launch
+folder itself was removed. A draft open in the folder being removed is moved the
+same way. Desktop launches the host in the folder it last picked and stores that
+pick, so removing that folder used to leave it as the launch folder and every
+"New conversation" with an empty workspace list started in the deleted folder;
+the host now reports `defaultCwd` and `defaultCwdFallback` (on bootstrap and
+`GET /api/v1/workspaces`) and the page names the fallback "默认项目" in the
+composer's folder pill and the sidebar's project list. A usable launch folder
+keeps its own name. `bootstrap.cwd` is the launch folder's resolved path, so it
+matches the cwd a session header records and the paths the registry stores; a
+launch spelling that differed (a symlink, a trailing slash) would otherwise keep
+the removed real folder in the picker.
 
 Every project header offers removal, with or without conversations. An in-app  
 dialog names the project and explains that files and existing chats are retained.  
@@ -410,7 +460,9 @@ point out of the workspace.
   not labelled complete. Candidate queries never read file contents.
 - `file` classifies a file as `text` (up to 1 MB, returned as UTF-8), `image`,  
   `binary` (NUL byte in the first 8 KB), or `too-large`; only `text` carries  
-  content. `raw` streams images, and nothing else, for the preview.
+  content. Images over 10 MiB (`MAX_IMAGE_BYTES`, the size the page prints as
+  "10.0 MB") are `too-large` instead of a broken image. `raw` streams images,
+  and nothing else, for the preview.
 
 An empty workspace also shows a branch switcher beside the folder pill, above  
 the composer card. Both pickers choose where the next conversation starts, so  
@@ -585,10 +637,11 @@ response's `sessionId` is that new id, and the store is re-keyed in the same
 step, so the client's next read and the inspector resolve instead of 404ing. The  
 branch is titled `<parent title>_fork`, derived from the parent's current title,  
 so forking a fork gives `<title>_fork_fork`. A fork is refused while a turn runs,  
-while the context is compacting, or while another fork is in flight. A branch has  
-no file until its first reply, so an untouched fork has nothing to branch yet:  
-the implicit fork reports "cancelled" (the client's generic notice), and an  
-explicit entry on such a branch is refused by the kernel.
+while the context is compacting, or while another fork is in flight. A branch
+gets its file with its first prompt, so an explicit fork at a recorded user
+message works as soon as that message is on the branch; the implicit fork
+branches *before* the newest prompt, so an untouched branch has nothing to keep
+and reports "cancelled" (the client's generic notice).
 
 `/btw` is the one command that bypasses the queue: asking a side question while  
 the main task runs is its purpose, and the kernel runs extension commands before  
@@ -1045,12 +1098,18 @@ Network backpressure reads from the bounded ring rather than accumulating a
 subscriber queue. Input is bounded to 64 KiB per request, 32 outstanding Host  
 commands and 64 client commands. Timed-out input is not automatically repeated.
 
-The client fits the PTY to the panel, supports ANSI rendering, selection,  
-explicit clipboard copy/paste, Ctrl+C and normal terminal input including IME.  
-OSC 52 clipboard writes and link activation are disabled. Clear affects the  
-local display only and does not stop the shell or erase the Host replay buffer.  
-Clipboard access still requires browser permission. Native PTY startup has been  
-verified on Windows and macOS; Linux requires its own acceptance.  
+The client fits the PTY to the panel, supports ANSI rendering, selection,
+Cmd/Ctrl+C copy, Cmd/Ctrl+V paste and normal terminal input including IME.
+Paste is the browser's native `paste` event, which carries the clipboard text
+with the event: the client never reads the clipboard from script, so pasting
+needs no clipboard-read permission (Desktop grants none) and a refused read can
+no longer surface as a transient error. A paste over the Host's 64 KiB input
+limit is refused before xterm forwards it, because the Host would close the
+stream. Copy still uses the clipboard API and reports a refusal. OSC 52
+clipboard writes and link activation are disabled. Clear affects the local
+display only and does not stop the shell or erase the Host replay buffer.
+Native PTY startup has been verified on Windows and macOS; Linux requires its
+own acceptance.
 Dependencies are pinned and installed without lifecycle scripts. The list route  
 reports `support` before any shell starts, so the dock can explain a missing  
 native build instead of offering a broken button. A missing or incompatible  

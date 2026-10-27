@@ -424,9 +424,7 @@ export class AgentSessionRuntime implements AgentSessionRuntimeHost {
 				}
 
 				if (!existsSync(currentSessionFile)) {
-					throw new Error(
-						"This session has not been saved yet. Wait for the first assistant response before cloning or forking it.",
-					);
+					throw new Error("This session has not been saved yet. Send a prompt before cloning or forking it.");
 				}
 				const sessionManager = this.sessionManagerFactory.open(currentSessionFile, sessionDir);
 				const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);

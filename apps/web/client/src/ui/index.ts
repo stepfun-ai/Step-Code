@@ -15,6 +15,7 @@
 export { Button, type ButtonProps, type ButtonVariant } from "./Button/Button";
 export { DiffStat, type DiffStatProps } from "./DiffStat/DiffStat";
 export { EmptyState } from "./EmptyState/EmptyState";
+export { useCopiedFlag } from "./hooks/useCopiedFlag";
 export { type DismissEvent, type DismissOptions, useDismiss } from "./hooks/useDismiss";
 export { useMergedRef } from "./hooks/useMergedRef";
 export { Icon, type IconName, type IconProps, type IconSize, LEGACY_ICONS } from "./Icon/Icon";

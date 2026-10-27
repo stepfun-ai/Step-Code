@@ -46,7 +46,15 @@ async function startFixture(base: string): Promise<Fixture> {
 		}
 		let raw = "";
 		for await (const part of request) raw += part;
-		requests.push(JSON.parse(raw) as ChatRequest);
+		const parsed = JSON.parse(raw) as ChatRequest;
+		// The session-title sidecar runs beside the turn; keep it out of the turn's script and log.
+		if (parsed.messages.some((message) => message.role === "system" && textOf(message).includes("title-generation task"))) {
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.write(chunk({ content: '{"title":"fixture title"}' }, null));
+			response.write(chunk({}, "stop"));
+			return response.end("data: [DONE]\n\n");
+		}
+		requests.push(parsed);
 		const reply = (script.shift() ?? (() => ({ text: "ok" })))();
 		response.writeHead(200, { "content-type": "text/event-stream" });
 		if ("tool" in reply) {

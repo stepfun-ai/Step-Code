@@ -27,7 +27,12 @@ export function NoticeRow({ notice }: { readonly notice: NoticeItem }) {
 		<section className="notice-row" data-level={notice.level} data-notice-id={notice.id}>
 			<div className="notice-content">
 				{notice.markdown ? (
-					<MarkdownView html={html} className="notice-markdown" onCopyCode={(code) => void copyText(code)} />
+					<MarkdownView
+						html={html}
+						className="notice-markdown"
+						onCopyCode={(code) => copyText(code, null)}
+						copiedLabel={t("copied")}
+					/>
 				) : (
 					<p className="notice-text">{notice.text}</p>
 				)}

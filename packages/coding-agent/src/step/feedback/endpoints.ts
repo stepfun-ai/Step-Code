@@ -38,7 +38,7 @@ function normalizedPathname(url: URL): string {
 	return decodeURIComponent(url.pathname).replace(/\/+$/u, "") || "/";
 }
 
-export function resolveFeedbackEndpoint(env: NodeJS.ProcessEnv = process.env, bundle = false): string | undefined {
+export function resolveFeedbackEndpoint(env: NodeJS.ProcessEnv = process.env, bundle = false): string {
 	// Unlike telemetry, feedback adopts the built-in default on both channels:
 	// a report is user-initiated, so there is no unattended-egress concern.
 	return resolveEndpoint(endpointName(bundle), { channel: readFeedbackBuildEnv(env).channel, env });

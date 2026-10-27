@@ -63,6 +63,8 @@ export function SidebarActions() {
 				className="sidebar-action"
 				id="marketButton"
 				type="button"
+				// The plugin market is hidden on every host for now; plugins stay manageable in Settings.
+				hidden
 				aria-current={midView === "market" ? "page" : undefined}
 				title={t("pluginMarket")}
 				onClick={() => openMidView("market")}
@@ -141,7 +143,8 @@ export function ConversationList() {
 						{ value: "group", label: t("groups"), attrs: { "data-view": "group" } },
 					]}
 				/>
-				<div className="list-header-actions">
+				{/* Both actions only concern the project view; the grouped view hides them. */}
+				<div className="list-header-actions" hidden={view.current === "group"}>
 					<Tooltip content={`${t("addWorkspace")} ${chord("O")}`}>
 						<IconButton
 							className="list-mode-button list-action"

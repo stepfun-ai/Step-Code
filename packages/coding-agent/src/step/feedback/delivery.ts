@@ -430,11 +430,25 @@ async function post(
 	}
 }
 
+/**
+ * Refuse to post to the real collector from a test run.
+ *
+ * The built-in route is a production URL, so a test that forgot to inject a
+ * local endpoint would otherwise deliver a report for real. Throwing is the
+ * point: a silent skip would hide the missing injection.
+ */
 function assertNoRealCollectorUnderTest(endpoint: string, bundle: boolean): void {
-	if (process.env.NODE_ENV !== "test" && process.env.VITEST === undefined) return;
+	if (!isTestRun()) return;
 	if (!isBuiltInFeedbackEndpoint(endpoint, bundle)) return;
 	throw new Error(
 		`feedback delivery refused: a test would have posted to the real collector at ${endpoint}. Point the endpoint at a local address, or inject fetchImpl.`,
+	);
+}
+
+/** Vitest, `node --test` and suites that set NODE_ENV are all test runs. */
+function isTestRun(): boolean {
+	return (
+		process.env.NODE_ENV === "test" || process.env.VITEST !== undefined || process.env.NODE_TEST_CONTEXT !== undefined
 	);
 }
 
