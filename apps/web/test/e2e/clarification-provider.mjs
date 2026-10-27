@@ -115,6 +115,18 @@ export async function clarificationCompletion(request, response) {
     delta = { tool_calls: [{ index: 0, id: `approval-call-${input.messages.length}`, type: "function", function: {
       name: tool.function.name, arguments: JSON.stringify({ command }),
     } }] };
+  } else if (last.role === "user" && text.includes("delegate-subagent-fixture")) {
+    // The parent delegates the write, so the approval has to come from the
+    // child's own permission prompt rather than from the main session.
+    delta = { tool_calls: [{ index: 0, id: `subagent-call-${input.messages.length}`, type: "function", function: {
+      name: "subagent",
+      arguments: JSON.stringify({ agent: "general", task: "create-sub-file: write hello into src/sub.txt" }),
+    } }] };
+  } else if (last.role === "user" && text.includes("create-sub-file")) {
+    const write = tools.find((item) => item.function.name === "write_file") ?? tools.find((item) => item.function.name === "write");
+    delta = { tool_calls: [{ index: 0, id: `subagent-write-${input.messages.length}`, type: "function", function: {
+      name: write.function.name, arguments: JSON.stringify({ path: "src/sub.txt", content: "hello\n" }),
+    } }] };
   } else if (last.role === "user") {
     const freeform = text.includes("freeform-only");
     delta = { tool_calls: [{ index: 0, id: "clarification-call", type: "function", function: {

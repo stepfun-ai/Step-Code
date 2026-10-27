@@ -1304,7 +1304,19 @@
 }
 
 /* The candidate picker 获取可用模型 opens. It is the shared `ui/Modal`; only the
-   tool row and the option list are the picker's own. */
+   tool row and the option list are the picker's own. The dialog is capped to the
+   viewport so a long reply scrolls inside the list and the footer stays visible. */
+.settings-discover-dialog {
+	display: flex;
+	flex-direction: column;
+	max-height: min(680px, calc(100dvh - 32px));
+}
+.settings-discover-dialog .settings-modal-tools {
+	margin-top: 14px;
+}
+.settings-discover-dialog .settings-model-options {
+	margin-top: 8px;
+}
 .settings-modal-tools {
 	display: flex;
 	align-items: center;

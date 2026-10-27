@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { WorkspaceRegistry } from "../src/workspaces.ts";
+import { canonicalWorkspacePath, WorkspaceRegistry } from "../src/workspaces.ts";
+import { WebSessionStore } from "../src/runtime.ts";
 
 test("workspaces persist across registry instances and can be removed", async () => {
 	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-workspaces-")));
@@ -212,6 +213,71 @@ test("a folder recorded under two spellings is listed once", async () => {
 		const listed = await new WorkspaceRegistry(file).list();
 		assert.equal(listed.filter((workspace) => !workspace.hidden).length, 1);
 	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a launch folder reached through a symlink is reported under its real path", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-canonical-")));
+	try {
+		const real = join(base, "project");
+		const link = join(base, "shortcut");
+		await mkdir(real);
+		await symlink(real, link);
+		// `bootstrap.cwd` names the page's launch folder. The registry stores and
+		// removes resolved paths, so a symlinked launch spelling listed the removed
+		// folder in the composer's picker again, on this page and after a reload.
+		assert.equal(await canonicalWorkspacePath(link), real);
+		assert.equal(await canonicalWorkspacePath(join(real, "..", "project")), real);
+		// A folder that is gone keeps the only spelling left, so its recorded
+		// removal still matches.
+		const missing = join(base, "gone");
+		assert.equal(await canonicalWorkspacePath(missing), missing);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a session recorded through a symlink is listed under the registry's spelling", async () => {
+	// The client matches a removed folder against the spelling its session rows
+	// carry, so the listing has to report the real path: a session recorded
+	// through a symlink kept that spelling, and its project group survived the
+	// removal of the folder it actually named. This locks the host-side
+	// resolution the client's string compare depends on.
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-session-cwd-")));
+	const previousAgentDir = process.env.STEP_CODING_AGENT_DIR;
+	process.env.STEP_CODING_AGENT_DIR = join(base, "agent");
+	try {
+		const real = join(base, "project");
+		const link = join(base, "shortcut");
+		await mkdir(real);
+		await symlink(real, link);
+		// The directory name is only a container; the listing reads the header's cwd.
+		const directory = join(base, "agent", "sessions", "symlinked");
+		await mkdir(directory, { recursive: true });
+		const timestamp = new Date().toISOString();
+		await writeFile(
+			join(directory, "session.jsonl"),
+			[
+				{ type: "session", version: 3, id: "s1", timestamp, cwd: link },
+				{
+					type: "message",
+					id: "m1",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: "hello", timestamp: Date.now() },
+				},
+			]
+				.map((line) => JSON.stringify(line))
+				.join("\n") + "\n",
+		);
+		const listed = await new WebSessionStore().list();
+		assert.equal(listed.length, 1);
+		assert.equal(listed[0].cwd, real, "the row carries the real path, the spelling the registry stores");
+		assert.equal(listed[0].cwdAvailable, true);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.STEP_CODING_AGENT_DIR;
+		else process.env.STEP_CODING_AGENT_DIR = previousAgentDir;
 		await rm(base, { recursive: true, force: true });
 	}
 });

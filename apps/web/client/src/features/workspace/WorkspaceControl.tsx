@@ -40,12 +40,15 @@ export function WorkspaceControl() {
 				closeOnEscape={false}
 				content={
 					<>
-						<div className="workspace-popover-title">{t("recentFolders")}</div>
+						{/* An empty list has no folders to title: the reason is the state itself. */}
+						{workspaces.length ? <div className="workspace-popover-title">{t("recentFolders")}</div> : null}
+						{/* Keep the list's own name: the empty row inside it states the condition,
+						    and a label repeating it would be announced twice. */}
 						<div id="workspaceRecentList" role="listbox" aria-label={t("recentFolders")}>
 							{workspaces.map((path) => (
 								<RecentItem key={path} path={path} selected={path === view.draftCwd} />
 							))}
-							{workspaces.length ? null : <EmptyState>{t("emptyDirectory")}</EmptyState>}
+							{workspaces.length ? null : <EmptyState>{t("noWorkspaces")}</EmptyState>}
 						</div>
 						<div className="workspace-popover-divider" />
 						<button

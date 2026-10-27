@@ -32,8 +32,11 @@ async function isDirectory(path: string): Promise<boolean> {
  *
  * A folder that no longer exists cannot be resolved; its normalized path is the
  * only spelling left, and the entries recorded for it still have to match.
+ *
+ * Also used for the launch folder a page reports, so `bootstrap.cwd` matches the
+ * cwd a session header records and the paths this registry stores.
  */
-async function canonicalPath(path: string): Promise<string> {
+export async function canonicalWorkspacePath(path: string): Promise<string> {
 	try {
 		return await realpath(path);
 	} catch {
@@ -81,8 +84,8 @@ export class WorkspaceRegistry {
 			// under another spelling of the same folder still hides it. A file
 			// written by the buggy version held both spellings — one visible, one
 			// hidden — so this also repairs that state on the next read.
-			const canonicalRemoved = await Promise.all(removed.map(canonicalPath));
-			const canonicalPaths = await Promise.all(paths.map(canonicalPath));
+			const canonicalRemoved = await Promise.all(removed.map(canonicalWorkspacePath));
+			const canonicalPaths = await Promise.all(paths.map(canonicalWorkspacePath));
 			this.removed = unique([...removed, ...canonicalRemoved]);
 			this.paths = unique(canonicalPaths).filter((path) => !this.removed.includes(path));
 		} catch {
@@ -121,7 +124,7 @@ export class WorkspaceRegistry {
 	async has(path: string): Promise<boolean> {
 		await this.load();
 		if (!isAbsolute(path)) return false;
-		const canonical = await canonicalPath(path);
+		const canonical = await canonicalWorkspacePath(path);
 		if (this.removed.includes(canonical)) return false;
 		return this.paths.includes(canonical);
 	}
@@ -140,7 +143,7 @@ export class WorkspaceRegistry {
 		// Re-adding restores a removed folder, whichever spelling the removal used.
 		const previousPaths = this.paths;
 		const previousRemoved = this.removed;
-		const restored = await Promise.all(this.removed.map(canonicalPath));
+		const restored = await Promise.all(this.removed.map(canonicalWorkspacePath));
 		this.removed = this.removed.filter((_entry, index) => restored[index] !== path);
 		// Newest first: the folder just added is the one the user wants to see at the top of the sidebar.
 		this.paths = [path, ...this.paths.filter((entry) => entry !== path)];
@@ -160,7 +163,7 @@ export class WorkspaceRegistry {
 	async remove(path: string): Promise<boolean> {
 		await this.load();
 		if (!isAbsolute(path)) return false;
-		const canonical = await canonicalPath(path);
+		const canonical = await canonicalWorkspacePath(path);
 		// Both spellings are recorded. The canonical one owns the registered entry
 		// (so the folder cannot stay listed), and the caller's spelling is what the
 		// client compares session rows against, which may be another name for the

@@ -132,7 +132,13 @@ async function previewFileAt(target: string, path: string): Promise<WorkspaceFil
 	const info = await stat(target);
 	if (!info.isFile()) throw new Error("Path is not a file");
 	const mimeType = imageMimeType(target);
-	if (mimeType) return { kind: "image", path, size: info.size, mimeType };
+	if (mimeType) {
+		// An image the raw endpoint refuses is reported as "too large" rather
+		// than handed to the client as a broken <img>: a failed image load
+		// carries no status code, so the reader would see no reason at all.
+		if (info.size > MAX_IMAGE_BYTES) return { kind: "too-large", path, size: info.size };
+		return { kind: "image", path, size: info.size, mimeType };
+	}
 	if (info.size > MAX_PREVIEW_BYTES) return { kind: "too-large", path, size: info.size };
 	const handle = await open(target, "r");
 	try {

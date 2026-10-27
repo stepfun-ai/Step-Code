@@ -65,6 +65,15 @@ export function ProjectView() {
 		for (const session of view.sessions) if (view.tags.get(session.id) !== filter) hiddenIds.add(session.id);
 	}
 
+	// With no workspace on offer the list is empty for that reason; "no
+	// conversations" there reads as if the user never had one, while their
+	// chats sit under Recent.
+	const emptyReason = registered.size
+		? showArchived
+			? t("noArchivedProjectConversations")
+			: t("noProjectConversations")
+		: t("noWorkspaces");
+
 	return (
 		<div id="projectView" hidden={view.hidden}>
 			<div id="projectGroups">
@@ -82,11 +91,7 @@ export function ProjectView() {
 						}
 					/>
 				))}
-				{projects.size ? null : (
-					<EmptyState>
-						{showArchived ? t("noArchivedProjectConversations") : t("noProjectConversations")}
-					</EmptyState>
-				)}
+				{projects.size ? null : <EmptyState>{emptyReason}</EmptyState>}
 			</div>
 			<div className="recent-group" id="recentGroup" hidden={recent.length === 0 && !draftInRecent}>
 				<div className="project-label">

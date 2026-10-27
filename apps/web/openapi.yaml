@@ -1741,7 +1741,9 @@ paths:
       description: >-
         Ask one endpoint which models it advertises, for the form's "fetch available models" action. The
         body carries the draft the user is editing rather than a saved provider, so the address, protocol
-        and key are used as given and nothing is stored. The address is normalized as on save, then
+        and key are used as given and nothing is stored. A blank key falls back to the stored credential
+        for `providerId` (the credential file, then the declaration's own key), as on save and in the
+        connection test. The address is normalized as on save, then
         OpenAI-shaped protocols list at `{baseUrl}/models` with bearer auth; Anthropic Messages at
         `{baseUrl}/v1/models` with `x-api-key`. A reply over 4 MiB is refused.
       requestBody:
@@ -1752,6 +1754,7 @@ paths:
               type: object
               required: [baseUrl]
               properties:
+                providerId: { type: string, description: "Provider whose stored key is used when apiKey is blank" }
                 baseUrl: { type: string }
                 api: { type: string }
                 apiKey: { type: string, description: "Used for this request only" }

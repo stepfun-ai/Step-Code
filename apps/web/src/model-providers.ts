@@ -389,9 +389,26 @@ export async function deleteModelProvider(id: string): Promise<void> {
 }
 
 export interface DiscoverModelsInput {
+	readonly providerId?: unknown;
 	readonly baseUrl?: unknown;
 	readonly api?: unknown;
 	readonly apiKey?: unknown;
+}
+
+/**
+ * The key a session would use for `providerId`, resolved by the kernel from the
+ * credential file and `models.json` (stored entry first, then the declaration's
+ * own key), or `undefined` when there is none or the id is not a custom provider.
+ *
+ * The key stays on the host: it is only attached to the outgoing request.
+ */
+async function storedProviderApiKey(providerId: string): Promise<string | undefined> {
+	if (!PROVIDER_ID.test(providerId) || providerId.length > MAX_PROVIDER_ID || providerId === STEP_PROVIDER_ID) {
+		return undefined;
+	}
+	const runtime = await ModelRuntime.create({ authPath: modelsAuthPath(), modelsPath: modelsJsonPath() });
+	await runtime.refresh({ allowNetwork: false });
+	return (await runtime.getAuth(providerId))?.auth.apiKey || undefined;
 }
 
 /**
@@ -399,18 +416,23 @@ export interface DiscoverModelsInput {
  *
  * Nothing is stored: this answers for a declaration the user is still editing, so
  * a provider can be filled in and saved in one pass instead of save-then-return.
- * The key, when given, is used for this request only.
+ * A key typed in the form is used for this request only; a blank key field means
+ * "keep the stored key", as on save and in the connection test, so the stored
+ * credential for `providerId` is used instead.
  *
  * A failure keeps the endpoint's own words where the protocol reported them (an
  * HTTP status, a JSON parse failure), and maps the rest to a 4xx that names what
  * the user can change: the address, the protocol, or the key.
  */
 export async function discoverProviderModels(input: DiscoverModelsInput): Promise<DiscoveredModel[]> {
+	const typedKey = stringOf(input.apiKey);
+	const providerId = stringOf(input.providerId);
+	const apiKey = typedKey || (providerId ? await storedProviderApiKey(providerId) : undefined);
 	try {
 		return await discoverModels({
 			api: stringOf(input.api) || undefined,
 			baseUrl: stringOf(input.baseUrl),
-			apiKey: stringOf(input.apiKey) || undefined,
+			apiKey,
 		});
 	} catch (error) {
 		if (error instanceof ModelDiscoveryError) {

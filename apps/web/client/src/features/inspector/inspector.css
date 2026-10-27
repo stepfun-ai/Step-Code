@@ -317,24 +317,12 @@
 	font-size: 12px;
 	font-weight: 500;
 }
-/* The full objective clamps to three lines; the summary line above carries the gist. */
 .sb-goal-summary {
 	margin: 0 0 4px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	font-weight: 600;
-}
-.sb-goal-objective {
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 3;
-	overflow: hidden;
-	margin: 0 0 2px;
-	color: var(--ink);
-	font-size: 13px;
-	line-height: 1.6;
-	overflow-wrap: anywhere;
 }
 .sb-goal-stats {
 	margin: 0;
@@ -419,21 +407,18 @@
 	background: var(--attention);
 }
 
-/* Pause / resume beside the 目标 label. */
+/*
+ * Pause / resume beside the 目标 label: a standard-size icon button (the
+ * heading keeps its height); delete rides left of the status chip in red.
+ */
 .sb-goal-toggle {
-	display: grid;
-	place-items: center;
-	width: 22px;
-	height: 22px;
-	margin-left: 2px;
-	padding: 0;
-	border: 0;
-	border-radius: var(--radius-control);
-	background: transparent;
-	color: var(--ink-3);
-	cursor: pointer;
+	margin-left: 4px;
+	color: var(--ink-2);
 }
-.sb-goal-toggle:hover {
-	background: var(--surface-soft);
-	color: var(--ink);
+.sb-goal-danger {
+	color: var(--danger);
+}
+.sb-goal-danger:hover {
+	background: var(--danger-surface);
+	color: var(--danger);
 }

@@ -305,6 +305,11 @@ When to add or change one:
 - Workspace navigation metadata is separate from sessions: `web-workspaces.json` stores registered `workspaces`
   and explicit `removedWorkspaces`. Removed entries are returned with `hidden: true`; clients must not recreate
   their project groups from session cwd values. Re-adding restores the group; removal never deletes chats or files.
+  A removed folder also stops being a *target*: its chats stay readable, but `startDraft` reroutes any request for a
+  hidden cwd to `workspaceForNewConversation` (launch folder, else a workspace still on offer), so "New conversation"
+  from one of those chats — and a draft open in the folder being removed — never creates a session in it. The host
+  refuses folder-scoped requests for a folder it no longer knows (`Folder is not a known workspace`), which is what a
+  draft pinned to a removed folder used to hit.
 - Session tag groups are derived, not stored: a group exists exactly as long as a listed session carries its tag
   (`state/tag-groups.ts`). Deleting a session or untagging its last member removes the group from the grouped view
   and the row's picker together, and frees its colour; clearing the filter when its group disappears keeps the

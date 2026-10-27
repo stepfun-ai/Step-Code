@@ -140,6 +140,17 @@ Losing one is silent — its slash command and tools simply never register, and 
 typed `/goal` then reaches the model as ordinary text. Extensions are keyed by  
 command and tool name, so a duplicate would silently override the option above.
 
+A subagent child runs as its own `--mode rpc` process, so its Step permission
+controller cannot show anything by itself: without a handler the kernel cancels
+the child's confirmation as "nobody to answer", which reads as a denial — under
+Ask, a subagent's `write_file` then failed and the main agent retried the write
+itself. The host passes `subagent.requestApproval`, which routes the child's
+prompt into this session's `ApprovalBroker`; the card names the child's tool and
+shows the dialog body (path, content, command) the child summarized, and the
+verdict travels back over the child's rpc stream. Only `confirm` is forwarded:
+select/input/editor dialogs stay auto-cancelled. A host without a handler keeps
+the old cancel, never a silent approve.
+
 A host that renders no terminal must still answer `ExtensionUIContext.theme`:  
 extensions style status text unconditionally. The Web host returns the kernel's  
 identity-styled `plainTheme`, and `step-plan.ts` falls back to plain text when a  
@@ -320,6 +331,15 @@ Web session objects from appending to the same JSONL file. This is not a
 cross-process lock. An older CLI that does not participate in a lease protocol  
 must be closed before the Web Host opens the same session.
 
+Desktop and Web are separate Host processes over the same `~/.stepcode`, on the
+same machine. Each page reads the session and workspace lists when it loads, so
+a conversation the other Host created, archived or deleted is only on disk. The
+client re-reads both lists when its window regains focus or its tab becomes
+visible (`features/shell/ShellEffects.tsx`, coalesced to one read per second),
+which is how a session started in one appears in the other without a reload.
+Nothing pushes between Hosts and no state is shared beyond the files, so a Web
+Host on another machine cannot see a local Desktop's conversations.
+
 Workspaces are folders the user registered through "Add workspace" (sidebar  
 button, or Alt+Cmd+O / Ctrl+Alt+O). The Host opens the operating system's  
 folder chooser when that dialog would appear on the machine in front of the  
@@ -342,6 +362,20 @@ returns removed folders with `hidden: true` so session refreshes and page reload
 cannot recreate their project group. Hidden folders are excluded from recent  
 folder choices; their conversations remain readable under Recent and searchable.  
 Adding the folder again clears its removal marker and restores its project group.
+
+A removed folder also stops being a target for new work. "New conversation"
+inherits the folder of the conversation on screen, so starting one from a removed
+folder's retained chat used to create a session there — in a workspace the picker
+could no longer even list, where folder-scoped requests (file tree, git, `@`
+completion) then answered "Folder is not a known workspace". `startDraft` reroutes
+a hidden cwd to the launch folder, else to a workspace still on offer, and a draft
+open in the folder being removed is moved the same way. Only the last resort —
+every workspace removed — keeps the launch folder, because the host still has to
+run somewhere. Existing sessions keep their folder and stay fully usable.
+`bootstrap.cwd` is the launch folder's resolved path, so it matches the cwd a
+session header records and the paths the registry stores; a launch spelling that
+differed (a symlink, a trailing slash) would otherwise keep the removed real
+folder in the picker.
 
 Every project header offers removal, with or without conversations. An in-app  
 dialog names the project and explains that files and existing chats are retained.  

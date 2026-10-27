@@ -1582,9 +1582,53 @@ test("approval cards show complete commands, restore on reload, and offer only d
   assert.match(await readFile(join(workspace, "approval-result.txt"), "utf8"), /approval command preview/);
   await browser.run(`
     await fetch("/api/v1/sessions/${id}/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "approval-fixture-remembered" }) });
-    await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed" && $(".approval") === null, "later command reuses session grant");
+    // The post returns before the turn starts, so "completed" alone can still be
+    // the previous turn's state: wait for this turn's own command result too.
+    await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/${id}")).json();
+      const results = value.entries.filter((entry) => entry.message?.role === "toolResult").length;
+      return value.status === "completed" && $(".approval") === null && results >= 2;
+    }, "later command reuses session grant");
   `);
   assert.match(await readFile(join(workspace, "approval-remembered.txt"), "utf8"), /approval command preview/);
+});
+
+test("a subagent's write asks for approval and runs in the child, not the main session", { skip }, async () => {
+  const report = await browser.run(`
+    const json = { "content-type": "application/json" };
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: json, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    const base = "/api/v1/sessions/" + session.id;
+    await fetch(base + "/policy", { method: "PATCH", headers: json, body: JSON.stringify({ preset: "ask" }) });
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-subagent-fixture" }) });
+    const asked = [];
+    const snapshot = await until(async () => {
+      const value = await (await fetch(base)).json();
+      if (value.status === "failed") throw new Error(JSON.stringify(value));
+      for (const approval of value.pendingApprovals ?? []) {
+        asked.push({ tool: approval.toolName, content: approval.message });
+        await fetch(base + "/approvals/decision", { method: "POST", headers: json, body: JSON.stringify({ id: approval.id, verdict: "approve_for_session" }) });
+      }
+      return value.status === "completed" ? value : null;
+    }, "the delegated write settles", 180000);
+    const calls = [];
+    for (const entry of snapshot.entries) {
+      for (const part of entry.message?.content ?? []) {
+        if (part.type === "toolCall") calls.push(part.name);
+      }
+    }
+    const subagentResult = snapshot.entries.find((entry) => entry.message?.role === "toolResult" && entry.message.toolName === "subagent");
+    return { id: session.id, asked, calls, resultError: subagentResult?.message?.isError === true, resultText: subagentResult?.message?.content?.map((part) => part.text ?? "").join("") ?? "" };
+  `);
+  // The parent's delegation and the child's write each ask once, in this session.
+  assert.deepEqual(
+    report.asked.map((entry) => entry.tool),
+    ["subagent", "write_file"],
+  );
+  assert.match(report.asked[1].content, /write_file path=src\/sub\.txt/u, "the child's dialog body carries the file it wants to write");
+  // Only the delegated agent wrote the file: the parent's transcript has no write call.
+  assert.deepEqual(report.calls, ["subagent"]);
+  assert.equal(report.resultError, false, report.resultText);
+  assert.equal(await readFile(join(workspace, "src", "sub.txt"), "utf8"), "hello\n");
 });
 
 test("denying an approval never executes the command", { skip }, async () => {
@@ -2227,6 +2271,107 @@ test("workspaces with chats can be removed through the dialog, retained after re
   assert.deepEqual(restored, [workspace]);
 });
 
+test("a removed workspace leaves the composer picker and never receives a new conversation", { skip }, async () => {
+  // Removing a workspace keeps its conversations. One of them can still be open,
+  // and "New conversation" inherits the folder from it, so the app has to stop
+  // targeting the folder the user deleted: the picker cannot list it any more,
+  // and a chat started there was sent into a workspace that was gone.
+  const now = new Date().toISOString()
+  const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const extraSession = "e2e-extra-workspace-session"
+  const dir = join(base, "agent", "sessions", "--e2e-extra--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, `${extraSession}.jsonl`),
+    [
+      { type: "session", version: 3, id: extraSession, timestamp: now, cwd: extra },
+      { type: "message", id: "x-u", parentId: null, timestamp: now, message: { role: "user", content: "removed workspace chat", timestamp: Date.now() } },
+      { type: "message", id: "x-a", parentId: "x-u", timestamp: now, message: { role: "assistant", content: [{ type: "text", text: "ok" }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "stop", timestamp: Date.now() } },
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n") + "\n",
+  )
+  await browser.run(`
+    await fetch("/api/v1/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: ${JSON.stringify(extra)} }) });
+  `)
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${extraSession}"]'), "the workspace's chat");
+    row.click();
+    await until(() => $(".session-row.active"), "opened chat");
+    const group = await until(() => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === ${JSON.stringify(extra)}), "workspace group");
+    group.querySelector(".workspace-menu-button").click();
+    await until(() => $("#workspaceMenu"), "workspace menu");
+    $("#workspaceMenu .remove-workspace").click();
+    await until(() => !$("#removeWorkspaceModal").hidden, "removal dialog");
+    $("#removeWorkspaceConfirm").click();
+    await until(() => $("#removeWorkspaceModal").hidden, "removed");
+    return {
+      groups: projects(),
+      recent: $$("#recentTasks .session-row").map((row) => row.dataset.sessionId),
+      workspaces: (await (await fetch("/api/v1/workspaces")).json()).workspaces,
+    };
+  `)
+  assert.equal(removed.groups.includes(extra), false, "the sidebar drops the removed project")
+  assert.ok(removed.recent.includes(extraSession), "its conversation is kept, under Recent")
+  assert.equal(
+    removed.workspaces.find((workspace) => workspace.name === "second-project")?.hidden,
+    true,
+    "the removal is recorded, not only hidden in this page's memory",
+  )
+
+  // The removed chat is still open. A new conversation must not inherit its folder.
+  const next = await browser.run(`
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "draft composer");
+    const pill = $("#workspaceButtonName").textContent;
+    $("#workspaceButton").click();
+    const rows = await until(() => $$("#workspaceRecentList [role=option]").length && $$("#workspaceRecentList [role=option]"), "picker");
+    const items = rows.map((row) => row.title);
+    document.body.click();
+    await until(() => !$("#workspacePopover"), "picker closes");
+    const editor = $("#prompt");
+    editor.textContent = "stream-fixture"; editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    const id = await until(() => $(".session-row.active")?.dataset.sessionId, "created session");
+    const snapshot = await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/" + id)).json();
+      if (value.status === "failed") throw new Error(JSON.stringify(value));
+      return value.status === "completed" ? value : null;
+    }, "the new turn settles");
+    return {
+      pill,
+      items,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+      cwd: snapshot.cwd,
+      groups: projects(),
+    };
+  `)
+  assert.equal(next.pill, "project", "the draft moves to a workspace still on offer")
+  assert.deepEqual(next.items, [workspace], "the picker no longer offers the removed folder")
+  assert.equal(next.cwd, workspace, "the new session is not created in the removed folder")
+  assert.equal(next.toast, "", "no folder-scoped request was refused")
+  assert.equal(next.groups.includes(extra), false, "the removed project never comes back as an empty group")
+  assert.equal(next.groups.includes(workspace), true, "the new chat joins the workspace it was started in")
+
+  // And the removal survives a reload: no group, no picker entry, chat still readable.
+  await browser.goto(`${origin}/`)
+  const reloaded = await browser.run(`
+    await until(() => $("[data-session-id]"), "rows after reload");
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "draft after reload");
+    $("#workspaceButton").click();
+    await until(() => $$("#workspaceRecentList [role=option]").length, "picker after reload");
+    const items = $$("#workspaceRecentList [role=option]").map((row) => row.title);
+    document.body.click();
+    return { items, groups: projects(), recent: $$("#recentTasks .session-row").map((row) => row.dataset.sessionId) };
+  `)
+  assert.equal(reloaded.items.includes(extra), false, "the picker stays clean after a reload")
+  assert.equal(reloaded.groups.includes(extra), false, "the removed project never comes back as a group")
+  assert.ok(reloaded.recent.includes(extraSession), "the removed folder's chat is still readable")
+})
+
 test("rewriting a message leaves one input box, not two", { skip }, async () => {
   // Rewriting happens in place, above the conversation. The bottom composer used
   // to stay mounted beside it, so the page showed two prompt fields at once.
@@ -2400,6 +2545,59 @@ test("conversation search finds message content written outside the page and ope
     return sessions.map((session) => session.id).filter((id) => id.startsWith("e2e-search") || id.startsWith("subagent-"));
   `)
   assert.deepEqual(listed, [sessionId])
+})
+
+test("a conversation another Host started appears when this window regains focus", { skip }, async () => {
+  // Desktop and Web are separate Host processes over one ~/.stepcode. A turn run
+  // in the other one writes a transcript this page never hears about; the row has
+  // to appear without a reload when the user comes back to the window.
+  const seededId = "e2e-other-host-seeded"
+  const sessionId = "e2e-other-host-session"
+  const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const transcript = (id, text) => {
+    const now = new Date().toISOString()
+    return [
+      { type: "session", version: 3, id, timestamp: now, cwd: join(base, "other-host-project") },
+      { type: "message", id: `${id}-user`, parentId: null, timestamp: now, message: { role: "user", content: text, timestamp: Date.now() } },
+      {
+        type: "message",
+        id: `${id}-answer`,
+        parentId: `${id}-user`,
+        timestamp: now,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "written by the other host" }],
+          api: "openai-completions",
+          provider: "e2e",
+          model: "e2e",
+          usage,
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+      },
+    ]
+  }
+  const dir = join(base, "agent", "sessions", "--e2e-other-host--")
+  await mkdir(dir, { recursive: true })
+  const writeSession = (id, text) =>
+    writeFile(join(dir, `${id}.jsonl`), transcript(id, text).map((line) => JSON.stringify(line)).join("\n") + "\n")
+
+  // A conversation the other Host wrote before this page loaded: seeing its row
+  // proves the page read the list, so the next write cannot race the bootstrap.
+  await writeSession(seededId, "seeded before the page loaded")
+  await browser.goto(`${origin}/`)
+  await browser.run(`await until(() => $("[data-session-id='${seededId}']"), "the seeded row");`)
+
+  await writeSession(sessionId, "started in the other host")
+  const seen = await browser.run(`
+    const row = () => $("[data-session-id='${sessionId}']");
+    const before = Boolean(row());
+    window.dispatchEvent(new Event("focus"));
+    const found = await until(() => row(), "the other host's session row");
+    return { before, title: found.querySelector(".session-title")?.textContent };
+  `)
+  assert.equal(seen.before, false, "no row exists until the list is re-read")
+  assert.equal(seen.title, "started in the other host")
 })
 
 test("the conversation locator rail jumps to a query and follows the viewport", { skip }, async () => {

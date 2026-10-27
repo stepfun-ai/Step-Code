@@ -44,11 +44,20 @@ export class ApprovalBroker {
 		}
 	}
 
+	/**
+	 * Ask for a verdict on one confirmation.
+	 *
+	 * `toolName` is the kernel dialog's title, `Approve <tool> [<call id>]` (or
+	 * `Dangerous …`). The tool it names is the identity the card and the session
+	 * grant use, so the hazard word and the call id are stripped here: callers
+	 * pass the title through unchanged, including a subagent's forwarded prompt.
+	 */
 	confirm(toolName: string, message: string, signal?: AbortSignal): Promise<boolean> {
 		const callId = /\[([^\]]+)\]$/u.exec(toolName)?.[1];
 		const captured = callId ? this.toolCalls.get(callId.slice(-8)) : undefined;
 		if (callId) this.toolCalls.delete(callId.slice(-8));
-		const name = captured?.toolName ?? toolName.replace(/\s+\[[^\]]+\]$/u, "");
+		const name =
+			captured?.toolName ?? toolName.replace(/\s+\[[^\]]+\]$/u, "").replace(/^(?:Approve|Dangerous) /u, "");
 		const reason = message
 			.split("\n\n", 1)[0]
 			.replace(/^Call: [^\n]*\n/u, "")

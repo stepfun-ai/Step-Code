@@ -3,7 +3,7 @@
  * `buildCodeView`; app.js 1771-1873).
  */
 
-import { type CSSProperties, type ReactNode, useLayoutEffect, useMemo, useRef } from "react";
+import { type CSSProperties, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { localFileApi, workspaceApi } from "../../lib/api";
 import { basename, cx, formatBytes } from "../../lib/format";
@@ -65,6 +65,18 @@ function PreviewMessage({ children }: { readonly children: ReactNode }) {
 	return <div className="preview-message">{children}</div>;
 }
 
+/**
+ * The bytes of a previewed image. A load that fails anyway — the file grew past
+ * the host's image limit after the tab read it, or it was removed — replaces
+ * the broken-image icon with a message; the icon alone carries no reason.
+ */
+function PreviewImage({ path, src }: { readonly path: string; readonly src: string }) {
+	const t = useT();
+	const [failed, setFailed] = useState(false);
+	if (failed) return <PreviewMessage>{t("imageLoadFailed")}</PreviewMessage>;
+	return <img className="preview-image" alt={basename(path)} src={src} onError={() => setFailed(true)} />;
+}
+
 function CodeView({ content, path }: { readonly content: string; readonly path: string }) {
 	const t = useT();
 	const wrap = useAppStore((state) => state.preview.wrap);
@@ -120,9 +132,8 @@ function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 	if (!file) return null;
 	if (file.kind === "image")
 		return (
-			<img
-				className="preview-image"
-				alt={basename(file.path)}
+			<PreviewImage
+				path={file.path}
 				src={
 					tab.scope === "local"
 						? localFileApi("/raw", tab.path)

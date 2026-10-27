@@ -5,6 +5,16 @@ import type { ApprovalRequest } from "../../state/types";
 import { Icon } from "../../ui";
 import { type ApprovalVerdict, decideApproval } from "./actions";
 
+/**
+ * The dialog body of a prompt forwarded from a subagent child, without the
+ * internal tool-call id the kernel prefixes it with. Such a prompt is the only
+ * one this page receives no structured tool input for.
+ */
+function forwardedDetail(message: string): string | undefined {
+	const text = message.replace(/^Call: [^\n]*\n/u, "").trim();
+	return text || undefined;
+}
+
 /** Render actual arguments, rather than the kernel's clipped diagnostic prompt. */
 export function ApprovalCard({ approval }: { readonly approval: ApprovalRequest }) {
 	const t = useT();
@@ -31,7 +41,7 @@ export function ApprovalCard({ approval }: { readonly approval: ApprovalRequest 
 		...(preview?.after !== undefined ? [`${t("approvalAfter")}\n${preview.after}`] : []),
 		...(typeof input.then_run === "string" ? [`${t("approvalThenRun")}\n${input.then_run}`] : []),
 		...(command === undefined && preview?.before === undefined && preview?.after === undefined
-			? [`${approval.toolName}\n${JSON.stringify(input, null, 2)}`]
+			? [forwardedDetail(approval.message) ?? `${approval.toolName}\n${JSON.stringify(input, null, 2)}`]
 			: []),
 	].join("\n\n");
 	// Routine mutation boilerplate is replaced by the localized title; keep specific policy reasons.

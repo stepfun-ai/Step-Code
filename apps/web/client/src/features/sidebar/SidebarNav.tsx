@@ -50,6 +50,8 @@ export function SidebarActions() {
 				className="sidebar-action"
 				id="cronButton"
 				type="button"
+				// Scheduled tasks are still demo data; keep the entry hidden on every host for now.
+				hidden
 				aria-current={midView === "cron" ? "page" : undefined}
 				title={t("cronTasks")}
 				onClick={() => openMidView("cron")}

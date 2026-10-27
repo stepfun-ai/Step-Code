@@ -239,8 +239,8 @@ function webUiContext(
 	return {
 		clarify: (questions, signal) => clarifications.ask(questions, signal),
 		select: selectionSelect(selections),
-		confirm: (title, message, options) =>
-			broker.confirm(title.replace(/^Approve |^Dangerous /u, ""), message, options?.signal),
+		// The broker derives the tool and the grant key from the dialog title.
+		confirm: (title, message, options) => broker.confirm(title, message, options?.signal),
 		input: textInput(textInputs),
 		// A command's answer is a notice in the transcript, not a prompt: it never
 		// reaches the model or the session file.
@@ -349,6 +349,14 @@ export function webExtensions(
 			telemetry,
 			cliPath: resolveSubagentCliPath(),
 			ultraloopSessionMode: false,
+			subagent: {
+				// A child runs `--mode rpc` with no window of its own, so its
+				// permission dialog used to be cancelled and a subagent's write
+				// failed without anyone being asked. Show it on this session's
+				// approval stream instead: the dialog body carries the tool's
+				// summarized input (path, content, command).
+				requestApproval: (prompt) => broker.confirm(prompt.title, prompt.message, prompt.signal),
+			},
 		}),
 		createStepCronExtension({ telemetry }),
 		createStepGoalExtension({ telemetry }),

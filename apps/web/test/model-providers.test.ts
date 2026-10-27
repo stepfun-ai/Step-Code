@@ -398,6 +398,46 @@ test("discovery reports the failure the user can act on", async () => {
 	await rejectsWith(() => discoverProviderModels({ baseUrl: "", api: "openai-completions" }), 400);
 });
 
+test("discovery with a blank key uses the provider's stored key, and a typed key still wins", async () => {
+	const seen: (string | undefined)[] = [];
+	const endpoint = await mockEndpoint((_url, headers, response) => {
+		const key = typeof headers["x-api-key"] === "string" ? headers["x-api-key"] : undefined;
+		seen.push(key);
+		if (key !== "sk-stored" && key !== "sk-typed") {
+			jsonResponse(response, { error: "bad key" }, 401);
+			return;
+		}
+		jsonResponse(response, { data: [{ id: "claude-x" }] });
+	});
+	try {
+		await saveModelProvider(
+			"gw-discover",
+			{ baseUrl: endpoint.url, api: "anthropic-messages", apiKey: "sk-stored", models: [{ id: "claude-x" }] },
+			{ replace: false },
+		);
+		// Editing a saved provider: the key field is blank, the stored key answers.
+		const models = await discoverProviderModels({ providerId: "gw-discover", baseUrl: endpoint.url, api: "anthropic-messages" });
+		assert.deepEqual(models, [{ id: "claude-x", name: "claude-x" }]);
+		assert.equal(seen.at(-1), "sk-stored");
+
+		await discoverProviderModels({
+			providerId: "gw-discover",
+			baseUrl: endpoint.url,
+			api: "anthropic-messages",
+			apiKey: "sk-typed",
+		});
+		assert.equal(seen.at(-1), "sk-typed", "a typed key replaces the stored one for this request");
+
+		// No stored credential (unknown id, or the account provider) means no key at all.
+		await rejectsWith(() => discoverProviderModels({ providerId: "gw-unknown", baseUrl: endpoint.url, api: "anthropic-messages" }), 502);
+		await rejectsWith(() => discoverProviderModels({ providerId: "step", baseUrl: endpoint.url, api: "anthropic-messages" }), 502);
+		assert.equal(seen.at(-1), undefined);
+	} finally {
+		await deleteModelProvider("gw-discover");
+		await endpoint.close();
+	}
+});
+
 test("discovery refuses an over-large reply instead of truncating it", async () => {
 	const endpoint = await mockEndpoint((_url, _headers, response) => {
 		response.writeHead(200, { "content-type": "application/json", "content-length": String(5 * 1024 * 1024) });

@@ -10,6 +10,7 @@ import {
 	containedWorkspacePath,
 	listDirectory,
 	MAX_FILE_COMPLETIONS,
+	MAX_IMAGE_BYTES,
 	MAX_PREVIEW_BYTES,
 	readLocalFile,
 	readWorkspaceFile,
@@ -222,6 +223,12 @@ test("a file is classified as text, image, binary or too large", async () => {
 		const big = await readWorkspaceFile(root, "big.log");
 		assert.equal(big.kind, "too-large");
 		assert.equal("content" in big, false);
+		// An image over the raw limit is "too large", not a preview that would
+		// render as a broken image: the client shows the reason instead.
+		await writeFile(join(root, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1, 0x50));
+		const huge = await readWorkspaceFile(root, "huge.png");
+		assert.equal(huge.kind, "too-large");
+		assert.equal("mimeType" in huge, false);
 		await assert.rejects(readWorkspaceFile(root, "src"), /not a file/);
 	} finally {
 		await cleanup();
