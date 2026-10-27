@@ -1,9 +1,14 @@
+import type { ProviderResponse } from "../types.ts";
+import { headersToRecord } from "./headers.ts";
+
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
 interface ProviderRetryOptions {
 	maxRetries?: number;
 	maxRetryDelayMs?: number;
 	signal?: AbortSignal;
+	/** Observes each HTTP error response, including attempts that are retried. */
+	onErrorResponse?: (response: ProviderResponse) => void | Promise<void>;
 }
 
 interface ProviderError extends Error {
@@ -103,6 +108,24 @@ function getRetryDelayMs(error: ProviderError, retryIndex: number, maxRetryDelay
 	return exponentialDelay * (1 - Math.random() * 0.25);
 }
 
+/**
+ * Hand an error response to the caller's observer. The observer is diagnostic
+ * only, so its failure is swallowed: it must never turn a retryable error into
+ * a different error or stop the retry loop.
+ */
+async function reportErrorResponse(
+	onErrorResponse: ProviderRetryOptions["onErrorResponse"],
+	status: number,
+	headers: Headers | undefined,
+): Promise<void> {
+	if (!onErrorResponse) return;
+	try {
+		await onErrorResponse({ status, headers: headers ? headersToRecord(headers) : {} });
+	} catch {
+		// Observability must not alter provider retry behavior.
+	}
+}
+
 function createAbortError(): Error {
 	const error = new Error("Request aborted");
 	error.name = "AbortError";
@@ -151,6 +174,9 @@ export async function retryProviderRequest<T>(
 			// Each retry is a fresh SDK request, so X-Stainless-Retry-Count remains zero.
 			return await request();
 		} catch (error) {
+			if (isProviderError(error) && error.status !== undefined) {
+				await reportErrorResponse(options.onErrorResponse, error.status, error.headers);
+			}
 			if (options.signal?.aborted) throw createAbortError();
 			if (retriesRemaining <= 0 || !isProviderError(error) || !isRetryableProviderError(error)) throw error;
 

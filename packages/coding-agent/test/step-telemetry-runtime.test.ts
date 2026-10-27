@@ -29,10 +29,8 @@ async function readSpool(directory: string, prefix: string): Promise<Array<Recor
 }
 
 describe("Step telemetry runtime", () => {
-	it("uses the release collector default while keeping dev builds local", () => {
-		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" })).toBe(
-			"https://api.stepfun.com/stepcliobserserver/api/v1/events",
-		);
+	it("has no built-in collector: an unconfigured build reports nowhere", () => {
+		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release" })).toBeUndefined();
 		expect(readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev" })).toBeUndefined();
 		expect(readTelemetryEndpoint({})).toBeUndefined();
 	});
@@ -40,26 +38,26 @@ describe("Step telemetry runtime", () => {
 	// The build pipeline embeds STEPCODE_BUILD_CHANNEL (build-binaries.sh, Bun
 	// `--env=STEPCODE_BUILD_*`, the esbuild define allowlist). Telemetry used to
 	// read STEP_CLI_BUILD_CHANNEL, a name no build sets, so every release binary
-	// resolved "dev" and reported nothing. Lock both directions of the fix.
+	// resolved "dev" and ignored its persisted endpoint. Lock both directions.
 	it("resolves the channel through the shared build identity", () => {
-		expect(readTelemetryEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" })).toBe(
-			"https://api.stepfun.com/stepcliobserserver/api/v1/events",
-		);
+		const config = { endpoint: "https://cfg.test/events" };
+		expect(readTelemetryEndpoint({ STEP_HARNESS_BUILD_CHANNEL: "release" }, config)).toBe("https://cfg.test/events");
 		// The primary name wins over the legacy alias, so a release binary whose
 		// runtime sets the alias to dev degrades to silence rather than reporting.
 		expect(
-			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev", STEP_HARNESS_BUILD_CHANNEL: "release" }),
+			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev", STEP_HARNESS_BUILD_CHANNEL: "release" }, config),
 		).toBeUndefined();
-		expect(readTelemetryEndpoint({ STEP_CLI_BUILD_CHANNEL: "release" })).toBeUndefined();
+		expect(readTelemetryEndpoint({ STEP_CLI_BUILD_CHANNEL: "release" }, config)).toBeUndefined();
 	});
 
 	it("keeps the telemetry and feedback envelopes on one channel", () => {
+		const config = { endpoint: "https://cfg.test/events" };
 		const env = { STEP_HARNESS_BUILD_CHANNEL: "release" };
-		expect(readTelemetryEndpoint(env)).toBe("https://api.stepfun.com/stepcliobserserver/api/v1/events");
+		expect(readTelemetryEndpoint(env, config)).toBe("https://cfg.test/events");
 		expect(resolveFeedbackEndpoint(env)).toBe("https://api.stepfun.com/stepcliobserserver/api/v1/feedback");
 
 		const devEnv = {};
-		expect(readTelemetryEndpoint(devEnv)).toBeUndefined();
+		expect(readTelemetryEndpoint(devEnv, config)).toBeUndefined();
 		expect(resolveFeedbackEndpoint(devEnv)).toBe(
 			"https://test-openapi-stepcliobserserver.c.stepfun-inc.net/api/v1/feedback",
 		);

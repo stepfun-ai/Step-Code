@@ -239,15 +239,19 @@ export {
 } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export {
+	createModelRequestTraceCapture,
 	type ModelRequestCompleted,
 	type ModelRequestObserver,
 	type ModelRequestOutcome,
 	type ModelRequestStarted,
+	type ModelRequestTrace,
+	type ModelRequestTraceCapture,
 	type ModelRequestUsage,
 	type ObserveModelRequestFailureOptions,
 	type ObserveModelRequestStreamOptions,
 	observeModelRequestFailure,
 	observeModelRequestStream,
+	readResponseTraceId,
 } from "./core/model-request-observer.ts";
 export {
 	defaultModelPerProvider,
@@ -826,6 +830,20 @@ export type {
 	UsagePresentation,
 	UsageStatus,
 } from "./step/usage/types.ts";
+export {
+	classifyStepUsageEndpoint,
+	createStepUsageObservabilityProvider,
+	processStartAt,
+	readInternalProviderHosts,
+	resolveStepUsageClient,
+	STEP_USAGE_TELEMETRY_EVENTS,
+	type StepUsageClient,
+	type StepUsageEndpointClassification,
+	type StepUsageObservabilityOptions,
+	type StepUsageObservabilityProvider,
+	type StepUsageUserType,
+	stepUsageLocalDay,
+} from "./step/usage-telemetry.ts";
 export {
 	resolveStepCodeVersion,
 	STEPCODE_BUILD_VERSION_ENV,

@@ -56,6 +56,54 @@ describe("provider request retries", () => {
 		expect(request).toHaveBeenCalledTimes(1);
 	});
 
+	it("reports every error response, including retried attempts and the final failure", async () => {
+		const request = vi
+			.fn<() => Promise<string>>()
+			.mockRejectedValueOnce(providerError(500, { "x-trace-id": "first", "retry-after-ms": "0" }))
+			.mockRejectedValueOnce(providerError(500, { "x-trace-id": "second", "retry-after-ms": "0" }))
+			.mockRejectedValue(providerError(400, { "x-trace-id": "final" }));
+		const seen: { status: number; traceId: string | undefined }[] = [];
+
+		await expect(
+			retryProviderRequest(request, {
+				maxRetries: 2,
+				onErrorResponse: (response) => {
+					seen.push({ status: response.status, traceId: response.headers["x-trace-id"] });
+				},
+			}),
+		).rejects.toThrow("Provider error: 400");
+		expect(seen).toEqual([
+			{ status: 500, traceId: "first" },
+			{ status: 500, traceId: "second" },
+			{ status: 400, traceId: "final" },
+		]);
+	});
+
+	it("keeps retry behavior when the error-response observer throws", async () => {
+		const request = vi
+			.fn<() => Promise<string>>()
+			.mockRejectedValueOnce(providerError(503, { "retry-after-ms": "0" }))
+			.mockResolvedValue("ok");
+
+		await expect(
+			retryProviderRequest(request, {
+				maxRetries: 1,
+				onErrorResponse: () => {
+					throw new Error("observer failure");
+				},
+			}),
+		).resolves.toBe("ok");
+		expect(request).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not report errors that carry no HTTP status", async () => {
+		const onErrorResponse = vi.fn();
+		const request = vi.fn<() => Promise<string>>().mockRejectedValue(new Error("socket hang up"));
+
+		await expect(retryProviderRequest(request, { maxRetries: 0, onErrorResponse })).rejects.toThrow("socket hang up");
+		expect(onErrorResponse).not.toHaveBeenCalled();
+	});
+
 	it("rejects a provider-requested retry delay above the limit", async () => {
 		const request = vi.fn<() => Promise<string>>().mockRejectedValue(providerError(429, { "retry-after": "277403" }));
 

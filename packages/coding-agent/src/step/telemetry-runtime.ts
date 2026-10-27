@@ -5,7 +5,7 @@ import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
 import { normalizeStepCommit, readStepBuildIdentity } from "./build-identity.ts";
 import { resolveStepStorageRoot } from "./device-id.ts";
-import { readEndpointChannelDefault, readEndpointEnvOverride } from "./observer-endpoints.ts";
+import { readEndpointEnvOverride } from "./observer-endpoints.ts";
 import type {
 	StepTelemetryContextPatch,
 	StepTelemetryEventName,
@@ -16,6 +16,7 @@ import type {
 	StepTelemetryTrackOptions,
 } from "./telemetry.ts";
 import { isKnownStepTelemetryEvent, STEP_TELEMETRY_EVENT_PROPERTY_NAMES } from "./telemetry-events.ts";
+import { readBuildStepUsageTelemetryConfig, readRuntimeStepUsageTelemetryConfig } from "./usage-telemetry-config.ts";
 import { resolveStepCodeVersion, STEPCODE_VERSION } from "./version.ts";
 
 /** Envelope written to the Step analytics collector and local spool. */
@@ -619,28 +620,41 @@ function safeTrackRuntime(
 	}
 }
 
-/** Resolve the endpoint env overrides and the release-channel default. */
+/**
+ * Resolve the collector endpoint. There is no built-in default: without an
+ * explicit source the CLI reports nowhere, so a build from a tree whose
+ * `config/usage-telemetry.yaml` is blank sends nothing.
+ *
+ * Precedence: environment endpoint > runtime usage config > `config.toml`
+ * endpoint (release builds only) > the usage config embedded at build time.
+ */
 export function readTelemetryEndpoint(
 	env: NodeJS.ProcessEnv = process.env,
 	config?: StepTelemetryRuntimeOptions["config"],
 ): string | undefined {
 	const explicit = readEndpointEnvOverride("telemetry", env);
 	if (explicit) return explicit;
-	// A persisted endpoint is honored only by release builds. This is the old
-	// Step safety boundary: a source checkout may spool locally, while an
-	// explicit environment endpoint remains the documented dev test escape hatch.
-	if (readStepBuildIdentity(env).channel !== "release") return undefined;
-	// An unset/unknown channel resolves to dev above, so source checkouts keep
-	// spooling locally. Released binaries embed the channel at build time.
-	return normalizeEndpoint(config?.endpoint) ?? readEndpointChannelDefault("telemetry", "release");
+	// An operator-supplied usage config is an explicit action, so it applies on
+	// any channel: testing an installed build against a collector needs no rebuild.
+	const runtimeUsage = normalizeEndpoint(readRuntimeStepUsageTelemetryConfig(env)?.endpoint);
+	if (runtimeUsage) return runtimeUsage;
+	// A persisted endpoint is honored only by release builds, and there it wins
+	// over the embedded config. An unset/unknown channel resolves to dev, so a
+	// source checkout ignores it; released binaries embed the channel.
+	if (readStepBuildIdentity(env).channel === "release") {
+		const persisted = normalizeEndpoint(config?.endpoint);
+		if (persisted) return persisted;
+	}
+	// The committed usage config applies on every channel, so local, test, and
+	// release builds report to the same collector.
+	return normalizeEndpoint(readBuildStepUsageTelemetryConfig(env)?.endpoint);
 }
 
 /**
  * Resolve Step's telemetry gates in the same order as the legacy runtime:
  * test runtime, environment opt-out, persistent opt-out, then endpoint
- * precedence (environment > release config > release default). A dev build
- * still records to its local spool, but never reaches a collector unless an
- * endpoint is explicitly supplied through the environment or call options.
+ * precedence (see {@link readTelemetryEndpoint}). Without a resolved endpoint
+ * the runtime records only to its local spool and never reaches a collector.
  */
 export function resolveStepTelemetrySettings(
 	env: NodeJS.ProcessEnv = process.env,
@@ -655,10 +669,11 @@ export function resolveStepTelemetrySettings(
 		return { enabled: false, spoolEnabled: false, reason: "env-opt-out" };
 	}
 	if (config?.enabled === false) return { enabled: false, spoolEnabled: false, reason: "config-opt-out" };
+	const endpoint = readTelemetryEndpoint(env, config);
 	return {
 		enabled: true,
 		spoolEnabled: config?.spool !== false,
-		...(readTelemetryEndpoint(env, config) ? { endpoint: readTelemetryEndpoint(env, config) } : undefined),
+		...(endpoint ? { endpoint } : undefined),
 	};
 }
 

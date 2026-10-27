@@ -149,6 +149,17 @@ else
     echo "==> Skipping pnpm install (--skip-install)"
 fi
 
+# Usage telemetry: one YAML document (config/usage-telemetry.yaml, or the path in
+# STEPCODE_USAGE_TELEMETRY_CONFIG, which a GitLab File variable supplies) becomes
+# a JSON define inlined by `bun build --env=STEPCODE_BUILD_*`. A build without
+# it reports nothing. A malformed field fails the build rather than shipping a
+# release that silently sends nothing. The loader needs the `yaml` package, so
+# this runs after the install step.
+STEPCODE_BUILD_USAGE_TELEMETRY="$(node scripts/load-usage-telemetry-config.mjs)"
+if [[ -n "$STEPCODE_BUILD_USAGE_TELEMETRY" && "$STEPCODE_BUILD_USAGE_TELEMETRY" != "{}" ]]; then
+    export STEPCODE_BUILD_USAGE_TELEMETRY
+fi
+
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")

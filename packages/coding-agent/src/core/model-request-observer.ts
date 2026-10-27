@@ -5,6 +5,7 @@ import {
 	type AssistantMessageEventStream,
 	createAssistantMessageEventStream,
 	type Model,
+	type ProviderResponse,
 	type Usage,
 } from "@step-harness/providers";
 
@@ -55,14 +56,104 @@ export interface ModelRequestUsage {
 }
 
 /**
+ * One upstream HTTP response that carried a gateway trace id (`x-trace-id`).
+ *
+ * Reported per attempt: a request the provider retries yields one trace per
+ * response, successful or not.
+ */
+export interface ModelRequestTrace {
+	readonly traceId: string;
+	/** Step session that owns the request; empty when the call has no session. */
+	readonly sessionId: string;
+	readonly provider: string;
+	readonly model: string;
+	/** For endpoint classification only; reporters must not send it. */
+	readonly baseUrl: string;
+	readonly statusCode: number;
+	/** One-based HTTP response count within this logical request. */
+	readonly attempt: number;
+}
+
+/**
  * Minimal observer seam for product integrations.
  *
- * Both callbacks are best effort: the caller never awaits them and an observer
+ * All callbacks are best effort: the caller never awaits them and an observer
  * failure cannot alter provider streaming or agent-loop settlement.
  */
 export interface ModelRequestObserver {
 	onRequestStarted?(request: ModelRequestStarted): void | Promise<void>;
 	onRequestCompleted?(request: ModelRequestCompleted): void | Promise<void>;
+	onTraceId?(trace: ModelRequestTrace): void | Promise<void>;
+}
+
+const TRACE_ID_HEADER = "x-trace-id";
+const MAX_TRACE_ID_LENGTH = 128;
+const PRINTABLE_TOKEN = /^[\x21-\x7e]+$/u;
+
+/**
+ * Read the gateway trace id from a provider response.
+ *
+ * Built-in adapters lowercase header names; extension providers may not, so
+ * the lookup is case-insensitive. A value that is not a short printable token
+ * is ignored rather than forwarded.
+ */
+export function readResponseTraceId(headers: Readonly<Record<string, string>> | undefined): string | undefined {
+	// Extension providers build this object themselves, so do not trust its shape.
+	if (!headers || typeof headers !== "object") return undefined;
+	let raw: unknown = headers[TRACE_ID_HEADER];
+	if (raw === undefined) {
+		for (const [name, value] of Object.entries(headers)) {
+			if (name.toLowerCase() === TRACE_ID_HEADER) {
+				raw = value;
+				break;
+			}
+		}
+	}
+	if (typeof raw !== "string") return undefined;
+	const value = raw.trim();
+	return value && value.length <= MAX_TRACE_ID_LENGTH && PRINTABLE_TOKEN.test(value) ? value : undefined;
+}
+
+/** Response callbacks that turn provider responses into {@link ModelRequestTrace} reports. */
+export interface ModelRequestTraceCapture {
+	onResponse(response: ProviderResponse, model: Model<Api>): void;
+	onErrorResponse(response: ProviderResponse, model: Model<Api>): void;
+}
+
+/**
+ * Create the per-request trace capture, or undefined when nobody listens.
+ *
+ * One capture belongs to one logical request so its attempt counter covers
+ * every response that request receives, including provider retries.
+ */
+export function createModelRequestTraceCapture(
+	observer: ModelRequestObserver | undefined,
+	sessionId: string,
+): ModelRequestTraceCapture | undefined {
+	if (!observer?.onTraceId) return undefined;
+	let attempt = 0;
+	const report = (response: ProviderResponse, model: Model<Api>): void => {
+		attempt += 1;
+		// Capturing runs inside the provider's response callback: a malformed
+		// response from an extension provider must not fail the request.
+		try {
+			const traceId = readResponseTraceId(response?.headers);
+			if (!traceId) return;
+			notifyTraceId(observer, {
+				traceId,
+				sessionId,
+				provider: model.provider,
+				model: model.id,
+				baseUrl: model.baseUrl,
+				// The collector stores an integer; an extension provider may hand over anything.
+				statusCode: Number.isInteger(response.status) ? response.status : 0,
+				attempt,
+			});
+		} catch {
+			// Trace capture is diagnostic only.
+		}
+	};
+	return { onResponse: report, onErrorResponse: report };
 }
 
 export interface ObserveModelRequestStreamOptions {
@@ -290,6 +381,15 @@ function notifyCompleted(observer: ModelRequestObserver, request: ModelRequestCo
 		void Promise.resolve(result).catch(() => undefined);
 	} catch {
 		// Observability must never affect request settlement.
+	}
+}
+
+function notifyTraceId(observer: ModelRequestObserver, trace: ModelRequestTrace): void {
+	try {
+		const result = observer.onTraceId?.(trace);
+		void Promise.resolve(result).catch(() => undefined);
+	} catch {
+		// Observability must never affect the provider response path.
 	}
 }
 
