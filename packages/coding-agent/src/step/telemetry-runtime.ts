@@ -630,18 +630,19 @@ export function readTelemetryEndpoint(
 	// any channel: testing an installed build against a collector needs no rebuild.
 	const runtimeEndpoint = normalizeEndpoint(readRuntimeStepUsageTelemetryConfig(env)?.endpoint);
 	if (runtimeEndpoint) return runtimeEndpoint;
-	// Everything below is build-supplied and honored only by release builds. This
-	// is the old Step safety boundary: a source checkout may spool locally, while
-	// an explicit environment endpoint remains the documented dev test escape hatch.
+	// The committed usage config is an explicit product decision, so it applies on
+	// every channel too: local source runs, test builds, and releases report to the
+	// same collector, which is what makes local verification meaningful.
+	const usageEndpoint = normalizeEndpoint(readBuildStepUsageTelemetryConfig(env)?.endpoint);
+	if (usageEndpoint) return usageEndpoint;
+	// Everything below keeps the old build-supplied boundary: release builds only.
+	// A source checkout may spool locally, while an explicit environment endpoint
+	// remains the documented dev test escape hatch.
 	if (readStepBuildIdentity(env).channel !== "release") return undefined;
 	// An unset/unknown channel resolves to dev above, so source checkouts keep
 	// spooling locally. Released binaries embed the channel and the config file at
 	// build time.
-	return (
-		normalizeEndpoint(config?.endpoint) ??
-		normalizeEndpoint(readBuildStepUsageTelemetryConfig(env)?.endpoint) ??
-		normalizeEndpoint(readBuildTelemetryEndpoint(env))
-	);
+	return normalizeEndpoint(config?.endpoint) ?? normalizeEndpoint(readBuildTelemetryEndpoint(env));
 }
 
 /** Runtime overrides, highest precedence first. The legacy names keep operator runbooks working. */

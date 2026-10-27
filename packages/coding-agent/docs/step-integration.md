@@ -205,8 +205,14 @@ Precedence, highest first:
 | --- | --- |
 | `STEPCODE_TELEMETRY_ENDPOINT`, `STEPCODE_INTERNAL_PROVIDER_HOSTS` | Explicit operator override, any build |
 | `STEPCODE_USAGE_TELEMETRY` (JSON) or `STEPCODE_USAGE_TELEMETRY_CONFIG` (JSON file) | Running an installed build without rebuilding |
-| The embedded config from the YAML above | Release builds only |
-| `STEPCODE_BUILD_TELEMETRY_ENDPOINT`, `STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS` | Legacy single-value build variables, still honored |
+| The committed YAML above, embedded by the build | Every channel, so local, test, and release report to the same collector |
+| `STEPCODE_BUILD_TELEMETRY_ENDPOINT`, `STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS` | Legacy single-value build variables; release builds only |
+
+A source run has no embedded build config, so it must load the YAML explicitly:
+
+```bash
+STEPCODE_USAGE_TELEMETRY="$(node scripts/load-usage-telemetry-config.mjs)" pnpm step ...
+```
 
 Opting out: `enabled: false` in the config, `STEPCODE_DISABLE_TELEMETRY`, or
 `config.toml` `[telemetry] enabled = false`. The desktop shell sets

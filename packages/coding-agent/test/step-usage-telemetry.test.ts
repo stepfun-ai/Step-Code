@@ -75,14 +75,29 @@ describe("usage endpoint classification", () => {
 });
 
 describe("usage telemetry config", () => {
-	it("embeds the YAML config: release builds use it, dev builds ignore it", () => {
+	it("uses the embedded YAML config on every channel, so local and release agree", () => {
 		const buildConfig = JSON.stringify({ endpoint: "https://collector.test/config" });
 		expect(
 			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "release", STEPCODE_BUILD_USAGE_TELEMETRY: buildConfig }),
 		).toBe("https://collector.test/config");
 		expect(
 			readTelemetryEndpoint({ STEPCODE_BUILD_CHANNEL: "dev", STEPCODE_BUILD_USAGE_TELEMETRY: buildConfig }),
+		).toBe("https://collector.test/config");
+	});
+
+	it("keeps the legacy build variable release-gated", () => {
+		expect(
+			readTelemetryEndpoint({
+				STEPCODE_BUILD_CHANNEL: "dev",
+				STEPCODE_BUILD_TELEMETRY_ENDPOINT: "https://legacy.test/ingest",
+			}),
 		).toBeUndefined();
+		expect(
+			readTelemetryEndpoint({
+				STEPCODE_BUILD_CHANNEL: "release",
+				STEPCODE_BUILD_TELEMETRY_ENDPOINT: "https://legacy.test/ingest",
+			}),
+		).toBe("https://legacy.test/ingest");
 	});
 
 	it("lets an operator point an installed build at another collector without rebuilding", () => {
