@@ -163,6 +163,8 @@ export async function launchWebServer(options: WebServerLaunchOptions): Promise<
 			// second copy. Forced off rather than left unset: the command that launched
 			// the app may have exported it.
 			STEPCODE_WEB_OPEN: "0",
+			// Usage telemetry reports this host as `desktop`; subagent children inherit it.
+			STEPCODE_HOST: "desktop",
 		},
 		release,
 	);

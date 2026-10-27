@@ -6,6 +6,7 @@ import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { readUsageTelemetryConfig } from "./load-usage-telemetry-config.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -147,6 +148,13 @@ function readStepBuildDefines() {
 		if (typeof value === "string" && value.trim()) {
 			defines[`process.env.${name}`] = JSON.stringify(value.trim());
 		}
+	}
+	// Usage telemetry: one embedded JSON document from config/usage-telemetry.yaml
+	// (or STEPCODE_USAGE_TELEMETRY_CONFIG). Absent in a public build, which then
+	// reports nothing.
+	const usageTelemetry = readUsageTelemetryConfig();
+	if (Object.keys(usageTelemetry).length > 0) {
+		defines["process.env.STEPCODE_BUILD_USAGE_TELEMETRY"] = JSON.stringify(JSON.stringify(usageTelemetry));
 	}
 	return defines;
 }

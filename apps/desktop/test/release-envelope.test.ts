@@ -44,6 +44,39 @@ test("a valid envelope maps to the server's identity environment", () => {
 	});
 });
 
+test("usage telemetry travels from the envelope to the server environment", () => {
+	const usageTelemetry = {
+		endpoint: "https://collector.example.test/ingest",
+		internalProviderHosts: ["gateway.example.test"],
+	};
+	const parsed = parseReleaseEnvelope({ ...envelope, usageTelemetry });
+	assert.deepEqual(parsed?.usageTelemetry, usageTelemetry);
+	const environment = withReleaseIdentity(
+		{
+			STEPCODE_BUILD_USAGE_TELEMETRY: '{"endpoint":"https://shell.example.test/"}',
+			STEPCODE_TELEMETRY_ENDPOINT: "https://tester.example.test/",
+		},
+		parsed,
+	);
+	assert.equal(environment.STEPCODE_BUILD_USAGE_TELEMETRY, JSON.stringify(usageTelemetry));
+	// A runtime override stays available for testing an installed app.
+	assert.equal(environment.STEPCODE_TELEMETRY_ENDPOINT, "https://tester.example.test/");
+
+	// A malformed or oversized document is dropped, not shipped half-read.
+	assert.equal(parseReleaseEnvelope({ ...envelope, usageTelemetry: "text" })?.usageTelemetry, undefined);
+	assert.equal(parseReleaseEnvelope({ ...envelope, usageTelemetry: ["a"] })?.usageTelemetry, undefined);
+	assert.equal(
+		parseReleaseEnvelope({ ...envelope, usageTelemetry: { blob: "x".repeat(4096) } })?.usageTelemetry,
+		undefined,
+	);
+	// Without the field, a packaged build drops shell-exported values.
+	const withoutTelemetry = withReleaseIdentity(
+		{ STEPCODE_BUILD_USAGE_TELEMETRY: '{"endpoint":"https://shell.example.test/"}' },
+		parseReleaseEnvelope(envelope),
+	);
+	assert.equal(withoutTelemetry.STEPCODE_BUILD_USAGE_TELEMETRY, undefined);
+});
+
 test("an envelope on disk is read beside the server entry", async (t) => {
 	const directory = await fixture(t);
 	await writeFile(join(directory, RELEASE_ENVELOPE_FILE), `${JSON.stringify(envelope, null, "\t")}\n`);

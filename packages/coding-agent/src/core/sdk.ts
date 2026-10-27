@@ -11,6 +11,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
 import {
+	createModelRequestTraceCapture,
 	type ModelRequestObserver,
 	observeModelRequestFailure,
 	observeModelRequestStream,
@@ -376,6 +377,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			const headerRunner = extensionRunnerRef.current;
+			// Trace ids belong to the session this agent serves. `options.sessionId`
+			// is a routing id and may be a throwaway (one-off summaries mint one).
+			const traceCapture = createModelRequestTraceCapture(modelRequestObserver, sessionManager.getSessionId());
 			const requestOptions: ModelsSimpleStreamOptions = {
 				...options,
 				timeoutMs,
@@ -388,7 +392,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				onResponse: async (response, resolvedModel: Model<Api>) => {
 					statusCode = response.status;
 					responseModel = resolvedModel;
+					traceCapture?.onResponse(response, resolvedModel);
 					await options?.onResponse?.(response, resolvedModel);
+				},
+				onErrorResponse: async (response, resolvedModel: Model<Api>) => {
+					traceCapture?.onErrorResponse(response, resolvedModel);
+					await options?.onErrorResponse?.(response, resolvedModel);
 				},
 				transformHeaders: async (requestHeaders) => {
 					const headers = mergeProviderAttributionHeaders(model, options?.sessionId, requestHeaders);

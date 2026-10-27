@@ -57,6 +57,10 @@
 #   tagging:              STEP_RELEASE_TOKEN (protected; api + write_repository
 #                         scopes, allowed to create the protected desktop-v* tags)
 #   signing/notarization: see .gitlab-ci.desktop-macos-signing.yml
+#   usage telemetry:      config/usage-telemetry.yaml (collector endpoint + internal
+#                         gateway hosts), committed with no values in the public
+#                         tree. A GitLab File variable STEPCODE_USAGE_TELEMETRY_CONFIG
+#                         overrides it for one job. Empty means the build reports nothing.
 #
 # The default branch's version of this file also runs the CLI/TUI lint, test,
 # tag, package, publish and notify jobs. When merging, keep those jobs and the

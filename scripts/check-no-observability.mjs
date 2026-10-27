@@ -6,10 +6,13 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDirectory, "..");
+// The delivery runtime itself (`createStepTelemetryRuntime`) is public: it has no
+// built-in destination and reports only to a collector supplied by the build or
+// the environment. What must stay out of public source is a destination or a
+// private address, which the patterns below still reject.
 const forbidden = [
 	/private-telemetry/iu,
 	/\/api\/v1\/events/iu,
-	/createStepTelemetryRuntime/iu,
 	/\bx-step-(session|goal|attempt|harness|span|workspace|provider|model)\b/iu,
 	/(?:git@|https?:\/\/|ssh:\/\/git@)gitlab\.(?!com(?:[\/:]|$))/iu,
 	/BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/iu,

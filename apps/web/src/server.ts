@@ -92,6 +92,7 @@ import {
 	UploadTooLargeError,
 	withUploadedFiles,
 } from "./uploads.ts";
+import { webUsageTelemetry } from "./usage-telemetry.ts";
 import { VoiceRelay } from "./voice.ts";
 import { voiceRoute } from "./voice-routes.ts";
 import { canonicalWorkspacePath, WORKSPACES_FILE, WorkspaceRegistry } from "./workspaces.ts";
@@ -377,6 +378,7 @@ const login = new WebLoginController({
 	onSaved: () => {
 		loginCache = undefined;
 		account.invalidate();
+		webUsageTelemetry().refreshIdentity();
 		void store.reloadCredentials();
 		// The Step login key is part of a server's environment: reconnect with it.
 		resyncMcp();
@@ -1279,8 +1281,9 @@ const shutdown = async (): Promise<void> => {
 				} finally {
 					// Flush sessions before stopping their index, even if session teardown fails.
 					// Sessions only release their MCP leases; the pool owns the server processes.
+					// Usage telemetry flushes after the sessions closed, so their last traces are in the batch.
 					await mcpWarmup.release();
-					await Promise.all([sessionSearch.close(), closeStepMcpPool()]);
+					await Promise.all([sessionSearch.close(), closeStepMcpPool(), webUsageTelemetry().shutdown()]);
 				}
 			})(),
 		]);

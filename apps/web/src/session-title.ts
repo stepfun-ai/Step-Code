@@ -1,4 +1,4 @@
-import type { ModelRuntime } from "@step-harness/coding-agent";
+import type { ModelRequestTraceCapture, ModelRuntime } from "@step-harness/coding-agent";
 
 /** Model accepted by `completeSimple`; the session's `Model<any>` is assignable. */
 type TitleModel = Parameters<ModelRuntime["completeSimple"]>[0];
@@ -147,6 +147,8 @@ export async function generateSessionTitle(
 	modelRuntime: ModelRuntime,
 	model: TitleModel,
 	input: string,
+	/** Usage-telemetry trace callbacks; the title call is part of the session's traffic. */
+	trace?: ModelRequestTraceCapture,
 ): Promise<string | null> {
 	const message = await modelRuntime.completeSimple(
 		model,
@@ -161,6 +163,7 @@ export async function generateSessionTitle(
 			// A reasoning model gets its cheapest tier: the answer is one line.
 			...(model.reasoning ? { reasoning: "minimal" as const } : {}),
 			signal: AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS),
+			...(trace ? { onResponse: trace.onResponse, onErrorResponse: trace.onErrorResponse } : {}),
 		},
 	);
 	return cleanGeneratedTitle(assistantText(message));

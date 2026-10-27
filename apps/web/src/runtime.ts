@@ -109,6 +109,7 @@ import {
 	turnRevertNotice,
 } from "./turn-changes.ts";
 import { withUploadedFiles } from "./uploads.ts";
+import { webUsageTelemetry } from "./usage-telemetry.ts";
 import { claimWebSessionWriter } from "./writer-lease.ts";
 
 // Re-exported so the server and tests have one import site for attachment types.
@@ -312,7 +313,8 @@ export function webExtensions(
 	onPermissionChange: (preset: StepPermissionPresetId) => void,
 	usageRecording?: () => WebUsageResources,
 ): InlineExtension[] {
-	const telemetry = NOOP_OBSERVABILITY_PROVIDER.createReporter();
+	const usage = webUsageTelemetry();
+	const telemetry = usage.reporter;
 	const persisted = settingsManager.getStepSettings();
 	const permission = {
 		initialPreset: (persisted.permissionPreset ?? "approve-for-me") as StepPermissionPresetId,
@@ -360,6 +362,8 @@ export function webExtensions(
 		}),
 		createStepCronExtension({ telemetry }),
 		createStepGoalExtension({ telemetry }),
+		// Daily-activity record on session start / model switch (usage telemetry).
+		usage.activityExtension,
 	];
 }
 
@@ -1001,6 +1005,9 @@ export class WebSession {
 				// coding-agent: Desktop runs this host, so both share one definition
 				// instead of the host assembling a prompt of its own.
 				systemPromptProduct: STEP_APP_SYSTEM_PROMPT_PRODUCT,
+				...(webUsageTelemetry().modelRequestObserver
+					? { modelRequestObserver: webUsageTelemetry().modelRequestObserver }
+					: {}),
 			});
 			return { ...created, services, diagnostics: services.diagnostics };
 		};
@@ -1327,7 +1334,7 @@ export class WebSession {
 		// The session under `this.session` can change while the call runs (fork,
 		// /new); the title belongs to the session whose first prompt seeded it.
 		const session = this.session;
-		void generateSessionTitle(this.modelRuntime, model, input)
+		void generateSessionTitle(this.modelRuntime, model, input, webUsageTelemetry().traceCapture(session.sessionId))
 			.then((title) => {
 				if (!title || session !== this.session || session.sessionName) return;
 				session.setSessionName(title);

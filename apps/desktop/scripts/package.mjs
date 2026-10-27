@@ -52,6 +52,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import builder from "electron-builder";
 import winSigner from "./win-signer.cjs";
+import { readUsageTelemetryConfig } from "../../../scripts/load-usage-telemetry-config.mjs";
 
 const { Arch, build, Platform } = builder;
 
@@ -115,6 +116,10 @@ function releaseEnvelope(installSource) {
 	}
 	const feedbackEndpoint = feedbackUrl("STEPCODE_FEEDBACK_ENDPOINT");
 	const feedbackBundleEndpoint = feedbackUrl("STEPCODE_FEEDBACK_BUNDLE_ENDPOINT");
+	// Usage telemetry: the same YAML config the CLI builds embed, carried to the
+	// server through the envelope. Empty when this checkout has no config, so the
+	// packaged app reports nothing.
+	const usageTelemetry = readUsageTelemetryConfig();
 	return {
 		version,
 		channel: "release",
@@ -123,6 +128,7 @@ function releaseEnvelope(installSource) {
 		installSource,
 		...(feedbackEndpoint === undefined ? {} : { feedbackEndpoint }),
 		...(feedbackBundleEndpoint === undefined ? {} : { feedbackBundleEndpoint }),
+		...(Object.keys(usageTelemetry).length === 0 ? {} : { usageTelemetry }),
 	};
 }
 

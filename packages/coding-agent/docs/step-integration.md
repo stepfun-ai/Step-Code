@@ -151,8 +151,66 @@ of the native `settings.json` schema while leaving default startup unchanged.
 Top-level `step feedback` and interactive `/feedback` use a Step-owned gate,
 configured by `feedbackEnabled` in the Step config and the legacy feedback
 opt-out environment variables. This gate is independent of Step telemetry:
-disabling analytics does not disable user feedback, while the optional
-`feedback_submitted` analytics event still follows the telemetry gate.
+disabling analytics does not disable user feedback. The `feedback_submitted`
+analytics event is still produced, but usage telemetry (below) does not forward
+it.
+
+### Usage telemetry
+
+The CLI, Web host, and desktop app report two events through the Step telemetry
+runtime (`src/step/telemetry-runtime.ts`), and nothing else. The observability
+provider in `src/step/usage-telemetry.ts` drops every other `track()` call.
+
+| Event | When | Main fields |
+| --- | --- | --- |
+| `device_daily_active` | A session starts on, or switches to, a usable model, and on the first response from an endpoint in a UTC+8 day; at most once per process, day, and user type | `user_type` (`internal` / `external`), `provider_kind`, `provider`, `model`, `local_day`, `client`, `opened_at` |
+| `session_trace_recorded` | Every model HTTP response carrying an `x-trace-id` header, including error responses and attempts the provider retries | `session_id`, `trace_id`, `user_type`, `provider_kind`, `provider`, `model`, `status_code`, `attempt`, `local_day`, `client` |
+
+`provider_kind` is `internal` for a configured internal gateway, the Step login
+profile id (`step_plan`, `step_plan_oversea`, `platform_cn`, `platform_oversea`)
+for a Step endpoint, or the configured provider id otherwise; endpoint
+addresses are never sent. A Step endpoint counts toward `device_daily_active`
+only once a credential is configured; an internal gateway counts without one.
+Envelopes carry the device id, the `auth.json` Step `uid` when present, and the
+session id for trace records. `opened_at` is the process start time, so a launch
+that signs in later still reports the time the app was opened; the field is
+omitted when the process started on an earlier UTC+8 day, and the collector then
+uses the record time. Prompts, responses, tool arguments, and API keys
+are never reported.
+
+Reporting is off unless a collector is configured, and then nothing is sent or
+spooled. The configuration is one YAML document, identical for test and release
+builds:
+
+```yaml
+enabled: true
+endpoint: https://collector.example.com/api/v1/events
+internalProviderHosts:
+  - gateway.example.com
+```
+
+The file is `config/usage-telemetry.yaml`. The public tree ships it with every
+key commented out, so a build from it reports nothing; the internal tree fills
+in the collector and the internal gateways. Build steps read it (or the file
+named by `STEPCODE_USAGE_TELEMETRY_CONFIG`, a GitLab *File* variable, to override
+it for one job) and embed the result: `scripts/build-binaries.sh` for CLI binaries,
+`scripts/build-coding-agent-bundle.mjs` for the bundle, and
+`apps/desktop/scripts/package.mjs` into `stepcode-release.json`. A malformed
+known field fails the build instead of shipping a release that sends nothing;
+unknown keys are passed through so a newer file needs no loader change.
+
+Precedence, highest first:
+
+| Source | Applies to |
+| --- | --- |
+| `STEPCODE_TELEMETRY_ENDPOINT`, `STEPCODE_INTERNAL_PROVIDER_HOSTS` | Explicit operator override, any build |
+| `STEPCODE_USAGE_TELEMETRY` (JSON) or `STEPCODE_USAGE_TELEMETRY_CONFIG` (JSON file) | Running an installed build without rebuilding |
+| The embedded config from the YAML above | Release builds only |
+| `STEPCODE_BUILD_TELEMETRY_ENDPOINT`, `STEPCODE_BUILD_INTERNAL_PROVIDER_HOSTS` | Legacy single-value build variables, still honored |
+
+Opting out: `enabled: false` in the config, `STEPCODE_DISABLE_TELEMETRY`, or
+`config.toml` `[telemetry] enabled = false`. The desktop shell sets
+`STEPCODE_HOST=desktop`, so its records report `client: "desktop"`.
 
 The Step entrypoint mirrors stderr to
 `<storage-root>/logs/dev-YYYY-MM-DD.log` without changing the original stderr

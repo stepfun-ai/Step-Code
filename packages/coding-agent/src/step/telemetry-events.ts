@@ -191,6 +191,28 @@ export interface StepTelemetryEventPayloads {
 		readonly is_tty: boolean;
 		readonly trace_enabled: boolean;
 	};
+	readonly device_daily_active: {
+		readonly user_type: string;
+		readonly provider_kind: string;
+		readonly provider: string;
+		readonly model: string;
+		readonly local_day: string;
+		readonly client: string;
+		/** Process start time, omitted when the process started on an earlier day. */
+		readonly opened_at: string;
+	};
+	readonly session_trace_recorded: {
+		readonly session_id: string;
+		readonly trace_id: string;
+		readonly user_type: string;
+		readonly provider_kind: string;
+		readonly provider: string;
+		readonly model: string;
+		readonly status_code: number;
+		readonly attempt: number;
+		readonly local_day: string;
+		readonly client: string;
+	};
 }
 
 export type StepTelemetryKnownEventName = keyof StepTelemetryEventPayloads & string;
@@ -247,6 +269,8 @@ export const STEP_TELEMETRY_EVENT_NAMES = Object.keys({
 	error_raised: true,
 	feedback_submitted: true,
 	tui_input_anomaly: true,
+	device_daily_active: true,
+	session_trace_recorded: true,
 }) as readonly StepTelemetryKnownEventName[];
 
 const propertyNames = <K extends StepTelemetryKnownEventName>(
@@ -374,6 +398,27 @@ export const STEP_TELEMETRY_EVENT_PROPERTY_NAMES: Readonly<Record<StepTelemetryK
 		"term",
 		"is_tty",
 		"trace_enabled",
+	),
+	device_daily_active: propertyNames(
+		"user_type",
+		"provider_kind",
+		"provider",
+		"model",
+		"local_day",
+		"client",
+		"opened_at",
+	),
+	session_trace_recorded: propertyNames(
+		"session_id",
+		"trace_id",
+		"user_type",
+		"provider_kind",
+		"provider",
+		"model",
+		"status_code",
+		"attempt",
+		"local_day",
+		"client",
 	),
 };
 
@@ -858,6 +903,35 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 			term: "TERM value for terminal grouping.",
 			is_tty: "Whether stdin was a terminal.",
 			trace_enabled: "Whether a local full trace was also being written.",
+		},
+	},
+	device_daily_active: {
+		owner: "runtime",
+		comment: "Daily active device per user type (internal, external); first report of a UTC+8 day wins server-side.",
+		properties: {
+			user_type: "internal for configured internal gateways, external for Step endpoints.",
+			provider_kind: "internal, a Step login profile id, or the configured provider id.",
+			provider: "Configured provider id of the model in use.",
+			model: "Model identifier in use.",
+			local_day: "Calendar day in UTC+8, YYYY-MM-DD.",
+			client: "cli, web, or desktop.",
+			opened_at: "Process start time (ISO 8601); omitted when the process started on an earlier UTC+8 day.",
+		},
+	},
+	session_trace_recorded: {
+		owner: "llm",
+		comment: "One upstream gateway trace id (x-trace-id) per HTTP response, linked to its session.",
+		properties: {
+			session_id: "Step session that issued the request, empty when the call has no session.",
+			trace_id: "Gateway trace id from the x-trace-id response header.",
+			user_type: "internal, external, or third_party.",
+			provider_kind: "internal, a Step login profile id, or the configured provider id.",
+			provider: "Configured provider id that answered.",
+			model: "Model identifier that answered.",
+			status_code: "HTTP status of this response.",
+			attempt: "One-based response count within the logical request, including retries.",
+			local_day: "Calendar day in UTC+8, YYYY-MM-DD.",
+			client: "cli, web, or desktop.",
 		},
 	},
 };

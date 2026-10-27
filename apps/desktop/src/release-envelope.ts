@@ -21,6 +21,8 @@ const MAX_COMMIT_LENGTH = 40;
 const MAX_BUILD_TIME_LENGTH = 40;
 const MAX_INSTALL_SOURCE_LENGTH = 32;
 const MAX_ENDPOINT_LENGTH = 2048;
+/** Bound on the embedded usage-telemetry document, serialized. */
+const MAX_USAGE_TELEMETRY_LENGTH = 4096;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const PRODUCT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const INSTALL_SOURCE = /^[a-z0-9._-]{1,32}$/iu;
@@ -35,6 +37,11 @@ export interface ReleaseEnvelope {
 	readonly installSource?: string;
 	readonly feedbackEndpoint?: string;
 	readonly feedbackBundleEndpoint?: string;
+	/**
+	 * Usage-telemetry config: the same document the CLI builds embed. The server
+	 * receives it as `STEPCODE_BUILD_USAGE_TELEMETRY` (JSON).
+	 */
+	readonly usageTelemetry?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -59,6 +66,7 @@ const RELEASE_IDENTITY_ENV_KEYS = [
 	"STEP_HARNESS_FEEDBACK_ENDPOINT",
 	"STEPCODE_FEEDBACK_BUNDLE_ENDPOINT",
 	"STEP_HARNESS_FEEDBACK_BUNDLE_ENDPOINT",
+	"STEPCODE_BUILD_USAGE_TELEMETRY",
 ] as const;
 
 /**
@@ -80,6 +88,7 @@ export function parseReleaseEnvelope(value: unknown): ReleaseEnvelope | undefine
 	const installSource = normalizeInstallSource(record.installSource);
 	const feedbackEndpoint = normalizeEndpoint(record.feedbackEndpoint);
 	const feedbackBundleEndpoint = normalizeEndpoint(record.feedbackBundleEndpoint);
+	const usageTelemetry = normalizeUsageTelemetry(record.usageTelemetry);
 	return {
 		version,
 		channel: "release",
@@ -88,6 +97,7 @@ export function parseReleaseEnvelope(value: unknown): ReleaseEnvelope | undefine
 		...(installSource === undefined ? {} : { installSource }),
 		...(feedbackEndpoint === undefined ? {} : { feedbackEndpoint }),
 		...(feedbackBundleEndpoint === undefined ? {} : { feedbackBundleEndpoint }),
+		...(usageTelemetry === undefined ? {} : { usageTelemetry }),
 	};
 }
 
@@ -132,6 +142,9 @@ export function withReleaseIdentity(base: NodeJS.ProcessEnv, envelope: ReleaseEn
 	if (envelope.feedbackEndpoint !== undefined) environment.STEPCODE_FEEDBACK_ENDPOINT = envelope.feedbackEndpoint;
 	if (envelope.feedbackBundleEndpoint !== undefined) {
 		environment.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT = envelope.feedbackBundleEndpoint;
+	}
+	if (envelope.usageTelemetry !== undefined) {
+		environment.STEPCODE_BUILD_USAGE_TELEMETRY = JSON.stringify(envelope.usageTelemetry);
 	}
 	return environment;
 }
@@ -188,6 +201,22 @@ function normalizeEndpoint(value: unknown): string | undefined {
 		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
 		if (url.username || url.password) return undefined;
 		return url.toString();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Usage telemetry is a shallow, JSON-serializable document; the runtime parses
+ * and re-validates it. An oversized document is dropped rather than shipped
+ * half-read.
+ */
+function normalizeUsageTelemetry(value: unknown): Readonly<Record<string, unknown>> | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	try {
+		const serialized = JSON.stringify(value);
+		if (!serialized || serialized.length > MAX_USAGE_TELEMETRY_LENGTH) return undefined;
+		return JSON.parse(serialized) as Record<string, unknown>;
 	} catch {
 		return undefined;
 	}

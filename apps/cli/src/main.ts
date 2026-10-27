@@ -251,6 +251,7 @@ const stepMainOptions: MainOptions = {
 		},
 		traceHeaderPolicy: observability.traceHeaderPolicy(),
 		stepCodeProviderExtension,
+		usageActivityExtension: observability.createActivityExtension(telemetryReporter),
 	}),
 	authRuntimeSetup: (modelRuntime) => {
 		modelRuntime.registerProvider(STEP_PROVIDER_ID, createStepProviderConfig());
