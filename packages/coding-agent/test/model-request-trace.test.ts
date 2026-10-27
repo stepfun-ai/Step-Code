@@ -70,6 +70,8 @@ describe("model request trace capture", () => {
 		}
 		expect(onTraceId).not.toHaveBeenCalled();
 		expect(readResponseTraceId(undefined)).toBeUndefined();
+		capture?.onResponse({ status: "200", headers: { "x-trace-id": "t9" } } as never, model);
+		expect(onTraceId).toHaveBeenCalledWith(expect.objectContaining({ traceId: "t9", statusCode: 0 }));
 	});
 
 	it("never lets an observer failure reach the provider response path", async () => {

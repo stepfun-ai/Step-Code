@@ -145,7 +145,8 @@ export function createModelRequestTraceCapture(
 				provider: model.provider,
 				model: model.id,
 				baseUrl: model.baseUrl,
-				statusCode: response.status,
+				// The collector stores an integer; an extension provider may hand over anything.
+				statusCode: Number.isInteger(response.status) ? response.status : 0,
 				attempt,
 			});
 		} catch {
