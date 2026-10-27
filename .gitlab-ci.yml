@@ -82,6 +82,14 @@ workflow:
     # GitLab reports as failed and which then blocks the merge request.
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
 
+# Every include below is loaded only for a pipeline that can run desktop jobs:
+# Run pipeline, the API/trigger, or a desktop-v* tag. GitLab resolves includes
+# before it applies the workflow rules, and the falcon files need read access
+# to catalyst/falcon-mobile-pipeline. Loaded on every pipeline, a branch push or
+# merge request from someone without that access failed as "yaml invalid"
+# instead of being filtered out. Now a push loads none of them, the workflow
+# rules drop it, and no pipeline is created. A CLI v* tag pipeline loads none
+# of them either: the CLI jobs need neither falcon nor the desktop files.
 include:
   # Brings the global before_script (falcon toolchain clone and prepare.sh), the
   # .scripts.initial-env / .scripts.import-ci-env references and a stages list.
@@ -89,12 +97,18 @@ include:
   - project: 'catalyst/falcon-mobile-pipeline'
     ref: main
     file: 'stages/before_script.yml'
+    rules: &desktop-include-rules
+      - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger" || $CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/'
   - local: '.gitlab-ci.desktop-macos.yml'
+    rules: *desktop-include-rules
   - local: '.gitlab-ci.desktop-windows.yml'
+    rules: *desktop-include-rules
   # Developer ID signing + notarization: release tags, or MACOS_SIGNING_ENABLED.
   # It brings its own pinned include of falcon's signing template.
   - local: '.gitlab-ci.desktop-macos-signing.yml'
+    rules: *desktop-include-rules
   - local: '.gitlab-ci.desktop-release.yml'
+    rules: *desktop-include-rules
 
 variables:
   # ── Ad-hoc packaging defaults (not in the form; see the header) ──────────
@@ -122,10 +136,16 @@ variables:
       - 'major'
     description: 'Release StepCode Desktop: patch / minor / major creates the next desktop-vX.Y.Z tag, builds the signed macOS installers and uploads them (test bucket automatically, production on a manual click). none builds an unsigned macOS test package only.'
 
+  # ── Release targets shared by the desktop and CLI release jobs ───────────
+  # Declared here, not in .gitlab-ci.desktop-release.yml: that file is not
+  # loaded for a CLI v* tag pipeline (see the include rules).
+  RELEASE_BUILDER_IMAGE: 'hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:c6538968b0f1d223b02016bf1689c35a6b26d6945fb273629ce66d1f3e36a7fc'
+  STEP_RELEASE_BASE_URL: 'https://capy-public-dev.tos-cn-shanghai.volces.com/stepcode'
+  STEP_RELEASE_PROD_BASE_URL: 'https://static-openapi.stepfun.com/stepcode'
+  STEP_TOS_PROD_BUCKET: 'devcenter-web-cn-prod'
+  STEP_TOS_PROD_ENDPOINT: 'tos-cn-shanghai.ivolces.com'
+
   # ── CLI/TUI release variables (ported from the default branch) ───────────
-  # RELEASE_BUILDER_IMAGE, STEP_RELEASE_BASE_URL, STEP_RELEASE_PROD_BASE_URL,
-  # STEP_TOS_PROD_BUCKET and STEP_TOS_PROD_ENDPOINT are already declared by
-  # .gitlab-ci.desktop-release.yml with the same values.
   RELEASE_BUNDLE_VERSION: "v0.3.1"
   # Internal mirror for the rg/fd search-tool binaries: this project's own GitLab
   # generic package registry. scripts/copy-search-tools.mjs fetches from here

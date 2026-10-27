@@ -19,12 +19,10 @@
 #   desktop/latest.json                      channel pointer, uploaded last; also the in-app
 #                                            update channel the packaged app reads (electron-updater)
 
+# RELEASE_BUILDER_IMAGE, STEP_RELEASE_BASE_URL, STEP_RELEASE_PROD_BASE_URL and
+# the STEP_TOS_PROD_* targets are declared in .gitlab-ci.yml (the CLI release
+# jobs use them too).
 variables:
-  RELEASE_BUILDER_IMAGE: 'hub.stepfun-inc.com/aiagent/step-cli/release-builder@sha256:c6538968b0f1d223b02016bf1689c35a6b26d6945fb273629ce66d1f3e36a7fc'
-  STEP_RELEASE_BASE_URL: 'https://capy-public-dev.tos-cn-shanghai.volces.com/stepcode'
-  STEP_RELEASE_PROD_BASE_URL: 'https://static-openapi.stepfun.com/stepcode'
-  STEP_TOS_PROD_BUCKET: 'devcenter-web-cn-prod'
-  STEP_TOS_PROD_ENDPOINT: 'tos-cn-shanghai.ivolces.com'
   # Windows in releases: off while the Windows packager (runner tags windows +
   # bare-metal) cannot run jobs, so a release is macOS only and never waits on
   # it. Set to 'true' (here, or as an added variable in Run pipeline) to build, EV-sign and
