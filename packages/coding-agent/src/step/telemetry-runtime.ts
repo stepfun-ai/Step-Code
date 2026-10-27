@@ -16,6 +16,7 @@ import type {
 	StepTelemetryTrackOptions,
 } from "./telemetry.ts";
 import { isKnownStepTelemetryEvent, STEP_TELEMETRY_EVENT_PROPERTY_NAMES } from "./telemetry-events.ts";
+import { readBuildStepUsageTelemetryConfig, readRuntimeStepUsageTelemetryConfig } from "./usage-telemetry-config.ts";
 import { resolveStepCodeVersion, STEPCODE_VERSION } from "./version.ts";
 
 /** Envelope written to the Step analytics collector and local spool. */
@@ -626,6 +627,14 @@ export function readTelemetryEndpoint(
 ): string | undefined {
 	const explicit = readEndpointEnvOverride("telemetry", env);
 	if (explicit) return explicit;
+	// An operator-supplied usage config is an explicit action, so it applies on
+	// any channel: testing an installed build against a collector needs no rebuild.
+	const runtimeUsage = normalizeEndpoint(readRuntimeStepUsageTelemetryConfig(env)?.endpoint);
+	if (runtimeUsage) return runtimeUsage;
+	// The committed usage config is an explicit product decision too, so local,
+	// test, and release builds report to the same collector.
+	const buildUsage = normalizeEndpoint(readBuildStepUsageTelemetryConfig(env)?.endpoint);
+	if (buildUsage) return buildUsage;
 	// A persisted endpoint is honored only by release builds. This is the old
 	// Step safety boundary: a source checkout may spool locally, while an
 	// explicit environment endpoint remains the documented dev test escape hatch.

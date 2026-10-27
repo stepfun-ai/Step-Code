@@ -1,0 +1,28 @@
+# StepCode usage telemetry configuration.
+#
+# One document serves test and release builds. Build steps read it and embed the
+# result:
+#   scripts/build-binaries.sh               CLI binaries (Bun --env inlining)
+#   scripts/build-coding-agent-bundle.mjs   the coding-agent bundle
+#   apps/desktop/scripts/package.mjs        stepcode-release.json
+# To override it for one CI job without editing this file, point
+# STEPCODE_USAGE_TELEMETRY_CONFIG at another file (a GitLab File variable works).
+#
+# This copy carries the internal values. The public tree ships the same file with
+# every key commented out, so a build from that tree reports nothing; blank this
+# file before publishing a branch.
+#
+# A malformed known key fails the build rather than shipping a release that
+# silently sends nothing. Unknown keys are passed through untouched.
+
+# Set to false to ship a build that carries this config but reports nothing.
+enabled: true
+
+# Collector URL that receives the batched events.
+endpoint: https://api.stepfun.com/stepcliobserserver/api/v1/events
+
+# Exact hostnames treated as internal gateways. Requests to them report
+# user_type=internal; Step login profiles report external; any other provider
+# is third_party under its configured provider id.
+internalProviderHosts:
+  - mp.z01.normandyfunc.com
