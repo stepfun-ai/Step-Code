@@ -125,6 +125,12 @@ const LATEX_MARKDOWN_EXTENSIONS: readonly TokenizerExtension[] = [
 		name: "latexBlock",
 		level: "block",
 		start(source) {
+			// The regex below can only match when the remainder still holds a block-math
+			// opener, so most documents can skip the scan. Without this every block
+			// boundary re-scans the whole remaining source. Keep these literals in sync
+			// with the pattern's alternatives: a missed opener silently stops block math
+			// from starting on a paragraph continuation line.
+			if (!source.includes("$$") && !source.includes("\\[")) return undefined;
 			const match = /(?:^|\n) {0,3}(?:\$\$|\\\[)/.exec(source);
 			return match ? match.index + (match[0].startsWith("\n") ? 1 : 0) : undefined;
 		},
