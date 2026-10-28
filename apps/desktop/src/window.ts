@@ -145,6 +145,9 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 			additionalArguments: [`${VERSION_ARGUMENT}${options.version}`],
 		},
 	});
+	// Windows/Linux render the application menu as an in-window bar; hide it but
+	// keep the menu installed so its accelerators (zoom, reload, DevTools) still work.
+	if (!darwin) window.setMenuBarVisibility(false);
 	if (saved?.maximized) window.maximize();
 
 	window.webContents.setWindowOpenHandler(({ url }) => {

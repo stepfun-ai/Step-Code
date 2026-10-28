@@ -1,7 +1,7 @@
 /**
  * Pure formatting helpers ported from legacy app.js. None of them reads app
  * state; strings that were translated in the legacy code are parameters here
- * (see i18n/index.ts for `formatRelativeTime`, which supplies them).
+ * (see i18n/index.ts for `formatRelativeTimeLong`, which supplies them).
  */
 
 import type { ToolArgs } from "../state/types";
@@ -100,21 +100,6 @@ export function basename(path: string | undefined | null): string {
 			.split(/[\\/]/)
 			.at(-1) || path
 	);
-}
-
-/** Elapsed time as `now` / `5m` / `3h` / `2d` (legacy `relativeTime`). */
-export function relativeTime(
-	value: string | number | Date | undefined,
-	justNowLabel: string,
-	now = Date.now(),
-): string {
-	const timestamp = new Date(value ?? Number.NaN).getTime();
-	if (!Number.isFinite(timestamp)) return "";
-	const elapsed = Math.max(0, now - timestamp);
-	if (elapsed < 60_000) return justNowLabel;
-	if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
-	if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
-	return `${Math.floor(elapsed / 86_400_000)}d`;
 }
 
 /** Elapsed time spelled out in `locale`: "4 小时前" / "4 hours ago"; under a minute is `justNowLabel`. */
