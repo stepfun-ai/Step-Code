@@ -3,10 +3,175 @@
  * messages (final/progress/needs-input) from a lane into the parent session.
  */
 
+import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
-import { boundToolResultContent } from "../../core/tools/tool-output.ts";
+import { retainToolOutputText } from "../../core/tools/tool-output.ts";
+import { truncateHead, truncateTail } from "../../core/tools/truncate.ts";
 import type { BackgroundAgentLane, StepSubagentResultRecord } from "../step-subagent.ts";
-import { totalResults } from "./helpers.ts";
+import { isRecordValue, totalResults } from "./helpers.ts";
+import { liveRoster } from "./projection.ts";
+
+/** Live-only channel; it never steers the model or appends progress to its transcript. */
+export const SUBAGENT_LANE_CHANNEL = "step:subagent-lane";
+export const SUBAGENT_RESPONSE_ENTRY = "step-subagent-response";
+
+export interface CompletedSubagentResponse {
+	laneId: string;
+	agent: string;
+	task: string;
+	taskIndex: number;
+	sessionId: string;
+	timestamp: number;
+	/** Complete text, or a retained-output preview and path. */
+	output: string;
+	/** Hash of the unabridged, trimmed answer, including when output is a retention preview. */
+	outputHash?: string;
+}
+
+export interface SubagentLaneSnapshot {
+	laneId: string;
+	status: BackgroundAgentLane["status"];
+	details: BackgroundAgentLane["details"];
+}
+
+const USAGE_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "cost", "contextTokens", "turns"];
+const LIVE_STRING_FIELDS = [
+	"model",
+	"stopReason",
+	"errorMessage",
+	"activeText",
+	"activeTool",
+	"activeToolArgs",
+	"activeToolOutput",
+	"lastEvent",
+	"worktreePath",
+	"worktreeBranch",
+	"sessionId",
+	"sessionFile",
+];
+const nonnegativeNumber = (value: unknown): value is number =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+function validLaneSnapshot(value: unknown): value is SubagentLaneSnapshot {
+	if (
+		!isRecordValue(value) ||
+		typeof value.laneId !== "string" ||
+		!value.laneId ||
+		value.laneId.length > 200 ||
+		typeof value.status !== "string" ||
+		!["running", "completed", "failed", "aborted"].includes(value.status)
+	)
+		return false;
+	const details = value.details;
+	if (
+		!isRecordValue(details) ||
+		details.agentId !== value.laneId ||
+		(details.status !== undefined && details.status !== value.status) ||
+		typeof details.mode !== "string" ||
+		!["single", "parallel", "chain"].includes(details.mode) ||
+		typeof details.agentScope !== "string" ||
+		!["user", "project", "both"].includes(details.agentScope)
+	)
+		return false;
+	if (
+		typeof details.userAgentsDir !== "string" ||
+		details.userAgentsDir.length > 2048 ||
+		!(
+			details.projectAgentsDir === null ||
+			(typeof details.projectAgentsDir === "string" && details.projectAgentsDir.length <= 2048)
+		)
+	)
+		return false;
+	if (
+		![details.startedAt, details.updatedAt, details.omittedResults].every(
+			(field) => field === undefined || nonnegativeNumber(field),
+		) ||
+		(details.omittedResults !== undefined && !Number.isSafeInteger(details.omittedResults))
+	)
+		return false;
+	return (
+		Array.isArray(details.results) &&
+		details.results.every((record) => {
+			if (
+				!isRecordValue(record) ||
+				typeof record.agent !== "string" ||
+				typeof record.task !== "string" ||
+				typeof record.stderr !== "string" ||
+				typeof record.agentSource !== "string" ||
+				!["builtin", "user", "project", "unknown"].includes(record.agentSource) ||
+				typeof record.status !== "string" ||
+				!["queued", "running", "completed", "failed", "aborted", "skipped"].includes(record.status)
+			)
+				return false;
+			if (
+				typeof record.exitCode !== "number" ||
+				!Number.isFinite(record.exitCode) ||
+				!Array.isArray(record.messages) ||
+				record.messages.length !== 0
+			)
+				return false;
+			const usage = record.usage;
+			if (
+				!isRecordValue(usage) ||
+				Object.keys(usage).some((key) => !USAGE_FIELDS.includes(key)) ||
+				!USAGE_FIELDS.every((key) => nonnegativeNumber(usage[key]))
+			)
+				return false;
+			return (
+				LIVE_STRING_FIELDS.every((key) => record[key] === undefined || typeof record[key] === "string") &&
+				[record.startedAt, record.updatedAt, record.step].every(
+					(field) => field === undefined || nonnegativeNumber(field),
+				) &&
+				(record.pendingReply === undefined || typeof record.pendingReply === "boolean") &&
+				(record.cancelledPrompts === undefined ||
+					(Array.isArray(record.cancelledPrompts) &&
+						record.cancelledPrompts.every((field) => typeof field === "string")))
+			);
+		})
+	);
+}
+
+/** Validate and re-project the extension-bus boundary; unknown fields never reach host caches. */
+export function readSubagentLaneSnapshot(value: unknown): SubagentLaneSnapshot | undefined {
+	if (!validLaneSnapshot(value)) return;
+	const details = value.details;
+	const roster = liveRoster(details.results);
+	return {
+		laneId: value.laneId,
+		status: value.status,
+		details: {
+			mode: details.mode,
+			agentScope: details.agentScope,
+			userAgentsDir: details.userAgentsDir,
+			projectAgentsDir: details.projectAgentsDir,
+			agentId: value.laneId,
+			status: value.status,
+			startedAt: details.startedAt,
+			updatedAt: details.updatedAt,
+			results: roster.results,
+			omittedResults: (details.omittedResults ?? 0) + (roster.omittedResults ?? 0) || undefined,
+		},
+	};
+}
+
+export function publishLaneSnapshot(pi: ExtensionAPI, lane: BackgroundAgentLane): void {
+	const roster = liveRoster(lane.details.results);
+	const snapshot: SubagentLaneSnapshot = {
+		laneId: lane.id,
+		status: lane.status,
+		details: {
+			...lane.details,
+			agentId: lane.id,
+			status: lane.status,
+			startedAt: lane.startedAt,
+			updatedAt: lane.updatedAt,
+			...roster,
+			results: roster.results,
+			omittedResults: (lane.details.omittedResults ?? 0) + (roster.omittedResults ?? 0) || undefined,
+		},
+	};
+	pi.events?.emit(SUBAGENT_LANE_CHANNEL, snapshot);
+}
 
 /** Notification detail levels for background lanes. */
 export type BackgroundLaneSubscribeLevel = "final" | "progress";
@@ -137,7 +302,7 @@ export function notifyLaneEvent(
 	);
 }
 
-function laneOutputText(lane: BackgroundAgentLane): string {
+export function laneOutputText(lane: BackgroundAgentLane): string {
 	return (
 		lane.result?.content
 			.filter((block) => block.type === "text")
@@ -145,6 +310,37 @@ function laneOutputText(lane: BackgroundAgentLane): string {
 			.join("\n")
 			.trim() ?? ""
 	);
+}
+
+export function completedOutputHash(output: string): string {
+	return createHash("sha256").update(output.trim()).digest("hex");
+}
+
+/** A bounded recent-answer view; every omitted answer remains a durable journal fact. */
+export function completedResponseLines(lane: BackgroundAgentLane, output: string, budget = 16_000): string[] {
+	const hash = completedOutputHash(output);
+	const responses = (lane.completedResponses ?? []).filter((response) => {
+		const text = response.output.trim();
+		return text && !(response.outputHash ? response.outputHash === hash : text === output.trim());
+	});
+	const lines: string[] = [];
+	let remaining = Math.max(0, budget - 250);
+	let shown = 0;
+	for (let index = responses.length - 1; index >= 0 && remaining > 300; index--) {
+		const response = responses[index];
+		const title = `Completed response (${response.agent.slice(0, 200)}, child ${response.sessionId.slice(0, 200)}):\n`;
+		if (Buffer.byteLength(title) + 100 > remaining) break;
+		const body = clipAnswerView(response.output, Math.max(0, remaining - Buffer.byteLength(title) - 100)).text;
+		lines.push(title + body);
+		remaining -= Buffer.byteLength(title + body);
+		shown++;
+	}
+	const omitted = responses.length - shown + (lane.completedResponsesOmitted ?? 0);
+	if (omitted > 0)
+		lines.unshift(
+			`${omitted} earlier completed responses omitted from this view; see the parent journal and child transcripts.`,
+		);
+	return lines;
 }
 
 function formatDuration(ms: number): string {
@@ -159,7 +355,7 @@ function taskLabel(record: StepSubagentResultRecord, index: number): string {
 }
 
 /** Duration, usage, child sessions, and cancelled prompts: what status and the final notification share. */
-export function laneSummaryLines(lane: BackgroundAgentLane, now = Date.now()): string[] {
+export function laneSummaryLines(lane: BackgroundAgentLane, now = Date.now(), complete = false): string[] {
 	const records = lane.details.results;
 	const usage = records.reduce(
 		(total, record) => ({
@@ -188,7 +384,34 @@ export function laneSummaryLines(lane: BackgroundAgentLane, now = Date.now()): s
 	if (cancelled.length > 0) {
 		lines.push(`Prompts auto-cancelled because a background lane cannot ask the user:\n${cancelled.join("\n")}`);
 	}
-	return lines;
+	return complete ? lines : [clipLaneView(lines.join("\n\n"), 6_000).text];
+}
+
+function clipLaneView(text: string, maxBytes: number): { text: string; clipped: boolean } {
+	const result = truncateHead(text, { maxBytes, maxLines: 128 });
+	return {
+		text:
+			result.content +
+			(result.truncated ? `\n[${result.totalLines - result.outputLines} lines omitted from this view]` : ""),
+		clipped: result.truncated,
+	};
+}
+
+/** Answers keep both their introduction and conclusion; metadata uses a head-only view. */
+function clipAnswerView(text: string, maxBytes: number): { text: string; clipped: boolean } {
+	const whole = truncateHead(text, { maxBytes, maxLines: 1_000 });
+	if (!whole.truncated) return { text, clipped: false };
+	const allocation = Math.max(0, Math.floor((maxBytes - 100) / 2));
+	const head = truncateHead(text, { maxBytes: allocation, maxLines: 450 });
+	let first = head.content;
+	if (!first && allocation > 0) {
+		const bytes = Buffer.from(text);
+		let end = Math.min(bytes.length, allocation);
+		while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+		first = bytes.subarray(0, end).toString("utf8");
+	}
+	const tail = truncateTail(text, { maxBytes: allocation, maxLines: 450 });
+	return { text: `${first}\n[output middle omitted from this view]\n${tail.content}`, clipped: true };
 }
 
 function failureReasons(lane: BackgroundAgentLane, output: string): string[] {
@@ -203,7 +426,7 @@ function failureReasons(lane: BackgroundAgentLane, output: string): string[] {
 			label: taskLabel(record, index),
 			cause: record.errorMessage?.trim() || record.stderr?.trim() || "no error detail captured",
 		}))
-		.filter(({ cause }) => !output.includes(cause))
+		.filter(({ cause }) => output.length > 8_000 || !output.includes(cause))
 		.map(({ label, cause }) => `- ${label}: ${truncateText(cause, 400)}`);
 }
 
@@ -212,27 +435,67 @@ function failureReasons(lane: BackgroundAgentLane, output: string): string[] {
  * it survives the output bound; oversized output is saved through the shared
  * tool-output retention boundary and replaced by a preview plus its path.
  */
-export async function buildLaneFinalDetail(lane: BackgroundAgentLane, outputDirectory: string): Promise<string> {
+export function laneReportView(lane: BackgroundAgentLane): { text: string; complete: string; clipped: boolean } {
 	const output = laneOutputText(lane);
-	const reasons = failureReasons(lane, output);
-	const detail = [
-		...laneSummaryLines(lane),
+	const current = clipAnswerView(output, 10_000);
+	const reasons = failureReasons(lane, current.text);
+	const diagnosticText = [
+		lane.completionError ? `Completed response retention failed: ${lane.completionError}` : "",
 		reasons.length > 0 ? `Failure reasons:\n${reasons.join("\n")}` : "",
-		output ? `Output:\n${output}` : "",
 	]
 		.filter(Boolean)
 		.join("\n\n");
+	const diagnostics = clipLaneView(diagnosticText, 4_000);
+	const summary = laneSummaryLines(lane, Date.now(), true).join("\n\n");
+	const metadata = clipLaneView(summary, 6_000);
+	const history = clipAnswerView(completedResponseLines(lane, output).join("\n\n"), 10_000);
+	const title = `Current outcome: ${lane.status}`;
+	const outputTitle = lane.status === "running" ? "Output of the previous turn" : "Output";
+	const text = [
+		title,
+		diagnostics.text,
+		current.text ? `${outputTitle}:\n${current.text}` : "",
+		metadata.text,
+		history.text,
+	]
+		.filter(Boolean)
+		.join("\n\n");
+	const complete = [
+		title,
+		diagnosticText,
+		output ? `${outputTitle}:\n${output}` : "",
+		summary,
+		...(lane.completedResponses ?? []).map(
+			(response) => `Completed response (${response.agent}, child ${response.sessionId}):\n${response.output}`,
+		),
+		lane.completedResponsesOmitted
+			? `${lane.completedResponsesOmitted} older answers remain in the parent journal and child transcripts.`
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n\n");
+	return { text, complete, clipped: diagnostics.clipped || current.clipped || metadata.clipped || history.clipped };
+}
+
+export async function buildLaneFinalView(
+	lane: BackgroundAgentLane,
+	outputDirectory: string,
+): Promise<{ text: string; path?: string }> {
+	const view = laneReportView(lane);
+	if (!view.clipped) return { text: view.text };
 	try {
-		const bounded = await boundToolResultContent([{ type: "text", text: detail }], outputDirectory);
-		return bounded
-			.filter((part) => part.type === "text")
-			.map((part) => part.text)
-			.join("\n");
+		const path = await retainToolOutputText(view.complete, outputDirectory);
+		return { path, text: `Retained lane diagnostics. Full output: ${JSON.stringify(path)}\n\n${view.text}` };
 	} catch (error) {
-		// Saving the full output failed; still deliver the notification, bounded
-		// in memory, and say why no file path is given.
-		return `${truncateText(detail, 50_000)}\n[full output could not be saved: ${error instanceof Error ? error.message : String(error)}]`;
+		// Preserve the bounded current outcome even when its complete snapshot cannot be saved.
+		return {
+			text: `${view.text}\n[full output could not be saved: ${truncateText(error instanceof Error ? error.message : String(error), 800)}]`,
+		};
 	}
+}
+
+export async function buildLaneFinalDetail(lane: BackgroundAgentLane, outputDirectory: string): Promise<string> {
+	return (await buildLaneFinalView(lane, outputDirectory)).text;
 }
 
 function laneProgressDetail(lane: BackgroundAgentLane): string {

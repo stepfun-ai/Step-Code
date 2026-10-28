@@ -1758,6 +1758,16 @@ pi.events.on("my:event", (data) => { ... });
 pi.events.emit("my:event", { ... });
 ```
 
+When the built-in subagent extension is mounted, `SUBAGENT_LANE_CHANNEL`
+(`step:subagent-lane`, exported from `@step-harness/coding-agent`) carries
+`SubagentLaneSnapshot` values on this session-local bus. A host can subscribe
+without rendering TUI widgets or requesting model progress notifications.
+Snapshots contain bounded current output and child ids, never child transcripts
+or accumulated completed answers. They are live-only and do not enter session
+messages. Keep the latest value per lane and clear host caches at session shutdown.
+Completed answers are separate `SUBAGENT_RESPONSE_ENTRY` journal facts; see the
+[background lane lifecycle](../../../docs/orchestration-lifecycle.md#background-subagent-lanes).
+
 ### pi.registerProvider(name, config)
 
 Register or override a model provider dynamically. Useful for proxies, custom endpoints, or team-wide model configurations.
