@@ -22,6 +22,7 @@ import { RetryRow } from "./RetryRow";
 import { SubagentStatusIcon } from "./SubagentStatusIcon";
 import { ThinkingDisclosure } from "./ThinkingDisclosure";
 import { ToolRow } from "./TimelineRows";
+import { collectTurnFooters } from "./turn-footers";
 
 /** A running parent may still have children writing; their transcripts are re-read this often. */
 const REFRESH_MS = 2000;
@@ -249,6 +250,16 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 		() => items.filter((item) => !(item.kind === "message" && item.role === "user")),
 		[items],
 	);
+	// A terminal child can be inspected while its parent continues with other work.
+	const childBusy =
+		task?.status === "running" || task?.status === "queued" || ((!task || task.status === "unknown") && parentBusy);
+	const timestampReplies = useMemo(
+		() =>
+			new Set(
+				collectTurnFooters(items, childBusy ? "running" : "idle", false, true).map((turn) => turn.messages.at(-1)),
+			),
+		[items, childBusy],
+	);
 	/**
 	 * The run's token totals.
 	 *
@@ -410,7 +421,12 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 						{executionItems.length ? (
 							executionItems.map((item) =>
 								item.kind === "message" ? (
-									<MessageItem key={item.itemId} item={item} fileCwd={transcript.value?.cwd} />
+									<MessageItem
+										key={item.itemId}
+										item={item}
+										fileCwd={transcript.value?.cwd}
+										inlineTimestamp={timestampReplies.has(item)}
+									/>
 								) : item.kind === "tool" ? (
 									<ToolRow key={item.itemId} item={item} readOnly />
 								) : item.kind === "thinking" ? (

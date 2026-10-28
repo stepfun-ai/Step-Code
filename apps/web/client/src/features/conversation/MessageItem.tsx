@@ -21,7 +21,7 @@ import { highlightFence } from "../files/index";
 import { forkAtEntry } from "./actions";
 import { CopyAction } from "./CopyAction";
 import { openFeedback, type Sentiment } from "./feedback";
-import { clockTime } from "./message-meta";
+import { fullDateTime } from "./message-meta";
 import { useFadeIn, useSmoothText } from "./streaming";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { MessageAttachments } from "./TurnArtifacts";
@@ -50,6 +50,7 @@ export const MessageItem = memo(function MessageItem({
 	attachments,
 	fileCwd,
 	rewritableBefore,
+	inlineTimestamp = false,
 }: {
 	readonly item: MessageTimelineItem;
 	/** The pending bubble's files: the host has not echoed the message (and its file blocks) yet. */
@@ -61,10 +62,7 @@ export const MessageItem = memo(function MessageItem({
 	readonly attachments?: readonly TurnArtifact[];
 	/** Read-only child transcripts resolve references against their own workspace. */
 	readonly fileCwd?: string;
-	/**
-	 * Model id shown with the sent-message timestamp. The transcript records no
-	 * model per message, so the caller passes the one the session ran on.
-	 */
+	/** Legacy session-model hint; message timestamps use only recorded instants. */
 	readonly model?: string;
 	/**
 	 * Present only on the latest user message: the entry a rewrite forks to
@@ -73,6 +71,8 @@ export const MessageItem = memo(function MessageItem({
 	 * recorded message to rewrite, so it offers no action even when it is latest.
 	 */
 	readonly rewritableBefore?: string;
+	/** Only the final reply in a timestamp-only (error or read-only child) turn renders inline metadata. */
+	readonly inlineTimestamp?: boolean;
 }) {
 	const t = useT();
 	const role = item.role === "user" ? "user" : "assistant";
@@ -135,7 +135,7 @@ export const MessageItem = memo(function MessageItem({
 				? `${badgeHtml}${html}`
 				: html;
 	useFadeIn(bodyRef, html, live);
-	if (item.error) return <MessageError entryId={item.entryId} error={item.error} />;
+	if (item.error) return <MessageError item={item} inlineTimestamp={inlineTimestamp} />;
 	// The live turn before its first text (reasoning, or waiting on the first token).
 	if (role === "assistant" && !content) return <ThinkingIndicator />;
 	/*
@@ -159,11 +159,12 @@ export const MessageItem = memo(function MessageItem({
 			) : null}
 			{attachments?.length ? <MessageAttachments artifacts={attachments} cwd={cwd} /> : null}
 			{quoted ? <QuotedContext quote={quoted.quote} /> : null}
-			{role === "user" && item.content ? (
+			{role === "user" ? (
 				<div className="prompt-actions">
+					<MessageMeta item={item} />
 					{/* A prompt command copies the line that runs it again, not just its arguments. */}
-					<CopyAction value={command ? messageText : content} />
-					{rewritableBefore !== undefined && item.entryId ? (
+					{item.content ? <CopyAction value={command ? messageText : content} /> : null}
+					{item.content && rewritableBefore !== undefined && item.entryId ? (
 						<button
 							type="button"
 							className="message-action"
@@ -184,6 +185,7 @@ export const MessageItem = memo(function MessageItem({
 					) : null}
 				</div>
 			) : null}
+			{role === "assistant" && inlineTimestamp ? <MessageMeta item={item} /> : null}
 		</article>
 	);
 });
@@ -214,17 +216,17 @@ function QuotedContext({ quote }: { readonly quote: SessionContextQuote }) {
 	);
 }
 
-/**
- * What a message was and when: the model and the clock time (`14:05`), as plain
- * text with no label. A sent message shows it under its bubble; a reply shows it
- * once, on the row under the turn that settled. An entry without a timestamp (an
- * optimistic pending bubble) shows nothing.
- */
-function MessageMeta({ timestamp }: { readonly timestamp: string }) {
+/** Only recorded instants are displayed; live and optimistic rows never acquire a browser time. */
+function MessageMeta({ item }: { readonly item: MessageTimelineItem }) {
+	if (!item.entryId || item.itemId.startsWith("message-live")) return null;
+	const label = fullDateTime(item.timestamp);
+	if (!label) return null;
 	return (
 		<span className="message-meta">
-			<time className="message-meta-time" dateTime={timestamp}>
-				{clockTime(timestamp)}
+			{/* Timestamp-only replies have no actions; focus still needs to reveal recorded metadata. */}
+			{/* biome-ignore lint/a11y/noNoninteractiveTabindex: focus reveals otherwise hover-only recorded metadata. */}
+			<time className="message-meta-time" dateTime={item.timestamp} tabIndex={0}>
+				{label}
 			</time>
 		</span>
 	);
@@ -268,12 +270,18 @@ function errorDetail(error: string): { readonly status: string; readonly message
 }
 
 /** A failed model request: the provider's message, with any URL in it as a link (e.g. account verification). */
-function MessageError({ entryId, error }: { readonly entryId?: string; readonly error: string }) {
+function MessageError({
+	item,
+	inlineTimestamp,
+}: {
+	readonly item: MessageTimelineItem;
+	readonly inlineTimestamp: boolean;
+}) {
 	const t = useT();
-	const detail = errorDetail(error);
+	const detail = errorDetail(item.error ?? "");
 	const parts = detail.message.split(/(https?:\/\/[^\s"'<>)]*[^\s"'<>),.;:!?])/g);
 	return (
-		<article className="message assistant message-error" role="alert" data-entry-id={entryId}>
+		<article className="message assistant message-error" role="alert" data-entry-id={item.entryId}>
 			<div className="message-error-title">
 				{t("modelRequestFailed")}
 				{detail.status ? <span className="message-error-status">{detail.status}</span> : null}
@@ -290,6 +298,7 @@ function MessageError({ entryId, error }: { readonly entryId?: string; readonly 
 					),
 				)}
 			</p>
+			{inlineTimestamp ? <MessageMeta item={item} /> : null}
 		</article>
 	);
 }
@@ -303,13 +312,11 @@ function MessageError({ entryId, error }: { readonly entryId?: string; readonly 
  */
 export function MessageActions({
 	messages,
-	aborted = false,
+	timestampItem,
 }: {
 	readonly messages: readonly MessageTimelineItem[];
-	/** Model shown with the turn's time; the transcript records none per message. */
-	readonly model?: string;
-	/** The turn was stopped by the user: no finished reply to credit. */
-	readonly aborted?: boolean;
+	/** The last recorded reply's timestamp, even when processes separate it from this toolbar. */
+	readonly timestampItem?: MessageTimelineItem;
 }) {
 	const t = useT();
 	const [vote, setVote] = useState<Sentiment | null>(null);
@@ -318,7 +325,6 @@ export function MessageActions({
 		.filter((item) => !item.error && item.content)
 		.map((item) => item.content)
 		.join("\n\n");
-	const last = messages.at(-1);
 	const entryId = messages.reduce<string | undefined>((previous, item) => item.entryId ?? previous, undefined);
 	const onVote = (sentiment: Sentiment) => {
 		// One vote visible at a time; clicking the active one clears it.
@@ -363,10 +369,7 @@ export function MessageActions({
 					{`${t("usage")} ${formatTokens(tokens)} tok`}
 				</span>
 			) : null}
-			{/* The model and clock time belong to the turn that settled here, not to
-			    every step of it: only this row carries them. */}
-			{/* Only the clock, and only on hover: the model name is noise here. */}
-			{last?.timestamp && !aborted ? <MessageMeta timestamp={last.timestamp} /> : null}
+			{timestampItem ? <MessageMeta item={timestampItem} /> : null}
 		</div>
 	);
 }
