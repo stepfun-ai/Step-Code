@@ -17,6 +17,23 @@ function hostPlatform(): StepcodeDesktopBridge["platform"] {
 const version = process.argv.find((argument) => argument.startsWith(VERSION_ARGUMENT))?.slice(VERSION_ARGUMENT.length);
 
 const bridge: StepcodeDesktopBridge = {
+	beginTagGroupClose() {
+		// Invoke responses are untyped; the renderer validates the attempt before using it.
+		return ipcRenderer.invoke(DESKTOP_IPC.beginTagGroupClose) as ReturnType<
+			StepcodeDesktopBridge["beginTagGroupClose"]
+		>;
+	},
+	completeTagGroupClose(attemptId, outcome) {
+		return ipcRenderer.invoke(DESKTOP_IPC.completeTagGroupClose, attemptId, outcome) as Promise<boolean>;
+	},
+	readTagGroups() {
+		// Electron invoke erases response types; main validates disk data and the renderer validates the IPC result.
+		return ipcRenderer.invoke(DESKTOP_IPC.readTagGroups) as ReturnType<StepcodeDesktopBridge["readTagGroups"]>;
+	},
+	saveTagGroups(data) {
+		// This dedicated handler returns no payload and resolves only after atomic replacement.
+		return ipcRenderer.invoke(DESKTOP_IPC.saveTagGroups, data) as Promise<void>;
+	},
 	platform: hostPlatform(),
 	version: version ?? "",
 	getTheme() {

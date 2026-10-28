@@ -5,6 +5,7 @@ import { readStorage, STORAGE_KEYS } from "../lib/storage";
 import { isDesktopHost } from "../platform/host";
 import type { PerformanceRun } from "./performance";
 import { readSessionPreferences } from "./session-order";
+import { readInitialTagGroups } from "./tag-groups";
 import type {
 	AccountReport,
 	Attachment,
@@ -390,6 +391,8 @@ export interface AppState {
 	readonly theme: ThemeChoice;
 	readonly locale: Locale;
 	readonly ui: UiState;
+	readonly tagGroupsLoadError: string | null;
+	readonly tagGroupsSaveError: string | null;
 	readonly toast: ToastState | null;
 }
 
@@ -450,8 +453,7 @@ export function createInitialState(): AppState {
 		unreadById: new Map(),
 		foldedProjects: new Set(),
 		expandedProjects: new Set(),
-		groups: [],
-		tags: new Map(),
+		...readInitialTagGroups(),
 		pinnedSessions: arrangement.pinnedSessions,
 		sessionOrder: arrangement.sessionOrder,
 		currentView: "project",
@@ -522,6 +524,8 @@ export function createInitialState(): AppState {
 			childView: null,
 			imagePreview: null,
 		},
+		tagGroupsLoadError: null,
+		tagGroupsSaveError: null,
 		toast: null,
 	};
 }

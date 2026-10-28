@@ -2490,6 +2490,52 @@ test("a group stops being offered once its last session drops it", { skip }, asy
   })
 })
 
+test("tag group metadata survives browser reload and its last-member removal survives another reload", { skip }, async () => {
+  const sessionId = "e2e-persisted-tag-session"
+  const now = new Date().toISOString()
+  const dir = join(base, "agent", "sessions", "--e2e-persisted-tag--")
+  await mkdir(dir, { recursive: true })
+  const entries = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "persisted-tag-user", parentId: null, timestamp: now,
+      message: { role: "user", content: "group persistence fixture", timestamp: Date.now() } },
+  ]
+  await writeFile(join(dir, `${sessionId}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "persisted group picker");
+    picker.querySelector("[data-new-tag='teal']").click();
+    const input = await until(() => $("#tagNameInput"), "persisted group name");
+    input.value = "Reload group";
+    $("#tagNameConfirm").click();
+    await until(() => !$("#tagPicker"), "created group");
+  `)
+  await browser.goto(`${origin}/`)
+  const restored = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "restored group picker");
+    const name = picker.querySelector("[data-tag='teal']")?.textContent;
+    const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
+    picker.querySelector("[data-tag='teal']").click();
+    await until(() => !$("#tagPicker"), "removed restored tag");
+    return { name, tag: stored.tags.find(([id]) => id === "${sessionId}") };
+  `)
+  assert.deepEqual(restored, { name: "Reload group", tag: [sessionId, "teal"] })
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "untagged group picker");
+    const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return removed;
+  `)
+  assert.equal(removed, true)
+})
+
 test("conversation search finds message content written outside the page and opens the matching message", { skip }, async () => {
   // A session another process (the CLI) wrote: the host's index picks it up without a notification.
   const sessionId = "e2e-search-session"

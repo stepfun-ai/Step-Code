@@ -21,6 +21,7 @@ import { observePerformance } from "./performance";
 import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
 import { backgroundSubagentStatuses, subagentTasks } from "./subagent-tasks";
+import { restoreTagGroups, updateTagGroups } from "./tag-group-persistence";
 import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
 import type {
@@ -1441,16 +1442,23 @@ export function forgetDeletedSession(id: string): void {
 		new Set(state.sessions.map((session) => session.id).filter((sessionId) => sessionId !== id)),
 	);
 	if (arrangementChanged(state, arrangement)) writeSessionPreferences(arrangement);
+	updateTagGroups((groups) => withoutSessionTag(groups, id));
 	setState({
-		...withoutSessionTag(state, id),
 		pinnedSessions: arrangement.pinnedSessions,
 		sessionOrder: arrangement.sessionOrder,
 	});
 }
 
-/** Reload the session list (legacy `refreshSessions`, 3111-3115). */
+let sessionListRequest = 0;
+let sessionListApplied = 0;
+
+/** Reload the list immediately; successful recovery only gates the later group prune. */
 export async function refreshSessions(): Promise<void> {
+	const request = ++sessionListRequest;
+	const recovery = restoreTagGroups();
 	const data = await api<{ sessions: SessionSummary[] }>("/api/v1/sessions");
+	if (request < sessionListApplied) return;
+	sessionListApplied = request;
 	// The arrangement is pruned against what the list will hold, so a deleted
 	// session cannot keep a pin or a dragged place that no row can clear.
 	const before = getState();
@@ -1466,18 +1474,22 @@ export async function refreshSessions(): Promise<void> {
 		const live = data.sessions.flatMap((session): SessionLiveStatus[] =>
 			session.status ? [{ id: session.id, status: session.status, unread: session.unread === true }] : [],
 		);
-		// A session the host no longer lists is gone for good; its group tag has to
-		// go with it, or the group stays in the picker with no session anywhere. The
-		// open session counts as listed even if this answer omitted it.
-		const present = new Set([...kept, ...data.sessions].map((session) => session.id));
-		if (state.current) present.add(state.current.id);
 		return {
 			sessions: [...kept, ...data.sessions],
-			...pruneTagGroups(state, present),
 			...foldLiveStatuses(state, live, listed),
 			pinnedSessions: arrangement.pinnedSessions,
 			sessionOrder: arrangement.sessionOrder,
 		};
+	});
+	void recovery.then((restored) => {
+		if (!restored || request !== sessionListApplied) return;
+		updateTagGroups((groups) => {
+			// Re-evaluate selection and the latest successful list before and after a pruning save.
+			const state = getState();
+			const present = new Set(state.sessions.map((session) => session.id));
+			if (state.current) present.add(state.current.id);
+			return pruneTagGroups(groups, present);
+		}, true);
 	});
 }
 

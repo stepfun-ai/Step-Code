@@ -28,6 +28,8 @@ const MIN_SIZE = { width: 720, height: 480 };
 export const TRAFFIC_LIGHT_POSITION = { x: 16, y: 16 };
 
 export interface MainWindowOptions {
+	readonly onNativeClose: (window: BrowserWindow) => void;
+	readonly onDocumentChanged: (window: BrowserWindow, url: string) => void;
 	readonly preload: string;
 	readonly version: string;
 	readonly state: DesktopStateStore;
@@ -166,6 +168,8 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 	// The page title is the product name; keep it stable in the Dock / taskbar.
 	window.on("page-title-updated", (event) => event.preventDefault());
 
+	window.on("close", () => options.onNativeClose(window));
+	window.webContents.on("did-navigate", (_event, url) => options.onDocumentChanged(window, url));
 	installContextMenu(window);
 	persistBounds(window, options.state);
 	return window;
