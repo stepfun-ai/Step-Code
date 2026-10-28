@@ -841,14 +841,19 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	color: var(--ink);
 	font-weight: 400;
 }
-/* Commands show a bold `/name`, then the description. */
+/* Commands show a bold `/name`, then the description. Every kind the menu's
+   command group can emit — a built-in, `mcp`, and `feedback`, which opens the
+   dialog instead of inserting text — shares this rule; a new kind must join it
+   or its entry renders in the muted secondary colour among black ones. */
 .slash-item.command .slash-item-title,
-.slash-item.mcp .slash-item-title {
+.slash-item.mcp .slash-item-title,
+.slash-item.feedback .slash-item-title {
 	color: var(--ink);
 	font-weight: 600;
 }
 .slash-item.command .slash-item-title strong,
-.slash-item.mcp .slash-item-title strong {
+.slash-item.mcp .slash-item-title strong,
+.slash-item.feedback .slash-item-title strong {
 	font-weight: inherit;
 }
 /* Group headers ("命令" / "技能"). */
