@@ -13,13 +13,11 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
-import { useT } from "../../i18n";
+import { useMarkdownLabels, useT } from "../../i18n";
 import { api, errorMessage } from "../../lib/api";
-import { renderMarkdown } from "../../lib/markdown";
 import {
 	activeCwd,
 	copyText,
@@ -565,10 +563,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 		if (queuedCount) void updateQueued({ kind: "steer" });
 	};
 
-	const previewHtml = useMemo(
-		() => renderMarkdown(previewSource, { code: t("code"), copy: t("copy"), table: t("markdownTable") }),
-		[previewSource, t],
-	);
+	const markdownLabels = useMarkdownLabels();
 	/** In the preview, Enter sends and Cmd/Ctrl+Enter steers exactly as in the editor. */
 	const onPreviewKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
 		const mod = event.metaKey || event.ctrlKey;
@@ -727,7 +722,8 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 						<MarkdownView
 							ref={previewRef}
 							className="prompt-preview message-body"
-							html={previewHtml}
+							source={previewSource}
+							labels={markdownLabels}
 							role="region"
 							aria-label={t("markdownPreview")}
 							tabIndex={0}

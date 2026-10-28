@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useSyncExternalStore } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { relativeTime } from "../lib/format";
 import { appStore, useAppStore } from "../state/store";
 import { type Locale, MESSAGES, type MessageKey } from "./messages";
@@ -46,6 +46,25 @@ export function useT(): TranslateFn {
 /** Current locale, for components that branch on it directly. */
 export function useLocale(): Locale {
 	return useAppStore((state) => state.locale);
+}
+
+/** The Markdown renderer's labels in the current locale; one object per locale, so the renderer's memo holds. */
+export function useMarkdownLabels(): {
+	readonly code: string;
+	readonly copy: string;
+	readonly table: string;
+	readonly diagram: string;
+} {
+	const locale = useLocale();
+	return useMemo(
+		() => ({
+			code: translate(locale, "code"),
+			copy: translate(locale, "copy"),
+			table: translate(locale, "markdownTable"),
+			diagram: translate(locale, "markdownDiagram"),
+		}),
+		[locale],
+	);
 }
 
 /** `relativeTime` with the translated "just now" label. */

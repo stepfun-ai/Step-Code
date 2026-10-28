@@ -22,12 +22,13 @@ A change to the client is a change to the desktop app. Check both hosts when it 
 | Build / dev server | Vite 8.2 + `@vitejs/plugin-react` | `vite.config.ts`: root `client/`, output `dist/public/` |
 | State | Own store on `useSyncExternalStore` (`client/src/state/store.ts`) | No Redux, Zustand, React Query, router |
 | Styling | Plain CSS per feature + CSS Modules for `ui/` primitives | **No Tailwind**, no CSS-in-JS, no UI kit |
-| Markdown, highlighting, i18n | In-house (`lib/markdown.ts`, `features/files/highlight.ts`, `i18n/`) | No libraries |
+| Markdown | Streamdown (`ui/MarkdownView/`): `streamdown` with `@streamdown/cjk`, `@streamdown/math` (KaTeX), and `@streamdown/code` (Shiki) and `@streamdown/mermaid` loaded on first use | Own elements and classes through `components`; no Tailwind. Raw HTML renders as text, only http/https/mailto links navigate, images never load |
+| Highlighting (file preview), i18n | In-house (`features/files/highlight.ts`, `i18n/`) | No libraries |
 | Types | TypeScript strict, `erasableSyntaxOnly`, `verbatimModuleSyntax` | Type-checked by `tsgo` (both tsconfigs) |
 | Lint / format | Biome (root `biome.json`) | Tabs, indent width 3, line width 120, double quotes, semicolons |
 | Tests | `node:test` + `tsx` (unit), headless Chrome over CDP (e2e) | No Jest, Vitest or Playwright Test runner; the browser adapter itself uses playwright-core |
 
-The runtime dependencies are `react`, `react-dom`, `playwright-core`, `node-pty`, `@xterm/xterm`, `@xterm/addon-fit` and the workspace `@step-harness/coding-agent`. Adding any dependency
+The runtime dependencies are `react`, `react-dom`, `playwright-core`, `node-pty`, `@xterm/xterm`, `@xterm/addon-fit`, the Markdown stack (`streamdown`, `@streamdown/cjk`, `@streamdown/code`, `@streamdown/math`, `@streamdown/mermaid`, `katex`, and `mdast-util-from-markdown`, `mdast-util-gfm`, `micromark-extension-gfm` for `markdownFileReferences`) and the workspace `@step-harness/coding-agent`. Adding any dependency
 needs the user's approval first; pin it to an exact version and install with `pnpm install --ignore-scripts`.
 
 ## Directory layout
@@ -171,7 +172,7 @@ keep only the classes passed in. Read the component's doc comment before using i
 | `ShimmerText` | Animated "working on it" label | Put it in a status region to announce it |
 | `Kbd` | Keyboard shortcut hints | |
 | `DiffStat` | `+12 -3` line counts (`additions`, `deletions`) | |
-| `MarkdownView` | Rendering `lib/markdown` output (`html`), with code-block copy buttons (`onCopyCode`; unless it resolves `false`, the button shows `copiedLabel` briefly) | Only HTML from `renderMarkdown`; never other HTML |
+| `MarkdownView` | Rendering Markdown `source` with `labels`; `streaming` for text still arriving (completes unfinished syntax, defers highlighting and diagrams), `localFiles` + `onFileReference` for `.md-file-reference` buttons, `fileNames` + `renderFile` for attached-file chips, `lead` for an inline badge, `onCopyCode` (unless it resolves `false`, the button shows `copiedLabel` briefly) | The grammar and elements live in `markdown-plugins.ts` and `markdown-content.ts`; keep URL, HTML and image handling there |
 | `ResizeHandle` | Draggable / keyboard splitter between panels | Holds no size: `getSize`, `onResize` (live), `onCommit` (persist), `onReset`; `orientation="horizontal"` for stacked panels |
 | `useCopiedFlag` | `[copied, flash]` for a copy button that confirms in place | Pair with `copyText(value, null)` to skip the toast |
 | `useDismiss` | Outside-press and Escape dismissal for a mounted overlay | Include the trigger in `insideRefs` |
@@ -439,8 +440,9 @@ host imports must be built (`pnpm build` at the root) before the host runs.
 
 ## Do not
 
-- Add Tailwind, a CSS-in-JS library, a component kit, a state library, a router or a Markdown library.
+- Add Tailwind, a CSS-in-JS library, a component kit, a state library, a router or another Markdown library.
 - Edit `dist/`, or reintroduce the deleted vanilla client (`public/app.js`).
 - Put UI strings in only one language, or hard-code colors that the theme tokens cover.
-- Use `any`, inline/dynamic imports, `enum`, `namespace` or parameter properties.
+- Use `any`, inline/dynamic imports, `enum`, `namespace` or parameter properties. Exception: Shiki and Mermaid
+  load through `import()` in `ui/MarkdownView/markdown-content.ts`, which keeps about 850 KB out of the initial bundle.
 - Change `desktop-bridge.ts` without the matching desktop change.

@@ -447,6 +447,7 @@
 /* The Markdown body is block-level, so the badge floats to stay on the first
  * text line, in front of the words — the input box's chip position. */
 .message-body--invoked > .message-skill {
+	float: left;
 	margin: 0 6px 0 0;
 }
 .message .message-md {
@@ -541,23 +542,9 @@
 @media (prefers-reduced-motion: reduce) {
 	.thinking-disclosure,
 	.tool-disclosure,
-	.thinking-chevron,
-	.thinking .stream-fade {
+	.thinking-chevron {
 		transition: none;
 		animation: none;
-	}
-}
-
-/* Text the live reply just added fades in (features/conversation/streaming.ts sets a negative delay per chunk). */
-.stream-fade {
-	animation: stream-fade 420ms ease-out both;
-}
-@keyframes stream-fade {
-	from {
-		opacity: 0;
-	}
-	to {
-		opacity: 1;
 	}
 }
 

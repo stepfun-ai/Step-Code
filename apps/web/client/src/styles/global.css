@@ -572,6 +572,16 @@ html[data-theme="dark"] .sidebar {
 .message-body > h4:first-child {
   margin-top: 0;
 }
+/* The rendered Markdown (ui/MarkdownView) sits in one root; its outer blocks never add space at the edges. */
+.md-root > :first-child {
+  margin-top: 0;
+}
+.md-root > :last-child {
+  margin-bottom: 0;
+}
+.message-body p {
+  margin: 10px 0;
+}
 .message-body strong {
   color: var(--ink);
   font-weight: 600;
@@ -580,22 +590,37 @@ html[data-theme="dark"] .sidebar {
 .message.assistant .message-body {
   color: var(--ink);
 }
-.message-body .md-li {
-  position: relative;
-  display: block;
-  padding-left: 1.25em;
+.message-body ul,
+.message-body ol {
+  margin: 10px 0;
+  padding-left: 1.4em;
 }
-.message-body .md-li + .md-li {
+.message-body li + li {
   margin-top: 0.2em;
 }
-.message-body .md-li::before {
-  position: absolute;
-  left: 0.3em;
-  content: "•";
+.message-body li > :is(ul, ol) {
+  margin: 0.2em 0 0;
+}
+/* A loose list wraps each item in a paragraph; the item already spaces it. */
+.message-body li > p {
+  margin: 0;
+}
+.message-body li::marker {
   color: var(--ink-3);
 }
-.message-body .md-li-nested::before {
-  content: "◦";
+.message-body ol > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+.message-body ul ul {
+  list-style-type: circle;
+}
+.message-body .contains-task-list {
+  padding-left: 0.2em;
+  list-style: none;
+}
+.message-body .task-list-item > input {
+  margin: 0 0.45em 0 0;
+  vertical-align: -0.1em;
 }
 /* Links read in the text's own ink; the underline marks them, so a reply is not dotted with violet. */
 .message-body a {
@@ -612,10 +637,6 @@ html[data-theme="dark"] .sidebar {
 .message-body strong {
   font-weight: 600;
 }
-.message-body .md-gap {
-  display: block;
-  height: 10px;
-}
 /*
  * A quote is set back from the prose with a rule, and a horizontal rule is a
  * block: both appear in answers that talk *about* Markdown, and showing their
@@ -631,23 +652,6 @@ html[data-theme="dark"] .sidebar {
   margin: 16px 0;
   border: 0;
   border-top: 1px solid var(--line);
-}
-/* A numbered item keeps the number its author wrote. */
-.message-body .md-li.md-oli {
-  padding-left: 1.55em;
-}
-.message-body .md-li.md-oli::before {
-  left: 0.1em;
-  content: attr(data-n) ".";
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-/* Two-space indentation is one nesting level. */
-.message-body .md-li.md-li-nested {
-  padding-left: 2.2em;
-}
-.message-body .md-li.md-li-nested.md-oli {
-  padding-left: 3em;
 }
 .message-body .md-table-wrap {
   max-width: 100%;
@@ -787,6 +791,27 @@ html[data-theme="dark"] .sidebar {
   tab-size: 4;
   font: inherit;
   white-space: pre;
+}
+/* Shiki colours each token for both themes; the dark theme reads its `--shiki-dark` value. */
+html[data-theme="dark"] .code-block code span {
+  color: var(--shiki-dark) !important;
+}
+.message-body .md-mermaid {
+  margin: 14px 0;
+  overflow-x: auto;
+}
+.message-body .md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.message-body .katex-display {
+  margin: 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* A renderer failure shows the source as it was written. */
+.md-fallback {
+  white-space: pre-wrap;
 }
 
 /* legacy 912: chevron in composer and workspace controls */

@@ -22,7 +22,7 @@ export { Icon, type IconName, type IconProps, type IconSize, LEGACY_ICONS } from
 export { IconButton, type IconButtonProps } from "./IconButton/IconButton";
 export { ICON_NAMES, IconSprite } from "./IconSprite/IconSprite";
 export { Kbd, type KbdProps } from "./Kbd/Kbd";
-export { MarkdownView, type MarkdownViewProps } from "./MarkdownView/MarkdownView";
+export { type MarkdownLabels, MarkdownView, type MarkdownViewProps } from "./MarkdownView/MarkdownView";
 export { Menu, MenuDivider, type MenuDividerProps, MenuItem, type MenuItemProps, type MenuProps } from "./Menu/Menu";
 export { Modal, type ModalProps } from "./Modal/Modal";
 export { Popover, type PopoverPlacement, type PopoverProps } from "./Popover/Popover";
