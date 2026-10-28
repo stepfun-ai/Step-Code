@@ -63,7 +63,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 - Preserve the frozen `bin` / `exports` boundary. Do not add argv, TTY, or process entry points, or weaken `check:coding-agent-entry-freeze`.
 - Reuse `src/theme/` and `config.ts` for theme catalogs and resolution. Renderers consume the active theme; do not add another theme registry.
 - Session completion, cancellation, recovery, and tool permissions remain consistent across RPC, print, TUI, and SDK. Protocol adaptation and presentation may vary by mode.
-- Every serialized transport filters through `sessionEventDurability` (exported by `src/index.ts`); frames require an explicit live-consumer opt-in. In-process subscribers still receive every event.
+- Every *record* transport filters through `sessionEventDurability` (via `toJsonEvent`); frames require an explicit live-consumer opt-in. That is `--mode json` and `--mode rpc`, whose stdout a harness may redirect to a file. In-process subscribers, the in-process event bridge and the framed SDK host (`--sdk-stdio`) are live channels: they keep every event by design, so a record consumer must use `json`/`rpc` rather than those.
 - Add features through existing extension / feature interfaces. Compatibility wrappers must not introduce independent core execution semantics.
 
 ## Session, tool, and feature constraints

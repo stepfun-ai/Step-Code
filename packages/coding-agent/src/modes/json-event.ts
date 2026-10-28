@@ -89,8 +89,26 @@ export const MAX_LIVE_UPDATE_BYTES = 256 * 1024;
 const LIVE_TRUNCATION_MARKER = "[live output truncated]";
 const MAX_LIVE_IDENTIFIER_CHARS = 200;
 
+/**
+ * Size of the event as the host will write it.
+ *
+ * A live frame carries whatever a tool put in `partialResult`, which is `any`:
+ * a `BigInt`, a circular reference, or a getter that throws makes
+ * `JSON.stringify` throw. Treating an unserializable payload as oversized keeps
+ * the frame — the marker text still describes the tool's progress — instead of
+ * aborting the run from inside a `subscribe` callback with a TypeError the tool
+ * never caused.
+ */
+function serializedBytes(value: unknown): number {
+	try {
+		return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+	} catch {
+		return Number.POSITIVE_INFINITY;
+	}
+}
+
 function boundedToolUpdate(event: ToolUpdateEvent): JsonToolUpdateEvent {
-	if (Buffer.byteLength(JSON.stringify(event), "utf8") <= MAX_LIVE_UPDATE_BYTES) return event;
+	if (serializedBytes(event) <= MAX_LIVE_UPDATE_BYTES) return event;
 	const content: unknown = event.partialResult?.content;
 	const text = Array.isArray(content)
 		? content
@@ -116,7 +134,7 @@ function boundedToolUpdate(event: ToolUpdateEvent): JsonToolUpdateEvent {
 	});
 	let length = Math.min(text.length, MAX_LIVE_UPDATE_BYTES);
 	let result = candidate(length > 0 ? text.slice(-length) : "");
-	while (Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_LIVE_UPDATE_BYTES && length > 0) {
+	while (serializedBytes(result) > MAX_LIVE_UPDATE_BYTES && length > 0) {
 		length = Math.floor(length / 2);
 		// slice(-0) restores the entire output instead of reaching the floor.
 		result = candidate(length > 0 ? text.slice(-length) : "");
