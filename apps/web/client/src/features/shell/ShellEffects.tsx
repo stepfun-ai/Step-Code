@@ -18,11 +18,12 @@ import {
 import { type AppState, getState, setUi, useAppStore } from "../../state/store";
 import { answerSelection, answerTextInput, pendingSelection, pendingTextInput } from "../composer/actions";
 import { openTree, setPreviewOpen } from "../files/actions";
+import { handleMigrationEscape } from "../migration";
 import { closeTopmostSettingsLayer } from "../settings/actions";
 import { closeSearch, closeWorkspaceMenu, openSearch } from "../sidebar/actions";
 import { toggleTerminalDock } from "../terminal/actions";
 import { requestVoiceStop, voiceRecording } from "../voice/actions";
-import { chooseWorkspaceFolder, closeWorkspaceRemoval } from "../workspace/actions";
+import { chooseWorkspaceFolder, closeWorkspaceBrowser, closeWorkspaceRemoval } from "../workspace/actions";
 import { closeLogoutConfirm, confirmLogout, toggleSidebar, watchSystemTheme } from "./actions";
 
 /**
@@ -57,7 +58,8 @@ function handleEscape(): void {
 	else if (ui.changesMenu) setUi({ changesMenu: null });
 	else if (ui.rightPanelMenu) setUi({ rightPanelMenu: false });
 	else if (ui.searchOpen) closeSearch();
-	else if (ui.workspaceBrowserOpen) setUi({ workspaceBrowserOpen: false });
+	else if (ui.workspaceBrowserOpen) closeWorkspaceBrowser();
+	else if (handleMigrationEscape()) return;
 	else if (closeTopmostSettingsLayer()) return;
 	else if (ui.workspacePopoverOpen) setUi({ workspacePopoverOpen: false });
 	else if (ui.branchCreateOpen) setUi({ branchCreateOpen: false });

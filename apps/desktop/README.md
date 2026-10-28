@@ -17,6 +17,10 @@ What the shell adds on top of the browser version:
   `@step-harness/web/desktop-bridge`): native folder picker, open http(s) links in the system browser, reveal a path
   in Finder / Explorer, and name the default browser (name + icon, macOS / Windows) for "open in browser" controls.
   The client checks for it and otherwise falls back to the server's picker / in-page browser / a generic label.
+  `pickDirectory({ purpose: "resource" })` selects an existing migration target without saving it as the next-launch
+  workspace or offering directory creation. Omitted purpose keeps ordinary workspace-picking behaviour.
+  First-use migration does not require account sign-in; Settings keeps the same migration entry. See
+  [migration boundaries and confirmation](../../docs/desktop-migration.md).
 - The user's login-shell environment (macOS / Linux GUI launches), so the agent's bash tool finds the same `git`,
   `node`, Homebrew tools, etc. as in a terminal. On macOS/Linux, a private `node` wrapper also makes Electron's
   bundled Node available when no system `node` is on PATH, including to StepPage's installer and MCP launcher.

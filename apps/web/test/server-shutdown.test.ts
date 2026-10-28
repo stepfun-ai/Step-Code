@@ -29,6 +29,7 @@ for (const importFails of [false, true]) {
 			sitePreview: { close: noop },
 			terminals: { stopAll: noop },
 			voice: { stopAll: noop },
+			migrations: { close: noop },
 			sessionImports: {
 				close: async () => {
 					await importDrain;

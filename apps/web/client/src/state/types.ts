@@ -7,6 +7,31 @@
 
 import type { TagColor } from "../i18n/messages";
 
+export type {
+	MigrationAcknowledgement,
+	MigrationAction,
+	MigrationCandidate,
+	MigrationDiagnostic,
+	MigrationHolding,
+	MigrationItemResult,
+	MigrationJob,
+	MigrationKind,
+	MigrationLocation,
+	MigrationPlan,
+	MigrationPreview,
+	MigrationPreviewRequest,
+	MigrationReadiness,
+	MigrationRecoveryPreview,
+	MigrationRuleImpact,
+	MigrationScanRequest,
+	MigrationScanResult,
+	MigrationScope,
+	MigrationSelection,
+	MigrationSource,
+	MigrationSourceReport,
+	MigrationStartRequest,
+} from "./migration-types";
+
 /** Host-owned interactive shells; independent of Agent tool execution. */
 export interface TerminalInfo {
 	readonly id: string;
@@ -733,6 +758,15 @@ export interface BrowserLoginState {
 	readonly error?: string;
 }
 
+export interface DesktopOnboardingState {
+	readonly schemaVersion: 1;
+	readonly flowVersion: 1;
+	readonly revision: number;
+	readonly status: "unseen" | "offered" | "in_progress" | "completed" | "skipped";
+	readonly lastJobId?: string;
+	readonly updatedAt: string;
+}
+
 export interface BootstrapPayload {
 	readonly cwd: string;
 	/**
@@ -746,6 +780,9 @@ export interface BootstrapPayload {
 	readonly login?: LoginReport | null;
 	/** A custom models.json model runs without a Step credential, so no sign-in gate is needed. */
 	readonly customModels?: boolean;
+	readonly migrationAvailable?: boolean;
+	readonly migrationSuggested?: boolean;
+	readonly desktopOnboarding?: DesktopOnboardingState;
 	/** The running build's product version, e.g. `0.1.0`. */
 	readonly version?: string;
 	/** When the installed build was produced; absent for a source checkout. */
@@ -857,6 +894,10 @@ export interface SettingsMcpServer {
 	readonly transport: "stdio" | "http";
 	readonly enabled: boolean;
 	readonly config?: McpServerConfig;
+	/** Fields omitted from config because their stored values must not be sent to the browser. */
+	readonly protectedFields?: readonly (keyof McpServerConfig)[];
+	/** Revision of the full declaration, including protected values and permission lists. */
+	readonly revision?: string;
 	readonly status?: McpServerStatus["status"];
 	readonly toolCount?: number;
 	readonly error?: string;

@@ -18,6 +18,16 @@ server binds to `127.0.0.1` by default. `POST /auth/logout` expires the page
 cookie; re-entry then requires a fresh terminal launch link. That is page access  
 only; the Step sign-out is `POST /api/v1/logout` (see Account below).
 
+### Local migration
+
+Desktop and Web use the shared offline migration service for sessions, skills,
+ordinary global MCP, prompt templates and instruction rules. The first-use
+invitation is Desktop-only; settings provides the later entry. Local migration
+requires the Host launch cookie but no Step account, model credential or model
+request. See [Desktop local migration](desktop-migration.md) for supported
+sources, explicit project selection, immutable consent, cancellation and guarded
+rules recovery, and [OpenAPI](../apps/web/openapi.yaml) for the wire contracts.
+
 The credential lives in `~/.stepcode/auth.json` (`STEPCODE_AUTH_PATH` overrides  
 it). It is written by `step login` in a terminal or by the sign-in dialog of  
 Web and Desktop (see "Sign-in dialog" below), in the same shape, so CLI, Web and  

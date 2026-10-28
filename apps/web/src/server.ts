@@ -14,6 +14,7 @@ import {
 	getStepAccountProfile,
 	getStepAuthPath,
 	getStepLoginStatus,
+	MigrationService,
 	openBrowser,
 	resolveStepAgentDir,
 	resolveStepCodeVersion,
@@ -30,6 +31,12 @@ import { WebBrowser } from "./browser.ts";
 import { recordBrowserOpened, shouldOpenBrowser } from "./browser-open.ts";
 import { browserRoute } from "./browser-routes.ts";
 import { listWorkflowChildren, readChildTranscript } from "./child-sessions.ts";
+import {
+	DesktopOnboardingError,
+	type DesktopOnboardingState,
+	type DesktopOnboardingStatus,
+	DesktopOnboardingStore,
+} from "./desktop-onboarding.ts";
 import { type DirectoryPickerMode, pickNativeDirectory, resolveDirectoryPickerMode } from "./directory-picker.ts";
 import {
 	absoluteLocalPath,
@@ -45,6 +52,7 @@ import {
 import { createBranch, GitBranchError, listLocalBranches, readGitState, switchBranch } from "./git.ts";
 import { buildLoginReport, type LoginReport, loginMethods, WebLoginController } from "./login.ts";
 import { signOutStep } from "./logout.ts";
+import { migrationRoute } from "./migration-routes.ts";
 import {
 	deleteModelProvider,
 	discoverProviderModels,
@@ -80,6 +88,7 @@ import {
 	removePlugin,
 	SettingsError,
 	saveMcpServer,
+	saveMcpServerPatch,
 	setMcpServerEnabled,
 	setSkillEnabled,
 	updateMarketplace,
@@ -318,6 +327,18 @@ const sessionImports = new SessionImportService({
 	onPersisted: (event) => sessionSearch.notifyPersisted(event),
 });
 const store = new WebSessionStore({ index: sessionSearch });
+let migrations: MigrationService | undefined;
+let onboarding: DesktopOnboardingStore | undefined;
+try {
+	migrations = new MigrationService({ agentDir: resolveStepAgentDir(), sessions: sessionImports, env: process.env });
+} catch {
+	// Optional migration data must not prevent the host from serving existing chats.
+}
+try {
+	onboarding = new DesktopOnboardingStore({ agentDir: resolveStepAgentDir() });
+} catch {
+	// An unsafe or unavailable onboarding directory is reported by its API, never reset silently.
+}
 const workspaces = new WorkspaceRegistry(join(resolveStepAgentDir(), WORKSPACES_FILE));
 const embeddedBrowser = new WebBrowser([port, launchPort]);
 /** Rendered previews of workspace files, on their own origin (see site-preview.ts). */
@@ -544,7 +565,11 @@ async function settingsRoute(
 				return json(response, 201, { ok: true });
 			}
 			if (name && !action && method === "PUT") {
-				saveMcpServer(name, (await body(request)).config, { replace: true });
+				const input = await body(request);
+				if (Object.keys(input).some((key) => key !== "patch") || !input.patch) {
+					return error(response, 400, "A revision-checked MCP settings patch is required");
+				}
+				saveMcpServerPatch(name, input.patch);
 				return json(response, 200, { ok: true });
 			}
 			if (name && !action && method === "PATCH") {
@@ -769,12 +794,65 @@ const server = createServer(async (request, response) => {
 		if (parts[2] === "terminals")
 			return await terminalRoute(terminals, parts.slice(3), url, request, response, knownWorkspace);
 		if (parts[2] === "voice") return await voiceRoute(voice, parts.slice(3), request, response);
+		if (parts[2] === "migrations") {
+			if (!migrations) return json(response, 503, { error: "migration-unavailable", code: "migration-unavailable" });
+			return await migrationRoute(migrations, parts.slice(3), url, request, response, knownWorkspace);
+		}
+		if (parts[2] === "desktop-onboarding" && parts.length === 3) {
+			if (!onboarding)
+				return json(response, 503, { error: "onboarding-unavailable", code: "onboarding-unavailable" });
+			try {
+				if (method === "GET") return json(response, 200, onboarding.get());
+				if (method === "PATCH") {
+					const input = await body(request);
+					const statuses: DesktopOnboardingStatus[] = ["unseen", "offered", "in_progress", "completed", "skipped"];
+					if (
+						Object.keys(input).some((key) => !["expectedRevision", "status", "lastJobId"].includes(key)) ||
+						typeof input.expectedRevision !== "number" ||
+						typeof input.status !== "string" ||
+						!statuses.includes(input.status as DesktopOnboardingStatus) ||
+						(input.lastJobId !== undefined && typeof input.lastJobId !== "string")
+					) {
+						return json(response, 400, { error: "invalid-onboarding-data", code: "invalid-onboarding-data" });
+					}
+					return json(
+						response,
+						200,
+						onboarding.update({
+							expectedRevision: input.expectedRevision,
+							status: input.status as DesktopOnboardingStatus,
+							...(typeof input.lastJobId === "string" ? { lastJobId: input.lastJobId } : {}),
+						}),
+					);
+				}
+				return error(response, 404, "Not found");
+			} catch (caught) {
+				const code = caught instanceof DesktopOnboardingError ? caught.code : "onboarding-unavailable";
+				return json(response, caught instanceof DesktopOnboardingError ? caught.status : 503, {
+					error: code,
+					code,
+				});
+			}
+		}
 		if (parts[2] === "bootstrap" && method === "GET") {
 			const [report, customModels, defaultInfo] = await Promise.all([
 				loginReport(),
 				hasUsableCustomModel(),
 				defaultWorkspaceInfo(),
 			]);
+			let desktopOnboarding: DesktopOnboardingState | undefined;
+			try {
+				desktopOnboarding = onboarding?.get();
+			} catch {
+				/* The explicit onboarding API reports recovery errors. */
+			}
+			const [existingSessions, existingWorkspaces] =
+				desktopOnboarding?.status === "unseen" ? await Promise.all([store.list(), workspaces.list()]) : [[], []];
+			const migrationSuggested =
+				!!migrations &&
+				desktopOnboarding?.status === "unseen" &&
+				!existingSessions.length &&
+				!existingWorkspaces.some((workspace) => workspace.hidden);
 			// The identity of the running build, so a page (and the person looking at
 			// it) can tell which build it is talking to. `buildTime` is staged beside
 			// the server entry by the installer; a source checkout reports none.
@@ -793,6 +871,9 @@ const server = createServer(async (request, response) => {
 				directoryPicker,
 				login: report,
 				customModels,
+				migrationAvailable: !!migrations,
+				migrationSuggested,
+				...(desktopOnboarding ? { desktopOnboarding } : {}),
 				version: resolveStepCodeVersion().value,
 				...(buildTime ? { buildTime } : {}),
 			});
@@ -1387,7 +1468,13 @@ const shutdown = async (): Promise<void> => {
 					// their partial replies before Desktop's 5s SIGKILL. Both finish before
 					// the session index is closed, including when either cleanup fails.
 					const results = await Promise.allSettled([
-						sessionImports.close(),
+						(async () => {
+							try {
+								await migrations?.close();
+							} finally {
+								await sessionImports.close();
+							}
+						})(),
 						store.interruptAndClose({ graceMs: SHUTDOWN_TURN_GRACE_MS, reason: "host shutdown" }),
 					]);
 					for (const result of results) {

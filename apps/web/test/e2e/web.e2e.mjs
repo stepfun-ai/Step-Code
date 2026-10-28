@@ -241,21 +241,77 @@ const until = async (probe, label, timeout = 8000) => {
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 };
-const migrationScanCompleted = async (action, label) => {
+const migrationPost = async (path, action) => {
   const originalFetch = window.fetch;
-  let completed = 0;
+  let result;
+  let observed = false;
   window.fetch = async (input, init) => {
-    const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
     const response = await originalFetch(input, init);
-    if (path === '/api/v1/session-imports/scan' && (init?.method ?? 'GET') === 'POST') completed++;
+    if (url.origin === location.origin && url.pathname === '/api/v1/migrations' + path && init?.method === 'POST') {
+      result = { status: response.status, body: await response.clone().json(), request: JSON.parse(init.body) };
+      observed = true;
+    }
     return response;
   };
   try {
     await action();
-    await until(() => completed > 0 && $('#importScan') && !$('#importScan').disabled, label);
+    await until(() => observed, 'migration POST ' + path);
+    return result;
   } finally {
     window.fetch = originalFetch;
   }
+};
+const migrationRead = async (path = '') => {
+  const response = await fetch('/api/v1/migrations' + path);
+  if (!response.ok) throw new Error('Migration read failed: ' + response.status);
+  return response.json();
+};
+const migrationFooter = () => $$('#migrationModal .migration-dialog-foot button');
+const migrationOpen = async () => {
+  if ($('#migrationModal') && !$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
+  if ($('#settingsView').hidden) $('#settingsButton').click();
+  $('[data-settings-page="migration"]').click();
+  await until(() => $('#migrationPage > button'), 'migration Settings entry');
+  $('#migrationPage > button').click();
+  await until(() => !$('#migrationModal').hidden && $('.migration-invitation button'), 'explicit scan invitation');
+};
+const migrationScan = async () => {
+  const result = await migrationPost('/scan', () => $('.migration-invitation button').click());
+  if (result.status !== 200) throw new Error('Scan failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-list'), 'scan rendered');
+  return result.body;
+};
+const migrationSelect = async (item) => {
+  const row = $('[data-candidate-id="' + item.id + '"]');
+  if (!row || row.querySelector('input').disabled) throw new Error('Candidate not selectable: ' + item.name);
+  const result = await migrationPost('/preview', () => row.querySelector('input').click());
+  if (result.status !== 200) throw new Error('Preview failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
+  if (!row.querySelector('input').checked) throw new Error('Explicit selection lost');
+  for (const input of $$('.migration-preview .migration-check input')) if (!input.checked) input.click();
+  return result.body;
+};
+const migrationPlan = async () => {
+  await until(() => !migrationFooter()[1].disabled, 'selected previews ready');
+  const result = await migrationPost('/plans', () => migrationFooter()[1].click());
+  if (result.status !== 200) throw new Error('Plan failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-final-plan'), 'immutable final review');
+  return result.body;
+};
+const migrationStart = async () => {
+  const result = await migrationPost('', () => migrationFooter()[1].click());
+  if (result.status !== 202) throw new Error('Start failed: ' + JSON.stringify(result.body));
+  const job = await until(async () => {
+    const job = await migrationRead('/' + result.body.id);
+    return ['completed', 'cancelled', 'interrupted'].includes(job.status) ? job : null;
+  }, 'durable terminal job');
+  await until(() => $('[data-result-count="pending"] dd')?.textContent === '0', 'terminal job UI');
+  for (const status of ['imported', 'skipped', 'failed']) {
+    if (Number($('[data-result-count="' + status + '"] dd').textContent) !== job.items.filter(item => item.status === status).length)
+      throw new Error('UI count disagrees with durable job: ' + status);
+  }
+  return job;
 };
 const treeRows = () => $$("#fileTreeBody .file-row").map((row) => row.dataset.path);
 const treeRow = (path) => $$("#fileTreeBody .file-row").find((row) => row.dataset.path === path);
@@ -1628,7 +1684,9 @@ test("a subagent's write asks for approval and runs in the child, not the main s
         asked.push({ tool: approval.toolName, content: approval.message });
         await fetch(base + "/approvals/decision", { method: "POST", headers: json, body: JSON.stringify({ id: approval.id, verdict: "approve_for_session" }) });
       }
-      return value.status === "completed" ? value : null;
+      const delegatedResult = value.entries?.some(entry => entry.message?.role === "toolResult" && entry.message.toolName === "subagent");
+      // POST accepts the prompt before its turn starts; a previous/initial completed state is not this turn's completion.
+      return value.status === "completed" && delegatedResult ? value : null;
     }, "the delegated write settles", 180000);
     const calls = [];
     for (const entry of snapshot.entries) {
@@ -3577,458 +3635,291 @@ test("session migration imports reviewed snapshots while sources continue writin
     { type: "user", uuid: "cc-user", parentUuid: null, sessionId: "migration-claude", cwd: workspace, timestamp, message: { content: "<user_query>Claude migration acceptance</user_query>" } },
     { type: "assistant", uuid: "cc-assistant", parentUuid: "cc-user", sessionId: "migration-claude", timestamp, message: { content: [{ type: "text", text: "Historical CC reply" }] } },
   ].map(JSON.stringify).join("\n") + "\n")
+  const claudePath = join(claudeRoot, "migration-claude.jsonl")
+  const claudeInput = await readFile(claudePath, "utf8")
   const scanned = await browser.run(`
-    if ($("#settingsView").hidden) $("#settingsButton").click();
-    await until(() => !$("#settingsView").hidden, "settings");
-    $("[data-settings-page='migration']").click();
-    await until(() => $("#importScan"), "migration page");
-    if ($('#importCustomToggle') || $('#importCustomPath')) throw new Error('Custom paths must be unavailable');
-    if ($('#importIncludeArchived')) throw new Error('Archive option must be absent');
-    const archived = false;
-    await until(() => $$(".session-import-row").length === 2, "two active source sessions");
-    await until(() => $$('[data-import-app] .session-import-logo').every(img => img.complete && img.naturalWidth > 0), 'platform logos loaded');
-    if (!$('[data-import-app="codex"] .session-import-logo').getAttribute('src').endsWith('/codex.svg')) throw new Error('Codex logo mismatch');
-    if (!$('[data-import-app="claude-code"] .session-import-logo').getAttribute('src').endsWith('/claudecode.svg')) throw new Error('Claude logo mismatch');
-    if ($$('[data-import-app]').some(group => group.open)) throw new Error('Applications must start collapsed');
-    if ($$('[data-import-project]').some(group => group.open)) throw new Error('Projects must start collapsed');
-    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
-    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
-    return { archived, errors: !!$(".session-import-errors"), sources: $$(".session-import-row").map(row => row.dataset.importSource).sort() };
-  `)
-  assert.deepEqual(scanned, { archived: false, errors: false, sources: ["claude-code", "codex"] })
-  const grouping = await browser.run(`
-    const groups = $$('[data-import-app]').map(node => node.dataset.importApp);
-    let codex = $('[data-import-app="codex"]');
-    const titles = $$('.session-import-section-head h1, .session-import-section-head h2').map(node => node.textContent);
-    const pathVisible = codex.textContent.includes(${JSON.stringify(sourcePath)});
-    codex.querySelector('summary').click();
-    const collapsed = !codex.open;
-    const search = $('.session-import-toolbar input[type="search"]');
-    search.value = 'rollout-migration.jsonl';
-    search.dispatchEvent(new Event('input'));
-    await until(() => $$('.session-import-row').length === 1, 'source path search');
-    codex = $('[data-import-app="codex"]');
-    const staysCollapsed = !codex.open;
-    codex.querySelector('summary').click();
-    const expanded = codex.open;
-    search.value = 'no-matching-migration-session';
-    search.dispatchEvent(new Event('input'));
-    await until(() => $$('.session-import-row').length === 0, 'empty search');
-    const emptyCards = $$('[data-import-app]').length;
-    const emptyHints = $$('.session-import-list .empty-list').length;
-    search.value = '';
-    search.dispatchEvent(new Event('input'));
-    await until(() => $$('.session-import-row').length === 2, 'cleared search');
-    return { apps: groups, titles, pathVisible, collapsed, staysCollapsed, expanded, emptyCards, emptyHints };
-  `)
-  assert.deepEqual(grouping.apps, ["codex", "claude-code"])
-  assert.equal(grouping.titles.length, 2)
-  assert.equal(grouping.pathVisible, false)
-  assert.equal(grouping.collapsed, true)
-  assert.equal(grouping.staysCollapsed, true)
-  assert.equal(grouping.expanded, true)
-  assert.equal(grouping.emptyCards, 0)
-  assert.equal(grouping.emptyHints, 0)
-  await browser.run(`
-    await until(() => $$('.session-import-report').length === 2 && !$('#importScan').disabled, 'automatic preview statistics');
-    const oldRow = $('.session-import-row');
-    $('#importScan').click();
-    await until(() => $('.session-import-row') !== oldRow && !$('#importScan').disabled, 'manual rescan completed');
-    if ($$('[data-import-app]').some(group => group.open)) throw new Error('Rescan must collapse cards');
-    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
-    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
+    await migrationOpen();
+    if ($('#importCustomToggle, #importCustomPath, #importIncludeArchived')) throw new Error('Arbitrary source roots or archive controls exposed');
+    const scan = await migrationScan();
+    const sessions = scan.candidates.filter(item => item.kind === 'sessions');
+    if (sessions.length !== 2) throw new Error('Expected two active native-format sessions: ' + JSON.stringify(sessions));
+    if (sessions.some(item => item.sourcePath.includes('archived_sessions'))) throw new Error('Archive scanned by default');
+    if ($$('[data-candidate-id] > input').some(input => input.checked)) throw new Error('Scan silently selected candidates');
     for (const key of ['customRoot', 'codexRoot', 'claudeRoot', 'workbuddyRoot', 'qoderRoot']) {
-      const response = await fetch('/api/v1/session-imports/scan', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({[key]: '/must-not-scan'}) });
-      if (response.status !== 400) throw new Error('Custom path override was accepted: ' + key);
+      const response = await fetch('/api/v1/migrations/scan', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({[key]: '/must-not-scan'}) });
+      if (response.status !== 400) throw new Error('Custom source override accepted: ' + key);
     }
-
-    if ($('.session-import-excerpt')) throw new Error('Preview body must not appear in list');
-    if ($('#importSelectAll')) throw new Error('Global select all must be absent');
-    const appOpen = $('[data-import-app="codex"]').open;
-    $('[data-import-select="codex"]').click();
-    await until(() => $('[data-import-source="codex"] input[type="checkbox"]').checked, 'app selected');
-    if ($('[data-import-select="codex"]').type !== 'checkbox' || $('[data-import-app="codex"]').open !== appOpen) throw new Error('Checkbox must not toggle application folding');
-    const selectedRow = $('[data-import-source="codex"]');
-    const unselectedRow = $('[data-import-source="claude-code"]');
-    await until(() => getComputedStyle(selectedRow).backgroundColor !== getComputedStyle(unselectedRow).backgroundColor, 'selected row highlight');
-    if (getComputedStyle($('.session-import-toolbar .search-input')).borderTopStyle !== 'solid') throw new Error('Search input has no border');
-    if ($('[data-import-source="claude-code"] input[type="checkbox"]').checked) throw new Error('App select leaked');
-    const projectSelect = $('[data-import-app="claude-code"] .session-import-select-group[data-import-select^="claude-code:"]');
-    const projectOpen = projectSelect.closest('details').open;
-    projectSelect.click();
-    await until(() => $('[data-import-source="claude-code"] input[type="checkbox"]').checked, 'project selected');
-    if (projectSelect.type !== 'checkbox' || projectSelect.closest('details').open !== projectOpen) throw new Error('Project checkbox must not toggle folding');
-    if ($('#importConfirm') || !$('[data-import-app="codex"] > summary [data-import-confirm="codex"]')) throw new Error('Import must be platform-scoped');
-    if ($('.session-import-row .session-import-path')) throw new Error('Session paths visible');
-    if ($('[data-import-project] summary .session-import-project-path')) throw new Error('Project path must be hidden');
-    if (!/已选.*1|1.*selected/i.test($('[data-import-app="codex"] > summary').textContent)) throw new Error('App selected count missing');
-    if (!/已选.*1|1.*selected/i.test($('[data-import-app="claude-code"] [data-import-project] > summary').textContent)) throw new Error('Project selected count missing');
-    if ($('[data-import-app="codex"] input:not([type="checkbox"])')) throw new Error('Scanned path must not be editable');
-    if ($('.session-import-root')) throw new Error('Source paths must be hidden');
-    await until(() => !$('[data-import-confirm="codex"]').disabled, "preview completion");
-    if ($('.session-import-target') || $('#importReviewSelected')) throw new Error('Obsolete target or review controls');
-    const button = $('[data-import-source="codex"] button');
-    button.click();
-    await until(() => $('.session-import-preview-popover'), 'floating preview');
-    await until(() => !button.disabled, 'preview check complete');
-    if (!$('.session-import-preview-popover').textContent.includes('Migration acceptance')) throw new Error('Missing preview content');
-    const panel = $('.session-import-preview-popover');
-    const rect = panel.getBoundingClientRect();
-    const top = document.elementFromPoint(Math.min(innerWidth - 1, rect.left + rect.width / 2), Math.min(innerHeight - 1, rect.top + 20));
-    if (!panel.contains(top)) throw new Error('Preview is covered by settings');
-    button.click();
-    await until(() => !$('.session-import-preview-popover'), 'closed preview');
-    return true;
+    const search = $('.migration-list input[type="search"]');
+    search.value = 'rollout-migration.jsonl';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await until(() => $$('.migration-row').length === 1, 'source path search');
+    search.value = 'no-matching-migration-session';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await until(() => !$('.migration-row'), 'empty search');
+    if (!$('.migration-list .empty-list')) throw new Error('Empty search explanation missing');
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await until(() => $$('.migration-row').length === 2, 'cleared search');
+    const previews = [];
+    for (const item of [...sessions].sort((a, b) => a.source.localeCompare(b.source))) previews.push(await migrationSelect(item));
+    const codex = previews.find(preview => preview.candidate.source === 'codex');
+    if (!codex.sourceText.includes('Migration acceptance')) throw new Error('Reviewed snapshot content missing');
+    if (!codex.warnings.length || !$('.migration-preview .migration-diagnostics li')) throw new Error('Historical compatibility warning hidden');
+    for (const preview of previews) {
+      if (preview.target.scope.kind !== 'project' || preview.target.scope.cwd !== ${JSON.stringify(workspace)}) throw new Error('Session destination must be explicit project');
+    }
+    window.reviewedMigrationPreviews = previews;
+    return sessions.map(item => item.source).sort();
   `)
-  await browser.send("Emulation.setDeviceMetricsOverride", {
-    width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
-  })
-  try {
-    const layout = await browser.run(`
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      const content = $(".settings-content");
-      const buttons = $$("[data-import-confirm]").map(node => node.getBoundingClientRect());
-      return {
-        contentWidth: content.getBoundingClientRect().width,
-        overflowing: content.scrollWidth > content.clientWidth,
-        offenders: [...content.querySelectorAll('*')].filter(node => node.getBoundingClientRect().right > innerWidth).slice(0, 12).map(node => ({class: node.className, width: node.getBoundingClientRect().width})),
-        buttonsFit: buttons.every(rect => rect.left >= 0 && rect.right <= innerWidth),
-      };
-    `)
-    assert.ok(layout.contentWidth >= 280, JSON.stringify(layout))
-    assert.equal(layout.overflowing, false, JSON.stringify(layout))
-    assert.equal(layout.buttonsFit, true)
-  } finally {
-    await browser.send("Emulation.setDeviceMetricsOverride", {
-      width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
-    })
-  }
+  assert.deepEqual(scanned, ["claude-code", "codex"])
+  assert.equal(await readFile(sourcePath, "utf8"), input)
   const updatedInput = input + [
     { type: "event_msg", timestamp, payload: { type: "token_count", info: {} } },
     { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Unreviewed source append" }] } },
   ].map(JSON.stringify).join("\n") + "\n"
   await writeFile(sourcePath, updatedInput)
-  await browser.run(`
-    $('[data-import-confirm="codex"]').click();
-    await until(() => $$('.session-import-result').length === 1 && !$('[data-import-confirm="claude-code"]').disabled, 'Codex imported separately');
-    if ($('[data-import-source="codex"]') || $('[data-import-app="codex"]')) throw new Error('Imported Codex session or empty card still appears in source list');
-    if (!$('[data-import-source="claude-code"] input').checked) throw new Error('Other platform selection was cleared');
-    $('[data-import-confirm="claude-code"]').click();
-    await until(() => $$(".session-import-result").length === 2, "completed imports");
-    if ($('.session-import-row') || $('[data-import-app]')) throw new Error('Imported sessions must exist only in history, without empty source cards');
-    await migrationScanCompleted(() => $('#importScan').click(), 'rescan with imported history');
-    if ($('.session-import-row') || $('[data-import-app]') || $$('.session-import-result').length !== 2) throw new Error('Rescan restored imported source sessions or empty cards');
-    const jobs = await (await fetch("/api/v1/session-imports")).json();
-    if (jobs.jobs.length !== 2 || jobs.jobs.some(job => job.results.length !== 1 || job.results[0].status !== 'imported')) throw new Error('Jobs must be per-platform');
-    window.migrationJob = { results: jobs.jobs.flatMap(job => job.results) };
-    const history = $$('[data-import-history-app]');
-    if (history.length !== 2 || history.some(group => group.querySelectorAll('.session-import-result').length !== 1)) {
-      throw new Error('Import history is not grouped by app');
-    }
-    if ($('.session-import-result .session-import-path')) throw new Error('History session paths visible');
-    if (history[0].open) throw new Error('Import history must start collapsed');
-    for (const group of history) group.querySelector('summary').click();
-    for (const group of $$('[data-import-history-project]')) group.querySelector('summary').click();
-    return true;
-  `)
   const imported = await browser.run(`
-    const job = window.migrationJob;
-    const sessions = (await (await fetch("/api/v1/sessions")).json()).sessions;
-    const codex = sessions.find(session => job.results.some(result => result.sessionId === session.id) && session.name.startsWith("[codex]"));
-    if (!codex) throw new Error("Codex import missing from native sessions");
-    const snapshot = await (await fetch("/api/v1/sessions/" + codex.id)).json();
-    if (!snapshot.entries.some(entry => entry.imported)) throw new Error("Missing source provenance");
-    if (JSON.stringify(snapshot.entries).includes("Unreviewed source append")) throw new Error("Imported unreviewed content");
-    const result = job.results.find(result => result.sessionId === codex.id);
-    // Grouped history renders rows per app, so select by the imported session id, not DOM order.
-    document.querySelector('.session-import-result[data-import-result="' + codex.id + '"] button').click();
-    await until(() => $("#settingsView").hidden, "opened native import");
-    await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "imported history");
-    return { id: codex.id, hasUnknown: !!$("[data-tool-state='unknown']") };
+    const before = (await migrationRead()).jobs.length;
+    const plan = await migrationPlan();
+    if ((await migrationRead()).jobs.length !== before) throw new Error('Review started a job without explicit Start');
+    if (plan.items.length !== 2 || plan.items.some(item => !window.reviewedMigrationPreviews.some(preview => preview.id === item.id && preview.fingerprint === item.fingerprint)))
+      throw new Error('Final review did not use frozen previews');
+    const job = await migrationStart();
+    if (job.items.length !== 2 || job.items.some(item => item.status !== 'imported')) throw new Error('Native source import failed: ' + JSON.stringify(job));
+    window.realMigrationJob = job;
+    const sessions = (await (await fetch('/api/v1/sessions')).json()).sessions;
+    const codexItem = job.items.find(item => item.source === 'codex');
+    const codex = sessions.find(session => session.id === codexItem.sessionId && session.name.startsWith('[codex]'));
+    if (!codex) throw new Error('Codex import missing from native index');
+    const snapshot = await (await fetch('/api/v1/sessions/' + codex.id)).json();
+    if (!snapshot.entries.some(entry => entry.imported)) throw new Error('Source provenance lost');
+    const entries = JSON.stringify(snapshot.entries);
+    if (entries.includes('Unreviewed source append')) throw new Error('Imported unreviewed content');
+    if (!entries.includes('never execute this historical call')) throw new Error('Historical call discarded');
+    const claudeItem = job.items.find(item => item.source === 'claude-code');
+    const claudeSnapshot = await (await fetch('/api/v1/sessions/' + claudeItem.sessionId)).json();
+    if (!claudeSnapshot.entries.some(entry => entry.imported) || !JSON.stringify(claudeSnapshot.entries).includes('Historical CC reply'))
+      throw new Error('Claude native history or provenance lost');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === claudeItem.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'Claude migration acceptance', 'opened native Claude message');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    const nativeJobRow = await until(() => $$('.migration-history-row').find(row => row.querySelector('code')?.textContent === job.createdAt), 'return to native job history');
+    nativeJobRow.querySelector('button').click();
+    await until(() => $$('.migration-job-item').length === 2 && !$('#migrationModal').hidden, 'reattach native job');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === codexItem.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && document.body.textContent.includes('Migration acceptance quokkabridge'), 'opened native import');
+    if (!$('#authBanner').hidden || !$('#errorToast').hidden) throw new Error('Successful local navigation disturbed authentication');
+    if ($('[data-tool-state="running"]') || $('[data-tool-state="completed"]')) throw new Error('Unconfirmed historical call acquired an execution outcome');
+    return { id: codex.id, hasUnknown: !!$('[data-tool-state="unknown"]') };
   `)
   assert.equal(imported.hasUnknown, true)
   assert.equal(await readFile(sourcePath, "utf8"), updatedInput)
+  assert.equal(await readFile(claudePath, "utf8"), claudeInput)
   await browser.send("Page.reload")
-  await browser.run(`await until(() => document.body.textContent.includes("Migration acceptance quokkabridge"), "reopened after refresh");`)
-  const search = await browser.run(`
-    const result = await (await fetch("/api/v1/search?q=quokkabridge")).json();
+  await browser.run(`await until(() => document.body.textContent.includes('Migration acceptance quokkabridge'), 'reopened after refresh');`)
+  assert.equal(await browser.run(`
+    const result = await (await fetch('/api/v1/search?q=quokkabridge')).json();
     return result.hits.some(hit => hit.sessionId === ${JSON.stringify(imported.id)});
-  `)
-  assert.equal(search, true)
+  `), true)
   await browser.run(`
-    await migrationScanCompleted(async () => {
-      $('#settingsButton').click();
-      $('[data-settings-page="general"]').click();
-      await until(() => !$('.session-import-page'), 'general page before migration reopen');
-      $('[data-settings-page="migration"]').click();
-    }, 'migration reopened with persisted history');
-    await until(() => $$('.session-import-result').length === 2, 'persisted history rows');
-    if ($('.session-import-row') || $('[data-import-app]')) throw new Error('Reopening migration restored imported sessions or empty cards');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    await until(() => $$('.migration-history-row').length === 1, 'persisted unified job');
+    const jobs = (await migrationRead()).jobs;
+    if (jobs.length !== 1 || jobs[0].items.length !== 2 || jobs[0].items.some(item => item.status !== 'imported')) throw new Error('Persisted job lost real outcomes');
     $('#settingsBack').click();
   `)
 })
 
-test("session migration failures stay silent and preserve truthful job state", { skip }, async () => {
+test("session migration failures are visible and preserve truthful job state", { skip }, async () => {
   await browser.run(`
     await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated page');
     if ($('#settingsView').hidden) $('#settingsButton').click();
     $('[data-settings-page="general"]').click();
-    await until(() => !$('.session-import-page'), 'previous migration unmounted');
+    await until(() => !$('#migrationPage'), 'migration Settings unmounted');
     const originalFetch = window.fetch;
-    const path = '/api/v1/session-imports';
-    const diagnostic = '__migration_diagnostic__';
+    const path = '/api/v1/migrations';
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 600000).toISOString();
     const expiredId = 'migration-fixture-expired-session';
-    const createdAt = '2026-10-22T00:00:00.000Z';
-    const candidate = (id, source, title) => ({
-      id, source, title, sessionId: id, cwd: ${JSON.stringify(workspace)},
-      modified: createdAt, archived: false, version: 'fixture',
-      sourcePath: ${JSON.stringify(join(base, "mock-imports"))} + '/' + id + '.jsonl',
-    });
+    const scope = { kind: 'project', cwd: ${JSON.stringify(workspace)} };
+    const candidate = (id, source, name) => ({ id, source, name, kind: 'sessions',
+      sourcePath: '/fixture/' + id + '.jsonl', sourceScope: scope, holding: 'external',
+      readiness: 'ready', needsMigration: true, diagnostics: [], sourceSessionId: id, modified: createdAt });
     const healthy = candidate('healthy', 'codex', 'Healthy migration fixture');
     const broken = candidate('broken', 'qoder', 'Broken migration fixture');
-    const saved = { id: 'saved', createdAt, status: 'completed', total: 1, results: [{
-      candidateId: 'saved-candidate', source: 'claude-code', title: 'Saved migration fixture',
-      status: 'imported', sessionId: expiredId,
-    }] };
+    const target = { scope, path: '/fixture/native-sessions', name: healthy.name };
+    const preview = item => ({ id: 'preview-' + item.id, candidate: item, fingerprint: 'frozen-' + item.id,
+      expiresAt, target: { ...target, name: item.name }, action: 'import', allowedActions: ['import', 'skip'],
+      sourceText: item.name + ' reviewed content', requiredAcknowledgements: [],
+      warnings: [{ code: 'unsupported_content', count: 73519 }], blockers: [], activation: 'history' });
+    const result = (item, status, extra = {}) => ({ id: 'result-' + item.id, candidateId: item.id,
+      kind: 'sessions', source: item.source, name: item.name, sourceScope: scope,
+      requestedTarget: { ...target, name: item.name }, action: 'import', status,
+      diagnostics: [], activation: 'history', ...extra });
+    const saved = { id: 'saved', createdAt, revision: 1, status: 'completed', items: [
+      result(candidate('saved-candidate', 'claude-code', 'Saved migration fixture'), 'imported', { sessionId: expiredId, actualTarget: target }),
+      result(candidate('persisted-failed', 'qoder', 'Failed saved fixture'), 'failed', { diagnostics: [{ code: 'session-import-failed' }] }),
+    ] };
     let history = [saved];
-    let scanFailure = false;
-    let historyFailure = false;
-    let sourceErrors = true;
-    let brokenPreview = true;
-    let healthyPreviewFailure = false;
-    let startFailure = true;
-    let pollFailure = true;
+    let scanFailure = false, historyFailure = false, previewFailure = true, malformedPreview = false;
+    let planFailure = true, startFailure = true, pollFailure = true;
     let running;
-    const calls = { history: 0, scan: 0, previews: [], start: [], cancel: 0, poll: 0, open: 0 };
-    const leaks = new Set();
-    const inspect = (node) => {
-      if ((node.textContent ?? '').includes(diagnostic)) leaks.add('technical diagnostic entered DOM');
-    };
-    const observer = new MutationObserver(records => {
-      inspect(document.body);
-      for (const record of records) {
-        inspect(record.target);
-        for (const node of record.addedNodes) inspect(node);
-      }
-    });
-    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-    const response = (body, status = 200) => new Response(JSON.stringify(body), {
-      status, headers: { 'content-type': 'application/json' },
-    });
-    const failure = stage => response({ error: diagnostic + stage }, 500);
+    const calls = { history: 0, scan: 0, previews: [], plans: [], starts: [], cancel: 0, poll: 0, open: 0 };
+    const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const failure = stage => response({ error: 'fixture-' + stage, code: 'fixture-' + stage }, 503);
     window.fetch = async (input, init) => {
       const url = new URL(typeof input === 'string' ? input : input.url, location.href);
       const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
       if (url.origin !== location.origin) return originalFetch(input, init);
-      if (url.pathname === '/api/v1/sessions/' + expiredId && method === 'GET') {
-        calls.open++;
-        return failure('open');
-      }
+      if (url.pathname === '/api/v1/sessions/' + expiredId && method === 'GET') { calls.open++; return failure('open'); }
       if (url.pathname !== path && !url.pathname.startsWith(path + '/')) return originalFetch(input, init);
-      if (url.pathname === path && method === 'GET') {
-        calls.history++;
-        return historyFailure ? failure('history') : response({ jobs: history });
-      }
+      if (url.pathname === path && method === 'GET') { calls.history++; return historyFailure ? failure('history') : response({ jobs: history }); }
       if (url.pathname === path + '/scan' && method === 'POST') {
         calls.scan++;
-        return scanFailure ? failure('scan') : response({
-          roots: { codex: '/fixture/codex', qoder: '/fixture/qoder', 'claude-code': '/fixture/claude' },
-          candidates: [healthy, broken],
-          errors: sourceErrors ? [{ source: 'claude-code', message: diagnostic + 'source' }] : [],
-        });
+        return scanFailure ? failure('scan') : response({ candidates: [healthy, broken], truncated: false,
+          sources: [{ kind: 'sessions', source: 'claude-code', scope: { kind: 'global' }, path: '/fixture/claude',
+            status: 'error', diagnostics: [{ code: 'session-scan-failed' }] }] });
       }
       if (url.pathname === path + '/preview' && method === 'POST') {
-        const { candidateId } = JSON.parse(init.body);
-        calls.previews.push(candidateId);
-        if ((candidateId === broken.id && brokenPreview) || (candidateId === healthy.id && healthyPreviewFailure)) return failure('preview');
-        const item = candidateId === healthy.id ? healthy : broken;
-        return response({ ...item, fingerprint: 'fixture-' + item.id, messageCount: 2, toolCount: 1,
-          warnings: [{ code: 'unsupported_content', count: 73519 }], excerpt: item.title + ' preview',
-        });
+        const { candidateId } = JSON.parse(init.body); calls.previews.push(candidateId);
+        if (candidateId === broken.id && previewFailure) return failure('preview');
+        const value = preview(candidateId === healthy.id ? healthy : broken);
+        return response(malformedPreview ? { ...value, candidate: { ...value.candidate, readiness: 'invented' } } : value);
+      }
+      if (url.pathname === path + '/plans' && method === 'POST') {
+        const request = JSON.parse(init.body); calls.plans.push(request);
+        if (planFailure) return failure('plan');
+        return response({ id: 'fixture-plan', digest: 'immutable-digest', expiresAt,
+          items: request.selections.map(selection => preview(selection.previewId === 'preview-healthy' ? healthy : broken)) });
       }
       if (url.pathname === path && method === 'POST') {
-        calls.start.push(JSON.parse(init.body));
+        calls.starts.push(JSON.parse(init.body));
         if (startFailure) return failure('start');
-        running = { id: 'fixture-running', createdAt, status: 'running', total: 1, results: [] };
-        history = [running, ...history];
-        return response(running);
+        running = { id: 'fixture-running', createdAt, revision: 2, status: 'running', items: [result(healthy, 'pending')] };
+        history = [running, saved]; return response(running, 202);
       }
-      if (url.pathname === path + '/fixture-running' && method === 'DELETE') {
-        calls.cancel++;
-        return failure('cancel');
-      }
-      if (url.pathname === path + '/fixture-running' && method === 'GET') {
-        calls.poll++;
-        return pollFailure ? failure('poll') : response(running);
-      }
+      if (url.pathname === path + '/fixture-running/cancel' && method === 'POST') { calls.cancel++; return failure('cancel'); }
+      if (url.pathname === path + '/fixture-running' && method === 'GET') { calls.poll++; return pollFailure ? failure('poll') : response(running); }
       throw new Error('Unexpected migration fixture request: ' + method + ' ' + url.pathname);
     };
     try {
-      const painted = async () => {
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const settle = async () => { await new Promise(resolve => setTimeout(resolve, 100)); };
+      const visibleError = async (selector, code) => {
+        const label = {
+          'invalid-response': '服务返回的迁移数据不符合接口，未应用此响应。',
+          'session-open-failed': '无法打开已迁入会话，请重试；迁移结果没有被更改。',
+        }[code] ?? code;
+        await until(() => $(selector)?.textContent.includes(label), 'visible ' + code);
+        if ($(selector).getBoundingClientRect().height === 0) throw new Error('Error hidden: ' + code);
+        if (!$('#authBanner').hidden) throw new Error('Migration error changed authentication');
       };
-      const silent = async stage => {
-        await painted();
-        inspect(document.body);
-        if (leaks.size) throw new Error(stage + ': ' + [...leaks].join(', '));
-        if ($('.session-import-error, .session-import-errors, .session-import-row-failure, .session-import-list .empty-list')) throw new Error(stage + ': diagnostic or empty-result UI remains');
-        if (!$('#errorToast').hidden) throw new Error(stage + ': unexpected error toast');
-        if ($$('.session-import-report').some(report => report.querySelectorAll('span').length !== 1)) throw new Error(stage + ': preview compatibility warnings remain');
+      const refresh = async () => {
+        const before = calls.history;
+        $('.migration-history > header button').click();
+        await until(() => calls.history > before && !$('.migration-history > header button').disabled, 'history read settled');
       };
-      const expand = () => {
-        for (const group of $$('[data-import-app], [data-import-project], [data-import-history-app], [data-import-history-project]')) group.open = true;
-      };
-      const ready = async label => {
-        await until(() => $('#importScan') && !$('#importScan').disabled, label);
-        await painted();
-      };
-      const rescan = async label => {
-        const previous = calls.history;
-        $('#importScan').click();
-        await until(() => calls.history > previous, label + ' request');
-        await ready(label);
-      };
-      const savedRemains = () => {
-        if (!$('[data-import-result="' + expiredId + '"]')) throw new Error('Successful saved history disappeared');
-      };
-      const healthyOnly = () => {
-        const rows = $$('.session-import-row');
-        if (rows.length !== 1 || rows[0].querySelector('strong').textContent !== healthy.title) throw new Error('Only the healthy candidate should be displayed');
-        if ($('[data-import-app="qoder"], [data-import-app="claude-code"]')) throw new Error('Failed or empty source card remains');
-        if (rows[0].querySelector('input').disabled) throw new Error('Healthy candidate is not selectable');
-      };
-      $('[data-settings-page="migration"]').click();
-      await until(() => calls.scan === 1 && calls.previews.length === 2, 'injected scan and previews');
-      await ready('initial scan complete');
-      await silent('per-source scan errors and partial preview failure');
-      healthyOnly();
-      savedRemains();
-      expand();
-      const search = $('.session-import-toolbar input[type="search"]');
-      search.value = 'no-matching-fixture';
-      search.dispatchEvent(new Event('input'));
-      await until(() => !$('.session-import-row'), 'no search matches');
-      if ($('[data-import-app]')) throw new Error('Empty search left an application card');
-      await silent('empty search');
-      savedRemains();
-      search.value = '';
-      search.dispatchEvent(new Event('input'));
-      await until(() => $('.session-import-row'), 'healthy search restored');
-      healthyOnly();
-      sourceErrors = false;
-      brokenPreview = false;
-      await rescan('successful rescan recovery');
-      if ($$('.session-import-row').length !== 2) throw new Error('Rescan did not restore recovered candidate');
-      await silent('recovered preview');
-      expand();
-      const row = $$('.session-import-row').find(node => node.querySelector('strong').textContent === healthy.title);
-      row.querySelector('input').click();
-      row.querySelector('button').click();
-      await until(() => $('.session-import-preview-popover') && !row.querySelector('button').disabled, 'healthy preview opened');
-      row.querySelector('button').click();
-      await until(() => !$('.session-import-preview-popover'), 'healthy preview closed');
-      healthyPreviewFailure = true;
-      row.querySelector('button').click();
-      await until(() => !$('#importScan').disabled && !row.isConnected, 'previously selected preview removed after failure');
-      if ($('.session-import-preview-popover')) throw new Error('Failed preview left stale content open');
-      if ($('[data-import-confirm="codex"]')) throw new Error('Failed selected candidate can still be submitted');
-      await silent('selected preview failure');
-      healthyPreviewFailure = false;
-      await rescan('restore selected preview');
-      saved.results[0].warning = diagnostic + 'saved-warning';
-      const failedHistory = { id: 'persisted-failed', createdAt, status: 'completed', total: 1, results: [{
-        candidateId: 'persisted-failed-candidate', source: 'qoder', title: 'Failed saved fixture',
-        status: 'failed', error: diagnostic + 'result-error', warning: diagnostic + 'result-warning',
-      }] };
-      history = [saved, failedHistory];
-      await rescan('persistent result diagnostics');
-      const failedStatus = () => {
-        const result = $('[data-import-result="persisted-failed-candidate"]');
-        if (!result || !/未导入|Not imported/i.test(result.textContent)) throw new Error('Real failed history must remain as Not imported');
-        if (result.querySelector('button')) throw new Error('Failed history must not offer a successful session');
-      };
-      failedStatus();
-      await silent('persistent result error and warning');
-      scanFailure = true;
-      await rescan('whole scan failure');
-      if ($('.session-import-row, [data-import-app]')) throw new Error('Failed scan retained source candidates or empty cards');
-      savedRemains();
-      failedStatus();
-      await silent('whole scan failure');
-      scanFailure = false;
-      await rescan('scan recovery');
-      if ($$('.session-import-row').length !== 2) throw new Error('Healthy candidates did not recover after scan failure');
+      await migrationOpen();
+      if (calls.scan || calls.previews.length || calls.starts.length) throw new Error('Settings navigation auto-scanned or started migration');
+      $('#migrationModal .migration-dialog-head button').click();
+      await until(() => $('.migration-history-row'), 'saved history loaded');
       historyFailure = true;
-      const scansBeforeHistoryFailure = calls.scan;
-      await rescan('history GET failure');
-      if (calls.scan !== scansBeforeHistoryFailure) throw new Error('Scan continued after failed history read');
-      if ($('.session-import-row, [data-import-app]')) throw new Error('Failed history read retained candidates');
-      savedRemains();
-      failedStatus();
-      await silent('history GET failure');
+      await refresh();
+      await visibleError('#migrationPage [role="alert"]', 'fixture-history');
+      if ($$('.migration-history-row').length !== 1) throw new Error('Failed history read discarded last known saved job');
+      if (calls.scan) throw new Error('History failure triggered scan');
       historyFailure = false;
-      await rescan('history recovery');
-      if ($$('.session-import-row').length !== 2) throw new Error('History recovery lost healthy candidates');
-      expand();
-      $('[data-import-select="codex"]').click();
-      await until(() => !$('[data-import-confirm="codex"]').disabled, 'healthy selection ready');
-      const resultsBeforeStart = $$('.session-import-result').length;
-      $('[data-import-confirm="codex"]').click();
-      await until(() => calls.start.length === 1 && !$('[data-import-confirm="codex"]').disabled, 'start POST failure settled');
-      if ($$('.session-import-result').length !== resultsBeforeStart) throw new Error('Failed submission fabricated an import result');
-      if (!$('[data-import-source="codex"] input').checked) throw new Error('Failed submission discarded retryable selection');
-      if ($('.session-import-history > header button')) throw new Error('Failed submission fabricated a running job');
-      if (calls.start[0].selections.length !== 1 || calls.start[0].selections[0].candidateId !== healthy.id) throw new Error('Submission included an unselected or failed candidate');
-      await silent('start POST failure');
+      await refresh();
+      await migrationOpen();
+      scanFailure = true;
+      const failedScan = await migrationPost('/scan', () => $('.migration-invitation button').click());
+      if (failedScan.status !== 503 || $('.migration-row')) throw new Error('Failed scan fabricated candidates');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-scan');
+      scanFailure = false;
+      await migrationScan();
+      if (!$('.migration-source-reports').open || !$('[data-scan-status="error"]').textContent.includes('/fixture/claude')) throw new Error('Partial source failure hidden');
+      const brokenRow = $('[data-candidate-id="broken"]');
+      await migrationPost('/preview', () => brokenRow.querySelector('input').click());
+      await visibleError('.migration-preview [role="alert"]', 'fixture-preview');
+      if (!migrationFooter()[1].disabled) throw new Error('Failed selected preview remains submittable');
+      if (!$('[data-candidate-id="healthy"]')) throw new Error('Partial failure removed healthy candidate');
+      previewFailure = false;
+      malformedPreview = true;
+      await migrationPost('/preview', () => $('.migration-preview > header button').click());
+      await visibleError('.migration-preview [role="alert"]', 'invalid-response');
+      if (!migrationFooter()[1].disabled) throw new Error('Invalid DTO passed review readiness');
+      malformedPreview = false;
+      brokenRow.querySelector('input').click();
+      const healthyPreview = await migrationSelect(healthy);
+      if (!$('.migration-preview .migration-diagnostics').textContent.includes('73519')) throw new Error('Compatibility warning count hidden');
+      const failedPlan = await migrationPost('/plans', () => migrationFooter()[1].click());
+      if (failedPlan.status !== 503 || $('.migration-final-plan')) throw new Error('Failed plan fabricated review');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-plan');
+      if (calls.starts.length) throw new Error('Plan failure started job');
+      planFailure = false;
+      const plan = await migrationPlan();
+      if (plan.items.length !== 1 || plan.items[0].id !== healthyPreview.id || calls.plans.at(-1).selections.length !== 1)
+        throw new Error('Plan included unselected or failed candidate');
+      const failedStart = await migrationPost('', () => migrationFooter()[1].click());
+      if (failedStart.status !== 503 || $('.migration-job')) throw new Error('Failed start fabricated running job');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-start');
+      await settle();
+      if (calls.starts.length !== 1 || calls.cancel) throw new Error('Uncertain start automatically retried');
+      if (!$('.migration-final-plan') || migrationFooter()[1].disabled) throw new Error('Explicit retry lost frozen plan');
       startFailure = false;
-      $('[data-import-confirm="codex"]').click();
-      await until(() => calls.start.length === 2 && calls.poll >= 2, 'running job and failed poll retry');
+      await migrationPost('', () => migrationFooter()[1].click());
+      await until(() => calls.poll >= 2, 'failed read polling with backoff');
+      await visibleError('.migration-job [role="alert"]', 'fixture-poll');
       const stillRunning = () => {
-        if (!$('#importScan').disabled || !$('.session-import-history > header button')) throw new Error('Uncertain running job became completed or cancelled');
-        if (!/正在导入|Importing/i.test($('.session-import-history > .settings-page-desc').textContent)) throw new Error('Last known running status was lost');
-        if ($$('.session-import-result').length !== resultsBeforeStart) throw new Error('Uncertain running job fabricated a result');
-        savedRemains();
-        failedStatus();
+        if (!$('.migration-job > header button') || $('[data-result-count="pending"] dd').textContent !== '1' || $('[data-result-count="imported"] dd').textContent !== '0')
+          throw new Error('Uncertain job fabricated terminal state or import outcome');
+        if ($$('.migration-job-item button').length) throw new Error('Pending result offered successful session');
       };
       stillRunning();
-      await silent('poll GET failure');
-      const pollsBeforeCancel = calls.poll;
-      $('.session-import-history > header button').click();
-      await until(() => calls.cancel === 1 && calls.poll > pollsBeforeCancel, 'cancel DELETE failure and subsequent poll');
+      const cancel = await migrationPost('/fixture-running/cancel', () => $('.migration-job > header button').click());
+      if (cancel.status !== 503) throw new Error('Cancel failure not injected');
+      await visibleError('#migrationModal .migration-main > [role="alert"]', 'fixture-cancel');
       stillRunning();
-      if (calls.start.length !== 2 || calls.cancel !== 1) throw new Error('Failed mutation was automatically retried');
-      await silent('cancel DELETE failure');
-      running = { ...running, status: 'completed', results: [{
-        candidateId: healthy.id, source: healthy.source, title: healthy.title, cwd: healthy.cwd,
-        status: 'failed', error: diagnostic + 'job-result-error', warning: diagnostic + 'job-result-warning',
-      }] };
-      history = [running, ...history.filter(job => job.id !== running.id)];
+      const starts = calls.starts;
+      if (starts.length !== 2 || starts[0].planId !== 'fixture-plan' || starts[0].digest !== 'immutable-digest' || !starts[0].idempotencyKey ||
+        JSON.stringify(starts[0]) !== JSON.stringify(starts[1])) throw new Error('Explicit start retry changed frozen plan or idempotency key');
+      // A stale read must not downgrade the last known running revision to completion.
+      running = { ...running, revision: 1, status: 'completed', items: [result(healthy, 'failed')] };
       pollFailure = false;
-      await until(() => !$('#importScan').disabled && $('[data-import-result="healthy"]'), 'poll recovery with real failed result');
-      const failedImport = $('[data-import-result="healthy"]');
-      if (!/未导入|Not imported/i.test(failedImport.textContent) || failedImport.querySelector('button')) throw new Error('Failed job result masquerades as an imported session');
-      if ($('.session-import-history > header button')) throw new Error('Completed job still offers cancellation');
-      if (!$('[data-import-source="codex"] input').checked) throw new Error('Failed result lost retryable selection');
-      if (calls.start.length !== 2 || calls.cancel !== 1) throw new Error('Mutation retried during poll recovery');
-      await silent('poll recovery and real failed result');
-      await rescan('rescan after failed import');
-      if ($$('.session-import-row').length !== 2) throw new Error('Failed import incorrectly hid healthy candidate as imported');
-      savedRemains();
-      expand();
-      $('[data-import-result="' + expiredId + '"] button').click();
-      await until(() => calls.open === 1 && $('#settingsView').hidden, 'failed history session open');
-      await silent('invalid imported session open');
+      const priorPoll = calls.poll;
+      await until(() => calls.poll > priorPoll && !$('.migration-job [role="alert"]'), 'poll read recovered');
+      stillRunning();
+      running = { ...running, revision: 3, status: 'completed', items: [result(healthy, 'failed', { diagnostics: [{ code: 'session-import-failed' }] })] };
+      history = [running, saved];
+      await until(() => $('[data-item-status="failed"]'), 'truthful failed result');
+      if ($('[data-item-status="failed"] button') || $('.migration-job > header button') || $('[data-result-count="failed"] dd').textContent !== '1')
+        throw new Error('Failed result masquerades as imported or still cancellable');
+      if (!$('[data-item-status="failed"] .migration-diagnostics li')) throw new Error('Persisted item diagnostic hidden');
+      await settle();
+      if (calls.starts.length !== 2 || calls.cancel !== 1) throw new Error('Mutation automatically retried during read recovery');
+      $('#migrationModal .migration-dialog-head button').click();
+      await refresh();
+      if ($$('.migration-history-row').length !== 2) throw new Error('Saved history lost during failures');
+      const savedRow = $$('.migration-history-row')[1];
+      savedRow.querySelector('button').click();
+      await until(() => $$('.migration-job-item').length === 2, 'saved job reattached');
+      if ($('[data-item-status="failed"] button')) throw new Error('Saved failure offers imported session');
+      $('[data-item-status="imported"] button').click();
+      await until(() => calls.open === 1, 'expired imported session open attempted');
+      await visibleError('#migrationModal [role="alert"]', 'session-open-failed');
+      if ($('#migrationModal').hidden || $('#settingsView').hidden) throw new Error('Failed open claimed successful navigation');
     } finally {
-      try {
-        $('[data-settings-page="general"]').click();
-        await until(() => !$('.session-import-page'), 'migration fixture unmounted');
-      } finally {
-        observer.disconnect();
-        window.fetch = originalFetch;
-        if (!$('#settingsView').hidden) $('#settingsBack').click();
-      }
+      if (!$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
+      $('[data-settings-page="general"]').click();
+      await until(() => !$('#migrationPage'), 'fixture reader unmounted');
+      window.fetch = originalFetch;
+      if (!$('#settingsView').hidden) $('#settingsBack').click();
     }
   `)
+  // Session-open errors are visible, but dismissing the wizard must not change auth or the conversation.
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated reload after fixture');`)
 })
 
 test("WorkBuddy and Qoder sessions are identified and imported through the migration UI", { skip }, async () => {
@@ -4048,41 +3939,48 @@ test("WorkBuddy and Qoder sessions are identified and imported through the migra
     { type: "user", sessionId: "q-ui", cwd: workspace, uuid: "q-u", parentUuid: null, timestamp, message: { role: "user", content: "<user_query>Qoder fixture</user_query>" } },
     { type: "active-leaf", sessionId: "q-ui", leafUuid: "q-u" },
   ].map(JSON.stringify).join("\n") + "\n")
+  const sourceFiles = [join(workbuddyRoot, "workbuddy.jsonl"), join(qoderRoot, "qoder.jsonl")]
+  const before = await Promise.all(sourceFiles.map(path => readFile(path, "utf8")))
   const imported = await browser.run(`
-    if ($('#settingsView').hidden) $('#settingsButton').click();
-    $('[data-settings-page="migration"]').click();
-    await until(() => $('#importScan'), 'migration page ready');
-    if ($('#importCustomToggle') || $('#importCustomPath')) throw new Error('Custom path controls must be absent');
-    await until(() => $('[data-import-app="workbuddy"] .session-import-report') && $('[data-import-app="qoder"] .session-import-report') && !$('#importScan').disabled, 'new source previews');
-    await until(() => $$('[data-import-app] .session-import-logo').every(img => img.complete && img.naturalWidth > 0), 'new source logos');
-    if (!$('[data-import-app="workbuddy"] .session-import-logo').getAttribute('src').endsWith('/workbuddy.svg')) throw new Error('WorkBuddy logo mismatch');
-    if (!$('[data-import-app="qoder"] .session-import-logo').getAttribute('src').endsWith('/qoder-dark.svg')) throw new Error('Qoder logo mismatch');
-    if ($$('[data-import-app]').some(group => group.open)) throw new Error('New source cards must start collapsed');
-    for (const group of $$('[data-import-app]')) group.querySelector('summary').click();
-    for (const group of $$('[data-import-project]')) group.querySelector('summary').click();
-    if (!$$('.session-import-row strong').some(node => node.textContent.includes('WorkBuddy fixture'))) throw new Error('Missing WorkBuddy title');
-    $('[data-import-select="workbuddy"]').click();
-    $('[data-import-select="qoder"]').click();
-    await until(() => !$('[data-import-confirm="workbuddy"]').disabled, 'new source confirmation');
-    $('[data-import-confirm="workbuddy"]').click();
-    await until(() => $('[data-import-history-app="workbuddy"] .session-import-result') && !$('[data-import-confirm="qoder"]').disabled, 'WorkBuddy imported');
-    if ($('[data-import-source="workbuddy"]') || $('[data-import-app="workbuddy"]')) throw new Error('Imported WorkBuddy session or empty card still appears in source list');
-    if (!$('[data-import-source="qoder"] input').checked) throw new Error('Qoder selection must remain');
-    $('[data-import-confirm="qoder"]').click();
-    await until(() => $('[data-import-history-app="workbuddy"] .session-import-result') && $('[data-import-history-app="qoder"] .session-import-result'), 'new source import history');
-    if (['workbuddy', 'qoder'].some(source => $('[data-import-source="' + source + '"]') || $('[data-import-app="' + source + '"]'))) throw new Error('New source imports must exist only in history, without empty cards');
-    const jobs = (await (await fetch('/api/v1/session-imports')).json()).jobs;
-    const results = jobs.flatMap(job => job.results).filter(result => ['workbuddy', 'qoder'].includes(result.source));
-    for (const result of results) {
-      const snapshot = await (await fetch('/api/v1/sessions/' + result.sessionId)).json();
-      if (JSON.stringify(snapshot.entries).includes('<user_query>')) throw new Error('User wrapper leaked into imported entries');
+    await migrationOpen();
+    const scan = await migrationScan();
+    const sources = scan.candidates.filter(item => item.kind === 'sessions' && ['workbuddy', 'qoder'].includes(item.source));
+    if (sources.length !== 2 || new Set(sources.map(item => item.source)).size !== 2) throw new Error('Native source identification lost');
+    if (!sources.find(item => item.source === 'workbuddy').name.includes('WorkBuddy fixture')) throw new Error('Native title metadata lost');
+    for (const item of sources) {
+      const row = $('[data-candidate-id="' + item.id + '"]');
+      if (!row.textContent.includes(item.source === 'workbuddy' ? 'WorkBuddy' : 'Qoder')) throw new Error('Source label missing');
+      const preview = await migrationSelect(item);
+      if (!preview.sourceText.includes(item.source === 'workbuddy' ? 'WorkBuddy fixture' : 'Qoder fixture')) throw new Error('Native content not reviewed');
+      if (preview.blockers.length) throw new Error('Native valid source rejected');
     }
-    const workbuddy = results.find(result => result.source === 'workbuddy');
-    document.querySelector('.session-import-result[data-import-result="' + workbuddy.sessionId + '"] button').click();
-    await until(() => $('#settingsView').hidden && $('.message.user')?.dataset.content === 'WorkBuddy fixture', 'clean imported user message');
-    return results.map(result => ({ source: result.source, status: result.status }));
+    const plan = await migrationPlan();
+    if (plan.items.length !== 2 || plan.items.some(item => !['workbuddy', 'qoder'].includes(item.candidate.source))) throw new Error('Plan leaked other source selections');
+    const job = await migrationStart();
+    if (job.items.length !== 2 || job.items.some(item => item.status !== 'imported')) throw new Error('Native import failed: ' + JSON.stringify(job));
+    for (const item of job.items) {
+      const snapshot = await (await fetch('/api/v1/sessions/' + item.sessionId)).json();
+      const entries = JSON.stringify(snapshot.entries);
+      if (entries.includes('<user_query>')) throw new Error('User wrapper leaked into native entries');
+      if (!snapshot.entries.some(entry => entry.imported) || !entries.includes(item.source === 'workbuddy' ? 'WorkBuddy fixture' : 'Qoder fixture'))
+        throw new Error('Imported source provenance or real message lost');
+    }
+    const qoder = job.items.find(item => item.source === 'qoder');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === qoder.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'Qoder fixture', 'opened native Qoder message');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    const sourceJobRow = await until(() => $$('.migration-history-row').find(row => row.querySelector('code')?.textContent === job.createdAt), 'return to current imported job');
+    sourceJobRow.querySelector('button').click();
+    await until(() => $$('.migration-job-item').length === 2 && !$('#migrationModal').hidden, 'reattach current source job');
+    const workbuddy = job.items.find(item => item.source === 'workbuddy');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === workbuddy.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'WorkBuddy fixture', 'clean imported user message');
+    if (!$('#authBanner').hidden || !$('#errorToast').hidden) throw new Error('Successful imported navigation is not quiet');
+    return job.items.map(item => ({ source: item.source, status: item.status }));
   `)
   assert.deepEqual(imported.sort((a, b) => a.source.localeCompare(b.source)), [{ source: "qoder", status: "imported" }, { source: "workbuddy", status: "imported" }])
+  assert.deepEqual(await Promise.all(sourceFiles.map(path => readFile(path, "utf8"))), before)
 })
 
 test("new conversation offers a lightweight shortcut to session migration", { skip }, async () => {
@@ -4136,7 +4034,8 @@ test("new conversation offers a lightweight shortcut to session migration", { sk
     await browser.run(`
       $('#emptySessionImport').click();
       await until(() => !$('#settingsView').hidden && $('[data-page="migration"]'), 'migration settings');
-      if (!$('#importScan')) throw new Error('Migration page did not open');
+      if (!$('#migrationPage > button') || !$('[data-settings-page="migration"]').classList.contains('active')) throw new Error('Migration Settings entry did not open');
+      if (!$('#migrationModal').hidden) throw new Error('Lightweight shortcut must not bypass the Settings entry or explicit scan');
       $('#settingsBack').click();
     `)
   } finally {

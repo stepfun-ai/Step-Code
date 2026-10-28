@@ -6,11 +6,18 @@
  * `policy.*` / `feedbackTopic.*` families. Adding a key: add it to both locales.
  */
 
+import { mcpSettingsMessages } from "./mcp-settings-messages";
+import { migrationMessages } from "./migration-messages";
+
 export type Locale = "zh-CN" | "en-US";
 
 export const LOCALES: readonly Locale[] = ["zh-CN", "en-US"];
 
 const zhCN = {
+	...mcpSettingsMessages.zh,
+	...migrationMessages.zh,
+	migrationUseTarget: "使用此目标文件夹",
+	migrationOnboardingUnavailable: "暂时无法保存首次引导状态。你仍可进入主界面，或从设置打开数据迁移。",
 	terminalTitle: "终端",
 	terminalTabs: "终端标签页",
 	terminalNew: "新建终端",
@@ -847,6 +854,7 @@ const zhCN = {
 	"settingsMarketplaceKind.local": "本地",
 	settingsMcp: "MCP 服务器",
 	settingsModels: "模型",
+	modelConfigurationNeeded: "发起对话前，请配置并选择一个可用模型。输入与附件已保留；也可以在账号设置中登录。",
 	settingsModelsDesc: "填入各提供商的 API 密钥即可使用其模型。",
 	settingsModelsMine: "模型提供商",
 	settingsModelsCustom: "自定义",
@@ -1013,6 +1021,11 @@ const zhCN = {
 export type MessageKey = keyof typeof zhCN;
 
 const enUS: Record<MessageKey, string> = {
+	...mcpSettingsMessages.en,
+	...migrationMessages.en,
+	migrationUseTarget: "Use this target folder",
+	migrationOnboardingUnavailable:
+		"The first-use state could not be saved. You can still use the app or open Data migration from Settings.",
 	terminalTitle: "Terminal",
 	terminalTabs: "Terminal tabs",
 	terminalNew: "New terminal",
@@ -1866,6 +1879,8 @@ const enUS: Record<MessageKey, string> = {
 	"settingsMarketplaceKind.local": "Local",
 	settingsMcp: "MCP servers",
 	settingsModels: "Models",
+	modelConfigurationNeeded:
+		"Configure and select an available model before sending. Your input and attachments are kept; you can also sign in from Account settings.",
 	settingsModelsDesc: "Fill in each provider's API key to use its models.",
 	settingsModelsMine: "Model providers",
 	settingsModelsCustom: "Custom",

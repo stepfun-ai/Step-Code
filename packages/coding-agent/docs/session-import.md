@@ -62,6 +62,30 @@ If the index callback fails after publication, the result remains imported (or
 skipped), with a warning rather than a false failure; retrying also re-notifies
 the index.
 
+## Reserved publication
+
+A host-owned migration job can use `reserve(selections)` instead of `start()`.
+Reservation pins the reviewed snapshots and freezes the final native message IDs,
+timestamps and serialized bytes, without creating target files or a nested job.
+Each reserved item reports its planned path and SHA-256 fingerprint; `publish()`
+uses the same non-overwriting writer as ordinary imports and runs at most once.
+The owning job can record its durable intent before calling it.
+
+Always `await reservation.release()` in the owner's cleanup. Release invalidates
+unpublished work immediately and waits for in-flight publication and temporary-file
+cleanup. A publication that has already entered the atomic link operation may
+complete; its real result must be recorded, not reclassified as unwritten. After
+release settles no owned publication is still writing. The injected service still
+belongs to its host, which must separately await `close()` before closing the index.
+
+An existing target must have matching session identity and import provenance.
+Unrelated, invalid, oversized (over 128 MiB), linked or unstable target files fail
+verification rather than being counted as imported. The reserved item's `existing`
+metadata reports the native file's actual cwd; read it after `publish()` as well,
+since another publisher may win the same snapshot while the item waits. The legacy
+`ImportResult.cwd` remains the requested cwd, not an assertion that an existing
+session moved. Reimport never rewrites continued native history.
+
 ## Desktop scanning
 
 Opening the migration page automatically scans the supported applications' default

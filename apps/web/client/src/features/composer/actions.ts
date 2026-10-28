@@ -11,6 +11,7 @@ import {
 	FULL_ACCESS_PRESET,
 	FULL_ACCESS_RISK_CANCEL,
 } from "../../lib/permissions";
+import { isDesktopHost } from "../../platform/host";
 import {
 	applyQueueState,
 	countUserMessages,
@@ -33,6 +34,9 @@ import type {
 	TimelineItem,
 	UploadedFile,
 } from "../../state/types";
+import { openSettings } from "../settings/actions";
+import { modelConfigurationRequired } from "./model-readiness";
+import { draftModelSource } from "./models";
 import { commandLeadIcon, MODES, modeFromCommand } from "./modes";
 import {
 	insertCommandLead,
@@ -470,6 +474,16 @@ export async function sendMessage(text: string, files: readonly PromptFile[] = [
 	const state = getState();
 	const { attachments, timelineItems } = state;
 	const active = turnActive(state);
+	// Read-only startup and migration need no model. Block an actual ordinary prompt
+	// before clearing attachments; the caller restores its editor when false is returned.
+	if (isDesktopHost() && !active && !text.startsWith("/")) {
+		const source = state.current ?? draftModelSource(state.draftModels, state.draftModel, state.draftThinking);
+		if (modelConfigurationRequired(source)) {
+			openSettings("models");
+			showError(t("modelConfigurationNeeded"), false);
+			return false;
+		}
+	}
 	// A queued or steered message waits for the turn, so only a new turn gets
 	// the immediate message and thinking indicator.
 	const images = attachments.filter((attachment) => attachment.kind === "image");

@@ -1,22 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-	link,
-	lstat,
-	mkdir,
-	open,
-	readdir,
-	readFile,
-	realpath,
-	rename,
-	stat,
-	unlink,
-	writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { FileEntry, SessionFilePersistedEvent } from "../session-manager.ts";
+import type { SessionFilePersistedEvent } from "../session-manager.ts";
 import { stripImportedUserControls } from "./content.ts";
+import { SessionImportError } from "./errors.ts";
+import { prepareSessionPublication, type ReservedSessionImport, type ReservedSessionImports } from "./publication.ts";
+
+export { SessionImportError } from "./errors.ts";
+export type { ReservedSessionImport, ReservedSessionImports } from "./publication.ts";
+
 import { parseForeignSession, record } from "./parsers.ts";
 import type {
 	ImportCandidate,
@@ -156,14 +150,6 @@ export interface ImportScanResult {
 	roots: Partial<Record<ImportSource, string>>;
 	candidates: ImportCandidate[];
 	errors: { source: ImportSource; message: string }[];
-}
-
-export class SessionImportError extends Error {
-	readonly status: number;
-	constructor(message: string, status = 400) {
-		super(message);
-		this.status = status;
-	}
 }
 
 /** A local, offline migration service. Source files are opened read-only, never as live sessions. */
@@ -686,20 +672,85 @@ export class SessionImportService {
 		return job;
 	}
 
-	async start(selections: ImportSelection[]): Promise<ImportJob> {
+	private reviewedSelections(selections: ImportSelection[]) {
 		if (this.closed) throw new SessionImportError("Importer is closed", 503);
 		if (!selections.length || selections.length > 100)
 			throw new SessionImportError("Select between 1 and 100 sessions");
 		this.prunePreviews();
-		const submitted = selections.map((selection) => {
+		return selections.map((selection) => {
 			const file = this.candidates.get(selection.candidateId);
-			if (!file || !/^[a-f0-9]{64}$/u.test(selection.fingerprint) || !isAbsolute(selection.cwd))
+			if (
+				!file ||
+				!/^[a-f0-9]{64}$/u.test(selection.fingerprint) ||
+				!isAbsolute(selection.cwd) ||
+				selection.cwd.includes("\0")
+			)
 				throw new SessionImportError("Invalid selection; preview and choose an absolute project directory");
 			const snapshot = this.previews.get(`${selection.candidateId}:${selection.fingerprint}`);
 			if (!snapshot || snapshot.expires <= Date.now())
 				throw new SessionImportError("Preview expired; preview the selected session again", 409);
 			return { selection: { ...selection }, file, snapshot };
 		});
+	}
+
+	/** Reserve reviewed bytes for an external durable job, without starting a nested import job. */
+	async reserve(selections: ImportSelection[]): Promise<ReservedSessionImports> {
+		const submitted = this.reviewedSelections(selections);
+		for (const { snapshot } of submitted) snapshot.users++;
+		let released = false;
+		let releasePromise: Promise<void> | undefined;
+		const publications: Promise<ImportResult>[] = [];
+		const release = (): Promise<void> => {
+			if (releasePromise) return releasePromise;
+			released = true;
+			releasePromise = Promise.allSettled(publications).then(() => {
+				for (const { snapshot } of submitted) snapshot.users--;
+				this.prunePreviews();
+			});
+			return releasePromise;
+		};
+		try {
+			const items: ReservedSessionImport[] = [];
+			for (const { selection, snapshot } of submitted) {
+				const prepared = await this.preparePublication(selection, snapshot, () => !released && !this.closed);
+				if (this.closed) throw new SessionImportError("Importer is closed", 503);
+				let publication: Promise<ImportResult> | undefined;
+				items.push({
+					candidate: prepared.candidate,
+					cwd: prepared.cwd,
+					path: prepared.path,
+					fingerprint: prepared.fingerprint,
+					get existing() {
+						return prepared.existing;
+					},
+					publish: async () => {
+						if (released) throw new SessionImportError("Import reservation was released", 409);
+						if (this.closed) throw new SessionImportError("Importer is closed", 503);
+						if (!publication) {
+							publication = this.queue.then(() => {
+								if (released) throw new SessionImportError("Import reservation was released", 409);
+								if (this.closed) throw new SessionImportError("Importer is closed", 503);
+								return prepared.publish();
+							});
+							publications.push(publication);
+							this.queue = publication.then(
+								() => undefined,
+								() => undefined,
+							);
+						}
+						return structuredClone(await publication);
+					},
+				});
+			}
+			return { items, release };
+		} catch (error) {
+			await release();
+			throw error;
+		}
+	}
+
+	async start(selections: ImportSelection[]): Promise<ImportJob> {
+		const submitted = this.reviewedSelections(selections);
 		const job: ImportJob = {
 			id: randomUUID(),
 			createdAt: new Date().toISOString(),
@@ -772,82 +823,23 @@ export class SessionImportService {
 		this.previews.clear();
 	}
 
-	private async commit(selection: ImportSelection, snapshot: ReviewedSnapshot): Promise<ImportResult> {
-		// This immutable document was serialized by preview(), not supplied by the client or source.
-		const { entries: reviewedEntries, preview } = JSON.parse(snapshot.data) as ImportDocument;
-		const cwd = await realpath(selection.cwd);
-		if (!(await stat(cwd)).isDirectory()) throw new SessionImportError("Project directory does not exist");
-		const hash = createHash("sha256")
-			.update(`session-import-v2\0${preview.source}\0${preview.sessionId}\0${preview.fingerprint}`)
-			.digest("hex");
-		const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-		const dir = join(this.sessionRoot, "imported");
-		await mkdir(dir, { recursive: true });
-		const path = join(dir, `${id}.jsonl`);
-		const temporary = join(dir, `.${id}.${randomUUID()}.tmp`);
-		const timestamp = new Date().toISOString();
-		const last = reviewedEntries.at(-1);
-		const leaf = last && "id" in last ? last.id : null;
-		const entries: FileEntry[] = [
-			{ type: "session", version: 3, id, timestamp, cwd },
-			...reviewedEntries,
-			{
-				type: "custom",
-				id: randomUUID().slice(0, 8),
-				parentId: leaf,
-				timestamp,
-				customType: "stepcode.session-import",
-				data: {
-					converterVersion: 2,
-					source: preview.source,
-					sourceSessionId: preview.sessionId,
-					fingerprint: preview.fingerprint,
-					version: preview.version,
-					sourceCwd: preview.cwd,
-					warnings: preview.warnings,
-				},
-			},
-		];
-		const metadataId = entries.at(-1);
-		entries.push({
-			type: "session_info",
-			id: randomUUID().slice(0, 8),
-			parentId: metadataId && "parentId" in metadataId ? metadataId.id : leaf,
-			timestamp,
-			name: `[${preview.source}] ${preview.title}`,
+	private preparePublication(
+		selection: ImportSelection,
+		snapshot: ReviewedSnapshot,
+		canPublish?: () => boolean,
+	): Promise<ReservedSessionImport> {
+		// Serialized by this service's preview, never accepted as client-supplied session entries.
+		const document = JSON.parse(snapshot.data) as ImportDocument;
+		return prepareSessionPublication({
+			selection,
+			document,
+			sessionRoot: this.sessionRoot,
+			onPersisted: this.onPersisted,
+			canPublish,
 		});
-		const handle = await open(temporary, "wx", 0o600);
-		let status: "imported" | "skipped" = "imported";
-		try {
-			await handle.writeFile(`${entries.map((e) => JSON.stringify(e)).join("\n")}\n`);
-			await handle.sync();
-			await handle.close();
-			// A hard-link publication is atomic and, unlike rename, never overwrites another importer.
-			await link(temporary, path);
-		} catch (error) {
-			if (record(error).code === "EEXIST") status = "skipped";
-			else throw error;
-		} finally {
-			await handle.close();
-			await unlink(temporary);
-		}
-		let warning: string | undefined;
-		try {
-			this.onPersisted?.({ path, kind: "append" });
-		} catch (error) {
-			// Publication is already durable. An index failure must not misreport it as a failed import.
-			warning = `Session saved; search index notification failed: ${error instanceof Error ? error.message : String(error)}`;
-		}
-		return {
-			candidateId: selection.candidateId,
-			source: preview.source,
-			sourcePath: preview.sourcePath,
-			title: preview.title,
-			cwd: selection.cwd,
-			status,
-			sessionId: id,
-			path,
-			warning,
-		};
+	}
+
+	private async commit(selection: ImportSelection, snapshot: ReviewedSnapshot): Promise<ImportResult> {
+		return (await this.preparePublication(selection, snapshot)).publish();
 	}
 }

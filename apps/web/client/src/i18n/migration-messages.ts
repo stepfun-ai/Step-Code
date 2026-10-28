@@ -1,0 +1,663 @@
+// Paired dictionary input only; the existing i18n module remains the sole translator.
+const labels = {
+	migrationTitle: ["数据迁移", "Data migration"],
+	migrationInvitationTitle: ["把已有资源带到 StepCode", "Bring existing resources to StepCode"],
+	migrationInvitationBody: [
+		"无需登录。先检查本机资源，再选择要迁移的内容与目标位置。",
+		"No sign-in required. Inspect local resources, then choose what to migrate and where.",
+	],
+	migrationSettingsBody: [
+		"检查会话与受支持的资源，或查看迁移任务记录。",
+		"Inspect sessions and supported resources, or review migration history.",
+	],
+	migrationScanBoundary: [
+		"检查会话元数据及受支持资源的配置、说明内容，用于判断格式与重复项。只检查明确选择的项目；迁移前仍需逐项预览确认。",
+		"Inspect session metadata and supported resource configuration and instructions to identify formats and duplicates. Only selected projects are inspected; preview and confirmation are still required before migration.",
+	],
+	migrationSourcePreserved: [
+		"原文件保留不变，不自动执行内容、安装依赖或授予权限。",
+		"Source files remain unchanged. Content is not executed, dependencies are not installed, and permissions are not granted automatically.",
+	],
+	migrationSourceProjects: ["选择要检查的项目来源", "Choose source projects to inspect"],
+	migrationSourceProjectsHelp: [
+		"只检查明确勾选的已登记项目，不自动遍历历史项目。",
+		"Only explicitly selected registered projects are inspected, not every historical project.",
+	],
+	migrationStartScan: ["开始检查", "Start scan"],
+	migrationScanning: ["正在检查来源资源…", "Inspecting source resources…"],
+	migrationNew: ["开始新的迁移", "Start a new migration"],
+	migrationHistory: ["迁移记录", "Migration history"],
+	migrationRefreshHistory: ["刷新记录", "Refresh history"],
+	migrationLoadingHistory: ["正在读取迁移记录…", "Loading migration history…"],
+	migrationNoHistory: ["还没有迁移任务记录。", "No migration jobs yet."],
+	migrationViewJob: ["查看任务", "View job"],
+	migrationItemCount: ["{count} 项", "{count} items"],
+	migrationJob: ["迁移任务", "Migration job"],
+	migrationNoActiveJob: ["没有已绑定的迁移任务。", "No attached migration job."],
+	migrationStopRemaining: ["停止后续迁移", "Stop remaining items"],
+	migrationStopping: ["正在停止后续迁移…", "Stopping remaining items…"],
+	migrationHideContinues: [
+		"隐藏此窗口不会停止任务；停止后续迁移需要单独请求。",
+		"Hiding this window does not stop the job. Stopping remaining items requires a separate request.",
+	],
+	migrationPollFailed: [
+		"暂时无法读取任务进度，将延迟重试读取；这不代表任务已停止或成功。",
+		"Progress is temporarily unavailable. Reads will retry with backoff; this does not mean the job stopped or succeeded.",
+	],
+	migrationRetryFailures: ["重新预览失败与未执行项", "Re-preview failed and unrun items"],
+	migrationOpenSession: ["打开已迁入会话", "Open imported session"],
+	migrationPreviewRecovery: ["预览恢复备份", "Preview backup restoration"],
+	migrationRecovery: ["恢复单项备份", "Restore one item from backup"],
+	migrationRecoveryLimit: [
+		"恢复文件只影响之后的加载，不能撤销已发出的模型请求、已生成的回答或已执行的工具和文件修改。",
+		"Restoring a file affects future loading only. It cannot undo model requests, generated answers, executed tools, or file changes.",
+	],
+	migrationRecoveryChanged: [
+		"恢复前会再次核对当前目标；目标已被修改时将拒绝覆盖。",
+		"The current target is checked again before restoration. Changes to the target prevent overwriting it.",
+	],
+	migrationRecoveryConsent: [
+		"我已查看当前内容、备份内容和恢复限制，同意恢复此文件。",
+		"I reviewed the current content, backup content, and limitations, and consent to restoring this file.",
+	],
+	migrationApplyRecovery: ["确认恢复此文件", "Confirm file restoration"],
+	migrationCancelRecovery: ["取消恢复", "Cancel restoration"],
+	migrationRestored: ["已恢复备份，供之后加载使用。", "Backup restored for future loading."],
+	migrationCurrentContent: ["当前目标内容", "Current target content"],
+	migrationRestoredContent: ["恢复后的内容", "Restored content"],
+	migrationPreview: ["迁移预览", "Migration preview"],
+	migrationChoosePreview: [
+		"选择或打开一项查看预览。规则不会默认选中。",
+		"Select or open an item to preview it. Rules are not selected by default.",
+	],
+	migrationLoadingPreview: ["正在更新预览，旧确认已失效…", "Updating preview; previous consent is no longer valid…"],
+	migrationRefreshPreview: ["重新预览", "Refresh preview"],
+	migrationSourcePath: ["来源位置", "Source location"],
+	migrationTargetPath: ["最终目标位置", "Final target location"],
+	migrationRequestedTarget: ["请求的目标位置", "Requested target location"],
+	migrationActualTarget: ["实际目标位置", "Actual target location"],
+	migrationTarget: ["目标范围与项目", "Target scope and project"],
+	migrationChooseTarget: ["请选择目标项目", "Choose a target project"],
+	migrationProjectTarget: ["项目：{cwd}", "Project: {cwd}"],
+	migrationGlobalTarget: ["StepCode 全局", "StepCode global"],
+	migrationGlobalSource: ["用户范围", "User scope"],
+	migrationPickTarget: ["选择其他目标文件夹…", "Choose another target folder…"],
+	migrationPickerFailed: [
+		"无法选择文件夹，请重试。未更改项目或草稿。",
+		"Folder selection failed. Retry; no workspace or draft was changed.",
+	],
+	migrationTargetName: [
+		"目标名称（独立技能副本须用新名称）",
+		"Target name (independent skill copies require a new name)",
+	],
+	migrationAction: ["迁移动作", "Migration action"],
+	migrationDoNotMigrate: ["不迁移这项", "Do not migrate this item"],
+	migrationMcpBoundary: [
+		"仅迁移连接配置，不迁移服务、已有连接或登录状态。普通 MCP 仅支持全局目标，导入后默认禁用。",
+		"Only connection configuration is migrated, not services, existing connections, or sign-in state. Ordinary MCP supports global targets only and is disabled on import.",
+	],
+	migrationIncludeSensitive: [
+		"请求包含可迁移的敏感字面值（预览仍脱敏，需单独同意）",
+		"Request inclusion of transferable sensitive literal values (preview remains redacted; separate consent required)",
+	],
+	migrationSourceContent: ["来源内容（安全预览）", "Source content (safe preview)"],
+	migrationTargetContent: ["写入前目标内容", "Target content before write"],
+	migrationResultContent: ["写入后的完整内容", "Complete content after write"],
+	migrationNoExistingContent: ["无现有内容", "No existing content"],
+	migrationFiles: ["技能包文件（{count}）", "Skill package files ({count})"],
+	migrationBytes: ["{count} 字节", "{count} bytes"],
+	migrationNone: ["无", "None"],
+	migrationRuleWarning: ["这会改变 StepCode 之后如何处理任务", "This changes how StepCode handles future tasks"],
+	migrationRuleGlobalScope: [
+		"全局规则默认用于共享此 Step 配置的 Desktop、Web、CLI 与其他项目，不只本次迁入会话。",
+		"Global rules are used by default across Desktop, Web, CLI, and other projects sharing this Step profile, not just imported sessions.",
+	],
+	migrationRuleProjectScope: [
+		"项目规则默认影响 {cwd} 及其子目录的之后加载，不只当前项目标签下的会话。",
+		"Project rules affect future loading in {cwd} and its subdirectories by default, not just sessions under the current project label.",
+	],
+	migrationRuleTiming: [
+		"默认在新会话或之后资源初始化时加载；不会强制刷新正在运行的会话。",
+		"Loaded by default for new sessions or future resource initialization; active sessions are not forcibly refreshed.",
+	],
+	migrationRuleModel: [
+		"迁移本身本地离线。之后对话时，规则文本可能随请求发给所选模型服务；请检查敏感内容与不可信指令。",
+		"Migration itself is local and offline. In future conversations, rule text may be sent to the selected model service. Review sensitive content and untrusted instructions.",
+	],
+	migrationRulePermissions: [
+		"规则不会改变 Step 权限系统或自动批准工具，但可能影响模型尝试做什么。",
+		"Rules do not change Step permissions or automatically approve tools, but may influence what the model attempts.",
+	],
+	migrationBackupRequired: [
+		"本次追加或替换需要先备份；备份失败不会继续写入。",
+		"This append or replacement requires a backup first; a failed backup prevents writing.",
+	],
+	migrationRuleImpactMissing: [
+		"缺少规则加载影响预览，不能确认写入。",
+		"Rule loading impact is missing; writing cannot be confirmed.",
+	],
+	migrationRuleConsent: [
+		"我已查看完整内容、加载变化和影响范围，同意本次规则写入。",
+		"I reviewed all content, loading changes, and scope, and consent to this rule write.",
+	],
+	migrationConfirmRuleAppend: ["确认备份并追加规则", "Confirm backup and append rules"],
+	migrationConfirmRuleReplace: ["确认备份并替换规则", "Confirm backup and replace rules"],
+	migrationConfirmRuleProject: ["确认添加项目规则", "Confirm adding project rules"],
+	migrationConfirmRuleGlobal: ["确认添加全局规则", "Confirm adding global rules"],
+	migrationRuleConfirmed: [
+		"已确认此预览的规则影响；更改目标或动作须重新确认。",
+		"Rule impact confirmed for this preview. Target or action changes require fresh consent.",
+	],
+	migrationSelectItem: ["选择迁移 {name}", "Select {name} for migration"],
+	migrationIndependentCopy: ["高级：复制独立技能副本", "Advanced: copy an independent skill"],
+	migrationSourceFilter: ["来源筛选", "Source filter"],
+	migrationAllSources: ["全部来源", "All sources"],
+	migrationSearch: ["搜索名称或来源路径", "Search names or source paths"],
+	migrationNeedsMigration: ["待迁移（{count}）", "Needs migration ({count})"],
+	migrationNoCandidates: [
+		"没有符合筛选条件的待迁移项；其他状态和检查错误可在下方查看。",
+		"No matching actionable items. Other states and scan errors are shown below.",
+	],
+	migrationOtherStates: ["已在使用 / 其他状态（{count}）", "Already in use / other states ({count})"],
+	migrationScanReports: ["来源检查结果与诊断", "Source scan results and diagnostics"],
+	migrationTruncated: [
+		"检查结果达到上限，当前清单不是完整来源列表。",
+		"Scan limit reached; this is not the complete source list.",
+	],
+	migrationDiagnosticUnknown: [
+		"诊断：{code}。此项未被当作成功。",
+		"Diagnostic: {code}. This item is not counted as successful.",
+	],
+	migrationDiagnosticCount: ["（{count} 项）", "({count} items)"],
+	migrationPlanRequired: [
+		"请先完成逐项预览与确认，再生成最终清单。",
+		"Complete individual previews and consent before generating a final plan.",
+	],
+	migrationFinalPlan: ["最终迁移清单", "Final migration plan"],
+	migrationPlanImmutable: [
+		"此清单固定目标与动作。任何更改或预览过期，都需要重新预览、确认并生成清单。",
+		"This plan fixes targets and actions. Changes or expiry require fresh previews, consent, and a new plan.",
+	],
+	migrationSteps: ["迁移步骤", "Migration steps"],
+	migrationConfirmStep: ["确认与迁移", "Confirm and migrate"],
+	migrationLocalOnly: [
+		"本地迁移，不自动发送消息或调用模型。",
+		"Local migration; no messages or model calls are triggered automatically.",
+	],
+	migrationHide: ["隐藏迁移窗口", "Hide migration window"],
+	migrationSelected: ["已选择 {count} 项", "{count} selected"],
+	migrationScanAgain: ["重新检查来源", "Scan sources again"],
+	migrationReviewPlan: ["生成确认清单", "Generate final plan"],
+	migrationBackToSelection: ["返回逐项选择", "Back to item selection"],
+	migrationStart: ["开始迁移此清单", "Start this migration plan"],
+	migrationStarting: ["正在提交任务…", "Submitting job…"],
+	migrationFinish: ["完成引导", "Finish onboarding"],
+	migrationSkip: ["跳过引导", "Skip onboarding"],
+	migrationLegacyHistory: ["此前会话迁移记录", "Earlier session import history"],
+	migrationLegacyReadOnly: [
+		"只读展示此前保存的会话迁移结果，与新的迁移任务分开。刷新只读取记录，不取消或重新迁移。",
+		"Read-only saved session import results, separate from new migration jobs. Refresh only reads records; it does not cancel or re-import.",
+	],
+	migrationLegacyEmpty: ["没有此前会话迁移记录。", "No earlier session import records."],
+	migrationLegacyUnknown: ["未记录 / 未知", "Not recorded / unknown"],
+	migrationLegacyUntitled: ["未记录会话标题", "Session title not recorded"],
+	migrationLegacyRequestedCwd: [
+		"明确选择的目录（可能不是实际目标）",
+		"Explicitly selected directory (may not be the actual target)",
+	],
+	migrationLegacyActualUnknown: [
+		"旧记录未确认实际目标，请在打开会话后核对。",
+		"The old record does not confirm the actual target. Check after opening the session.",
+	],
+	migrationLegacyRecorded: [
+		"已记录结果 {recorded} 项 / 请求总数 {total} 项",
+		"{recorded} recorded results / {total} requested items",
+	],
+	migrationLegacyResultsUnknown: [
+		"逐项结果缺失或格式无法识别，不能确认成功。",
+		"Item results are missing or unrecognized; success cannot be confirmed.",
+	],
+	migrationLegacyLoadFailed: [
+		"无法读取此前记录，请刷新重试。已显示的记录保留，但可能不是最新状态；这不代表没有记录。",
+		"Earlier records could not be read. Refresh to retry. Displayed records are retained but may be stale; this does not mean no records exist.",
+	],
+	migrationLegacyOpenFailed: [
+		"无法打开此会话，请重试；迁移记录未更改。",
+		"This session could not be opened. Retry; import records were not changed.",
+	],
+	migrationLegacySessionUnknown: [
+		"旧记录缺少有效会话标识，无法直接打开。",
+		"The old record has no valid session identifier and cannot be opened directly.",
+	],
+	migrationLegacyFailure: [
+		"旧记录报告迁移失败，未计作已迁入；技术错误详情不在此展示。",
+		"The old record reports an import failure, not a successful import. Technical error details are not displayed here.",
+	],
+	migrationLegacyWarning: [
+		"旧记录包含警告，请核对会话与目标；不在此展示原始诊断内容。",
+		"The old record includes a warning. Check the session and target; raw diagnostics are not displayed here.",
+	],
+	"migrationLegacyJob.running": [
+		"旧记录状态：执行中（仅上次记录，不确认当前仍运行）",
+		"Recorded as running (last recorded state, not confirmation it is still running)",
+	],
+	"migrationLegacyJob.completed": ["旧任务已结束，请核对逐项结果", "Old job ended; review individual results"],
+	"migrationLegacyJob.cancelled": ["旧任务已取消，已保存结果仍保留", "Old job cancelled; saved results retained"],
+	"migrationLegacyJob.interrupted": ["旧任务中断，请核对已保存结果", "Old job interrupted; review saved results"],
+	"migrationLegacyJob.unknown": ["旧任务状态未知，不计作成功", "Old job status unknown; not counted as successful"],
+	"migrationLegacyResult.imported": ["已迁入（旧记录）", "Imported (old record)"],
+	"migrationLegacyResult.skipped": ["已跳过（不计作本次已迁入）", "Skipped (not counted as imported by this job)"],
+	"migrationLegacyResult.failed": ["迁移失败", "Import failed"],
+	"migrationLegacyResult.unknown": ["结果未知，不计作已迁入", "Unknown result; not counted as imported"],
+} satisfies Record<string, readonly [string, string]>;
+
+const states = {
+	"migrationKind.sessions": ["会话记录", "Session history"],
+	"migrationKind.skills": ["技能", "Skills"],
+	"migrationKind.mcp": ["MCP 配置", "MCP configuration"],
+	"migrationKind.prompts": ["提示词模板", "Prompt templates"],
+	"migrationKind.rules": ["AI 行为规则", "AI behavior rules"],
+	"migrationSource.codex": ["Codex", "Codex"],
+	"migrationSource.claude-code": ["Claude Code", "Claude Code"],
+	"migrationSource.workbuddy": ["WorkBuddy", "WorkBuddy"],
+	"migrationSource.qoder": ["Qoder", "Qoder"],
+	"migrationSource.shared": ["共享资源", "Shared resources"],
+	"migrationSource.stepcode": ["StepCode", "StepCode"],
+	"migrationSource.plugin": ["插件", "Plugin"],
+	"migrationHolding.external": ["外部来源", "External source"],
+	"migrationHolding.reference": ["直接读取原文件", "Direct source reference"],
+	"migrationHolding.stepcode": ["StepCode 持有", "Held by StepCode"],
+	"migrationHolding.plugin": ["插件提供", "Provided by plugin"],
+	"migrationReadiness.ready": ["可用", "Ready"],
+	"migrationReadiness.disabled": ["已禁用", "Disabled"],
+	"migrationReadiness.shadowed": ["被同名资源遮蔽", "Shadowed by same-name resource"],
+	"migrationReadiness.untrusted": ["需要项目信任", "Project trust required"],
+	"migrationReadiness.unsupported": ["不支持", "Unsupported"],
+	"migrationReadiness.unknown": ["状态未确认", "Unconfirmed state"],
+	"migrationAction.copy": ["复制", "Copy"],
+	"migrationAction.import": ["导入配置", "Import configuration"],
+	"migrationAction.create": ["新建规则", "Create rules"],
+	"migrationAction.append": ["追加规则", "Append rules"],
+	"migrationAction.replace": ["替换规则", "Replace rules"],
+	"migrationAction.skip": ["保持不变 / 跳过", "Keep unchanged / skip"],
+	"migrationActivation.history": [
+		"仅迁入历史记录，不恢复运行状态或来源权限。",
+		"Historical records only; execution state and source permissions are not restored.",
+	],
+	"migrationActivation.disabled": [
+		"配置默认禁用，不自动启动或连接。",
+		"Configuration is disabled by default; no automatic startup or connection.",
+	],
+	"migrationActivation.next-resource-load": [
+		"供之后资源加载使用，不表示所有会话已生效。",
+		"Available for future resource loading, not proof of activation in every session.",
+	],
+	"migrationActivation.unchanged": ["未写入，保留已有状态。", "No write; existing state preserved."],
+	"migrationRules.before": ["写入前有效规则", "Effective rules before write"],
+	"migrationRules.after": ["写入后有效规则", "Effective rules after write"],
+	"migrationRules.shadowed": ["将被遮蔽的规则", "Rules that will be shadowed"],
+	"migrationAcknowledgement.scope-expansion": [
+		"我同意将项目资源扩大到全局范围，供共享此配置的其他项目和会话使用。",
+		"I consent to expanding this project resource to global scope, including other projects and sessions sharing this profile.",
+	],
+	"migrationAcknowledgement.independent-copy": [
+		"我同意以新名称建立独立副本；它不再随原文件更新，也不会禁用原引用。",
+		"I consent to an independent copy under a new name. It will not track source updates or disable the original reference.",
+	],
+	"migrationAcknowledgement.sensitive-values": [
+		"我同意将可迁移的敏感字面值写入目标配置；它可能影响后续连接。",
+		"I consent to writing transferable sensitive literal values into target configuration; they may affect future connections.",
+	],
+	"migrationCategoryHelp.sessions": [
+		"保留原生历史与请求的项目位置，不执行历史工具。缺少项目时须选择目标。",
+		"Preserve native history and requested project location. Historical tools are not executed. Choose a target when the project is missing.",
+	],
+	"migrationCategoryHelp.skills": [
+		"检查实际加载状态。直接引用不等于已复制，独立副本需新名称与单独同意。",
+		"Inspect actual loading state. A direct reference is not a copy; independent copies require a new name and separate consent.",
+	],
+	"migrationCategoryHelp.mcp": [
+		"仅迁移普通全局 MCP 声明，不迁移服务、连接或登录状态。",
+		"Migrate ordinary global MCP declarations only, not services, connections, or sign-in state.",
+	],
+	"migrationCategoryHelp.prompts": [
+		"仅支持兼容静态模板，不继承动态 shell、模型或工具权限设置。",
+		"Compatible static templates only; dynamic shell, model, and tool permission settings are not inherited.",
+	],
+	"migrationCategoryHelp.rules": [
+		"AGENTS.md / CLAUDE.md 等受支持规则。每次写入均须查看完整内容与加载影响，并明确确认。",
+		"Supported rules such as AGENTS.md / CLAUDE.md. Every write requires full content and loading-impact review plus explicit consent.",
+	],
+	"migrationJobStatus.queued": ["等待迁移", "Queued"],
+	"migrationJobStatus.running": ["正在迁移", "Running"],
+	"migrationJobStatus.stopping": ["正在停止后续迁移", "Stopping remaining items"],
+	"migrationJobStatus.completed": ["任务已结束，请核对逐项结果", "Job ended; review individual results"],
+	"migrationJobStatus.cancelled": ["后续迁移已停止", "Remaining migration stopped"],
+	"migrationJobStatus.interrupted": ["任务中断，结果须核对", "Job interrupted; review results"],
+	"migrationItemStatus.pending": ["尚未执行", "Pending"],
+	"migrationItemStatus.running": ["正在写入", "Writing"],
+	"migrationItemStatus.imported": ["已迁入", "Imported"],
+	"migrationItemStatus.skipped": ["已跳过 / 无需写入", "Skipped / no write needed"],
+	"migrationItemStatus.failed": ["失败", "Failed"],
+	"migrationItemStatus.not-run": ["未执行", "Not run"],
+	"migrationCount.imported": ["已迁入", "Imported"],
+	"migrationCount.skipped": ["已跳过", "Skipped"],
+	"migrationCount.failed": ["失败", "Failed"],
+	"migrationCount.notRun": ["未执行", "Not run"],
+	"migrationCount.pending": ["等待 / 执行中", "Pending / running"],
+	"migrationScanStatus.ok": ["检查完成", "Scan complete"],
+	"migrationScanStatus.missing": ["来源不存在", "Source missing"],
+	"migrationScanStatus.empty": ["来源为空", "Source empty"],
+	"migrationScanStatus.error": ["检查失败", "Scan failed"],
+	"migrationScanStatus.unsupported": ["来源格式不支持", "Source format unsupported"],
+} satisfies Record<string, readonly [string, string]>;
+
+const diagnosticLabels = {
+	"session-publication-warning": [
+		"会话发布返回警告，请核对实际目标与记录；不恢复运行状态。",
+		"Session publication returned a warning. Review the actual target and history; execution state is not restored.",
+	],
+	"resource-load-timing-only": [
+		"复制完成只表示文件已保存；是否加载仍取决于启停规则、优先级和项目信任。",
+		"Copying means the files were saved, not loaded. Loading still depends on enable rules, precedence, and project trust.",
+	],
+	"target-activation-unknown": [
+		"无法确认目标资源的加载状态；请在对应资源设置中核对，不计作已启用。",
+		"The target loading state is unknown. Check resource settings; it is not reported as enabled.",
+	],
+	"target-disabled": [
+		"资源已写入但目标仍处于禁用状态，不表示已启用或生效。",
+		"Resource written, but the target remains disabled; this does not mean it is enabled or active.",
+	],
+	"session-open-failed": [
+		"无法打开已迁入会话，请重试；迁移结果没有被更改。",
+		"Imported session could not be opened. Retry; migration results were not changed.",
+	],
+	"invalid-acknowledgements": ["同意记录格式无效，请重新确认。", "Consent record is invalid. Confirm again."],
+	"invalid-backup": ["备份数据无效，无法恢复。", "Backup data is invalid; restoration is unavailable."],
+	"invalid-config-namespace": [
+		"配置命名空间无效，未继续迁移。",
+		"Configuration namespace is invalid; migration did not continue.",
+	],
+	"invalid-document": ["来源文档格式无效。", "Source document format is invalid."],
+	"invalid-journal": [
+		"迁移日志格式无效，不能确认结果。",
+		"Migration journal is invalid; results cannot be confirmed.",
+	],
+	"invalid-journal-target": ["迁移日志目标无效，拒绝读写。", "Journal target is invalid; access refused."],
+	"invalid-kinds": ["请求的迁移类别无效。", "Requested migration kinds are invalid."],
+	"invalid-path": ["路径不符合本机服务的安全要求。", "Path does not meet local host safety requirements."],
+	"invalid-plugin-config": ["插件配置无法解析。", "Plugin configuration could not be parsed."],
+	"invalid-preview-request": [
+		"预览请求无效，请重新选择来源与目标。",
+		"Preview request invalid. Select source and target again.",
+	],
+	"invalid-projects": [
+		"项目来源列表无效，请仅选择已登记项目。",
+		"Project source list invalid. Select registered projects only.",
+	],
+	"invalid-resource": ["来源资源格式无效。", "Source resource is invalid."],
+	"invalid-resource-name": ["目标资源名称无效，请更改名称。", "Target resource name invalid. Choose another name."],
+	"invalid-rule-target": [
+		"规则只允许规范目标文件，不写入任意位置。",
+		"Rules require a canonical target file, not an arbitrary location.",
+	],
+	"invalid-scope": ["目标作用域无效。", "Target scope is invalid."],
+	"invalid-selections": ["选择清单格式无效，请重新生成。", "Selection list invalid. Generate it again."],
+	"invalid-skill": ["技能包格式无效。", "Skill package format is invalid."],
+	"invalid-skill-name": ["技能逻辑名称无效，请更改名称。", "Logical skill name invalid. Choose another name."],
+	"invalid-source-config": [
+		"来源配置解析失败，不等同于没有配置。",
+		"Source configuration parsing failed; this does not mean no configuration exists.",
+	],
+	"invalid-start-request": ["提交请求无效，请核对最终清单。", "Start request invalid. Review the final plan."],
+	"invalid-target-config": [
+		"目标配置解析失败，不能安全合并。",
+		"Target configuration parsing failed; safe merging is unavailable.",
+	],
+	"invalid-trust-store": [
+		"项目信任记录无效，不能推断已受信任。",
+		"Project trust records invalid; trust cannot be inferred.",
+	],
+	"job-not-found": ["迁移任务不存在，请刷新记录。", "Migration job not found. Refresh history."],
+	"journal-changed": ["迁移日志已变化，请重新读取结果。", "Migration journal changed. Refresh results."],
+	"journal-limit": ["迁移日志达到安全容量限制。", "Migration journal reached its safety capacity limit."],
+	"journal-write-failed": ["无法保存迁移日志，结果须核对。", "Migration journal could not be saved. Review results."],
+	"plan-limit": ["最终清单达到容量限制，请减少项数。", "Final plan reached its capacity limit. Select fewer items."],
+	"preview-limit": [
+		"预览达到容量限制，请减少项数并重新检查。",
+		"Preview capacity limit reached. Select fewer items and scan again.",
+	],
+	"resource-limit": ["资源扫描达到安全容量限制。", "Resource scan reached its safety capacity limit."],
+	"unsafe-plugin-path": ["插件路径不符合安全边界。", "Plugin path violates safety boundaries."],
+	"unsafe-state-directory": ["迁移状态目录不安全，拒绝读写。", "Migration state directory is unsafe; access refused."],
+	"network-error": [
+		"网络响应不可确认。请重新读取；不会自动重试写入。",
+		"Network response is uncertain. Refresh reads; writes are not retried automatically.",
+	],
+	"invalid-response": [
+		"服务返回的迁移数据不符合接口，未应用此响应。",
+		"Server migration data violates the interface; this response was not applied.",
+	],
+	"http-401": ["本机连接认证失效，请重新连接。", "Local connection authentication expired. Reconnect."],
+	"http-403": ["本机服务拒绝此请求。", "The local host refused this request."],
+	"onboarding-save-failed": ["未能保存引导完成状态，请重试。", "Onboarding completion could not be saved. Retry."],
+	"retry-scan-required": [
+		"来源预览不再可用，请重新检查来源并确认失败项。",
+		"Source previews are unavailable. Scan again and confirm failed items.",
+	],
+	"acknowledgement-required": ["缺少此预览要求的明确同意。", "Explicit consent required by this preview is missing."],
+	"batch-target-conflict": [
+		"所选项写入同一目标，需调整清单。",
+		"Selected items write the same target. Adjust the plan.",
+	],
+	"candidate-not-found": ["来源候选已失效，请重新检查。", "Source candidate expired. Scan again."],
+	"direct-reference": [
+		"StepCode 直接读取原文件，尚未复制。",
+		"StepCode reads the original file directly; it has not been copied.",
+	],
+	"duplicate-selection": ["同一预览重复选择。", "The same preview was selected twice."],
+	"idempotency-conflict": [
+		"提交标识与已记录的清单冲突，请核对任务记录。",
+		"Submission identity conflicts with the recorded plan. Review job history.",
+	],
+	"independent-copy-needs-new-name": [
+		"独立技能副本必须使用不同的有效名称。",
+		"An independent skill copy requires a different valid name.",
+	],
+	"mcp-configured-equal": [
+		"目标已配置相同内容；不重复写入或更改启用状态。",
+		"The target already has equivalent configuration; no duplicate write or enablement change.",
+	],
+	"mcp-fields-not-translated": [
+		"部分来源 MCP 字段无法转换，请核对预览。",
+		"Some source MCP fields cannot be translated. Review the preview.",
+	],
+	"mcp-global-only": ["普通 MCP 只支持 StepCode 全局目标。", "Ordinary MCP supports StepCode global targets only."],
+	"migration-blocked": ["清单含阻断项，未开始写入。", "The plan contains blockers; writing did not start."],
+	"migration-busy": ["已有迁移在执行，请查看当前任务。", "A migration is already running. View the current job."],
+	"migration-closed": ["迁移服务已关闭，请重新连接。", "Migration service closed. Reconnect."],
+	"migration-io-error": [
+		"读取或写入文件失败，请核对路径与权限。",
+		"File reading or writing failed. Check paths and permissions.",
+	],
+	"migration-lock-invalid": [
+		"迁移写入锁无效，未继续写入。",
+		"Migration write lock is invalid; writing did not continue.",
+	],
+	"migration-lock-lost": ["迁移写入锁已丢失，请核对结果。", "Migration write lock was lost. Review results."],
+	"plan-expired": ["最终清单已过期，请重新预览与确认。", "Final plan expired. Preview and consent again."],
+	"plan-not-found": ["最终清单不存在，请重新生成。", "Final plan not found. Generate a new plan."],
+	"preview-changed": [
+		"来源、目标或加载关系已变化，请重新预览与确认。",
+		"Source, target, or loading relationships changed. Preview and consent again.",
+	],
+	"preview-expired": ["预览已过期，请重新预览与确认。", "Preview expired. Preview and consent again."],
+	"preview-not-found": ["预览不存在，请重新预览。", "Preview not found. Create a new preview."],
+	"plugin-managed": [
+		"资源由插件管理，不脱离插件复制。",
+		"This resource is plugin-managed and is not copied outside its plugin.",
+	],
+	"plugin-provided": ["资源由插件提供，不重复迁入。", "Resource provided by a plugin; no duplicate migration."],
+	"project-mcp-source-unsupported": [
+		"当前不支持此项目 MCP 来源格式。",
+		"This project MCP source format is not supported.",
+	],
+	"project-not-selected": ["此项目来源未被明确选择。", "This project source was not explicitly selected."],
+	"publication-conflict": [
+		"目标发布发生冲突，请核对目标后重新预览。",
+		"Target publication conflict. Review the target and preview again.",
+	],
+	"publication-reconciled": [
+		"已根据磁盘与日志核对发布结果。",
+		"Publication outcome reconciled from disk and journal.",
+	],
+	"publication-uncertain": [
+		"发布结果无法确认，不计作成功。请核对目标。",
+		"Publication outcome uncertain; not counted as success. Review the target.",
+	],
+	"recovery-future-loads-only": [
+		"恢复只影响之后加载，不能撤销过去的模型或工具行为。",
+		"Restoration affects future loading only, not past model or tool behavior.",
+	],
+	"recovery-impact-changed": [
+		"规则加载关系已变化，请重新预览恢复。",
+		"Rule loading relationships changed. Preview restoration again.",
+	],
+	"recovery-not-applied": ["恢复未应用，不会宣称已恢复。", "Restoration was not applied; no restored claim is made."],
+	"recovery-outcome-uncertain": [
+		"恢复结果不确定，请核对文件；不要盲目重复覆盖。",
+		"Restoration outcome uncertain. Review the file; do not overwrite blindly.",
+	],
+	"recovery-preview-expired": [
+		"恢复预览已过期，请重新预览并同意。",
+		"Restoration preview expired. Preview and consent again.",
+	],
+	"recovery-reconciled": ["已核对恢复操作的磁盘结果。", "Restoration disk outcome reconciled."],
+	"recovery-target-changed": [
+		"当前目标已被修改，拒绝覆盖；请重新核对并预览。",
+		"Current target changed; overwrite refused. Review and preview again.",
+	],
+	"recovery-unavailable": ["此项没有可恢复的已提交备份。", "This item has no restorable committed backup."],
+	"relative-mcp-path-unsupported": [
+		"MCP 相对路径依赖无法安全保留，不能静默改为服务目录。",
+		"MCP relative path dependency cannot be safely preserved; it will not be silently changed to the host directory.",
+	],
+	"reserved-prompt-name": [
+		"模板名称与内置命令冲突，请更换名称。",
+		"Template name conflicts with a built-in command. Choose another name.",
+	],
+	"resource-inspection-incomplete": [
+		"无法完整确认资源加载状态，不作为待迁移成功项。",
+		"Resource loading inspection is incomplete; no actionable or successful claim is made.",
+	],
+	"resource-unknown": ["资源状态未确认，不能写入。", "Resource state unconfirmed; writing blocked."],
+	"resource-unsupported": ["资源格式或用途不支持迁移。", "Resource format or purpose is unsupported."],
+	"resource-untrusted": [
+		"项目资源需要信任；迁移不会自动授权。",
+		"Project resource requires trust; migration does not grant it automatically.",
+	],
+	"rule-batch-impact-conflict": [
+		"多项规则在本清单中互相改变加载影响，请分别重新规划。",
+		"Rules in this batch alter each other's loading impact. Re-plan separately.",
+	],
+	"rule-context-inspection-unsupported": [
+		"当前规则上下文无法安全检查，阻止写入。",
+		"Current rule context cannot be safely inspected; writing blocked.",
+	],
+	"rule-higher-priority-override": [
+		"更高优先级规则会遮蔽目标，未自动修改或删除其他规则。",
+		"A higher-priority rule shadows the target; other rules are not modified or deleted automatically.",
+	],
+	"rules-default-model-context": [
+		"规则内容默认可能进入后续模型请求的系统上下文。",
+		"Rules may enter system context in future model requests by default.",
+	],
+	"rules-no-active-reload": ["规则写入不会强制刷新活跃会话。", "Rule writes do not forcibly reload active sessions."],
+	"sensitive-values-omitted": [
+		"敏感字面值未包含，变量引用保留；预览始终脱敏。",
+		"Sensitive literals omitted; variable references preserved. Preview remains redacted.",
+	],
+	"session-preview-failed": [
+		"会话预览失败，未隐藏此诊断。",
+		"Session preview failed; this diagnostic remains visible.",
+	],
+	"session-project-required": [
+		"来源会话请求的项目不可用，请明确选择目标项目。",
+		"The source session's requested project is unavailable. Choose a target project explicitly.",
+	],
+	"session-publication-failed": ["会话发布失败，请核对逐项结果。", "Session publication failed. Review item results."],
+	"session-reservation-failed": [
+		"无法预留原生会话目标，未覆盖已有会话。",
+		"Native session destination could not be reserved; existing sessions were not overwritten.",
+	],
+	"session-reservation-missing": [
+		"会话目标预留失效，不能继续写入。",
+		"Session destination reservation missing; writing cannot continue.",
+	],
+	"session-scan-failed": [
+		"会话来源检查失败，不等同于来源为空。",
+		"Session source scan failed; this does not mean the source is empty.",
+	],
+	"session-source-read-error": [
+		"无法读取会话来源，请检查文件权限或格式。",
+		"Session source cannot be read. Check permissions or format.",
+	],
+	"skill-manual-invocation-only": [
+		"此技能仅允许手动调用，不自动由模型选择。",
+		"This skill is manual-invocation-only, not automatically selected by the model.",
+	],
+	"skill-name-conflict": [
+		"技能逻辑名称冲突；仅改目录名无法解决。",
+		"Logical skill name conflict; changing only the directory name cannot resolve it.",
+	],
+	"skill-name-shadowed": [
+		"技能被同名资源遮蔽，不自动启用或禁用其他来源。",
+		"Skill shadowed by a same-name resource; other sources are not enabled or disabled automatically.",
+	],
+	"source-changed": [
+		"来源文件已变化，请重新检查、预览并同意。",
+		"Source file changed. Scan, preview, and consent again.",
+	],
+	"standalone-skill-copy-unsupported": [
+		"不支持将此单文件技能当作完整技能包复制。",
+		"This standalone skill file cannot be copied as a complete skill package.",
+	],
+	"target-changed": ["目标文件已变化，请重新预览并确认。", "Target file changed. Preview and consent again."],
+	"target-conflict": [
+		"目标已有不同内容；不会静默覆盖，请调整目标或动作。",
+		"Target contains different content. No silent overwrite; adjust target or action.",
+	],
+	"target-untrusted": [
+		"目标项目未受信任，不能迁入此资源。",
+		"Target project is untrusted; this resource cannot be migrated into it.",
+	],
+	"unsafe-file-size-or-type": ["文件大小或类型超出安全范围。", "File size or type exceeds safety limits."],
+	"unsafe-link": ["检测到不安全链接，不跟随链接写入。", "Unsafe link detected; writes do not follow it."],
+	"unsupported-action": [
+		"此目标不支持请求的动作，请使用允许的动作。",
+		"Requested action is unsupported for this target. Choose an allowed action.",
+	],
+	"unsupported-mcp-config": ["MCP 声明格式无法安全转换。", "MCP declaration cannot be safely translated."],
+	"unsupported-mcp-url": [
+		"MCP 传输地址不支持，不将 SSE/WS 伪装为 HTTP。",
+		"MCP transport URL unsupported; SSE/WS is not disguised as HTTP.",
+	],
+	"unsupported-prompt-syntax": [
+		"模板包含不支持的动态或来源特定语法，不能迁入。",
+		"Template contains unsupported dynamic or source-specific syntax; migration blocked.",
+	],
+} satisfies Record<string, readonly [string, string]>;
+const diagnostics = Object.fromEntries(
+	Object.entries(diagnosticLabels).map(([code, values]) => [`migrationDiagnostic.${code}`, values]),
+);
+
+function dictionary(language: 0 | 1): Record<string, string> {
+	return Object.fromEntries(
+		[...Object.entries(labels), ...Object.entries(states), ...Object.entries(diagnostics)].map(([key, values]) => [
+			key,
+			values[language],
+		]),
+	);
+}
+export const migrationMessages = { zh: dictionary(0), en: dictionary(1) };

@@ -456,7 +456,7 @@ function readClaudeSource(homeDir: string): SourceRead {
 	return { servers, warnings, state: "ok" };
 }
 
-function translateClaudeServer(name: string, record: Record<string, unknown>): TranslatedServer | undefined {
+export function translateClaudeServer(name: string, record: Record<string, unknown>): TranslatedServer | undefined {
 	const type = typeof record.type === "string" ? record.type : undefined;
 
 	if (type && CLAUDE_IDE_TRANSPORTS.has(type)) {
@@ -599,7 +599,7 @@ function readCodexSource(homeDir: string): SourceRead {
  * translation: both express the transport by which of `command` / `url` is set,
  * and both keep the startup and tool timeouts separately.
  */
-function translateCodexServer(name: string, record: Record<string, unknown>): TranslatedServer {
+export function translateCodexServer(name: string, record: Record<string, unknown>): TranslatedServer {
 	const warnings: string[] = [];
 	const common = compact({
 		enabled: typeof record.enabled === "boolean" ? record.enabled : undefined,

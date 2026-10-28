@@ -12,8 +12,12 @@ export interface StepcodeDesktopBridge {
 	readonly platform: "darwin" | "win32" | "linux";
 	/** Desktop application version. */
 	readonly version: string;
-	/** Open the native folder chooser. Resolves to an absolute path, or null when cancelled. */
-	pickDirectory(options?: { readonly title?: string; readonly defaultPath?: string }): Promise<string | null>;
+	/** Open the native folder chooser. Resource picks do not change the next-launch workspace. */
+	pickDirectory(options?: {
+		readonly title?: string;
+		readonly defaultPath?: string;
+		readonly purpose?: "workspace" | "resource";
+	}): Promise<string | null>;
 	/** Open an http(s) URL in the system browser. */
 	openExternal(url: string): Promise<void>;
 	/** Reveal a file or folder in Finder / Explorer / the file manager. */

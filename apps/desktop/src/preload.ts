@@ -24,6 +24,7 @@ const bridge: StepcodeDesktopBridge = {
 		const request = {
 			title: typeof options?.title === "string" ? options.title : undefined,
 			defaultPath: typeof options?.defaultPath === "string" ? options.defaultPath : undefined,
+			purpose: options?.purpose,
 		};
 		return ipcRenderer.invoke(DESKTOP_IPC.pickDirectory, request) as Promise<string | null>;
 	},
