@@ -1360,7 +1360,7 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	color: var(--ink-3);
 }
 /*
- * 二级面板（ZCode 式）：`.plus-sub-slot` 定位在悬停行右侧（inline top 来自
+ * 二级面板：`.plus-sub-slot` 定位在悬停行右侧（inline top 来自
  * `openSub`），`.plus-sub` 是面板本体。分两层是为了让定位随行动态变化。
  */
 .plus-sub-slot {

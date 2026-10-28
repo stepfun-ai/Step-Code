@@ -344,7 +344,7 @@ export function applyLeadingCommand(editor: HTMLElement): void {
 
 /**
  * A skill or plugin picked from `#plusMenu`, staged as one light-purple icon
- * chip above `#prompt` (ZCode-style): `prefix` commands lead the next message
+ * chip above `#prompt`: `prefix` commands lead the next message
  * (one slash command per message, so a command pick replaces the previous
  * one), `note` picks ride at its tail.
  */
@@ -366,13 +366,13 @@ export interface ContextPackage {
 	readonly block: string;
 }
 
-/** Caps the packaged transcript, ZCode's selection limits shrunk to one pick. */
+/** Caps the packaged transcript for a single context pick. */
 const SESSION_CONTEXT_MAX_CHARS = 4000;
 const SESSION_CONTEXT_MAX_MESSAGES = 20;
 
 /**
- * Package another session's conversation as a prompt tail block (ZCode's
- * `# userselect:` pattern): a heading naming the source session and a fenced
+ * Package another session's conversation as a prompt tail block:
+ * a `# userselect:` heading naming the source session and a fenced
  * transcript of its user/assistant messages, oldest first, capped. The block
  * is ordinary prompt text — editable before sending, visible in the composer.
  */

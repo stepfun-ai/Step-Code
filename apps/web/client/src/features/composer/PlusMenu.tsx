@@ -3,7 +3,7 @@
  * that used to sit in the control row or only in Settings: staging attachments,
  * the session modes (goal / plan, single-select, moved here from `#modeMenu`;
  * see `PICKABLE_MODES` for why a mode may be hidden), and three entries with
- * ZCode-style secondary panels — plugins,
+ * searchable secondary panels — plugins,
  * skills and other sessions' context. The permission preset stays a sibling
  * button, not an entry here.
  *

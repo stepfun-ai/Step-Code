@@ -1,5 +1,5 @@
 /**
- * Secondary panels that open from `#plusMenu`'s 更多 rows, ZCode-style: a panel
+ * Secondary panels that open from `#plusMenu`'s 更多 rows: a panel
  * flies out to the right of the menu with a search field on top and a list
  * below. Plugins and skills share `PickerPanel` (one async load, then filter);
  * the session picker reads the store instead and packages the picked

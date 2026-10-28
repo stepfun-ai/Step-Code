@@ -8,7 +8,7 @@ import { setUi, useAppStore } from "../../state/store";
 import type { TimelineItem } from "../../state/types";
 
 /**
- * The conversation locator (ZCode's `ConversationTurnNavigator`): a thin rail
+ * The conversation locator: a thin rail
  * on the right of the middle column with one tick per user query. Clicking a
  * tick scrolls the stream to that message (through `ui.revealEntry`, like a
  * search hit), the tick of the query the viewport is on stays dark, and
@@ -28,7 +28,7 @@ interface NavTick {
 
 const USER_PREVIEW_MAX = 160;
 const ASSISTANT_PREVIEW_MAX = 220;
-/** Below this middle-column width the rail would crowd the message column (ZCode hides under 864px too). */
+/** Below this middle-column width the rail would crowd the message column. */
 const RAIL_MIN_WIDTH = 860;
 
 function clipText(text: string, max: number): string {
@@ -75,7 +75,7 @@ function buildTicks(items: readonly TimelineItem[], running: boolean): NavTick[]
 
 /**
  * The query the viewport is on: the first tick whose row still intersects the
- * viewport (ZCode's rule), or — when the top edge sits inside a reply — the
+ * viewport, or — when the top edge sits inside a reply — the
  * last tick entirely above it. Rows and ticks are in the same order.
  */
 function resolveActiveTick(stream: HTMLElement, ticks: readonly NavTick[]): number {
@@ -92,7 +92,7 @@ function resolveActiveTick(stream: HTMLElement, ticks: readonly NavTick[]): numb
 	return lastAbove;
 }
 
-/** Hover/focus "mountain": bars shrink and fade with distance from the focused tick (ZCode's decay). */
+/** Hover/focus "mountain": bars shrink and fade with distance from the focused tick. */
 function barVisual(
 	index: number,
 	focusIndex: number | undefined,
@@ -243,7 +243,7 @@ export function StreamNav() {
 										revealEntry: {
 											sessionId,
 											entryId: tick.entryId,
-											// ZCode's jump lands the query at the viewport top, so the
+											// The jump lands the query at the viewport top, so the
 											// tick that owns the viewport after the jump is the clicked one.
 											behavior: reducedMotion ? "auto" : "smooth",
 											block: "start",
