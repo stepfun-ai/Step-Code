@@ -29,7 +29,7 @@ describe("regression #7925: tool-call metadata is available when streaming start
 			throw new Error("Expected toolcall_start assistant update");
 		}
 
-		expect(toJsonEvent(update)).toEqual({
+		expect(toJsonEvent(update, { includeLiveEvents: true })).toEqual({
 			type: "message_update",
 			usage: update.message.usage,
 			assistantMessageEvent: {

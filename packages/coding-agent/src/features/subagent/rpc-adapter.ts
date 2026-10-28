@@ -237,7 +237,10 @@ export async function createSubagentRpcSession(
 	sessionId: string,
 ): Promise<StepSubagentRpcSession> {
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-subagent-"));
-	const args = ["--mode", "rpc", "--session-id", sessionId];
+	// The child's stdout is a pipe this process reads frame by frame, not a log
+	// file: live progress belongs here, and the parent renders it in the lane
+	// list. Serialized transports default to durable events, so ask for them.
+	const args = ["--mode", "rpc", "--session-id", sessionId, "--include-live-events"];
 	const model = input.agent.model ?? input.model;
 	if (model) args.push("--model", model);
 	if (input.thinkingLevel && !input.agent.model) args.push("--thinking", input.thinkingLevel);

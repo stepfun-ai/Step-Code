@@ -885,7 +885,7 @@ function readCredentialUid(credential: unknown): string | undefined {
 async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispatch" }>): Promise<void> {
 	switch (prep.appMode) {
 		case "rpc": {
-			await runRpcMode(prep.runtimeHost);
+			await runRpcMode(prep.runtimeHost, { includeLiveEvents: prep.parsed.includeLiveEvents });
 			break;
 		}
 		case "interactive": {
@@ -917,6 +917,7 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 				completionCheck: prep.parsed.completionCheck,
 				completionCheckAttempts: prep.parsed.completionCheckAttempts,
 				completionReview: prep.parsed.completionReview,
+				includeLiveEvents: prep.parsed.includeLiveEvents,
 				messages: prep.parsed.messages,
 				initialMessage: prep.initialMessage,
 				initialImages: prep.initialImages,

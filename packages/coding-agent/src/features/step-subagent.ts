@@ -220,6 +220,12 @@ export interface StepSubagentDetails {
 	userAgentsDir: string;
 	projectAgentsDir: string | null;
 	results: StepSubagentResultRecord[];
+	/**
+	 * Tasks left out of a live frame to keep one frame bounded. Only set while
+	 * running with a batch larger than the byte budget; the final result reports
+	 * every task. Renderers add it to `results.length` for the real total.
+	 */
+	omittedResults?: number;
 	/** Present for background lanes and useful to a renderer/list command. */
 	agentId?: string;
 	status?: "running" | "completed" | "failed" | "aborted";
@@ -752,10 +758,14 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 					lane.ctx.ui.setWidget(lanesWidgetKey, undefined);
 					return;
 				}
+				// Each lane's frame is byte-bounded, so its omitted count must be
+				// summed too: otherwise a two-lane batch under-reports its total.
+				const omitted = batch.reduce((sum, entry) => sum + (entry.details.omittedResults ?? 0), 0);
 				const details: StepSubagentDetails = {
 					...lane.details,
 					mode: "parallel",
 					results: batch.flatMap((entry) => entry.details.results),
+					...(omitted > 0 ? { omittedResults: omitted } : {}),
 				};
 				lanesWidget?.setDetails(details);
 				const signature = subagentListSignature(details);

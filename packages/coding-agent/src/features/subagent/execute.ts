@@ -47,6 +47,17 @@ import {
 } from "../workflow/budget.ts";
 import { truncateText } from "./lane-events.ts";
 import type { StepSubagentLaneRuntime } from "./lane-lifecycle.ts";
+import { finalRoster, liveRoster } from "./projection.ts";
+
+/**
+ * Repaint budget for live frames.
+ *
+ * A frame is a snapshot for a human watching the UI, not a fact: the transport
+ * drops it from the persisted stream unless the host opts in. Recomputing the
+ * roster projection per streamed token costs more than a screen can show, and
+ * 100ms is the cadence the bash tool already uses.
+ */
+const LIVE_FRAME_INTERVAL_MS = 100;
 
 export interface StepSubagentTaskInput {
 	agent: string;
@@ -373,6 +384,8 @@ export async function runPreparedSubagent(
 	const chain = mode === "chain" ? tasks : undefined;
 
 	const records = tasks.map((task) => makeEmptyResult(task.agent, task.task));
+	let lastFrameAt = 0;
+	let pendingFrame: ReturnType<typeof setTimeout> | undefined;
 	const execution = laneRuntime ? "background" : "blocking";
 	const createdAt = tasks.map(() => Date.now());
 	const createdTasks = new Set<number>();
@@ -396,20 +409,45 @@ export async function runPreparedSubagent(
 			duration_ms: Math.max(0, Date.now() - (createdAt[index] ?? Date.now())),
 		});
 	};
+	/**
+	 * Publish one live frame.
+	 *
+	 * A frame is a replacement snapshot for a human watching the UI. It is
+	 * explicitly *not* a fact the model or a log needs: the transport drops it
+	 * from the persisted stream unless the host asks for live events, and the
+	 * terminal result restates everything worth keeping. That is why the two
+	 * knobs here are latency and repaint cost, not durability.
+	 *
+	 * The window is a repaint budget: recomputing a roster projection per streamed
+	 * token costs more than the UI can show, and 100ms is the cadence the bash
+	 * tool already uses. It is not a log-safety mechanism — nothing here reaches
+	 * a log file by default — so it can be tuned or removed without affecting
+	 * what gets persisted.
+	 */
 	const emit = (mode: StepSubagentDetails["mode"]): void => {
-		onUpdate?.(
+		if (!onUpdate) return;
+		const wait = LIVE_FRAME_INTERVAL_MS - (Date.now() - lastFrameAt);
+		if (wait > 0) {
+			// The newest roster wins; an intermediate frame is stale by definition.
+			pendingFrame ??= setTimeout(() => {
+				pendingFrame = undefined;
+				publishFrame(mode);
+			}, wait);
+			pendingFrame.unref?.();
+			return;
+		}
+		publishFrame(mode);
+	};
+
+	const publishFrame = (mode: StepSubagentDetails["mode"]): void => {
+		if (!onUpdate) return;
+		lastFrameAt = Date.now();
+		const roster = liveRoster(records);
+		const details = buildDetails(mode, discovery, scope, roster.results);
+		onUpdate(
 			makeToolResult(
-				buildDetails(
-					mode,
-					discovery,
-					scope,
-					records.map((record) => ({
-						...record,
-						messages: [...record.messages],
-						usage: cloneUsage(record.usage),
-					})),
-				),
-				resultDetailsText(buildDetails(mode, discovery, scope, records)),
+				roster.omittedResults === undefined ? details : { ...details, omittedResults: roster.omittedResults },
+				resultDetailsText(details),
 			),
 		);
 	};
@@ -580,7 +618,12 @@ export async function runPreparedSubagent(
 			}
 		}
 	} else await runOne(tasks[0], 0);
-	const finalDetails = buildDetails(mode, discovery, scope, records);
+	if (pendingFrame) {
+		clearTimeout(pendingFrame);
+		pendingFrame = undefined;
+		publishFrame(mode);
+	}
+	const finalDetails = buildDetails(mode, discovery, scope, finalRoster(records));
 	if (mode === "parallel") {
 		const success = records.filter((record) => record.status === "completed").length;
 		const summaries = records.map(

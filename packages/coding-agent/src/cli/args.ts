@@ -53,6 +53,13 @@ export interface Args {
 	completionCheckAttempts?: number;
 	/** One opt-in task self-review; shares the Git follow-up budget when enabled. */
 	completionReview?: boolean;
+	/**
+	 * Also emit live progress (`message_update`, `tool_execution_update`) on the
+	 * `json`/`rpc` stdout channel. Off by default: those frames are a cumulative
+	 * snapshot of in-flight work, and a host that redirects the stream to a file
+	 * would keep every one of them.
+	 */
+	includeLiveEvents?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -405,6 +412,8 @@ export function parseArgs(args: string[]): Args {
 				result.models = taken.value.split(",").map((s) => s.trim());
 				i = taken.nextIndex;
 			}
+		} else if (arg === "--include-live-events") {
+			result.includeLiveEvents = true;
 		} else if (arg === "--no-tools" || arg === "-nt") {
 			result.noTools = true;
 		} else if (arg === "--no-builtin-tools" || arg === "-nbt") {
@@ -668,6 +677,7 @@ ${chalk.bold("Options:")}
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
+  --include-live-events          Live consumers/debugging only; makes JSON/RPC logs much larger
 ${stepPermissionOptionsText}
   --sdk-stdio                    Run the Step Agent SDK length-prefixed stdio host
   --print, -p                    Non-interactive mode: process prompt and exit

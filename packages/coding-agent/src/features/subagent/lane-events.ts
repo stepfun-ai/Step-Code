@@ -6,6 +6,7 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { boundToolResultContent } from "../../core/tools/tool-output.ts";
 import type { BackgroundAgentLane, StepSubagentResultRecord } from "../step-subagent.ts";
+import { totalResults } from "./helpers.ts";
 
 /** Notification detail levels for background lanes. */
 export type BackgroundLaneSubscribeLevel = "final" | "progress";
@@ -57,7 +58,7 @@ export function truncateText(value: string, maxChars: number): string {
 }
 
 /** "2 completed, 1 failed" over a lane's task records. */
-export function laneTaskCounts(records: readonly StepSubagentResultRecord[]): string {
+export function laneTaskCounts(records: readonly StepSubagentResultRecord[], total = records.length): string {
 	const order: Array<[StepSubagentResultRecord["status"], string]> = [
 		["completed", "completed"],
 		["failed", "failed"],
@@ -72,6 +73,7 @@ export function laneTaskCounts(records: readonly StepSubagentResultRecord[]): st
 			return count > 0 ? `${count} ${label}` : "";
 		})
 		.filter(Boolean);
+	if (total > records.length) parts.push(`${total - records.length} not shown`);
 	return parts.length > 0 ? parts.join(", ") : "no tasks ran";
 }
 
@@ -84,9 +86,9 @@ function laneHeadline(lane: BackgroundAgentLane, event: BackgroundLaneEvent): st
 		case "background_restarted":
 			return `Lane ${lane.id} restarted its child process.`;
 		case "background_interrupted":
-			return `Lane ${lane.id} was stopped: ${laneTaskCounts(lane.details.results)}.`;
+			return `Lane ${lane.id} was stopped: ${laneTaskCounts(lane.details.results, totalResults(lane.details))}.`;
 		default:
-			return `Lane ${lane.id} finished: ${laneTaskCounts(lane.details.results)}.`;
+			return `Lane ${lane.id} finished: ${laneTaskCounts(lane.details.results, totalResults(lane.details))}.`;
 	}
 }
 
@@ -114,7 +116,7 @@ export function notifyLaneEvent(
 			// The detail is child-model output. Escape the whole body so it cannot
 			// forge a `</agent-notification>` close and inject content outside it.
 			content:
-				`<agent-notification lane="${escapeXmlAttr(lane.id)}" tasks="${lane.details.results.length}">` +
+				`<agent-notification lane="${escapeXmlAttr(lane.id)}" tasks="${totalResults(lane.details)}">` +
 				`${escapeXmlAttr(body)}</agent-notification>`,
 			// Progress is for the parent model; the user already watches the lanes
 			// widget, and a transcript entry every 15s per lane buries the session.
@@ -236,7 +238,9 @@ export async function buildLaneFinalDetail(lane: BackgroundAgentLane, outputDire
 function laneProgressDetail(lane: BackgroundAgentLane): string {
 	const records = lane.details.results;
 	const active = records.find((record) => record.status === "running") ?? records.at(-1);
-	const parts: string[] = [`step ${active ? records.indexOf(active) + 1 : 1}/${Math.max(records.length, 1)}`];
+	const parts: string[] = [
+		`step ${active ? records.indexOf(active) + 1 : 1}/${Math.max(totalResults(lane.details), 1)}`,
+	];
 	if (active?.activeTool) parts.push(`tool ${active.activeTool}`);
 	if (active) parts.push(`turns ${active.usage.turns}, in:${active.usage.input} out:${active.usage.output}`);
 	return parts.join("; ");

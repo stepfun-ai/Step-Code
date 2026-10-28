@@ -318,6 +318,11 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
+export {
+	isEphemeralSessionEvent,
+	type SessionEventDurability,
+	sessionEventDurability,
+} from "./core/session-event-durability.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
 export * from "./core/session-index/index.ts";
 export type {

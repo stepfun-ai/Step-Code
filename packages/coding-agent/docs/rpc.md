@@ -861,16 +861,16 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | Event | Description |
 |-------|-------------|
 | `agent_start` | Agent begins processing |
-| `agent_end` | One low-level agent run completes (may still be followed by retry, compaction, or queued continuations) |
+| `agent_end` | One low-level agent run completes (may still be followed by retry, compaction, or queued continuations); carries `willRetry` and a message count, not the messages |
 | `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains |
 | `turn_start` | New turn begins |
-| `turn_end` | Turn completes (includes assistant message and tool results) |
+| `turn_end` | Turn completes; carries the message role and a tool-result count, not the messages |
 | `message_start` | Message begins |
-| `message_update` | Streaming update (text/thinking/toolcall deltas) |
+| `message_update` | **Opt-in frame** (`--include-live-events`): text/thinking/toolcall deltas; see [Facts and frames](#facts-and-frames) |
 | `message_end` | Message completes |
 | `bash_execution_update` | Direct RPC bash command output chunk |
 | `tool_execution_start` | Tool begins execution |
-| `tool_execution_update` | Tool execution progress (streaming output) |
+| `tool_execution_update` | **Opt-in frame** (`--include-live-events`): tool progress; see [Facts and frames](#facts-and-frames) |
 | `tool_execution_end` | Tool completes |
 | `queue_update` | Pending steering/follow-up queue changed |
 | `compaction_start` | Compaction begins |
@@ -892,13 +892,23 @@ Emitted when the agent begins processing a prompt.
 
 ### agent_end
 
-Emitted when one low-level agent run completes. Contains all messages generated during this run. If `willRetry` is true, an automatic retry will follow.
+Emitted when one low-level agent run completes. If `willRetry` is true, an automatic retry will follow.
+
+The messages of the run are **not** repeated here: each one already arrived as
+its own `message_start`/`message_end`, and each tool result as `tool_execution_end`.
+What only this event says is that the run ended and whether it will be retried,
+so the record carries `messageCount` instead of the array.
+
+`messageCount` is the length of the run's `messages` array, **not** a checksum: a
+resampled tool-call leak or a throwing `shouldStopAfterTurn` can make the loop
+emit more `message_end` events than it lists. Detect a truncated run by a message
+that never got its `message_end`, not by comparing counts.
 
 ```json
 {
   "type": "agent_end",
-  "messages": [...],
-  "willRetry": false
+  "willRetry": false,
+  "messageCount": 4
 }
 ```
 
@@ -921,10 +931,14 @@ A turn consists of one assistant response plus any resulting tool calls and resu
 ```json
 {
   "type": "turn_end",
-  "message": {...},
-  "toolResults": [...]
+  "messageRole": "assistant",
+  "toolResultCount": 2
 }
 ```
+
+As with `agent_end`, the assistant message and the tool results are not repeated
+— they arrived as `message_end` and `tool_execution_end` — so a turn boundary
+reports where it fell rather than what it contained.
 
 ### message_start / message_end
 
@@ -1053,6 +1067,20 @@ When complete:
 ```
 
 Use `toolCallId` to correlate events. The `partialResult` in `tool_execution_update` contains the accumulated output so far (not just the delta), allowing clients to simply replace their display on each update.
+
+### Facts and frames
+
+RPC is a control channel, and its stdout can be redirected to a file as easily as
+`json`'s, so it also writes **facts only** by default: `message_update` and
+`tool_execution_update` are frames, each superseded by its successor, and are
+written only when the caller passes `--include-live-events`. The subagent runner
+does, because it reads its child's pipe frame by frame and renders the result.
+
+If a `tool_execution_update` frame is written, it is capped at 256 KiB of serialized
+bytes. An oversized update keeps only the tail of its text, adds a `[live output truncated]`
+marker, clips `toolCallId`/`toolName`, and omits `args`/`details`; read those from
+`tool_execution_start`/`tool_execution_end`, which are never bounded. The cap
+applies to the stdout projection only, not to in-process extension handlers.
 
 ### queue_update
 
@@ -1530,7 +1558,7 @@ import subprocess
 import json
 
 proc = subprocess.Popen(
-    ["step", "--mode", "rpc", "--no-session"],
+    ["step", "--mode", "rpc", "--include-live-events", "--no-session"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     text=True
@@ -1569,7 +1597,7 @@ For a complete example of handling the extension UI protocol, see [`examples/rpc
 const { spawn } = require("child_process");
 const { StringDecoder } = require("string_decoder");
 
-const agent = spawn("step", ["--mode", "rpc", "--no-session"]);
+const agent = spawn("step", ["--mode", "rpc", "--include-live-events", "--no-session"]);
 
 function attachJsonlReader(stream, onLine) {
     const decoder = new StringDecoder("utf8");

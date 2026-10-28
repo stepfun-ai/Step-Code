@@ -14,9 +14,24 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { StepSubagentUsage, StepWorktreeLease } from "../step-subagent.ts";
+import type { StepSubagentDetails, StepSubagentUsage, StepWorktreeLease } from "../step-subagent.ts";
 
 const execFile = promisify(execFileCallback);
+
+/**
+ * Tasks in a call, including any a byte-bounded live frame left out.
+ *
+ * A frame stops adding records once it reaches its budget and reports the rest
+ * as `omittedResults`. Counting `results.length` alone would tell a 600-task
+ * batch it has 174 tasks — and, at the end of a run, that all of them are done.
+ *
+ * This lives in the leaf helpers module because both the renderers and the lane
+ * notifications need it; importing it from a renderer made those two modules
+ * import each other.
+ */
+export function totalResults(details: Pick<StepSubagentDetails, "results" | "omittedResults">): number {
+	return details.results.length + (details.omittedResults ?? 0);
+}
 
 /** Tool names in agent files may use either Pi's native names or Step's
  * model-facing aliases. Child Step processes expose the latter. */
