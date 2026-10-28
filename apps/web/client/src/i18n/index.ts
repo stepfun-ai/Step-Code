@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useSyncExternalStore } from "react";
-import { relativeTime, relativeTimeLong } from "../lib/format";
+import { relativeTimeLong } from "../lib/format";
 import { appStore, useAppStore } from "../state/store";
 import { type Locale, MESSAGES, type MessageKey } from "./messages";
 
@@ -48,9 +48,18 @@ export function useLocale(): Locale {
 	return useAppStore((state) => state.locale);
 }
 
-/** `relativeTime` with the translated "just now" label. */
-export function formatRelativeTime(value: string | number | Date | undefined): string {
-	return relativeTime(value, t("justNow"));
+/**
+ * Short elapsed time for list rows: "39 分钟" / "20 小时" / "6 天" in Chinese,
+ * "39m" / "20h" / "6d" in English; under a minute is "just now".
+ */
+export function formatRelativeTime(value: string | number | Date | undefined, now = Date.now()): string {
+	const timestamp = new Date(value ?? Number.NaN).getTime();
+	if (!Number.isFinite(timestamp)) return "";
+	const elapsed = Math.max(0, now - timestamp);
+	if (elapsed < 60_000) return t("justNow");
+	if (elapsed < 3_600_000) return t("relativeTimeMinutes", { count: Math.floor(elapsed / 60_000) });
+	if (elapsed < 86_400_000) return t("relativeTimeHours", { count: Math.floor(elapsed / 3_600_000) });
+	return t("relativeTimeDays", { count: Math.floor(elapsed / 86_400_000) });
 }
 
 /** The spelled-out `relativeTimeLong` ("4 小时前") in the current locale. */
