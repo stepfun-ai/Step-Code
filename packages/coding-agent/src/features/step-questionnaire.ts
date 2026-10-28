@@ -264,6 +264,7 @@ async function executeNativeDialog(
 		let inputMode = questions[0]?.options.length === 0;
 		let inputQuestionId: string | null = inputMode ? (questions[0]?.id ?? null) : null;
 		let cachedLines: string[] | undefined;
+		let cachedWidth: number | undefined;
 		const answers = new Map<string, StepQuestionnaireAnswer>();
 		const totalTabs = questions.length + 1;
 		const editorTheme: EditorTheme = {
@@ -411,7 +412,8 @@ async function executeNativeDialog(
 		};
 
 		const render = (width: number): string[] => {
-			if (cachedLines) return cachedLines;
+			if (cachedLines && cachedWidth === width) return cachedLines;
+			cachedWidth = width;
 			const renderWidth = Math.max(1, width);
 			const lines: string[] = [];
 			const question = currentQuestion();
@@ -508,10 +510,19 @@ async function executeNativeDialog(
 		};
 
 		return {
+			get focused(): boolean {
+				return editor.focused;
+			},
+			set focused(value: boolean) {
+				// The host focuses this wrapper, but the nested editor owns the IME cursor marker.
+				editor.focused = value;
+				cachedLines = undefined;
+			},
 			render,
 			handleInput,
 			invalidate: () => {
 				cachedLines = undefined;
+				editor.invalidate();
 			},
 		};
 	});
