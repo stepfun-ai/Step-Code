@@ -1,10 +1,10 @@
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
-import { formatRelativeTime, useRelativeTimeClock, useT } from "../../i18n";
+import { formatRelativeTime, formatRelativeTimeLong, useRelativeTimeClock, useT } from "../../i18n";
 import { cx } from "../../lib/format";
 import { openSession, sessionTitle, taskStatus } from "../../state/session";
 import { mapWith, setState, shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
-import { Icon, LEGACY_ICONS, Popover, Tooltip } from "../../ui";
+import { Icon, IconButton, LEGACY_ICONS, Popover, Tooltip } from "../../ui";
 import {
 	applyTagFilter,
 	closeSessionMenu,
@@ -83,6 +83,18 @@ export function SessionRow({
 	const index = movableIds.indexOf(session.id);
 	const previousId = index > 0 ? movableIds[index - 1] : null;
 	const nextId = index >= 0 && index < movableIds.length - 1 ? movableIds[index + 1] : null;
+
+	const title = sessionTitle(session);
+	// The card says "completed" only where the row shows its green dot (a finished run not yet
+	// looked at); any other settled row reads as idle, whether or not this host ran it.
+	const cardStatus = status === "completed" && !row.unread ? "idle" : status;
+	// Measured when the row is entered: the sidebar width, the hover actions (shown by then) and
+	// the title itself all change the cut. Only a cut title earns the hover card.
+	const [titleClipped, setTitleClipped] = useState(false);
+	const measureTitle = (event: { readonly currentTarget: HTMLDivElement }) => {
+		const element = event.currentTarget.querySelector(".session-title");
+		setTitleClipped(element !== null && element.scrollWidth > element.clientWidth);
+	};
 
 	const [dragging, setDragging] = useState(false);
 	const [dropPlace, setDropPlace] = useState<"before" | "after" | null>(null);
@@ -191,120 +203,139 @@ export function SessionRow({
 	};
 
 	return (
-		// biome-ignore lint/a11y/useSemanticElements: the legacy row is a div[role=button] holding its own buttons, which a <button> cannot contain.
-		<div
-			ref={rowRef}
-			className={cx(
-				"session-row",
-				status,
-				row.active && "active",
-				row.unread && "unread",
-				dragging && "dragging",
-				dropPlace && `drop-${dropPlace}`,
-			)}
-			role="button"
-			tabIndex={0}
-			data-session-id={session.id}
-			data-pinned={row.pinned ? "true" : undefined}
-			style={filteredOut ? { display: "none" } : undefined}
-			// The pinned block is fixed: its rows cannot be grabbed at all.
-			draggable={row.pinned ? undefined : true}
-			onDragStart={row.pinned ? undefined : onDragStart}
-			onDragEnd={onDragEnd}
-			onDragOver={onDragOver}
-			onDragLeave={onDragLeave}
-			onDrop={onDrop}
-			onClick={onClick}
-			onKeyDown={onKeyDown}
+		// The whole row shows a card with the full title when the ellipsis cut it.
+		<Tooltip
+			placement="right"
+			className="session-hover-card"
+			content={
+				titleClipped ? (
+					<>
+						<span className="session-hover-card-title">{title}</span>
+						<span className="session-hover-card-time">{formatRelativeTimeLong(session.modified)}</span>
+						<span className={cx("session-hover-card-status", cardStatus)}>{t(cardStatus)}</span>
+					</>
+				) : null
+			}
 		>
-			<i className="session-dot" aria-hidden="true" />
-			<span className="session-title-wrap">
-				<span className="session-title">{sessionTitle(session)}</span>
-			</span>
-			<span className="session-meta">
-				{status === "running" || status === "waiting" || status === "failed" ? (
-					<span className={cx("session-badge", status)}>{t(status)}</span>
-				) : null}
-				<time className="session-time">{formatRelativeTime(session.modified)}</time>
-				{/* Escape belongs to the shell's chain. */}
-				<Popover
-					bare
-					className="sidebar-menu session-menu"
-					id="sessionMenu"
-					placement="bottom-end"
-					open={row.menuOpen}
-					onClose={closeSessionMenu}
-					dismissOn="click"
-					closeOnEscape={false}
-					content={<SessionMenu session={session} />}
-				>
-					<button
-						className="session-menu-button"
-						type="button"
-						title={t("moreActions")}
-						aria-label={t("moreActions")}
-						aria-haspopup="menu"
-						aria-expanded={row.menuOpen}
-						aria-controls="sessionMenu"
-						onClick={onMenuClick}
-					>
-						<Icon {...LEGACY_ICONS.more} />
-					</button>
-				</Popover>
-				{grouped ? null : (
-					// Escape belongs to the shell's chain (the group name field closes the picker itself).
+			{/* biome-ignore lint/a11y/useSemanticElements: the legacy row is a div[role=button] holding its own buttons, which a <button> cannot contain. */}
+			<div
+				ref={rowRef}
+				className={cx(
+					"session-row",
+					status,
+					row.active && "active",
+					row.unread && "unread",
+					dragging && "dragging",
+					dropPlace && `drop-${dropPlace}`,
+				)}
+				role="button"
+				tabIndex={0}
+				data-session-id={session.id}
+				data-pinned={row.pinned ? "true" : undefined}
+				style={filteredOut ? { display: "none" } : undefined}
+				// The pinned block is fixed: its rows cannot be grabbed at all.
+				draggable={row.pinned ? undefined : true}
+				onDragStart={row.pinned ? undefined : onDragStart}
+				onDragEnd={onDragEnd}
+				onDragOver={onDragOver}
+				onDragLeave={onDragLeave}
+				onDrop={onDrop}
+				onClick={onClick}
+				onKeyDown={onKeyDown}
+				onPointerEnter={measureTitle}
+				onFocus={measureTitle}
+			>
+				<i className="session-dot" aria-hidden="true" />
+				<span className="session-title-wrap">
+					<span className="session-title">{title}</span>
+				</span>
+				<span className="session-meta">
+					{status === "running" || status === "waiting" || status === "failed" ? (
+						<span className={cx("session-badge", status)}>{t(status)}</span>
+					) : null}
+					<time className="session-time">{formatRelativeTime(session.modified)}</time>
+					{/* Escape belongs to the shell's chain. */}
 					<Popover
 						bare
-						className="sidebar-menu tag-picker"
-						id="tagPicker"
+						className="sidebar-menu session-menu"
+						id="sessionMenu"
 						placement="bottom-end"
-						open={row.tagPickerOpen}
-						onClose={closeTagPicker}
+						open={row.menuOpen}
+						onClose={closeSessionMenu}
 						dismissOn="click"
 						closeOnEscape={false}
-						content={<TagPicker sessionId={session.id} />}
+						content={<SessionMenu session={session} />}
 					>
-						<button
-							className="session-tag-button"
-							type="button"
-							title={t("setGroup")}
-							aria-label={t("setGroup")}
-							aria-haspopup="menu"
-							aria-expanded={row.tagPickerOpen}
-							aria-controls="tagPicker"
-							onClick={onTagButtonClick}
-						>
-							<Icon {...LEGACY_ICONS.tag} />
-						</button>
+						{/* No hint while its menu is open: the menu already says what the button did. */}
+						<Tooltip content={row.menuOpen ? null : t("moreActions")}>
+							<IconButton
+								className="session-menu-button"
+								icon={LEGACY_ICONS.more.name}
+								iconSize={LEGACY_ICONS.more.size}
+								aria-label={t("moreActions")}
+								aria-haspopup="menu"
+								aria-expanded={row.menuOpen}
+								aria-controls="sessionMenu"
+								onClick={onMenuClick}
+							/>
+						</Tooltip>
 					</Popover>
-				)}
-				{tag ? (
-					<button
-						className="tag-diamond session-tag"
-						type="button"
-						style={cssVar("--tag-color", TAG_COLORS[tag])}
-						title={row.tagName}
-						aria-label={row.tagName}
-						onClick={onTagClick}
-					/>
-				) : null}
-				{/* The row's last slot, after the hover actions, so every pin lines up at the
+					{grouped ? null : (
+						// Escape belongs to the shell's chain (the group name field closes the picker itself).
+						<Popover
+							bare
+							className="sidebar-menu tag-picker"
+							id="tagPicker"
+							placement="bottom-end"
+							open={row.tagPickerOpen}
+							onClose={closeTagPicker}
+							dismissOn="click"
+							closeOnEscape={false}
+							content={<TagPicker sessionId={session.id} />}
+						>
+							{/* No hint while the picker is open: the picker already says what the button did. */}
+							<Tooltip content={row.tagPickerOpen ? null : t("setGroup")}>
+								<IconButton
+									className="session-tag-button"
+									icon={LEGACY_ICONS.tag.name}
+									iconSize={LEGACY_ICONS.tag.size}
+									aria-label={t("setGroup")}
+									aria-haspopup="menu"
+									aria-expanded={row.tagPickerOpen}
+									aria-controls="tagPicker"
+									onClick={onTagButtonClick}
+								/>
+							</Tooltip>
+						</Popover>
+					)}
+					{tag ? (
+						<Tooltip content={row.tagName}>
+							<button
+								className="tag-diamond session-tag"
+								type="button"
+								style={cssVar("--tag-color", TAG_COLORS[tag])}
+								aria-label={row.tagName}
+								onClick={onTagClick}
+							/>
+						</Tooltip>
+					) : null}
+					{/* The row's last slot, after the hover actions, so every pin lines up at the
 				    same right edge. A pinned row always shows its solid pin, so hovering the row
 				    adds "…" and the tag button to its left without moving it; an unpinned row
 				    shows the outline pin only on hover. Each icon swaps for the other while the
 				    button itself is hovered, previewing the state a click leads to. */}
-				<Tooltip content={row.pinned ? t("unpinSession") : t("pinSession")}>
-					<button
-						className={row.pinned ? "session-pin" : "session-pin-action"}
-						type="button"
-						aria-label={row.pinned ? t("unpinSession") : t("pinSession")}
-						onClick={onPinClick}
-					>
-						<Icon name="pinFilled" size="xs" className="session-pin-filled" />
-						<Icon name="pin" size="xs" className="session-pin-outline" />
-					</button>
-				</Tooltip>
-			</span>
-		</div>
+					<Tooltip content={row.pinned ? t("unpinSession") : t("pinSession")}>
+						<IconButton
+							className={row.pinned ? "session-pin" : "session-pin-action"}
+							aria-label={row.pinned ? t("unpinSession") : t("pinSession")}
+							onClick={onPinClick}
+						>
+							<Icon name="pinFilled" size="xs" className="session-pin-filled" />
+							<Icon name="pin" size="xs" className="session-pin-outline" />
+						</IconButton>
+					</Tooltip>
+				</span>
+			</div>
+		</Tooltip>
 	);
 }

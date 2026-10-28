@@ -117,6 +117,23 @@ export function relativeTime(
 	return `${Math.floor(elapsed / 86_400_000)}d`;
 }
 
+/** Elapsed time spelled out in `locale`: "4 小时前" / "4 hours ago"; under a minute is `justNowLabel`. */
+export function relativeTimeLong(
+	value: string | number | Date | undefined,
+	locale: string,
+	justNowLabel: string,
+	now = Date.now(),
+): string {
+	const timestamp = new Date(value ?? Number.NaN).getTime();
+	if (!Number.isFinite(timestamp)) return "";
+	const elapsed = Math.max(0, now - timestamp);
+	if (elapsed < 60_000) return justNowLabel;
+	const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+	if (elapsed < 3_600_000) return format.format(-Math.floor(elapsed / 60_000), "minute");
+	if (elapsed < 86_400_000) return format.format(-Math.floor(elapsed / 3_600_000), "hour");
+	return format.format(-Math.floor(elapsed / 86_400_000), "day");
+}
+
 /** 45.9K rather than 45900 and 118.6M rather than 118627K, so a row stays one line. */
 export function formatTokens(count: number): string {
 	if (count < 1000) return String(count);

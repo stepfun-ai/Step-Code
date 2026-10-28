@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useSyncExternalStore } from "react";
-import { relativeTime } from "../lib/format";
+import { relativeTime, relativeTimeLong } from "../lib/format";
 import { appStore, useAppStore } from "../state/store";
 import { type Locale, MESSAGES, type MessageKey } from "./messages";
 
@@ -51,6 +51,11 @@ export function useLocale(): Locale {
 /** `relativeTime` with the translated "just now" label. */
 export function formatRelativeTime(value: string | number | Date | undefined): string {
 	return relativeTime(value, t("justNow"));
+}
+
+/** The spelled-out `relativeTimeLong` ("4 小时前") in the current locale. */
+export function formatRelativeTimeLong(value: string | number | Date | undefined): string {
+	return relativeTimeLong(value, appStore.getState().locale, t("justNow"));
 }
 
 /*

@@ -137,6 +137,15 @@ apps/web/
      for icon buttons.
 7. **Accessibility.** Every `<button>` has `type`; icon-only buttons have `aria-label`. Clickable non-buttons need a
    role, `tabIndex` and a keyboard handler. Biome's a11y rules must pass.
+   - Icon-only buttons use `IconButton` (`icon` / `iconSize`, or `Icon` children for several icons), never a hand-written
+     `<button>` wrapping an `<Icon>`. Keep the feature class (`className`) tests and CSS select on; the feature CSS
+     overrides size and colour, and a feature `:hover` rule needs an ancestor class to outrank IconButton's own.
+   - Icon buttons never set the `title` attribute. Show
+     their hint with `Tooltip` (`<Tooltip content={label}>{button}</Tooltip>`); when the button opens a `Popover`,
+     put the `Tooltip` inside the `Popover` and pass `content={open ? null : label}`.
+   - Text cut by an ellipsis shows the full text in a `Tooltip`, not `title`; measure on hover
+     (`scrollWidth > clientWidth`) so untruncated text gets no hint. A list row whose label is cut wraps the whole
+     row (`placement="right"`), so hovering anywhere on it shows the card (see `features/sidebar/SessionRow.tsx`).
 8. **Inputs driven by tests.** The e2e suite sets `input.value` and dispatches a non-bubbling `input` event. React's
    `onChange` misses that; for such inputs use a native listener or `onInputCapture` on an uncontrolled input (see
    `ui/SearchInput`).
@@ -155,10 +164,10 @@ keep only the classes passed in. Read the component's doc comment before using i
 | Component | Use it for | Notes |
 |---|---|---|
 | `Button` | Text buttons; `variant` `plain` (default, native look reset), `primary` / `secondary` (dialog footer actions) | `type="button"` by default |
-| `IconButton` | Square icon-only buttons (`icon`, `iconSize`) | Always has `.icon-button`; pass `aria-label`; wrap in `Tooltip` for a hint |
+| `IconButton` | Square icon-only buttons (`icon`, `iconSize`) | Always has `.icon-button`; pass `aria-label`; wrap in `Tooltip` for a hint. Use it instead of `<button><Icon /></button>` |
 | `Icon` | Sprite icons: `<Icon name size>`; `LEGACY_ICONS` holds preset name+size pairs | Sizes `2xs xs sm md lg menu`. New icons: add a `<symbol id="i-<name>">` to `IconSprite` and the name to `ICON_NAMES` |
 | `IconSprite` | The `<symbol>` sheet every `Icon` references | Rendered once in `App.tsx`; do not render again |
-| `Tooltip` | Hover / keyboard-focus hints: `<Tooltip content={text or element}>{trigger}</Tooltip>` | Placement top, centered, shifts only at viewport edges. One child that forwards `style`, `ref` and `aria-describedby`; the hint is its next sibling (no wrapper). Empty `content` = no hint. Rendered in the top layer (manual popover), so a neighbouring panel never covers it. Can itself be a `Popover` trigger |
+| `Tooltip` | Hover / keyboard-focus hints: `<Tooltip content={text or element}>{trigger}</Tooltip>` | Placement top, centered, shifts only at viewport edges; `placement="right"` sits beside the trigger, top edges aligned (flips up / left when there is no room). One child that forwards `style`, `ref` and `aria-describedby`; the hint is its next sibling (no wrapper). Empty `content` = no hint. Rendered in the top layer (manual popover), so a neighbouring panel never covers it. Can itself be a `Popover` trigger |
 | `Modal` | Dialogs: backdrop + `section[role=dialog][aria-modal]`, toggled by `open` | `id` / `overlayClassName` on the overlay, `className` / `dialogProps` on the dialog, `labelledBy`. Escape belongs to the shell's chain unless `closeOnEscape` |
 | `Popover` | A panel or menu opened from a trigger (dropdowns, pickers, overflow menus): `<Popover content={panel} open onClose>{trigger}</Popover>` | The child is the trigger (forwards `ref` and `style`; may be a `Tooltip`); other div props go to the panel. The panel renders only while open, portaled to `body`, `--popover-gap` (4px) from the trigger: `placement` `bottom-start` (default) / `bottom-end` / `top-start` / `top-end`, or `bottom` / `top` centred on the trigger (shifted at a viewport edge), flipped when there is no room. `dismissOn`, `closeOnEscape` (refocuses the trigger) |
 | `Menu`, `MenuItem`, `MenuDivider` | Rows inside a `Popover` | `MenuItem`: `icon`, `trailing`, `danger`; pass `role="menu"` / `"menuitem"` where it is a real menu |

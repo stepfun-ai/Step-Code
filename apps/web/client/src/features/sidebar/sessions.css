@@ -188,7 +188,13 @@
 	display: grid;
 	place-items: center;
 }
-.session-tag-button:hover {
+/*
+ * The row itself hovers with `--hover`, the IconButton default, so the row's
+ * icon buttons step up to `--selected`. `.session-row` lifts these above
+ * IconButton's own `:hover:not(:disabled)` rule.
+ */
+.session-row .session-tag-button:hover,
+.session-row .session-menu-button:hover {
 	background: var(--selected);
 	color: var(--ink);
 }
@@ -377,6 +383,9 @@
 	place-items: center;
 	width: 22px;
 	height: var(--control-h-xs);
+	/* The 14px glyph sits centred in the 22px box; pull the box out by the 4px inset so the
+	   glyph's right edge, not the box's, lines up with the time on unpinned rows. */
+	margin-right: -4px;
 	border-radius: var(--radius-chip);
 	color: var(--ink-3);
 }
@@ -390,8 +399,8 @@
 .session-pin-action:focus-visible {
 	display: inline-grid;
 }
-.session-pin:hover,
-.session-pin-action:hover {
+.session-row .session-pin:hover,
+.session-row .session-pin-action:hover {
 	background: var(--selected);
 	color: var(--ink);
 }
@@ -424,7 +433,8 @@
 }
 /* A pinned row's pin keeps the right edge, so its status dot sits just left of the pin, in room the pin leaves. */
 .grouped-view .session-row[data-pinned="true"] .session-dot {
-	right: 36px;
+	/* 6px left of the pin's box, which ends 4px into the row padding (its -4px margin). */
+	right: 32px;
 }
 .grouped-view .session-row[data-pinned="true"]:is(.running, .waiting, .failed, .unread) .session-pin {
 	margin-left: 13px;
@@ -435,5 +445,64 @@
 }
 .grouped-view .session-tag-button,
 .grouped-view .tag-diamond {
+	display: none;
+}
+/*
+ * A row whose title the ellipsis cut shows the whole title, its age and its
+ * status in a dark card beside it (SessionRow's `Tooltip placement="right"`).
+ * The card is the row's next sibling, out of flow in the top layer.
+ */
+.session-hover-card {
+	max-width: 300px;
+	padding: 12px 14px;
+	border-color: var(--hover-card-line);
+	border-radius: var(--radius-panel);
+	background: var(--hover-card-surface);
+	box-shadow: var(--elev-3);
+	color: var(--hover-card-ink-2);
+	font-size: 12px;
+	line-height: 1.45;
+}
+.session-hover-card-title {
+	display: block;
+	color: var(--hover-card-ink);
+	font-size: 13px;
+	font-weight: 500;
+}
+.session-hover-card-time {
+	display: block;
+	margin-top: 6px;
+}
+.session-hover-card-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 10px;
+}
+.session-hover-card-status::before {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--hover-card-ink-2);
+	content: "";
+}
+.session-hover-card-status.running::before {
+	background: var(--hover-card-ink);
+	animation: pulse 1.4s ease-in-out infinite;
+}
+.session-hover-card-status.waiting::before {
+	background: var(--hover-card-attention);
+}
+.session-hover-card-status.failed::before {
+	background: var(--hover-card-danger);
+}
+.session-hover-card-status.completed::before {
+	background: var(--hover-card-success);
+}
+/*
+ * The card stays while the pointer is on the row's actions ("…", tag, pin); their own
+ * hints show above them. An open row menu, a drag or a drop target hides it.
+ */
+.session-row:is(:has([aria-expanded="true"]), .dragging, .drop-before, .drop-after) + .session-hover-card {
 	display: none;
 }

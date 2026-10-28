@@ -587,9 +587,15 @@
 }
 /* Each file's diff scrolls sideways on its own; the file rows above it stay put. */
 .changes-diff {
-	/* One column as wide as the longest line (never narrower than the panel), so every row's tint spans it. */
+	/*
+	 * One column as wide as the longest line (never narrower than the panel), so every row's tint
+	 * spans it when the diff scrolls sideways. `auto`, not `minmax(100%, max-content)`: in a
+	 * scroll container that minmax never grows past 100%, so the tint stopped at the panel edge.
+	 * `white-space: pre` makes a line's min-content its full width, so the `auto` track starts there
+	 * and only stretches to fill the panel when every line is shorter.
+	 */
 	display: grid;
-	grid-template-columns: minmax(100%, max-content);
+	grid-template-columns: auto;
 	overflow-x: auto;
 	padding: 4px 0 10px;
 	font: 13px / 21.5px var(--mono);
