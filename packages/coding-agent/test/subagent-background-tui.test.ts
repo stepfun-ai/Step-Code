@@ -1,5 +1,5 @@
 import { visibleWidth } from "@step-harness/pi-tui";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import {
@@ -8,7 +8,11 @@ import {
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
 } from "../src/features/step-subagent.ts";
-import { type AgentNotificationDetails, notifyLaneEvent } from "../src/features/subagent/lane-events.ts";
+import {
+	type AgentNotificationDetails,
+	maybeNotifyLaneProgress,
+	notifyLaneEvent,
+} from "../src/features/subagent/lane-events.ts";
 import { renderAgentNotification } from "../src/features/subagent/rendering.ts";
 import type { Theme } from "../src/theme/theme.ts";
 
@@ -140,6 +144,9 @@ test("background lanes share one stable list widget that clears when the batch s
 	expect(calls.length).toBe(before);
 
 	expect(new Set(calls.map((call) => call.key))).toEqual(new Set(["step-agent-lanes"]));
+	// Live frames coalesce on a repaint budget, so the roster showing both lanes
+	// running arrives on the next publish rather than synchronously.
+	await waitFor(() => (calls.at(-1)?.component?.render(100)[0] ?? "").includes("2 running"));
 	const widget = calls.at(-1)!.component!;
 	const rows = widget.render(100);
 	expect(rows[0]).toContain("background agents");
@@ -193,6 +200,26 @@ test("progress notifications reach the model but stay out of the transcript", ()
 		agents: ["general"],
 		detail: "all done",
 	});
+});
+
+test("lane notifications count omitted live records without inventing their statuses", () => {
+	const sent: Array<{ content: string }> = [];
+	const pi = { sendMessage: (message: (typeof sent)[number]) => sent.push(message) } as unknown as ExtensionAPI;
+	const lane = fakeLane("progress");
+	lane.details.omittedResults = 199;
+	lane.details.results[0] = { ...lane.details.results[0], status: "running", usage: runResult("").usage };
+	lane.lastProgressNotifyAt = 0;
+	const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+	try {
+		maybeNotifyLaneProgress(pi, lane);
+	} finally {
+		now.mockRestore();
+	}
+	expect(sent[0].content).toContain('tasks="200"');
+	expect(sent[0].content).toContain("step 1/200");
+	// Only the visible record's status is known; omitted records are not assumed done.
+	notifyLaneEvent(pi, lane, "background_done");
+	expect(sent[1].content).toContain("1 running, 199 not shown");
 });
 
 function notification(details?: AgentNotificationDetails): CustomMessage<AgentNotificationDetails> {

@@ -8,10 +8,15 @@ import {
 	createStepSubagentExtension,
 	escapeXmlAttr,
 	routeSubagentRpcLine,
+	type StepSubagentDetails,
+	type StepSubagentResultRecord,
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
 } from "../src/features/step-subagent.ts";
 import { builtinStepAgents, resolveStepAgent, type StepAgentConfig } from "../src/features/step-subagent-agents.ts";
+import { finalRoster } from "../src/features/subagent/projection.ts";
+import { renderSubagentResult } from "../src/features/subagent/rendering.ts";
+import { getThemeByName } from "../src/theme/theme.ts";
 
 interface SentMessage {
 	customType: string;
@@ -20,6 +25,74 @@ interface SentMessage {
 	deliverAs?: string;
 	triggerTurn?: boolean;
 }
+
+test.each([20, 200])("final projection preserves every outcome in a %i-task batch", async (count) => {
+	const { api, tools } = createApi();
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		maxParallelTasks: 1000,
+		runner: async (input) => {
+			const index = Number(input.task.split("-")[1]);
+			const failed = count === 200 && index % 3 === 0;
+			return {
+				...textResult(""),
+				messages: [],
+				activeText: `${input.task}\n${"r".repeat(12_000)}`,
+				exitCode: failed ? 1 : 0,
+				errorMessage: failed ? "e".repeat(5000) : undefined,
+			};
+		},
+	})(api);
+	const tool = tools.get("subagent");
+	if (!tool) throw new Error("subagent tool not registered");
+	const result = await tool.execute(
+		"batch",
+		{ tasks: Array.from({ length: count }, (_, index) => ({ agent: "general", task: `task-${index}` })) },
+		undefined,
+		undefined,
+		createContext("/tmp"),
+	);
+	// This tool owns StepSubagentDetails; the registration map erases its generic.
+	const typed = result as AgentToolResult<StepSubagentDetails>;
+	const rows = typed.details?.results ?? [];
+	expect(rows).toHaveLength(count);
+	expect(rows.every((record) => record.task.length > 0)).toBe(true);
+	expect(rows.every((record) => Boolean(record.activeText))).toBe(true);
+	const failures = rows.filter((record) => record.status === "failed");
+	expect(failures).toHaveLength(count === 200 ? 67 : 0);
+	expect(failures.every((record) => Boolean(record.errorMessage || record.stderr))).toBe(true);
+	expect(Buffer.byteLength(JSON.stringify(typed.details))).toBeLessThan(128 * 1024 + count * 1024);
+	const theme = getThemeByName("dark");
+	if (!theme) throw new Error("dark theme missing");
+	const rendered = renderSubagentResult(typed, { expanded: false, isPartial: false }, theme).render(200).join("\n");
+	expect(rendered).not.toContain("(no output)");
+});
+
+test.each(["failed", "aborted"] as const)(
+	"large %s batches retain escaped diagnostics within a size-independent bound",
+	(status) => {
+		const records: StepSubagentResultRecord[] = Array.from({ length: 200 }, () => ({
+			agent: "general",
+			agentSource: "builtin",
+			status,
+			task: "\u0001".repeat(20_000),
+			messages: [],
+			activeText: "\u0001".repeat(20_000),
+			stderr: "\u0001".repeat(20_000),
+			errorMessage: "\u0001".repeat(20_000),
+			exitCode: 1,
+			usage: textResult("").usage,
+		}));
+		const projected = finalRoster(records);
+		expect(
+			projected.every((record) => record.task && record.activeText && record.errorMessage && record.stderr),
+		).toBe(true);
+		const bytes = Buffer.byteLength(JSON.stringify(projected));
+		expect(bytes).toBeLessThan(128 * 1024 + records.length * 3000);
+		const larger = finalRoster(records.map((record) => ({ ...record, activeText: record.activeText?.repeat(10) })));
+		expect(Buffer.byteLength(JSON.stringify(larger))).toBe(bytes);
+	},
+);
 
 test("RPC forwards 429 retry and recovery signals without treating errors as successes", () => {
 	const progress: unknown[] = [];
@@ -285,6 +358,9 @@ test("a ten-task batch starts eight and queues two on a ten-core host", async ()
 			createContext("/workspace"),
 		);
 		await waitFor(() => calls === 8);
+		// Live frames coalesce on a repaint budget (see execute.ts), so the roster
+		// that reflects the dispatched batch arrives on the next frame.
+		await waitFor(() => counts.some((count) => count.running === 8 && count.queued === 2), 2_000);
 		expect(counts).toContainEqual({ running: 8, queued: 2 });
 		release();
 		await result;

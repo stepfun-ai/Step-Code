@@ -259,7 +259,16 @@ async function main() {
 
 	const agent = spawn(
 		"node",
-		[cliPath, "--mode", "rpc", "--no-session", "--no-extension", "--extension", extensionPath],
+		[
+			cliPath,
+			"--mode",
+			"rpc",
+			"--include-live-events",
+			"--no-session",
+			"--no-extension",
+			"--extension",
+			extensionPath,
+		],
 		{ stdio: ["pipe", "pipe", "pipe"] },
 	);
 

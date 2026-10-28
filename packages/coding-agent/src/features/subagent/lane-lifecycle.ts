@@ -9,7 +9,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
-import type { StepSubagentDetails, StepSubagentRpcSession, SubagentParams } from "../step-subagent.ts";
+import type {
+	StepSubagentDetails,
+	StepSubagentResultRecord,
+	StepSubagentRpcSession,
+	SubagentParams,
+} from "../step-subagent.ts";
 import type { PreparedSubagentRun, SubagentPreflight } from "./execute.ts";
 import { SUBAGENT_SESSION_ID_PREFIX } from "./helpers.ts";
 import {
@@ -86,6 +91,42 @@ function getLaneSessions(sessionId: string, liveOnly = true): StepSubagentRpcSes
 		if ((id === sessionId || id.startsWith(prefix)) && (!liveOnly || session.isAlive())) sessions.push(session);
 	}
 	return sessions;
+}
+
+/**
+ * Keep the lane's roster complete enough to report the real task count.
+ *
+ * A live frame carries only the records that fit its byte budget, and the
+ * omitted count describes that frame, not the roster we hold. Merging recovers
+ * records we once saw but never the ones we have not been sent yet, so the count
+ * is recomputed from the frame's own total instead of being cleared or kept.
+ */
+export function rosterFields(
+	previous: StepSubagentDetails,
+	next: StepSubagentDetails,
+): Pick<StepSubagentDetails, "results" | "omittedResults"> {
+	// Always set the key: the caller spreads the frame under this result, so
+	// omitting it would keep the frame's own count and double-count the records
+	// the merge just recovered.
+	if (next.omittedResults === undefined) return { results: next.results, omittedResults: undefined };
+	const total = next.results.length + next.omittedResults;
+	const merged = mergeResults(previous.results, next.results).slice(0, total);
+	const omitted = Math.max(0, total - merged.length);
+	return { results: merged, omittedResults: omitted === 0 ? undefined : omitted };
+}
+
+/** Overlay a bounded live roster onto the roster the lane already knows. */
+function mergeResults(
+	previous: readonly StepSubagentResultRecord[],
+	next: readonly StepSubagentResultRecord[],
+): StepSubagentResultRecord[] {
+	const length = Math.max(previous.length, next.length);
+	const merged: StepSubagentResultRecord[] = [];
+	for (let index = 0; index < length; index += 1) {
+		const record = next[index] ?? previous[index];
+		if (record) merged.push(record);
+	}
+	return merged;
 }
 
 function laneStatusFromDetails(details: StepSubagentDetails): BackgroundAgentLane["status"] {
@@ -250,6 +291,10 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			if (partial.details) {
 				lane.details = {
 					...partial.details,
+					// A frame is bounded by bytes, so it may omit the roster's tail.
+					// Keep the lanes already known instead of forgetting them; the
+					// final result replaces this with every task.
+					...rosterFields(lane.details, partial.details),
 					agentId: lane.id,
 					status: "running",
 					startedAt: lane.startedAt,

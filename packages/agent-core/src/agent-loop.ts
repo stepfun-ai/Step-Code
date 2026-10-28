@@ -781,46 +781,93 @@ async function prepareToolCall(
 	}
 }
 
+/**
+ * Run one prepared tool call, forwarding its progress as session events.
+ *
+ * Progress is a *replacement snapshot*: the next frame supersedes this one, so
+ * an intermediate frame may be dropped without losing information. That is not
+ * true of the result, which is returned to the loop and persisted as a message.
+ *
+ * The consequence for this function is that it must not accumulate one promise
+ * per progress callback. A tool that streams for a minute would otherwise hold
+ * every frame — and every consumer slow enough to fall behind — in memory, which
+ * is exactly how a large live payload turns into an OOM. Instead at most one
+ * frame is in flight; a frame arriving while another is being delivered replaces
+ * it, and the newest snapshot wins.
+ */
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
-	const updateEvents: Promise<void>[] = [];
 	let acceptingUpdates = true;
+	let delivering = false;
+	let pending: unknown;
+	let hasPending = false;
+	let idle: Promise<void> | undefined;
+	// Wrapped so a listener that throws `undefined` is still recorded as a failure.
+	let deliveryFailure: { error: unknown } | undefined;
+
+	const deliver = async (): Promise<void> => {
+		delivering = true;
+		try {
+			// Drain whatever is pending, even if the tool has already returned: that
+			// frame is the newest state and is exactly what the caller must see before
+			// the result. `acceptingUpdates` only rejects frames arriving afterwards.
+			while (hasPending) {
+				const partialResult = pending;
+				pending = undefined;
+				hasPending = false;
+				await emit({
+					type: "tool_execution_update",
+					toolCallId: prepared.toolCall.id,
+					toolName: prepared.toolCall.name,
+					args: prepared.toolCall.arguments,
+					partialResult,
+				});
+			}
+		} finally {
+			delivering = false;
+		}
+	};
+
+	const forward = (partialResult: unknown): void => {
+		if (!acceptingUpdates) return;
+		// Only the newest frame matters while one is in flight; that replacement is
+		// what keeps a fast producer from queueing a promise per token. Once the
+		// drain finishes, the next frame has to start a new one — caching the handle
+		// from the first frame and never clearing it silently stops forwarding.
+		pending = partialResult;
+		hasPending = true;
+		if (delivering) return;
+		idle = deliver().catch((error: unknown) => {
+			// Updates are not awaited by the tool. Retain listener failures for the
+			// awaited drain so a later frame cannot erase them or leave a rejection
+			// unobserved while the tool is still running.
+			deliveryFailure ??= { error };
+		});
+	};
 
 	try {
-		const result = await prepared.tool.execute(
-			prepared.toolCall.id,
-			prepared.args as never,
-			signal,
-			(partialResult) => {
-				if (!acceptingUpdates) return;
-				updateEvents.push(
-					Promise.resolve(
-						emit({
-							type: "tool_execution_update",
-							toolCallId: prepared.toolCall.id,
-							toolName: prepared.toolCall.name,
-							args: prepared.toolCall.arguments,
-							partialResult,
-						}),
-					),
-				);
-			},
-		);
+		const result = await prepared.tool.execute(prepared.toolCall.id, prepared.args as never, signal, forward);
+		// Stop accepting frames, then let the last one land before returning the
+		// result, so a consumer sees progress and then completion, not the reverse.
 		acceptingUpdates = false;
-		await Promise.all(updateEvents);
+		await idle;
+		if (deliveryFailure) throw deliveryFailure.error;
 		return { result, isError: result.isError === true };
 	} catch (error) {
 		acceptingUpdates = false;
-		await Promise.all(updateEvents);
+		await idle;
+		// The tool's own failure is what stopped the call; a listener failure is a
+		// second cause and must not be hidden by it (or repeat it).
+		const causes = deliveryFailure && deliveryFailure.error !== error ? [error, deliveryFailure.error] : [error];
 		return {
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+			result: createErrorToolResult(
+				causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
+			),
 			isError: true,
 		};
-	} finally {
-		acceptingUpdates = false;
 	}
 }
 
