@@ -162,6 +162,10 @@
 
 调用方必须复用同一个 `Markdown` 实例，否则实例级状态随组件一起消失；`AssistantMessageComponent` 因此按内容种类保留实例并只调 `setText`（`markdownSlots`）。每帧仍要做一次指针复制拼出扁平数组，以及主屏/全屏自己的差分；这两项是独立成本，不随前缀复用消失。Step 呈现的包装层（`step-message.ts` 的 `renderNativeRun`：`hideCompleteFences`、空行折叠、`trimOuterRows`）同样每帧扫一遍全部 native 行，那部分成本不受这里影响，需要单独处理。
 
+`invalidate()` 同时清掉 `defaultStylePrefix`。它是从主题派生的 ANSI 前缀，会在每个"在样式内结束"的行内片段之后重新拼一次；主题切换若只清缓存而留着它，旧主题的转义就会拼进新输出——当新主题不再应用该样式时（例如关掉粗体）会直接显示错。第 8 节的 `setIncrementalRenderDisabled(true)` 对这里同样生效：置位后渲染整篇且不保留前缀（`renderContent` 开头），否则那个"强制全量路径做字节级等价校验"的开关在 Markdown 内部形同虚设。
+
+**语法高亮按主题实例 + `(lang, source)` 记忆化**（`cachedHighlight`，`packages/coding-agent/src/theme/theme.ts`）。渲染器把主题当纯函数用，自己无法去重，所以只要一帧里重渲了某个已完成代码块，高亮就整块重跑：认证前缀之外的路径（块级数学、reference definition）每帧重渲整篇，而认证路径的可变尾块里若含围栏也会每帧重渲。实测 60 KB、120 列、120 B/delta，用产品主题和真实 highlight.js：块级数学文档 2 687 ms → 448 ms（6.0 倍），reference definition 2 672 ms → 457 ms（5.8 倍），普通散文 45 ms → 15 ms（3.1 倍）。未标注语言的围栏同样在缓存范围内（逐行 `fg` 也不便宜）。缓存以 `Symbol.for` 解析出的真实主题实例为键（导出的 `theme` 是 Proxy、身份不变，直接用会把上一个主题的颜色永久留给下一个），按插入顺序 FIFO 淘汰、单条超过 64 KiB 不缓存，且永远返回副本——`core/tools/write.ts` 会在流式写入时持有并修改返回数组。
+
 ## 5. 主屏差分渲染（regular）
 
 `TuiMainScreen.doRender`（`tui-main-screen.ts:329-750`）每帧的完整顺序：

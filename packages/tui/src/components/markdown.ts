@@ -1,7 +1,7 @@
 import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens, type TokensList } from "marked";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
-import type { Component } from "../tui.ts";
+import { type Component, isIncrementalRenderDisabled } from "../tui.ts";
 import { applyBackgroundToLine, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 import {
 	applyInlineTagDepth,
@@ -322,6 +322,11 @@ export class Markdown implements Component {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
+		// The default style prefix is derived from the theme, and a theme switch is
+		// delivered as an invalidate. Keeping it would splice the previous theme's
+		// escapes into every inline span that ends inside a style, which is visible
+		// whenever the new theme stops applying that style.
+		this.defaultStylePrefix = undefined;
 		// Theme, width, and option changes make previously rendered rows wrong, not
 		// just stale, so the certified prefix cannot survive an invalidate.
 		this.resetStream();
@@ -383,6 +388,16 @@ export class Markdown implements Component {
 	 * that force a full re-render.
 	 */
 	private renderContent(normalizedText: string, contentWidth: number, width: number): string[] {
+		if (isIncrementalRenderDisabled()) {
+			// The shared switch promises an unoptimized path for the render-equivalence
+			// harness. Reusing a prefix here would make that path incremental again, so
+			// the document is rendered whole and nothing is retained.
+			this.resetStream();
+			this.previousSource = normalizedText;
+			this.layoutWidth = contentWidth;
+			return this.renderFrom(normalizedText, contentWidth, width, 0, false);
+		}
+
 		const appendOnly =
 			this.previousSource.length > 0 &&
 			normalizedText.length >= this.previousSource.length &&

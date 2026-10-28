@@ -101,6 +101,21 @@ const HAZARDS: ReadonlyArray<readonly [string, string]> = [
 	["paragraph-continuation", "intro\n\nfirst line\nsecond line\n\nthird\n"],
 	["image-line", "intro\n\n![alt](https://example.com/x.png)\n\ntail\n"],
 	["empty-first-block", "\n\nfirst\n\nsecond\n"],
+	// The block shapes below were contributed by the per-token cache investigation.
+	// They are not new constructs, but each one stresses a different part of the
+	// certification: link state that is balanced again, list numbering that starts off
+	// one, wide characters, and nested containers.
+	[
+		"inline-anchor-balanced-then-autolink",
+		'<a href="x">open\n\nhttps://example.com\n\nclose </a>\n\nhttps://example.com\n\nend\n',
+	],
+	["ordered-list-starts-at-three", "3. three\n4. four\n\n5. five\n\n- a\n  1. x\n  2. y\n"],
+	["loose-list", "- one\n- two\n\n- three\n"],
+	["setext-equals", "para\n\nheading\n===\n\nafter\n"],
+	["nested-blockquote", "a\n\n> quoted\n>\n> > deeper\n>\n> more\n\noutro\n"],
+	["cjk-and-emoji", "标题\n\n中文段落 🎉 全角。\n\n- 列表\n\n| 甲 | 乙 |\n| - | - |\n| 1 | 2 |\n"],
+	["inline-latex", "a\n\ninline $E = mc^2$ math\n\nmore\n"],
+	["long-paragraph", `word ${"word ".repeat(120)}\n`],
 ];
 
 describe("Markdown streaming", () => {
