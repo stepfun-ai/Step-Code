@@ -324,11 +324,12 @@ restore; this option does not migrate existing plans or project settings.
 See [plan file storage](../../../docs/step-configuration.md#plan-file-storage)
 for path rules and retention responsibilities.
 
-- `enter_plan_mode`, `/plan`, and `--plan` share the same setup. Entry takes
+- Only the user enters plan mode: `/plan` and `--plan` share the same setup,
+  and the model has no entry tool. Entry takes
   effect immediately; it does not request approval. An explicit `--plan`
   applies at process startup, including a continued session whose mode was off;
-  later reloads and session/branch navigation do not reapply it. The plan path is
-  announced. Plan mode does not remove tools from the request — that would
+  later reloads and session/branch navigation do not reapply it. Plan mode does
+  not remove tools from the request — that would
   invalidate the provider's cached prompt prefix — so enforcement lives in the
   `tool_call` policy: `write_file`, `edit_file`, `write`, and `edit` may only
   target the plan file, and every other target is rejected with an actionable
@@ -336,6 +337,14 @@ for path rules and retention responsibilities.
   that check. This is **not a shell sandbox**: command tools retain the existing
   permission policy, and the model is instructed to keep commands read-only
   while planning.
+- The default system prompt carries no planning method. When the mode changes,
+  the next turn appends one hidden `step-plan-mode` message: a
+  `<collaboration_mode>` block with the plan method and the plan path on entry,
+  and a short Default block after a plan cycle ends. An unchanged mode is never
+  repeated, so the system prompt, tool block, and earlier history stay
+  byte-identical. If compaction summarizes the block away, or the mode changes
+  mid-run, the `context` hook adds it to that request only, without writing
+  history. See [plan approval](../../../docs/plan-approval.md#mode-announcements).
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution, stay in
   plan mode, or provide refinement notes. Cancel

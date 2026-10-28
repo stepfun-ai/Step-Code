@@ -205,15 +205,9 @@ test("Step capabilities register native plan, clarify_user, and subagent tools",
 	})(api);
 	expect([...tools.keys()]).toEqual(expect.arrayContaining(["subagent", "clarify_user"]));
 	expect([...tools.keys()]).toEqual(
-		expect.arrayContaining([
-			"enter_plan_mode",
-			"exit_plan_mode",
-			"task_create",
-			"task_update",
-			"task_get",
-			"task_list",
-		]),
+		expect.arrayContaining(["exit_plan_mode", "task_create", "task_update", "task_get", "task_list"]),
 	);
+	expect(tools.has("enter_plan_mode")).toBe(false);
 	expect(tools.has("askuser")).toBe(false);
 	expect(tools.has("questionnaire")).toBe(false);
 	expect([...commands.keys()]).toEqual(expect.arrayContaining(["plan", "todos"]));

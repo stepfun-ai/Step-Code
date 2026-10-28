@@ -11,6 +11,35 @@ through the `tool_call` policy, so the request's tool block stays byte-identical
 and the provider's prompt cache keeps its prefix. Only a profile that lacks a
 plan tool has it appended on entry, and that addition alone is reverted on exit.
 
+## Mode announcements
+
+Only the user enters plan mode, with `/plan` or `--plan`; there is no model-facing
+entry tool. The system prompt only states that plan mode is user-controlled and
+announced by the runtime; it carries no planning method in any mode. The method
+and the mode itself reach the model as append-only messages instead:
+
+| Transition | Appended at the next turn |
+| --- | --- |
+| Default → Plan | A hidden `step-plan-mode` custom message holding a `<collaboration_mode>` block with the plan method and the session plan path |
+| Plan → Default (approval, `/plan` off, or a headless/RPC handoff) | A short Default block stating that the Plan instructions no longer apply |
+| No change, or on and off again before a turn | Nothing |
+
+Earlier blocks are never edited or removed; the latest one is authoritative. The
+system prompt, tool block, and history before the new block stay byte-identical,
+so a mode change costs only the appended block. An active mode is compared with
+the last announcement still visible in the selected context, so resumed sessions
+and branch navigation re-announce only when they disagree. Leaving the mode is
+compared with the last announcement recorded in the branch history instead.
+
+Two cases cannot wait for the next turn: compaction can summarize an announcement
+away, and approval or `/plan` can change the mode during a run. The `context` hook
+appends the missing block to that provider request only; it does not write session
+history. The next turn persists the announcement normally. Leaving plan mode
+still appends the Default block when the Plan block was compacted away, because
+the compaction summary can carry its rules.
+
+## Handoff details
+
 Successful headless and RPC exits return the existing model-facing text plus
 structured `details`, for example:
 

@@ -45,7 +45,6 @@ function exitPlanModeDefinition(): ToolDefinition<any, any, any> {
 	} as unknown as ExtensionAPI;
 	registerPlanModeTools(api, {
 		isPlanModeActive: () => true,
-		enterPlanMode: () => "/tmp/plan.md",
 		exitPlanMode: () => {},
 		resolvePlanFilePath: () => "/tmp/plan.md",
 	} satisfies StepPlanModeController);

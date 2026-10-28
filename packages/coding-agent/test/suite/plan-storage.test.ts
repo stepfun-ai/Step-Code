@@ -79,7 +79,6 @@ async function setup(external: boolean, approvePlan: boolean) {
 	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", planDir);
 	const planPath = join(planDir, `session-${harness.session.sessionId}.md`);
 	harness.setResponses([
-		fauxAssistantMessage([fauxToolCall("enter_plan_mode", {})]),
 		fauxAssistantMessage([
 			fauxToolCall("write_file", { path: planPath, content: "# Proposal\nCheck the parser.\n" }),
 		]),
@@ -107,13 +106,16 @@ async function setup(external: boolean, approvePlan: boolean) {
 			harness.session.dispose();
 		},
 	};
-	const run = () =>
-		runPrintMode(host as unknown as AgentSessionRuntimeHost, {
+	// Only the user enters plan mode; /plan runs as a command and starts no turn.
+	const run = async () => {
+		await harness.session.prompt("/plan");
+		return runPrintMode(host as unknown as AgentSessionRuntimeHost, {
 			mode: "json",
 			initialMessage: "Plan the change, implement it, and finish with committed work.",
 			completionCheck: "git-committed",
 			completionCheckAttempts: 1,
 		});
+	};
 	return { harness, cwd, planPath, run };
 }
 
@@ -141,15 +143,18 @@ test.each([false, true])(
 		expect(await run()).toBe(0);
 		const tools = harness.eventsOfType("tool_execution_end");
 		expect(tools.map((event) => [event.toolName, event.isError])).toEqual([
-			["enter_plan_mode", false],
 			["write_file", false],
 			["edit_file", false],
 			["exit_plan_mode", false],
 		]);
-		expect(getMessageText(tools[0].result)).toContain(planPath);
-		expect(getMessageText(tools[3].result)).toContain("caller must gate approval externally");
-		expect(getMessageText(tools[3].result)).toContain("Check the parser and tests.");
-		expect(tools[3].result.details).toMatchObject({ outcome: "approved", approvalSource: "external" });
+		// The plan file reaches the model through the plan-mode announcement.
+		const announcement = harness.session.messages.find(
+			(message) => message.role === "custom" && message.customType === "step-plan-mode",
+		);
+		expect(JSON.stringify(announcement)).toContain(planPath);
+		expect(getMessageText(tools[2].result)).toContain("caller must gate approval externally");
+		expect(getMessageText(tools[2].result)).toContain("Check the parser and tests.");
+		expect(tools[2].result.details).toMatchObject({ outcome: "approved", approvalSource: "external" });
 		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
 		expect(existsSync(join(cwd, ".gitignore"))).toBe(false);
 		// Physical absence catches accidental project writes even if Git ignores them.

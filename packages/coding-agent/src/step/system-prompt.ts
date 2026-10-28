@@ -192,19 +192,10 @@ export function buildStepSystemPromptAppendix(
 	const hasExecute = hasAnyTool(active, EXECUTE_TOOLS);
 	const operatingMode: "all-tools" | "read-only" = hasWrite || hasExecute ? "all-tools" : "read-only";
 
-	const planningSection = active.has("enter_plan_mode")
+	const planModeSection = active.has("exit_plan_mode")
 		? [
-				"# Planning",
-				[
-					"- A plan is a Markdown proposal explaining how and why to do the work: approach, constraints, trade-offs, and validation. It is not a todo checklist.",
-					"- Call enter_plan_mode before work that spans multiple files, changes architecture or public interfaces, or where the request is ambiguous enough that exploration should shape the approach.",
-					"- There is no entry gate: enter_plan_mode takes effect immediately without user approval, so prefer entering plan mode over guessing when scope is unclear.",
-					"- While plan mode is active, file-editing tools can only write to the session plan file announced by enter_plan_mode. This is not a shell sandbox: run_command retains normal permissions; keep commands read-only and non-destructive while planning.",
-					"- Explore the repository first, then write the complete plan to the announced plan file with write_file: goal, ordered steps with file paths, validation commands, and open questions.",
-					"- Call exit_plan_mode to submit the written proposal for review, not to approve it yourself. In interactive sessions, approval exits plan mode; staying, requesting refinements, or cancelling keeps it active. After refinements, update the plan file and submit it again. In headless and RPC sessions the tool exits without interactive approval; the caller must gate approval externally before continuing execution.",
-					"- After the user approves execution, keep the plan file as the reference and follow it step by step; do not silently diverge from the approved plan.",
-					"- Skip plan mode for trivial work: single-file edits, direct questions, or tasks with an obvious short path.",
-				].join("\n"),
+				"# Plan mode",
+				"Plan mode is user-controlled: only the user starts it, with /plan or --plan, and you cannot enter it yourself. A <collaboration_mode> message from the runtime announces each mode change and carries that mode's instructions; follow the latest one.",
 			]
 		: [];
 
@@ -325,13 +316,13 @@ export function buildStepSystemPromptAppendix(
 
 		"# Workflow",
 		"1. Understand first: read relevant code and project instructions, then investigate until the root cause is clear.",
-		"2. Plan when useful: for work with several non-trivial steps or real uncertainty, keep a concise plan and update it as facts change.",
+		"2. Track multi-step work: for several non-trivial steps, record progress with the task tools when they are available and update it as facts change. A todo list is not a plan proposal.",
 		"3. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
 		"4. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
 		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly. For UI-facing changes, also verify visually when a browser or screenshot tool is available; when none is, suggest installing the playwright plugin.",
 		"6. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
 
-		...planningSection,
+		...planModeSection,
 
 		...taskTrackingSection,
 

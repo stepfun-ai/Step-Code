@@ -131,15 +131,21 @@ describe("Step system prompt appendix", () => {
 		expect(withoutSubagent).not.toContain("# Delegation");
 	});
 
-	it("adds the Planning section only when enter_plan_mode is active", () => {
-		const withPlan = buildStepSystemPromptAppendix(["read_file", "enter_plan_mode", "exit_plan_mode"]);
-		expect(withPlan).toContain("# Planning");
-		expect(withPlan).toContain("There is no entry gate");
-		expect(withPlan).toContain("exit_plan_mode");
-		expect(withPlan).toContain("Skip plan mode for trivial work");
+	it("never describes plan mode as something the model enters", () => {
+		const withPlan = buildStepSystemPromptAppendix(["read_file", "exit_plan_mode"]);
+		expect(withPlan).not.toContain("# Planning");
+		expect(withPlan).not.toContain("enter_plan_mode");
+		expect(withPlan).not.toContain("There is no entry gate");
+		expect(withPlan).toContain("# Plan mode");
+		expect(withPlan).toContain("only the user starts it, with /plan or --plan");
+		expect(withPlan).toContain("<collaboration_mode>");
 
 		const withoutPlan = buildStepSystemPromptAppendix(["read_file", "write_file"]);
-		expect(withoutPlan).not.toContain("# Planning");
+		expect(withoutPlan).not.toContain("# Plan mode");
+		expect(withoutPlan).not.toContain("<collaboration_mode>");
+		// The workflow step tracks progress; it no longer asks for a standing plan.
+		expect(withoutPlan).not.toContain("Plan when useful");
+		expect(withoutPlan).toContain("A todo list is not a plan proposal");
 	});
 
 	it("adds the Task tracking section and task tool rules only when task tools are active", () => {
@@ -158,22 +164,16 @@ describe("Step system prompt appendix", () => {
 
 	it("distinguishes a proposal from execution progress and refreshes tasks after resume", () => {
 		const prompt = buildStepSystemPromptAppendix([
-			"enter_plan_mode",
 			"exit_plan_mode",
 			"task_create",
 			"task_update",
 			"task_get",
 			"task_list",
 		]);
-		expect(prompt).toContain("A plan is a Markdown proposal explaining how and why");
 		expect(prompt).toContain("Tasks are todo items in the session execution checklist");
 		expect(prompt).toContain("not to execute, delegate, or schedule work");
-		expect(prompt).toContain("submit the written proposal for review, not to approve it yourself");
-		expect(prompt).toContain("staying, requesting refinements, or cancelling keeps it active");
-		expect(prompt).toContain("exits without interactive approval");
-		expect(prompt).toContain("not a shell sandbox");
+		expect(prompt).toContain("independent of plan mode");
 		expect(prompt).toContain("resuming work or after compaction");
-		expect(prompt).toContain("caller must gate approval externally");
 		expect(prompt).not.toContain("update_plan");
 		expect(prompt).not.toContain("TodoWrite");
 	});

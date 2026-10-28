@@ -51,6 +51,7 @@ const PLAN_TOOLS_UNDER_TEST = [
 	"clarify_user",
 	"write_file",
 	"edit_file",
+	"exit_plan_mode",
 ];
 
 /** Keys the review dialog reacts to, spelled the way the terminal sends them. */
@@ -225,6 +226,14 @@ async function runTool(harness: Harness, name: string, params: unknown, ctx: Ext
 	return await tool!.execute(`${name}-call`, params as never, undefined, undefined, ctx);
 }
 
+/** Enter plan mode the only way a session can: the user's /plan toggle. */
+async function enterPlanMode(harness: Harness, ctx: ExtensionContext): Promise<void> {
+	await harness.commands.get("plan")!.handler("", ctx);
+}
+
+const NOT_IN_PLAN_MODE =
+	"Not in plan mode. Only the user starts plan mode, with /plan or --plan; continue the task in the current mode.";
+
 function lastPlanEntry(harness: Harness): Record<string, unknown> {
 	const entry = harness.appended.filter((candidate) => candidate.customType === "step-plan").at(-1);
 	expect(entry, "a step-plan entry was persisted").toBeDefined();
@@ -235,12 +244,11 @@ function lastPlanEntry(harness: Harness): Record<string, unknown> {
 // Legacy hidden-meta scrubbing
 // ---------------------------------------------------------------------------
 
-test("plan extension no longer injects hidden meta and scrubs the persisted legacy ones", async () => {
+test("plan extension scrubs the legacy hidden meta messages", async () => {
 	const harness = createHarness();
 	createStepPlanExtension()(harness.api);
 
-	// The per-turn injection and the text-mining hooks are gone.
-	expect(harness.handlerEvents()).not.toContain("before_agent_start");
+	// The text-mining hooks are gone; before_agent_start only announces mode changes.
 	expect(harness.handlerEvents()).not.toContain("turn_end");
 	expect(harness.handlerEvents()).not.toContain("agent_end");
 
@@ -266,7 +274,7 @@ test("run_command is not gated in plan mode; non-plan-file mutations still are",
 	const harness = createHarness({ cwd });
 	createStepPlanExtension()(harness.api);
 	const context = harness.ctx();
-	await runTool(harness, "enter_plan_mode", {}, context);
+	await enterPlanMode(harness, context);
 
 	await expect(
 		harness.emit(
@@ -295,7 +303,7 @@ test("run_command is not gated in plan mode; non-plan-file mutations still are",
 // planSource
 // ---------------------------------------------------------------------------
 
-test("planSource is user for /plan, agent for enter_plan_mode, and cleared on exit", async () => {
+test("planSource is user for /plan and cleared on exit", async () => {
 	const cwd = makeWorkspace();
 	const harness = createHarness({ cwd });
 	createStepPlanExtension()(harness.api);
@@ -308,9 +316,6 @@ test("planSource is user for /plan, agent for enter_plan_mode, and cleared on ex
 	const afterToggleOff = lastPlanEntry(harness);
 	expect(afterToggleOff.enabled).toBe(false);
 	expect(afterToggleOff.planSource).toBeUndefined();
-
-	await runTool(harness, "enter_plan_mode", {}, context);
-	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true, planSource: "agent" });
 });
 
 // ---------------------------------------------------------------------------
@@ -460,9 +465,6 @@ test("status chip shows Planning with the source and clears when plan mode is of
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
 	await harness.commands.get("plan")!.handler("", context);
 	expect(harness.statuses.get("plan-mode")).toBeUndefined();
-
-	await runTool(harness, "enter_plan_mode", {}, context);
-	expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
 });
 
 test("session_start restores the chip: user for --plan, unknown for persisted state without planSource", async () => {
@@ -490,8 +492,8 @@ test("plan telemetry carries the source dim across enter, update, and exit", asy
 	await harness.commands.get("plan")!.handler("", context);
 	await harness.commands.get("plan")!.handler("", context);
 
-	// Agent flow: enter, write the plan file, approved exit.
-	await runTool(harness, "enter_plan_mode", {}, context);
+	// Second cycle: enter, write the plan file, approved exit.
+	await enterPlanMode(harness, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	await harness.emit(
 		{ type: "tool_call", toolName: "write_file", toolCallId: "t1", input: { path: planPath, content: "# plan" } },
@@ -504,9 +506,9 @@ test("plan telemetry carries the source dim across enter, update, and exit", asy
 	expect(events).toEqual([
 		{ event: "plan_mode_entered", properties: { source: "user" } },
 		{ event: "plan_mode_exited", properties: { source: "user", outcome: "toggled_off" } },
-		{ event: "plan_mode_entered", properties: { source: "agent" } },
-		{ event: "plan_updated", properties: { source: "agent", created: true } },
-		{ event: "plan_mode_exited", properties: { source: "agent", outcome: "approved" } },
+		{ event: "plan_mode_entered", properties: { source: "user" } },
+		{ event: "plan_updated", properties: { source: "user", created: true } },
+		{ event: "plan_mode_exited", properties: { source: "user", outcome: "approved" } },
 	]);
 });
 
@@ -523,7 +525,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	// RPC can expose a dialog bridge (hasUI true), but approval still belongs to its caller.
 	const context = harness.ctx({ mode: "rpc", hasUI });
 
-	await runTool(harness, "enter_plan_mode", {}, context);
+	await enterPlanMode(harness, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	const planContents = "# The plan\n1. Do the thing\n";
@@ -564,7 +566,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	).toBe(true);
 	expect(events.at(-1)).toEqual({
 		event: "plan_mode_exited",
-		properties: { source: "agent", outcome: "auto_rpc" },
+		properties: { source: "user", outcome: "auto_rpc" },
 	});
 });
 
@@ -574,7 +576,7 @@ test("tui-mode exit_plan_mode still gates through the review dialog", async () =
 	createStepPlanExtension()(harness.api);
 	const context = harness.ctx();
 
-	await runTool(harness, "enter_plan_mode", {}, context);
+	await enterPlanMode(harness, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	writeFileSync(planPath, "# The plan\n");
@@ -585,7 +587,7 @@ test("tui-mode exit_plan_mode still gates through the review dialog", async () =
 	};
 	expect(harness.customCalls()).toBe(1);
 	expect(result.content[0]!.text).toContain("Staying in plan mode.");
-	expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
 	// Escape hands the turn back to the user. Without this the model re-submits
 	// the unchanged plan straight away and the dialog re-opens on every Escape.
 	expect(result.terminate).toBe(true);
@@ -610,7 +612,7 @@ test.each([
 		const planContents = "# The plan\n";
 		const harness = createHarness({ cwd, review: keys });
 		createStepPlanExtension()(harness.api);
-		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		await enterPlanMode(harness, harness.ctx());
 		mkdirSync(path.dirname(planPath), { recursive: true });
 		writeFileSync(planPath, planContents);
 
@@ -637,14 +639,14 @@ test.each([
 // Shared entry and branch-local restoration
 // ---------------------------------------------------------------------------
 
-test("plan extension registers only the plan command and its two model tools", () => {
+test("plan extension registers only the plan command and the exit tool; the model cannot enter plan mode", () => {
 	const harness = createHarness();
 	createStepPlanExtension()(harness.api);
 	expect([...harness.commands.keys()]).toEqual(["plan"]);
-	expect([...harness.tools.keys()]).toEqual(["enter_plan_mode", "exit_plan_mode"]);
+	expect([...harness.tools.keys()]).toEqual(["exit_plan_mode"]);
 });
 
-const planEntryCases = ["/plan", "--plan", "enter_plan_mode"].flatMap((entry) =>
+const planEntryCases = ["/plan", "--plan"].flatMap((entry) =>
 	[false, true].map((external) => [entry, external] as const),
 );
 
@@ -660,13 +662,12 @@ test.each(planEntryCases)(
 		harness.api.setActiveTools(originalTools);
 		createStepPlanExtension({ telemetry })(harness.api);
 		const context = harness.ctx();
-		if (entry === "/plan") await harness.commands.get("plan")!.handler("", context);
-		else if (entry === "--plan") await harness.emit({ type: "session_start", reason: "startup" }, context);
-		else await runTool(harness, "enter_plan_mode", {}, context);
+		if (entry === "/plan") await enterPlanMode(harness, context);
+		else await harness.emit({ type: "session_start", reason: "startup" }, context);
 
 		const planPath = path.join(planDir, "session-sess-1.md");
 		expect(fs.existsSync(planDir)).toBe(false);
-		const source = entry === "enter_plan_mode" ? "agent" : "user";
+		const source = "user";
 		expect(lastPlanEntry(harness)).toMatchObject({
 			version: 2,
 			enabled: true,
@@ -684,10 +685,8 @@ test.each(planEntryCases)(
 		// cached prompt prefix for the whole conversation.
 		expect(harness.activeTools()).toContain("write");
 		expect(harness.activeTools()).toContain("edit");
-		if (source === "user") {
-			expect(harness.notifications.at(-1)?.message).toContain(planPath);
-			expect(harness.notifications.at(-1)?.message).not.toContain("command execution are disabled");
-		}
+		expect(harness.notifications.at(-1)?.message).toContain(planPath);
+		expect(harness.notifications.at(-1)?.message).not.toContain("command execution are disabled");
 		// The guard is the only enforcement now that the editing tools stay
 		// visible, and the file tools resolve through resolveToCwd. Every accepted
 		// spelling below must therefore mean the same file the tools will write.
@@ -726,8 +725,9 @@ test.each(planEntryCases)(
 		const snapshotsBefore = harness.appended.length;
 		const telemetryBefore = events.length;
 		const toolsBefore = harness.activeTools();
-		const repeated = await runTool(harness, "enter_plan_mode", {}, context);
-		expect(repeated).toMatchObject({ content: [{ text: expect.stringContaining(planPath) }] });
+		// `/plan <task>` while planning hands over the task without re-entering.
+		await harness.commands.get("plan")!.handler("refine the proposal", context);
+		expect(harness.userMessages.at(-1)).toEqual(["refine the proposal", {}]);
 		expect(harness.appended).toHaveLength(snapshotsBefore);
 		expect(events).toHaveLength(telemetryBefore);
 		expect(events[0]).toEqual({ event: "plan_mode_entered", properties: { source } });
@@ -752,7 +752,6 @@ test("entering and leaving plan mode keeps an equivalent tool set in its origina
 	// so plan mode narrows permissions without changing the capability set.
 	const originalTools = [
 		"clarify_user",
-		"enter_plan_mode",
 		"exit_plan_mode",
 		"list_directory",
 		"find_files",
@@ -826,6 +825,7 @@ test("entering plan mode appends only the plan tools a profile lacks", async () 
 			"clarify_user",
 			"write_file",
 			"edit_file",
+			"exit_plan_mode",
 		],
 	]);
 	// Existing order is preserved and nothing is dropped.
@@ -880,7 +880,7 @@ test.each(["session_start", "session_tree"] as const)(
 		harness.session.branch(branchA);
 		createStepPlanExtension({ telemetry })(harness.api);
 		for (const name of ["branch_a_tool", "branch_b_tool"]) {
-			harness.api.registerTool({ ...harness.tools.get("enter_plan_mode")!, name });
+			harness.api.registerTool({ ...harness.tools.get("exit_plan_mode")!, name });
 		}
 		harness.api.setActiveTools([...harness.activeTools(), "branch_a_tool", "branch_b_tool"]);
 
@@ -888,9 +888,6 @@ test.each(["session_start", "session_tree"] as const)(
 		expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
 		expect(harness.activeTools()).toContain("branch_a_tool");
 		expect(harness.activeTools()).not.toContain("branch_b_tool");
-		expect(await runTool(harness, "enter_plan_mode", {}, harness.ctx())).toMatchObject({
-			content: [{ text: expect.stringContaining(pathA) }],
-		});
 		await expect(
 			harness.emit({ type: "tool_call", toolName: "edit_file", input: { path: pathA } }, harness.ctx()),
 		).resolves.toBeUndefined();
@@ -908,9 +905,9 @@ test.each(["session_start", "session_tree"] as const)(
 		expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
 		expect(harness.activeTools()).toContain("branch_b_tool");
 		expect(harness.activeTools()).not.toContain("branch_a_tool");
-		expect(await runTool(harness, "enter_plan_mode", {}, harness.ctx())).toMatchObject({
-			content: [{ text: expect.stringContaining(pathB) }],
-		});
+		await expect(
+			harness.emit({ type: "tool_call", toolName: "edit_file", input: { path: pathB } }, harness.ctx()),
+		).resolves.toBeUndefined();
 		await harness.commands.get("plan")!.handler("", harness.ctx());
 		expect(harness.activeTools()).toEqual(toolsB);
 
@@ -926,7 +923,7 @@ test.each(["session_start", "session_tree"] as const)(
 		expect(harness.appended).toHaveLength(snapshotsBefore);
 		expect(events).toHaveLength(telemetryBefore);
 		expect(await runTool(harness, "exit_plan_mode", {}, harness.ctx())).toMatchObject({
-			content: [{ text: "Not in plan mode." }],
+			content: [{ text: NOT_IN_PLAN_MODE }],
 		});
 		expect(events.filter((event) => event.event === "plan_mode_entered")).toEqual([]);
 	},
@@ -944,7 +941,7 @@ test("legacy off snapshots recover the latest branch baseline and new entry capt
 	});
 	createStepPlanExtension()(harness.api);
 	for (const name of ["older_tool", "saved_tool", "new_tool"]) {
-		harness.api.registerTool({ ...harness.tools.get("enter_plan_mode")!, name });
+		harness.api.registerTool({ ...harness.tools.get("exit_plan_mode")!, name });
 	}
 	for (let attempt = 0; attempt < 2; attempt++) {
 		await restoreLifecycle(harness, "session_start");
@@ -973,7 +970,7 @@ test("exiting plan mode removes only the tools entering added", async () => {
 	// Register the custom names too: the real session drops unknown names, so a
 	// test that relies on them must not depend on the stub echoing everything.
 	for (const name of ["custom_tool", "late_tool"]) {
-		harness.api.registerTool({ ...harness.tools.get("enter_plan_mode")!, name });
+		harness.api.registerTool({ ...harness.tools.get("exit_plan_mode")!, name });
 	}
 	const context = harness.ctx();
 
@@ -1085,6 +1082,7 @@ test("a stale legacy baseline is not replayed onto a newer plan entry", async ()
 		"clarify_user",
 		"write_file",
 		"edit_file",
+		"exit_plan_mode",
 		"late_tool",
 	];
 	harness.api.setActiveTools(live);
@@ -1128,11 +1126,11 @@ test.each(["session_start", "session_tree"] as const)(
 		await expect(
 			harness.emit({ type: "tool_call", toolName: "write_file", input: { path: "src/app.ts" } }, harness.ctx()),
 		).resolves.toBeUndefined();
-		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		await enterPlanMode(harness, harness.ctx());
 		expect(lastPlanEntry(harness)).toMatchObject({
 			version: 2,
 			planFilePath: path.join(cwd, ".stepcode", "plans", "session-sess-1.md"),
-			planSource: "agent",
+			planSource: "user",
 		});
 	},
 );
@@ -1274,7 +1272,7 @@ test("switching to a fresh session clears the preceding plan path and source", a
 	const cwd = makeWorkspace();
 	const harness = createHarness({ cwd, flags: { plan: true } });
 	createStepPlanExtension()(harness.api);
-	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	await enterPlanMode(harness, harness.ctx());
 	harness.session.newSession({ id: "sess-2" });
 	await harness.emit({ type: "session_start", reason: "new" }, harness.ctx());
 	expect(harness.statuses.get("plan-mode")).toBeUndefined();
@@ -1313,25 +1311,25 @@ test("the selected external plan path stays pinned until a fresh session", async
 	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", firstRoot);
 	const harness = createHarness({ cwd });
 	createStepPlanExtension()(harness.api);
-	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	await enterPlanMode(harness, harness.ctx());
 	const firstPath = path.join(firstRoot, "session-sess-1.md");
 	expect(lastPlanEntry(harness).planFilePath).toBe(firstPath);
 	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", nextRoot);
 	for (const type of ["session_start", "session_tree"] as const) {
 		await restoreLifecycle(harness, type);
-		expect(await runTool(harness, "enter_plan_mode", {}, harness.ctx())).toMatchObject({
-			content: [{ text: expect.stringContaining(firstPath) }],
-		});
+		await expect(
+			harness.emit({ type: "tool_call", toolName: "write_file", input: { path: firstPath } }, harness.ctx()),
+		).resolves.toBeUndefined();
 	}
 	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", undefined);
 	await harness.commands.get("plan")!.handler("", harness.ctx());
 	await restoreLifecycle(harness, "session_start");
-	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	await enterPlanMode(harness, harness.ctx());
 	expect(lastPlanEntry(harness).planFilePath).toBe(firstPath);
 	vi.stubEnv("STEP_CODING_AGENT_PLAN_DIR", nextRoot);
 	harness.session.newSession({ id: "sess-2" });
 	await harness.emit({ type: "session_start", reason: "new" }, harness.ctx());
-	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	await enterPlanMode(harness, harness.ctx());
 	expect(lastPlanEntry(harness).planFilePath).toBe(path.join(nextRoot, "session-sess-2.md"));
 });
 
@@ -1386,7 +1384,7 @@ for (const { mode, hasUI } of [
 		const harness = createHarness({ cwd: makeWorkspace() });
 		createStepPlanExtension()(harness.api);
 		expect(await runTool(harness, "exit_plan_mode", {}, harness.ctx({ mode, hasUI }))).toEqual({
-			content: [{ type: "text", text: "Not in plan mode." }],
+			content: [{ type: "text", text: NOT_IN_PLAN_MODE }],
 			details: undefined,
 			terminate: false,
 		});
@@ -1403,7 +1401,8 @@ for (const { mode, hasUI } of [
 			const harness = createHarness({ cwd, select });
 			createStepPlanExtension({ telemetry })(harness.api);
 			const context = harness.ctx({ mode, hasUI });
-			await runTool(harness, "enter_plan_mode", {}, context);
+			await enterPlanMode(harness, context);
+			const noticesAfterEntry = harness.notifications.length;
 			const planningTools = harness.activeTools();
 			const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 			mkdirSync(path.dirname(planPath), { recursive: true });
@@ -1432,9 +1431,9 @@ for (const { mode, hasUI } of [
 			expect(result.content[0].text).toMatch(/write_file|readable|regular file/i);
 			expect(lastPlanEntry(harness).enabled).toBe(true);
 			expect(harness.appended).toHaveLength(1);
-			expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
-			expect(events).toEqual([{ event: "plan_mode_entered", properties: { source: "agent" } }]);
-			expect(harness.notifications).toEqual([]);
+			expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+			expect(events).toEqual([{ event: "plan_mode_entered", properties: { source: "user" } }]);
+			expect(harness.notifications).toHaveLength(noticesAfterEntry);
 		},
 	);
 }
@@ -1452,7 +1451,7 @@ test.each([
 	const originalTools = ["read_file", "custom_tool"];
 	harness.api.setActiveTools(originalTools);
 	createStepPlanExtension({ telemetry })(harness.api);
-	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	await enterPlanMode(harness, harness.ctx());
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	const proposal = "Change the parser, add focused regression coverage, then verify the result.";
@@ -1466,7 +1465,7 @@ test.each([
 		expect(harness.activeTools()).toEqual(originalTools);
 		expect(events.at(-1)).toEqual({
 			event: "plan_mode_exited",
-			properties: { source: "agent", outcome: "approved" },
+			properties: { source: "user", outcome: "approved" },
 		});
 	} else {
 		expect(lastPlanEntry(harness).enabled).toBe(true);
@@ -1484,7 +1483,7 @@ test.each(["Cover the migration edge case.", "  padded note  "])(
 			review: [REVIEW_KEYS.down, ...typeReview(notes), REVIEW_KEYS.enter],
 		});
 		createStepPlanExtension()(harness.api);
-		await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+		await enterPlanMode(harness, harness.ctx());
 		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 		mkdirSync(path.dirname(planPath), { recursive: true });
 		writeFileSync(planPath, "Draft proposal.");
@@ -1492,7 +1491,7 @@ test.each(["Cover the migration edge case.", "  padded note  "])(
 		const result = await runTool(harness, "exit_plan_mode", {}, harness.ctx());
 		expect(lastPlanEntry(harness).enabled).toBe(true);
 		expect(harness.appended).toHaveLength(1);
-		expect(harness.statuses.get("plan-mode")).toBe("Planning (agent)");
+		expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
 		// Steering, not follow-up: this tool result keeps the agent running, and the
 		// follow-up queue only drains once it would stop, so the note has to jump the
 		// queue or the model answers the empty turn by asking what to change.
@@ -1509,7 +1508,7 @@ test("the review dialog shows the whole plan, however long", async () => {
 	const cwd = makeWorkspace();
 	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
 	createStepPlanExtension()(harness.api);
-	await runTool(harness, "enter_plan_mode", {}, harness.ctx());
+	await enterPlanMode(harness, harness.ctx());
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	const proposal = [
@@ -1542,7 +1541,7 @@ test("a valid headless proposal exits requiring external approval with the whole
 	const originalTools = harness.activeTools();
 	createStepPlanExtension({ telemetry })(harness.api);
 	const context = harness.ctx({ mode: "print", hasUI: false });
-	await runTool(harness, "enter_plan_mode", {}, context);
+	await enterPlanMode(harness, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	const planContents = `${"p".repeat(2000)}tail of the plan`;
@@ -1579,7 +1578,7 @@ test("a valid headless proposal exits requiring external approval with the whole
 	expect(harness.activeTools()).toEqual(originalTools);
 	expect(events.at(-1)).toEqual({
 		event: "plan_mode_exited",
-		properties: { source: "agent", outcome: "auto_headless" },
+		properties: { source: "user", outcome: "auto_headless" },
 	});
 });
 
@@ -1602,7 +1601,7 @@ test.each(["tui", "print", "rpc"] as const)(
 		const hashes: string[] = [];
 
 		for (const planContents of variants) {
-			await runTool(harness, "enter_plan_mode", {}, context);
+			await enterPlanMode(harness, context);
 			writeFileSync(planPath, planContents);
 			const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { details?: PlanReviewDetails };
 			expect(result.details).toMatchObject({
@@ -1615,18 +1614,6 @@ test.each(["tui", "print", "rpc"] as const)(
 		expect(new Set(hashes).size).toBe(variants.length);
 	},
 );
-
-test("enter_plan_mode describes writing a proposal rather than tracking todos", () => {
-	const harness = createHarness();
-	createStepPlanExtension()(harness.api);
-	const tool = harness.tools.get("enter_plan_mode")!;
-	expect(tool.description).toContain("not to track todos");
-	expect(tool.description).toContain("Returns the proposal file path");
-	expect(tool.description).toContain("write_file or edit_file");
-	expect(tool.description).toContain("File-editing tools are limited to that file");
-	expect(tool.description).toContain("commands still use normal permissions");
-	expect(tool.promptSnippet).toContain("proposal");
-});
 
 test("exit_plan_mode describes review and mode-specific approval rather than unconditional exit", () => {
 	const harness = createHarness();
@@ -1696,3 +1683,203 @@ test("bare /plan still toggles plan mode and sends nothing", async () => {
 	expect(harness.statuses.get("plan-mode")).toBeUndefined();
 	expect(harness.userMessages).toEqual([]);
 });
+
+// ---------------------------------------------------------------------------
+// Collaboration-mode announcements
+// ---------------------------------------------------------------------------
+
+interface AnnouncementMessage {
+	customType: string;
+	content: string;
+	display: boolean;
+	details: { mode: string; planFilePath?: string };
+}
+
+async function startTurn(harness: Harness): Promise<AnnouncementMessage | undefined> {
+	const result = (await harness.emit(
+		{ type: "before_agent_start", prompt: "next", systemPrompt: "base prompt" },
+		harness.ctx(),
+	)) as { message?: AnnouncementMessage } | undefined;
+	// Persist like AgentSession does, so the next turn sees what was announced.
+	if (result?.message) {
+		const { customType, content, display, details } = result.message;
+		harness.session.appendCustomMessageEntry(customType, content, display, details);
+	}
+	return result?.message;
+}
+
+async function requestView(harness: Harness, messages: Array<Record<string, unknown>>) {
+	const result = (await harness.emit({ type: "context", messages }, harness.ctx())) as {
+		messages: Array<Record<string, unknown>>;
+	};
+	return result.messages;
+}
+
+test("default mode announces nothing and leaves the request untouched", async () => {
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	expect(await startTurn(harness)).toBeUndefined();
+	const messages = [{ role: "user", content: "hello" }];
+	expect(await requestView(harness, messages)).toEqual(messages);
+});
+
+test("/plan announces plan mode once, and leaving it announces Default once", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+
+	await enterPlanMode(harness, harness.ctx());
+	const planBlock = await startTurn(harness);
+	expect(planBlock).toMatchObject({
+		customType: "step-plan-mode",
+		display: false,
+		details: { mode: "plan", planFilePath: planPath },
+	});
+	expect(planBlock?.content).toContain("<collaboration_mode>");
+	expect(planBlock?.content).toContain(planPath);
+	expect(planBlock?.content).toContain("exit_plan_mode");
+	// Append-only: an unchanged mode is never repeated.
+	expect(await startTurn(harness)).toBeUndefined();
+
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	const defaultBlock = await startTurn(harness);
+	expect(defaultBlock).toMatchObject({ customType: "step-plan-mode", details: { mode: "default" } });
+	expect(defaultBlock?.content).toContain("Collaboration Mode: Default");
+	expect(await startTurn(harness)).toBeUndefined();
+	// The block travels as a hidden message; plan state entries are unchanged in shape.
+	expect(harness.appended.every((entry) => entry.customType === "step-plan")).toBe(true);
+});
+
+test("/plan <task> announces plan mode on the turn that carries the task", async () => {
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	await harness.commands.get("plan")!.handler("plan the parser rewrite", harness.ctx());
+	expect(harness.userMessages).toEqual([["plan the parser rewrite", {}]]);
+	expect((await startTurn(harness))?.details.mode).toBe("plan");
+});
+
+test("toggling plan mode on and off between turns announces nothing", async () => {
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	await enterPlanMode(harness, harness.ctx());
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	expect(await startTurn(harness)).toBeUndefined();
+});
+
+test("the context hook restores a compacted announcement without writing history", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	await enterPlanMode(harness, harness.ctx());
+	const announced = await startTurn(harness);
+	const appendedBefore = harness.appended.length;
+	const entriesBefore = harness.session.getEntries().length;
+
+	// Compaction summarized the block away: the request view gets it back.
+	const compacted = [{ role: "compactionSummary", summary: "earlier work", timestamp: 1 }];
+	const restored = await requestView(harness, compacted);
+	expect(restored).toHaveLength(2);
+	expect(restored[1]).toMatchObject({
+		role: "custom",
+		customType: "step-plan-mode",
+		display: false,
+		content: announced?.content,
+	});
+
+	// With the block still present, nothing is added.
+	const intact = [{ role: "custom", ...announced, timestamp: 1 }];
+	expect(await requestView(harness, intact)).toEqual(intact);
+
+	expect(harness.appended).toHaveLength(appendedBefore);
+	expect(harness.session.getEntries()).toHaveLength(entriesBefore);
+});
+
+test("an approval mid-run shows the Default block on the next request of the same run", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
+	createStepPlanExtension()(harness.api);
+	await enterPlanMode(harness, harness.ctx());
+	const announced = await startTurn(harness);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n");
+	await runTool(harness, "exit_plan_mode", {}, harness.ctx());
+
+	const view = await requestView(harness, [{ role: "custom", ...announced, timestamp: 1 }]);
+	expect(view.at(-1)).toMatchObject({ customType: "step-plan-mode", details: { mode: "default" } });
+	// The next turn persists the Default block once.
+	expect((await startTurn(harness))?.details.mode).toBe("default");
+	expect(await startTurn(harness)).toBeUndefined();
+});
+
+test("a compacted Plan block is re-announced while planning and still retracted after leaving", async () => {
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	await enterPlanMode(harness, harness.ctx());
+	expect((await startTurn(harness))?.details.mode).toBe("plan");
+
+	// Compaction keeps only entries from the marker on: the Plan block is summarized away.
+	const kept = harness.session.appendCustomEntry("marker");
+	harness.session.appendCompaction("earlier planning", kept, 1000);
+	expect((await startTurn(harness))?.details.mode).toBe("plan");
+
+	const second = harness.session.appendCustomEntry("marker");
+	harness.session.appendCompaction("more planning", second, 1000);
+	await harness.commands.get("plan")!.handler("", harness.ctx());
+	// The summary may still carry Plan rules, so leaving owes a Default block even
+	// though no Plan block is visible any more.
+	const view = await requestView(harness, [{ role: "compactionSummary", summary: "more planning", timestamp: 1 }]);
+	expect(view.at(-1)).toMatchObject({ customType: "step-plan-mode", details: { mode: "default" } });
+	expect((await startTurn(harness))?.details.mode).toBe("default");
+	expect(await startTurn(harness)).toBeUndefined();
+});
+
+test("--plan at startup announces plan mode on the first turn", async () => {
+	const harness = createHarness({ cwd: makeWorkspace(), flags: { plan: true } });
+	createStepPlanExtension()(harness.api);
+	await harness.emit({ type: "session_start", reason: "startup" }, harness.ctx());
+	expect((await startTurn(harness))?.details.mode).toBe("plan");
+	expect(await startTurn(harness)).toBeUndefined();
+});
+
+test.each(["session_start", "session_tree"] as const)(
+	"%s restore re-announces only when the visible block disagrees with the mode",
+	async (type) => {
+		const planFilePath = "/workspace/.stepcode/plans/session-sess-1.md";
+		const announced = (mode: "plan" | "default") => (mode === "plan" ? { mode, planFilePath } : { mode });
+
+		// A legacy agent-entered plan that was already announced: no repeat.
+		const legacy = createHarness({
+			entries: [
+				{ type: "custom", customType: "step-plan", data: { enabled: true, planSource: "agent", planFilePath } },
+			],
+		});
+		legacy.session.appendCustomMessageEntry("step-plan-mode", "<collaboration_mode>", false, announced("plan"));
+		createStepPlanExtension()(legacy.api);
+		await restoreLifecycle(legacy, type);
+		expect(legacy.statuses.get("plan-mode")).toBe("Planning (agent)");
+		expect(await startTurn(legacy)).toBeUndefined();
+
+		// The same plan state recorded before announcements existed: announce once.
+		const unannounced = createHarness({
+			entries: [
+				{ type: "custom", customType: "step-plan", data: { enabled: true, planSource: "agent", planFilePath } },
+			],
+		});
+		createStepPlanExtension()(unannounced.api);
+		await restoreLifecycle(unannounced, type);
+		expect(await startTurn(unannounced)).toMatchObject({ details: announced("plan") });
+		expect(await startTurn(unannounced)).toBeUndefined();
+
+		// A finished cycle whose Default block is recorded: nothing more to say.
+		const finished = createHarness({
+			entries: [{ type: "custom", customType: "step-plan", data: { version: 2, enabled: false } }],
+		});
+		finished.session.appendCustomMessageEntry("step-plan-mode", "<collaboration_mode>", false, announced("plan"));
+		finished.session.appendCustomMessageEntry("step-plan-mode", "<collaboration_mode>", false, announced("default"));
+		createStepPlanExtension()(finished.api);
+		await restoreLifecycle(finished, type);
+		expect(await startTurn(finished)).toBeUndefined();
+	},
+);
