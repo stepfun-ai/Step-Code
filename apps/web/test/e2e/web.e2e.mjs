@@ -1630,6 +1630,58 @@ test("a subagent's write asks for approval and runs in the child, not the main s
   assert.equal(await readFile(join(workspace, "src", "sub.txt"), "utf8"), "hello\n");
 });
 
+test("background subagent output is live beside an idle parent and completed answers survive stopping a supplement", { skip }, async () => {
+  const id = await browser.run(`
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    await fetch("/api/v1/sessions/" + session.id + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "background-parent-fixture" }) });
+    await until(async () => (await (await fetch("/api/v1/sessions/" + session.id)).json()).status === "completed", "parent persisted");
+    return session.id;
+  `);
+  await browser.goto(`${origin}/`);
+  const live = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${id}"]'), "background parent");
+    row.click();
+    await until(() => row.classList.contains("active"), "selected parent");
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-background-fixture" }) });
+    const lane = await until(() => $('.lane-row[data-subagent-tool-id="tool-background-call"]'), "background lane");
+    lane.click();
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "live-only child text", 180000);
+    const snapshot = await (await fetch(base)).json();
+    return { parentStatus: snapshot.status, childId: snapshot.subagentLanes?.[0]?.details.results[0]?.sessionId, live: $(".subagent-live-progress").textContent, composer: Boolean($("#prompt")) };
+  `);
+  assert.equal(live.parentStatus, "completed");
+  assert.match(live.childId, /^subagent-/u);
+  assert.match(live.live, /streamed reply/u);
+  assert.equal(live.composer, true);
+  if (process.env.STEP_E2E_SUBAGENT_SCREENSHOT) {
+    const screenshot = await browser.send("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.STEP_E2E_SUBAGENT_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
+  }
+  const stopped = await browser.run(`
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await until(async () => {
+      const value = await (await fetch(base)).json();
+      return value.subagentLanes?.[0]?.status === "completed" && value.status === "completed" && value.entries.some((entry) => entry.customType === "step-subagent-response");
+    }, "first child report completed", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "reply-background-fixture" }) });
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "supplement is live", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "stop-background-fixture" }) });
+    await until(async () => (await (await fetch(base)).json()).subagentLanes?.[0]?.status === "aborted", "supplement stopped", 180000);
+    await until(() => $(".subagent-completed-output")?.textContent.includes("streamed reply 39"), "retained first report");
+    const value = await (await fetch(base)).json();
+    return { status: value.subagentLanes[0].status, completed: value.entries.filter((entry) => entry.customType === "step-subagent-response").length, output: $(".subagent-completed-output").textContent,
+      agentRows: $$(".sb-agent-row").length, controls: $$(".subagent-controls details").length };
+  `);
+  assert.equal(stopped.status, "aborted");
+  assert.equal(stopped.completed, 1);
+  assert.match(stopped.output, /streamed reply 39/u);
+  assert.equal(stopped.controls, 2);
+  assert.equal(stopped.agentRows, 0);
+});
+
 test("denying an approval never executes the command", { skip }, async () => {
   const id = await browser.run(`
     const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
@@ -3011,7 +3063,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
   assert.equal(seen.rejected.laneState, "failed", "a refused dispatch is not a failed lane")
   assert.match(seen.rejected.laneText, /rejected audit/)
   assert.equal(seen.rejected.summaryUnknownHasAttempt, false, "a refused dispatch is recorded as status unknown")
-  assert.match(seen.rejected.summaryFailed.join(" | "), /rejected audit/)
+  assert.deepEqual(seen.rejected.summaryFailed, [], "the activity summary excludes settled failures; the parent row keeps navigation")
   assert.deepEqual(seen.rejected.panel, {
     error: "Invalid parameters. Provide exactly one mode.",
     status: "已失败",

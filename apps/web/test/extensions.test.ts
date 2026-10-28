@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExtensionAPI, ToolDefinition } from "@step-harness/coding-agent";
-import { webExtensions } from "../src/runtime.ts";
+import { createEventBus, SUBAGENT_LANE_CHANNEL, SUBAGENT_RESPONSE_ENTRY, type ExtensionAPI, type ToolDefinition, type SubagentLaneSnapshot } from "@step-harness/coding-agent";
+import { projectEntry, webExtensions } from "../src/runtime.ts";
 
 /**
  * The Web host mounts its extensions through `webExtensions`. Losing one is
@@ -109,4 +109,31 @@ test("the Web host does not expose the terminal-only standing switch", async () 
 	// Ultraloop is a per-message opt-in on Web; `/ultraloop on` is the CLI's
 	// standing switch, a state the client cannot show or revoke.
 	assert.equal(commands.has("ultraloop"), false);
+});
+
+test("the Web host subscribes to its own lane bus, not TUI widgets or another session", async () => {
+	const settings = { getStepSettings: () => ({}) } as unknown as Parameters<typeof webExtensions>[0];
+	const broker = { captureToolCall: () => {} } as unknown as Parameters<typeof webExtensions>[1];
+	const bus = createEventBus();
+	const other = createEventBus();
+	const seen: Array<SubagentLaneSnapshot | null> = [];
+	const host = webExtensions(settings, broker, () => {}, undefined, (lane) => seen.push(lane))[0];
+	assert.ok(typeof host !== "function");
+	await host.factory({ ...api(new Set(), new Set()), events: bus });
+	const lane = { laneId: "lane-1", status: "running", details: { agentId: "lane-1", mode: "single", agentScope: "user", userAgentsDir: "/fixture", projectAgentsDir: null, results: [] } };
+	other.emit(SUBAGENT_LANE_CHANNEL, lane);
+	assert.equal(seen.length, 0);
+	bus.emit(SUBAGENT_LANE_CHANNEL, lane);
+	assert.equal(seen.length, 1);
+	assert.equal(seen[0]?.laneId, lane.laneId);
+	for (const invalid of [null, undefined, {}, { ...lane, details: {} }]) bus.emit(SUBAGENT_LANE_CHANNEL, invalid);
+	assert.equal(seen.length, 1, "malformed payloads cannot clear or pollute the cache");
+	bus.clear();
+	other.clear();
+});
+
+test("completed child answers survive the host's journal projection", () => {
+	const projected = projectEntry({ type: "custom", customType: SUBAGENT_RESPONSE_ENTRY, id: "result", parentId: null, timestamp: new Date(0).toISOString(), data: { laneId: "lane-1", sessionId: "child-1", taskIndex: 0, output: "completed report" } });
+	assert.equal(projected.customType, SUBAGENT_RESPONSE_ENTRY);
+	assert.deepEqual(projected.data, { laneId: "lane-1", sessionId: "child-1", taskIndex: 0, output: "completed report" });
 });

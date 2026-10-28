@@ -222,6 +222,29 @@ retention-error scope. Stopping a lane publishes its settled roster after cleanu
 steps do not remain queued in a reconnect snapshot. Consumers validate bus input
 with `readSubagentLaneSnapshot`, which re-projects the bounded live allowlist.
 
+The Web/Desktop host forwards live lane updates as `subagent_lane` SSE events
+and includes its latest bounded lane snapshots in session snapshots for reconnects.
+The child inspector uses these for ids, status and streaming output, while reading
+the child's completed transcript remains a read-only polling fallback. Retained
+completed-response entries remain visible even after a later lane interruption.
+Its summary list and header count show only running agents. Control calls update
+the existing child-session or lane/task identity rather than creating agent rows;
+their history stays with that agent. Completed agents remain accessible through
+the parent conversation's tool rows and the read-only child inspector.
+Journal entry order determines whether a control or notification is newer;
+rebuilding history cannot let an old reply revive an already settled lane.
+Completed-answer SSE facts are applied directly rather than depending on an
+asynchronous HTTP refresh; the stream revision prevents an older snapshot from
+replacing them. Hosts validate bus payloads and retain only running lanes plus
+the sixteen most recently updated finished lanes.
+When a new host explicitly reports no live owner for an unfinished historical
+lane, the client marks the unresolved work unknown instead of resurrecting
+it as running. Historical child links and completed answers remain available.
+Omitted roster entries preserve uncertainty rather than inheriting the lane's
+aggregate terminal status. The inspector discloses the omitted count; client
+and host caches retain the same 16 recent terminal lanes plus running lanes.
+The header hides its count when no known agent is running.
+
 `agent_send` takes `{lane_id, action, prompt?, interrupt?}`:
 
 - `reply` continues a single-agent lane's transcript. While the turn runs it is a

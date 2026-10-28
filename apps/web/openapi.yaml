@@ -220,7 +220,8 @@ paths:
     get:
       description: Host-wide browser tab snapshot. No engine is launched by reading it. An optional control header renews that page's lease.
       parameters:
-        - { name: x-stepcode-browser-control, in: header, schema: { type: string } }      responses:
+        - { name: x-stepcode-browser-control, in: header, schema: { type: string } }
+      responses:
         "200":
           description: Browser snapshot
           content:
@@ -1070,6 +1071,10 @@ paths:
                     type: boolean
                     description: The last run was stopped by the user (runtime.ts `lastRunAborted`), so it has no finished reply to credit.
                   permissionPreset: { type: string, enum: [ask, approve-for-me, full-access] }
+                  subagentLanes:
+                    type: array
+                    description: Latest bounded live lane snapshots for reconnects; process memory, not model context or resumed execution.
+                    items: { $ref: "#/components/schemas/SubagentLaneSnapshot" }
                   goal:
                     type: object
                     description: The session's goal (runtime.ts `projectGoal`); absent when there is none.
@@ -1095,6 +1100,11 @@ paths:
                     items:
                       type: object
                       properties:
+                        customType:
+                          type: string
+                          description: On a custom step-subagent-response entry, identifies a durable completed child answer.
+                        data:
+                          $ref: "#/components/schemas/CompletedSubagentResponse"
                         details:
                           description: >-
                             Lifecycle projection on custom_message / agent-notification entries only.
@@ -1222,7 +1232,10 @@ paths:
         "200":
           description: >-
             SSE snapshot and agent/status/approval/clarification_required/clarification_resolved/selection_required/
-            selection_resolved/text_input_required/text_input_resolved/notice/side-answer/queue events.
+            selection_resolved/text_input_required/text_input_resolved/notice/side-answer/queue/subagent_lane events.
+            subagent_lane carries lane (a SubagentLaneSnapshot, or null when this runtime shuts down).
+            This live-only frame replaces that lane's state and does not steer the model or persist progress.
+            Completed answers are separate step-subagent-response custom entries carrying customType and data.
             clarification_required carries clarification and selection_required carries selection; the resolved events
             carry id. text_input_required carries `input` (id, sessionId, title, placeholder) and
             text_input_resolved carries id. side-answer carries `answer` (id, question, text, model, unavailable,
@@ -2181,6 +2194,79 @@ paths:
         "200": { description: Workspace file contents }
 components:
   schemas:
+    CompletedSubagentResponse:
+      type: object
+      required: [laneId, agent, task, taskIndex, sessionId, timestamp, output]
+      properties:
+        laneId: { type: string }
+        agent: { type: string }
+        task: { type: string }
+        taskIndex: { type: integer, minimum: 0 }
+        sessionId: { type: string }
+        timestamp: { type: number, description: "Child answer completion time, epoch milliseconds" }
+        output: { type: string, description: "Complete answer, or bounded preview with the full retained-output file path" }
+        outputHash: { type: string, description: "SHA-256 of the unabridged trimmed answer; optional for old entries" }
+    SubagentLaneSnapshot:
+      type: object
+      required: [laneId, status, details]
+      properties:
+        laneId: { type: string }
+        status: { type: string, enum: [running, completed, failed, aborted] }
+        details:
+          type: object
+          required: [mode, agentScope, userAgentsDir, projectAgentsDir, agentId, results]
+          properties:
+            mode: { type: string, enum: [single, parallel, chain] }
+            agentScope: { type: string, enum: [user, project, both] }
+            userAgentsDir: { type: string }
+            projectAgentsDir: { type: [string, "null"] }
+            agentId: { type: string, description: "Same identity as laneId" }
+            status: { type: string, enum: [running, completed, failed, aborted] }
+            startedAt: { type: number }
+            updatedAt: { type: number }
+            omittedResults: { type: integer, minimum: 0 }
+            results:
+              type: array
+              description: Bounded replacement roster; no child transcript or accumulated completed answers.
+              items:
+                type: object
+                required: [agent, agentSource, task, status, exitCode, messages, stderr, usage]
+                properties:
+                  agent: { type: string }
+                  agentSource: { type: string, enum: [builtin, user, project, unknown] }
+                  task: { type: string }
+                  status: { type: string, enum: [queued, running, completed, failed, aborted, skipped] }
+                  exitCode: { type: number }
+                  messages: { type: array, maxItems: 0 }
+                  stderr: { type: string }
+                  sessionId: { type: string }
+                  sessionFile: { type: string }
+                  model: { type: string }
+                  stopReason: { type: string }
+                  errorMessage: { type: string }
+                  activeText: { type: string }
+                  activeTool: { type: string }
+                  activeToolArgs: { type: string }
+                  activeToolOutput: { type: string }
+                  lastEvent: { type: string }
+                  startedAt: { type: number }
+                  updatedAt: { type: number }
+                  step: { type: number }
+                  worktreePath: { type: string }
+                  worktreeBranch: { type: string }
+                  pendingReply: { type: boolean }
+                  cancelledPrompts: { type: array, items: { type: string } }
+                  usage:
+                    type: object
+                    required: [input, output, cacheRead, cacheWrite, cost, contextTokens, turns]
+                    properties:
+                      input: { type: number, minimum: 0 }
+                      output: { type: number, minimum: 0 }
+                      cacheRead: { type: number, minimum: 0 }
+                      cacheWrite: { type: number, minimum: 0 }
+                      cost: { type: number, minimum: 0 }
+                      contextTokens: { type: number, minimum: 0 }
+                      turns: { type: number, minimum: 0 }
     TerminalInfo:
       type: object
       required: [id, cwd, title, shell, status, cols, rows]

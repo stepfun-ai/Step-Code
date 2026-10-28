@@ -200,6 +200,8 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly status: SessionStatus;
 	readonly sessionFile?: string;
 	readonly entries?: readonly SessionEntry[];
+	/** Live-only lane snapshots, replaced through SSE and never model messages. */
+	readonly subagentLanes?: readonly unknown[];
 	readonly model?: ModelRef;
 	readonly permissionPreset?: string;
 	readonly policies?: readonly PolicyPreset[];
@@ -453,6 +455,9 @@ export interface ToolTimelineItem {
 	readonly children?: readonly ChildAgentLink[];
 	/** Validated presentation of the subagent tool's structured per-task records. */
 	readonly subagentTasks?: readonly SubagentTask[];
+	readonly subagentControl?: SubagentControl;
+	readonly subagentOmitted?: number;
+	readonly subagentLaneStatus?: SubagentStatus;
 	/** A workflow call's run id; its agents come from `GET /sessions/{id}/children?workflowRun=`. */
 	readonly workflowRun?: string;
 	/** An `exit_plan_mode` result awaiting the user's decision; see `PlanReview`. */
@@ -496,6 +501,8 @@ export interface SubagentTask {
 	readonly agent: string;
 	readonly task: string;
 	readonly status: SubagentStatus;
+	/** The last explicit per-task record, before lane-wide lifecycle overlays. */
+	readonly reportedStatus?: SubagentStatus;
 	readonly sessionId?: string;
 	readonly backgroundAgentId?: string;
 	readonly model?: string;
@@ -503,6 +510,27 @@ export interface SubagentTask {
 	/** Absent when the run reported no usage, or the details predate the field. */
 	readonly usage?: SubagentUsage;
 	readonly error?: string;
+	readonly activeText?: string;
+	readonly activeTool?: string;
+	readonly activeToolOutput?: string;
+	readonly completedOutputs?: ReadonlyArray<{ readonly id: string; readonly output: string }>;
+	readonly controls?: ReadonlyArray<{
+		readonly id: string;
+		readonly action: SubagentControl["action"];
+		readonly prompt?: string;
+		readonly output?: string;
+	}>;
+}
+
+export interface SubagentControl {
+	readonly action: "reply" | "stop" | "status";
+	readonly laneId?: string;
+	readonly prompt?: string;
+	readonly lanes: ReadonlyArray<{
+		readonly laneId: string;
+		readonly status: SubagentStatus;
+		readonly tasks: readonly SubagentTask[];
+	}>;
 }
 
 /** GET /api/v1/sessions/{id}/children/{childId} (child-sessions.ts `ChildTranscript`). */

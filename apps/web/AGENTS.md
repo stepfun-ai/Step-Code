@@ -91,6 +91,9 @@ apps/web/
   `@step-harness/coding-agent` and below; the client renders what the host sends.
 - **The host stays thin.** Do not put agent-loop, prompt assembly, tool or permission logic in `src/`. Call the
   coding-agent APIs; translate their events into SSE. Pending approvals go through `ApprovalBroker`.
+- Background subagent progress comes from the session-local `SUBAGENT_LANE_CHANNEL`, not `setWidget` or model notifications. Cache bounded lane snapshots for reconnects, clear them on runtime shutdown, and merge child ids and progress only into the matching parent session. Completed answers are durable `step-subagent-response` facts and remain visible after a later cancellation.
+- Agent summary rows and header counts show only `running` agents. `agent_send` controls update existing child/lane-task identities and their operation history, never add an agent row. Keep all parent tool-row links available for inspecting completed agents in the right panel.
+- Merge persisted controls and notifications in journal order, not projection order; older controls cannot overwrite a newer terminal state. Apply completed-response SSE facts directly even while live frames overtake HTTP refreshes. Validate lane bus input before caching, retain finished lanes by update time, and preserve unknown history in the header activity indicator without counting it as running.
 - **Desktop-only behaviour goes through the bridge.** Use `getDesktopBridge()` / `isDesktopHost()` from
   `platform/host.ts`, and always keep a browser fallback (e.g. folder picking: bridge, then the host's picker, then the
   in-page browser). Desktop-only CSS goes under `[data-host="desktop"]` in `styles/global.css`.

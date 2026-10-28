@@ -20,7 +20,14 @@ import { assistantBlocks } from "./assistant-content";
 import { observePerformance } from "./performance";
 import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
-import { backgroundSubagentStatuses, subagentTasks } from "./subagent-tasks";
+import {
+	cacheSubagentLanes,
+	readCompletedSubagentEntry,
+	readSubagentLane,
+	subagentControl,
+	subagentTasks,
+	withSubagentLaneState,
+} from "./subagent-tasks";
 import { restoreTagGroups, updateTagGroups } from "./tag-group-persistence";
 import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
@@ -655,6 +662,9 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					// a snapshot refresh (which follows every finished message) keeps the
 					// review card. Without this it flashed once and vanished.
 					...(block.name === "exit_plan_mode" ? planReview(result?.details) : {}),
+					...(block.name === "agent_send"
+						? { subagentControl: subagentControl(block.arguments, result?.details) }
+						: {}),
 					...(block.name === "subagent"
 						? {
 								subagentTasks: subagentTasks(
@@ -689,28 +699,7 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 		// The failed attempt is not recorded yet (or not in this branch): the retry still shows.
 		else items.push({ itemId: "retry-live", kind: "retry", errors: [retry.errorMessage], live: retry });
 	}
-	const background = backgroundSubagentStatuses(entries);
-	const rows = items.map((item) =>
-		item.kind === "tool" && item.subagentTasks
-			? {
-					...item,
-					subagentTasks: item.subagentTasks.map((task, _index, tasks) => {
-						const laneStatus = task.backgroundAgentId ? background.get(task.backgroundAgentId) : undefined;
-						if (!laneStatus || (tasks.length > 1 && task.status !== "running" && task.status !== "queued"))
-							return task;
-						// A lane's completion does not establish whether a still-queued chain step executed.
-						return {
-							...task,
-							status:
-								tasks.length > 1 && task.status === "queued" && laneStatus !== "running"
-									? "unknown"
-									: laneStatus,
-						};
-					}),
-				}
-			: item,
-	);
-	return settlePlanReviews(rows);
+	return settlePlanReviews([...withSubagentLaneState(items, undefined, entries)]);
 }
 
 /**
@@ -826,7 +815,14 @@ export function renderSnapshot(
 		const live = state.current?.id === snapshot.id ? state.current : undefined;
 		const timelineItems = holdStream
 			? state.timelineItems
-			: [...timelineFromEntries(snapshot.entries, snapshot.retry), ...approvalItems(snapshot)];
+			: [
+					...withSubagentLaneState(
+						timelineFromEntries(snapshot.entries, snapshot.retry),
+						snapshot.subagentLanes,
+						snapshot.entries,
+					),
+					...approvalItems(snapshot),
+				];
 		const pendingTurn = holdStream
 			? state.pendingTurn
 			: state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount
@@ -842,6 +838,7 @@ export function renderSnapshot(
 						compacting: live.compacting,
 						queuedMessages: live.queuedMessages,
 						steeringMessages: live.steeringMessages,
+						subagentLanes: live.subagentLanes,
 					}
 				: snapshot;
 		return {
@@ -909,6 +906,7 @@ export function closeStream(): void {
 }
 
 interface AgentStreamEvent {
+	readonly entry?: unknown;
 	readonly type: string;
 	readonly message?: { readonly role?: string; readonly content?: unknown; readonly usage?: unknown };
 	readonly toolCallId?: string;
@@ -930,7 +928,47 @@ function noteRevision(id: string, revision: number | undefined): void {
 }
 
 function updateTimeline(update: (items: readonly TimelineItem[]) => readonly TimelineItem[]): void {
-	setState((state) => ({ timelineItems: update(state.timelineItems) }));
+	setState((state) => ({
+		timelineItems: withSubagentLaneState(
+			update(state.timelineItems),
+			state.current?.subagentLanes,
+			state.current?.entries,
+		),
+	}));
+}
+
+export function applySubagentLane(sessionId: string, value: unknown): void {
+	const lane = value === null ? null : readSubagentLane(value);
+	if (lane === undefined) return;
+	setState((state) => {
+		if (state.current?.id !== sessionId) return {};
+		const lanes = lane ? cacheSubagentLanes(state.current.subagentLanes ?? [], lane) : [];
+		return {
+			current: { ...state.current, subagentLanes: lanes },
+			timelineItems: withSubagentLaneState(state.timelineItems, lanes, state.current.entries),
+		};
+	});
+}
+
+/** Apply the durable SSE fact directly; live frames may overtake its HTTP refresh. */
+export function applyCompletedSubagentEntry(sessionId: string, value: unknown): void {
+	const response = readCompletedSubagentEntry(value);
+	if (!response) return;
+	setState((state) => {
+		if (state.current?.id !== sessionId || state.current.entries?.some((entry) => entry.id === response.id))
+			return {};
+		const entry: SessionEntry = {
+			id: response.id,
+			type: "custom",
+			customType: "step-subagent-response",
+			data: response,
+		};
+		const entries = [...(state.current.entries ?? []), entry];
+		return {
+			current: { ...state.current, entries },
+			timelineItems: withSubagentLaneState(state.timelineItems, state.current.subagentLanes, entries),
+		};
+	});
 }
 
 /** Replace the row with the same id in place, or append it. */
@@ -1139,6 +1177,9 @@ function handleAgentEvent(
 				inputDetail: toolInputDetail(agentEvent.args),
 				outputDetail: "",
 				...withArgs(agentEvent.args),
+				...(agentEvent.toolName === "agent_send"
+					? { subagentControl: subagentControl(agentEvent.args, undefined) }
+					: {}),
 				...(agentEvent.toolName === "subagent"
 					? { subagentTasks: subagentTasks(agentEvent.args, undefined, "pending") }
 					: {}),
@@ -1180,6 +1221,9 @@ function handleAgentEvent(
 				agentEvent.result && { details: agentEvent.result.details, isError: agentEvent.isError === true },
 			),
 			...childAgents(item.toolName, agentEvent.result?.details),
+			...(item.toolName === "agent_send"
+				? { subagentControl: subagentControl(undefined, agentEvent.result?.details, item.subagentControl) }
+				: {}),
 			...(item.toolName === "exit_plan_mode" ? planReview(agentEvent.result?.details) : {}),
 			...(item.toolName === "subagent"
 				? {
@@ -1232,6 +1276,7 @@ export function connectStream(id: string): void {
 			revision?: number;
 		};
 		noteRevision(id, payload.revision);
+		if (payload.event.type === "entry_appended") applyCompletedSubagentEntry(id, payload.event.entry);
 		const promptCommand =
 			typeof payload.promptCommand === "string" && payload.promptCommand ? payload.promptCommand : undefined;
 		handleAgentEvent(payload.event, readThinkingTimings(payload.thinkingTimings), promptCommand);
@@ -1255,6 +1300,12 @@ export function connectStream(id: string): void {
 					? { ...state.current, status: payload.status, unread: payload.unread }
 					: state.current,
 		}));
+	});
+	source.addEventListener("subagent_lane", (event) => {
+		if (stream !== source) return;
+		const payload = JSON.parse((event as MessageEvent).data) as { lane?: unknown; revision?: number };
+		noteRevision(id, payload.revision);
+		applySubagentLane(id, payload.lane);
 	});
 	source.addEventListener("queue", (event) => {
 		if (stream === source) applyQueueState(id, JSON.parse((event as MessageEvent).data) as QueueState);
