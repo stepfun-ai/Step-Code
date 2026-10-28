@@ -102,11 +102,11 @@ desktop_tag_release:
     reports:
       dotenv: desktop.env
 
-# Same cross-build as stepcode-desktop-package-windows, without falcon: a
-# release names its version from the tag and needs no falcon collection.
-# The Windows installer of a release, built and signed on the Windows packager
-# that holds the company's GlobalSign EV USB token (runner tags windows +
-# bare-metal; shared with catalyst/stepfun-desktop, enabled for this project).
+# The Windows installer, built and signed on the Windows packager that holds
+# the company's GlobalSign EV USB token (runner tags windows + bare-metal;
+# shared with catalyst/stepfun-desktop, enabled for this project). Two jobs use
+# it: stepcode-desktop-release-windows (published, DESKTOP_RELEASE_WINDOWS=true)
+# and stepcode-desktop-windows-signing-test (never published, below).
 # It is a persistent shell runner (Git Bash, Node and pnpm installed), so:
 #   - no image; the falcon before_script stays off;
 #   - pnpm install goes through powershell.exe: Git Bash pnpm writes POSIX
@@ -120,7 +120,7 @@ desktop_tag_release:
 # The token signs one thing at a time: a stepfun-desktop pipeline signing at the
 # same moment makes the probe time out, and a retry is the remedy (the
 # resource_group below only serialises this project's own runs).
-stepcode-desktop-release-windows:
+.desktop-windows-signed-build:
   stage: package
   tags:
     - mobile
@@ -143,12 +143,9 @@ stepcode-desktop-release-windows:
     GODEBUG: 'http2client=0'
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
     ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
-  rules:
-    - if: '$DESKTOP_RELEASE_WINDOWS != "true"'
-      when: never
-    - !reference [.desktop-release-rules, rules]
+
+.desktop-windows-signed-build-steps:
   script:
-    - !reference [.desktop-release-version, script]
     - node --version
     # No --ignore-scripts: node-pty and esbuild build their binaries in postinstall.
     - |
@@ -158,12 +155,56 @@ stepcode-desktop-release-windows:
     # The structural half of the check (metadata, payload version, a certificate
     # table that is not Apple's); signtool already verified the chain in pack-win.
     - node scripts/verify-win-artifact.mjs --signed --unpacked="$(ls -d apps/desktop/release/*/win-unpacked | head -1)"
+
+stepcode-desktop-release-windows:
+  extends: .desktop-windows-signed-build
+  rules:
+    - if: '$DESKTOP_RELEASE_WINDOWS != "true"'
+      when: never
+    - !reference [.desktop-release-rules, rules]
+  script:
+    - !reference [.desktop-release-version, script]
+    - !reference [.desktop-windows-signed-build-steps, script]
   artifacts:
     name: 'stepcode-desktop-windows-$CI_PIPELINE_IID'
     paths:
       - dist-electron/*.exe
       - dist-electron/latest.yml
     expire_in: 2 weeks
+
+# Windows packaging and EV signing as a test only, while Windows is held back
+# from releases (DESKTOP_RELEASE_WINDOWS is not true). It never blocks macOS:
+# it is a manual job (the play button) that may fail, and no upload needs it,
+# so nothing it builds is published. It shows up in release pipelines and in
+# any Run pipeline, and keeps the installer as a job artifact to download and
+# try. It builds the same way the release job does, at the release's version
+# when there is a tag, else at the root package.json version.
+stepcode-desktop-windows-signing-test:
+  extends: .desktop-windows-signed-build
+  rules:
+    - if: '$DESKTOP_RELEASE_WINDOWS == "true"'
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/ || $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
+      when: manual
+      allow_failure: true
+    - when: never
+  script:
+    - |
+      tag="${DESKTOP_TAG:-${CI_COMMIT_TAG:-}}"
+      if printf '%s' "$tag" | grep -Eq '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        export STEPCODE_BUILD_VERSION="${tag#desktop-v}"
+        export STEPCODE_BUILD_COMMIT="$CI_COMMIT_SHA"
+      fi
+      export STEPCODE_UPDATE_URL="${STEPCODE_UPDATE_URL:-${STEP_RELEASE_PROD_BASE_URL}/desktop/}"
+      echo "Windows signing test (not published): version ${STEPCODE_BUILD_VERSION:-from the root package.json}"
+    - !reference [.desktop-windows-signed-build-steps, script]
+  artifacts:
+    name: 'stepcode-desktop-windows-signing-test-$CI_PIPELINE_IID'
+    paths:
+      - dist-electron/*.exe
+      - dist-electron/latest.yml
+    expire_in: 1 week
+    when: always
 
 # Stages the installers the release jobs built and uploads them. Only
 # manifest.json and latest.json differ per environment (they carry its base URL).

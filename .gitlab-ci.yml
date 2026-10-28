@@ -22,7 +22,9 @@
 #        a dmg + zip,
 #      - with DESKTOP_RELEASE_WINDOWS=true (off for now: the Windows packager
 #        is down), builds the Windows NSIS installer on the Windows packager
-#        and signs it with the GlobalSign EV token (stepcode-desktop-release-windows),
+#        and signs it with the GlobalSign EV token (stepcode-desktop-release-windows);
+#        until then the manual, allowed-to-fail stepcode-desktop-windows-signing-test
+#        does the same build as a test and publishes nothing,
 #      - uploads the installers to the test bucket automatically
 #        (desktop_upload_test), and to the production bucket on a manual click
 #        (desktop_upload_prod). desktop/latest.json is uploaded last in each
