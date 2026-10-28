@@ -534,20 +534,29 @@ async function openClarification(params: Record<string, unknown>, fullscreen = f
 			component.handleInput?.("\x1b");
 			tui.setFocus(null);
 			tui.removeChild(component);
-			await result;
+			try {
+				await result;
+			} finally {
+				tui.stop();
+			}
 		},
 	};
 }
 
-function answerCursor(component: Component, width = 80): { row: number; col: number } {
+function dialogAnchor(component: Component, width = 80): { row: number; col: number } {
 	const lines = component.render(width);
 	const markerRows = lines.flatMap((line, row) => (line.includes(CURSOR_MARKER) ? [row] : []));
 	expect(markerRows).toHaveLength(1);
 	const row = markerRows[0]!;
-	const answerLabelRow = lines.findIndex((line) => line.includes("Your answer:"));
-	expect(answerLabelRow).toBeGreaterThanOrEqual(0);
-	expect(row).toBeGreaterThan(answerLabelRow);
 	return { row, col: visibleWidth(lines[row]!.split(CURSOR_MARKER)[0]!) };
+}
+
+function answerCursor(component: Component, width = 80): { row: number; col: number } {
+	const anchor = dialogAnchor(component, width);
+	const answerLabelRow = component.render(width).findIndex((line) => line.includes("Your answer:"));
+	expect(answerLabelRow).toBeGreaterThanOrEqual(0);
+	expect(anchor.row).toBeGreaterThan(answerLabelRow);
+	return anchor;
 }
 
 test.each([false, true])(
@@ -596,7 +605,43 @@ test("clarify_user recomputes answer wrapping when width changes without invalid
 	}
 });
 
-test("clarify_user only shows an answer cursor in freeform mode across question tabs", async () => {
+test.each([false, true])(
+	"clarify_user anchors the selected option before Enter (fullscreen=%s)",
+	async (fullscreen) => {
+		const dialog = await openClarification(
+			{ question: "Choose", options: [{ label: "中文选项", value: "option" }] },
+			fullscreen,
+		);
+		try {
+			expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+			dialog.tui.setFocus(dialog.component);
+			const first = dialogAnchor(dialog.component);
+			expect(dialog.component.render(80)[first.row]).toContain("1. 中文选项");
+			dialog.component.handleInput?.("\x1b[B");
+			const next = dialogAnchor(dialog.component);
+			expect(next.row).toBeGreaterThan(first.row);
+			expect(dialog.component.render(80)[next.row]).toContain("2. Type a custom answer");
+			expect(dialog.component.render(80).join("\n")).not.toContain("Your answer:");
+			for (const width of [80, 20]) {
+				const anchor = dialogAnchor(dialog.component, width);
+				expect(anchor.col).toBe(2);
+				const line = dialog.component.render(width)[anchor.row]!;
+				expect(line.split(CURSOR_MARKER)[0]!.endsWith("> ")).toBe(true);
+			}
+			for (const width of [2, 1]) {
+				expect(dialogAnchor(dialog.component, width).col).toBe(0);
+			}
+			dialog.tui.setFocus(null);
+			expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+			dialog.tui.setFocus(dialog.component);
+			expect(dialogAnchor(dialog.component)).toEqual(next);
+		} finally {
+			await dialog.close();
+		}
+	},
+);
+
+test("clarify_user preserves a dialog anchor across navigation and freeform modes", async () => {
 	const dialog = await openClarification({
 		questions: [
 			{ id: "choice", question: "Choose", options: [{ label: "Option", value: "option" }] },
@@ -605,11 +650,12 @@ test("clarify_user only shows an answer cursor in freeform mode across question 
 	});
 	try {
 		dialog.tui.setFocus(dialog.component);
-		expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+		const optionAnchor = dialogAnchor(dialog.component);
+		expect(dialog.component.render(80)[optionAnchor.row]).toContain("1. Option");
 		dialog.component.handleInput?.("2");
 		answerCursor(dialog.component);
 		dialog.component.handleInput?.("\x1b");
-		expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+		expect(dialogAnchor(dialog.component)).toEqual(optionAnchor);
 		dialog.component.handleInput?.("\t");
 		const firstLine = answerCursor(dialog.component);
 		dialog.component.handleInput?.("\x1b[13;2u");
@@ -618,6 +664,7 @@ test("clarify_user only shows an answer cursor in freeform mode across question 
 		expect(multiline.row).toBe(firstLine.row + 1);
 		dialog.component.handleInput?.("\t");
 		expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+		expect(dialog.component.render(80).join("\n")).not.toContain("Your answer:");
 		dialog.component.handleInput?.("\x1b[Z");
 		answerCursor(dialog.component);
 	} finally {

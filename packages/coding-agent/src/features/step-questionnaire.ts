@@ -1,7 +1,16 @@
 /** Step's single clarification tool, rendered with Pi's native TUI primitives. */
 
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { Editor, type EditorTheme, Key, matchesKey, Text, visibleWidth, wrapTextWithAnsi } from "@step-harness/pi-tui";
+import {
+	CURSOR_MARKER,
+	Editor,
+	type EditorTheme,
+	Key,
+	matchesKey,
+	Text,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
@@ -477,8 +486,9 @@ async function executeNativeDialog(
 				lines.push("");
 				for (const [index, option] of options.entries()) {
 					const selected = index === optionIndex;
+					const anchor = selected && editor.focused && !inputMode ? CURSOR_MARKER : "";
 					addWrapped(
-						selected ? theme.fg("accent", "> ") : "  ",
+						selected ? theme.fg("accent", `> ${anchor}`) : "  ",
 						theme.fg(selected ? "accent" : "text", `${index + 1}. ${option.label}`),
 					);
 					if (option.description) {
@@ -514,7 +524,7 @@ async function executeNativeDialog(
 				return editor.focused;
 			},
 			set focused(value: boolean) {
-				// The host focuses this wrapper, but the nested editor owns the IME cursor marker.
+				// The host focuses this wrapper, but the nested editor owns the answer cursor.
 				editor.focused = value;
 				cachedLines = undefined;
 			},
