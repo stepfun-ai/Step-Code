@@ -25,7 +25,6 @@ import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
 import type {
 	AccountReport,
-	AgentMessage,
 	ApprovalRequest,
 	BootstrapPayload,
 	ChildAgentLink,
@@ -355,8 +354,14 @@ const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_f
  * `edit_file` record a unified patch in their result details; `write` says why
  * when it recorded none. Step's `write_file` records no patch (an untracked
  * change), and `changed: false` when the file already held the content.
+ * `result` is the recorded tool result, or a live `tool_execution_end`'s
+ * result with the event's own `isError`.
  */
-function fileChange(name: string, args: unknown, result: AgentMessage | undefined): FileChange | undefined {
+function fileChange(
+	name: string,
+	args: unknown,
+	result: { readonly details?: unknown; readonly isError?: boolean } | undefined,
+): FileChange | undefined {
 	if (!FILE_CHANGE_TOOLS.has(name) || !result || result.isError) return undefined;
 	const details = (result.details ?? {}) as {
 		patch?: unknown;
@@ -1166,6 +1171,13 @@ function handleAgentEvent(
 			state: agentEvent.isError ? "failed" : "completed",
 			outputSummary: compact(output),
 			outputDetail: clipDetail(output),
+			// The end event carries no arguments: the row kept the path from the start event.
+			// Without this the turn's changes stayed empty until a snapshot read succeeded.
+			change: fileChange(
+				item.toolName,
+				item.args,
+				agentEvent.result && { details: agentEvent.result.details, isError: agentEvent.isError === true },
+			),
 			...childAgents(item.toolName, agentEvent.result?.details),
 			...(item.toolName === "exit_plan_mode" ? planReview(agentEvent.result?.details) : {}),
 			...(item.toolName === "subagent"
