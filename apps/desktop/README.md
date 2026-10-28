@@ -17,6 +17,9 @@ What the shell adds on top of the browser version:
   `@step-harness/web/desktop-bridge`): native folder picker, open http(s) links in the system browser, reveal a path
   in Finder / Explorer, and name the default browser (name + icon, macOS / Windows) for "open in browser" controls.
   The client checks for it and otherwise falls back to the server's picker / in-page browser / a generic label.
+  `getTheme()` and `setTheme(choice)` restore and persist appearance in this desktop profile, independently of
+  the server port. They accept `system`, `light`, `dark` and `violet`; failed writes reject and show a client notice.
+  Plain browsers keep their origin-scoped localStorage. A valid local choice is imported when the profile has none.
 - The user's login-shell environment (macOS / Linux GUI launches), so the agent's bash tool finds the same `git`,
   `node`, Homebrew tools, etc. as in a terminal. On macOS/Linux, a private `node` wrapper also makes Electron's
   bundled Node available when no system `node` is on PATH, including to StepPage's installer and MCP launcher.
@@ -40,7 +43,7 @@ Electron main (src/main.ts)
  │     loads http://127.0.0.1:<port>/#token=<token>; the client exchanges it for its auth cookie
  │     navigation pinned to that origin; other http(s) links ──▶ system browser
  ├─ preload.ts (dist/preload.cjs) ── contextBridge ──▶ window.stepcodeDesktop
- └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser
+ └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser / getTheme / setTheme
        (only from the window's top frame on the server origin)
 ```
 
@@ -96,7 +99,8 @@ Electron switches such as `--remote-debugging-port=9222` can be appended to `ele
 
 ## Files
 
-- Window bounds and last picked folder: `<userData>/desktop-state.json` (macOS: `~/Library/Application Support/StepCode`).
+- Window bounds, last picked folder and appearance choice: `<userData>/desktop-state.json`
+  (macOS: `~/Library/Application Support/StepCode`). Appearance is local to this profile, not shared CLI configuration.
 - Server log: `<logs>/web-server.log` (macOS: `~/Library/Logs/StepCode`), also **File → Show Server Logs**.
 - Private Node wrapper (macOS/Linux, when using Electron's runtime): `<userData>/node-bin/node`. Refreshed when
   the server starts so moving or upgrading the app does not leave it pointing at an old executable. Wrapper-write

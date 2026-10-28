@@ -256,6 +256,7 @@ async function main(): Promise<void> {
 	// A packaged app shows the bundle's icon.icns; `electron .` would show Electron's own icon.
 	if (!app.isPackaged && existsSync(icon)) app.dock?.setIcon(icon);
 	installDesktopIpc({
+		state,
 		getWindow: () => window,
 		getServerOrigin: () => server?.origin,
 		onDirectoryPicked: (path) => state.update({ lastWorkspace: path }),

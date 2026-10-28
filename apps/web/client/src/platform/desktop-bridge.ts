@@ -12,6 +12,10 @@ export interface StepcodeDesktopBridge {
 	readonly platform: "darwin" | "win32" | "linux";
 	/** Desktop application version. */
 	readonly version: string;
+	/** Saved appearance for this desktop profile, or null when no valid choice was saved. */
+	getTheme(): Promise<DesktopThemeChoice | null>;
+	/** Persist a theme across server ports and app launches; rejects if the write fails. */
+	setTheme(theme: DesktopThemeChoice): Promise<void>;
 	/** Open the native folder chooser. Resolves to an absolute path, or null when cancelled. */
 	pickDirectory(options?: { readonly title?: string; readonly defaultPath?: string }): Promise<string | null>;
 	/** Open an http(s) URL in the system browser. */
@@ -24,6 +28,9 @@ export interface StepcodeDesktopBridge {
 	 */
 	defaultBrowser(): Promise<DesktopBrowserInfo | null>;
 }
+
+/** Appearance selection, independent of the currently resolved system color scheme. */
+export type DesktopThemeChoice = "system" | "light" | "dark" | "violet";
 
 /** Display identity of the system's default browser. */
 export interface DesktopBrowserInfo {

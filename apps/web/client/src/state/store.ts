@@ -408,7 +408,7 @@ export function emptyTree(cwd = ""): TreeState {
 
 function initialTheme(): ThemeChoice {
 	const stored = readStorage(STORAGE_KEYS.theme);
-	return stored === "light" || stored === "dark" ? stored : "system";
+	return stored === "light" || stored === "dark" || stored === "violet" ? stored : "system";
 }
 
 /**

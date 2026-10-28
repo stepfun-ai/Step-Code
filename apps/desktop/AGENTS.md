@@ -52,7 +52,7 @@ apps/desktop/
     pages.ts             error / loading pages shown when the server is not available
     shell-environment.ts read the login-shell environment for GUI launches
     node-environment.ts  private Electron-backed node fallback for macOS/Linux child processes
-    state.ts             persisted window bounds and last picked folder (<userData>/desktop-state.json)
+    state.ts             persisted window bounds, appearance and last picked folder (<userData>/desktop-state.json)
   dist/                  build output; never edit
   release/               installers and their staging tree (git-ignored)
 ```
@@ -70,6 +70,12 @@ apps/desktop/
 - The server listens on loopback only. The launch token is redacted in logs; never print it or write it to disk.
 
 ## The bridge contract
+
+`getTheme()` reads the profile appearance or null; `setTheme(choice)` validates the four allowed choices and
+persists them in the same `DesktopStateStore` used by the window. Both require the owned top-frame/server-origin
+check. A failed write rejects; window bounds can remain best-effort. Appearance is profile-scoped, independent of
+server ports and separate from CLI configuration. The client restores it before rendering and keeps browser storage
+as the non-Desktop fallback and one-time migration source.
 
 The contract is `apps/web/client/src/platform/desktop-bridge.ts`, imported here as a type from
 `@step-harness/web/desktop-bridge`. Both sides must agree, so adding a capability is one change across both packages:

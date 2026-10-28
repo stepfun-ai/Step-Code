@@ -19,6 +19,12 @@ const version = process.argv.find((argument) => argument.startsWith(VERSION_ARGU
 const bridge: StepcodeDesktopBridge = {
 	platform: hostPlatform(),
 	version: version ?? "",
+	getTheme() {
+		return ipcRenderer.invoke(DESKTOP_IPC.getTheme) as ReturnType<StepcodeDesktopBridge["getTheme"]>;
+	},
+	setTheme(theme) {
+		return ipcRenderer.invoke(DESKTOP_IPC.setTheme, theme) as Promise<void>;
+	},
 	pickDirectory(options) {
 		// Only plain strings cross the boundary; anything else is dropped here and re-validated in main.
 		const request = {
