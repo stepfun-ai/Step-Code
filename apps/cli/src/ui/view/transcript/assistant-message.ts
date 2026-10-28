@@ -33,6 +33,20 @@ export class AssistantMessageComponent extends Container {
 	private isStreaming = false;
 	private zoneCache?: ZoneCache;
 
+	/**
+	 * Markdown instances reused across streaming updates, in the order the visible
+	 * content blocks produce them.
+	 *
+	 * Rebuilding them per delta throws away every render cache inside `Markdown`, which
+	 * is what made a long streamed reply repaint its whole transcript on every token.
+	 * Instances are kept only while the surrounding inputs are unchanged; the pool key
+	 * below covers the state that changes their rendering.
+	 */
+	private markdownPool: Markdown[] = [];
+	private poolCursor = 0;
+	/** Shape of the visible content plus the settings that affect a pooled instance. */
+	private poolKey = "";
+
 	constructor(
 		message?: AssistantMessage,
 		hideThinkingBlock = false,
@@ -60,6 +74,10 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		// A full invalidation means the theme or settings changed, so pooled instances may
+		// hold rows rendered with the previous styling.
+		this.markdownPool = [];
+		this.poolKey = "";
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -115,9 +133,50 @@ export class AssistantMessageComponent extends Container {
 		return lines;
 	}
 
+	/**
+	 * Signature of everything that would make a pooled instance render differently.
+	 *
+	 * `isStreaming` is included because the transform closure captures it, and the
+	 * output padding because it is a constructor argument. A changed signature drops the
+	 * pool rather than trying to patch instances in place.
+	 */
+	private poolSignature(message: AssistantMessage, isStreaming: boolean): string {
+		const shape = message.content
+			.map((content) =>
+				content.type === "text"
+					? content.text.trim()
+						? "t"
+						: ""
+					: content.type === "thinking"
+						? content.thinking.trim()
+							? "h"
+							: ""
+						: "",
+			)
+			.join("");
+		return `${shape}|${isStreaming ? 1 : 0}|${this.outputPad}|${this.hideThinkingBlock ? 1 : 0}|${this.markdownTransformers.length}`;
+	}
+
+	/** Next reusable instance for this position, or a freshly built one. */
+	private takeMarkdown(create: () => Markdown): Markdown {
+		const index = this.poolCursor++;
+		const existing = this.markdownPool[index];
+		if (existing) return existing;
+		const created = create();
+		this.markdownPool[index] = created;
+		return created;
+	}
+
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
+
+		const signature = this.poolSignature(message, isStreaming);
+		if (signature !== this.poolKey) {
+			this.poolKey = signature;
+			this.markdownPool = [];
+		}
+		this.poolCursor = 0;
 
 		// Clear content container
 		this.contentContainer.clear();
@@ -136,11 +195,15 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-					}),
+				const text = content.text.trim();
+				const instance = this.takeMarkdown(
+					() =>
+						new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
+							transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+						}),
 				);
+				instance.setText(text);
+				this.contentContainer.addChild(instance);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
@@ -172,25 +235,29 @@ export class AssistantMessageComponent extends Container {
 					);
 				} else {
 					// Render each run of thinking blocks as one Markdown section.
-					this.contentContainer.addChild(
-						new Markdown(
-							thinkingBlocks.join("\n\n"),
-							this.outputPad,
-							0,
-							{ ...this.markdownTheme, code: (text: string) => theme.fg("muted", text) },
-							{
-								color: (text: string) => theme.fg("thinkingText", text),
-								italic: true,
-							},
-							{
-								transform: createMarkdownTransform(
-									"assistant-thinking",
-									this.isStreaming,
-									this.markdownTransformers,
-								),
-							},
-						),
+					const thinkingText = thinkingBlocks.join("\n\n");
+					const thinkingInstance = this.takeMarkdown(
+						() =>
+							new Markdown(
+								thinkingText,
+								this.outputPad,
+								0,
+								{ ...this.markdownTheme, code: (text: string) => theme.fg("muted", text) },
+								{
+									color: (text: string) => theme.fg("thinkingText", text),
+									italic: true,
+								},
+								{
+									transform: createMarkdownTransform(
+										"assistant-thinking",
+										this.isStreaming,
+										this.markdownTransformers,
+									),
+								},
+							),
 					);
+					thinkingInstance.setText(thinkingText);
+					this.contentContainer.addChild(thinkingInstance);
 				}
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));

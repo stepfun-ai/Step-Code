@@ -1221,6 +1221,68 @@ function getCliHighlightTheme(t: Theme): CliHighlightTheme {
 }
 
 /**
+ * The concrete `Theme` behind the exported proxy.
+ *
+ * `theme` is a proxy whose identity never changes, so keying a cache on it would
+ * survive a theme switch and serve colours from the previous theme. Every
+ * replacement path funnels through `setGlobalTheme`, and the backing instance is
+ * stored under a `Symbol.for` key, so resolving it here also keeps separate module
+ * instances (tsx + jiti) agreeing on the same cache key.
+ */
+function resolveThemeInstance(t: Theme): Theme {
+	if ((t as unknown) !== (theme as unknown)) return t;
+	const store = globalThis as Record<symbol, Theme>;
+	return store[THEME_KEY_NEW] ?? store[THEME_KEY] ?? store[THEME_KEY_OLD] ?? t;
+}
+
+/**
+ * Highlighted lines per theme, memoized on language and source.
+ *
+ * A streaming reply re-renders its whole document on every delta, and the renderer's
+ * cache is keyed on the full text, so every already-finished fenced block would
+ * otherwise be re-highlighted from scratch on every frame. Measured on a 146 KB
+ * message streamed over 150 frames: highlighting is 1.4x-3.6x of base render cost
+ * once a message contains code, and this removes essentially all of it.
+ *
+ * The result is always a copy. `core/tools/write.ts` keeps the returned array and
+ * appends to / overwrites its elements while a file streams, so handing out the
+ * cached array would corrupt the cache.
+ */
+const highlightCache = new WeakMap<Theme, Map<string, string[]>>();
+/** Distinct finished blocks in one message; a long answer stays well inside this. */
+const HIGHLIGHT_CACHE_ENTRIES = 256;
+/** Whole-file callers (read/write tools) must not pin megabytes per entry. */
+const HIGHLIGHT_CACHE_SOURCE_LIMIT = 64 * 1024;
+
+function cachedHighlight(t: Theme, code: string, lang: string, compute: () => string[]): string[] {
+	const perTheme = (() => {
+		const instance = resolveThemeInstance(t);
+		let cache = highlightCache.get(instance);
+		if (!cache) {
+			cache = new Map();
+			highlightCache.set(instance, cache);
+		}
+		return cache;
+	})();
+
+	const key = `${lang}\u0000${code}`;
+	const hit = perTheme.get(key);
+	if (hit) return [...hit];
+
+	const lines = compute();
+	if (code.length <= HIGHLIGHT_CACHE_SOURCE_LIMIT) {
+		if (perTheme.size >= HIGHLIGHT_CACHE_ENTRIES) {
+			// Drop the oldest insertion; re-setting an existing key keeps its position,
+			// so this is a sound FIFO.
+			const oldest = perTheme.keys().next().value;
+			if (oldest !== undefined) perTheme.delete(oldest);
+		}
+		perTheme.set(key, lines);
+	}
+	return [...lines];
+}
+
+/**
  * Highlight code with syntax coloring based on file extension or language.
  * Returns array of highlighted lines.
  */
@@ -1239,7 +1301,7 @@ export function highlightCode(code: string, lang?: string): string[] {
 		theme: getCliHighlightTheme(theme),
 	};
 	try {
-		return highlight(code, opts).split("\n");
+		return cachedHighlight(theme, code, validLang, () => highlight(code, opts).split("\n"));
 	} catch {
 		return code.split("\n");
 	}
@@ -1362,7 +1424,7 @@ export function getMarkdownTheme(activeTheme: Theme = theme): MarkdownTheme {
 				theme: getCliHighlightTheme(activeTheme),
 			};
 			try {
-				return highlight(code, opts).split("\n");
+				return cachedHighlight(activeTheme, code, validLang, () => highlight(code, opts).split("\n"));
 			} catch {
 				return code.split("\n").map((line) => activeTheme.fg("mdCodeBlock", line));
 			}

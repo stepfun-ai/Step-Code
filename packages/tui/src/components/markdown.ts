@@ -1,7 +1,7 @@
 import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
-import type { Component } from "../tui.ts";
+import { type Component, isIncrementalRenderDisabled } from "../tui.ts";
 import { applyBackgroundToLine, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
@@ -175,6 +175,58 @@ markdownParser.setOptions({
 markdownParser.use({ extensions: [...LATEX_MARKDOWN_EXTENSIONS] });
 
 /**
+ * Render-relevant identity of a token.
+ *
+ * Keying on `raw` is not enough: Marked carries inline link state across blocks, so
+ * identical source can parse differently in two places. The key therefore digests the
+ * token's whole parsed structure. Every own property is included, because rendering
+ * reads fields that do not live in `tokens` — a list keeps its children in `items`, a
+ * table in `header`/`rows`, and code keeps its language beside its text. Serializing by
+ * structure rather than by a hand-written field list means a field added by a future
+ * Marked version cannot silently fall out of the key.
+ */
+function tokenRenderKey(token: Token, contentWidth: number, width: number, nextType: string | undefined): string {
+	return `${digest(stableStringify(token))}\u0003${contentWidth}\u0003${width}\u0003${nextType ?? ""}`;
+}
+
+/** Deterministic serialization: sorted keys, no functions, no cycles. */
+function stableStringify(value: unknown, seen = new Set<unknown>()): string {
+	if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+	if (seen.has(value)) return "\u0004";
+	seen.add(value);
+	const entries = Object.keys(value as Record<string, unknown>)
+		.sort()
+		.filter((key) => typeof (value as Record<string, unknown>)[key] !== "function")
+		.map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key], seen)}`);
+	seen.delete(value);
+	return Array.isArray(value) ? `[${entries.join(",")}]` : `{${entries.join(",")}}`;
+}
+
+/** FNV-1a over the serialized token, so keys stay small for large blocks. */
+function digest(text: string): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < text.length; i++) {
+		hash ^= text.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return `${(hash >>> 0).toString(16)}:${text.length}`;
+}
+
+interface TokenRender {
+	/** Rows this token produced before wrapping. */
+	preWrap: string[];
+	/** Rows after wrapping, margins and padding. */
+	lines: string[];
+	/** Subset of `preWrap` that this token contributed to the no-wrap set. */
+	contributes: string[];
+	/** Subset of `preWrap` that was already in the no-wrap set when rendered. */
+	nowrapHits: string[];
+}
+
+/** Distinct token renders to retain; one long answer stays well inside this. */
+const TOKEN_RENDER_CACHE_BYTES = 8 * 1024 * 1024;
+
+/**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
  */
@@ -255,8 +307,23 @@ export class Markdown implements Component {
 	 * so indentation and structure survive copying (Codex TUI behavior).
 	 */
 	private nowrapLines = new Set<string>();
+	/**
+	 * Rows the token currently being rendered contributes to the no-wrap rule.
+	 * Collected per call rather than diffed against the document-wide set, because a
+	 * token's contribution must not depend on which other tokens ran first.
+	 */
+	private rowNoWrap: Set<string> | null = null;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
+
+	/**
+	 * Rendered top-level tokens, keyed by subtree plus width and the following token's
+	 * type (spacing). A streaming reply re-renders its whole document on every delta
+	 * while its finished blocks never change, so without this each frame repaints and
+	 * re-highlights the entire message.
+	 */
+	private tokenCache = new Map<string, TokenRender>();
+	private tokenCacheBytes = 0;
 
 	constructor(
 		text: string,
@@ -276,13 +343,23 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.text = text;
-		this.invalidate();
+		// An append only invalidates the assembled output: completed tokens stay valid,
+		// which is the point of the token cache. A replacement or shrink is handled by
+		// the cache keys themselves, because no token's subtree survives it.
+		this.cachedText = undefined;
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
 	}
 
 	invalidate(): void {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
+		// An explicit invalidation means the rendering inputs changed underneath the
+		// cache (theme, options, injected styles), so cached tokens may be stale.
+		this.tokenCache.clear();
+		this.tokenCacheBytes = 0;
+		this.defaultStylePrefix = undefined;
 	}
 
 	render(width: number): string[] {
@@ -308,61 +385,85 @@ export class Markdown implements Component {
 		// Replace tabs with 3 spaces for consistent rendering
 		const normalizedText = text.replace(/\t/g, "   ");
 
-		// Parse markdown to HTML-like tokens
+		// Lexing the whole document is cheap and keeps Marked's own interpretation as the
+		// single source of truth; rendering, wrapping and highlighting are what this
+		// cache stops repeating for tokens that already finished.
 		const tokens = markdownParser.lexer(normalizedText);
 		trimPartialClosingFences(tokens);
 
-		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
-		this.nowrapLines.clear();
+		// A reference definition lives in the document-level link table, not in a token's
+		// subtree, so a link's resolved target can change without its own subtree
+		// changing. Those documents take the uncached path.
+		const links = (tokens as unknown as { links?: Record<string, unknown> }).links;
+		const hasReferenceDefinitions = links !== undefined && Object.keys(links).length > 0;
+		const cacheEnabled = !hasReferenceDefinitions && !isIncrementalRenderDisabled();
 
+		const keys: string[] = new Array(tokens.length);
+		const preWrap: string[][] = new Array(tokens.length);
+		const contributes: string[][] = new Array(tokens.length);
+
+		// Pass 1: produce every token's pre-wrap rows and, independently of the others,
+		// the rows it puts under the document-wide no-wrap rule. A cached token replays
+		// its own contribution, so the collected set does not depend on which tokens hit.
 		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i];
-			const nextToken = tokens[i + 1];
-			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
-			for (const tokenLine of tokenLines) {
-				renderedLines.push(tokenLine);
+			const token = tokens[i]!;
+			const nextType = tokens[i + 1]?.type;
+			// The trailing block is the one still growing, so caching it would retain every
+			// intermediate state of a streamed paragraph or fence.
+			const cacheable = cacheEnabled && i < tokens.length - 1;
+			keys[i] = cacheable ? tokenRenderKey(token, contentWidth, width, nextType) : "";
+			const cached = cacheable ? this.tokenCache.get(keys[i]!) : undefined;
+			if (cached) {
+				preWrap[i] = cached.preWrap;
+				contributes[i] = cached.contributes;
+				continue;
 			}
+			this.rowNoWrap = new Set();
+			preWrap[i] = this.renderToken(token, contentWidth, nextType);
+			contributes[i] = [...this.rowNoWrap];
+			this.rowNoWrap = null;
 		}
+		this.nowrapLines.clear();
+		for (const rows of contributes) for (const row of rows) this.nowrapLines.add(row);
 
-		// Wrap lines (NO padding, NO background yet). Code-block lines skip
-		// soft wrapping and are clipped instead, keeping code copyable.
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			if (isImageLine(line)) {
-				wrappedLines.push(line);
-			} else if (this.nowrapLines.has(line)) {
-				wrappedLines.push(
-					visibleWidth(line) > contentWidth ? truncateToWidth(line, contentWidth, "", false) : line,
-				);
-			} else {
-				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
-					wrappedLines.push(wrappedLine);
-				}
-			}
-		}
-
-		// Add margins and background to each wrapped line
+		// Pass 2: wrap, then add margins and background. A cached token is reusable only
+		// while its own no-wrap membership is unchanged, because another token's code row
+		// can make an identical prose row stop wrapping.
 		const leftMargin = " ".repeat(this.paddingX);
 		const rightMargin = " ".repeat(this.paddingX);
 		const bgFn = this.defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
 
-		for (const line of wrappedLines) {
-			if (isImageLine(line)) {
-				contentLines.push(line);
+		for (let i = 0; i < tokens.length; i++) {
+			const key = keys[i]!;
+			const rows = preWrap[i]!;
+			const cached = key !== "" ? this.tokenCache.get(key) : undefined;
+			if (cached && this.nowrapDependencyUnchanged(cached, rows)) {
+				for (const line of cached.lines) contentLines.push(line);
 				continue;
 			}
 
-			const lineWithMargins = leftMargin + line + rightMargin;
+			const lines: string[] = [];
+			for (const line of rows) {
+				if (isImageLine(line)) {
+					lines.push(line);
+					continue;
+				}
+				if (this.nowrapLines.has(line)) {
+					const clipped =
+						visibleWidth(line) > contentWidth ? truncateToWidth(line, contentWidth, "", false) : line;
+					lines.push(this.padRow(clipped, width, leftMargin, rightMargin, bgFn));
+					continue;
+				}
+				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
+					lines.push(this.padRow(wrappedLine, width, leftMargin, rightMargin, bgFn));
+				}
+			}
 
-			if (bgFn) {
-				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
-			} else {
-				// No background - just pad to width
-				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
-				contentLines.push(lineWithMargins + " ".repeat(paddingNeeded));
+			for (const line of lines) contentLines.push(line);
+			if (key !== "") {
+				const nowrapHits = rows.filter((row) => this.nowrapLines.has(row));
+				this.storeTokenRender(key, { preWrap: rows, lines, contributes: contributes[i]!, nowrapHits });
 			}
 		}
 
@@ -383,6 +484,57 @@ export class Markdown implements Component {
 		this.cachedLines = result;
 
 		return result.length > 0 ? result : [""];
+	}
+
+	/** Add horizontal margins and pad (or background-fill) a row to the full width. */
+	private padRow(
+		line: string,
+		width: number,
+		leftMargin: string,
+		rightMargin: string,
+		bgFn: ((text: string) => string) | undefined,
+	): string {
+		const lineWithMargins = leftMargin + line + rightMargin;
+		if (bgFn) return applyBackgroundToLine(lineWithMargins, width, bgFn);
+		return lineWithMargins + " ".repeat(Math.max(0, width - visibleWidth(lineWithMargins)));
+	}
+
+	/**
+	 * Whether a cached token's wrapped rows are still valid.
+	 *
+	 * Wrapping depends on the document-wide no-wrap set, so a token is reusable only if
+	 * its own rows' membership has not changed since it was rendered.
+	 */
+	private nowrapDependencyUnchanged(cached: TokenRender, rows: readonly string[]): boolean {
+		const wasHit = new Set(cached.nowrapHits);
+		for (const row of rows) {
+			if (this.nowrapLines.has(row) !== wasHit.has(row)) return false;
+		}
+		return true;
+	}
+
+	private storeTokenRender(key: string, entry: TokenRender): void {
+		const size =
+			key.length +
+			entry.lines.reduce((total, line) => total + line.length, 0) +
+			entry.preWrap.reduce((total, line) => total + line.length, 0);
+		// Bound retained output rather than entry count: one long block would otherwise
+		// outgrow any fixed number of entries.
+		while (this.tokenCacheBytes + size > TOKEN_RENDER_CACHE_BYTES && this.tokenCache.size > 0) {
+			const oldest = this.tokenCache.keys().next().value;
+			if (oldest === undefined) break;
+			const evicted = this.tokenCache.get(oldest);
+			if (evicted) {
+				this.tokenCacheBytes -=
+					oldest.length +
+					evicted.lines.reduce((total, line) => total + line.length, 0) +
+					evicted.preWrap.reduce((total, line) => total + line.length, 0);
+			}
+			this.tokenCache.delete(oldest);
+		}
+		if (this.tokenCache.has(key)) this.tokenCache.delete(key);
+		this.tokenCache.set(key, entry);
+		this.tokenCacheBytes += size;
 	}
 
 	/**
@@ -544,7 +696,7 @@ export class Markdown implements Component {
 					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
 						const row = `${indent}${hlLine}`;
-						this.nowrapLines.add(row);
+						this.rowNoWrap?.add(row);
 						lines.push(row);
 					}
 				} else {
@@ -552,7 +704,7 @@ export class Markdown implements Component {
 					const codeLines = token.text.split("\n");
 					for (const codeLine of codeLines) {
 						const row = `${indent}${this.theme.codeBlock(codeLine)}`;
-						this.nowrapLines.add(row);
+						this.rowNoWrap?.add(row);
 						lines.push(row);
 					}
 				}
