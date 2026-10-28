@@ -164,7 +164,20 @@
 
 `invalidate()` 同时清掉 `defaultStylePrefix`。它是从主题派生的 ANSI 前缀，会在每个"在样式内结束"的行内片段之后重新拼一次；主题切换若只清缓存而留着它，旧主题的转义就会拼进新输出——当新主题不再应用该样式时（例如关掉粗体）会直接显示错。第 8 节的 `setIncrementalRenderDisabled(true)` 对这里同样生效：置位后渲染整篇且不保留前缀（`renderContent` 开头），否则那个"强制全量路径做字节级等价校验"的开关在 Markdown 内部形同虚设。
 
-**语法高亮按主题实例 + `(lang, source)` 记忆化**（`cachedHighlight`，`packages/coding-agent/src/theme/theme.ts`）。渲染器把主题当纯函数用，自己无法去重，所以只要一帧里重渲了某个已完成代码块，高亮就整块重跑：认证前缀之外的路径（块级数学、reference definition）每帧重渲整篇，而认证路径的可变尾块里若含围栏也会每帧重渲。实测 60 KB、120 列、120 B/delta，用产品主题和真实 highlight.js：块级数学文档 2 687 ms → 448 ms（6.0 倍），reference definition 2 672 ms → 457 ms（5.8 倍），普通散文 45 ms → 15 ms（3.1 倍）。未标注语言的围栏同样在缓存范围内（逐行 `fg` 也不便宜）。缓存以 `Symbol.for` 解析出的真实主题实例为键（导出的 `theme` 是 Proxy、身份不变，直接用会把上一个主题的颜色永久留给下一个），按插入顺序 FIFO 淘汰、单条超过 64 KiB 不缓存，且永远返回副本——`core/tools/write.ts` 会在流式写入时持有并修改返回数组。
+**语法高亮按主题实例 + 语法版本 + `(lang, source)` 记忆化**（`cachedHighlight`，`packages/coding-agent/src/theme/theme.ts`）。渲染器把主题当纯函数用，自己无法去重，所以只要一帧里重渲了某个已完成代码块，高亮就整块重跑：认证前缀之外的路径（块级数学、reference definition）每帧重渲整篇，而认证路径的可变尾块里若含围栏也会每帧重渲。实测 40 KB、120 列、120 B/delta，用产品主题和真实 highlight.js：块级数学文档 1 154 ms → 211 ms（5.5 倍），reference definition 1 206 ms → 237 ms（5.1 倍），含一个围栏的散文 29 ms → 9 ms（3.2 倍）；**纯散文只有 1.15 倍**——不含围栏的文档本来就不调用高亮，缓存对它无用，这不是本改动的收益来源。
+
+三个键成分都不能省：
+
+- **主题实例**：导出的 `theme` 是 Proxy、身份不变，直接用它做键会把上一个主题的颜色永久留给下一个；键取 `setGlobalTheme` 存进 `Symbol.for` 槽的真实实例。这个识别只覆盖本模块的 Proxy，跨模块实例传入的 Proxy 会被当作普通对象——仓库内没有这种调用。
+- **语法版本**（`highlightGrammarRevision`）：`highlight.js` 的子语言解析走同一个注册表，同一段 `javascript` 里的 HTML 模板只有 XML 语法加载完成后才会上色，所以 `(lang, source)` 不足以标识结果。启动时 `loadAllHighlightLanguages()` 完成后版本自增，旧键自动失效。
+- **language + source**：同一段文本按 TypeScript 和按 JSON 高亮结果不同。
+
+其它约束：
+
+- **只在第二次请求时写入**。仍在流式增长的围栏每个 delta 都是一个新键，且这些前缀之后不会再被请求；把它们存下来会用一个代码块的几百个中间态占满预算（实测单个 56 KB 围栏 33 MiB）并把真正可复用的已完成块挤出去。已完成块会重复请求同一键，因此第二次命中才落盘。
+- **按 payload 预算淘汰**（4 MiB/主题，FIFO）而不是条目数；单条源码超过 64 Ki（UTF-16 code unit，不是字节）不保留，避免 read/write 工具把整文件钉在缓存里。
+- **永远返回副本**：`core/tools/write.ts` 会在流式写入时持有并修改返回数组。
+- 两个入口（`highlightCode` 与 markdown 主题的 `highlightCode`）共用一份缓存，因此失败兜底也统一成 `fg("mdCodeBlock", …)`；否则同一键的结果取决于谁先跑。
 
 ## 5. 主屏差分渲染（regular）
 

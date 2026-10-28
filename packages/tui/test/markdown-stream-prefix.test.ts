@@ -101,10 +101,9 @@ const HAZARDS: ReadonlyArray<readonly [string, string]> = [
 	["paragraph-continuation", "intro\n\nfirst line\nsecond line\n\nthird\n"],
 	["image-line", "intro\n\n![alt](https://example.com/x.png)\n\ntail\n"],
 	["empty-first-block", "\n\nfirst\n\nsecond\n"],
-	// The block shapes below were contributed by the per-token cache investigation.
-	// They are not new constructs, but each one stresses a different part of the
-	// certification: link state that is balanced again, list numbering that starts off
-	// one, wide characters, and nested containers.
+	// Shapes that stress a different part of the certification: inline state that is
+	// balanced again, list numbering that starts off one, wide characters, and nested
+	// containers.
 	[
 		"inline-anchor-balanced-then-autolink",
 		'<a href="x">open\n\nhttps://example.com\n\nclose </a>\n\nhttps://example.com\n\nend\n',
