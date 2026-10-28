@@ -25,7 +25,7 @@ import {
 	SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
 } from "../step/settings-manager.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
-import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
+import type { StepAgentConfig, StepAgentScope } from "./step-subagent-agents.ts";
 import { executeSubagent, prepareSubagentRun, runPreparedSubagent } from "./subagent/execute.ts";
 import {
 	allocateStepWorktree,
@@ -48,6 +48,7 @@ import {
 	subagentListSignature,
 } from "./subagent/rendering.ts";
 import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
+import { buildSubagentToolDescription } from "./subagent/tool-description.ts";
 import { clampWorkflowConcurrency } from "./workflow/budget.ts";
 
 // Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
@@ -834,15 +835,10 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		pi.registerTool<typeof StepSubagentParamsSchema, StepSubagentDetails>({
 			name: "subagent",
 			label: "Subagent",
-			description: [
-				"Delegate tasks to specialized subagents with isolated context.",
-				"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-				"By default the call blocks until the agents finish and returns their results.",
-				"With run_in_background:true it returns a lane_id at once and later sends one <agent-notification> when the lane ends; manage the lane with agent_send.",
-				formatBuiltinAgentGuidance(),
-				`Default agent scope is "user" (from ${path.join(resolved.agentDir, "agents")}).`,
-				`To enable project-local agents in ${resolved.configDirName}/agents, set agentScope: "both" (or "project").`,
-			].join(" "),
+			description: buildSubagentToolDescription({
+				userAgentsDir: path.join(resolved.agentDir, "agents"),
+				configDirName: resolved.configDirName,
+			}),
 			parameters: StepSubagentParamsSchema,
 			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 				const callParams = params as SubagentParams;

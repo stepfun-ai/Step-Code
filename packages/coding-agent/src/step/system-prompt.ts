@@ -42,7 +42,7 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 	task_list:
 		"Use task_list to recover todo progress or choose the next open item; blockedBy contains only unfinished prerequisites.",
 	workflow:
-		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create.",
+		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task, once delegation is authorized, prefer subagent; for calendar or wall-clock deferral prefer cron_create.",
 };
 
 const READ_TOOLS = [
@@ -228,14 +228,9 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Coordination primitives",
 				[
-					"- The coordination primitives — direct tools, subagent, cron_create, workflow, and session goals — share one job (running work on your behalf) but differ on when the work runs and what the fresh actor sees.",
-					"- Reach for direct tools first (read_file, edit_file, run_command). Escalate only when a specific primitive's value applies.",
-					"- subagent (Agent tool, when available): delegate a scoped task to a fresh context. Use when the parent context is precious, the task is exploration-heavy, or you want an independent verifier. The child agent has no memory of this conversation; brief it self-contained.",
-					"- cron_create (when available): use a five-field local-time schedule for recurrence or restart-survival; it is for calendar triggers, not completion-state work.",
-					"- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in. Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
-					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, budget, and clear.",
-					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; calendar recurrence or restart survival → cron_create; explicit completion-state continuation → create_goal; broad multi-agent work with per-agent budgets → workflow.",
-					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule or create a goal.",
+					"- Default to direct tools. Every other primitive needs explicit authorization: subagent when the user, applicable AGENTS.md, or a skill asks for subagents, delegation, or parallel agent work; workflow through the ultraloop opt-in; cron_create and create_goal through an explicit request.",
+					"- Once authorized: a scoped or parallel delegated task → subagent; broad fan-out with a journal and budgets → workflow; calendar recurrence or restart survival → cron_create; an explicit multi-turn objective → create_goal.",
+					"- Do not stack primitives to look busy. Each primitive's own tool description or section explains how to use it.",
 				].join("\n"),
 			]
 		: [];
@@ -271,7 +266,7 @@ export function buildStepSystemPromptAppendix(
 				[
 					'- workflow is opt-in: reach for it only when the user\'s current message contains the keyword "ultraloop" (or "ultracode") or an explicit request such as "use a workflow", "run a workflow", "fan out agents", or "orchestrate this with subagents"; ultraloop is on for the session (the latest on/off system-reminder in the current context reports its state; unchanged state is not repeated); the user invokes a saved workflow by name; or a skill instructs it. A system-reminder confirms per-turn and session-standing opt-ins (saved-workflow and skill invocations are valid without one); never infer opt-in from task shape, and never carry a per-turn opt-in forward.',
 					"- When ultraloop is on for the session that opt-in is standing: author and run a workflow for every substantive task by default, treat token cost as unconstrained, and aim for the most exhaustive correct answer. Multi-phase work often means several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits. When session mode is off, revert to the per-turn opt-in rule.",
-					"- Without any signal, prefer targeted tools — search_files, read_file, or a single subagent — and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
+					"- Without any signal, prefer targeted tools such as search_files and read_file, and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
 					"- With opt-in, workflow fits broad multi-subsystem audits, mechanical migrations across many sites, multi-way parallel review with adversarial verification, research sweeps, and HoH convergence on a spec.",
 					"- Scripts compose agent() calls using phase(title) to label visible milestones (one string; it runs nothing), parallel() and pipeline() for fan-out, iterate() for HoH loops, nested workflow() for sub-runs, log() for progress, and the budget object; pass inputs via args as real JSON values, never JSON-encoded strings.",
 					"- parallel() is a barrier that awaits every call before returning; pipeline() threads each item through the stages independently with no barrier between stages, so a stage never sees sibling items' earlier-stage output. Default to pipeline() and use a stage-wide parallel() only when a stage needs cross-item context such as dedup, early exit, or cross-referencing.",
@@ -326,7 +321,7 @@ export function buildStepSystemPromptAppendix(
 		"- A permission denial is final for that call. Do not retry it verbatim or disguise the same action as another tool call.",
 
 		"# Cost and consent",
-		"- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger; do not invoke them uninvited.",
+		"- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger, and subagent requires an explicit delegation request from the user, AGENTS.md, or a skill; do not invoke them uninvited.",
 
 		"# Workflow",
 		"1. Understand first: read relevant code and project instructions, then investigate until the root cause is clear.",
@@ -383,20 +378,6 @@ export function buildStepSystemPromptAppendix(
 	} else if (hasRead && !hasWrite && !hasExecute) {
 		sections.push(
 			"Operating mode: read-only inspection. Use the available read and discovery tools; do not mutate files or execute arbitrary commands.",
-		);
-	}
-
-	if (active.has("subagent")) {
-		sections.push(
-			[
-				"# Delegation",
-				"- Use subagent to delegate work that benefits from an isolated context: broad exploration whose intermediate output does not belong in this transcript, independent parallel tasks, or long-running work.",
-				"- Run in the foreground (the default) whenever your next step needs the result; the call returns it directly. Set run_in_background:true only for independent work you can continue without.",
-				"- A background call returns a lane_id at once. Each lane sends one <agent-notification> when it ends, at the start of a later turn; it carries the outcome, output, failure reasons, and child session paths. After starting a lane, do not sleep, poll, or call agent_send status to wait for it: end your turn or keep working on something else.",
-				'- agent_send manages a lane by lane_id. action:"reply" continues a single-agent lane\'s transcript (interrupt:false queues after its current turn; interrupt:true steers immediately); parallel and chain lanes cannot take replies, so start a new subagent call for follow-up work. action:"stop" ends the lane. action:"status" answers a specific question about a lane (state, usage, session paths, recent output); omit lane_id to list lanes.',
-				'- The default subscribe:"final" sends only the ending notification. Use subscribe:"progress" only when throttled progress matters, for example a long review or audit lane.',
-				"- Do not delegate small single-step edits; the overhead outweighs the isolation.",
-			].join("\n"),
 		);
 	}
 

@@ -113,19 +113,19 @@ describe("Step system prompt appendix", () => {
 		expect(withoutBrowser).toContain("playwright plugin");
 	});
 
-	it("adds event-driven delegation guidance only when the subagent tool is active", () => {
+	it("leaves delegation method to the subagent tool and keeps only the authorization gate", () => {
 		const withSubagent = buildStepSystemPromptAppendix(["read_file", "subagent", "agent_send"]);
 
-		expect(withSubagent).toContain("# Delegation");
-		expect(withSubagent).toContain("<agent-notification>");
-		expect(withSubagent).toContain("agent_send");
-		expect(withSubagent).toContain('subscribe:"final"');
-		// The S3-deleted tools are never mentioned: lanes are event-driven and
-		// agent_send is the only lane verb.
-		expect(withSubagent).not.toContain("agent_wait");
-		expect(withSubagent).not.toContain("agent_list");
-		expect(withSubagent).not.toContain("agent_reply");
-		expect(withSubagent).not.toContain("agent_interrupt");
+		// Method and lane mechanics moved into the subagent tool description.
+		expect(withSubagent).not.toContain("# Delegation");
+		expect(withSubagent).not.toContain("<agent-notification>");
+		expect(withSubagent).toContain("# Coordination primitives");
+		expect(withSubagent).toContain("Every other primitive needs explicit authorization");
+		expect(withSubagent).toContain("subagent when the user, applicable AGENTS.md, or a skill asks");
+		// The old automatic escalation is gone everywhere in the prompt.
+		expect(withSubagent).not.toContain("long or exploratory task → subagent");
+		expect(withSubagent).not.toContain("Escalate only when");
+		expect(withSubagent).not.toContain("the parent context is precious");
 
 		const withoutSubagent = buildStepSystemPromptAppendix(["read_file"]);
 		expect(withoutSubagent).not.toContain("# Delegation");
@@ -228,6 +228,7 @@ describe("Step system prompt appendix", () => {
 		expect(withCron).toContain("cron_create");
 		expect(withCron).toContain("workflow");
 		expect(withCron).toContain("Do not stack primitives to look busy");
+		expect(withCron).toContain("Each primitive's own tool description or section explains how to use it");
 
 		const withWorkflow = buildStepSystemPromptAppendix(["read_file", "workflow"]);
 		expect(withWorkflow).toContain("# Coordination primitives");
@@ -244,6 +245,7 @@ describe("Step system prompt appendix", () => {
 		const prompt = buildStepSystemPromptAppendix(["read_file"]);
 		expect(prompt).toContain("# Cost and consent");
 		expect(prompt).toContain("Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger");
+		expect(prompt).toContain("subagent requires an explicit delegation request");
 		expect(prompt).not.toContain("necessary but not sufficient consent");
 		expect(prompt).not.toContain("so the user can steer before you spend");
 	});

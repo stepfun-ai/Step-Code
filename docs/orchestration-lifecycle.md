@@ -156,6 +156,21 @@ the turn as failed and ends the child even for a keep-alive lane. The default is
 30 minutes, deliberately generous because a long `run_command` is silent while it
 runs; `STEP_SUBAGENT_TURN_IDLE_TIMEOUT_MS` overrides it and `0` disables it.
 
+## Subagent delegation authorization
+
+Delegation guidance is split by owner. The `subagent` tool description holds the
+default gate (spawn only when the user, applicable AGENTS.md, or a skill explicitly
+asks for subagents, delegation, or parallel agent work), the delegation method, and
+the lane facts; it does not change within a session. The system prompt's
+`# Coordination primitives` section only routes between direct tools, `subagent`,
+`workflow`, `cron_create`, and `create_goal` once one is authorized. Session-standing
+ultracode is the proactive switch: its on reminder also authorizes proactive
+delegation, and its off reminder restores the explicit-request gate. A per-turn
+`ultracode: <task>` opt-in authorizes a workflow for that turn only; it does not
+lift the subagent gate, because the workflow already fans out its own agents. Like workflow
+opt-in, this is model guidance, not a permission gate; `subagent` calls are not
+rejected for lacking a request.
+
 ## Background subagent lanes
 
 `subagent` blocks by default: the call returns once every child has finished.
