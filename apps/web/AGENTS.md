@@ -416,8 +416,8 @@ Run from the repo root.
 | `pnpm web:watch` | Host from source plus the Vite dev server (port `STEPCODE_WEB_CLIENT_PORT`, default 5173); the launch URL opens Vite, so client edits apply by HMR. The host is not watched, so an agent editing this repo does not restart it and drop its own turn; restart the command for host or package changes, or set `STEPCODE_WEB_WATCH_HOST=1` to restart the host on every change (drops running turns). The browser opens once per run |
 | `pnpm --filter @step-harness/web dev:client` | Vite dev server with HMR, proxies to a host on `STEPCODE_WEB_PORT` (start the host first) |
 | `pnpm --filter @step-harness/web typecheck` | Host and client type check |
-| `pnpm --filter @step-harness/web test` | Host unit tests |
-| `TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/<name>.test.ts` | One unit test file (from `apps/web/`); without the tsconfig, workspace packages resolve to `dist/` and fail |
+| `pnpm --filter @step-harness/web test` | Host unit tests (`tsx --tsconfig`, so it also runs under the Windows `cmd` shell pnpm uses) |
+| `pnpm exec tsx --tsconfig ../../tsconfig.json --test test/<name>.test.ts` | One unit test file (from `apps/web/`, any shell); without the tsconfig, workspace packages resolve to `dist/` and fail. `TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test ...` is the POSIX-shell equivalent |
 | `STEPCODE_WEB_BROWSER_TEST=1 TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/browser.test.ts` | Opt-in installed-Chromium adapter acceptance against a local fixture only; no account, provider or engine download |
 | `STEPCODE_WEB_TERMINAL_TEST=1 TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/terminal.test.ts` | Opt-in real local-shell acceptance in temporary folders; no account/provider calls |
 | `pnpm --filter @step-harness/web test:e2e` | Client build + e2e in headless Chrome (`CHROME_PATH` to override; skipped without Chrome) |

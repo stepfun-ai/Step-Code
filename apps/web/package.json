@@ -12,7 +12,7 @@
 		"dev:client": "vite",
 		"build": "shx rm -rf dist && tsgo -p tsconfig.json && vite build && shx cp openapi.yaml dist/openapi.yaml",
 		"build:client": "vite build",
-		"test": "TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/*.test.ts",
+		"test": "tsx --tsconfig ../../tsconfig.json --test test/*.test.ts",
 		"test:e2e": "vite build && node --test test/e2e/*.e2e.mjs",
 		"typecheck": "tsgo -p tsconfig.json --noEmit && tsgo -p tsconfig.client.json --noEmit"
 	},
