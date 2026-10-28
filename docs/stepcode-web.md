@@ -839,6 +839,24 @@ through coding-agent's public `models.json` / `auth.json` APIs.
 - Failures never stop the host; the host logs one `[models]` line when it  
   imports something, never the key.
 
+## Editing a custom model provider
+
+The model settings page declares providers and keys through
+[`apps/web/src/model-providers.ts`](../apps/web/src/model-providers.ts). The form
+shows the address, protocol, name and, per model, the id, context window, max
+output, input kinds, reasoning flag and thinking-level map; a save rebuilds
+exactly those. Everything it cannot show is kept from the stored declaration:
+provider-level `headers`, `compat`, `authHeader` and `modelOverrides`, and
+per-model `api`, `baseUrl`, `cost`, `samplingParams`, `headers` and `compat`. A
+model row the form no longer sends is removed, because deleting a model is an
+edit too.
+
+That rule is not cosmetic: `compat.forceAdaptiveThinking`
+([models](../packages/coding-agent/docs/models.md#anthropic-messages-compatibility))
+turns an Anthropic request from the legacy budget payload into adaptive thinking,
+so a save made only to rotate a key must not silently change how requests are
+built.
+
 ## Subagent presentation
 
 The Web client uses the DFSC Standard task rows: a persistent Bot icon, a  
