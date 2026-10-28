@@ -32,9 +32,16 @@
 // so it does not stop a namespace import (`import * as p; p.toJsonEvent(...)`),
 // a hand-rolled `JSON.stringify(event)`, a wrapper module outside the scanned
 // roots, or an edit to the transport allowlist above. Those are deliberate acts
-// visible in review; what it does catch is the ordinary mistake — a new transport
-// that never calls the projection, a transport whose call stopped threading the
-// option, and the call-site filter coming back.
+// visible in review.
+//
+// What it does catch is narrower than "a new transport": it catches a new
+// *caller of the projection* that is not in the allowlist, a transport whose
+// call stopped threading the option, and the call-site filter coming back. It
+// does **not** catch a new transport that never calls the projection at all —
+// one that subscribes to the session and serializes the events itself, as the
+// framed SDK host does. Nothing here can tell that apart from an in-process
+// subscriber without knowing the file writes a stream, so that case relies on
+// review of the `session.subscribe` call site.
 //
 // No new dependency; same node + --self-test convention as the sibling
 // check-*.mjs scripts. Pure classification in analyzeFile(path, text).
