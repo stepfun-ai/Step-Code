@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
 import type { Static } from "typebox";
+import { SUBAGENT_SESSION_ID_PREFIX } from "../../core/child-session.ts";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../../step/telemetry.ts";
 import {
@@ -497,11 +498,17 @@ export async function runPreparedSubagent(
 			}
 		}
 		let requestEpoch = admission?.epoch ?? 0;
+		const sessionId = laneRuntime?.sessionId
+			? index === 0
+				? laneRuntime.sessionId
+				: `${laneRuntime.sessionId}-${index}`
+			: `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`;
 		// Flip the queued placeholder before spawning, so the step reads as running
 		// (with a clock) from the moment it is dispatched, not from its first event.
 		records[index] = {
 			...records[index],
 			agentSource: agent.source,
+			sessionId,
 			status: "running",
 			startedAt: Date.now(),
 			updatedAt: Date.now(),
@@ -515,16 +522,37 @@ export async function runPreparedSubagent(
 				worktree = await options.worktreeManager.allocate(baseCwd, taskLabel(task, index));
 				childCwd = worktree.path;
 			}
-			const childSessionId = laneRuntime?.sessionId
-				? index === 0
-					? laneRuntime.sessionId
-					: `${laneRuntime.sessionId}-${index}`
-				: `subagent-${randomUUID()}`;
 			const withSession = (result: StepSubagentRunResult): StepSubagentRunResult => ({
 				...result,
-				sessionId: result.sessionId ?? childSessionId,
+				sessionId,
 			});
+			const seenResponses = new Set<string>();
+			const observedMessages = new WeakSet<StepSubagentRunResult["messages"][number]>();
+			const retainCompletedResponses = (result: StepSubagentRunResult): void => {
+				if (!laneRuntime?.onCompletedResponse) return;
+				for (const message of result.messages) {
+					if (message.role !== "assistant" || message.stopReason !== "stop" || observedMessages.has(message))
+						continue;
+					observedMessages.add(message);
+					const output = message.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n");
+					const key = `${message.timestamp}:${output}`;
+					if (!output || seenResponses.has(key)) continue;
+					seenResponses.add(key);
+					laneRuntime.onCompletedResponse({
+						agent: agent.name,
+						task: task.task,
+						taskIndex: index,
+						sessionId,
+						timestamp: message.timestamp,
+						output,
+					});
+				}
+			};
 			const update = (partial: StepSubagentRunResult): void => {
+				retainCompletedResponses(partial);
 				records[index] = resultRecord(agent.name, task.task, withSession(partial), {
 					agentSource: agent.source,
 					worktreePath: worktree?.path,
@@ -544,7 +572,7 @@ export async function runPreparedSubagent(
 				onUpdate: update,
 				onNeedsInput: laneRuntime?.onNeedsInput,
 				onChildRespawn: laneRuntime?.onChildRespawn,
-				sessionId: childSessionId,
+				sessionId,
 				keepAlive: laneRuntime?.keepAlive === true,
 				...(laneRuntime?.turnTimeoutMs ? { turnTimeoutMs: laneRuntime.turnTimeoutMs } : {}),
 				// An admitted child keeps its shared slot until its process has exited.
@@ -560,6 +588,7 @@ export async function runPreparedSubagent(
 						}
 					: {}),
 			});
+			retainCompletedResponses(child);
 			const completed = resultRecord(agent.name, task.task, withSession(child), {
 				agentSource: agent.source,
 				worktreePath: worktree?.path,
@@ -573,7 +602,10 @@ export async function runPreparedSubagent(
 		} catch (error) {
 			if (worktree && task.retainWorktree === false) await worktree.cleanup().catch(() => undefined);
 			const message = error instanceof Error ? error.message : String(error);
-			const failed = makeFailureResult(agent.name, task.task, message, agent.source);
+			const failed = {
+				...makeFailureResult(agent.name, task.task, message, agent.source),
+				sessionId,
+			};
 			records[index] = failed;
 			emit(mode);
 			reportFinished(failed, index);

@@ -192,6 +192,39 @@ output is saved under the session's `tool-output` directory and replaced by a
 preview with its path. `subscribe: "progress"` adds throttled progress messages
 that do not wake the parent. A child's needs-input request does wake it.
 
+Live hosts subscribe to `SUBAGENT_LANE_CHANNEL` (`step:subagent-lane`) on the
+session's extension event bus. Each `SubagentLaneSnapshot` replaces that lane's
+state and carries bounded child session ids, current output, tools and usage.
+This channel is independent of TUI widgets and `subscribe`, never enters model
+context, and is not written to JSON/RPC records. Hosts keep the latest snapshot
+for reconnects and must isolate it by session. Shutdown invalidates late callbacks.
+
+A child assistant's successful final answer (`stopReason: "stop"`) is a separate
+fact from full lane settlement. Each answer is retained once as a
+`step-subagent-response` custom entry in the parent journal. Oversized text uses
+the shared output-retention boundary. A queued follow-up, a failed later response,
+or stopping the lane does not replace that completed answer. Terminal notifications
+and `agent_send status` include completed answers alongside the current outcome;
+an interrupted lane remains interrupted, not falsely successful. Retention errors
+are reported in the terminal notification, with the child's own transcript still
+available. Progress frames contain no completed-response history.
+
+Outcome and failure diagnostics precede historical answer bodies. Status and
+notification views use independent byte budgets for diagnostics, current output,
+session metadata and recent answers, report omitted
+answers explicitly, and refer to the journal/child transcripts for the complete
+history. This does not remove durable answers. A normalized full-answer hash
+prevents a retained preview or trailing whitespace from duplicating the current
+answer; substring matches never discard an independent answer. Clipped views
+retain their complete lane snapshot in the owned tool-output namespace and show
+its file path. Answer views keep both the introduction and conclusion. Only
+32 recent answers and 128,000 characters of answer/task payload remain cached in
+memory; all completed-answer journal facts and child transcripts stay intact.
+Each new reply immediately publishes its running state and starts a fresh
+retention-error scope. Stopping a lane publishes its settled roster after cleanup, so skipped
+steps do not remain queued in a reconnect snapshot. Consumers validate bus input
+with `readSubagentLaneSnapshot`, which re-projects the bounded live allowlist.
+
 `agent_send` takes `{lane_id, action, prompt?, interrupt?}`:
 
 - `reply` continues a single-agent lane's transcript. While the turn runs it is a
