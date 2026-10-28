@@ -11,6 +11,7 @@ import {
 	FULL_ACCESS_PRESET,
 	FULL_ACCESS_RISK_CANCEL,
 } from "../../lib/permissions";
+import { retainComposerDraftWork, updateDraftAttachments } from "../../state/composer-drafts";
 import {
 	applyQueueState,
 	countUserMessages,
@@ -292,12 +293,12 @@ export function syncStagedModeLead(editor: HTMLElement): void {
  * modes are mutually exclusive); any other command appends — commands stack,
  * one input may carry several.
  */
-export function stageCommandLead(editor: HTMLElement, command: string): void {
+export function stageCommandLead(editor: HTMLElement, command: string, stageMode = true): void {
 	const name = command.replace(/^\//u, "");
 	const mode = modeFromCommand(name.replace(/:$/u, ""));
 	const meta = mode ? MODES.find((entry) => entry.id === mode) : undefined;
 	if (mode && meta) {
-		chooseMode(mode);
+		if (stageMode) chooseMode(mode);
 		// Insert the chip synchronously (see the input sync note): another mode's
 		// chip yields its place — one mode rides a message.
 		insertModeLead(editor, {
@@ -334,10 +335,10 @@ export function stageCommandAtSlashToken(editor: HTMLElement, token: SlashToken,
  * leaves the text and becomes its lead chip, so every command line shows the
  * same icon and theme from the moment it is recognizable.
  */
-export function applyLeadingCommand(editor: HTMLElement): void {
+export function applyLeadingCommand(editor: HTMLElement, stageMode = true): void {
 	const name = stripLeadingCommand(editor);
 	if (name === null) return;
-	stageCommandLead(editor, name === "ultracode" ? "ultracode:" : `/${name}`);
+	stageCommandLead(editor, name === "ultracode" ? "ultracode:" : `/${name}`, stageMode);
 }
 
 /* ── Other-session context ────────────────────────────────────────────────── */
@@ -413,23 +414,30 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 /** Read each file (up to 5 MB) and stage it; oversized or unreadable files raise a toast. */
-export async function addAttachments(files: readonly File[]): Promise<void> {
-	for (const file of files) {
-		if (file.size > MAX_ATTACHMENT_BYTES) {
-			showError(t("attachmentTooLarge"));
-			continue;
+export async function addAttachments(files: readonly File[], stage?: (attachment: Attachment) => void): Promise<void> {
+	const owner = getState().composerDraftId;
+	const release = stage ? () => {} : retainComposerDraftWork(owner);
+	try {
+		for (const file of files) {
+			if (file.size > MAX_ATTACHMENT_BYTES) {
+				showError(t("attachmentTooLarge"));
+				continue;
+			}
+			try {
+				const attachment: Attachment = {
+					name: file.name,
+					mimeType: file.type || "application/octet-stream",
+					data: await readFileAsBase64(file),
+					kind: file.type.startsWith("image/") ? "image" : "text",
+				};
+				if (stage) stage(attachment);
+				else updateDraftAttachments(owner, (attachments) => [...attachments, attachment]);
+			} catch (error) {
+				showError((error instanceof Error && error.message) || t("attachmentUnreadable"));
+			}
 		}
-		try {
-			const attachment: Attachment = {
-				name: file.name,
-				mimeType: file.type || "application/octet-stream",
-				data: await readFileAsBase64(file),
-				kind: file.type.startsWith("image/") ? "image" : "text",
-			};
-			setState((state) => ({ attachments: [...state.attachments, attachment] }));
-		} catch (error) {
-			showError((error instanceof Error && error.message) || t("attachmentUnreadable"));
-		}
+	} finally {
+		release();
 	}
 }
 
@@ -505,10 +513,11 @@ export async function sendMessage(text: string, files: readonly PromptFile[] = [
 		// A slash command journals no user message: the host echoes it as a
 		// command row through the snapshot, so pull the snapshot once the
 		// command has run (commands that drive no turn push no other event).
-		if (text.startsWith("/")) void refreshCurrent();
+		if (text.startsWith("/") && getState().composerDraftId === state.composerDraftId) void refreshCurrent();
 		return true;
 	} catch (error) {
-		setState({ attachments, pendingTurn: null });
+		updateDraftAttachments(state.composerDraftId, (newer) => [...attachments, ...newer]);
+		if (getState().composerDraftId === state.composerDraftId) setState({ pendingTurn: null });
 		if (steering && state.current) setSteering(state.current.id, steering);
 		showError(errorMessage(error));
 		return false;

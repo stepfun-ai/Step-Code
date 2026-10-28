@@ -105,6 +105,14 @@ apps/web/
   prose on completion. IME, moved selections and session/workspace replacement
   invalidate picks; stale/pending candidates must not send or overwrite input.
   Escape belongs to the shell chain and closes the list without aborting a turn.
+- Main composer drafts are page-local and keyed by `state.composerDraftId`, not cwd. Each new conversation
+  gets a fresh identity even in the same folder; first-send session creation adopts that identity.
+  `state/composer-drafts.ts` scopes images and modes; `features/composer/drafts.ts` parks live rich-input nodes,
+  skills/plugins and quoted contexts between selections. Do not serialize drafts to disk or clone uploading chips
+  on navigation. Waiting uploads invalidate a submit when its editor leaves; late reads, failed sends and context
+  picks update only their originating draft. Unreachable unsaved inputs release their nodes and images after pending
+  work settles; session drafts and inputs awaiting creation/adoption remain recoverable. Inline rewrites own their
+  image attachments and navigate to a fork only after successful submission; they never consume main-input state.
 - `platform/desktop-bridge.ts` is a cross-package contract with `apps/desktop/src/preload.ts`. Change it only together
   with the desktop side (see `apps/desktop/AGENTS.md`).
 - Appearance is restored before mounting the React client. Desktop `getTheme` / `setTheme` use the profile's

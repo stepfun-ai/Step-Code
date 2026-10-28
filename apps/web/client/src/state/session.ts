@@ -17,6 +17,12 @@ import { contentText, skillInvocation } from "../lib/markdown";
 import { FULL_ACCESS_PRESET, isFullAccessRisk } from "../lib/permissions";
 import { isDesktopHost } from "../platform/host";
 import { assistantBlocks } from "./assistant-content";
+import {
+	composerDraftPatch,
+	forgetComposerDraft,
+	retainComposerDraftWork,
+	sessionComposerDraft,
+} from "./composer-drafts";
 import { observePerformance } from "./performance";
 import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
@@ -811,6 +817,9 @@ export function renderSnapshot(
 		pendingSelections: (snapshot.pendingSelections ?? []).filter((request) => !resolvedSelections.has(request.id)),
 	};
 	const previousSessionId = getState().current?.id;
+	const inputPatch = composerDraftPatch(
+		sessionComposerDraft(snapshot.id, options.adoptDraft ? getState().composerDraftId : undefined),
+	);
 	setState((state) => {
 		const live = state.current?.id === snapshot.id ? state.current : undefined;
 		const timelineItems = holdStream
@@ -842,6 +851,7 @@ export function renderSnapshot(
 					}
 				: snapshot;
 		return {
+			...inputPatch,
 			current,
 			performanceRun: !holdStream && state.current?.id !== snapshot.id ? null : state.performanceRun,
 			policiesCache: snapshot.policies ?? state.policiesCache,
@@ -1611,6 +1621,7 @@ export async function runSessionAction(action: SessionAction, session: SessionSu
 			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
 			// After leaving it: leaving a session stashes its tabs.
 			forgetPreviewSession(session.id);
+			forgetComposerDraft(session.id);
 		}
 		await refreshSessions();
 	} catch (error) {
@@ -1741,9 +1752,11 @@ export function startDraft(cwd: string = getState().bootstrapCwd, options: { rea
 	// A folder removed from workspace navigation keeps its chats but is no
 	// target for new work; see `workspaceForNewConversation`.
 	const startIn = isHiddenWorkspace(getState(), draftCwd) ? workspaceForNewConversation() : draftCwd;
+	const inputPatch = composerDraftPatch(`draft:${crypto.randomUUID()}`);
 	setState((state) => {
 		const current = state.current;
 		return {
+			...inputPatch,
 			draftPolicy: current ? current.permissionPreset || state.draftPolicy : state.draftPolicy,
 			draftSelection: null,
 			draftFullAccessAnswer: "",
@@ -1808,72 +1821,97 @@ export async function refreshModelCatalog(): Promise<void> {
 	await loadDraftModels(state.draftCwd || state.bootstrapCwd);
 }
 
+const pendingDraftSessions = new Map<string, { promise: Promise<SessionSnapshot>; title: { firstMessage?: string } }>();
+
 /**
  * The current session, creating it from the draft (cwd, policy, model,
  * thinking level) when there is none yet (legacy `createSessionIfNeeded`,
  * 3153-3182). `firstMessage` titles the new sidebar row until the host lists it.
+ * Side questions and first sends share creation and setup only within their originating draft.
  */
 export async function createSessionIfNeeded(firstMessage?: string): Promise<SessionSnapshot> {
 	const state = getState();
+	const pending = pendingDraftSessions.get(state.composerDraftId);
+	if (pending) {
+		if (firstMessage && !pending.title.firstMessage) pending.title.firstMessage = firstMessage;
+		return pending.promise;
+	}
 	if (state.current) return state.current;
-	let snapshot = await apiSend<SessionSnapshot>("/api/v1/sessions", "POST", {
-		cwd: state.draftCwd || state.bootstrapCwd,
-	});
-	// A session whose settings already name Full Access asks the risk question
-	// itself at start (and runs as Approve for Me until answered). Switching
-	// tier on top of that would raise a second copy of the same question.
-	const askedAtStart = snapshot.pendingSelections?.some(isFullAccessRisk) ?? false;
-	if (!askedAtStart && state.draftPolicy && snapshot.permissionPreset !== state.draftPolicy) {
-		snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/policy`, "PATCH", {
-			preset: state.draftPolicy,
+	const title = { firstMessage };
+	const promise = createDraftSession(state, title);
+	pendingDraftSessions.set(state.composerDraftId, { promise, title });
+	return promise;
+}
+
+async function createDraftSession(state: AppState, title: { firstMessage?: string }): Promise<SessionSnapshot> {
+	const release = retainComposerDraftWork(state.composerDraftId);
+	try {
+		let snapshot = await apiSend<SessionSnapshot>("/api/v1/sessions", "POST", {
+			cwd: state.draftCwd || state.bootstrapCwd,
 		});
-	}
-	// The user already answered the risk question in the draft; hand that
-	// answer to the kernel instead of asking twice. Without one (a tier carried
-	// over from another session), the question stays open for the dialog.
-	const risk = snapshot.pendingSelections?.find(isFullAccessRisk);
-	if (risk && state.draftPolicy === FULL_ACCESS_PRESET && state.draftFullAccessAnswer) {
-		snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/selections/response`, "POST", {
-			id: risk.id,
-			value: state.draftFullAccessAnswer,
-		});
-	}
-	if (state.draftModel) {
-		const [provider, modelId] = state.draftModel.split("\u0000");
-		if (provider && modelId && (snapshot.model?.provider !== provider || snapshot.model?.id !== modelId)) {
-			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/model`, "PATCH", {
-				provider,
-				modelId,
+		// A session whose settings already name Full Access asks the risk question
+		// itself at start (and runs as Approve for Me until answered). Switching
+		// tier on top of that would raise a second copy of the same question.
+		const askedAtStart = snapshot.pendingSelections?.some(isFullAccessRisk) ?? false;
+		if (!askedAtStart && state.draftPolicy && snapshot.permissionPreset !== state.draftPolicy) {
+			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/policy`, "PATCH", {
+				preset: state.draftPolicy,
 			});
 		}
+		// The user already answered the risk question in the draft; hand that
+		// answer to the kernel instead of asking twice. Without one (a tier carried
+		// over from another session), the question stays open for the dialog.
+		const risk = snapshot.pendingSelections?.find(isFullAccessRisk);
+		if (risk && state.draftPolicy === FULL_ACCESS_PRESET && state.draftFullAccessAnswer) {
+			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/selections/response`, "POST", {
+				id: risk.id,
+				value: state.draftFullAccessAnswer,
+			});
+		}
+		if (state.draftModel) {
+			const [provider, modelId] = state.draftModel.split("\u0000");
+			if (provider && modelId && (snapshot.model?.provider !== provider || snapshot.model?.id !== modelId)) {
+				snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/model`, "PATCH", {
+					provider,
+					modelId,
+				});
+			}
+		}
+		// Always send a draft's pick: the host clamps it to the model the session
+		// ended up on, the same way the draft panel did (`clampEffort`). Skipping
+		// a level the model lacks would start the session on the default instead.
+		if (state.draftThinking && snapshot.thinkingLevel !== state.draftThinking) {
+			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/thinking`, "PATCH", {
+				level: state.draftThinking,
+			});
+		}
+		// Failed setup must leave the input unadopted so it can be retried or released.
+		sessionComposerDraft(snapshot.id, state.composerDraftId);
+		// Show the row now, titled by the message being sent; the host lists the
+		// session once its first prompt is written (see `unlistedSessions`).
+		unlistedSessions.add(snapshot.id);
+		const now = new Date().toISOString();
+		setState((current) => ({
+			sessions: mergeSessionSummary(current.sessions, {
+				id: snapshot.id,
+				cwd: snapshot.cwd,
+				created: now,
+				modified: now,
+				...(title.firstMessage ? { firstMessage: title.firstMessage } : {}),
+			}),
+		}));
+		// Creation may finish after the reader selected another conversation.
+		if (getState().composerDraftId !== state.composerDraftId || getState().ui.openingSession) return snapshot;
+		// The real row replaces the draft placeholder.
+		setUi({ draftRow: null });
+		renderSnapshot(snapshot, { adoptDraft: true });
+		connectStream(snapshot.id);
+		void refreshSessions().catch(() => {});
+		return snapshot;
+	} finally {
+		pendingDraftSessions.delete(state.composerDraftId);
+		release();
 	}
-	// Always send a draft's pick: the host clamps it to the model the session
-	// ended up on, the same way the draft panel did (`clampEffort`). Skipping
-	// a level the model lacks would start the session on the default instead.
-	if (state.draftThinking && snapshot.thinkingLevel !== state.draftThinking) {
-		snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/thinking`, "PATCH", {
-			level: state.draftThinking,
-		});
-	}
-	// Show the row now, titled by the message being sent; the host lists the
-	// session once its first prompt is written (see `unlistedSessions`).
-	unlistedSessions.add(snapshot.id);
-	const now = new Date().toISOString();
-	setState((current) => ({
-		sessions: mergeSessionSummary(current.sessions, {
-			id: snapshot.id,
-			cwd: snapshot.cwd,
-			created: now,
-			modified: now,
-			...(firstMessage ? { firstMessage } : {}),
-		}),
-	}));
-	// The real row replaces the draft placeholder.
-	setUi({ draftRow: null });
-	renderSnapshot(snapshot, { adoptDraft: true });
-	connectStream(snapshot.id);
-	void refreshSessions().catch(() => {});
-	return snapshot;
 }
 
 /** Stop the running turn of the current session (legacy `interruptCurrent`, 3245-3254). */

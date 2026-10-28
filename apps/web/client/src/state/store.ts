@@ -326,6 +326,8 @@ export interface AppState {
 	 * Until then the pane is still loading, not an empty new conversation.
 	 */
 	readonly booted: boolean;
+	/** Independent page-local input identity, retained when its first send creates a session. */
+	readonly composerDraftId: string;
 	readonly draftCwd: string;
 	readonly draftPolicy: string;
 	/**
@@ -441,6 +443,7 @@ export function createInitialState(): AppState {
 		defaultCwd: "",
 		defaultCwdFallback: false,
 		booted: false,
+		composerDraftId: `draft:${crypto.randomUUID()}`,
 		draftCwd: "",
 		draftPolicy: "approve-for-me",
 		draftSelection: null,
