@@ -499,8 +499,10 @@
 .session-hover-card-status.completed::before {
 	background: var(--hover-card-success);
 }
-/* One hint at a time: over a row action its own tooltip speaks; an open menu, a drag or a drop target hides the card. */
-.session-row:is(:has(.session-meta button:hover), :has([aria-expanded="true"]), .dragging, .drop-before, .drop-after)
-	+ .session-hover-card {
+/*
+ * The card stays while the pointer is on the row's actions ("…", tag, pin); their own
+ * hints show above them. An open row menu, a drag or a drop target hides it.
+ */
+.session-row:is(:has([aria-expanded="true"]), .dragging, .drop-before, .drop-after) + .session-hover-card {
 	display: none;
 }
