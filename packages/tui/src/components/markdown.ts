@@ -1,8 +1,22 @@
-import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
+import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens, type TokensList } from "marked";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import {
+	applyInlineTagDepth,
+	cloneStreamGuard,
+	createStreamGuard,
+	findBlockMathStart,
+	findCertifiedCut,
+	guardIsClean,
+	rawLengthOf,
+	rawsCoverSource,
+	type StreamGuard,
+	scanBlockMath,
+	scanReferenceLabels,
+} from "./markdown-stream.ts";
+import { markdownWork } from "./markdown-work.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -125,8 +139,9 @@ const LATEX_MARKDOWN_EXTENSIONS: readonly TokenizerExtension[] = [
 		name: "latexBlock",
 		level: "block",
 		start(source) {
-			const match = /(?:^|\n) {0,3}(?:\$\$|\\\[)/.exec(source);
-			return match ? match.index + (match[0].startsWith("\n") ? 1 : 0) : undefined;
+			// Marked calls this at every paragraph boundary with the unconsumed
+			// remainder, so the shared predicate short-circuits before the pattern.
+			return findBlockMathStart(source);
 		},
 		tokenizer: tokenizeBlockLatex,
 	},
@@ -258,6 +273,26 @@ export class Markdown implements Component {
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
+	/** Length of the certified source prefix; 0 when nothing may be reused. */
+	private stableSourceEnd = 0;
+	/** Padded output rows of the certified prefix. */
+	private stablePaddedLines: string[] = [];
+	/**
+	 * Pre-wrap row text of prose rows in the certified prefix that were softly
+	 * wrapped. A code row that arrives later with the same text would clip them.
+	 */
+	private stableWrappedProseRows = new Set<string>();
+	/** Pre-wrap row text of fenced-code rows in the certified prefix. */
+	private stableNoWrap = new Set<string>();
+	/** Content width of the previous frame. */
+	private layoutWidth = 0;
+	/** Normalized source of the previous frame, for append detection. */
+	private previousSource = "";
+	/** First output row that may differ from the previous frame. */
+	renderDirtyStart?: number;
+	/** Facts the certified prefix leaves behind for the tail parse. */
+	private guard: StreamGuard = createStreamGuard();
+
 	constructor(
 		text: string,
 		paddingX: number,
@@ -276,13 +311,20 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.text = text;
-		this.invalidate();
+		// Only the outer cache is stale here: a caller that appends to a streamed
+		// reply still has a valid prefix, and `render` decides whether to reuse it.
+		this.cachedText = undefined;
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
 	}
 
 	invalidate(): void {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
+		// Theme, width, and option changes make previously rendered rows wrong, not
+		// just stale, so the certified prefix cannot survive an invalidate.
+		this.resetStream();
 	}
 
 	render(width: number): string[] {
@@ -298,6 +340,7 @@ export class Markdown implements Component {
 		// Don't render anything if there's no actual text
 		if (!text || text.trim() === "") {
 			const result: string[] = [];
+			this.resetStream();
 			// Update cache
 			this.cachedText = this.text;
 			this.cachedWidth = width;
@@ -306,68 +349,12 @@ export class Markdown implements Component {
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
-		const normalizedText = text.replace(/\t/g, "   ");
-
-		// Parse markdown to HTML-like tokens
-		const tokens = markdownParser.lexer(normalizedText);
-		trimPartialClosingFences(tokens);
-
-		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
-		this.nowrapLines.clear();
-
-		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i];
-			const nextToken = tokens[i + 1];
-			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
-			for (const tokenLine of tokenLines) {
-				renderedLines.push(tokenLine);
-			}
-		}
-
-		// Wrap lines (NO padding, NO background yet). Code-block lines skip
-		// soft wrapping and are clipped instead, keeping code copyable.
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			if (isImageLine(line)) {
-				wrappedLines.push(line);
-			} else if (this.nowrapLines.has(line)) {
-				wrappedLines.push(
-					visibleWidth(line) > contentWidth ? truncateToWidth(line, contentWidth, "", false) : line,
-				);
-			} else {
-				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
-					wrappedLines.push(wrappedLine);
-				}
-			}
-		}
-
-		// Add margins and background to each wrapped line
-		const leftMargin = " ".repeat(this.paddingX);
-		const rightMargin = " ".repeat(this.paddingX);
-		const bgFn = this.defaultTextStyle?.bgColor;
-		const contentLines: string[] = [];
-
-		for (const line of wrappedLines) {
-			if (isImageLine(line)) {
-				contentLines.push(line);
-				continue;
-			}
-
-			const lineWithMargins = leftMargin + line + rightMargin;
-
-			if (bgFn) {
-				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
-			} else {
-				// No background - just pad to width
-				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
-				contentLines.push(lineWithMargins + " ".repeat(paddingNeeded));
-			}
-		}
+		const normalizedText = text.includes("\t") ? text.replace(/\t/g, "   ") : text;
+		const contentLines = this.renderContent(normalizedText, contentWidth, width);
 
 		// Add top/bottom padding (empty lines)
 		const emptyLine = " ".repeat(width);
+		const bgFn = this.defaultTextStyle?.bgColor;
 		const emptyLines: string[] = [];
 		for (let i = 0; i < this.paddingY; i++) {
 			const line = bgFn ? applyBackgroundToLine(emptyLine, width, bgFn) : emptyLine;
@@ -383,6 +370,244 @@ export class Markdown implements Component {
 		this.cachedLines = result;
 
 		return result.length > 0 ? result : [""];
+	}
+
+	/**
+	 * Render the document, reusing the certified prefix when it is still valid.
+	 *
+	 * A streamed reply appends to the same document on every delta. Re-lexing and
+	 * re-laying out everything that already ended makes the total cost quadratic in
+	 * the message length, so the renderer keeps the rows of certified blocks and
+	 * only re-renders the mutable tail. Certification is deliberately narrow: see
+	 * `findCertifiedCut` for the exact conditions, and `renderFrom` for the cases
+	 * that force a full re-render.
+	 */
+	private renderContent(normalizedText: string, contentWidth: number, width: number): string[] {
+		const appendOnly =
+			this.previousSource.length > 0 &&
+			normalizedText.length >= this.previousSource.length &&
+			normalizedText.startsWith(this.previousSource);
+		if (!appendOnly || this.layoutWidth !== contentWidth) {
+			this.resetStream();
+		}
+		this.previousSource = normalizedText;
+		this.layoutWidth = contentWidth;
+
+		if (!this.guard.blockMath) {
+			scanBlockMath(normalizedText, this.guard);
+		}
+		if (this.guard.blockMath) {
+			// A pending block-math token can re-clip the paragraph in front of it, so a
+			// document that has one never reuses a prefix. The guard survives: it keeps
+			// the hazard sticky and stops the scan from re-reading the document.
+			this.dropPrefix();
+			return this.renderFrom(normalizedText, contentWidth, width, 0, false);
+		}
+
+		return this.renderFrom(normalizedText, contentWidth, width, this.stableSourceEnd, true);
+	}
+
+	/**
+	 * Render `normalizedText[base..]` and certify a new prefix out of it.
+	 *
+	 * `certifiable` is false when the document as a whole cannot be split (an
+	 * uncertified parse, a reference definition, ...); the frame is then rendered
+	 * whole and nothing is retained.
+	 */
+	private renderFrom(
+		normalizedText: string,
+		contentWidth: number,
+		width: number,
+		base: number,
+		certifiable: boolean,
+	): string[] {
+		const tail = base === 0 ? normalizedText : normalizedText.slice(base);
+		const tokens = this.parse(tail);
+
+		if (tokens.links && Object.keys(tokens.links).length > 0) {
+			// A definition is visible to every block, so nothing may be retained.
+			if (base > 0) {
+				this.resetStream();
+				this.previousSource = normalizedText;
+				return this.renderFrom(normalizedText, contentWidth, width, 0, false);
+			}
+			certifiable = false;
+		}
+
+		trimPartialClosingFences(tokens);
+
+		// Code rows of the certified prefix still decide how identical rows elsewhere
+		// are laid out, so the no-wrap set has to carry over.
+		this.nowrapLines.clear();
+		for (const row of this.stableNoWrap) {
+			this.nowrapLines.add(row);
+		}
+
+		const rows = new Array<string[]>(tokens.length);
+		const wrapped = new Array<string[]>(tokens.length);
+		for (let index = 0; index < tokens.length; index++) {
+			const token = tokens[index];
+			rows[index] = this.renderToken(token, contentWidth, tokens[index + 1]?.type);
+			markdownWork.renderedTokens++;
+		}
+		for (let index = 0; index < rows.length; index++) {
+			wrapped[index] = this.wrapRows(rows[index], contentWidth);
+		}
+
+		if (base > 0 && this.collidesWithStableRows(tokens, rows)) {
+			// A code row that arrived after a prose row was certified changes how that
+			// prose row is laid out, so the retained rows are wrong. Re-rendering this
+			// frame re-lays everything out with the complete no-wrap set.
+			this.resetStream();
+			this.previousSource = normalizedText;
+			return this.renderFrom(normalizedText, contentWidth, width, 0, true);
+		}
+
+		if (base === 0) {
+			markdownWork.coldFrames++;
+		} else {
+			markdownWork.reusedFrames++;
+		}
+
+		let cut: number | undefined = certifiable ? findCertifiedCut(tokens) : undefined;
+		let nextGuard: StreamGuard | undefined;
+		if (cut !== undefined) {
+			const chunkSource = tail.slice(0, rawLengthOf(tokens, cut));
+			if (!rawsCoverSource(tokens.slice(0, cut), chunkSource)) {
+				cut = undefined;
+			} else {
+				const candidate = cloneStreamGuard(this.guard);
+				scanReferenceLabels(chunkSource, candidate);
+				applyInlineTagDepth(tokens.slice(0, cut), candidate);
+				if (!guardIsClean(candidate)) {
+					cut = undefined;
+				} else {
+					nextGuard = candidate;
+				}
+			}
+		}
+
+		const dirtyStart = this.stablePaddedLines.length;
+		let firstTailToken = 0;
+		if (cut !== undefined && nextGuard !== undefined) {
+			for (let index = 0; index < cut; index++) {
+				for (const row of rows[index]) {
+					if (tokens[index].type === "code") {
+						this.stableNoWrap.add(row);
+					} else if (!this.nowrapLines.has(row)) {
+						// Only a row that was softly wrapped can be changed by a code row
+						// that arrives later; a clipped row stays clipped because the
+						// no-wrap set only grows.
+						this.stableWrappedProseRows.add(row);
+					}
+				}
+				for (const line of this.padRows(wrapped[index], width)) {
+					this.stablePaddedLines.push(line);
+				}
+			}
+			this.stableSourceEnd += rawLengthOf(tokens, cut);
+			this.guard = nextGuard;
+			firstTailToken = cut;
+		}
+
+		const lines = this.stablePaddedLines.slice();
+		for (let index = firstTailToken; index < tokens.length; index++) {
+			for (const line of this.padRows(wrapped[index], width)) {
+				lines.push(line);
+			}
+		}
+		// A whole-document render keeps no comparable prefix: the top and bottom
+		// padding rows are identical empty rows, but a changed style can still repaint
+		// them, so nothing above the content may be reused.
+		this.renderDirtyStart = base === 0 ? 0 : this.paddingY + dirtyStart;
+		return lines;
+	}
+
+	/** Drop the certified prefix and everything derived from it. */
+	private resetStream(): void {
+		this.layoutWidth = 0;
+		this.dropPrefix();
+		this.guard = createStreamGuard();
+	}
+
+	private dropPrefix(): void {
+		this.stableSourceEnd = 0;
+		this.stablePaddedLines = [];
+		this.stableWrappedProseRows.clear();
+		this.stableNoWrap.clear();
+	}
+
+	private parse(source: string): TokensList {
+		markdownWork.lexUnits += source.length;
+		return markdownParser.lexer(source);
+	}
+
+	/**
+	 * Whether a fenced-code row added by this frame is identical to a prose row
+	 * that was already laid out.
+	 *
+	 * Code rows are never soft-wrapped, and the rule is applied by row text rather
+	 * than by origin, so such a collision silently changes rows that are already
+	 * on screen. Re-rendering the document is the only correct answer.
+	 */
+	private collidesWithStableRows(tokens: readonly Token[], rows: readonly string[][]): boolean {
+		if (this.stableWrappedProseRows.size === 0) {
+			return false;
+		}
+		for (let index = 0; index < tokens.length; index++) {
+			if (tokens[index].type !== "code") {
+				continue;
+			}
+			for (const row of rows[index]) {
+				if (this.stableWrappedProseRows.has(row)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Wrap rows for terminal width. Code-block rows skip soft wrapping and are
+	 * clipped instead, keeping code copyable.
+	 */
+	private wrapRows(rows: readonly string[], contentWidth: number): string[] {
+		const wrapped: string[] = [];
+		for (const row of rows) {
+			if (isImageLine(row)) {
+				wrapped.push(row);
+			} else if (this.nowrapLines.has(row)) {
+				wrapped.push(visibleWidth(row) > contentWidth ? truncateToWidth(row, contentWidth, "", false) : row);
+			} else {
+				for (const wrappedRow of wrapTextWithAnsi(row, contentWidth)) {
+					wrapped.push(wrappedRow);
+				}
+			}
+		}
+		markdownWork.wrappedRows += wrapped.length;
+		return wrapped;
+	}
+
+	/** Add margins, background, and trailing padding to each rendered row. */
+	private padRows(rows: readonly string[], width: number): string[] {
+		const leftMargin = " ".repeat(this.paddingX);
+		const rightMargin = " ".repeat(this.paddingX);
+		const bgFn = this.defaultTextStyle?.bgColor;
+		const padded: string[] = [];
+		for (const row of rows) {
+			if (isImageLine(row)) {
+				padded.push(row);
+				continue;
+			}
+			const lineWithMargins = leftMargin + row + rightMargin;
+			if (bgFn) {
+				padded.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+			} else {
+				const visibleLen = visibleWidth(lineWithMargins);
+				padded.push(lineWithMargins + " ".repeat(Math.max(0, width - visibleLen)));
+			}
+		}
+		return padded;
 	}
 
 	/**
