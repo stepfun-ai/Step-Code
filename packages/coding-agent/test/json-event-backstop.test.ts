@@ -67,3 +67,20 @@ test("terminal tool results are never bounded", () => {
 		MAX_LIVE_UPDATE_BYTES,
 	);
 });
+
+test("an unserializable live payload does not throw out of the projection", () => {
+	// `partialResult` is `any`: a tool can hand back a BigInt or a circular
+	// reference. Measuring the frame with a bare `JSON.stringify` used to raise a
+	// TypeError from inside the transport's subscribe callback, turning a healthy
+	// tool call into an unrelated serialization failure. An unserializable frame is
+	// treated as oversized instead, which still writes the progress marker.
+	const bigint = frame("x");
+	(bigint.partialResult as Record<string, unknown>).n = 1n;
+	const circular = frame("y");
+	(circular.partialResult as Record<string, unknown>).self = circular.partialResult;
+
+	for (const event of [bigint, circular]) {
+		const projected = toJsonEvent(event, { includeLiveEvents: true });
+		expect(projected?.type).toBe("tool_execution_update");
+	}
+});

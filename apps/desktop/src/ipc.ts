@@ -11,8 +11,11 @@ import { isAbsolute, normalize } from "node:path";
 import type { DesktopBrowserInfo } from "@step-harness/web/desktop-bridge";
 import { app, type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
 import { DESKTOP_IPC } from "./ipc-channels.ts";
+import { type DesktopStateStore, isDesktopThemeChoice } from "./state.ts";
 
 export interface DesktopIpcOptions {
+	/** Profile state shared with window bounds and workspace persistence. */
+	readonly state: DesktopStateStore;
 	/** The window allowed to call the bridge, if one is open. */
 	readonly getWindow: () => BrowserWindow | undefined;
 	/** Origin of the running web server, e.g. `http://127.0.0.1:51234`; undefined while it is down. */
@@ -60,6 +63,15 @@ function existingDirectory(path: string | undefined): string | undefined {
 
 /** Register the bridge handlers once for the application lifetime. */
 export function installDesktopIpc(options: DesktopIpcOptions): void {
+	ipcMain.handle(DESKTOP_IPC.getTheme, (event) => {
+		trustedWindow(event, options);
+		return options.state.theme();
+	});
+	ipcMain.handle(DESKTOP_IPC.setTheme, (event, raw: unknown) => {
+		trustedWindow(event, options);
+		if (!isDesktopThemeChoice(raw)) throw new Error("setTheme expects a valid theme choice");
+		if (!options.state.update({ theme: raw })) throw new Error("Could not persist desktop theme");
+	});
 	// One folder dialog per window: a second request joins the open one instead of stacking.
 	const pending = new WeakMap<BrowserWindow, Promise<string | null>>();
 

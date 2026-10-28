@@ -9,6 +9,8 @@ export const DESKTOP_IPC = {
 	openExternal: "stepcode-desktop:open-external",
 	revealPath: "stepcode-desktop:reveal-path",
 	defaultBrowser: "stepcode-desktop:default-browser",
+	getTheme: "stepcode-desktop:get-theme",
+	setTheme: "stepcode-desktop:set-theme",
 } as const;
 
 /** Argument the main process passes to the preload so the bridge can report the app version synchronously. */

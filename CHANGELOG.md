@@ -4,6 +4,7 @@
 
 ### Changed
 
+- `--mode json` and `--mode rpc` now write only session **facts**: `message_update` and `tool_execution_update` are live frames — each superseded by `message_end` / `tool_execution_end` — and no longer appear in that stream. A harness that redirects one of them to a file therefore gets a record proportional to the work done, not to the tokens streamed; a subagent call that wrote 4,992 MiB of repeated child transcripts now writes a few KiB. Pass the new `--include-live-events` flag to get the frames back: a live viewer wants them, a log does not. See [JSON output](packages/coding-agent/docs/json.md) and [RPC](packages/coding-agent/docs/rpc.md).
 - Replace permission tiers with Ask, Approve for Me (default), and Full Access. Full Access runs dangerous and unanalyzable commands after a session-only or remembered risk acknowledgment. Saved legacy permission modes reset to Ask for users to choose again; `--approval-mode strict` is no longer accepted. Both automatic tiers enable bounded model-error continuation by default; Ask does not.
 
 ### Fixed

@@ -12,8 +12,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { openTree } from "./features/files/actions";
-import { applyLocale, applyTheme } from "./features/shell/actions";
-import { applyHostAttributes } from "./platform/host";
+import { applyLocale, applyTheme, restoreDesktopTheme } from "./features/shell/actions";
+import { applyHostAttributes, isDesktopHost } from "./platform/host";
 import { bootstrap } from "./state/session";
 import { getState } from "./state/store";
 
@@ -23,12 +23,17 @@ applyHostAttributes();
 applyTheme(getState().theme, false);
 applyLocale(getState().locale, false);
 
-const container = document.getElementById("root");
-if (!container) throw new Error("#root is missing from index.html");
-createRoot(container).render(
-	<StrictMode>
-		<App />
-	</StrictMode>,
-);
+function renderApp(): void {
+	const container = document.getElementById("root");
+	if (!container) throw new Error("#root is missing from index.html");
+	createRoot(container).render(
+		<StrictMode>
+			<App />
+		</StrictMode>,
+	);
+	void bootstrap({ openTree });
+}
 
-void bootstrap({ openTree });
+// Desktop changes origin on each server start; restore its profile choice before mounting any controls.
+if (isDesktopHost()) void restoreDesktopTheme().then(renderApp);
+else renderApp();

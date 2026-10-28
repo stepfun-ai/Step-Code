@@ -104,6 +104,10 @@ apps/web/
   Escape belongs to the shell chain and closes the list without aborting a turn.
 - `platform/desktop-bridge.ts` is a cross-package contract with `apps/desktop/src/preload.ts`. Change it only together
   with the desktop side (see `apps/desktop/AGENTS.md`).
+- Appearance is restored before mounting the React client. Desktop `getTheme` / `setTheme` use the profile's
+  `desktop-state.json`, not the changing server origin; a valid localStorage choice migrates only when no desktop
+  choice exists. Plain browsers retain localStorage. Keep all four choices (`system`, `light`, `dark`, `violet`),
+  persist the system selection rather than its resolved color, and report bridge failures without blocking the UI.
 
 ## Client conventions
 

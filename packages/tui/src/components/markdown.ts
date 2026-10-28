@@ -346,6 +346,10 @@ export class Markdown implements Component {
 		if (!text || text.trim() === "") {
 			const result: string[] = [];
 			this.resetStream();
+			// The component now owns no rows, so a stale dirty start would point past
+			// the end of its own output. The host clamps it, but an explicit reset
+			// keeps the contract local instead of relying on that clamp.
+			this.renderDirtyStart = 0;
 			// Update cache
 			this.cachedText = this.text;
 			this.cachedWidth = width;

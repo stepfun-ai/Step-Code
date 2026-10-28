@@ -1,14 +1,15 @@
 /**
  * Small JSON state file under Electron's userData directory.
  *
- * Holds what the shell needs across launches: the window bounds and the last
- * folder the user picked (the default workspace for the next server start).
+ * Holds what the shell needs across launches: the window bounds, appearance
+ * choice and last folder picked (the default workspace for the next start).
  * Sessions, workspaces and credentials stay where the CLI and web host keep
  * them; this file is never a second source of truth for those.
  */
 
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
+import type { DesktopThemeChoice } from "@step-harness/web/desktop-bridge";
 
 export interface WindowState {
 	readonly x?: number;
@@ -21,6 +22,12 @@ export interface WindowState {
 export interface DesktopState {
 	readonly window?: WindowState;
 	readonly lastWorkspace?: string;
+	readonly theme?: DesktopThemeChoice;
+}
+
+/** Validate persisted data and untrusted renderer input against the same theme choices. */
+export function isDesktopThemeChoice(value: unknown): value is DesktopThemeChoice {
+	return value === "system" || value === "light" || value === "dark" || value === "violet";
 }
 
 function finite(value: unknown): value is number {
@@ -43,6 +50,7 @@ function parseWindowState(value: unknown): WindowState | undefined {
 export class DesktopStateStore {
 	private readonly path: string;
 	private state: DesktopState;
+	private loadFailed = false;
 
 	constructor(path: string) {
 		this.path = path;
@@ -51,6 +59,12 @@ export class DesktopStateStore {
 
 	get(): DesktopState {
 		return this.state;
+	}
+
+	/** Read the profile choice, distinguishing a new profile from an unreadable state file. */
+	theme(): DesktopThemeChoice | null {
+		if (this.loadFailed) throw new Error("Could not read desktop theme");
+		return this.state.theme ?? null;
 	}
 
 	/** The last picked folder, when it still exists. */
@@ -64,31 +78,40 @@ export class DesktopStateStore {
 		}
 	}
 
-	update(patch: Partial<DesktopState>): void {
+	/** Keep the current state in memory; return whether it also reached disk. */
+	update(patch: Partial<DesktopState>): boolean {
 		this.state = { ...this.state, ...patch };
 		try {
 			mkdirSync(dirname(this.path), { recursive: true });
 			const temporary = `${this.path}.${process.pid}.tmp`;
 			writeFileSync(temporary, `${JSON.stringify(this.state, null, "\t")}\n`, "utf8");
 			renameSync(temporary, this.path);
+			if (patch.theme !== undefined) this.loadFailed = false;
+			return true;
 		} catch (error) {
-			// Losing window bounds is not worth interrupting the user over.
+			// Window bounds remain best-effort; preference callers must report a failed save.
 			console.warn("stepcode desktop: could not persist state", error);
+			return false;
 		}
 	}
 
 	private load(): DesktopState {
 		try {
 			const raw: unknown = JSON.parse(readFileSync(this.path, "utf8"));
-			if (typeof raw !== "object" || raw === null) return {};
+			if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+				throw new Error("Invalid desktop state");
+			}
 			const record = raw as Record<string, unknown>;
 			const window = parseWindowState(record.window);
 			const lastWorkspace = typeof record.lastWorkspace === "string" ? record.lastWorkspace : undefined;
 			return {
 				...(window === undefined ? {} : { window }),
 				...(lastWorkspace === undefined ? {} : { lastWorkspace }),
+				...(isDesktopThemeChoice(record.theme) ? { theme: record.theme } : {}),
 			};
-		} catch {
+		} catch (error) {
+			const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+			this.loadFailed = !missing;
 			return {};
 		}
 	}
