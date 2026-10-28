@@ -81,12 +81,14 @@ export class DesktopStateStore {
 	/** Keep the current state in memory; return whether it also reached disk. */
 	update(patch: Partial<DesktopState>): boolean {
 		this.state = { ...this.state, ...patch };
+		// An incomplete cache must not replace an unreadable profile, even for an explicit theme change.
+		// Saving resumes only in a new store that successfully loads the repaired file.
+		if (this.loadFailed) return false;
 		try {
 			mkdirSync(dirname(this.path), { recursive: true });
 			const temporary = `${this.path}.${process.pid}.tmp`;
 			writeFileSync(temporary, `${JSON.stringify(this.state, null, "\t")}\n`, "utf8");
 			renameSync(temporary, this.path);
-			if (patch.theme !== undefined) this.loadFailed = false;
 			return true;
 		} catch (error) {
 			// Window bounds remain best-effort; preference callers must report a failed save.
