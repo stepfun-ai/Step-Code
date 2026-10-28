@@ -861,9 +861,6 @@ html[data-theme="dark"] .sidebar {
 [data-host="desktop"] .brand-row input {
   -webkit-app-region: no-drag;
 }
-[data-host="desktop"][data-platform="darwin"] .file-tree {
-  top: calc(var(--brand-row-h) + var(--titlebar-inset));
-}
 /*
  * The whole top band of the window is title bar: across the main column it
  * covers the session header's full height (--session-header-h), and it

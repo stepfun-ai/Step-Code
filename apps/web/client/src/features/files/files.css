@@ -1,7 +1,8 @@
 /* Legacy styles.css 466-513: file tree. */
 .file-tree {
 	position: absolute;
-	inset: 64px 0 0;
+	/* Directly below the brand row; --titlebar-inset clears the macOS desktop title strip (0 elsewhere). */
+	inset: calc(var(--brand-row-h) + var(--titlebar-inset)) 0 0;
 	z-index: 8;
 	display: none;
 	flex-direction: column;
