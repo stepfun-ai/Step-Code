@@ -1,17 +1,9 @@
 import { memo, useState } from "react";
 import { useT } from "../../i18n";
 import { sessionModifiedLabel } from "../../lib/format";
-import { useAppStore } from "../../state/store";
 import type { MigrationCandidate, MigrationDiagnostic, MigrationSource } from "../../state/types";
 import { Button, EmptyState, SegmentedControl } from "../../ui";
-import {
-	changeMigrationGroupTarget,
-	deselectCandidate,
-	previewCandidate,
-	scanMigration,
-	selectMigrationGroup,
-	setSessionOptions,
-} from "./actions";
+import { deselectCandidate, previewCandidate, scanMigration, selectMigrationGroup, setSessionOptions } from "./actions";
 import { isActionable, isIndependentCopy, type MigrationDraft } from "./model";
 import { SourceDetails } from "./SourceDetails";
 import { groupMigrationCandidates, groupSelectionState, type MigrationCandidateGroup } from "./selection";
@@ -170,13 +162,7 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 	);
 });
 const scopeName = (cwd: string): string => cwd.replaceAll("\\", "/").replace(/\/+$/u, "").split("/").pop() || cwd;
-function SourceGroup({
-	group,
-	onPickTarget,
-}: {
-	readonly group: MigrationCandidateGroup;
-	readonly onPickTarget?: () => Promise<string | null>;
-}) {
+function SourceGroup({ group }: { readonly group: MigrationCandidateGroup }) {
 	const t = useT();
 	const drafts = useMigrationStore((state) => state.drafts);
 	const busy = useMigrationStore((state) => !!state.busy || state.scanning);
@@ -191,17 +177,6 @@ function SourceGroup({
 		(item) => item.needsMigration && !drafts[item.id]?.preview && !drafts[item.id]?.loading,
 	).length;
 	const [expanded, setExpanded] = useState(group.candidates[0]?.kind === "mcp");
-	const [picking, setPicking] = useState(false);
-	const workspaces = useAppStore((state) => state.workspaces);
-	const useAppStoreDefaultCwd = useAppStore((state) => state.defaultCwd);
-	const available = [
-		...new Set([
-			...workspaces
-				.filter((workspace) => workspace.available && !workspace.hidden)
-				.map((workspace) => workspace.path),
-			...(useAppStoreDefaultCwd ? [useAppStoreDefaultCwd] : []),
-		]),
-	];
 	const label = sessions
 		? group.scope.kind === "project"
 			? scopeName(group.root)
@@ -249,50 +224,9 @@ function SourceGroup({
 			</header>
 			{sessions && selection.selected > 0 ? (
 				<div className="migration-workspace-target">
-					<span className="migration-meta">{t("migrationSelectedSessions", { count: selection.selected })}</span>
-					<div className="migration-field">
-						<span>{t("migrationGroupTarget")}</span>
-						{available.length ? (
-							<select
-								value=""
-								disabled={busy}
-								onChange={(event) => {
-									if (event.currentTarget.value)
-										void changeMigrationGroupTarget(
-											group.candidates.map((item) => item.id),
-											{ kind: "project", cwd: event.currentTarget.value },
-										);
-								}}
-							>
-								<option value="">{t("migrationChooseTarget")}</option>
-								{available.map((path) => (
-									<option key={path} value={path}>
-										{path}
-									</option>
-								))}
-							</select>
-						) : null}
-					</div>
-					{onPickTarget ? (
-						<Button
-							disabled={busy || picking}
-							onClick={async () => {
-								setPicking(true);
-								try {
-									const cwd = await onPickTarget();
-									if (cwd)
-										await changeMigrationGroupTarget(
-											group.candidates.map((item) => item.id),
-											{ kind: "project", cwd },
-										);
-								} finally {
-									setPicking(false);
-								}
-							}}
-						>
-							{t("migrationPickTarget")}
-						</Button>
-					) : null}
+					<span className="migration-meta">
+						{t("migrationSelectedSessions", { count: selection.selected })} · {t("migrationInheritedTarget")}
+					</span>
 				</div>
 			) : null}
 			<div className="migration-group-items" hidden={!expanded}>
@@ -303,7 +237,7 @@ function SourceGroup({
 		</section>
 	);
 }
-export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => Promise<string | null> }) {
+export function CandidateList(_: { readonly onPickTarget?: () => Promise<string | null> }) {
 	const t = useT();
 	const scan = useMigrationStore((state) => state.scan);
 	const kind = useMigrationStore((state) => state.kind);
@@ -434,7 +368,7 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 			</div>
 			{groups ? (
 				groups.length ? (
-					groups.map((group) => <SourceGroup key={group.id} group={group} onPickTarget={onPickTarget} />)
+					groups.map((group) => <SourceGroup key={group.id} group={group} />)
 				) : (
 					<EmptyState>{t("migrationNoCandidates")}</EmptyState>
 				)

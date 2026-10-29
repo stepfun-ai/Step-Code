@@ -360,15 +360,22 @@ export class MigrationService {
 		const preview = await this.sessions.preview(input.candidateId).catch(() => fail("session-preview-failed", 409));
 		let scope: { kind: "global" } | { kind: "project"; cwd: string } = { kind: "global" };
 		let targetIssue: string | undefined;
-		const requested = input.target ?? (preview.cwd ? { kind: "project" as const, cwd: preview.cwd } : undefined);
-		if (requested?.kind === "project") {
+		// Sessions inherit their original workspace: it is recreated when missing, and a
+		// session without any recorded workspace lands in the profile's home workspace.
+		// Only an explicit API target ever overrides the inheritance.
+		const requested =
+			input.target ??
+			(preview.cwd
+				? { kind: "project" as const, cwd: preview.cwd, create: true }
+				: { kind: "project" as const, cwd: this.paths.home });
+		if (requested.kind === "project") {
 			try {
 				this.paths.chooseTarget(requested);
 				scope = this.paths.scope(requested);
 			} catch {
-				targetIssue = input.target ? "session-target-unavailable" : "session-original-directory-missing";
+				targetIssue = "session-target-unavailable";
 			}
-		} else targetIssue = preview.cwd ? "session-target-unavailable" : "session-workspace-not-recorded";
+		}
 		if (input.action !== undefined && !["import", "skip"].includes(input.action)) fail("unsupported-action");
 		const action = input.action ?? "import";
 		const dto: MigrationPreview = {

@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useT } from "../../i18n";
 import { Button, IconButton, Spinner } from "../../ui";
 import { acknowledgePreview, deselectCandidate, previewCandidate } from "./actions";
@@ -13,7 +12,6 @@ export function ResourcePreview({
 	kind,
 	draft,
 	expired,
-	onPickTarget,
 }: {
 	readonly id: string;
 	readonly kind: "sessions" | "mcp";
@@ -23,22 +21,6 @@ export function ResourcePreview({
 }) {
 	const t = useT();
 	const preview = draft.preview;
-	const missing =
-		!!preview &&
-		kind === "sessions" &&
-		(preview.target.scope.kind !== "project" ||
-			preview.blockers.some((item) =>
-				[
-					"session-workspace-not-recorded",
-					"session-original-directory-missing",
-					"session-target-unavailable",
-					"session-target-required",
-				].includes(item.code),
-			));
-	const [targetExpanded, setTargetExpanded] = useState(missing);
-	useEffect(() => {
-		if (missing) setTargetExpanded(true);
-	}, [missing]);
 	return (
 		<aside className="migration-preview" aria-label={t("migrationPreview")}>
 			<header className="migration-toolbar">
@@ -69,30 +51,11 @@ export function ResourcePreview({
 							<DiagnosticList diagnostics={preview.blockers} />
 						</div>
 					) : null}
-					{preview?.target.scope.kind === "project" && !missing ? (
+					{preview?.target.scope.kind === "project" ? (
 						<p className="migration-target-note" data-target-note="">
 							{t("migrationTargetNote", { cwd: preview.target.scope.cwd })}
 						</p>
 					) : null}
-					<details
-						className="migration-target-details"
-						open={targetExpanded}
-						onToggle={(event) => setTargetExpanded(event.currentTarget.open)}
-					>
-						<summary>
-							{t("migrationTargetWorkspace")}
-							{preview?.target.scope.kind === "project" && !missing ? (
-								<code>{preview.target.scope.cwd}</code>
-							) : null}
-						</summary>
-						<MigrationTargetPicker
-							id={id}
-							kind={kind}
-							draft={draft}
-							onPickTarget={onPickTarget}
-							labelled={false}
-						/>
-					</details>
 				</>
 			) : (
 				<>

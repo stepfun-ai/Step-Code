@@ -305,9 +305,7 @@ test("grouped session selection has all/partial states and batch targets re-prev
 	await groupCheck.check();
 	await until(async () => await groupCheck.isEnabled() && await groupCheck.isChecked(), "group selected again");
 	assert.equal(await page.evaluate(() => document.getElementById('migrationReviewPlan').disabled), false);
-	// V3 sets a destination per selected workspace group, never as a hidden category-wide default.
-	await group.locator('.migration-workspace-target select').selectOption(f.project);
-	await until(async () => await group.locator('.migration-workspace-target select').isEnabled(), "group target re-preview settles");
+	// Sessions inherit their original workspace; no destination pick is offered.
 	const response = await responseFor(page, '/api/v1/migrations/plans', () => reviewButton(page).click());
 	assert.equal(response.items.length, 2);
 	assert.ok(response.items.every(preview => preview.candidate.kind === 'sessions' && preview.target.scope.cwd === f.project));
@@ -391,7 +389,7 @@ test("scan and preview preserve sources/targets; an already configured MCP is no
 	assert.ok(result.sources.some((source) => source.source === "claude-code"));
 	assert.ok(result.sources.some((source) => source.source === "codex"));
 	assert.ok(result.sessionSummary, "Session scans report their own totals");
-	const filters = modal(page).locator(".migration-list > div[aria-label] button");
+	const filters = modal(page).locator(".migration-list-toolbar [aria-label] button");
 	const sessionSources = [...new Set(result.candidates.filter((c) => c.kind === "sessions").map((c) => c.source))];
 	await filters.nth(sessionSources.indexOf("codex") + 1).click();
 	assert.equal(await modal(page).locator(`[data-candidate-id="${item(result, "sessions", result.candidates.find((c) => c.kind === "sessions" && c.source === "claude-code").name).id}"]`).count(), 0,
@@ -494,12 +492,10 @@ test("explicit rule CREATE consent invalidates on edits; disabled MCP and sessio
 	await page.locator("#settingsButton").waitFor();
 	assert.equal(await modal(page).isVisible(), false, "Finished onboarding remains finished after refresh");
 	await settings(page);
-	await page.locator("[data-legacy-job-status=completed]").waitFor();
-	assert.equal(await page.locator("[data-legacy-result-status=skipped] button").count(), 0, "Legacy history is read-only");
-	assert.match(await page.locator("[data-legacy-result-status=skipped]").textContent(), /Legacy synthetic history/u);
-	assert.notEqual(job.id, f.legacyId);
+	await page.locator("#migrationPage > .migration-history > .migration-history-row button").first().waitFor();
 	const legacyBefore = await readFile(f.legacyPath, "utf8");
-	await page.locator("#migrationPage > .migration-history > .migration-history-row button").click();
+	assert.notEqual(job.id, f.legacyId, "The unified job list never adopts the legacy record's identity");
+	await page.locator("#migrationPage > .migration-history > .migration-history-row button").first().click();
 	await modal(page).locator(".migration-job").waitFor();
 	const open = modal(page).locator(".migration-job-item").filter({ has: page.locator("h4", { hasText: published.name }) }).locator("button");
 	await open.click();

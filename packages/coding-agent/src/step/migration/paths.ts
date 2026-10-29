@@ -123,16 +123,27 @@ export class MigrationPaths {
 	}
 	private ensureTargetDirectory(cwd: string): void {
 		if (info(cwd)?.isDirectory()) return; // Explicit creation is idempotent when the folder already exists.
-		const parent = dirname(cwd);
-		const parentInfo = info(parent);
-		if (!parentInfo?.isDirectory() || parentInfo.isSymbolicLink()) fail("invalid-projects");
-		safePath(parent);
-		const name = basename(cwd);
-		if (!name || name.length > 60 || name.includes("\0")) fail("invalid-projects");
-		try {
-			mkdirSync(cwd, { mode: 0o755 });
-		} catch {
-			fail("invalid-projects");
+		// Recreate the missing tail of the path under its nearest existing ancestor, so an
+		// inherited original workspace can always be restored; never widen beyond a few levels.
+		const missing: string[] = [];
+		let current = cwd;
+		while (!info(current)) {
+			missing.unshift(current);
+			const parent = dirname(current);
+			if (parent === current || missing.length > 5) fail("invalid-projects");
+			current = parent;
+		}
+		const ancestor = info(current);
+		if (!ancestor?.isDirectory() || ancestor.isSymbolicLink()) fail("invalid-projects");
+		safePath(current);
+		for (const path of missing) {
+			const name = basename(path);
+			if (!name || name.length > 60) fail("invalid-projects");
+			try {
+				mkdirSync(path, { mode: 0o755 });
+			} catch {
+				fail("invalid-projects");
+			}
 		}
 	}
 	projectIdentity(scope: MigrationScope): string | undefined {

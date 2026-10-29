@@ -70,24 +70,25 @@ it("previews history using an existing original workspace without requiring regi
 	expect(preview.blockers).toEqual([]);
 	expect(existsSync(join(home, ".stepcode", "workspaces.json"))).toBe(false);
 });
-it.each(["missing", "unknown"])(
-	"keeps %s-workspace history readable and blocks writes until a target is chosen",
-	async (kind) => {
-		history("one", kind === "missing" ? join(home, "removed") : undefined);
-		const scan = await service.scan({ kinds: ["sessions"] });
-		expect(scan.candidates).toHaveLength(1);
-		const preview = await service.preview({ candidateId: scan.candidates[0]!.id });
-		expect(preview.sourceText).toContain("Readable historical content");
-		expect(preview.blockers).toContainEqual({
-			code: kind === "missing" ? "session-original-directory-missing" : "session-workspace-not-recorded",
-		});
-		await expect(service.plan([{ previewId: preview.id, acknowledged: [] }])).rejects.toThrow("migration-blocked");
-		const cwd = join(home, "chosen");
-		mkdirSync(cwd);
-		const valid = await service.preview({ candidateId: scan.candidates[0]!.id, target: { kind: "project", cwd } });
-		expect(valid.blockers).toEqual([]);
-	},
-);
+it("inherits the original workspace, recreating it when missing", async () => {
+	history("one", join(home, "removed"));
+	const scan = await service.scan({ kinds: ["sessions"] });
+	const preview = await service.preview({ candidateId: scan.candidates[0]!.id });
+	expect(preview.sourceText).toContain("Readable historical content");
+	expect(preview.blockers).toEqual([]);
+	expect(preview.target.scope).toEqual({ kind: "project", cwd: join(home, "removed") });
+	expect(existsSync(join(home, "removed")), "the original folder is restored").toBe(true);
+});
+
+it("falls back to the home workspace when the source recorded no workspace", async () => {
+	history("one", undefined);
+	const scan = await service.scan({ kinds: ["sessions"] });
+	const preview = await service.preview({ candidateId: scan.candidates[0]!.id });
+	expect(preview.blockers).toEqual([]);
+	expect(preview.target.scope).toEqual({ kind: "project", cwd: home });
+	const job = await complete(preview);
+	expect(job.items[0]?.status).toBe("imported");
+});
 it("reports a bounded record count without changing discovery or preview", async () => {
 	history("one", join(home, "original"));
 	history("two", join(home, "original"), 2);
@@ -188,10 +189,10 @@ it("applies all-source time range before global result limits without hiding inc
 });
 
 it("creates an explicitly requested missing workspace folder as the session destination", async () => {
-	history("one", join(home, "removed"));
+	history("one", join(home, "original"));
+	mkdirSync(join(home, "original"));
 	const scan = await service.scan({ kinds: ["sessions"] });
-	const blocked = await service.preview({ candidateId: scan.candidates[0]!.id });
-	expect(blocked.blockers).toContainEqual({ code: "session-original-directory-missing" });
+	await service.preview({ candidateId: scan.candidates[0]!.id });
 	mkdirSync(join(home, "Documents"));
 	const created = join(home, "Documents", "NewFolder");
 	expect(existsSync(created)).toBe(false);
@@ -204,12 +205,13 @@ it("creates an explicitly requested missing workspace folder as the session dest
 	expect(preview.blockers).toEqual([]);
 	const job = await complete(preview);
 	expect(job.items[0]?.status).toBe("imported");
-	// Creation is bounded to one level under an existing directory: a missing parent
-	// never creates anything and surfaces as a target blocker instead.
+	// Creation is bounded: it restores a few missing levels under an existing
+	// ancestor, and a deeper gap refuses without touching the filesystem.
+	const deep = ["a", "b", "c", "d", "e", "f", "g"].reduce((p, part) => join(p, part), join(home, "deep"));
 	const refused = await service.preview({
 		candidateId: scan.candidates[0]!.id,
-		target: { kind: "project", cwd: join(home, "no-such-parent", "child"), create: true },
+		target: { kind: "project", cwd: deep, create: true },
 	});
-	expect(existsSync(join(home, "no-such-parent"))).toBe(false);
+	expect(existsSync(join(home, "deep"))).toBe(false);
 	expect(refused.blockers).toContainEqual({ code: "session-target-unavailable" });
 });
