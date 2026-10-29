@@ -707,7 +707,7 @@
 .tool-row.pending .tool-verb {
 	transform: skewX(-8deg);
 }
-.tool-row.failed .tool-verb,
+/* A failed call reads like its siblings: the verb already says "failed", only the glyph carries the colour. */
 .tool-row.failed .tool-glyph {
 	color: var(--danger);
 }

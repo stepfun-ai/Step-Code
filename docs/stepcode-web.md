@@ -1205,8 +1205,10 @@ arguments remain inside the disclosure. A single observed thought's duration
 also remains visible on the folded process row; individual durations remain  
 available in expanded multi-thought groups.
 
-Prose, images, failures, approvals, retry rows and dedicated Subagent/workflow,  
-plan and clarification calls end a process group. Calls awaiting approval and  
+Prose, images, model request failures, approvals, retry rows and dedicated
+Subagent/workflow, plan and clarification calls end a process group. A failed
+ordinary tool call stays inside its group and counts in the settled summary;
+opening the group shows its failed label and red glyph. Calls awaiting approval and
 unresolved historical calls are never summarized as completed or running.  
 User-turn boundaries, reply attachment areas, change cards and settled footers  
 remain outside process folds. Search can reveal recorded thinking inside a  

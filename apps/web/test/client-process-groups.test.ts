@@ -72,11 +72,20 @@ test("completed summaries count tool kinds, not thoughts or canonical Tasks", ()
 	assert.equal(processGroupSummary(varied, zh).label, "已完成 4 项工具操作");
 });
 
-test("failed and dedicated lifecycle calls stay outside compact groups", () => {
+test("failed ordinary calls fold with their siblings and count toward the completed summary", () => {
+	const failed = { ...tool("f", "run_command", "failed"), outputSummary: "exit 128" };
+	for (const active of [false, true]) {
+		const group = onlyGroup([thought("t"), tool("r", "run_command"), failed, tool("r2", "run_command")], active);
+		assert.equal(group.running, false);
+		assert.equal(group.rows[2].item, failed);
+		assert.equal(processGroupSummary(group, zh).label, "已完成：工具调用 3 项");
+	}
+});
+
+test("dedicated lifecycle calls stay outside compact groups, failed or not", () => {
 	for (const item of [
-		tool("f", "bash", "failed"),
-		...["subagent", "workflow", "enter_plan_mode", "exit_plan_mode", "desktop_send_message", "clarify_user"].map((name) =>
-			tool(name, name),
+		...["subagent", "workflow", "enter_plan_mode", "exit_plan_mode", "desktop_send_message", "clarify_user"].flatMap(
+			(name) => [tool(name, name), tool(`${name}-failed`, name, "failed")],
 		),
 		{ ...tool("child", "extension"), children: [{ sessionId: "child", label: "Child" }] },
 		{ ...tool("workflow", "extension"), workflowRun: "run" },

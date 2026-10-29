@@ -119,7 +119,8 @@ export const ToolRow = memo(function ToolRow({
 					<span className="tool-dot" aria-hidden="true">
 						·
 					</span>
-					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph. */}
+					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph,
+					    so a failed call folded into a process group stays as quiet as its siblings. */}
 					{stale ? <span className="tool-failed">{t("toolInterrupted")}</span> : null}
 					<RowSubject item={item} path={shown} openable={openable} />
 					{item.change?.patch ? <DiffStatRow item={item} /> : null}
