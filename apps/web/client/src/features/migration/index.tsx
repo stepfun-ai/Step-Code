@@ -236,7 +236,7 @@ export function MigrationOnboarding({
 						</div>
 						{stage === "select" && t(`migrationStepHint.${kind}`) ? (
 							<p className="migration-step-hint">{t(`migrationStepHint.${kind}`)}</p>
-						) : stage !== "select" ? (
+						) : stage !== "select" && t(stage === "review" ? "migrationPlanHint" : "migrationLocalOnly") ? (
 							<p className="migration-step-hint">
 								{t(stage === "review" ? "migrationPlanHint" : "migrationLocalOnly")}
 							</p>
