@@ -452,16 +452,6 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 							total: scan.sessionSummary.total,
 						})}
 					</p>
-					{scan.sessionSummary.incomplete ? (
-						<p className="migration-attention">
-							{t("migrationScanIncomplete")}
-							{(scan?.sources ?? []).some((report) =>
-								report.diagnostics.some((diagnostic) => diagnostic.code === "session-source-read-error"),
-							)
-								? ` ${t("migrationScanIncompleteSources")}`
-								: ""}
-						</p>
-					) : null}
 				</>
 			) : null}
 		</div>

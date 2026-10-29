@@ -376,10 +376,6 @@ const labels = {
 	migrationStatusAvailable: ["已可用了", "Already available"],
 	migrationMessages: ["条消息", "messages"],
 	migrationSessionShown: ["当前显示 {shown} / {total} 个会话", "Showing {shown} of {total} sessions"],
-	migrationScanIncomplete: [
-		"扫描未完成：部分来源无法读取。当前结果不代表全部历史，请检查来源位置或权限后重试。",
-		"Scan incomplete: some sources could not be read. This result is not the full history; check source locations or permissions and retry.",
-	],
 	migrationHide: ["关闭", "Close"],
 	migrationSelected: ["已选择 {count} 项", "{count} selected"],
 	migrationScanAgain: ["重新检查来源", "Scan sources again"],
@@ -389,10 +385,6 @@ const labels = {
 	migrationStarting: ["正在提交任务…", "Submitting job…"],
 	migrationFinish: ["完成引导", "Finish onboarding"],
 	migrationSkip: ["跳过引导", "Skip onboarding"],
-	migrationScanIncompleteSources: [
-		"部分来源未能读取，当前结果不代表全部历史。",
-		"Some sources could not be read, so this result is not the full history.",
-	],
 } satisfies Record<string, readonly [string, string]>;
 
 const states = {
