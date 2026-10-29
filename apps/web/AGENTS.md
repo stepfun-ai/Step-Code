@@ -238,8 +238,10 @@ When to add or change one:
   setting. Group consecutive thinking and ordinary tools only; singleton groups
   show the member's own disclosure without a group heading or indentation.
   Retain keyed member components and a manually opened singleton when siblings
-  arrive. Keep failed tools, approvals, retries and dedicated lifecycle calls
-  separate. Preserve original
+  arrive. Failed ordinary tools fold with their siblings and count in the
+  completed summary; their row shows the failure (verb text and glyph colour)
+  only when the group is opened. Keep approvals, retries and dedicated
+  lifecycle calls separate. Preserve original
   timeline indices for turn footers, file deliveries and search reveal. Group
   completion counts tool results, never canonical Tasks or child-agent success.
 - A subagent record is context the main agent produced, so its inspector has no prompt surface:
