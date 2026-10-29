@@ -51,12 +51,18 @@ A `length` response remains an incomplete summary and is never saved as a succes
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens > floor(contextWindow * triggerRatio)
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). This leaves room for the LLM's response.
+`triggerRatio` defaults to `0.9` for every model (configurable globally or per model in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). No fixed output reserve is subtracted: providers clamp each request's `max_tokens` to the remaining context, and a response truncated by that clamp goes through the overflow/length recovery below. `tokenLimit` can only make compaction trigger earlier. An explicitly configured `reserveTokens` keeps its old effect as an additional ceiling, `contextWindow - reserveTokens`.
 
-During a multi-turn agent run, Step checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Step also checks the threshold before a new user prompt and after a low-level agent run ends.
+Step checks the threshold once immediately before every model request: before the first request of a prompt (counting the incoming prompt), before every follow-up request inside a tool loop (counting the new tool results and injected steering), and before the first request of a continuation. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. Steering queued while a follow-up request compacts is delivered to that same request. Input queued while the pre-run check compacts (or added by an `agent_start` listener) joins the first request and is measured again before it is sent; input typed while that first request's own check compacts is delivered with the next request. A final answer that crosses the threshold does not compact on its own; the next request compacts first. Context-overflow and truncated-length recovery still run after the failed response. If measuring or preparing maintenance throws unexpectedly, the request is sent unchanged and overflow recovery remains the fallback.
+
+Token counts use the last valid assistant usage plus estimates of messages added after it. Usage reported before the latest compaction is ignored, because it measured the previous, larger context; without trustworthy usage, the estimate also includes the system prompt and tool schemas.
+
+If automatic threshold compaction fails three times in a row, it pauses for the session and the third failure's message says so; while paused, Step does not measure or attempt automatic compaction. An unexpected error while measuring or preparing maintenance also counts, is recorded as a `step-compaction-failure` entry, and the request is sent unchanged. Cancelled compactions, extension cancellations, and errors raised after a compaction was saved do not count. A successful compaction (including `/compact`), an accepted CLM edit, a model switch, or a registry update that changes the model's context window resumes it. Overflow recovery is unaffected.
+
+Set `triggerPolicy = "legacy"` to restore the previous `contextWindow - reserveTokens` threshold, checkpoints (including compaction right after a final answer), and token measurement.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -430,15 +436,24 @@ Configure compaction in `~/.stepcode/config.toml` or trusted `<project-dir>/.ste
 ```toml
 [compaction]
 enabled = true
-reserveTokens = 16384
+triggerRatio = 0.9
 keepRecentTokens = 20000
+
+[compaction.modelTriggerRatios]
+"my-provider/small-window-model" = 0.8
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
+| `triggerRatio` | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95) |
+| `modelTriggerRatios` | none | Per-model `triggerRatio`, keyed by `provider/model-id` |
+| `tokenLimit` | none | Absolute token ceiling; can only trigger earlier |
+| `triggerPolicy` | `"v2"` | `"legacy"` restores the previous threshold and checkpoints |
+| `reserveTokens` | `16384` | Summary output budget input; when set explicitly, also caps the trigger at `contextWindow - reserveTokens` |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+
+Invalid trigger values fall back to their defaults and are reported as settings warnings at startup.
 
 Disable auto-compaction with `enabled = false`. You can still compact manually with `/compact`.
 

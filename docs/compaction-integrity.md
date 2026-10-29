@@ -59,8 +59,8 @@ compaction results.
 
 ## Bound generated summary output
 
-`reserveTokens` also sets the automatic trigger:
-`contextTokens > contextWindow - reserveTokens`. Raising it must not raise a
+An explicitly configured `reserveTokens` smaller than the context window also caps the automatic trigger at
+`contextWindow - reserveTokens` (the default trigger is `contextWindow * triggerRatio`). Raising it must not raise a
 summary request above the model's output limit or the existing 32000-token
 summary ceiling. Both compaction implementations clamp the final candidate
 budget after considering the reserve fraction and model budget. History and
