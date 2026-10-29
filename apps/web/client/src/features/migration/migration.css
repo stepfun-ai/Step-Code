@@ -287,3 +287,6 @@
   .migration-source-location { flex-wrap: wrap; row-gap: 4px; }
   .migration-source-location > code { flex-basis: 100%; order: 5; padding-left: 30px; }
 }
+/* Single-line checks center their box with the label; the 5px offset is for multi-line consent text. */
+.migration-list-toolbar .migration-select-all .migration-check { align-items: center; }
+.migration-list-toolbar .migration-select-all .migration-check input { margin-top: 0; }
