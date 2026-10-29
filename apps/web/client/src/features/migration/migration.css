@@ -178,9 +178,9 @@
 .migration-row > .migration-source-logo { margin-top: 2px; }
 .migration-source-locations { color: var(--ink-2); font-size: 12px; margin-bottom: 16px; }
 .migration-source-locations summary, .migration-target-details summary, .migration-mcp-safety summary { cursor: pointer; }
-.migration-source-location-body { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); margin-top: 10px; }
-.migration-source-location { display: flex; align-items: center; gap: 10px; padding: 10px 0; flex-wrap: wrap; }
-.migration-source-location > div { flex: 1; min-width: 160px; }
+.migration-source-location-body { padding: 4px 0; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); margin-top: 8px; }
+.migration-source-location { display: flex; align-items: center; gap: 10px; padding: 8px 14px; flex-wrap: nowrap; }
+
 .migration-source-location code, .migration-plan-info > code { display: block; }
 .migration-scan-controls, .migration-workspace-target { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
 .migration-scan-controls .migration-field { flex: 0 1 auto; }
@@ -246,8 +246,10 @@
 /* ── Source tabs and source-location rows: icon/text alignment, app names ── */
 .migration-source-tabs button { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }
 .migration-source-tabs .migration-source-logo { width: 16px; height: 16px; }
-.migration-source-location { align-items: center; row-gap: 4px; }
-.migration-source-location > strong { font-weight: 650; }
+
+.migration-source-location + .migration-source-location { border-top: 1px solid var(--line); }
+.migration-source-location > strong { font-weight: 650; font-size: 12px; flex: 0 0 auto; }
+.migration-source-location > code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .migration-source-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .migration-source-actions-row { margin: 0 0 6px; }
 .migration-source-location .migration-source-action { padding: 4px 10px; font-size: 12px; color: var(--ink-2); background: var(--surface-soft); border: 1px solid var(--line); border-radius: var(--radius-chip); }
@@ -265,7 +267,7 @@
 .migration-source-locations > summary:hover { color: var(--ink); }
 .migration-source-locations > summary::after { content: "⌄"; font-size: 11px; }
 .migration-source-locations[open] > summary::after { content: "⌃"; }
-.migration-source-location > div:first-of-type { flex: 1; min-width: 0; }
+
 /* ── One-glance toolbars: scope → advanced → action; tabs + select-all ── */
 .migration-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .migration-toolbar .migration-scan-controls { margin: 0; }
@@ -273,3 +275,15 @@
 .migration-toolbar > .migration-meta[data-mcp-found] { margin: 0; }
 .migration-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .migration-list-toolbar .migration-select-all { display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: 0; border-radius: 0; }
+
+/* ── Source panel: one-line rows with a status dot ──────────────── */
+.migration-source-status { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-2); }
+.migration-source-status > i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-2); opacity: .55; }
+.migration-source-location[data-scan-status="ok"] .migration-source-status > i { background: var(--success); opacity: 1; }
+.migration-source-location[data-scan-status="partial"] .migration-source-status > i,
+.migration-source-location[data-scan-status="error"] .migration-source-status > i { background: var(--attention); opacity: 1; }
+.migration-source-location .migration-source-actions { margin-left: 0; }
+@media (max-width: 720px) {
+  .migration-source-location { flex-wrap: wrap; row-gap: 4px; }
+  .migration-source-location > code { flex-basis: 100%; order: 5; padding-left: 30px; }
+}

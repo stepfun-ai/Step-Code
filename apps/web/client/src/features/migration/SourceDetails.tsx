@@ -7,6 +7,16 @@ import { scanMigration, setMcpSourcePath, setSourceProjects } from "./actions";
 import { SourceLogo } from "./CandidateList";
 import { useMigrationStore } from "./store";
 
+/** One source per line: logo · app name · path (ellipsis) · status dot on the right. */
+function SourceStatus({ status }: { readonly status: string }) {
+	const t = useT();
+	return (
+		<span className="migration-source-status">
+			<i aria-hidden="true" />
+			{t(`migrationScanStatus.${status}`)}
+		</span>
+	);
+}
 export function SourceDetails() {
 	const t = useT();
 	const kind = useMigrationStore((state) => state.kind);
@@ -44,31 +54,25 @@ export function SourceDetails() {
 				{(scan?.sources ?? [])
 					.filter((report) => report.kind === kind)
 					.map((report, index) => (
-						<div key={`${report.path}:${index}`}>
-							<div className="migration-source-location" data-scan-status={report.status}>
-								<SourceLogo source={report.source} />
-								<div>
-									<strong>{t(`migrationSource.${report.source}`)}</strong>
-									<code>{report.path}</code>
-								</div>
-								<div className="migration-source-actions">
-									<span
-										className={`migration-pill${report.status === "error" || report.status === "partial" ? " migration-pill-attention" : report.status === "ok" ? " migration-pill-success" : ""}`}
-									>
-										{t(`migrationScanStatus.${report.status}`)}
-									</span>
-								</div>
-							</div>
+						<div
+							className="migration-source-location"
+							data-scan-status={report.status}
+							key={`${report.path}:${index}`}
+						>
+							<SourceLogo source={report.source} />
+							<strong>{t(`migrationSource.${report.source}`)}</strong>
+							<code title={report.path}>{report.path}</code>
+							<SourceStatus status={report.status} />
 						</div>
 					))}
 				{kind === "mcp"
 					? (["claude-code", "codex"] as const).map((source) => (
 							<div className="migration-source-location" key={source}>
 								<SourceLogo source={source} />
-								<div>
-									<strong>{t(`migrationSource.${source}`)}</strong>
-									<code>{sources[source] ?? t(`migrationMcpDefaultPath.${source}`)}</code>
-								</div>
+								<strong>{t(`migrationSource.${source}`)}</strong>
+								<code title={sources[source] ?? t(`migrationMcpDefaultPath.${source}`)}>
+									{sources[source] ?? t(`migrationMcpDefaultPath.${source}`)}
+								</code>
 								<div className="migration-source-actions">
 									<Button
 										className="migration-source-action"
@@ -95,21 +99,22 @@ export function SourceDetails() {
 					: null}
 				{kind === "rules" ? (
 					<>
-						<div className="migration-source-actions migration-source-actions-row">
-							<Button
-								id="migrationAddSourceFolder"
-								className="migration-source-action"
-								disabled={disabled}
-								onClick={() => void pick()}
-							>
-								{t("migrationAddSourceFolder")}
-							</Button>
+						<div className="migration-source-location">
+							<strong>{t("migrationSourceProjects")}</strong>
+							<div className="migration-source-actions">
+								<Button
+									id="migrationAddSourceFolder"
+									className="migration-source-action"
+									disabled={disabled}
+									onClick={() => void pick()}
+								>
+									{t("migrationAddSourceFolder")}
+								</Button>
+							</div>
 						</div>
 						{projects.map((cwd) => (
 							<div className="migration-source-location" key={cwd}>
-								<div>
-									<code>{cwd}</code>
-								</div>
+								<code title={cwd}>{cwd}</code>
 								{registered.has(cwd) ? null : (
 									<div className="migration-source-actions">
 										<span className="migration-pill migration-pill-attention">
