@@ -46,6 +46,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/new` | Start a new session |
 | `/name <name>` | Set session display name |
 | `/session` | Show session file, ID, messages, tokens, and cost |
+| `/context [all]` | Show the estimated current context breakdown; `all` expands skills, context files, and individual tools |
 | `/tree` | Jump to any point in the session and continue from there |
 | `/trust` | Save project trust decision for future sessions |
 | `/fork` | Create a new session from a previous user message |
@@ -93,6 +94,14 @@ Useful session commands:
 - `/fork` creates a new session from an earlier user message.
 - `/clone` duplicates the current active branch into a new session file.
 - `/compact` summarizes older messages to free context.
+
+### Current Context Breakdown
+
+`/context` shows a read-only estimate of the current context window. Instructions, tool definitions, and conversation are grouped separately. Conversation is further divided into user input, AI answers, thinking, tool calls, tool output, compaction summaries, and injected context. The meter also shows free space and the configured compaction reserve.
+
+Use `/context all`, or press `a` in the panel, to expand individual skills, context files, and tools. The report reads the active session and tool catalog without starting a model turn. When the active model is a Step endpoint, it asks the platform token-count endpoint for segmented totals: instructions, tool definitions, the full conversation, and each conversation category. Those requests send request-shaped payloads to the tokenizer only; they do not generate a model response. If the endpoint is unavailable, unauthenticated, rate-limited, or the active provider is not Step, `/context` falls back to local structural estimates. The header shows whether the totals came from the token-count API, a mix of both, or local estimates.
+
+Local fallback values are estimates of the current request structure, not cumulative billing or cache statistics; `/usage` owns those views. Local fallback counts ASCII text at about four characters per token, non-ASCII text at about one token per code point, and images as fixed blocks.
 
 See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 

@@ -115,7 +115,9 @@ describe("Step Pi slash command adapters", () => {
 	test("registers product adapters without replacing Pi's native commands", () => {
 		const { commands } = registerCommands();
 
-		expect([...commands.keys()]).toEqual(expect.arrayContaining(["plugin", "clear", "theme", "status", "btw"]));
+		expect([...commands.keys()]).toEqual(
+			expect.arrayContaining(["plugin", "clear", "theme", "status", "context", "btw"]),
+		);
 		expect(commands.has("effort")).toBe(false);
 	});
 

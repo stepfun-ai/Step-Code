@@ -13,8 +13,10 @@ import {
 	type BtwPanelOutcome,
 	createBtwPanel,
 } from "../render/btw-panel.ts";
+import { ContextPanel, formatContextReportText } from "../render/context-panel.ts";
 import { getAvailableThemes } from "../theme/theme.ts";
 import { copyToClipboard } from "../utils/clipboard.ts";
+import { captureContextReport } from "./context-report.ts";
 import {
 	type FeedbackSubmitResult,
 	formatFeedbackBundleFailureDetails,
@@ -126,6 +128,18 @@ export function registerStepPiCommandAdapters(
 				if (usage) await usage.status(args, ctx);
 				else ctx.ui.notify(formatStepStatus(ctx), "info");
 			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
+		"context",
+		{
+			description: "Show the current context-window breakdown",
+			getArgumentCompletions: (prefix) =>
+				["all"].filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
+			handler: handleStepContextCommand,
 		},
 		telemetry,
 	);
@@ -541,6 +555,32 @@ async function handleStepThemeCommand(args: string, ctx: ExtensionCommandContext
 		return;
 	}
 	ctx.ui.notify(result.error ? `Failed to set theme: ${result.error}` : `Unknown theme "${requested}".`, "warning");
+}
+
+async function handleStepContextCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	const requested = args.trim();
+	if (requested !== "" && requested !== "all") {
+		ctx.ui.notify("Usage: /context [all]", "warning");
+		return;
+	}
+	const report = await captureContextReport(ctx);
+	const showAll = requested === "all";
+	if (ctx.mode !== "tui" || !ctx.hasUI) {
+		ctx.ui.notify(formatContextReportText(report, showAll), "info");
+		return;
+	}
+	await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+		return new ContextPanel(
+			{
+				report,
+				showAll,
+				theme,
+				tui,
+				onClose: () => done(),
+			},
+			keybindings,
+		);
+	});
 }
 
 /** Format a secret-free status snapshot from Pi's public command context. */

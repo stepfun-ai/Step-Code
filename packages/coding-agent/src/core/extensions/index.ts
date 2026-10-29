@@ -46,6 +46,7 @@ export type {
 	ContextEvent,
 	// Event Results
 	ContextEventResult,
+	ContextReportSnapshot,
 	ContextUsage,
 	CustomToolCallEvent,
 	CustomToolResultEvent,

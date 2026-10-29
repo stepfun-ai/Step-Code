@@ -356,6 +356,8 @@ export interface ContextUsage {
 	contextWindow: number;
 	/** Context usage as percentage of context window, or null if tokens is unknown. */
 	percent: number | null;
+	/** Tokens held back for compaction and the next response; zero when automatic compaction is disabled. */
+	reserveTokens?: number;
 }
 
 export interface CompactOptions {
@@ -424,6 +426,8 @@ export interface ExtensionContext {
 export interface ExtensionCommandContext extends ExtensionContext {
 	/** Get the current base system-prompt construction options. */
 	getSystemPromptOptions(): BuildSystemPromptOptions;
+	/** Snapshot the current system prompt, messages, and tool catalog for context composition reports. */
+	getContextReportSnapshot?(): ContextReportSnapshot | undefined;
 
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
@@ -1739,6 +1743,18 @@ export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters
 
 export type GetAllToolsHandler = () => ToolInfo[];
 
+/** A point-in-time snapshot of the data needed to report context-token composition. */
+export interface ContextReportSnapshot {
+	systemPrompt: string;
+	systemPromptOptions: BuildSystemPromptOptions;
+	tools: readonly ToolInfo[];
+	/** Names of MCP servers whose remote tools are currently registered. */
+	mcpServerNames: readonly string[];
+	messages: readonly AgentMessage[];
+	contextWindow: number;
+	reserveTokens?: number;
+}
+
 export type GetCommandsHandler = () => SlashCommandInfo[];
 
 export type SetActiveToolsHandler = (toolNames: string[]) => void;
@@ -1818,6 +1834,7 @@ export interface ExtensionContextActions {
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
+	getContextReportSnapshot?: () => ContextReportSnapshot | undefined;
 	/** Optional native retry controls for product presets such as Step Autopilot. */
 	getAutoRetryEnabled?: () => boolean;
 	setAutoRetryEnabled?: (enabled: boolean) => void;

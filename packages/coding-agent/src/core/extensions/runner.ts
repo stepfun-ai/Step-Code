@@ -20,6 +20,7 @@ import type {
 	CompactOptions,
 	ContextEvent,
 	ContextEventResult,
+	ContextReportSnapshot,
 	ContextUsage,
 	EntryRenderer,
 	Extension,
@@ -288,6 +289,7 @@ export class ExtensionRunner {
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
 	private getSystemPromptOptionsFn: () => BuildSystemPromptOptions = () => ({ cwd: this.cwd });
+	private getContextReportSnapshotFn: () => ContextReportSnapshot | undefined = () => undefined;
 	private getAutoRetryEnabledFn: (() => boolean) | undefined;
 	private setAutoRetryEnabledFn: ((enabled: boolean) => void) | undefined;
 	private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
@@ -356,6 +358,7 @@ export class ExtensionRunner {
 		this.compactFn = contextActions.compact;
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn = contextActions.getSystemPromptOptions ?? (() => ({ cwd: this.cwd }));
+		this.getContextReportSnapshotFn = contextActions.getContextReportSnapshot ?? (() => undefined);
 		this.getAutoRetryEnabledFn = contextActions.getAutoRetryEnabled;
 		this.setAutoRetryEnabledFn = contextActions.setAutoRetryEnabled;
 
@@ -860,6 +863,10 @@ export class ExtensionRunner {
 		context.getSystemPromptOptions = () => {
 			this.assertActive();
 			return this.getSystemPromptOptionsFn();
+		};
+		context.getContextReportSnapshot = () => {
+			this.assertActive();
+			return this.getContextReportSnapshotFn();
 		};
 		context.waitForIdle = () => {
 			this.assertActive();

@@ -1065,7 +1065,7 @@ pi.on("tool_call", (event, ctx) => {
 
 ### ctx.getContextUsage()
 
-Returns current context usage for the active model. Uses last assistant usage when available, then estimates tokens for trailing messages.
+Returns current context usage for the active model. Uses last assistant usage when available, then estimates tokens for trailing messages. The optional `reserveTokens` field reports the configured compaction reserve, or zero when automatic compaction is disabled.
 
 ```typescript
 const usage = ctx.getContextUsage();
@@ -1122,6 +1122,17 @@ const contextPaths = options.contextFiles?.map((file) => file.path) ?? [];
 This has the same shape and mutability as `before_agent_start` `event.systemPromptOptions`: custom prompt, active tools, tool snippets, prompt guidelines, appended system prompt text, cwd, loaded context files, and loaded skills. It may include full context file contents, so treat it as sensitive extension-local data and avoid exposing it through command lists, logs, or autocomplete metadata.
 
 This reports the current base prompt inputs. It does not include per-turn `before_agent_start` chained system-prompt changes, later `context` event message mutations, or `before_provider_request` payload rewrites.
+
+### ctx.getContextReportSnapshot()
+
+Returns a point-in-time snapshot of the data needed to report context composition, or `undefined` when the host does not provide it. The snapshot contains the effective system prompt, the base system-prompt options, the registered tool catalog, current MCP server names, the active message list, the model context window, and the configured compaction reserve.
+
+```typescript
+const snapshot = ctx.getContextReportSnapshot?.();
+const toolCount = snapshot?.tools.length ?? 0;
+```
+
+Like `getSystemPromptOptions()`, this can include full prompt, context-file, and message contents. Treat it as sensitive extension-local data and avoid exposing it through command lists, logs, or autocomplete metadata. Prefer it over re-deriving context data when a command only needs a read-only report.
 
 ### ctx.waitForIdle()
 

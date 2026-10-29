@@ -51,6 +51,7 @@ import {
 	streamSimple,
 } from "@step-harness/providers/compat";
 import { getAgentDir } from "../config.ts";
+import { getStepMcpStatuses } from "../step/mcp.ts";
 import { redactSecretString } from "../step/secret-redaction.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
@@ -85,6 +86,7 @@ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
+	type ContextReportSnapshot,
 	type ContextUsage,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
@@ -3400,6 +3402,7 @@ export class AgentSession {
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
+				getContextReportSnapshot: () => this.createContextReportSnapshot(),
 				getAutoRetryEnabled: () => this.autoRetryEnabled,
 				setAutoRetryEnabled: (enabled) => this.setAutoRetryEnabled(enabled),
 			},
@@ -4142,13 +4145,14 @@ export class AgentSession {
 
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
+		const reserveTokens = this.autoCompactionEnabled ? this.settingsManager.getCompactionReserveTokens() : 0;
 		if (this._getLiveContext()) {
 			const tokens = this._workingContextTokens({
 				systemPrompt: this.systemPrompt,
 				messages: this.agent.state.messages,
 				tools: this.agent.state.tools,
 			});
-			return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
+			return { tokens, contextWindow, percent: (tokens / contextWindow) * 100, reserveTokens };
 		}
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
@@ -4176,7 +4180,7 @@ export class AgentSession {
 			}
 
 			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
+				return { tokens: null, contextWindow, percent: null, reserveTokens };
 			}
 		}
 
@@ -4187,6 +4191,25 @@ export class AgentSession {
 			tokens: estimate.tokens,
 			contextWindow,
 			percent,
+			reserveTokens,
+		};
+	}
+
+	/** Snapshot the inputs a /context report needs, including tools that are registered but not active. */
+	private createContextReportSnapshot(): ContextReportSnapshot {
+		const contextUsage = this.getContextUsage();
+		const systemPromptOptions: BuildSystemPromptOptions = {
+			...this._baseSystemPromptOptions,
+			contextFiles: this._baseSystemPromptOptions.contextFiles ?? [],
+		};
+		return {
+			systemPrompt: this.systemPrompt,
+			systemPromptOptions,
+			tools: this.getAllTools(),
+			mcpServerNames: getStepMcpStatuses().map((status) => status.name),
+			messages: this.agent.state.messages,
+			contextWindow: contextUsage?.contextWindow ?? this.model?.contextWindow ?? 0,
+			reserveTokens: contextUsage?.reserveTokens,
 		};
 	}
 
