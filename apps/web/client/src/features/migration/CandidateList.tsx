@@ -141,7 +141,10 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 				<CandidateProgressStatus candidate={candidate} draft={draft} />
 				{draft?.loading ? <span className="migration-meta">{t("migrationLoadingPreview")}</span> : null}
 				{draft?.preview && !draft.loading ? <DiagnosticList diagnostics={draft.preview.blockers} /> : null}
-				<DiagnosticList diagnostics={candidate.diagnostics} />
+				{/* The 已可用 status pill already says this; the verbose diagnostic would be noise. */}
+				<DiagnosticList
+					diagnostics={candidate.diagnostics.filter((item) => item.code !== "session-already-imported")}
+				/>
 				{draft?.error ? (
 					<p className="migration-danger">
 						{t(`migrationDiagnostic.${draft.error}`) === `migrationDiagnostic.${draft.error}`
