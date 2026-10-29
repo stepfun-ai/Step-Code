@@ -214,11 +214,14 @@ describe("#6647 compaction retries transient summarization failures", () => {
 		const append = vi
 			.spyOn(harness.sessionManager, "appendCustomEntry")
 			.mockImplementation((type, data) => persisted.appendCustomEntry(type, data));
-		await expect(harness.session.compact()).rejects.toThrow("observedPayloadMaxTokens=16");
+		const failedCompaction = harness.session.compact();
+		await expect(failedCompaction).rejects.toThrow("observedPayloadMaxTokens=16");
+		await expect(failedCompaction).rejects.toThrow("16-token selected output cap");
 		append.mockRestore();
 		const entry = SessionManager.open(persisted.getSessionFile()!)
 			.getEntries()
 			.find((entry) => entry.type === "custom" && entry.customType === "step-compaction-failure");
+		expect(entry).not.toHaveProperty("data.diagnostics.selectedMaxTokens");
 		expect(entry).toMatchObject({
 			data: {
 				version: 1,
@@ -227,7 +230,6 @@ describe("#6647 compaction retries transient summarization failures", () => {
 					model: harness.getModel().id,
 					contextWindow: harness.getModel().contextWindow,
 					modelMaxTokens: harness.getModel().maxTokens,
-					selectedMaxTokens: harness.getModel().maxTokens,
 					observedMaxTokens: 16,
 					attempts: 1,
 					stopReason: "length",

@@ -1332,6 +1332,13 @@ Calls are tracked internally by `sourceIndex`. Hooks, events, and tool context s
 
 ## 3.9 Summary generation — compaction and navigation summaries
 
+The built-in summary helpers use the provider's normal model output limit and
+remaining-context sizing, without a separate fixed summary cap. Their summary
+view omits provider thinking blocks while retaining visible text and tool facts;
+it does not rewrite the stored messages. Compaction trigger and source-selection
+reserve settings remain independent of response sizing. See the
+[compaction integrity contract](../../../docs/compaction-integrity.md).
+
 Both operations generate a summary through the same `deciding → generating → result` machinery, which is why they are specified together. The axes:
 
 | | compaction | navigation |

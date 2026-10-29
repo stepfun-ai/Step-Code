@@ -442,12 +442,19 @@ keepRecentTokens = 20000
 
 Disable auto-compaction with `enabled = false`. You can still compact manually with `/compact`.
 
-The reserve also influences generated summary budgets, but each history/update
-or split-turn prefix request is capped at 32000 tokens and at the model's positive
-`maxTokens` limit. Unknown/nonpositive model limits retain the reserve-fraction
-fallback up to 32000. For example, with a 1048576-token window, setting
-`reserveTokens = 851968` triggers compaction above 196608 tokens without inflating
-summary output beyond the limit. `keepRecentTokens` remains approximate; the
-ordinary model context/output declarations are unchanged. See the
-[compaction integrity contract](../../../docs/compaction-integrity.md) for exact
-request recognition and no-effort wire behavior.
+`reserveTokens` controls the automatic trigger, not the summary output limit.
+History, update, split-turn prefix, and branch summaries omit a separate
+`maxTokens` override. The provider sizes output from the model's declared limit
+and the remaining context space for the actual request. This leaves reasoning
+models their normal response budget instead of imposing an extra summary cap.
+The existing `generateSummary` and `generateSummaryWithUsage` reserve argument is
+retained for call compatibility but no longer selects the output budget.
+
+Summary input includes visible replies, tool calls, and tool results. Provider
+thinking blocks are omitted because replayed reasoning may not belong to the
+live context and can make the summary request larger than that context. This
+only changes the summary view; original session history and successful skill-read
+retention remain intact. `keepRecentTokens` stays approximate, and configured
+trigger thresholds are unchanged. See the
+[compaction integrity contract](../../../docs/compaction-integrity.md) for request
+recognition and wire-budget validation.

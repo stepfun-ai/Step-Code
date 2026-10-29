@@ -109,7 +109,7 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
+| `compaction.reserveTokens` | number | `16384` | Response headroom used to choose the automatic compaction trigger |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
 | `compaction.contextProjection` | string | `"clm-v1"` | CLM working view; `off` selects native compaction, `lightweight-v1` selects deterministic projection |
 | `compaction.autoClm.enabled` | boolean | `true` | Attempt bounded CLM maintenance before native compaction |
@@ -124,11 +124,14 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 }
 ```
 
+Compaction summaries use the provider's normal model/output and remaining-context
+budget. `compaction.reserveTokens` does not set a separate summary output cap.
+
 ### Branch Summary
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `branchSummary.reserveTokens` | number | `16384` | Tokens reserved for branch summarization |
+| `branchSummary.reserveTokens` | number | `16384` | Headroom left when selecting branch history; output is sized by the provider |
 | `branchSummary.skipPrompt` | boolean | `false` | Skip "Summarize branch?" prompt on `/tree` navigation (defaults to no summary) |
 
 ### Retry

@@ -57,29 +57,38 @@ This check prevents missing summaries from being persisted. It does not judge
 the factual quality of nonempty model text or validate extension-supplied
 compaction results.
 
-## Bound generated summary output
+## Size summary output through the provider
 
-`reserveTokens` also sets the automatic trigger:
-`contextTokens > contextWindow - reserveTokens`. Raising it must not raise a
-summary request above the model's output limit or the existing 32000-token
-summary ceiling. Both compaction implementations clamp the final candidate
-budget after considering the reserve fraction and model budget. History and
-history updates use fraction 0.8; split-turn prefixes use 0.5.
+Built-in history, update, split-turn prefix, and branch summaries do not set a
+separate `maxTokens` override. They use the same provider sizing as ordinary
+requests: the model's declared output limit is reduced when the actual request
+leaves less context headroom. This avoids starving a reasoning-enabled summary
+with a smaller fixed cap. The coding-agent and generic harness follow this rule.
 
-For a model declaring `contextWindow=1048576`, `maxTokens=65536`, a 196608-token
-trigger uses `reserveTokens=851968`. History and prefix requests both have output
-cap 32000. Previously their caps were 681574 and 425984. A positive lower model
-limit is respected; when `maxTokens <= 0` denotes an unknown limit, the reserve
-fraction remains the fallback, bounded by 32000.
+`compaction.reserveTokens` still selects the automatic trigger:
+`contextTokens > contextWindow - reserveTokens`. Existing configured/default
+trigger values are unchanged. The positional reserve argument to `generateSummary`
+and `generateSummaryWithUsage` remains accepted for caller compatibility but is
+unused for output sizing. `branchSummary.reserveTokens` still limits which source
+entries are selected; it does not impose a response-token cap.
 
-Settings defaults and valid budgets are unchanged. In particular, a 65536-output
-model keeps its 32000 summary cap with either the session's 16384 reserve or the
-low-level helper's 24576 reserve. With an unknown model limit and reserve 24576,
-history remains 19660 and prefix remains 12288. Ordinary model requests still use
-their existing output budget; this change only bounds generated compaction
-summaries. No new setting is introduced.
+For a model with `contextWindow=1048576` and `maxTokens=65536`, a request with enough
+context headroom can use the 65536-token model output limit, regardless of whether
+it is an actor or summary request. Near the context boundary, the provider reduces
+that limit. Tests should verify the effective request rather than infer a special
+summary allowance from its label.
 
-## Recognize compaction requests without relaxing the normal cap
+## Omit replayed thinking from summary input
+
+The summary view contains visible replies, tool calls, and tool results, with the
+existing diagnostic truncation and skill-preservation rules. It omits provider
+thinking blocks: these may no longer be part of the live provider context, and
+replaying them as plain text can make a summary request exceed that context.
+Original messages and stored session entries are unchanged. Generated summaries
+must still contain nonempty visible text; omission of input thinking does not
+weaken validation of the returned summary.
+
+## Recognize compaction requests
 
 Both implementations currently use the same system prompt: 581 UTF-8 bytes,
 SHA-256 `7f4677db342c3991df3ed0ba729c514db1772ef7af4c39155d2a0d87d08b12bb`.
@@ -112,19 +121,19 @@ The static suffix starts with `The messages above are a conversation to summariz
 are labels for inspection; they are not sufficient classifiers on their own.
 The complete suffix includes the eight-section format and detail rules.
 
-Branch summaries share the system prompt but have different instructions and a
-2048-token output budget. The system hash alone must not grant a compaction cap
-allowance. Unknown, drifted, or ambiguous summary-shaped requests require review.
-A normal request containing quoted summary instructions remains normal; neither
-an observed 32000 cap nor a session ID establishes that a request is compaction.
+Branch summaries share the system prompt but have different instructions. The
+system hash alone does not establish a request kind. Unknown, drifted, or ambiguous
+summary-shaped requests require review. A normal request containing quoted summary
+instructions remains normal; neither an observed output cap nor a session ID
+establishes that a request is compaction.
 The coding-agent main system prompt varies with runtime resources and configuration
 and therefore has no single compaction-style static hash.
 
 For the Harbor adaptive custom-model profile, the generated model overlay omits
 `reasoning`, `thinkingLevelMap`, and `compat`, and the adapter emits no `--thinking`
 flag. The model loader defaults `reasoning` to false. The default OpenAI Chat
-serializer emits `max_completion_tokens`: 65536 for normal requests and 32000 for
-recognized compaction requests with this model. Neither kind includes
+serializer emits `max_completion_tokens`: 65536 for both normal and compaction
+requests in this fixture, whose input leaves enough context headroom. Neither kind includes
 `reasoning_effort` or `thinking`. Do not add `--thinking off` merely to test this
 profile. Other integrity checks, including model identity and no-effort fields,
 still apply to every request.
@@ -153,7 +162,7 @@ Budget and adaptive wire regressions are also offline:
 pnpm exec vitest --run test/harness/compaction-summary-budget.test.ts
 
 # From packages/coding-agent
-pnpm exec vitest --run test/compaction.test.ts -t 'summary output budget'
+pnpm exec vitest --run test/compaction-summary-reasoning.test.ts test/branch-summarization.test.ts
 pnpm exec vitest --run test/suite/regressions/compaction-adaptive-wire.test.ts
 ```
 
@@ -162,4 +171,5 @@ builder using a synthetic model ID and endpoint. The native test loads it throug
 the model registry, injects an offline HTTP fetch backed by the suite faux
 provider, forces automatic history/prefix compaction, and verifies an explicit
 history update. It pins the system and static instruction bytes, checks both
-normal and summary wire caps, and supplies no thinking-level override.
+normal and summary wire budgets, and supplies no thinking-level override. Provider
+tests separately cover output clamping near the context boundary.

@@ -11,6 +11,9 @@
 
 ### Fixed
 
+- Summary requests now use the provider's model output limit and remaining-context sizing instead of fixed compaction/branch caps or reserve-derived budgets. Existing reserve arguments remain accepted for call compatibility; automatic trigger and branch source-selection settings are unchanged.
+- Compaction and branch-summary inputs omit provider thinking blocks while retaining visible replies, tool calls, diagnostic output, and existing skill-retention rules. Original session history is unchanged. These changes adapt Pi commits `15e7bdc` and `6fcb486` (upstream PR #11036).
+
 - Stop flooding startup with `[Skill conflicts]` when the same skills are installed in both `~/.agents/skills` and `~/.claude/skills`. Byte-identical copies are now skipped silently, and remaining name collisions collapse to one summary line per directory pair; `--verbose` still lists each one.
 - Cancel and drain workflow children before publishing a terminal state, share host admission across concurrent workflows, accept promise arrays in `parallel()`, and distinguish concurrency notices from actual script failures.
 - Clamp workflow concurrency to the host ceiling, back off on temporary 429s with an independent retry budget and adaptive admission cap, and report failed nodes in final tool results instead of silently treating partial workflows as successful.
