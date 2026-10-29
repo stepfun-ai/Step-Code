@@ -234,15 +234,13 @@ export function MigrationOnboarding({
 								)}
 							</h2>
 						</div>
-						<p className="migration-step-hint">
-							{t(
-								stage === "select"
-									? `migrationStepHint.${kind}`
-									: stage === "review"
-										? "migrationPlanHint"
-										: "migrationLocalOnly",
-							)}
-						</p>
+						{stage === "select" && t(`migrationStepHint.${kind}`) ? (
+							<p className="migration-step-hint">{t(`migrationStepHint.${kind}`)}</p>
+						) : stage !== "select" ? (
+							<p className="migration-step-hint">
+								{t(stage === "review" ? "migrationPlanHint" : "migrationLocalOnly")}
+							</p>
+						) : null}
 						<Tooltip content={t("migrationCloseWizard")}>
 							<IconButton icon="close" aria-label={t("migrationCloseWizard")} onClick={closeMigration} />
 						</Tooltip>

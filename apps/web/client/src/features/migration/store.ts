@@ -49,7 +49,7 @@ let state: MigrationState = {
 	projectCwds: [],
 	mcpSourcePaths: {},
 	scan: null,
-	sessionOptions: { range: "all", limit: 100 },
+	sessionOptions: { range: "30", limit: 100 },
 	scannedKinds: [],
 	closeRequested: false,
 	closeWhenSettled: false,

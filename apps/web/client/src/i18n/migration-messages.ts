@@ -2,7 +2,7 @@
 const labels = {
 	migrationEntryFirst: ["首次使用", "First run"],
 	migrationEntrySettings: ["设置 / 数据迁移", "Settings / Data migration"],
-	"migrationStepHint.sessions": ["选择要迁移的会话。", "Choose the sessions to migrate."],
+	"migrationStepHint.sessions": ["", ""],
 	"migrationStepHint.mcp": ["选择要带到 StepCode 的 MCP。", "Choose the MCP servers to bring to StepCode."],
 	"migrationStepHint.rules": [
 		"规则会影响后续模型行为。暂不迁移也能继续；写入前需完整审阅并单独确认。",
@@ -20,8 +20,6 @@ const labels = {
 	migrationReviewSelected: ["已选 {count} 项", "{count} selected"],
 	migrationTargetNote: ["目标工作区 · {cwd}", "Destination workspace · {cwd}"],
 	migrationGroupPending: ["{count} 项待处理", "{count} need attention"],
-	migrationSelectedSessions: ["已选 {count} 个会话", "{count} sessions selected"],
-	migrationInheritedTarget: ["各自迁回原项目", "each back in its original project"],
 	migrationMcpFound: ["发现 {count} 个可迁移的 MCP", "Found {count} MCP servers to migrate"],
 	migrationScanSessions: ["扫描会话", "Scan sessions"],
 	migrationNoSelectionTitle: ["还没有选中迁移内容", "Nothing selected yet"],

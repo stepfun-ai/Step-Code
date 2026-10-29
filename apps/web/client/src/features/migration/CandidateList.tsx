@@ -179,13 +179,6 @@ function SourceGroup({ group }: { readonly group: MigrationCandidateGroup }) {
 					<span aria-hidden="true">{expanded ? "⌄" : "›"}</span>
 				</Button>
 			</header>
-			{sessions && selection.selected > 0 ? (
-				<div className="migration-workspace-target">
-					<span className="migration-meta">
-						{t("migrationSelectedSessions", { count: selection.selected })} · {t("migrationInheritedTarget")}
-					</span>
-				</div>
-			) : null}
 			<div className="migration-group-items" hidden={!expanded}>
 				{group.candidates.map((candidate) => (
 					<CandidateRow key={candidate.id} candidate={candidate} />
