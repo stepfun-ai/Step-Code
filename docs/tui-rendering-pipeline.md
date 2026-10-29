@@ -191,9 +191,11 @@
 6. 全量重绘判定（`fullRender(clear)`，`tui-main-screen.ts:386-428`）：首帧不擦屏直接写；宽度变化必擦（换行位置全变）；高度变化必擦（Termux 软键盘场景例外，否则每次键盘弹出都重放整段历史，`tui-main-screen.ts:456-460`）；内容收缩超过历史最高水位且无 overlay 时擦除空行（`clearOnShrink`，`tui.ts:513-515`、`tui-main-screen.ts:465-469`）。擦屏序列是 `\x1b[2J\x1b[H\x1b[3J`（含 scrollback）。
 7. 差分区间扫描（`tui-main-screen.ts:473-498`）：从 `resetFrom` 扫到两帧最大行数，记 `firstChanged/lastChanged`；纯追加时区间锁在旧长度处（`appendStart` 快速路径）。区间经过 Kitty 图像块时向外扩展，避免从图像块中间重画（`tui-main-screen.ts:284-305`）。
 8. 视口夹取（`tui-main-screen.ts:568-589`）：`firstChanged` 落在上一帧视口之上且文档长度没变——只有 scrollback 副本过期，屏幕上行没动——只重绘可见部分；任何长度变化都可能让行在视口下位移，仍走全量重绘。
-9. 写入（`tui-main-screen.ts:593-680`）：`\x1b[?2026h` 开同步输出 → 视口滚动对齐（必要时 `\r\n` 推进滚动）→ CUU/CUD 移到首变行 → `\r` → 逐行 `\x1b[2K` + 行内容 → 尾部清理旧多出的行 → `\x1b[?2026l`。只写首变行到末变行，单行变化（spinner）不会闪烁全屏。
+9. 写入（`tui-main-screen.ts` 的差分输出路径）：`\x1b[?2026h` 开同步输出 → 视口滚动对齐（必要时 `\r\n` 推进滚动）→ CUU/CUD 移到首变行 → `\r` → 逐行 `\x1b[2K` + 行内容 → 尾部清理旧多出的行 → 恢复硬件光标位置及显示/隐藏状态 → `\x1b[?2026l`。只写首变行到末变行，单行变化（spinner）不会闪烁全屏。
 10. 硬保险（`tui-main-screen.ts:651-678`）：任何渲染行 `visibleWidth > width` 直接把全部行写进 `tui-crash.log`，清理终端状态后抛错——指向"组件没截断"这个根因。
-11. 更新镜像：`previousLines`、`hardwareCursorRow`、`previousViewportTop`、`previousKittyImageIds`、宽高（`tui-main-screen.ts:737-749`），并按需移动硬件光标（`positionHardwareCursor`，`tui-main-screen.ts:757-788`）。
+11. 更新镜像：`previousLines`、`hardwareCursorRow`、`previousViewportTop`、`previousKittyImageIds`、宽高。`positionHardwareCursor` 复用同一坐标计算；全量、差量和删除尾部内容的重绘均把其输出写入当前同步帧。没有内容重绘时仍可直接移动光标。
+
+同步输出结束前必须恢复 IME 光标锚点，避免终端先发布光标停在底栏末尾的中间状态。`packages/tui/test/tui-render.test.ts` 在同步输出写入边界检查实际终端坐标，覆盖首帧、后台状态刷新、缩放、尾部删除，以及光标显示/隐藏和全屏对照。该测试不替代真实终端与输入法组合的手工验收。
 
 输出统一经过 `BoundedTerminalWriter`（`tui-main-screen.ts:24-80`）：按 1MiB 分块刷盘，超长串按代理对边界切开，避免整帧拼成一个超过 V8 字符串上限的大串。
 
@@ -245,6 +247,8 @@ alt screen 进入时（`tui-alt-screen.ts:316-318`）：`\x1b[?1049h` + 关 auto
 - 挂载后 `setFocus(editor)`，`ui.start()`，再 `applyFromSettings()` 上主题（`interactive-mode.ts:1138-1157`）。
 
 选择器与自定义面板有两种挂载方式。`/settings` 通过 `showSelector` 替换 `editorContainer` 内的编辑器；`/usage` 与 `/status` 使用 `ctx.ui.custom` 默认的 inline 模式，采用相同的输入区域和终端全宽，底栏保留在面板下方。关闭时恢复编辑器、未提交草稿与键盘焦点；异步更新和关闭回调随面板释放。
+
+聚焦的澄清对话框在选项页提供一个硬件光标锚点：选中箭头所在的物理行，自由输入时使用 Editor 的编辑位置。锚点随渲染计算，失焦时移除；是否接收答案仍由输入模式决定，而不是由锚点是否存在决定。
 
 只有显式选择 overlay 的对话框才通过 `ui.showOverlay(component, options)` 叠加到现有内容上。overlay 的焦点恢复（被 overlay 内部组件抢走再还回）由 `TuiBase` 的状态机保证（`tui.ts:525-588`）；普通命令面板不应为了展示内容而默认居中覆盖聊天记录。
 
