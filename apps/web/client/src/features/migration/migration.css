@@ -170,8 +170,8 @@
 .migration-step-active { background: var(--surface); }
 .migration-step-active .migration-step-number { background: var(--ink); color: var(--surface); }
 .migration-resource-layout, .migration-resource-rules { grid-template-columns: minmax(0, 1fr); }
-.migration-resource-layout.migration-has-preview { grid-template-columns: minmax(0, 1fr) minmax(285px, .95fr); }
-.migration-resource-rules.migration-has-preview { grid-template-columns: minmax(200px, .65fr) minmax(320px, 1.35fr); }
+.migration-resource-layout.migration-has-preview { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
+.migration-resource-rules.migration-has-preview { grid-template-columns: minmax(0, 1fr) minmax(360px, 480px); }
 .migration-list { gap: 12px; }
 .migration-preview { position: sticky; top: 0; }
 .migration-source-logo { width: 23px; height: 23px; object-fit: contain; flex-shrink: 0; border-radius: var(--radius-chip); }

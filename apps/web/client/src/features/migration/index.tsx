@@ -17,7 +17,6 @@ import {
 	startNewMigration,
 	useMigrationVisibility,
 } from "./actions";
-import { MigrationBatchControls } from "./BatchControls";
 import { CandidateList, DiagnosticList } from "./CandidateList";
 import { useMigrationExpiry } from "./expiry";
 import { trapMigrationFocus, useMigrationDialogFocus } from "./focus";
@@ -302,7 +301,6 @@ export function MigrationOnboarding({
 								</span>
 								{stage === "select" && !isActiveJob(job) ? (
 									<div className="migration-selection-footer">
-										{kind === "mcp" ? <MigrationBatchControls kind={kind} /> : null}
 										<div className="migration-selection-nav">
 											<Button
 												variant="secondary"
