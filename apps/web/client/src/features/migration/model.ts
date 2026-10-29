@@ -35,10 +35,7 @@ export function isIndependentCopy(candidate: MigrationCandidate): boolean {
 	return candidate.kind === "skills" && candidate.holding === "reference" && candidate.readiness === "ready";
 }
 export function hasConsent(preview: MigrationPreview, acknowledged: readonly MigrationAcknowledgement[]): boolean {
-	return (
-		preview.requiredAcknowledgements.every((ack) => acknowledged.includes(ack)) &&
-		(preview.candidate.kind !== "rules" || preview.action === "skip" || acknowledged.includes("rules-impact"))
-	);
+	return preview.requiredAcknowledgements.every((ack) => acknowledged.includes(ack));
 }
 export function draftReady(draft: MigrationDraft, now = Date.now()): boolean {
 	return (
@@ -46,9 +43,6 @@ export function draftReady(draft: MigrationDraft, now = Date.now()): boolean {
 		!draft.loading &&
 		!draft.error &&
 		draft.preview.blockers.length === 0 &&
-		(draft.preview.candidate.kind !== "rules" ||
-			draft.preview.action === "skip" ||
-			(draft.ruleChecked && !!draft.preview.ruleImpact && draft.preview.resultText !== undefined)) &&
 		Date.parse(draft.preview.expiresAt) > now &&
 		hasConsent(draft.preview, draft.acknowledged)
 	);

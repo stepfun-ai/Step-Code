@@ -241,19 +241,13 @@ async function candidate(page, item, select = true) {
 	// Opening the history/declaration and selecting it are separate actions, so drive both.
 	const preview = await responseFor(page, "/api/v1/migrations/preview", () => row.locator(".migration-row-title").click());
 	if (select && !(await row.locator("input").isChecked())) await row.locator("input").check();
-	await until(async () => !(await modal(page).locator(".migration-preview select").first().isDisabled()), "preview UI settled");
+	await until(async () => !(await modal(page).locator(".migration-preview").innerText()).includes("正在更新预览"), "preview UI settled");
 	return preview;
 }
 async function changePreview(page, action) {
 	const preview = await responseFor(page, "/api/v1/migrations/preview", action);
-	await until(async () => !(await modal(page).locator(".migration-preview select").first().isDisabled()), "changed preview settled");
+	await until(async () => !(await modal(page).locator(".migration-preview").innerText()).includes("正在更新预览"), "changed preview settled");
 	return preview;
-}
-async function confirmRule(page) {
-	const consent = modal(page).locator(".migration-rule-consent");
-	await consent.locator("input").check();
-	await consent.locator("button").click();
-	assert.equal(await consent.locator("p").count(), 1, "Explicit confirmation must be acknowledged");
 }
 async function startJob(page) {
 	const plan = await responseFor(page, "/api/v1/migrations/plans", () => reviewButton(page).click());
@@ -422,23 +416,10 @@ test("explicit rule CREATE consent invalidates on edits; disabled MCP and sessio
 	const rule = await candidate(page, item(ruleScan, "rules", "CLAUDE.md"));
 	assert.equal(rule.action, "create");
 	assert.equal(existsSync(rule.target.path), false);
-	// The review list stays reachable so the unacknowledged rule is shown as blocked, not hidden.
-	assert.equal(await reviewButton(page).isDisabled(), false, "Review stays reachable with an unacknowledged rule");
+	// A reviewed rule needs no separate consent: the plan is submittable directly.
 	await reviewButton(page).click();
 	await modal(page).locator('.migration-final-plan').waitFor();
-	assert.equal(await modal(page).locator('#migrationStartPlan').isDisabled(), true,
-		"An unacknowledged rule keeps the write disabled");
-	await modal(page).locator('.migration-dialog-foot button').first().click();
-	await modal(page).locator('.migration-list').waitFor();
-	const consent = modal(page).locator(".migration-rule-consent");
-	assert.equal(await consent.locator("button").isDisabled(), true, "The checkbox alone is not confirmation");
-	await consent.locator("input").check();
-	assert.equal(await consent.locator("button").isDisabled(), false, "The checkbox enables the explicit confirmation");
-	await consent.locator("button").click();
-	assert.equal(await consent.locator("p").count(), 1, "Explicit confirmation must be acknowledged");
-	await reviewButton(page).click();
-	await modal(page).locator('.migration-final-plan').waitFor();
-	await until(async () => await modal(page).locator('#migrationStartPlan').isEnabled(), "a confirmed rule plan is submittable");
+	await until(async () => await modal(page).locator('#migrationStartPlan').isEnabled(), "a previewed rule plan is submittable");
 	await modal(page).locator('.migration-dialog-foot button').first().click();
 	await modal(page).locator('.migration-list').waitFor();
 	// A genuine Desktop resource pick must not register a workspace or switch the draft.
@@ -447,14 +428,8 @@ test("explicit rule CREATE consent invalidates on edits; disabled MCP and sessio
 	assert.equal(changed.target.scope.cwd, f.target);
 	assert.deepEqual(await page.evaluate(() => window.pickerPurposes), ["resource"]);
 	assert.deepEqual(await api(page, "/api/v1/workspaces"), workspacesBefore);
-	assert.equal(await consent.locator("input").isChecked(), false, "Target change clears rule checkbox");
-	assert.equal(await consent.locator("p").count(), 0, "Target change clears explicit acknowledgement");
-	await confirmRule(page);
 	await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("skip"));
 	await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("create"));
-	assert.equal(await consent.locator("input").isChecked(), false, "Action change clears rule consent");
-	assert.equal(await consent.locator("p").count(), 0, "Action change clears the explicit acknowledgement");
-	await confirmRule(page);
 	const mcpScan = await category(page, "mcp");
 	const mcp = await candidate(page, item(mcpScan, "mcp", "fresh"));
 	assert.equal(mcp.target.scope.kind, "global");
@@ -521,7 +496,6 @@ test("rule replace creates real backup; recovery preview is read-only and explic
 	const replacement = await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("replace"));
 	assert.equal(replacement.ruleImpact.backupRequired, true);
 	assert.equal(await readFile(rulePath, "utf8"), original, "Replace preview must not mutate rules");
-	await confirmRule(page);
 	const { job } = await startJob(page);
 	assert.equal(job.items[0].status, "imported");
 	assert.ok(job.items[0].backupId, "Replacement result identifies backup");

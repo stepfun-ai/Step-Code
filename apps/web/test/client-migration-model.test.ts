@@ -35,15 +35,12 @@ test("session previews let the backend resolve original cwd before validating ex
 	assert.deepEqual(initialPreviewRequest({ ...candidate, sourceScope: session.sourceScope }, ["/fixture/native-project"]), { candidateId: candidate.id });
 });
 
-test("every rule write, including create without backup, requires explicit preview consent", () => {
+test("rule writes need a clean preview, not a separate consent step", () => {
 	for (const action of ["create", "append", "replace"] as const) {
 		const p = preview({ action, requiredAcknowledgements: [] });
-		assert.equal(hasConsent(p, []), false);
-		assert.equal(draftReady({ ...draft(p), acknowledged: ["rules-impact"] }), false);
-		assert.equal(draftReady({ ...draft(p), ruleChecked: true, acknowledged: ["rules-impact"] }), true);
+		assert.equal(hasConsent(p, []), true);
+		assert.equal(draftReady(draft(p)), true);
 	}
-	assert.equal(draftReady({ ...draft(), ruleChecked: true, acknowledged: ["rules-impact"], preview: preview({ ruleImpact: undefined }) }), false);
-	assert.equal(hasConsent(preview({ action: "skip", requiredAcknowledgements: [] }), []), true);
 });
 test("target/action/input changes invalidate preview and consent without mutating selection", () => {
 	const original = { ...draft(), acknowledged: ["rules-impact" as const], ruleChecked: true };

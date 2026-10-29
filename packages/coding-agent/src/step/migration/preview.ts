@@ -204,7 +204,6 @@ export function prepareResource(
 			const inspection = ruleImpact(paths, scope, path, result);
 			dto.ruleImpact = inspection.impact;
 			if (inspection.blocked) block("rule-higher-priority-override");
-			if (dto.action !== "skip") dto.requiredAcknowledgements.push("rules-impact");
 			dto.warnings.push({ code: "rules-default-model-context" }, { code: "rules-no-active-reload" });
 		} else {
 			dto.allowedActions.push("copy");

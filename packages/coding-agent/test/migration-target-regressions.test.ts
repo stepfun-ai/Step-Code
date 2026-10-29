@@ -359,9 +359,6 @@ describe("independently selected migration destinations", () => {
 			target: { kind: "project", cwd: project },
 			action: "append",
 		});
-		await expect(service.plan([{ previewId: p.id, acknowledged: [] }])).rejects.toMatchObject({
-			code: "acknowledgement-required",
-		});
 		const job = await complete(p);
 		if (restart) {
 			await service.close();

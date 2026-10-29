@@ -309,18 +309,6 @@ const labels = {
 		"缺少规则加载影响预览，不能确认写入。",
 		"Rule loading impact is missing; writing cannot be confirmed.",
 	],
-	migrationRuleConsent: [
-		"我已查看完整内容、加载变化和影响范围，同意本次规则写入。",
-		"I reviewed all content, loading changes, and scope, and consent to this rule write.",
-	],
-	migrationConfirmRuleAppend: ["确认备份并追加规则", "Confirm backup and append rules"],
-	migrationConfirmRuleReplace: ["确认备份并替换规则", "Confirm backup and replace rules"],
-	migrationConfirmRuleProject: ["确认添加项目规则", "Confirm adding project rules"],
-	migrationConfirmRuleGlobal: ["确认添加全局规则", "Confirm adding global rules"],
-	migrationRuleConfirmed: [
-		"已确认此预览的规则影响；更改目标或动作须重新确认。",
-		"Rule impact confirmed for this preview. Target or action changes require fresh consent.",
-	],
 	migrationSelectItem: ["选择迁移 {name}", "Select {name} for migration"],
 	migrationSelectThis: ["选择此项", "Select this item"],
 	migrationDeselectItem: ["取消选择", "Deselect"],

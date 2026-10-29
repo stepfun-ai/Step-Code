@@ -1,7 +1,7 @@
 import { useT } from "../../i18n";
 import type { MigrationAcknowledgement, MigrationPreview, MigrationScope } from "../../state/types";
 import { Button, Spinner } from "../../ui";
-import { acknowledgePreview, checkRuleConsent, confirmRule, deselectCandidate, previewCandidate } from "./actions";
+import { acknowledgePreview, deselectCandidate, previewCandidate } from "./actions";
 import { DiagnosticList } from "./CandidateList";
 import { useMigrationExpiry } from "./expiry";
 import { ResourcePreview } from "./ResourcePreview";
@@ -88,14 +88,6 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 			<ResourcePreview id={id} kind={candidateKind} draft={draft} expired={expired} onPickTarget={onPickTarget} />
 		);
 	const isRule = candidateKind === "rules";
-	const confirmKey =
-		preview?.ruleImpact?.backupRequired && preview.action === "append"
-			? "migrationConfirmRuleAppend"
-			: preview?.ruleImpact?.backupRequired && preview.action === "replace"
-				? "migrationConfirmRuleReplace"
-				: preview?.target.scope.kind === "project"
-					? "migrationConfirmRuleProject"
-					: "migrationConfirmRuleGlobal";
 	return (
 		<aside
 			className={`migration-preview${isRule ? " migration-rule-review" : ""}`}
@@ -223,36 +215,6 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 								{t(`migrationAcknowledgement.${ack}`)}
 							</label>
 						))}
-					{isRule && preview.action !== "skip" ? (
-						<div className="migration-rule-consent">
-							<label className="migration-check">
-								<input
-									type="checkbox"
-									checked={draft.ruleChecked}
-									disabled={draft.loading}
-									onChange={(event) => checkRuleConsent(id, event.currentTarget.checked)}
-								/>
-								{t("migrationRuleConsent")}
-							</label>
-							<Button
-								variant="primary"
-								disabled={
-									!draft.selected ||
-									!draft.ruleChecked ||
-									!preview.ruleImpact ||
-									draft.loading ||
-									expired ||
-									preview.blockers.length > 0
-								}
-								onClick={() => confirmRule(id)}
-							>
-								{t(confirmKey)}
-							</Button>
-							{draft.acknowledged.includes("rules-impact") ? (
-								<p className="migration-attention">{t("migrationRuleConfirmed")}</p>
-							) : null}
-						</div>
-					) : null}
 					<Button variant="secondary" onClick={() => deselectCandidate(id)}>
 						{t("migrationDoNotMigrate")}
 					</Button>

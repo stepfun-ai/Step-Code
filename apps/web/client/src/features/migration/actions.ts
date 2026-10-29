@@ -363,23 +363,6 @@ export function acknowledgePreview(id: string, ack: MigrationAcknowledgement, ch
 		: draft.acknowledged.filter((value) => value !== ack);
 	updateMigration({ drafts: { ...state.drafts, [id]: { ...draft, acknowledged } }, plan: null, startKey: null });
 }
-export function checkRuleConsent(id: string, checked: boolean): void {
-	const state = getMigrationState();
-	const draft = state.drafts[id];
-	if (!draft) return;
-	updateMigration({
-		drafts: {
-			...state.drafts,
-			[id]: {
-				...draft,
-				ruleChecked: checked,
-				acknowledged: draft.acknowledged.filter((value) => value !== "rules-impact"),
-			},
-		},
-		plan: null,
-		startKey: null,
-	});
-}
 export async function createMigrationPlan(): Promise<void> {
 	const state = getMigrationState();
 	const selections = collectSelections(state.drafts, state.skipBlocked);
@@ -631,15 +614,4 @@ export function useMigrationVisibility(visible: boolean): void {
 			reconcilePolling();
 		};
 	}, [visible]);
-}
-
-export function confirmRule(id: string): void {
-	const draft = getMigrationState().drafts[id];
-	if (
-		draft?.ruleChecked &&
-		draft.preview?.ruleImpact &&
-		draft.preview.action !== "skip" &&
-		!draft.preview.blockers.length
-	)
-		acknowledgePreview(id, "rules-impact", true);
 }

@@ -461,11 +461,9 @@ describe("offline migration rules and jobs", () => {
 			shadowed: [join(agent, "CLAUDE.md")],
 			backupRequired: false,
 		});
-		await expect(service.plan([{ previewId: p.id, acknowledged: [] }])).rejects.toMatchObject({
-			code: "acknowledgement-required",
-		});
+		// Rule writes no longer require a separate impact acknowledgement; the preview is the consent surface.
 		expect(existsSync(join(agent, "AGENTS.md"))).toBe(false);
-		const job = await complete(p, ["rules-impact"]);
+		const job = await complete(p, []);
 		expect(job.items[0]?.status).toBe("imported");
 		expect(job.items[0]?.backupId).toBeUndefined();
 		expect(readFileSync(join(agent, "AGENTS.md"), "utf8")).toBe("Write tests first.");
