@@ -296,6 +296,12 @@ export interface AppState {
 	readonly current: SessionSnapshot | null;
 	/** Current selection's locally observed run; cleared on replacement or stream interruption. */
 	readonly performanceRun: PerformanceRun | null;
+	/**
+	 * The open session's context fill, from the inspector read the composer's
+	 * performance bar already polls; the right rail's context ring draws it.
+	 * Keyed by session so a switch never shows the previous session's fill.
+	 */
+	readonly contextFill: { readonly sessionId: string; readonly percent: number } | null;
 	readonly timelineItems: readonly TimelineItem[];
 	/** `ui.notify` output for this page load, shown after the timeline and never persisted. */
 	readonly notices: readonly NoticeItem[];
@@ -430,6 +436,7 @@ export function createInitialState(): AppState {
 		sessions: [],
 		current: null,
 		performanceRun: null,
+		contextFill: null,
 		timelineItems: [],
 		notices: [],
 		compacting: false,

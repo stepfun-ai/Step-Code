@@ -50,6 +50,10 @@
  */
 .app.right-panel-expanded .right-panel { position: absolute; grid-column: 1 / -1; grid-row: 1; top: 0; bottom: 0; left: 0; right: var(--rail-width); width: auto; z-index: 24; }
 .app.right-panel-expanded .right-panel > .preview-resizer { display: none; }
+/* The expanded panel covers the sidebar: its width handle (z-index 30) must not draw a line or grab drags through it. */
+.app.right-panel-expanded .sidebar-resizer { display: none; }
+/* On macOS the expanded panel's header starts under the traffic lights: start the title after them. */
+[data-host="desktop"][data-platform="darwin"] .app.right-panel-expanded .right-panel-header { padding-left: var(--sidebar-show-left); }
 .sb-content { padding: 16px 0 8px; font-size: 12px; line-height: 1.65; }
 .sb-content h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .sb-content p { margin: 0; overflow-wrap: anywhere; }
@@ -135,7 +139,13 @@
 .context-identity span, .context-identity small { color: var(--ink-2); font-size: 12px; }
 .context-content > section { padding: 16px 0; border-top: 1px solid var(--line); }
 .context-section-title { padding-inline: 0; color: var(--ink-2); font-size: 12px; }
-.context-section-title h3 { font-size: 12px; font-weight: 500; color: var(--ink); }
+/*
+ * Three steps, each smaller and quieter than the one above: the section title
+ * (15px, semibold), the role tabs (13px, the chosen one medium), then the rows
+ * (12px role label in secondary ink, the preview in tertiary ink).
+ */
+.context-section-title h3 { font-size: 15px; font-weight: 600; color: var(--ink); }
+.context-section-title > span { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
 .context-capacity-number { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin: 4px 0 16px; font-variant-numeric: tabular-nums; }
 .context-capacity-number > strong { font-size: 28px; font-weight: 500; line-height: 1.3; }
 .context-capacity-number small { font-size: 13px; color: var(--ink-2); margin-left: 1px; }
@@ -156,15 +166,21 @@
 .context-usage-list dd { margin: 0; font-variant-numeric: tabular-nums; }
 .context-message-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 10px; }
 .context-message-tabs { border: 0; padding: 0; min-inline-size: 0; }
-.context-message-tabs button { display: inline-flex; gap: 5px; align-items: center; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
-.context-message-tabs button[aria-pressed="true"] { background: var(--selected); }
-.context-message-tabs small { color: var(--ink-2); font-size: 12px; }
+.context-message-tabs button { display: inline-flex; gap: 5px; align-items: center; padding: 4px 8px; border-radius: var(--radius-tiny); color: var(--ink-2); font-size: 13px; }
+.context-message-tabs button[aria-pressed="true"] { background: var(--selected); color: var(--ink); font-weight: 500; }
+.context-message-tabs small { color: var(--ink-3); font-size: 12px; font-weight: 400; }
 .context-message { border-bottom: 1px solid var(--line); }
-.context-message summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 0; list-style: none; cursor: pointer; }
-.context-message summary > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-size: 12px; }
-.context-message-role { flex: none; font-size: 12px; }
+.context-message summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 0; list-style: none; cursor: pointer; }
+.context-message summary > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-size: 12px; }
+.context-message-role { flex: none; color: var(--ink-2); font-size: 12px; font-weight: 400; }
+.context-message summary > .icon { color: var(--ink-3); }
 .context-message[open] summary > .icon { transform: rotate(90deg); }
-.context-json { padding: 8px; background: var(--surface-soft); border-radius: 4px; }
+/* The rail's context ring: an ink arc over a quiet track (ContextRing.tsx). */
+.context-ring { display: block; fill: none; stroke-width: 2.2; }
+.context-ring-track { stroke: var(--line-strong); }
+.context-ring-fill { stroke: var(--ink); stroke-linecap: round; transition: stroke-dasharray 240ms ease; }
+/* The open record keeps 10px clear of the divider under it. */
+.context-json { margin-bottom: 10px; padding: 8px 10px; background: var(--surface-soft); border-radius: var(--radius-control); }
 .context-json > div { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--ink-2); }
 .context-json pre { max-height: 350px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px / 1.6 var(--mono); }
 @media (max-width: 1200px) {
