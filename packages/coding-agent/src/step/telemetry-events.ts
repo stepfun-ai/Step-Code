@@ -656,7 +656,7 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 		owner: "core",
 		comment: "Plan-mode entries split by who initiated planning.",
 		properties: {
-			source: "user for /plan or --plan, agent for enter_plan_mode.",
+			source: "user for /plan or --plan; agent only in sessions recorded before enter_plan_mode was removed.",
 		},
 	},
 	plan_mode_exited: {

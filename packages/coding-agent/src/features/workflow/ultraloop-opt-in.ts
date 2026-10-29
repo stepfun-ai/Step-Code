@@ -80,11 +80,11 @@ export function buildUltraloopReminder(token: string, workflowAvailable = true):
 }
 
 export function buildUltraloopSessionReminder(): string {
-	return "<system-reminder>Ultraloop is on for the session — the user has authorized multi-agent orchestration until they turn it off with /ultraloop off. Author and run a workflow for every substantive task by default; the goal is the most exhaustive, correct answer you can produce, and token cost is not a constraint. For multi-phase work (understand → design → implement → review), run several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward orchestrating with workflows and adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits.</system-reminder>";
+	return "<system-reminder>Ultraloop is on for the session — the user has authorized multi-agent orchestration until they turn it off with /ultraloop off. Author and run a workflow for every substantive task by default; the goal is the most exhaustive, correct answer you can produce, and token cost is not a constraint. For multi-phase work (understand → design → implement → review), run several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward orchestrating with workflows and adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits. Proactive delegation is also authorized: any earlier instruction requiring an explicit request before spawning subagents no longer applies, so delegate to subagent whenever parallel work would save time or improve quality.</system-reminder>";
 }
 
 function buildUltraloopSessionOffReminder(): string {
-	return "<system-reminder>Ultracode session mode is off. Previous session-wide workflow authorization no longer applies. Use workflow only for a new explicit per-turn request, a saved workflow invoked by name, or a skill instruction. Do not carry earlier per-turn authorization forward.</system-reminder>";
+	return "<system-reminder>Ultracode session mode is off. Previous session-wide workflow authorization no longer applies. Use workflow only for a new explicit per-turn request, a saved workflow invoked by name, or a skill instruction. Do not carry earlier per-turn authorization forward. Proactive subagent delegation no longer applies: spawn subagents only when the user or applicable AGENTS.md or skill instructions explicitly ask for subagents, delegation, or parallel agent work.</system-reminder>";
 }
 
 interface ReminderRecord {

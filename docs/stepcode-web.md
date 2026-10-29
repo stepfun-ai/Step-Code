@@ -95,13 +95,16 @@ plus the app's rule for reporting what the app already shows), with the same
 
 The Step operating contract (`buildStepSystemPromptAppendix`) is attached inside  
 that shared definition rather than at the host. It carries the tool selection  
-rules, the operating mode, the sections the active tools enable (planning, task  
-tracking, coordination, long-running goals, scheduled work, delegation), and an  
+rules, the operating mode, the sections the active tools enable (plan mode, task
+tracking, coordination, long-running goals, scheduled work), and an
 `<env>` block (working directory, platform, date, Git branch and uncommitted  
 count). Sharing one definition means a host does not need to, and should not,  
 assemble its own identity: doing so drops the contract that the same tool set  
 advertises. Change the app prompt in the package; `apps/web/src/` passes the  
 value and assembles no prompt.
+
+Planning instructions are carried by collaboration-mode announcements;
+delegation guidance and authorization are owned by the `subagent` tool description.
 
 The app product also declares `interaction: "one-shot"`. The composer's plan,  
 goal, and ultracode picks mark a single message: the client prefixes the text  
@@ -697,17 +700,23 @@ panel. Answers live in host memory for the session (bounded, like the terminal
 panel's history), appear in the snapshot so a reloaded page can show them again,  
 and are cleared by `POST /sessions/{id}/side-answers/clear`.
 
-Plan mode is visible to the model as well as to the page. `/plan <task>` enters  
-plan mode and sends the task as an ordinary user message. Every model request  
-while the mode is on carries a request-local `<system-reminder>` (never appended  
-to the session; each request drops the previous copy) that states the mode as a  
-fact: plan mode is ON, the host turned it on for the user's `/plan` request, and  
-`enter_plan_mode` must not be called; it names the plan file  
-(`.stepcode/plans/session-<id>.md`), says only that file may be written with  
-`write_file` / `edit_file`, and asks for exactly one `exit_plan_mode` call once  
-the proposal is written. A model that was only hinted at probed instead — it  
-called `enter_plan_mode` to "confirm" (answered "Already in plan mode") and  
-called `exit_plan_mode` again in later turns.
+Plan mode is visible to the model as well as to the page. Only the user starts
+it with `/plan` or `--plan`; there is no `enter_plan_mode` tool. `/plan <task>`
+enters plan mode and sends the task as an ordinary user message, expanding picked
+skills and prompt templates. The runtime appends a hidden `step-plan-mode`
+custom message containing a `<collaboration_mode>` block on mode changes. It
+names the plan file (`.stepcode/plans/session-<id>.md`), limits file mutations to
+that file, and explains how to submit a decision-complete proposal. The system
+prefix and existing tool order stay unchanged. Context projection restores a
+missing announcement after compaction and announces Default mode after exit;
+it does not append a new reminder on every unchanged request. The app's external
+handoff instruction permits leaving without a new proposal but never treats
+submission as approval to implement.
+
+Announcement details record whether the current host can leave planning without
+a proposal, so restoring the same plan on another host refreshes its handoff
+instructions. A pending Default announcement is reused by context projection
+rather than appended twice before it reaches the transcript.
 
 Plan mode ends the way it does in the terminal: the model calls  
 `exit_plan_mode`, or the user toggles `/plan`. A request that needs no proposal  
@@ -722,10 +731,10 @@ plan for review again. The terminal, which has a review
 dialog, keeps refusing a missing file and tells the model to let the user leave  
 with `/plan`. Tool results say the outcome plainly and persist it: after a  
 submit or a plain exit they report that plan mode (which the host turned on for  
-`/plan`) is now off and not to call the tool again; `enter_plan_mode` while the  
-mode is on says it changed nothing and was not needed. Leaving is never  
-announced as a transcript row: the strip closing and (for a proposal) the review  
-card are the whole report.
+`/plan`) is now off and not to call the tool again. A call while already off
+reports that only the user can start another plan round. The hidden Default-mode
+announcement reaches the model, not the visible transcript: the strip closing
+and (for a proposal) the review card are the user-facing report.
 
 The host mounts the same tool profile as the CLI (`createStepToolProfile`), so  
 the model is offered `read_file` / `write_file` / `edit_file` / `run_command`  

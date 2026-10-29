@@ -46,7 +46,6 @@ function exitPlanModeDefinition(): ToolDefinition<any, any, any> {
 	registerPlanModeTools(api, {
 		isPlanModeActive: () => true,
 		enteredByUser: () => false,
-		enterPlanMode: () => "/tmp/plan.md",
 		exitPlanMode: () => {},
 		resolvePlanFilePath: () => "/tmp/plan.md",
 		wasSubmitted: () => false,
