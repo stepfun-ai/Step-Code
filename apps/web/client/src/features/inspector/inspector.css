@@ -175,10 +175,11 @@
 .context-message-role { flex: none; color: var(--ink-2); font-size: 12px; font-weight: 400; }
 .context-message summary > .icon { color: var(--ink-3); }
 .context-message[open] summary > .icon { transform: rotate(90deg); }
-/* The rail's context ring: an ink arc over a quiet track (ContextRing.tsx). */
-.context-ring { display: block; fill: none; stroke-width: 2.2; }
-.context-ring-track { stroke: var(--line-strong); }
-.context-ring-fill { stroke: var(--ink); stroke-linecap: round; transition: stroke-dasharray 240ms ease; }
+/* The rail's context pie (ContextRing.tsx): outline and wedge both follow the
+ * rail button's colour like the other rail icons, at rest, on hover and pressed. */
+.context-ring { display: block; }
+.context-ring-track { fill: none; stroke: currentColor; stroke-width: 1.4; }
+.context-ring-fill { fill: currentColor; stroke: none; }
 /* The open record keeps 10px clear of the divider under it. */
 .context-json { margin-bottom: 10px; padding: 8px 10px; background: var(--surface-soft); border-radius: var(--radius-control); }
 .context-json > div { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--ink-2); }
