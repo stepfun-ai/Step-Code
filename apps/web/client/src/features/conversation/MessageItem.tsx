@@ -206,7 +206,7 @@ function QuotedContext({ quote }: { readonly quote: SessionContextQuote }) {
 				title={label}
 				onClick={() => setOpen((value) => !value)}
 			>
-				<Icon name="layers" size="2xs" />
+				<Icon name="conversation" size="2xs" />
 				<span className="message-quote-title">{label}</span>
 			</button>
 			{open ? <pre className="message-quote-body">{quote.transcript}</pre> : null}

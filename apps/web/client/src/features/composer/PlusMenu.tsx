@@ -27,8 +27,9 @@ type SubKey = "plugins" | "skills" | "sessions";
 
 const SUB_ENTRIES: ReadonlyArray<{ key: SubKey; labelKey: string; icon: IconName }> = [
 	{ key: "plugins", labelKey: "settingsPlugins", icon: "puzzle" },
-	{ key: "skills", labelKey: "slashSkills", icon: "wand" },
-	{ key: "sessions", labelKey: "otherSessionContext", icon: "layers" },
+	// The wrench is the skill mark everywhere: the panel's rows, the staged chip and the sent badge.
+	{ key: "skills", labelKey: "slashSkills", icon: "wrench" },
+	{ key: "sessions", labelKey: "otherSessionContext", icon: "conversation" },
 ];
 
 export interface PlusMenuProps extends ComposerMenuProps {

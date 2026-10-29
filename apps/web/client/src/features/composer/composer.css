@@ -383,6 +383,11 @@
 .composer-right {
 	min-width: 0;
 }
+/* The ＋ trigger keeps the hover fill while its menu is open, so the open menu reads as its own. */
+.composer-controls .plus-control[aria-expanded="true"] {
+	background: var(--hover);
+	color: var(--ink);
+}
 .composer-right > #modelMenu {
 	flex: 0 1 auto;
 	min-width: 0;
@@ -1384,8 +1389,9 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	flex: 1;
 	min-height: 120px;
 }
+/* 12px sides: the search glyph and the rows' kind glyphs share one 18px icon column. */
 .plus-sub-search {
-	padding: 8px;
+	padding: 8px 12px;
 	border-bottom: 1px solid var(--line);
 }
 .plus-sub-list {
@@ -1394,7 +1400,8 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 }
 .plus-sub-row {
 	display: flex;
-	align-items: center;
+	/* The kind glyph sits on the name line, not between name and description. */
+	align-items: flex-start;
 	gap: 9px;
 	width: 100%;
 	padding: 6px 8px;
@@ -1410,6 +1417,8 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 /* Row kind glyph (puzzle = plugin, wrench = skill), neutral like the staged chip. */
 .plus-sub-kind {
 	flex: none;
+	/* Centred on the 21px name line. */
+	margin-top: 1.5px;
 	color: var(--ink-3);
 }
 .plus-sub-row--faded {
