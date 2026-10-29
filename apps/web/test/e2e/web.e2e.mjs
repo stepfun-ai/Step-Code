@@ -1630,6 +1630,58 @@ test("a subagent's write asks for approval and runs in the child, not the main s
   assert.equal(await readFile(join(workspace, "src", "sub.txt"), "utf8"), "hello\n");
 });
 
+test("background subagent output is live beside an idle parent and completed answers survive stopping a supplement", { skip }, async () => {
+  const id = await browser.run(`
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    await fetch("/api/v1/sessions/" + session.id + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "background-parent-fixture" }) });
+    await until(async () => (await (await fetch("/api/v1/sessions/" + session.id)).json()).status === "completed", "parent persisted");
+    return session.id;
+  `);
+  await browser.goto(`${origin}/`);
+  const live = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${id}"]'), "background parent");
+    row.click();
+    await until(() => row.classList.contains("active"), "selected parent");
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-background-fixture" }) });
+    const lane = await until(() => $('.lane-row[data-subagent-tool-id="tool-background-call"]'), "background lane");
+    lane.click();
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "live-only child text", 180000);
+    const snapshot = await (await fetch(base)).json();
+    return { parentStatus: snapshot.status, childId: snapshot.subagentLanes?.[0]?.details.results[0]?.sessionId, live: $(".subagent-live-progress").textContent, composer: Boolean($("#prompt")) };
+  `);
+  assert.equal(live.parentStatus, "completed");
+  assert.match(live.childId, /^subagent-/u);
+  assert.match(live.live, /streamed reply/u);
+  assert.equal(live.composer, true);
+  if (process.env.STEP_E2E_SUBAGENT_SCREENSHOT) {
+    const screenshot = await browser.send("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.STEP_E2E_SUBAGENT_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
+  }
+  const stopped = await browser.run(`
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await until(async () => {
+      const value = await (await fetch(base)).json();
+      return value.subagentLanes?.[0]?.status === "completed" && value.status === "completed" && value.entries.some((entry) => entry.customType === "step-subagent-response");
+    }, "first child report completed", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "reply-background-fixture" }) });
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "supplement is live", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "stop-background-fixture" }) });
+    await until(async () => (await (await fetch(base)).json()).subagentLanes?.[0]?.status === "aborted", "supplement stopped", 180000);
+    await until(() => $(".subagent-completed-output")?.textContent.includes("streamed reply 39"), "retained first report");
+    const value = await (await fetch(base)).json();
+    return { status: value.subagentLanes[0].status, completed: value.entries.filter((entry) => entry.customType === "step-subagent-response").length, output: $(".subagent-completed-output").textContent,
+      agentRows: $$(".sb-agent-row").length, controls: $$(".subagent-controls details").length };
+  `);
+  assert.equal(stopped.status, "aborted");
+  assert.equal(stopped.completed, 1);
+  assert.match(stopped.output, /streamed reply 39/u);
+  assert.equal(stopped.controls, 2);
+  assert.equal(stopped.agentRows, 0);
+});
+
 test("denying an approval never executes the command", { skip }, async () => {
   const id = await browser.run(`
     const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
@@ -2490,6 +2542,52 @@ test("a group stops being offered once its last session drops it", { skip }, asy
   })
 })
 
+test("tag group metadata survives browser reload and its last-member removal survives another reload", { skip }, async () => {
+  const sessionId = "e2e-persisted-tag-session"
+  const now = new Date().toISOString()
+  const dir = join(base, "agent", "sessions", "--e2e-persisted-tag--")
+  await mkdir(dir, { recursive: true })
+  const entries = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "persisted-tag-user", parentId: null, timestamp: now,
+      message: { role: "user", content: "group persistence fixture", timestamp: Date.now() } },
+  ]
+  await writeFile(join(dir, `${sessionId}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "persisted group picker");
+    picker.querySelector("[data-new-tag='teal']").click();
+    const input = await until(() => $("#tagNameInput"), "persisted group name");
+    input.value = "Reload group";
+    $("#tagNameConfirm").click();
+    await until(() => !$("#tagPicker"), "created group");
+  `)
+  await browser.goto(`${origin}/`)
+  const restored = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "restored group picker");
+    const name = picker.querySelector("[data-tag='teal']")?.textContent;
+    const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
+    picker.querySelector("[data-tag='teal']").click();
+    await until(() => !$("#tagPicker"), "removed restored tag");
+    return { name, tag: stored.tags.find(([id]) => id === "${sessionId}") };
+  `)
+  assert.deepEqual(restored, { name: "Reload group", tag: [sessionId, "teal"] })
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "untagged group picker");
+    const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return removed;
+  `)
+  assert.equal(removed, true)
+})
+
 test("conversation search finds message content written outside the page and opens the matching message", { skip }, async () => {
   // A session another process (the CLI) wrote: the host's index picks it up without a notification.
   const sessionId = "e2e-search-session"
@@ -2965,7 +3063,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
   assert.equal(seen.rejected.laneState, "failed", "a refused dispatch is not a failed lane")
   assert.match(seen.rejected.laneText, /rejected audit/)
   assert.equal(seen.rejected.summaryUnknownHasAttempt, false, "a refused dispatch is recorded as status unknown")
-  assert.match(seen.rejected.summaryFailed.join(" | "), /rejected audit/)
+  assert.deepEqual(seen.rejected.summaryFailed, [], "the activity summary excludes settled failures; the parent row keeps navigation")
   assert.deepEqual(seen.rejected.panel, {
     error: "Invalid parameters. Provide exactly one mode.",
     status: "已失败",

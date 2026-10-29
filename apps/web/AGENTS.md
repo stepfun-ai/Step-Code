@@ -35,7 +35,7 @@ needs the user's approval first; pin it to an exact version and install with `pn
 ```
 apps/web/
   AGENTS.md / CLAUDE.md
-  package.json           exports: ./server (dist/server.js), ./desktop-bridge (client contract, type-only)
+  package.json           exports: ./server (dist/server.js), ./desktop-bridge (bounded client contract + validator)
   openapi.yaml           HTTP API description; copied to dist/ by `build`
   tsconfig.json          host (src/**), emits dist/
   tsconfig.client.json   client (client/src), noEmit, DOM libs, react-jsx
@@ -91,6 +91,9 @@ apps/web/
   `@step-harness/coding-agent` and below; the client renders what the host sends.
 - **The host stays thin.** Do not put agent-loop, prompt assembly, tool or permission logic in `src/`. Call the
   coding-agent APIs; translate their events into SSE. Pending approvals go through `ApprovalBroker`.
+- Background subagent progress comes from the session-local `SUBAGENT_LANE_CHANNEL`, not `setWidget` or model notifications. Cache bounded lane snapshots for reconnects, clear them on runtime shutdown, and merge child ids and progress only into the matching parent session. Completed answers are durable `step-subagent-response` facts and remain visible after a later cancellation.
+- Agent summary rows and header counts show only `running` agents. `agent_send` controls update existing child/lane-task identities and their operation history, never add an agent row. Keep all parent tool-row links available for inspecting completed agents in the right panel.
+- Merge persisted controls and notifications in journal order, not projection order; older controls cannot overwrite a newer terminal state. Apply completed-response SSE facts directly even while live frames overtake HTTP refreshes. Validate lane bus input before caching, retain finished lanes by update time, and preserve unknown history in the header activity indicator without counting it as running.
 - **Desktop-only behaviour goes through the bridge.** Use `getDesktopBridge()` / `isDesktopHost()` from
   `platform/host.ts`, and always keep a browser fallback (e.g. folder picking: bridge, then the host's picker, then the
   in-page browser). Desktop-only CSS goes under `[data-host="desktop"]` in `styles/global.css`.
@@ -102,6 +105,14 @@ apps/web/
   prose on completion. IME, moved selections and session/workspace replacement
   invalidate picks; stale/pending candidates must not send or overwrite input.
   Escape belongs to the shell chain and closes the list without aborting a turn.
+- Main composer drafts are page-local and keyed by `state.composerDraftId`, not cwd. Each new conversation
+  gets a fresh identity even in the same folder; first-send session creation adopts that identity.
+  `state/composer-drafts.ts` scopes images and modes; `features/composer/drafts.ts` parks live rich-input nodes,
+  skills/plugins and quoted contexts between selections. Do not serialize drafts to disk or clone uploading chips
+  on navigation. Waiting uploads invalidate a submit when its editor leaves; late reads, failed sends and context
+  picks update only their originating draft. Unreachable unsaved inputs release their nodes and images after pending
+  work settles; session drafts and inputs awaiting creation/adoption remain recoverable. Inline rewrites own their
+  image attachments and navigate to a fork only after successful submission; they never consume main-input state.
 - `platform/desktop-bridge.ts` is a cross-package contract with `apps/desktop/src/preload.ts`. Change it only together
   with the desktop side (see `apps/desktop/AGENTS.md`).
 - Appearance is restored before mounting the React client. Desktop `getTheme` / `setTheme` use the profile's
@@ -223,7 +234,7 @@ When to add or change one:
   the session manager's `stepcode-web.thinking-timing` custom entries outside model context. Snapshots and agent
   envelopes project validated `thinkingTimings` by original content index. Never infer durations for unobserved
   history or start clocks from browser receipt times.
-- The main transcript uses fixed DFSC Simple process groups, not a complexity
+- The main transcript uses fixed compact process groups, not a complexity
   setting. Group consecutive thinking and ordinary tools only; singleton groups
   show the member's own disclosure without a group heading or indentation.
   Retain keyed member components and a manually opened singleton when siblings
@@ -244,11 +255,11 @@ When to add or change one:
   expose only validated agentId/event/status fields through `src/subagent-notification.ts`. Do not parse
   notification prose, infer per-task success from the parent tool, or add child execution controls in the inspector.
 - `features/inspector` owns the shared right rail, Summary and Context views.
-  Summary uses DFSC's independent content-height floating board with a close-only
+  Summary uses an independent content-height floating board with a close-only
   header and fixed compact width. It floats over the conversation and reserves no
   grid space; where there is room the reading column slides aside without
   narrowing. Do not wrap it in the full-height inspector chrome used by the other panels.
-  Summary's DFSC colors are scoped to that surface. Keep grid disclosures,
+  Summary's surface colors are scoped to that surface. Keep grid disclosures,
   fixed-slot completion motion and reduced-motion support; never replay a
   live completion animation for initially loaded completed history.
   Its MCP switch-shaped indicators are decorative, not configuration controls.
@@ -343,7 +354,22 @@ When to add or change one:
   "默认项目" in the composer pill and the sidebar instead of the last path segment. The host
   refuses folder-scoped requests for a folder it no longer knows (`Folder is not a known workspace`), which is what a
   draft pinned to a removed folder used to hit.
-- Session tag groups are derived, not stored: a group exists exactly as long as a listed session carries its tag
+- Session tag groups are presentation metadata, not session data: names, colours and assignments persist through
+  the dedicated `state/tag-group-persistence.ts` owner (Desktop bridge/userData; Web localStorage). Desktop recovery
+  precedes session-list pruning, failed reads never overwrite storage, and edits during loading queue after recovery.
+  Edits validate against confirmed groups plus retained unconfirmed operations, persist before publishing store changes,
+  and reject colour/name collisions. Unchanged refresh snapshots do not write. Load and save failures are independent
+  store fields displayed by the existing ErrorToast; ordinary notices still expire after 4200ms, then the durable group
+  error reappears. Only successful recovery clears the load error; only a changed full snapshot write clears the save
+  error. Failed writes retain their operations in subsequent full snapshots. Group reads have a 10s wait bound and
+  expired responses cannot publish. Session lists load immediately; recovery gates only pruning against the latest
+  successful list and current/unlisted projection, with a stale-list/prune race gate.
+  Desktop ShellEffects synchronously vetoes unload only for accepted unconfirmed operations, freezes new edits and
+  drains recovery/ordered writes through the invoke-only beginTagGroupClose/completeTagGroupClose handshake. Main
+  owns a one-time window/document-bound intention with a 10s deadline. Failure/expiry cancels close or restart and
+  releases editing without dropping operations. Manual reload has no native token and never becomes a window close.
+  Clean/loading/error pages do not start group recovery merely to close.
+  A group exists exactly as long as a listed session carries its tag
   (`state/tag-groups.ts`). Deleting a session or untagging its last member removes the group from the grouped view
   and the row's picker together, and frees its colour; clearing the filter when its group disappears keeps the
   sidebar from going blank. Never keep an empty group record for the picker to re-offer.

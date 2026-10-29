@@ -4,6 +4,9 @@ import { applyTheme, restoreDesktopTheme } from "../client/src/features/shell/ac
 import { t } from "../client/src/i18n/index.ts";
 import { STORAGE_KEYS } from "../client/src/lib/storage.ts";
 import type { DesktopThemeChoice, StepcodeDesktopBridge } from "../client/src/platform/desktop-bridge.ts";
+import { createGroupAndTag, renameGroup } from "../client/src/features/sidebar/actions.ts";
+import { flushTagGroups, restoreTagGroups } from "../client/src/state/tag-group-persistence.ts";
+import type { TagGroupData } from "../client/src/platform/desktop-bridge.ts";
 import { createInitialState, getState, setState } from "../client/src/state/store.ts";
 
 const globals = ["window", "document", "localStorage"] as const;
@@ -43,6 +46,10 @@ function bridge(saved: DesktopThemeChoice | null, writes: DesktopThemeChoice[] =
 		platform: "darwin",
 		version: "test",
 		getTheme: async () => saved,
+		beginTagGroupClose: async () => null,
+		completeTagGroupClose: async () => false,
+		readTagGroups: async () => null,
+		saveTagGroups: async () => {},
 		setTheme: async (theme) => { writes.push(theme); },
 		pickDirectory: async () => null,
 		openExternal: async () => {},
@@ -117,6 +124,51 @@ test("a rejected desktop save is visible without breaking the current appearance
 	await Promise.resolve();
 	assert.equal(getState().theme, "violet");
 	assert.equal(getState().toast?.message, t("themeSaveFailed"));
+});
+
+test("theme restoration and group recovery merge only their own store fields", async () => {
+	let finishRead!: (value: TagGroupData) => void;
+	const read = new Promise<TagGroupData>((resolve) => { finishRead = resolve; });
+	const value = { ...bridge("violet"), readTagGroups: () => read };
+	desktop(value);
+	const recovery = restoreTagGroups();
+	await restoreDesktopTheme();
+	assert.equal(getState().theme, "violet");
+	finishRead({ version: 1, groups: [{ key: "blue", name: "Saved" }], tags: [["old", "blue"]] });
+	await recovery;
+	assert.equal(getState().theme, "violet", "late recovery cannot reset restored appearance");
+	assert.equal(getState().groups[0]?.name, "Saved");
+	value.getTheme = async () => "system";
+	await restoreDesktopTheme();
+	assert.equal(getState().theme, "system");
+	assert.equal(getState().groups[0]?.name, "Saved", "theme restoration cannot reset recovered groups");
+});
+
+test("a pending group acknowledgement preserves a concurrent theme selection and sidebar preferences", async () => {
+	let acknowledge!: () => void;
+	let started!: () => void;
+	const saving = new Promise<void>((resolve) => { started = resolve; });
+	const acknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });
+	const writes: DesktopThemeChoice[] = [];
+	desktop({ ...bridge("light", writes), saveTagGroups: async () => { started(); await acknowledgement; } });
+	await restoreTagGroups();
+	createGroupAndTag("s1", "red", "Work");
+	await saving;
+	applyTheme("violet");
+	setState({ expandedProjects: new Set(["/fixture"]), pinnedSessions: ["s1"], sessionOrder: ["s1"] });
+	acknowledge();
+	await flushTagGroups();
+	assert.equal(getState().theme, "violet");
+	assert.deepEqual(writes, ["violet"]);
+	assert.equal(getState().groups[0]?.name, "Work");
+	assert.deepEqual([...getState().expandedProjects], ["/fixture"]);
+	assert.deepEqual(getState().pinnedSessions, ["s1"]);
+	assert.deepEqual(getState().sessionOrder, ["s1"]);
+	renameGroup("red", "Renamed");
+	await flushTagGroups();
+	await restoreDesktopTheme();
+	assert.equal(getState().theme, "light");
+	assert.equal(getState().groups[0]?.name, "Renamed");
 });
 
 test("browser startup does not depend on a desktop bridge", async () => {

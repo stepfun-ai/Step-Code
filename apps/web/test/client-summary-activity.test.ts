@@ -24,15 +24,20 @@ test("summary reveals a task only once its result names one", () => {
 	}
 });
 
-test("summary reveals a subagent call regardless of its outcome", () => {
+test("only running agents reveal the summary; controls and settled dispatches do not", () => {
 	for (const toolName of ["subagent", "agent_send"]) {
 		for (const state of ["pending", "completed", "failed"] as const) {
 			assert.equal(summaryActivityTurn(snapshot([
 				{ kind: "message", itemId: "u1", role: "user", content: "Work" },
 				{ kind: "tool", itemId: "t1", toolName, state, inputSummary: "", outputSummary: "" },
-			])), "u1");
+			])), null);
 		}
 	}
+	assert.equal(summaryActivityTurn(snapshot([
+		{ kind: "message", itemId: "u1", role: "user", content: "Work" },
+		{ kind: "tool", itemId: "t1", toolName: "subagent", state: "completed", inputSummary: "", outputSummary: "",
+			subagentTasks: [{ agent: "explore", task: "Inspect", status: "running" }] },
+	])), "u1");
 });
 
 test("a failed or empty task call does not open the board on its own", () => {
@@ -57,7 +62,7 @@ test("old activity does not trigger on a new user turn, ordinary tools or thinki
 test("structured subagent tasks and history without a user entry remain eligible", () => {
 	assert.equal(summaryActivityTurn(snapshot([
 		{ kind: "tool", itemId: "t1", toolName: "workflow", state: "pending", inputSummary: "", outputSummary: "",
-			subagentTasks: [{ agent: "explore", task: "Inspect", status: "queued" }] },
+			subagentTasks: [{ agent: "explore", task: "Inspect", status: "running" }] },
 	])), "history");
 	// An unknown lane status has no record to show yet.
 	assert.equal(summaryActivityTurn(snapshot([

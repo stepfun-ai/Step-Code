@@ -34,7 +34,15 @@ export function SidebarShowButton() {
  */
 export function ErrorToast() {
 	const toast = useAppStore((state) => state.toast);
-	return <Toast id="errorToast" className="error-toast" message={toast?.message} tone={toast?.tone} />;
+	const groupError = useAppStore((state) => state.tagGroupsLoadError ?? state.tagGroupsSaveError);
+	return (
+		<Toast
+			id="errorToast"
+			className="error-toast"
+			message={toast?.message ?? groupError}
+			tone={toast?.tone ?? "danger"}
+		/>
+	);
 }
 
 /**

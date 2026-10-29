@@ -587,7 +587,7 @@
 	color: var(--ink-2);
 	font-size: 12px;
 }
-.attachment-chip > span {
+.attachment-chip > span:not([role="tooltip"]) {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -601,7 +601,7 @@
 	border-radius: 50%;
 	color: var(--ink-3);
 }
-.attachment-remove:hover {
+.attachment-chip .attachment-remove:hover {
 	background: var(--selected);
 	color: var(--ink);
 }

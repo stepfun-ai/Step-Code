@@ -3,14 +3,26 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import { Icon } from "../../ui";
 import { SubagentStatusIcon } from "../conversation";
-import { summaryAgentRecords } from "./model";
+import { activeAgentRecords } from "./model";
 import { openAgentRecord } from "./open-agent";
 
 export function SummaryAgents() {
 	const t = useT();
 	const sessionId = useAppStore((state) => state.current?.id);
 	const items = useAppStore((state) => state.timelineItems);
-	const records = useMemo(() => (sessionId ? summaryAgentRecords(items) : []), [sessionId, items]);
+	const records = useMemo(() => (sessionId ? activeAgentRecords(items) : []), [sessionId, items]);
+	const omitted = useMemo(
+		() =>
+			items.reduce(
+				(sum, item) =>
+					sum +
+					(item.kind === "tool" && item.toolName === "subagent" && item.subagentLaneStatus === "running"
+						? (item.subagentOmitted ?? 0)
+						: 0),
+				0,
+			),
+		[items],
+	);
 	return (
 		<section className="sb-agents" aria-label={t("rightAgents")}>
 			<div className="sb-section-heading">
@@ -44,7 +56,10 @@ export function SummaryAgents() {
 					</li>
 				))}
 			</ul>
-			{!records.length ? <p className="sb-state">{t(sessionId ? "rightNoAgents" : "rightNoSession")}</p> : null}
+			{omitted > 0 ? <p className="sb-state">{t("subagentOmitted", { count: omitted })}</p> : null}
+			{!records.length && !omitted ? (
+				<p className="sb-state">{t(sessionId ? "rightNoAgents" : "rightNoSession")}</p>
+			) : null}
 		</section>
 	);
 }

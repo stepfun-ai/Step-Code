@@ -1,8 +1,10 @@
+import { mkdtempSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { expect, test, vi } from "vitest";
+import { afterAll, expect, test, vi } from "vitest";
+import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import {
 	createStepSubagentExtension,
@@ -14,6 +16,11 @@ import {
 	type StepSubagentRunResult,
 } from "../src/features/step-subagent.ts";
 import { builtinStepAgents, resolveStepAgent, type StepAgentConfig } from "../src/features/step-subagent-agents.ts";
+import {
+	readSubagentLaneSnapshot,
+	SUBAGENT_LANE_CHANNEL,
+	SUBAGENT_RESPONSE_ENTRY,
+} from "../src/features/subagent/lane-events.ts";
 import { finalRoster } from "../src/features/subagent/projection.ts";
 import { renderSubagentResult } from "../src/features/subagent/rendering.ts";
 import { getThemeByName } from "../src/theme/theme.ts";
@@ -25,6 +32,11 @@ interface SentMessage {
 	deliverAs?: string;
 	triggerTurn?: boolean;
 }
+
+const outputRoot = mkdtempSync(join(tmpdir(), "step-subagent-events-"));
+afterAll(async () => {
+	await rm(outputRoot, { recursive: true, force: true });
+});
 
 test.each([20, 200])("final projection preserves every outcome in a %i-task batch", async (count) => {
 	const { api, tools } = createApi();
@@ -155,11 +167,14 @@ function createApi(): {
 	tools: Map<string, ToolDefinition>;
 	sent: SentMessage[];
 	handlers: Map<string, Handler[]>;
+	entries: Array<{ customType: string; data: unknown }>;
 } {
 	const tools = new Map<string, ToolDefinition>();
 	const sent: SentMessage[] = [];
 	const handlers = new Map<string, Handler[]>();
+	const entries: Array<{ customType: string; data: unknown }> = [];
 	const api = {
+		events: createEventBus(),
 		registerTool(tool: ToolDefinition) {
 			tools.set(tool.name, tool);
 		},
@@ -173,14 +188,80 @@ function createApi(): {
 		getActiveTools: () => [],
 		setActiveTools: () => {},
 		getFlag: () => false,
-		appendEntry: () => {},
+		appendEntry: (customType: string, data: unknown) => {
+			entries.push({ customType, data });
+		},
 		sendMessage: (message: SentMessage, options?: { deliverAs?: string; triggerTurn?: boolean }) => {
 			sent.push({ ...message, deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn });
 		},
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
-	return { api, tools, sent, handlers };
+	return { api, tools, sent, handlers, entries };
 }
+
+test("background progress is live without a UI or progress-model subscription; stopping retains completed answers", async () => {
+	const { api, tools, sent, entries } = createApi();
+	const frames: unknown[] = [];
+	api.events.on(SUBAGENT_LANE_CHANNEL, (frame) => {
+		frames.push(frame);
+	});
+	let update: StepSubagentRunInput["onUpdate"];
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async (input) => {
+			update = input.onUpdate;
+			const completed = { ...textResult("first report"), exitCode: -1 };
+			input.onUpdate?.(completed);
+			input.onUpdate?.(completed);
+			input.onUpdate?.({ ...completed, messages: [], activeText: "supplement is streaming", stopReason: "toolUse" });
+			return new Promise((resolve) => {
+				input.signal?.addEventListener(
+					"abort",
+					() =>
+						resolve({
+							...textResult(""),
+							messages: [],
+							stopReason: "aborted",
+							errorMessage: "Subagent was aborted",
+						}),
+					{ once: true },
+				);
+			});
+		},
+	})(api);
+	const ctx = createContext("/tmp");
+	const result = await tools.get("subagent")!.execute(
+		"background",
+		{
+			agent: "explore",
+			task: "inspect",
+			run_in_background: true,
+			subscribe: "final",
+		},
+		undefined,
+		undefined,
+		ctx,
+	);
+	const id = laneIdOf(result);
+	await waitFor(() => entries.length > 0);
+	expect(entries).toHaveLength(1);
+	expect(entries[0]).toMatchObject({
+		customType: SUBAGENT_RESPONSE_ENTRY,
+		data: { laneId: id, output: "first report" },
+	});
+	await waitFor(() => frames.some((frame) => JSON.stringify(frame).includes("supplement is streaming")));
+	expect(frames.some((frame) => JSON.stringify(frame).includes("subagent-"))).toBe(true);
+	expect(sent).toHaveLength(0);
+	await tools.get("agent_send")!.execute("stop", { lane_id: id, action: "stop" }, undefined, undefined, ctx);
+	await waitFor(() => sent.length === 1);
+	expect(sent[0]).toMatchObject({ details: { event: "background_interrupted", status: "aborted" } });
+	expect(sent[0].content).toContain("first report");
+	expect(sent[0].content).toContain("Subagent was aborted");
+	const count = frames.length;
+	update?.({ ...textResult("late answer"), activeText: "late output" });
+	expect(frames).toHaveLength(count);
+	expect(entries).toHaveLength(1);
+});
 
 function laneIdOf(result: AgentToolResult<unknown>): string {
 	const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -188,6 +269,189 @@ function laneIdOf(result: AgentToolResult<unknown>): string {
 	if (!id) throw new Error(`no lane id in: ${text}`);
 	return id;
 }
+
+test.each(["error", "throw"])("a completed response survives a later %s, including its child link", async (failure) => {
+	const { api, tools, sent, entries } = createApi();
+	const frames: unknown[] = [];
+	api.events.on(SUBAGENT_LANE_CHANNEL, (frame) => {
+		frames.push(frame);
+	});
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async (input) => {
+			input.onUpdate?.({ ...textResult("retained report"), exitCode: -1 });
+			if (failure === "throw") throw new Error("runner failed");
+			return { ...textResult(""), messages: [], exitCode: 1, stopReason: "error", errorMessage: "runner failed" };
+		},
+	})(api);
+	await tools
+		.get("subagent")!
+		.execute(
+			"failure",
+			{ agent: "explore", task: "inspect", run_in_background: true },
+			undefined,
+			undefined,
+			createContext("/tmp"),
+		);
+	await waitFor(() => sent.length === 1);
+	expect(entries).toHaveLength(1);
+	expect(sent[0].content).toContain("retained report");
+	expect(sent[0].content).toContain("runner failed");
+	expect(sent[0].details?.event).toBe("background_failed");
+	const last = readSubagentLaneSnapshot(frames.at(-1));
+	expect(last?.details.results[0].sessionId).toMatch(/^subagent-/);
+	expect(last?.status).toBe("failed");
+});
+
+test("status views bound all completed responses rather than only the current output", async () => {
+	const { api, tools, sent, entries } = createApi();
+	let count = 0;
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async () => textResult(`REPORT ${++count}\n${"r".repeat(20_000)}`),
+	})(api);
+	const ctx = createContext("/tmp");
+	const started = await tools
+		.get("subagent")!
+		.execute("start", { agent: "explore", task: "inspect", run_in_background: true }, undefined, undefined, ctx);
+	const id = laneIdOf(started);
+	await waitFor(() => sent.length === 1);
+	for (let turn = 2; turn <= 40; turn++) {
+		await tools
+			.get("agent_send")!
+			.execute(`reply-${turn}`, { lane_id: id, action: "reply", prompt: "supplement" }, undefined, undefined, ctx);
+		await waitFor(() => sent.length === turn);
+	}
+	const result = await tools
+		.get("agent_send")!
+		.execute("status", { lane_id: id, action: "status" }, undefined, undefined, ctx);
+	const output = textOf(result);
+	expect(output.length).toBeLessThan(50_000);
+	expect(output.match(/REPORT 40/g)).toHaveLength(1);
+	expect(output).toContain("earlier completed responses omitted");
+	expect(entries).toHaveLength(40);
+});
+
+test("a recovered later turn does not repeat a previous retention failure", async () => {
+	const { api, tools, sent } = createApi();
+	const append = api.appendEntry;
+	let deny = true;
+	api.appendEntry = (type, data) => {
+		if (deny) throw new Error("first write denied");
+		append(type, data);
+	};
+	createStepSubagentExtension({ agentDir: "/tmp/step-agent-test", runner: async () => textResult("answer") })(api);
+	const ctx = createContext("/tmp");
+	const start = await tools
+		.get("subagent")!
+		.execute("start", { agent: "explore", task: "inspect", run_in_background: true }, undefined, undefined, ctx);
+	await waitFor(() => sent.length === 1);
+	expect(sent[0].content).toContain("first write denied");
+	deny = false;
+	await tools
+		.get("agent_send")!
+		.execute("reply", { lane_id: laneIdOf(start), action: "reply", prompt: "again" }, undefined, undefined, ctx);
+	await waitFor(() => sent.length === 2);
+	expect(sent[1].content).not.toContain("first write denied");
+});
+
+test("stop publishes the settled chain roster, not its pre-abort queued placeholder", async () => {
+	const { api, tools, sent } = createApi();
+	const frames: unknown[] = [];
+	api.events.on(SUBAGENT_LANE_CHANNEL, (frame) => {
+		frames.push(frame);
+	});
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async (input) =>
+			new Promise((resolve) => {
+				input.signal?.addEventListener(
+					"abort",
+					() =>
+						resolve({
+							...textResult(""),
+							messages: [],
+							stopReason: "aborted",
+							errorMessage: "Subagent was aborted",
+						}),
+					{ once: true },
+				);
+			}),
+	})(api);
+	const ctx = createContext("/tmp");
+	const started = await tools.get("subagent")!.execute(
+		"start",
+		{
+			chain: [
+				{ agent: "explore", task: "first" },
+				{ agent: "explore", task: "second" },
+			],
+			run_in_background: true,
+		},
+		undefined,
+		undefined,
+		ctx,
+	);
+	await tools
+		.get("agent_send")!
+		.execute("stop", { lane_id: laneIdOf(started), action: "stop" }, undefined, undefined, ctx);
+	await waitFor(() => sent.length === 1);
+	const last = readSubagentLaneSnapshot(frames.at(-1));
+	expect(last?.details.results.map((result) => result.status)).toEqual(["aborted", "skipped"]);
+	expect(last?.details.updatedAt).toBeGreaterThan(0);
+	expect(last?.details.results.every((result) => result.messages.length === 0)).toBe(true);
+});
+
+test("a failed completed-answer write is visible in the terminal notification", async () => {
+	const { api, tools, sent } = createApi();
+	api.appendEntry = () => {
+		throw new Error("journal write denied");
+	};
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async () => textResult("completed answer"),
+	})(api);
+	await tools
+		.get("subagent")!
+		.execute(
+			"start",
+			{ agent: "explore", task: "inspect", run_in_background: true },
+			undefined,
+			undefined,
+			createContext("/tmp"),
+		);
+	await waitFor(() => sent.length === 1);
+	expect(sent[0].content).toContain("Completed response retention failed: journal write denied");
+});
+
+test("reply after completion publishes running before its asynchronous preparation finishes", async () => {
+	const { api, tools, sent } = createApi();
+	const frames: unknown[] = [];
+	api.events.on(SUBAGENT_LANE_CHANNEL, (frame) => {
+		frames.push(frame);
+	});
+	const gate = deferred();
+	let calls = 0;
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async () => {
+			if (++calls > 1) await gate.promise;
+			return textResult("answer");
+		},
+	})(api);
+	const ctx = createContext("/tmp");
+	const start = await tools
+		.get("subagent")!
+		.execute("start", { agent: "explore", task: "inspect", run_in_background: true }, undefined, undefined, ctx);
+	await waitFor(() => sent.length === 1);
+	const reply = await tools
+		.get("agent_send")!
+		.execute("reply", { lane_id: laneIdOf(start), action: "reply", prompt: "supplement" }, undefined, undefined, ctx);
+	expect(reply).toMatchObject({ details: [{ status: "running" }] });
+	expect(readSubagentLaneSnapshot(frames.at(-1))?.status).toBe("running");
+	gate.resolve();
+	await waitFor(() => sent.length === 2);
+});
 
 function textOf(result: AgentToolResult<unknown>): string {
 	return result.content
@@ -210,7 +474,7 @@ function createContext(cwd: string): ExtensionContext {
 			setWidget: () => {},
 			notify: () => {},
 		},
-		sessionManager: { getEntries: () => [] },
+		sessionManager: { getEntries: () => [], getSessionDir: () => outputRoot },
 	} as unknown as ExtensionContext;
 }
 
@@ -964,8 +1228,9 @@ test("status reports state, usage, child sessions, and the output tail without w
 	expect(done).toMatch(
 		/Child sessions \(transcripts stay on disk\):\n- task 1 \(general\): subagent-[0-9a-f-]+ \(\/sessions\/child\.jsonl\)/u,
 	);
-	expect(done).toContain("last 32000 characters");
-	expect(done.endsWith("THE END")).toBe(true);
+	expect(done).toContain("output middle omitted");
+	expect(done).toContain("THE END");
+	expect(Buffer.byteLength(done)).toBeLessThan(40_000);
 	expect(done).not.toContain("still running");
 	// The final notification names the child session as well.
 	const notification = sent.find((message) => message.details?.event === "background_done")!;
@@ -989,7 +1254,7 @@ test("an oversized final output is saved to disk and the notification keeps its 
 			/^<agent-notification lane="lane_[0-9a-f]{8}" tasks="1">Lane lane_[0-9a-f]{8} finished: 1 completed\./u,
 		);
 		expect(content).toContain(`Full output: &quot;${join(sessionDir, "tool-output")}`);
-		expect(content).not.toContain("TAIL");
+		expect(content).toContain("TAIL");
 		expect(content.length).toBeLessThan(60_000);
 	} finally {
 		await rm(sessionDir, { recursive: true, force: true });

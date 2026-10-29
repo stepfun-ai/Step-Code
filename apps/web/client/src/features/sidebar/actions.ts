@@ -3,11 +3,12 @@
  * file; `openSearch` / `closeSearch` are the fixed cross-feature names.
  */
 
-import type { TagColor } from "../../i18n";
+import { type TagColor, t } from "../../i18n";
 import { api } from "../../lib/api";
 import { arrangementChanged, moveSession, writeSessionPreferences } from "../../state/session-order";
 import { type ConversationView, getState, setState, setToggled, setUi } from "../../state/store";
-import { withoutSessionTag } from "../../state/tag-groups";
+import { updateTagGroups } from "../../state/tag-group-persistence";
+import { pruneTagGroups, withoutSessionTag } from "../../state/tag-groups";
 import type { SessionSearchResult } from "../../state/types";
 
 /* ── Global search (legacy 1199-1211) ────────────────────────────────────── */
@@ -137,11 +138,12 @@ export function toggleSidebar(): void {
  * behind only made the picker offer a group that no longer exists.
  */
 export function setSessionTag(sessionId: string, color: TagColor | null): void {
-	setState((state) => {
+	updateTagGroups((state) => {
 		if (!color) return withoutSessionTag(state, sessionId);
+		if (!state.groups.some((group) => group.key === color)) throw new Error(t("groupColorUnavailable"));
 		const tags = new Map(state.tags);
 		tags.set(sessionId, color);
-		return { tags };
+		return pruneTagGroups({ ...state, tags }, new Set(tags.keys()));
 	});
 }
 
@@ -151,10 +153,15 @@ export function setSessionTag(sessionId: string, color: TagColor | null): void {
  * that keeps it alive never appear apart.
  */
 export function createGroupAndTag(sessionId: string, color: TagColor, name: string): void {
-	setState((state) => {
+	updateTagGroups((state) => {
+		if (state.groups.some((group) => group.key === color)) throw new Error(t("groupColorUnavailable"));
+		if (state.groups.some((group) => group.name.toLowerCase() === name.trim().toLowerCase())) {
+			throw new Error(t("groupNameDuplicate"));
+		}
 		const tags = new Map(state.tags);
 		tags.set(sessionId, color);
-		return { groups: [...state.groups, { key: color, name }], tags };
+		const groups = [...state.groups, { key: color, name: name.trim() }];
+		return pruneTagGroups({ ...state, groups, tags }, new Set(tags.keys()));
 	});
 }
 
@@ -198,7 +205,10 @@ export function reorderSession(
 
 /** Rename the group a tag colour stands for; rows and the filter chip follow the colour, not the name. */
 export function renameGroup(key: TagColor, name: string): void {
-	setState((state) => ({
-		groups: state.groups.map((group) => (group.key === key ? { ...group, name } : group)),
-	}));
+	updateTagGroups((state) => {
+		if (state.groups.some((group) => group.key !== key && group.name.toLowerCase() === name.trim().toLowerCase())) {
+			throw new Error(t("groupNameDuplicate"));
+		}
+		return { groups: state.groups.map((group) => (group.key === key ? { ...group, name: name.trim() } : group)) };
+	});
 }

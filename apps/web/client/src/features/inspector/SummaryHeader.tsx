@@ -3,32 +3,21 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import type { SessionInspector } from "../../state/types";
 import { Icon, Tooltip } from "../../ui";
-import { sessionIsLive, summaryAgentRecords } from "./model";
+import { summaryHeaderState } from "./model";
 
 export function SummaryHeader({ data }: { readonly data?: SessionInspector }) {
 	const t = useT();
 	const sessionId = useAppStore((state) => state.current?.id);
 	const items = useAppStore((state) => state.timelineItems);
-	// The session's own status decides whether anything can still be running: a
-	// task row or agent record keeps the status it had when the turn was stopped,
-	// so only the session can say "this is over".
+	// Checklist activity follows the parent; background lanes can keep working
+	// while the parent is idle and carry their own lifecycle state.
 	const status = useAppStore((state) => state.current?.status);
-	const records = useMemo(() => (sessionId ? summaryAgentRecords(items) : []), [sessionId, items]);
+	const { count, state } = useMemo(
+		() => summaryHeaderState(sessionId ? items : [], status, data?.tasks ?? [], Boolean(data)),
+		[sessionId, items, status, data],
+	);
 	const tasks = data?.tasks ?? [];
 	const done = tasks.filter((task) => task.status === "completed").length;
-	const sessionLive = sessionIsLive(status);
-	const running =
-		sessionLive &&
-		(tasks.some((task) => task.status === "in_progress") || records.some((row) => row.status === "running"));
-	// An interrupted turn is reported as aborted rather than silently idle; the
-	// board's rows render the same verdict via effectiveTaskStatus.
-	const state = running
-		? "running"
-		: status === "failed"
-			? "aborted"
-			: !data || records.some((row) => row.status === "unknown")
-				? "unknown"
-				: "idle";
 	const label = t(state === "idle" ? "idle" : `subagentStatus.${state}`);
 	return (
 		<>
@@ -49,11 +38,11 @@ export function SummaryHeader({ data }: { readonly data?: SessionInspector }) {
 						</span>
 					</Tooltip>
 				) : null}
-				{records.length ? (
+				{sessionId && count > 0 ? (
 					<Tooltip content={t("rightAgents")}>
 						<span className="sb-header-agents">
 							<Icon name="bot" size="xs" />
-							{t("rightAgentRecords", { count: records.length })}
+							{t("rightAgentRecords", { count })}
 						</span>
 					</Tooltip>
 				) : null}

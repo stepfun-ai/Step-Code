@@ -15,7 +15,8 @@ What the shell adds on top of the browser version:
 - No terminal or browser needed: the server runs under Electron's bundled Node (`ELECTRON_RUN_AS_NODE=1`).
 - `window.stepcodeDesktop` (contract: `apps/web/client/src/platform/desktop-bridge.ts`, imported as
   `@step-harness/web/desktop-bridge`): native folder picker, open http(s) links in the system browser, reveal a path
-  in Finder / Explorer, and name the default browser (name + icon, macOS / Windows) for "open in browser" controls.
+  in Finder / Explorer, name the default browser (name + icon, macOS / Windows) for "open in browser" controls,
+  and read/save sidebar tag groups in stable userData storage.
   The client checks for it and otherwise falls back to the server's picker / in-page browser / a generic label.
   `getTheme()` and `setTheme(choice)` restore and persist appearance in this desktop profile, independently of
   the server port. They accept `system`, `light`, `dark` and `violet`; failed writes reject and show a client notice.
@@ -43,12 +44,16 @@ Electron main (src/main.ts)
  │     loads http://127.0.0.1:<port>/#token=<token>; the client exchanges it for its auth cookie
  │     navigation pinned to that origin; other http(s) links ──▶ system browser
  ├─ preload.ts (dist/preload.cjs) ── contextBridge ──▶ window.stepcodeDesktop
- └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser / getTheme / setTheme
+ │     beginTagGroupClose / completeTagGroupClose ──▶ tag-group-close.ts (native intention + document gate)
+ └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser / getTheme / setTheme / readTagGroups / saveTagGroups
        (only from the window's top frame on the server origin)
 ```
 
-On quit the server gets SIGTERM, then SIGKILL after 5 s. If it fails to start or exits unexpectedly the window shows
-an error page; **File → Restart Server** starts a new one.
+On quit, the renderer first drains accepted pending group edits. Only after the actual window closes does the server
+get SIGTERM, then SIGKILL after 5 s. Group drain failure or its separate 10s deadline cancels quit and retains the
+window and Host. Ordinary macOS window close keeps the Host alive. A failed start shows an error page;
+unexpected Host exit attempts that page but a dirty renderer can veto replacement and retain userData IPC access.
+**File → Restart Server** first uses the same bounded group drain, then changes origin and stops the old Host.
 
 ## Scripts
 
@@ -99,7 +104,7 @@ Electron switches such as `--remote-debugging-port=9222` can be appended to `ele
 
 ## Files
 
-- Window bounds, last picked folder and appearance choice: `<userData>/desktop-state.json`
+- Window bounds, last picked folder, appearance choice and sidebar tag-group metadata: `<userData>/desktop-state.json`
   (macOS: `~/Library/Application Support/StepCode`). Appearance is local to this profile, not shared CLI configuration.
 - Server log: `<logs>/web-server.log` (macOS: `~/Library/Logs/StepCode`), also **File → Show Server Logs**.
 - Private Node wrapper (macOS/Linux, when using Electron's runtime): `<userData>/node-bin/node`. Refreshed when
@@ -110,6 +115,44 @@ Electron switches such as `--remote-debugging-port=9222` can be appended to `ele
 
 The CLI still requires Node.js 20+ on PATH for StepPage. Windows keeps its existing behavior: no POSIX wrapper and
 no automatic StepPage installation.
+
+## Sidebar group persistence
+
+`readTagGroups()` and `saveTagGroups(data)` are narrowly scoped preload/IPC methods, with the same owned-window,
+top-frame and server-origin checks as the other bridge operations. They store only versioned group names, colours
+and session-id assignments in `desktop-state.json`, preserving its appearance, window and workspace fields. The shared boundary
+validator rejects duplicate colours/names/ids, unknown colours, empty names/groups, orphan references and oversized data
+(eight colours, 200-character names, 256-character session ids, 10,000 assignments, 4 MiB serialized metadata).
+
+The renderer restores Desktop data before session-list pruning, without delaying the list fetch or bootstrap.
+Edits made during recovery queue until restoration succeeds, then validate against confirmed groups plus retained
+unconfirmed edits. A conflicting colour or duplicate name
+is rejected visibly without merging saved groups. A failed read does not save an empty snapshot; a later list refresh
+retries recovery. Each changed snapshot saves before its group fields enter the UI store. Deletion and successful list
+pruning use the same path; unchanged snapshots do not write. Complete snapshots are sent in order. The main process
+replaces the state file synchronously and atomically before acknowledging a save,
+so closing the window or normally exiting immediately after that acknowledgement leaves no pending metadata write.
+A failed Desktop read or save remains visible in the existing error toast after ordinary 4200ms notices disappear.
+Successful recovery clears only the read error; a changed full write clears only the save error, never a no-op.
+Corrupt/unreadable state is protected from all preference writes until a subsequent full read succeeds; repairing
+the file alone does not make an incomplete cache safe to save. Valid appearance/window/workspace fields still restore
+when only group data is corrupt, and independent edits made while blocked survive recovery. Recovery waits at most
+10s and ignores expired late read responses.
+
+`beginTagGroupClose()` claims the current native close/quit/restart intention, or returns null for a manual reload.
+`completeTagGroupClose(attemptId, "saved" | "failed")` acknowledges only that window/document's one-time attempt.
+Main expires it after 10s. ShellEffects blocks unload only when accepted edits remain, freezes new edits and joins
+pending recovery/ordered writes. A failed write stays in the projected snapshot, so a later edit cannot erase it.
+Successful drain grants one unload permit; failure/timeout cancels the intention and preserves operations for retry.
+A manual reload without a native token drains without closing the window; the next manual reload can proceed.
+Clean loading/error pages do not read groups just to close. Main never force-destroys the window. Synchronous disk
+I/O can block main's event loop, so the timeout is not an absolute wall-clock bound during an OS filesystem stall.
+
+Plain Web uses `stepcode.tagGroups` in localStorage instead. Desktop never uses that origin-scoped fallback, because
+its loopback port can change between launches. Removing the last tagged session still removes the empty group and
+frees its colour; archiving a listed session keeps its tag. This does not synchronize groups with CLI/browser
+profiles, restore groups already lost before this fix, or guarantee writes interrupted by forced termination,
+force-killed processes or power loss. Other page preferences are unchanged.
 
 ## Desktop CSS hooks
 

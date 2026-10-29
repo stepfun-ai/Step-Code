@@ -5,6 +5,7 @@ import { readStorage, STORAGE_KEYS } from "../lib/storage";
 import { isDesktopHost } from "../platform/host";
 import type { PerformanceRun } from "./performance";
 import { readSessionPreferences } from "./session-order";
+import { readInitialTagGroups } from "./tag-groups";
 import type {
 	AccountReport,
 	Attachment,
@@ -331,6 +332,8 @@ export interface AppState {
 	 * Until then the pane is still loading, not an empty new conversation.
 	 */
 	readonly booted: boolean;
+	/** Independent page-local input identity, retained when its first send creates a session. */
+	readonly composerDraftId: string;
 	readonly draftCwd: string;
 	readonly draftPolicy: string;
 	/**
@@ -396,6 +399,8 @@ export interface AppState {
 	readonly theme: ThemeChoice;
 	readonly locale: Locale;
 	readonly ui: UiState;
+	readonly tagGroupsLoadError: string | null;
+	readonly tagGroupsSaveError: string | null;
 	readonly toast: ToastState | null;
 }
 
@@ -445,6 +450,7 @@ export function createInitialState(): AppState {
 		defaultCwd: "",
 		defaultCwdFallback: false,
 		booted: false,
+		composerDraftId: `draft:${crypto.randomUUID()}`,
 		draftCwd: "",
 		draftPolicy: "approve-for-me",
 		draftSelection: null,
@@ -457,8 +463,7 @@ export function createInitialState(): AppState {
 		unreadById: new Map(),
 		foldedProjects: new Set(),
 		expandedProjects: new Set(),
-		groups: [],
-		tags: new Map(),
+		...readInitialTagGroups(),
 		pinnedSessions: arrangement.pinnedSessions,
 		sessionOrder: arrangement.sessionOrder,
 		currentView: "project",
@@ -529,6 +534,8 @@ export function createInitialState(): AppState {
 			childView: null,
 			imagePreview: null,
 		},
+		tagGroupsLoadError: null,
+		tagGroupsSaveError: null,
 		toast: null,
 	};
 }

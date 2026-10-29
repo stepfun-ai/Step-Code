@@ -1,5 +1,8 @@
 /**
- * Model-facing plan-mode tools: enter_plan_mode and exit_plan_mode.
+ * Model-facing plan-mode tool: exit_plan_mode.
+ *
+ * There is deliberately no entry tool: only the user enters plan mode, through
+ * /plan or --plan, both owned by the step-plan extension.
  *
  * The tools own only the interaction surface (guards, review dialog, result
  * texts). Plan-mode state lives in the step-plan extension and is driven
@@ -35,11 +38,6 @@ export interface StepPlanModeController {
 	isPlanModeActive(): boolean;
 	/** Plan mode is on because the user asked for it (`/plan`, `--plan`), not through enter_plan_mode. */
 	enteredByUser(): boolean;
-	/**
-	 * Agent-initiated entry (the enter_plan_mode tool); user entry is the
-	 * /plan toggle owned by the extension. Returns the session plan file path.
-	 */
-	enterPlanMode(extensionContext: ExtensionContext): string;
 	/**
 	 * Leave plan mode: restore any tools plan mode added, persist state, record telemetry.
 	 * `submittedPlanHash` records a proposal handed to an external reviewer.
@@ -143,32 +141,8 @@ async function reviewPlanInteractively(
 	);
 }
 
-/** Register enter_plan_mode and exit_plan_mode against the given controller. */
+/** Register exit_plan_mode against the given controller. */
 export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeController): void {
-	pi.registerTool({
-		name: "enter_plan_mode",
-		label: "Enter plan mode",
-		description:
-			"Enter plan mode to research and propose an implementation approach before coding, not to track todos. Returns the proposal file path; use write_file or edit_file to record the approach, trade-offs, steps, and validation for review. File-editing tools are limited to that file; commands still use normal permissions.",
-		promptSnippet: "Enter planning to draft an implementation proposal",
-		parameters: Type.Object({}),
-		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
-			if (planMode.isPlanModeActive()) {
-				// Not an error and not uncertain state: a model that probes here has to
-				// learn that the mode is on and that probing is never needed.
-				const origin = planMode.enteredByUser()
-					? "the host turned it on for the user's /plan request"
-					: "it was turned on earlier";
-				return controlResult(
-					`Plan mode is already on (${origin}); this call changed nothing and was not needed. Do not call enter_plan_mode again. Write your proposal to ${planMode.resolvePlanFilePath(ctx)} using write_file or edit_file, then call exit_plan_mode once when it is ready.`,
-				);
-			}
-			const planFilePath = planMode.enterPlanMode(ctx);
-			return controlResult(
-				`Plan mode is now on. Explore the repository, then write your proposal to ${planFilePath} using write_file. Call exit_plan_mode once when it is ready for review.`,
-			);
-		},
-	});
 	pi.registerTool({
 		name: "exit_plan_mode",
 		label: "Exit plan mode",
@@ -183,7 +157,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
 			if (!planMode.isPlanModeActive()) {
 				return controlResult(
-					"Plan mode is already off, so there is nothing to submit or leave. Do not call exit_plan_mode again; to submit a revised proposal later, call enter_plan_mode first.",
+					"Not in plan mode. Only the user starts plan mode, with /plan or --plan; continue the task in the current mode.",
 				);
 			}
 			const planFilePath = planMode.resolvePlanFilePath(ctx);
@@ -204,7 +178,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				// second review card for a plan the user already has.
 				planMode.exitPlanMode("no_proposal", ctx);
 				return controlResult(
-					`${offText}. ${reason}, so there is nothing to review and the user is not being asked to approve anything. Answer the request directly. Do not call exit_plan_mode or enter_plan_mode again for this request.`,
+					`${offText}. ${reason}, so there is nothing to review and the user is not being asked to approve anything. Answer the request directly. Do not call exit_plan_mode again for this request; only the user can start another plan round with /plan or --plan.`,
 				);
 			};
 			if (!existsSync(planFilePath)) {

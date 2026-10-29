@@ -526,9 +526,35 @@ export async function runPreparedSubagent(
 			}
 			const withSession = (result: StepSubagentRunResult): StepSubagentRunResult => ({
 				...result,
-				sessionId: result.sessionId ?? sessionId,
+				sessionId,
 			});
+			const seenResponses = new Set<string>();
+			const observedMessages = new WeakSet<StepSubagentRunResult["messages"][number]>();
+			const retainCompletedResponses = (result: StepSubagentRunResult): void => {
+				if (!laneRuntime?.onCompletedResponse) return;
+				for (const message of result.messages) {
+					if (message.role !== "assistant" || message.stopReason !== "stop" || observedMessages.has(message))
+						continue;
+					observedMessages.add(message);
+					const output = message.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n");
+					const key = `${message.timestamp}:${output}`;
+					if (!output || seenResponses.has(key)) continue;
+					seenResponses.add(key);
+					laneRuntime.onCompletedResponse({
+						agent: agent.name,
+						task: task.task,
+						taskIndex: index,
+						sessionId,
+						timestamp: message.timestamp,
+						output,
+					});
+				}
+			};
 			const update = (partial: StepSubagentRunResult): void => {
+				retainCompletedResponses(partial);
 				records[index] = resultRecord(agent.name, task.task, withSession(partial), {
 					agentSource: agent.source,
 					sessionId,
@@ -565,6 +591,7 @@ export async function runPreparedSubagent(
 						}
 					: {}),
 			});
+			retainCompletedResponses(child);
 			const completed = resultRecord(agent.name, task.task, withSession(child), {
 				agentSource: agent.source,
 				sessionId,
@@ -579,7 +606,10 @@ export async function runPreparedSubagent(
 		} catch (error) {
 			if (worktree && task.retainWorktree === false) await worktree.cleanup().catch(() => undefined);
 			const message = error instanceof Error ? error.message : String(error);
-			const failed = { ...makeFailureResult(agent.name, task.task, message, agent.source), sessionId };
+			const failed = {
+				...makeFailureResult(agent.name, task.task, message, agent.source),
+				sessionId,
+			};
 			records[index] = failed;
 			emit(mode);
 			reportFinished(failed, index);
