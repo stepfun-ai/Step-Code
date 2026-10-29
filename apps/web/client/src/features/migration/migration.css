@@ -304,3 +304,6 @@
 	border-color: var(--line-strong);
 }
 .migration-source-locations > summary::after { width: 12px; text-align: center; }
+/* ── Preview card stays inside the dialog; its content scrolls instead ── */
+.migration-preview { max-height: calc(100dvh - 300px); overflow-y: auto; overscroll-behavior: contain; }
+.migration-rule-review .migration-text pre { max-height: 200px; }
