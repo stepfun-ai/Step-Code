@@ -68,7 +68,7 @@
 .migration-status[data-status="imported"] { color: var(--success); }
 .migration-status[data-status="failed"], .migration-danger, [data-scan-status="error"] { color: var(--danger); }
 .migration-status[data-status="shadowed"], .migration-status[data-status="untrusted"], .migration-status[data-status="unsupported"], .migration-attention { color: var(--attention); }
-.migration-preview { display: grid; gap: 14px; min-width: 0; padding: 18px; border: 1px solid var(--line); background: var(--surface-soft); border-radius: var(--radius-panel); }
+.migration-preview { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--line); background: var(--surface-soft); border-radius: var(--radius-panel); }
 .migration-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .migration-field { display: grid; gap: 5px; color: var(--ink-2); }
 .migration-field select, .migration-field input { background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-input); min-height: var(--control-h-md); padding: 5px var(--control-pad-x); width: 100%; font: inherit; }
@@ -86,7 +86,7 @@
 .migration-map > div { display: grid; gap: 2px; }
 .migration-map span { color: var(--ink-2); font-size: 11px; }
 .migration-text { min-width: 0; }
-.migration-text pre { padding: 12px; margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--mono); background: var(--code-surface); border: 1px solid var(--line); border-radius: var(--radius-chip); max-height: 260px; overflow: auto; }
+.migration-text pre { padding: 10px; margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.55 var(--mono); background: var(--code-surface); border: 1px solid var(--line); border-radius: var(--radius-chip); max-height: 150px; overflow: auto; }
 .migration-content-review { display: grid; gap: 16px; }
 .migration-rule-review .migration-content-review { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .migration-rule-review .migration-text pre { max-height: 400px; }
@@ -307,3 +307,6 @@
 /* ── Preview card stays inside the dialog; its content scrolls instead ── */
 .migration-preview { max-height: calc(100dvh - 300px); overflow-y: auto; overscroll-behavior: contain; }
 .migration-rule-review .migration-text pre { max-height: 200px; }
+/* ── Preview card: clamp the two growers so the card needs no scrollbar ── */
+.migration-preview .migration-toolbar h3 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.migration-preview > .migration-diagnostics { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
