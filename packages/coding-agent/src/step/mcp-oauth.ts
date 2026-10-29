@@ -1,13 +1,15 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
 	OAuthClientInformationMixed,
 	OAuthClientMetadata,
 	OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import lockfile from "proper-lockfile";
 import { openBrowser } from "../utils/open-browser.ts";
 import { resolveStepConfigRoot } from "./environment.ts";
 
@@ -38,7 +40,7 @@ export function createStoredMcpOAuthProvider(
 	clientInformation(): OAuthClientInformationMixed | undefined;
 	tokens(): OAuthTokens | undefined;
 	saveClientInformation(value: OAuthClientInformationMixed): void;
-	saveTokens(value: OAuthTokens): void;
+	saveTokens(value: OAuthTokens): Promise<void>;
 	redirectToAuthorization(): never;
 	saveCodeVerifier(value: string): void;
 	codeVerifier(): string;
@@ -60,10 +62,8 @@ export function createStoredMcpOAuthProvider(
 		saveClientInformation: (value) => {
 			clientInformation = value;
 		},
-		saveTokens: (tokens) => {
-			const store = loadStore(env);
-			store[key(name, serverUrl)] = { serverName: name, serverUrl, clientInformation, tokens };
-			saveStore(env, store);
+		saveTokens: async (tokens) => {
+			await saveCredentialTokens(env, name, serverUrl, clientInformation, tokens);
 		},
 		redirectToAuthorization: () => {
 			throw new Error(`MCP server '${name}' requires login; run step mcp login ${name}`);
@@ -94,6 +94,77 @@ function key(name: string, url: string): string {
 	return `${name}|${url}`;
 }
 
+function errorCode(error: unknown): string | undefined {
+	return typeof error === "object" && error !== null && "code" in error
+		? String((error as { code?: unknown }).code)
+		: undefined;
+}
+
+function acquireCredentialStoreLock(path: string): () => void {
+	const maxAttempts = 100;
+	const delayMs = 20;
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		try {
+			return lockfile.lockSync(path, { realpath: false });
+		} catch (error) {
+			if (errorCode(error) !== "ELOCKED" || attempt === maxAttempts) throw error;
+			const started = Date.now();
+			while (Date.now() - started < delayMs) {
+				// Keep the synchronous logout API while a peer writer finishes.
+			}
+		}
+	}
+	throw new Error("Failed to acquire MCP OAuth credential store lock");
+}
+
+function withCredentialStoreLock<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
+	mkdirSync(resolveStepConfigRoot(env), { recursive: true, mode: 0o700 });
+	const release = acquireCredentialStoreLock(credentialsPath(env));
+	try {
+		return fn();
+	} finally {
+		release();
+	}
+}
+
+async function acquireCredentialStoreLockAsync(path: string): Promise<() => Promise<void>> {
+	const timeoutMs = 30_000;
+	const delayMs = 20;
+	const deadline = Date.now() + timeoutMs;
+	while (true) {
+		try {
+			return await lockfile.lock(path, { realpath: false, retries: 0, stale: 60_000 });
+		} catch (error) {
+			if (errorCode(error) !== "ELOCKED" || Date.now() >= deadline) throw error;
+			await sleep(delayMs);
+		}
+	}
+}
+
+async function withCredentialStoreLockAsync<T>(env: NodeJS.ProcessEnv, fn: () => T | Promise<T>): Promise<T> {
+	mkdirSync(resolveStepConfigRoot(env), { recursive: true, mode: 0o700 });
+	const release = await acquireCredentialStoreLockAsync(credentialsPath(env));
+	try {
+		return await fn();
+	} finally {
+		await release();
+	}
+}
+
+async function saveCredentialTokens(
+	env: NodeJS.ProcessEnv,
+	name: string,
+	serverUrl: string,
+	clientInformation: OAuthClientInformationMixed | undefined,
+	tokens: OAuthTokens,
+): Promise<void> {
+	await withCredentialStoreLockAsync(env, () => {
+		const store = loadStore(env);
+		store[key(name, serverUrl)] = { serverName: name, serverUrl, clientInformation, tokens };
+		saveStore(env, store);
+	});
+}
+
 function loadStore(env: NodeJS.ProcessEnv): CredentialStore {
 	const path = credentialsPath(env);
 	if (!existsSync(path)) return {};
@@ -104,9 +175,18 @@ function loadStore(env: NodeJS.ProcessEnv): CredentialStore {
 function saveStore(env: NodeJS.ProcessEnv, store: CredentialStore): void {
 	const path = credentialsPath(env);
 	mkdirSync(resolveStepConfigRoot(env), { recursive: true, mode: 0o700 });
-	const temporary = `${path}.${process.pid}.tmp`;
-	writeFileSync(temporary, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-	renameSync(temporary, path);
+	const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(temporary, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+		renameSync(temporary, path);
+	} catch (error) {
+		try {
+			unlinkSync(temporary);
+		} catch {
+			// Cleanup is best effort and must not mask the original write or rename failure.
+		}
+		throw error;
+	}
 }
 
 export async function loginMcpServer(
@@ -181,10 +261,8 @@ export async function loginMcpServer(
 		},
 		state: () => state,
 		tokens: () => loadStore(env)[key(name, serverUrl)]?.tokens,
-		saveTokens: (tokens: OAuthTokens) => {
-			const store = loadStore(env);
-			store[key(name, serverUrl)] = { serverName: name, serverUrl, clientInformation, tokens };
-			saveStore(env, store);
+		saveTokens: async (tokens: OAuthTokens) => {
+			await saveCredentialTokens(env, name, serverUrl, clientInformation, tokens);
 		},
 		redirectToAuthorization: (url: URL) => {
 			process.stderr.write(`Open this URL to authorize ${name}:\n${url}\n`);
@@ -278,10 +356,12 @@ function matchesState(received: string | null, expected: string): boolean {
 }
 
 export function logoutMcpServer(name: string, serverUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
-	const store = loadStore(env);
-	const entry = key(name, serverUrl);
-	if (!store[entry]) return false;
-	delete store[entry];
-	saveStore(env, store);
-	return true;
+	return withCredentialStoreLock(env, () => {
+		const store = loadStore(env);
+		const entry = key(name, serverUrl);
+		if (!store[entry]) return false;
+		delete store[entry];
+		saveStore(env, store);
+		return true;
+	});
 }
