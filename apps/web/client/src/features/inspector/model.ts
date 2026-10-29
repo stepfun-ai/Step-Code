@@ -33,27 +33,54 @@ export interface SummaryAgentRecord {
 /** Reuse validated timeline state; a returned dispatch does not prove child success. */
 export function summaryAgentRecords(items: readonly TimelineItem[]): SummaryAgentRecord[] {
 	const records: SummaryAgentRecord[] = [];
+	const identities = new Map<string, number>();
+	const retain = (record: SummaryAgentRecord, aliases: string[]): void => {
+		const index = aliases.map((alias) => identities.get(alias)).find((value) => value !== undefined);
+		if (index === undefined) {
+			for (const alias of aliases) identities.set(alias, records.length);
+			records.push(record);
+		} else {
+			for (const alias of aliases) identities.set(alias, index);
+			const original = records[index];
+			records[index] = {
+				...original,
+				status: record.status !== "unknown" ? record.status : original.status,
+				agent: original.agent || record.agent,
+				task: original.task || record.task,
+			};
+		}
+	};
 	for (const item of items) {
-		if (item.kind !== "tool") continue;
+		if (item.kind !== "tool" || item.toolName === "agent_send") continue;
 		if (item.subagentTasks?.length) {
 			for (const [index, task] of item.subagentTasks.entries()) {
-				records.push({
-					key: `${item.itemId}:task:${index}`,
-					agent: task.agent,
-					task: task.task,
-					status: task.status,
-					target: { kind: "task", toolItemId: item.itemId, taskIndex: index },
-				});
+				const laneIdentity = task.backgroundAgentId ? `lane:${task.backgroundAgentId}:task:${index}` : undefined;
+				const childIdentity = task.sessionId ? `child:${task.sessionId}` : undefined;
+				const key = laneIdentity ?? childIdentity ?? `${item.itemId}:task:${index}`;
+				retain(
+					{
+						key,
+						agent: task.agent,
+						task: task.task,
+						status: task.status,
+						target: { kind: "task", toolItemId: item.itemId, taskIndex: index },
+					},
+					[key, ...(childIdentity ? [childIdentity] : [])],
+				);
 			}
 		} else if (item.children?.length) {
 			for (const child of item.children) {
-				records.push({
-					key: `${item.itemId}:child:${child.sessionId}`,
-					agent: child.label,
-					task: item.inputSummary,
-					status: "unknown",
-					target: { kind: "child", sessionId: child.sessionId },
-				});
+				const key = `child:${child.sessionId}`;
+				retain(
+					{
+						key,
+						agent: child.label,
+						task: item.inputSummary,
+						status: "unknown",
+						target: { kind: "child", sessionId: child.sessionId },
+					},
+					[key],
+				);
 			}
 		} else if (item.workflowRun) {
 			records.push({
@@ -63,7 +90,7 @@ export function summaryAgentRecords(items: readonly TimelineItem[]): SummaryAgen
 				status: "unknown",
 				target: { kind: "workflow", runId: item.workflowRun },
 			});
-		} else if (item.toolName === "subagent" || item.toolName === "agent_send") {
+		} else if (item.toolName === "subagent") {
 			records.push({
 				key: `${item.itemId}:dispatch`,
 				agent: "",
@@ -78,6 +105,39 @@ export function summaryAgentRecords(items: readonly TimelineItem[]): SummaryAgen
 
 export function finiteAmount(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Summary is current activity; history remains navigable from the parent tool rows. */
+export function activeAgentRecords(items: readonly TimelineItem[]): SummaryAgentRecord[] {
+	return summaryAgentRecords(items).filter((record) => record.status === "running");
+}
+
+/** Header activity preserves unknown history; its count describes only current running agents. */
+export function summaryHeaderState(
+	items: readonly TimelineItem[],
+	parentStatus: SessionStatus | undefined,
+	tasks: SessionInspector["tasks"],
+	hasInspector: boolean,
+): { count: number; state: "running" | "aborted" | "unknown" | "idle" } {
+	const records = summaryAgentRecords(items);
+	const count = records.filter((record) => record.status === "running").length;
+	const partialActive = items.some(
+		(item) => item.kind === "tool" && item.subagentLaneStatus === "running" && (item.subagentOmitted ?? 0) > 0,
+	);
+	const running =
+		count > 0 ||
+		partialActive ||
+		(sessionIsLive(parentStatus) && tasks.some((task) => task.status === "in_progress"));
+	return {
+		count,
+		state: running
+			? "running"
+			: parentStatus === "failed"
+				? "aborted"
+				: !hasInspector || records.some((record) => record.status === "unknown")
+					? "unknown"
+					: "idle",
+	};
 }
 
 /**

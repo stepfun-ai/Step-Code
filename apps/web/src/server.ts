@@ -59,6 +59,7 @@ import {
 	mcpStatuses,
 	projectEntry,
 	type QueuedFile,
+	setLaunchWorkspace,
 	type WebAttachment,
 	WebSessionStore,
 } from "./runtime.ts";
@@ -99,6 +100,7 @@ import { voiceRoute } from "./voice-routes.ts";
 import {
 	canonicalWorkspacePath,
 	type DefaultWorkspace,
+	firstUseWorkspaceDirectory,
 	resolveDefaultWorkspace,
 	WORKSPACES_FILE,
 	WorkspaceRegistry,
@@ -317,6 +319,27 @@ const embeddedBrowser = new WebBrowser([port, launchPort]);
 const sitePreview = new SitePreviewServer();
 const terminals = new WebTerminals();
 const voice = new VoiceRelay();
+
+/**
+ * The first-use workspace, prepared in the background so listening never waits
+ * on it (creating a folder under ~/Documents can sit behind a macOS privacy
+ * prompt). API requests await it, so the page only ever sees the final launch
+ * folder. Failure is logged and leaves the launch folder as it was.
+ */
+const firstUseWorkspace: Promise<void> = (async () => {
+	const directory = firstUseWorkspaceDirectory(process.env);
+	if (!directory) return;
+	try {
+		const path = await workspaces.initializeDefault(directory, async () => (await store.list()).length > 0);
+		if (!path) return;
+		setLaunchWorkspace(path);
+		resyncMcp();
+	} catch (caught) {
+		console.warn(
+			`Could not prepare the default workspace ${directory}: ${caught instanceof Error ? caught.message : String(caught)}`,
+		);
+	}
+})();
 
 /**
  * The default workspace: the folder a new conversation falls back to when no
@@ -756,6 +779,7 @@ const server = createServer(async (request, response) => {
 		if (url.pathname === "/healthz") return json(response, 200, { ok: true });
 		if (!url.pathname.startsWith("/api/")) return serveStatic(request, response, url.pathname);
 		if (!authorized(request)) return error(response, 401, "Authentication required");
+		await firstUseWorkspace;
 
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api" || parts[1] !== "v1") return error(response, 404, "Not found");

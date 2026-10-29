@@ -30,6 +30,11 @@ export interface TooltipProps {
 	/** Extra classes on the hint element, for feature-specific surface styles. */
 	readonly className?: string;
 	/**
+	 * `top` (default): centred above the trigger. `right`: beside the trigger, top edges aligned,
+	 * for a card describing a whole list row; it moves up or to the left when there is no room.
+	 */
+	readonly placement?: "top" | "right";
+	/**
 	 * Passed through to the trigger (merged with its own), so a wrapper that
 	 * clones its child, such as Popover, reaches the real element.
 	 */
@@ -38,8 +43,8 @@ export interface TooltipProps {
 }
 
 /**
- * Hover and keyboard-focus hint, placement "top": centered over its trigger and
- * shifted sideways only when a viewport edge leaves no room.
+ * Hover and keyboard-focus hint, placement "top" by default: centered over its trigger and
+ * shifted sideways only when a viewport edge leaves no room ("right" places it beside the trigger).
  *
  * The hint is rendered as the trigger's next sibling, not inside it and with no
  * wrapper, so the trigger's own layout and the selectors on it stay unchanged;
@@ -57,7 +62,7 @@ export interface TooltipProps {
  * `aria-describedby` points at the hint unless the hint repeats the trigger's
  * `aria-label` word for word, which would only make a screen reader say it twice.
  */
-export function Tooltip({ content, children, id, className, style, ref }: TooltipProps) {
+export function Tooltip({ content, children, id, className, placement = "top", style, ref }: TooltipProps) {
 	const autoId = useId();
 	const hintId = id ?? `tooltip-${autoId}`;
 	const anchorName = `--tooltip-${autoId.replace(/[^\w-]/g, "")}`;
@@ -98,7 +103,7 @@ export function Tooltip({ content, children, id, className, style, ref }: Toolti
 			{shown ? (
 				<span
 					ref={hintRef}
-					className={cx(styles.root, className)}
+					className={cx(styles.root, placement === "right" && styles.right, className)}
 					id={hintId}
 					role="tooltip"
 					popover="manual"

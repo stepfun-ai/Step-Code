@@ -1,5 +1,5 @@
 import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export interface WebWorkspace {
 	readonly path: string;
@@ -8,10 +8,32 @@ export interface WebWorkspace {
 	readonly available: boolean;
 	/** Explicitly removed from workspace navigation; sessions remain intact. */
 	readonly hidden?: boolean;
+	/** The first-use workspace the host created (see `initializeDefault`); the page names it "默认工作区". */
+	readonly default?: boolean;
 }
 
 /** File name of the registry inside the StepCode agent directory. */
 export const WORKSPACES_FILE = "web-workspaces.json";
+
+/**
+ * Where the first-use workspace lives: `<Documents>/StepCode/default-workspace`.
+ * The name is fixed and language-neutral, so one installation keeps one folder
+ * on disk whatever language the page is shown in.
+ */
+export const DEFAULT_WORKSPACE_PARENT = "StepCode";
+export const DEFAULT_WORKSPACE_DIRECTORY = "default-workspace";
+
+/**
+ * The first-use workspace folder, or undefined when this host must not create
+ * one. `STEPCODE_WEB_DOCUMENTS_DIR` names the account's Documents folder; Desktop
+ * sets it only when it has no folder to launch in, so a host started in a
+ * folder the user chose never creates anything under Documents.
+ */
+export function firstUseWorkspaceDirectory(env: NodeJS.ProcessEnv): string | undefined {
+	const documents = env.STEPCODE_WEB_DOCUMENTS_DIR?.trim();
+	if (!documents || !isAbsolute(documents)) return undefined;
+	return join(documents, DEFAULT_WORKSPACE_PARENT, DEFAULT_WORKSPACE_DIRECTORY);
+}
 
 async function isDirectory(path: string): Promise<boolean> {
 	try {
@@ -61,6 +83,8 @@ export class WorkspaceRegistry {
 	private readonly file: string;
 	private paths: string[] = [];
 	private removed: string[] = [];
+	/** The first-use workspace once created; kept after removal so it is never created again. */
+	private defaultPath: string | undefined;
 	private loaded = false;
 
 	constructor(file: string) {
@@ -88,6 +112,8 @@ export class WorkspaceRegistry {
 			const canonicalPaths = await Promise.all(paths.map(canonicalWorkspacePath));
 			this.removed = unique([...removed, ...canonicalRemoved]);
 			this.paths = unique(canonicalPaths).filter((path) => !this.removed.includes(path));
+			const recordedDefault = (parsed as { defaultWorkspace?: unknown } | null)?.defaultWorkspace;
+			if (typeof recordedDefault === "string" && isAbsolute(recordedDefault)) this.defaultPath = recordedDefault;
 		} catch {
 			// Missing or malformed metadata must not stop the host; start empty.
 		}
@@ -98,7 +124,15 @@ export class WorkspaceRegistry {
 		const temporary = `${this.file}.${process.pid}.tmp`;
 		await writeFile(
 			temporary,
-			`${JSON.stringify({ workspaces: this.paths, removedWorkspaces: this.removed }, null, 2)}\n`,
+			`${JSON.stringify(
+				{
+					workspaces: this.paths,
+					removedWorkspaces: this.removed,
+					...(this.defaultPath === undefined ? {} : { defaultWorkspace: this.defaultPath }),
+				},
+				null,
+				2,
+			)}\n`,
 			"utf8",
 		);
 		await rename(temporary, this.file);
@@ -117,6 +151,7 @@ export class WorkspaceRegistry {
 				name: basename(path) || path,
 				available: await isDirectory(path),
 				...(removed.includes(path) ? { hidden: true } : {}),
+				...(path === this.defaultPath ? { default: true } : {}),
 			})),
 		);
 	}
@@ -169,7 +204,12 @@ export class WorkspaceRegistry {
 				throw error;
 			}
 		}
-		return { path, name: basename(path) || path, available: true };
+		return {
+			path,
+			name: basename(path) || path,
+			available: true,
+			...(path === this.defaultPath ? { default: true } : {}),
+		};
 	}
 
 	/** Hide registered and session-derived workspaces without touching sessions or files. Idempotent for retries. */
@@ -195,6 +235,45 @@ export class WorkspaceRegistry {
 			throw error;
 		}
 		return true;
+	}
+
+	/**
+	 * Create and register the first-use workspace, once per installation.
+	 *
+	 * Creation needs a blank installation: no registered or removed workspace and
+	 * no session anywhere (`hasSessions`, checked again after the folder is made,
+	 * since a session can start meanwhile). An existing user is never moved into
+	 * a new folder. Once created the folder is recorded and reused on every later
+	 * call; removing it from navigation keeps that record, so it is never created
+	 * again, and re-adding the folder makes it the default once more.
+	 *
+	 * @param directory - absolute folder to create (see `firstUseWorkspaceDirectory`).
+	 * @param hasSessions - whether any session exists, live or on disk.
+	 * @returns the workspace's real path, or undefined when there is none to use.
+	 */
+	async initializeDefault(directory: string, hasSessions: () => Promise<boolean>): Promise<string | undefined> {
+		await this.load();
+		if (this.defaultPath !== undefined) {
+			const usable = this.paths.includes(this.defaultPath) && (await isDirectory(this.defaultPath));
+			return usable ? this.defaultPath : undefined;
+		}
+		if (!isAbsolute(directory)) throw new Error(`Default workspace path is not absolute: '${directory}'`);
+		if (this.paths.length > 0 || this.removed.length > 0 || (await hasSessions())) return undefined;
+		await mkdir(directory, { recursive: true });
+		const path = await realpath(directory);
+		if (!(await isDirectory(path))) throw new Error(`Default workspace is not a directory: '${path}'`);
+		if (this.defaultPath !== undefined || this.paths.length > 0 || (await hasSessions())) return undefined;
+		const previousPaths = this.paths;
+		this.paths = [path, ...this.paths];
+		this.defaultPath = path;
+		try {
+			await this.save();
+		} catch (error) {
+			this.paths = previousPaths;
+			this.defaultPath = undefined;
+			throw error;
+		}
+		return path;
 	}
 }
 

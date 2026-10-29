@@ -1,10 +1,11 @@
 /** Staged attachments: `#attachmentList` (legacy app.js 2919-2985). */
 
+import { useState } from "react";
 import { useT } from "../../i18n";
 import { cx } from "../../lib/format";
 import { setUi, useAppStore } from "../../state/store";
 import type { Attachment } from "../../state/types";
-import { Icon } from "../../ui";
+import { IconButton, Tooltip } from "../../ui";
 import { removeAttachment } from "./actions";
 
 /**
@@ -30,24 +31,37 @@ function ImageThumb({ attachment }: { readonly attachment: Attachment }) {
 	const src = `data:${attachment.mimeType};base64,${attachment.data}`;
 	const label = t("previewImageNamed", { name: attachment.name });
 	return (
-		<button
-			type="button"
-			className="attachment-thumb"
-			title={attachment.name}
-			aria-label={label}
-			onClick={() => setUi({ imagePreview: { src, name: attachment.name } })}
-		>
-			<img src={src} alt="" />
-		</button>
+		<Tooltip content={attachment.name}>
+			<button
+				type="button"
+				className="attachment-thumb"
+				aria-label={label}
+				onClick={() => setUi({ imagePreview: { src, name: attachment.name } })}
+			>
+				<img src={src} alt="" />
+			</button>
+		</Tooltip>
 	);
 }
 
-/** `#attachmentList`: one chip per staged file (a thumbnail for images), hidden while there are none. */
-export function AttachmentList() {
+/** `#attachmentList`: shared chip presentation for the main input and explicitly owned rewrite images. */
+export function AttachmentList({
+	attachments: ownedAttachments,
+	onRemove,
+}: {
+	readonly attachments?: readonly Attachment[];
+	readonly onRemove?: (index: number) => void;
+} = {}) {
 	const t = useT();
-	const attachments = useAppStore((state) => state.attachments);
+	const mainAttachments = useAppStore((state) => state.attachments);
+	const attachments = ownedAttachments ?? mainAttachments;
+	const [hoveredName, setHoveredName] = useState<Attachment | null>(null);
 	return (
-		<div className="attachment-list" id="attachmentList" hidden={!attachments.length}>
+		<div
+			className="attachment-list"
+			id={ownedAttachments ? undefined : "attachmentList"}
+			hidden={!attachments.length}
+		>
 			{attachments.map((attachment, index) => (
 				<span
 					className={cx("attachment-chip", attachment.kind === "image" && "attachment-chip--image")}
@@ -56,17 +70,27 @@ export function AttachmentList() {
 					{attachment.kind === "image" ? (
 						<ImageThumb attachment={attachment} />
 					) : (
-						<span title={attachment.name}>{attachment.name}</span>
+						<Tooltip content={hoveredName === attachment ? attachment.name : null}>
+							<span
+								onPointerEnter={(event) => {
+									const label = event.currentTarget;
+									setHoveredName(label.scrollWidth > label.clientWidth ? attachment : null);
+								}}
+								onPointerLeave={() => setHoveredName(null)}
+							>
+								{attachment.name}
+							</span>
+						</Tooltip>
 					)}
-					<button
-						type="button"
-						className="attachment-remove"
-						title={t("removeAttachment")}
-						aria-label={t("removeAttachment")}
-						onClick={() => removeAttachment(index)}
-					>
-						<Icon name="close-sm" size="xs" />
-					</button>
+					<Tooltip content={t("removeAttachment")}>
+						<IconButton
+							className="attachment-remove"
+							icon="close-sm"
+							iconSize="xs"
+							aria-label={t("removeAttachment")}
+							onClick={() => (onRemove ?? removeAttachment)(index)}
+						/>
+					</Tooltip>
 				</span>
 			))}
 		</div>

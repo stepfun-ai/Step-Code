@@ -1,14 +1,20 @@
 /**
  * Small JSON state file under Electron's userData directory.
  *
- * Holds what the shell needs across launches: the window bounds and the last
- * folder the user picked (the default workspace for the next server start).
+ * Holds window bounds, appearance, the last picked folder and sidebar group metadata.
+ * Group metadata is presentation-only, separate from session persistence.
  * Sessions, workspaces and credentials stay where the CLI and web host keep
  * them; this file is never a second source of truth for those.
  */
 
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
+import {
+	type DesktopThemeChoice,
+	parseTagGroupData,
+	TAG_GROUP_DATA_LIMIT,
+	type TagGroupData,
+} from "@step-harness/web/desktop-bridge";
 
 export interface WindowState {
 	readonly x?: number;
@@ -19,8 +25,15 @@ export interface WindowState {
 }
 
 export interface DesktopState {
+	readonly tagGroups?: TagGroupData;
 	readonly window?: WindowState;
 	readonly lastWorkspace?: string;
+	readonly theme?: DesktopThemeChoice;
+}
+
+/** Validate persisted data and untrusted renderer input against the same theme choices. */
+export function isDesktopThemeChoice(value: unknown): value is DesktopThemeChoice {
+	return value === "system" || value === "light" || value === "dark" || value === "violet";
 }
 
 function finite(value: unknown): value is number {
@@ -43,6 +56,9 @@ function parseWindowState(value: unknown): WindowState | undefined {
 export class DesktopStateStore {
 	private readonly path: string;
 	private state: DesktopState;
+	private loadFailed = false;
+	private loadError: unknown;
+	private pendingPreferences: Partial<Pick<DesktopState, "window" | "lastWorkspace" | "theme">> = {};
 
 	constructor(path: string) {
 		this.path = path;
@@ -51,6 +67,12 @@ export class DesktopStateStore {
 
 	get(): DesktopState {
 		return this.state;
+	}
+
+	/** Read the profile choice, distinguishing a new profile from an unreadable state file. */
+	theme(): DesktopThemeChoice | null {
+		if (this.loadFailed) throw new Error("Could not read desktop theme");
+		return this.state.theme ?? null;
 	}
 
 	/** The last picked folder, when it still exists. */
@@ -64,31 +86,76 @@ export class DesktopStateStore {
 		}
 	}
 
-	update(patch: Partial<DesktopState>): void {
+	/** Retry a failed read without letting preference updates overwrite unreadable metadata. */
+	readTagGroups(): TagGroupData | null {
+		if (this.loadError !== undefined) this.state = { ...this.load(), ...this.pendingPreferences };
+		if (this.loadError !== undefined) throw this.loadError;
+		return this.state.tagGroups ? parseTagGroupData(this.state.tagGroups) : null;
+	}
+
+	/** Synchronous atomic replacement means an IPC acknowledgement has no outstanding write at close. */
+	saveTagGroups(value: unknown): void {
+		const tagGroups = parseTagGroupData(value);
+		if (this.loadError !== undefined) throw this.loadError;
+		this.persist({ ...this.state, tagGroups });
+	}
+
+	/** Keep independent preferences in memory; return whether they also reached disk. */
+	update(patch: Partial<Pick<DesktopState, "window" | "lastWorkspace" | "theme">>): boolean {
+		this.pendingPreferences = { ...this.pendingPreferences, ...patch };
 		this.state = { ...this.state, ...patch };
+		// An incomplete cache must not replace an unreadable profile, even for an explicit theme change.
+		// Only a successful full reload, including group recovery, makes saving safe again.
+		if (this.loadError !== undefined) return false;
 		try {
-			mkdirSync(dirname(this.path), { recursive: true });
-			const temporary = `${this.path}.${process.pid}.tmp`;
-			writeFileSync(temporary, `${JSON.stringify(this.state, null, "\t")}\n`, "utf8");
-			renameSync(temporary, this.path);
+			this.persist(this.state);
+			return true;
 		} catch (error) {
-			// Losing window bounds is not worth interrupting the user over.
+			// Window bounds remain best-effort; theme callers report false and group writes reject.
 			console.warn("stepcode desktop: could not persist state", error);
+			return false;
 		}
 	}
 
+	private persist(next: DesktopState): void {
+		mkdirSync(dirname(this.path), { recursive: true });
+		const temporary = `${this.path}.${process.pid}.tmp`;
+		// The metadata limit is measured in compact JSON; formatting must not make an accepted profile unreadable.
+		writeFileSync(temporary, `${JSON.stringify(next)}\n`, "utf8");
+		renameSync(temporary, this.path);
+		this.state = next;
+		this.pendingPreferences = {};
+	}
+
 	private load(): DesktopState {
+		this.loadError = undefined;
+		this.loadFailed = false;
 		try {
+			if (statSync(this.path).size > TAG_GROUP_DATA_LIMIT + 65536) throw new Error("Desktop state is too large");
 			const raw: unknown = JSON.parse(readFileSync(this.path, "utf8"));
-			if (typeof raw !== "object" || raw === null) return {};
+			if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+				throw new Error("Invalid desktop state");
+			}
 			const record = raw as Record<string, unknown>;
 			const window = parseWindowState(record.window);
 			const lastWorkspace = typeof record.lastWorkspace === "string" ? record.lastWorkspace : undefined;
+			let tagGroups: TagGroupData | undefined;
+			try {
+				tagGroups = record.tagGroups === undefined ? undefined : parseTagGroupData(record.tagGroups);
+			} catch (error) {
+				// Group corruption blocks writes, but independent window/workspace preferences still restore.
+				this.loadError = error;
+			}
 			return {
 				...(window === undefined ? {} : { window }),
 				...(lastWorkspace === undefined ? {} : { lastWorkspace }),
+				...(isDesktopThemeChoice(record.theme) ? { theme: record.theme } : {}),
+				...(tagGroups === undefined ? {} : { tagGroups }),
 			};
-		} catch {
+		} catch (error) {
+			const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+			this.loadFailed = !missing;
+			if (!missing) this.loadError = error;
 			return {};
 		}
 	}

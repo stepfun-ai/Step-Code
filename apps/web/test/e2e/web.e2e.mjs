@@ -1630,6 +1630,58 @@ test("a subagent's write asks for approval and runs in the child, not the main s
   assert.equal(await readFile(join(workspace, "src", "sub.txt"), "utf8"), "hello\n");
 });
 
+test("background subagent output is live beside an idle parent and completed answers survive stopping a supplement", { skip }, async () => {
+  const id = await browser.run(`
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    await fetch("/api/v1/sessions/" + session.id + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "background-parent-fixture" }) });
+    await until(async () => (await (await fetch("/api/v1/sessions/" + session.id)).json()).status === "completed", "parent persisted");
+    return session.id;
+  `);
+  await browser.goto(`${origin}/`);
+  const live = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${id}"]'), "background parent");
+    row.click();
+    await until(() => row.classList.contains("active"), "selected parent");
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-background-fixture" }) });
+    const lane = await until(() => $('.lane-row[data-subagent-tool-id="tool-background-call"]'), "background lane");
+    lane.click();
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "live-only child text", 180000);
+    const snapshot = await (await fetch(base)).json();
+    return { parentStatus: snapshot.status, childId: snapshot.subagentLanes?.[0]?.details.results[0]?.sessionId, live: $(".subagent-live-progress").textContent, composer: Boolean($("#prompt")) };
+  `);
+  assert.equal(live.parentStatus, "completed");
+  assert.match(live.childId, /^subagent-/u);
+  assert.match(live.live, /streamed reply/u);
+  assert.equal(live.composer, true);
+  if (process.env.STEP_E2E_SUBAGENT_SCREENSHOT) {
+    const screenshot = await browser.send("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.STEP_E2E_SUBAGENT_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
+  }
+  const stopped = await browser.run(`
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await until(async () => {
+      const value = await (await fetch(base)).json();
+      return value.subagentLanes?.[0]?.status === "completed" && value.status === "completed" && value.entries.some((entry) => entry.customType === "step-subagent-response");
+    }, "first child report completed", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "reply-background-fixture" }) });
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "supplement is live", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "stop-background-fixture" }) });
+    await until(async () => (await (await fetch(base)).json()).subagentLanes?.[0]?.status === "aborted", "supplement stopped", 180000);
+    await until(() => $(".subagent-completed-output")?.textContent.includes("streamed reply 39"), "retained first report");
+    const value = await (await fetch(base)).json();
+    return { status: value.subagentLanes[0].status, completed: value.entries.filter((entry) => entry.customType === "step-subagent-response").length, output: $(".subagent-completed-output").textContent,
+      agentRows: $$(".sb-agent-row").length, controls: $$(".subagent-controls details").length };
+  `);
+  assert.equal(stopped.status, "aborted");
+  assert.equal(stopped.completed, 1);
+  assert.match(stopped.output, /streamed reply 39/u);
+  assert.equal(stopped.controls, 2);
+  assert.equal(stopped.agentRows, 0);
+});
+
 test("denying an approval never executes the command", { skip }, async () => {
   const id = await browser.run(`
     const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
@@ -2490,6 +2542,52 @@ test("a group stops being offered once its last session drops it", { skip }, asy
   })
 })
 
+test("tag group metadata survives browser reload and its last-member removal survives another reload", { skip }, async () => {
+  const sessionId = "e2e-persisted-tag-session"
+  const now = new Date().toISOString()
+  const dir = join(base, "agent", "sessions", "--e2e-persisted-tag--")
+  await mkdir(dir, { recursive: true })
+  const entries = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "persisted-tag-user", parentId: null, timestamp: now,
+      message: { role: "user", content: "group persistence fixture", timestamp: Date.now() } },
+  ]
+  await writeFile(join(dir, `${sessionId}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "persisted group picker");
+    picker.querySelector("[data-new-tag='teal']").click();
+    const input = await until(() => $("#tagNameInput"), "persisted group name");
+    input.value = "Reload group";
+    $("#tagNameConfirm").click();
+    await until(() => !$("#tagPicker"), "created group");
+  `)
+  await browser.goto(`${origin}/`)
+  const restored = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "restored group picker");
+    const name = picker.querySelector("[data-tag='teal']")?.textContent;
+    const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
+    picker.querySelector("[data-tag='teal']").click();
+    await until(() => !$("#tagPicker"), "removed restored tag");
+    return { name, tag: stored.tags.find(([id]) => id === "${sessionId}") };
+  `)
+  assert.deepEqual(restored, { name: "Reload group", tag: [sessionId, "teal"] })
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "untagged group picker");
+    const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return removed;
+  `)
+  assert.equal(removed, true)
+})
+
 test("conversation search finds message content written outside the page and opens the matching message", { skip }, async () => {
   // A session another process (the CLI) wrote: the host's index picks it up without a notification.
   const sessionId = "e2e-search-session"
@@ -2965,7 +3063,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
   assert.equal(seen.rejected.laneState, "failed", "a refused dispatch is not a failed lane")
   assert.match(seen.rejected.laneText, /rejected audit/)
   assert.equal(seen.rejected.summaryUnknownHasAttempt, false, "a refused dispatch is recorded as status unknown")
-  assert.match(seen.rejected.summaryFailed.join(" | "), /rejected audit/)
+  assert.deepEqual(seen.rejected.summaryFailed, [], "the activity summary excludes settled failures; the parent row keeps navigation")
   assert.deepEqual(seen.rejected.panel, {
     error: "Invalid parameters. Provide exactly one mode.",
     status: "已失败",
@@ -3534,4 +3632,394 @@ test("forking from the middle of a conversation branches there and leaves the pa
   // continued turn appends after that prefix, so only the prefix is compared.
   const after = await readFile(join(base, "agent", "sessions", "--e2e-fork-here--", sessionId + ".jsonl"), "utf8")
   assert.ok(after.startsWith(before), "the parent's transcript kept every original record")
+})
+
+test(
+  "the sidebar pins and reorders conversations, and only the project view offers workspace actions",
+  { skip },
+  async () => {
+    // Three conversations in one project folder plus one in another, so both the
+    // reorder and the "another list does not move" rule are observable. Their
+    // message timestamps set the host's order (newest first), which an
+    // unarranged list must keep.
+    const arrange = join(base, "arrange-project")
+    const neighbour = join(base, "arrange-neighbour")
+    await mkdir(arrange, { recursive: true })
+    await mkdir(neighbour, { recursive: true })
+    const now = Date.now()
+    const seed = async (cwd, id, age) => {
+      const timestamp = now - age
+      const at = new Date(timestamp).toISOString()
+      const lines = [
+        { type: "session", version: 3, id, timestamp: at, cwd },
+        {
+          type: "message",
+          id: `${id}-user`,
+          parentId: null,
+          timestamp: at,
+          message: { role: "user", content: `arrange fixture ${id}`, timestamp },
+        },
+      ]
+      const dir = join(base, "agent", "sessions", `--e2e-${id.split("-")[1] ?? "arrange"}--`)
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+    }
+    for (const [id, age] of [
+      ["e2e-arrange-first", 300_000],
+      ["e2e-arrange-second", 200_000],
+      ["e2e-arrange-third", 100_000],
+    ]) {
+      await seed(arrange, id, age)
+    }
+    await seed(neighbour, "e2e-neighbour-only", 50_000)
+
+    // A shared browser profile: never inherit an arrangement from an earlier run.
+    await browser.run(`localStorage.removeItem("stepcode.pinnedSessions"); localStorage.removeItem("stepcode.sessionOrder");`)
+    await browser.goto(`${origin}/`)
+    try {
+      const seen = await browser.run(`
+		const group = (cwd) => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === cwd);
+		const rows = (cwd) => {
+			const node = group(cwd);
+			return node ? [...node.querySelectorAll(".session-row")].map((row) => row.dataset.sessionId) : [];
+		};
+		const rowFor = (cwd, id) => group(cwd).querySelector(".session-row[data-session-id='" + id + "']");
+		const stored = (key) => JSON.parse(localStorage.getItem(key) ?? "null");
+		const dragTo = (source, target, clientY) => {
+			const transfer = new DataTransfer();
+			source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+			target.dispatchEvent(
+				new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer, clientY }),
+			);
+			return {
+				transfer,
+				drop: () => {
+					target.dispatchEvent(
+						new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer, clientY }),
+					);
+					source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+				},
+			};
+		};
+		await until(() => rows(${JSON.stringify(arrange)}).length === 3, "the arranged project's rows");
+		const initial = rows(${JSON.stringify(arrange)});
+
+		// Pinning "second" through the row's own menu floats it over the list and
+		// arranges nothing: a pin is a display order, not a stored place.
+		rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").querySelector(".session-menu-button").click();
+		const menu = await until(() => $("#sessionMenu"), "the session menu");
+		const labels = [...menu.querySelectorAll("button")].map((button) => button.textContent.trim());
+		menu.querySelector("[data-action='pin']").click();
+		await until(
+			() => rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned === "true",
+			"the pinned row to be marked",
+		);
+		const pinned = {
+			rows: rows(${JSON.stringify(arrange)}),
+			pins: stored("stepcode.pinnedSessions"),
+			marked: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned,
+			label: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").querySelector(".session-pin")?.getAttribute("aria-label"),
+			order: stored("stepcode.sessionOrder"),
+		};
+
+		// The pinned block is fixed: dropping a row on a pinned row changes nothing —
+		// no indicator, no pin, no position above the block.
+		const upper = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").getBoundingClientRect();
+		const ontoPinned = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third"),
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second"),
+			upper.top + 2,
+		);
+		const ontoIndicator = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").className.includes("drop-")
+			? "indicator"
+			: "none";
+		ontoPinned.drop();
+		await until(() => $("#errorToast").hidden, "the toast to stay quiet");
+		const fixedBlock = {
+			rows: rows(${JSON.stringify(arrange)}),
+			pins: stored("stepcode.pinnedSessions"),
+			order: stored("stepcode.sessionOrder"),
+			grabbable: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").draggable,
+		};
+
+		// Dropping on the upper half of an unpinned row lands above it.
+		const thirdTop = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").getBoundingClientRect();
+		const reorder = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-first"),
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third"),
+			thirdTop.top + 2,
+		);
+		const reorderIndicator = await until(
+			() => rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").classList.contains("drop-before") && "drop-before",
+			"the upper-half drop indicator",
+		);
+		reorder.drop();
+		await until(
+			() => rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-first") < rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-third"),
+			"the dragged row to land above",
+		);
+		const moved = { rows: rows(${JSON.stringify(arrange)}), order: stored("stepcode.sessionOrder") };
+
+		// And the lower half lands below, so the pointer's side is what decides.
+		const thirdBox = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").getBoundingClientRect();
+		const lowerDrag = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-first"),
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third"),
+			thirdBox.bottom - 2,
+		);
+		const lowerIndicator = await until(
+			() => rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").classList.contains("drop-after") && "drop-after",
+			"the lower-half drop indicator",
+		);
+		lowerDrag.drop();
+		await until(
+			() => rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-first") > rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-third"),
+			"the dragged row to land below",
+		);
+		const movedAgain = { rows: rows(${JSON.stringify(arrange)}), order: stored("stepcode.sessionOrder") };
+
+		// Another project's list is untouched by that drag: it still follows the host.
+		const other = rows(${JSON.stringify(neighbour)});
+
+		// A row dropped on another project's row is not a reorder at all.
+		const foreign = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-first"),
+			rowFor(${JSON.stringify(neighbour)}, "e2e-neighbour-only"),
+			0,
+		);
+		foreign.drop();
+		const crossed = { arrange: rows(${JSON.stringify(arrange)}), neighbour: rows(${JSON.stringify(neighbour)}) };
+
+		return {
+			initial,
+			labels,
+			pinned,
+			ontoIndicator,
+			fixedBlock,
+			reorderIndicator,
+			moved,
+			lowerIndicator,
+			movedAgain,
+			other,
+			crossed,
+		};
+	`)
+      assert.deepEqual(seen.initial, ["e2e-arrange-third", "e2e-arrange-second", "e2e-arrange-first"])
+      assert.ok(seen.labels.includes("置顶会话"), seen.labels.join(" | "))
+      assert.deepEqual(seen.pinned.rows, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
+      assert.deepEqual(seen.pinned.pins, ["e2e-arrange-second"])
+      assert.equal(seen.pinned.marked, "true")
+      assert.equal(seen.pinned.label, "取消置顶")
+      assert.equal((seen.pinned.order ?? []).length, 0, "a pin must not arrange anything")
+      assert.equal(seen.ontoIndicator, "none", "a pinned row shows no drop indicator")
+      assert.deepEqual(seen.fixedBlock, {
+        rows: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        pins: ["e2e-arrange-second"],
+        order: [],
+        grabbable: false,
+      })
+      assert.equal(seen.reorderIndicator, "drop-before")
+      assert.deepEqual(seen.moved, {
+        rows: ["e2e-arrange-second", "e2e-arrange-first", "e2e-arrange-third"],
+        order: ["e2e-arrange-first", "e2e-arrange-third"],
+      })
+      assert.equal(seen.lowerIndicator, "drop-after")
+      assert.deepEqual(seen.movedAgain, {
+        rows: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        order: ["e2e-arrange-third", "e2e-arrange-first"],
+      })
+      assert.deepEqual(seen.other, ["e2e-neighbour-only"])
+      assert.deepEqual(seen.crossed, {
+        arrange: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        neighbour: ["e2e-neighbour-only"],
+      })
+
+      // A reload keeps the pin and the arrangement.
+      await browser.goto(`${origin}/`)
+      const reloaded = await browser.run(`
+		const group = (cwd) => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === cwd);
+		const rows = (cwd) => {
+			const node = group(cwd);
+			return node ? [...node.querySelectorAll(".session-row")].map((row) => row.dataset.sessionId) : [];
+		};
+		const rowFor = (cwd, id) => group(cwd).querySelector(".session-row[data-session-id='" + id + "']");
+		const shown = (node) => node.getClientRects().length > 0;
+		await until(() => rows(${JSON.stringify(arrange)}).length === 3, "the arranged rows after reload");
+		const kept = rows(${JSON.stringify(arrange)});
+		const pinMarked = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned;
+
+		// Unpinning through the menu drops only the pin and keeps the arrangement.
+		rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").querySelector(".session-menu-button").click();
+		const menu = await until(() => $("#sessionMenu"), "the session menu after reload");
+		menu.querySelector("[data-action='pin']").click();
+		await until(() => !rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned, "the pin to clear");
+		const unpinned = {
+			pins: JSON.parse(localStorage.getItem("stepcode.pinnedSessions") ?? "null"),
+			rows: rows(${JSON.stringify(arrange)}),
+			grabbable: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").draggable,
+		};
+
+		// The same arrangement is available without a pointer: Alt+↓ moves the
+		// focused row past its drawn neighbour, and focus survives the move.
+		const moved = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second");
+		moved.focus();
+		moved.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }));
+		await until(
+			() => rows(${JSON.stringify(arrange)})[1] === "e2e-arrange-second",
+			"the keyboard reorder",
+		);
+		await until(
+			() => document.activeElement?.dataset.sessionId === "e2e-arrange-second",
+			"focus to stay on the moved row",
+		);
+		const oneStep = rows(${JSON.stringify(arrange)});
+		document.activeElement.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true }),
+		);
+		await until(
+			() => rows(${JSON.stringify(arrange)})[0] === "e2e-arrange-second",
+			"the second keyboard step",
+		);
+		const keyboard = rows(${JSON.stringify(arrange)});
+
+		// The grouped view has no workspace navigation: adding one and opening the
+		// archive belong to the project view alone.
+		const groupTab = () => $$(".view-tab").find((tab) => tab.dataset.view === "group");
+		const projectTab = () => $$(".view-tab").find((tab) => tab.dataset.view === "project");
+		groupTab().click();
+		await until(() => !$("#groupedView").hidden, "the grouped view");
+		const grouped = { add: shown($("#addWorkspace")), archive: shown($("#archiveToggle")) };
+		projectTab().click();
+		await until(() => $("#groupedView").hidden, "the project view");
+		const project = { add: shown($("#addWorkspace")), archive: shown($("#archiveToggle")) };
+
+		return { kept, pinMarked, unpinned, oneStep, keyboard, grouped, project };
+	`)
+      assert.deepEqual(reloaded.kept, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
+      assert.equal(reloaded.pinMarked, "true")
+      // "second" was pinned before it was ever arranged, so it has no unpinned
+      // place to return to and leads the unpinned rows once unpinned; it is
+      // draggable again now that the pin is gone.
+      assert.deepEqual(reloaded.unpinned, {
+        pins: [],
+        rows: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        grabbable: true,
+      })
+      assert.deepEqual(reloaded.oneStep, ["e2e-arrange-third", "e2e-arrange-second", "e2e-arrange-first"])
+      assert.deepEqual(reloaded.keyboard, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
+      assert.deepEqual(reloaded.project, { add: true, archive: true })
+    } finally {
+      // This case owns fixture sessions and a shared browser profile: leave both
+      // as they were even when an assertion above fails.
+      await browser
+        .run(`localStorage.removeItem("stepcode.pinnedSessions"); localStorage.removeItem("stepcode.sessionOrder");`)
+        .catch(() => {})
+      await rm(join(base, "agent", "sessions", "--e2e-arrange--"), { recursive: true, force: true })
+      await rm(join(base, "agent", "sessions", "--e2e-neighbour--"), { recursive: true, force: true })
+    }
+  },
+)
+
+test("a row dropped on another group section still retags it, it is not a reorder", { skip }, async () => {
+  // The grouped view's cross-section drop is the one feature this change could
+  // silently eat: a row-level drop handler that stops propagating would keep the
+  // reorder working while retagging stopped. Two tagged sessions make both
+  // sections real; the drag goes from one section's row to the other section.
+  const cwd = join(base, "group-drag-project")
+  await mkdir(cwd, { recursive: true })
+  const now = Date.now()
+  for (const [id, age] of [
+    ["e2e-gtag-one", 200_000],
+    ["e2e-gtag-two", 100_000],
+  ]) {
+    const at = new Date(now - age).toISOString()
+    const lines = [
+      { type: "session", version: 3, id, timestamp: at, cwd },
+      {
+        type: "message",
+        id: `${id}-user`,
+        parentId: null,
+        timestamp: at,
+        message: { role: "user", content: `group drag fixture ${id}`, timestamp: now - age },
+      },
+    ]
+    const dir = join(base, "agent", "sessions", "--e2e-gtag--")
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+  }
+
+  await browser.goto(`${origin}/`)
+  try {
+    const seen = await browser.run(`
+		const group = () => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === ${JSON.stringify(cwd)});
+		const rowFor = (id) => group().querySelector(".session-row[data-session-id='" + id + "']");
+		const sections = () => $$("#groupedView .group-section");
+		const sectionOf = (id) => sections().find((section) => section.querySelector(".session-row[data-session-id='" + id + "']"));
+		await until(() => group() && group().querySelectorAll(".session-row").length === 2, "the group drag fixtures");
+
+		const tag = async (id, colour, name) => {
+			rowFor(id).querySelector(".session-tag-button").click();
+			const picker = await until(() => $("#tagPicker"), "the tag picker");
+			picker.querySelector("[data-new-tag='" + colour + "']").click();
+			const input = await until(() => $("#tagNameInput"), "the group name input");
+			input.value = name;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			$("#tagNameConfirm").click();
+			await until(() => !$("#tagPicker"), "the picker to close");
+		};
+		await tag("e2e-gtag-one", "red", "拖拽红色");
+		await tag("e2e-gtag-two", "teal", "拖拽青色");
+
+		$$(".view-tab").find((tab) => tab.dataset.view === "group").click();
+		// Other tests leave their own sessions in this profile, so the two tagged
+		// sections are looked up by their rows rather than by section count.
+		await until(() => sectionOf("e2e-gtag-one") && sectionOf("e2e-gtag-two"), "both tagged sections");
+		const red = sectionOf("e2e-gtag-one");
+		const teal = sectionOf("e2e-gtag-two");
+		const heading = (section) => section.querySelector(".group-heading").textContent.trim();
+		const redName = heading(red);
+
+		// Drop the red section's row on the teal section itself: the row leaves the
+		// event alone, so the section's own retag handler takes it.
+		const source = rowFor("e2e-gtag-one");
+		const transfer = new DataTransfer();
+		source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+		teal.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+		teal.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+		source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+		await until(() => sectionOf("e2e-gtag-one")?.isSameNode(teal), "the row to join the other section");
+		const joined = sectionOf("e2e-gtag-one");
+		return {
+			redName,
+			tealName: heading(sectionOf("e2e-gtag-two")),
+			tealRows: [...joined.querySelectorAll(".session-row")].map((row) => row.dataset.sessionId),
+			redGone: !sections().some((section) => section.isSameNode(red)),
+			order: localStorage.getItem("stepcode.sessionOrder"),
+		};
+	`)
+    assert.equal(seen.redName, "拖拽红色")
+    assert.equal(seen.tealName, "拖拽青色")
+    assert.deepEqual([...seen.tealRows].sort(), ["e2e-gtag-one", "e2e-gtag-two"])
+    assert.equal(seen.redGone, true, "the emptied section is gone, as for any group")
+    assert.equal(seen.order, null, "a retag must not arrange anything")
+  } finally {
+    await rm(join(base, "agent", "sessions", "--e2e-gtag--"), { recursive: true, force: true })
+  }
+})
+
+test("the ＋ menu offers goal and plan, but not ultracode", { skip }, async () => {
+  // Ultracode is hidden in Web and Desktop until its interaction is finished. The
+  // mode itself stays wired (its keyword, lead chip and message badge), so the
+  // picker row is the only thing that must be gone.
+  const seen = await browser.run(`
+		$("#plusTrigger").click();
+		const plus = await until(() => $("#plusPopover"), "the add menu");
+		const modes = [...plus.querySelectorAll(".control-option--mode")].map((row) =>
+			[...row.classList].find((name) => name.startsWith("control-option--") && name !== "control-option--mode"),
+		);
+		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await until(() => !$("#plusPopover"), "the add menu to close");
+		return { modes, ultracode: Boolean(plus.querySelector(".control-option--ultraloop")) };
+	`)
+  assert.deepEqual(seen, { modes: ["control-option--goal", "control-option--plan"], ultracode: false })
 })

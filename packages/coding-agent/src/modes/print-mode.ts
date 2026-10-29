@@ -33,6 +33,13 @@ export interface PrintModeOptions extends CompletionCheckOptions {
 	initialMessage?: string;
 	/** Images to attach to the initial message */
 	initialImages?: ImageContent[];
+	/**
+	 * Also write live progress (`message_update`, `tool_execution_update`) to the
+	 * JSON stream. Off by default: a JSON run is a record of facts, and progress
+	 * frames are neither replayable nor bounded by the producer. See
+	 * `core/session-event-durability.ts`.
+	 */
+	includeLiveEvents?: boolean;
 }
 
 interface TerminatingBlock {
@@ -105,6 +112,7 @@ function hasFinalAssistantText(message: AgentMessage | undefined): boolean {
  * Sends prompts to the agent and outputs the result.
  */
 export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options: PrintModeOptions): Promise<number> {
+	const includeLiveEvents = options.includeLiveEvents === true;
 	const { mode, messages = [], initialMessage, initialImages } = options;
 	let exitCode = 0;
 	let session = runtimeHost.session;
@@ -178,7 +186,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			}
 			if (event.type === "message_end") assistantFailure ??= getAssistantFailure(event.message);
 			if (mode === "json") {
-				writeRawStdout(`${JSON.stringify(toJsonEvent(event))}\n`);
+				// The projection decides what a record contains; a caller that filters
+				// first would be a second, silently divergent policy.
+				const projected = toJsonEvent(event, { includeLiveEvents });
+				if (projected) writeRawStdout(`${JSON.stringify(projected)}\n`);
 			}
 		});
 		unsubscribeBackpressure =

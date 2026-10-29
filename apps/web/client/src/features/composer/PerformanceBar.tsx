@@ -5,7 +5,7 @@ import { useT } from "../../i18n";
 import { api } from "../../lib/api";
 import { formatTokens } from "../../lib/format";
 import { performanceDuration, performanceUsage, responseThroughput } from "../../state/performance";
-import { useAppStore } from "../../state/store";
+import { setState, useAppStore } from "../../state/store";
 import type { SessionInspector } from "../../state/types";
 import { Icon, Tooltip } from "../../ui";
 
@@ -34,11 +34,19 @@ export function PerformanceBar() {
 				const data = await api<SessionInspector>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/inspector`, {
 					signal: controller.signal,
 				});
-				if (!controller.signal.aborted && data.sessionId === sessionId)
+				if (!controller.signal.aborted && data.sessionId === sessionId) {
 					setResult({ id: sessionId, stats: data.stats });
+					const percent = data.stats.contextUsage?.percent;
+					setState({
+						contextFill: typeof percent === "number" && Number.isFinite(percent) ? { sessionId, percent } : null,
+					});
+				}
 			} catch {
 				// Failed statistics are unavailable, not zero or stale successful values.
-				if (!controller.signal.aborted) setResult({ id: sessionId, error: true });
+				if (!controller.signal.aborted) {
+					setResult({ id: sessionId, error: true });
+					setState({ contextFill: null });
+				}
 			}
 			if (!controller.signal.aborted && (status === "running" || status === "waiting"))
 				timer = setTimeout(read, 2000);

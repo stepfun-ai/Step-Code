@@ -350,6 +350,11 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
+export {
+	isEphemeralSessionEvent,
+	type SessionEventDurability,
+	sessionEventDurability,
+} from "./core/session-event-durability.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
 export * from "./core/session-index/index.ts";
 export type {
@@ -549,6 +554,13 @@ export {
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
 } from "./features/step-schedule.ts";
+export {
+	type CompletedSubagentResponse,
+	readSubagentLaneSnapshot,
+	SUBAGENT_LANE_CHANNEL,
+	SUBAGENT_RESPONSE_ENTRY,
+	type SubagentLaneSnapshot,
+} from "./features/subagent/lane-events.ts";
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.

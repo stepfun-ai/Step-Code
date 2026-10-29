@@ -15,7 +15,9 @@ test("the shared app prompt attaches the Step operating contract", () => {
 	const contract = buildStepSystemPromptAppendix(["read_file", "write_file", "edit_file", "run_command", "subagent"]);
 	assert.match(contract, /# StepCode operating contract/u);
 	assert.match(contract, /Operating mode: all-tools/u);
-	assert.match(contract, /# Delegation/u);
+	assert.match(contract, /# Coordination primitives/u);
+	assert.match(contract, /subagent when the user, applicable AGENTS\.md, or a skill asks/u);
+	assert.doesNotMatch(contract, /# Delegation/u);
 });
 
 test("the host passes the shared app prompt instead of assembling one", () => {

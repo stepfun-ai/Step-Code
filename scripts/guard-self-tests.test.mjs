@@ -20,6 +20,7 @@ const guardsWithSelfTest = [
 	"check-ts-relative-imports.mjs",
 	"check-derived-compat-only.mjs",
 	"check-no-provider-dispatch.mjs",
+	"check-session-event-transports.mjs",
 	"check-metadata-not-in-dispatch.mjs",
 	"check-no-secret-leak.mjs",
 	"check-legacy-scope-prefix.mjs",

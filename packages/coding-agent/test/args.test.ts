@@ -1,5 +1,15 @@
-import { describe, expect, test } from "vitest";
-import { normalizeSessionName, parseArgs } from "../src/cli/args.ts";
+import { describe, expect, test, vi } from "vitest";
+import { normalizeSessionName, parseArgs, printHelp } from "../src/cli/args.ts";
+
+test("help exposes the live-consumer opt-in and its log cost", () => {
+	const log = vi.spyOn(console, "log").mockImplementation(() => {});
+	try {
+		printHelp();
+		expect(log.mock.calls.flat().join("\n")).toMatch(/--include-live-events.*Live consumers\/debugging.*much larger/);
+	} finally {
+		log.mockRestore();
+	}
+});
 
 describe("parseArgs", () => {
 	describe("--version flag", () => {

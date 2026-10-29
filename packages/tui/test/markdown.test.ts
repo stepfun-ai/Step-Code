@@ -1781,3 +1781,19 @@ bar`,
 		});
 	});
 });
+
+describe("empty output", () => {
+	it("resets the dirty start so the host does not follow a stale offset", () => {
+		// The empty-text fast path returns no rows. A dirty start left over from the
+		// previous frame would then point past the end of the component's own output;
+		// the host clamps it, but the component should not rely on that.
+		const markdown = new Markdown("", 0, 0, defaultMarkdownTheme, undefined, {});
+		markdown.setText(Array.from({ length: 30 }, (_, i) => `row ${i}`).join("\n\n"));
+		markdown.render(40);
+		assert.ok((markdown.renderDirtyStart ?? 0) >= 0);
+
+		markdown.setText("");
+		assert.deepStrictEqual(markdown.render(40), []);
+		assert.strictEqual(markdown.renderDirtyStart, 0);
+	});
+});

@@ -68,8 +68,10 @@ export function groupProcessRows(
 				!SEPARATE_TOOLS.has(item.toolName) &&
 				!item.children?.length &&
 				!item.workflowRun &&
-				item.state !== "failed" &&
-				(item.state === "completed" || (active && index > lastUser && !awaiting.has(item.toolName))))
+				// A failed call is ordinary process output: it folds with its siblings and shows its state when opened.
+				(item.state === "completed" ||
+					item.state === "failed" ||
+					(active && index > lastUser && !awaiting.has(item.toolName))))
 		) {
 			pending.push({ ...row, item });
 		} else {

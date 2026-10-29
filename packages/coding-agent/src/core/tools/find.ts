@@ -164,10 +164,23 @@ function isInsideGitWorkTree(cwd: string): boolean {
 	return result.status === 0 && result.stdout.toString().trim() === "true";
 }
 
+/**
+ * fd resolves its own cwd for --full-path, so a removed host cwd fails every
+ * path glob. Run it from the absolute search directory instead. Any other
+ * search path keeps the inherited cwd so fd still reports its own path error;
+ * a failed stat is that same case, so it is not an error here.
+ */
+async function fdWorkingDirectory(searchPath: string): Promise<string | undefined> {
+	if (!path.isAbsolute(searchPath)) return undefined;
+	const stat = await fsStat(searchPath).catch(() => null);
+	return stat?.isDirectory() ? searchPath : undefined;
+}
+
 function createFdBackend(fdPath: string): FileListBackend {
 	return {
 		name: "fd",
 		async run(params) {
+			const cwd = await fdWorkingDirectory(params.searchPath);
 			return new Promise((resolve, reject) => {
 				if (params.signal?.aborted) {
 					reject(new Error("Operation aborted"));
@@ -195,7 +208,7 @@ function createFdBackend(fdPath: string): FileListBackend {
 				}
 				args.push("--", effectivePattern, params.searchPath);
 
-				const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+				const child = spawn(fdPath, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 				const rl = createInterface({ input: child.stdout });
 				let stderr = "";
 				const lines: string[] = [];

@@ -187,6 +187,11 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | `tool_execution_update` | Tool streams progress |
 | `tool_execution_end` | Tool completes |
 
+Tool updates are replacement snapshots: intermediate frames may be coalesced
+while delivery is in flight. A tool must put anything it needs preserved in its
+returned result. Delivery failures are observed by the awaited tool-result path;
+they do not leave background promise rejections or prevent the run from settling.
+
 `Agent.subscribe()` listeners are awaited in registration order. `agent_end` means no more loop events will be emitted, but `await agent.waitForIdle()` and `await agent.prompt(...)` only settle after awaited `agent_end` listeners finish.
 
 ## Agent Options

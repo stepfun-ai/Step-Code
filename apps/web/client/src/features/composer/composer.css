@@ -383,6 +383,11 @@
 .composer-right {
 	min-width: 0;
 }
+/* The ＋ trigger keeps the hover fill while its menu is open, so the open menu reads as its own. */
+.composer-controls .plus-control[aria-expanded="true"] {
+	background: var(--hover);
+	color: var(--ink);
+}
 .composer-right > #modelMenu {
 	flex: 0 1 auto;
 	min-width: 0;
@@ -582,7 +587,7 @@
 	color: var(--ink-2);
 	font-size: 12px;
 }
-.attachment-chip > span {
+.attachment-chip > span:not([role="tooltip"]) {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -596,7 +601,7 @@
 	border-radius: 50%;
 	color: var(--ink-3);
 }
-.attachment-remove:hover {
+.attachment-chip .attachment-remove:hover {
 	background: var(--selected);
 	color: var(--ink);
 }
@@ -841,14 +846,19 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	color: var(--ink);
 	font-weight: 400;
 }
-/* Commands show a bold `/name`, then the description. */
+/* Commands show a bold `/name`, then the description. Every kind the menu's
+   command group can emit — a built-in, `mcp`, and `feedback`, which opens the
+   dialog instead of inserting text — shares this rule; a new kind must join it
+   or its entry renders in the muted secondary colour among black ones. */
 .slash-item.command .slash-item-title,
-.slash-item.mcp .slash-item-title {
+.slash-item.mcp .slash-item-title,
+.slash-item.feedback .slash-item-title {
 	color: var(--ink);
 	font-weight: 600;
 }
 .slash-item.command .slash-item-title strong,
-.slash-item.mcp .slash-item-title strong {
+.slash-item.mcp .slash-item-title strong,
+.slash-item.feedback .slash-item-title strong {
 	font-weight: inherit;
 }
 /* Group headers ("命令" / "技能"). */
@@ -1355,7 +1365,7 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	color: var(--ink-3);
 }
 /*
- * 二级面板（ZCode 式）：`.plus-sub-slot` 定位在悬停行右侧（inline top 来自
+ * 二级面板：`.plus-sub-slot` 定位在悬停行右侧（inline top 来自
  * `openSub`），`.plus-sub` 是面板本体。分两层是为了让定位随行动态变化。
  */
 .plus-sub-slot {
@@ -1379,8 +1389,9 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	flex: 1;
 	min-height: 120px;
 }
+/* 12px sides: the search glyph and the rows' kind glyphs share one 18px icon column. */
 .plus-sub-search {
-	padding: 8px;
+	padding: 8px 12px;
 	border-bottom: 1px solid var(--line);
 }
 .plus-sub-list {
@@ -1389,7 +1400,8 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 }
 .plus-sub-row {
 	display: flex;
-	align-items: center;
+	/* The kind glyph sits on the name line, not between name and description. */
+	align-items: flex-start;
 	gap: 9px;
 	width: 100%;
 	padding: 6px 8px;
@@ -1405,6 +1417,8 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 /* Row kind glyph (puzzle = plugin, wrench = skill), neutral like the staged chip. */
 .plus-sub-kind {
 	flex: none;
+	/* Centred on the 21px name line. */
+	margin-top: 1.5px;
 	color: var(--ink-3);
 }
 .plus-sub-row--faded {

@@ -56,7 +56,7 @@ const TOOL_RULES: Readonly<Record<string, string>> = {
 	task_list:
 		"Use task_list to recover todo progress or choose the next open item; blockedBy contains only unfinished prerequisites.",
 	workflow:
-		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task prefer subagent; for calendar or wall-clock deferral prefer cron_create.",
+		"Use workflow only when the user has opted in (see # Workflow orchestration). It fits broad audits, migrations, multi-way parallel review, and spec-driven convergence via iterate(). For a single delegated task, once delegation is authorized, prefer subagent; for calendar or wall-clock deferral prefer cron_create.",
 };
 
 const READ_TOOLS = [
@@ -207,28 +207,10 @@ export function buildStepSystemPromptAppendix(
 	const operatingMode: "all-tools" | "read-only" = hasWrite || hasExecute ? "all-tools" : "read-only";
 
 	const oneShot = context.interaction === "one-shot";
-
-	const planningSection = active.has("enter_plan_mode")
+	const planModeSection = active.has("exit_plan_mode")
 		? [
-				"# Planning",
-				[
-					"- A plan is a Markdown proposal explaining how and why to do the work: approach, constraints, trade-offs, and validation. It is not a todo checklist.",
-					"- Call enter_plan_mode before work that spans multiple files, changes architecture or public interfaces, or where the request is ambiguous enough that exploration should shape the approach.",
-					"- There is no entry gate: enter_plan_mode takes effect immediately without user approval, so prefer entering plan mode over guessing when scope is unclear.",
-					"- While plan mode is active, file-editing tools can only write to the session plan file announced by enter_plan_mode. This is not a shell sandbox: run_command retains normal permissions; keep commands read-only and non-destructive while planning.",
-					"- Explore the repository first, then write the complete plan to the announced plan file with write_file: goal, ordered steps with file paths, validation commands, and open questions.",
-					...(oneShot
-						? [
-								"- The user marked this one message for planning. Planning means investigation and a written proposal, not carrying the work out: explore, write the proposal to the plan file, then call exit_plan_mode and stop. exit_plan_mode reports that the investigation is finished and shows the proposal to the user for a decision; it does not authorize implementation.",
-								"- The user then decides in the app: they either ask for changes, which arrives as a normal message you answer by revising the proposal and calling exit_plan_mode again, or they approve execution, which arrives as a separate message that authorizes the work. End the planning turn with the proposal itself — what you found, what you recommend, and the steps you would take — and never start implementing before that approval arrives.",
-								"- Plan mode applies to this task only. Once the proposal is delivered, do not assume planning is still on for later messages or keep treating the plan file as a binding contract unless the user asks for plan mode again.",
-							]
-						: [
-								"- Call exit_plan_mode to submit the written proposal for review, not to approve it yourself. In interactive sessions, approval exits plan mode; staying, requesting refinements, or cancelling keeps it active. After refinements, update the plan file and submit it again. In headless and RPC sessions the tool exits without interactive approval; the caller must gate approval externally before continuing execution.",
-								"- After the user approves execution, keep the plan file as the reference and follow it step by step; do not silently diverge from the approved plan.",
-							]),
-					"- Skip plan mode for trivial work: single-file edits, direct questions, or tasks with an obvious short path.",
-				].join("\n"),
+				"# Plan mode",
+				"Plan mode is user-controlled: only the user starts it, with /plan or --plan, and you cannot enter it yourself. A <collaboration_mode> message from the runtime announces each mode change and carries that mode's instructions; follow the latest one.",
 			]
 		: [];
 
@@ -252,16 +234,9 @@ export function buildStepSystemPromptAppendix(
 		? [
 				"# Coordination primitives",
 				[
-					"- The coordination primitives — direct tools, subagent, cron_create, workflow, and session goals — share one job (running work on your behalf) but differ on when the work runs and what the fresh actor sees.",
-					"- Reach for direct tools first (read_file, edit_file, run_command). Escalate only when a specific primitive's value applies.",
-					"- subagent (Agent tool, when available): delegate a scoped task to a fresh context. Use when the parent context is precious, the task is exploration-heavy, or you want an independent verifier. The child agent has no memory of this conversation; brief it self-contained.",
-					"- cron_create (when available): use a five-field local-time schedule for recurrence or restart-survival; it is for calendar triggers, not completion-state work.",
-					oneShot
-						? "- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires the user to opt in on the message being answered. Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate()."
-						: "- workflow (when available): isolated JavaScript that fans out to many subagents with journal, resume, and budget. Requires per-turn ultraloop opt-in. Use for broad audits, migrations, multi-way parallel review, or spec-driven convergence via iterate().",
-					"- create_goal (when available): use only for an explicitly requested session-scoped multi-turn objective. The host continues an active goal at idle boundaries; /goal is the user control surface for pause, resume, edit, budget, and clear.",
-					"- Picking one: bounded immediate task → direct tools; long or exploratory task → subagent; calendar recurrence or restart survival → cron_create; explicit completion-state continuation → create_goal; broad multi-agent work with per-agent budgets → workflow.",
-					"- Do not stack primitives to look busy. If a subagent will answer the question, do not wrap it in a workflow. If a direct read will do, do not schedule or create a goal.",
+					"- Default to direct tools. Every other primitive needs explicit authorization: subagent when the user, applicable AGENTS.md, or a skill asks for subagents, delegation, or parallel agent work; workflow through the ultraloop opt-in; cron_create and create_goal through an explicit request.",
+					"- Once authorized: a scoped or parallel delegated task → subagent; broad fan-out with a journal and budgets → workflow; calendar recurrence or restart survival → cron_create; an explicit multi-turn objective → create_goal.",
+					"- Do not stack primitives to look busy. Each primitive's own tool description or section explains how to use it.",
 				].join("\n"),
 			]
 		: [];
@@ -308,7 +283,7 @@ export function buildStepSystemPromptAppendix(
 								"- When ultraloop is on for the session that opt-in is standing: author and run a workflow for every substantive task by default, treat token cost as unconstrained, and aim for the most exhaustive correct answer. Multi-phase work often means several workflows in sequence — one per phase — so you stay in the loop between them. Lean toward adversarially verifying findings unless the work is already verified. Solo only on conversational turns or trivial mechanical edits. When session mode is off, revert to the per-turn opt-in rule.",
 							]
 						: []),
-					"- Without any signal, prefer targeted tools — search_files, read_file, or a single subagent — and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
+					"- Without any signal, prefer targeted tools such as search_files and read_file, and never reach for workflow on single-file edits, one-shot lookups, or exploration that a few targeted queries can answer.",
 					"- With opt-in, workflow fits broad multi-subsystem audits, mechanical migrations across many sites, multi-way parallel review with adversarial verification, research sweeps, and HoH convergence on a spec.",
 					"- Scripts compose agent() calls using phase(title) to label visible milestones (one string; it runs nothing), parallel() and pipeline() for fan-out, iterate() for HoH loops, nested workflow() for sub-runs, log() for progress, and the budget object; pass inputs via args as real JSON values, never JSON-encoded strings.",
 					"- parallel() is a barrier that awaits every call before returning; pipeline() threads each item through the stages independently with no barrier between stages, so a stage never sees sibling items' earlier-stage output. Default to pipeline() and use a stage-wide parallel() only when a stage needs cross-item context such as dedup, early exit, or cross-referencing.",
@@ -366,18 +341,18 @@ export function buildStepSystemPromptAppendix(
 
 		"# Cost and consent",
 		oneShot
-			? "- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger on the message being answered; do not invoke them uninvited, and do not carry an authorization from an earlier turn."
-			: "- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger; do not invoke them uninvited.",
+			? "- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger on the message being answered; do not carry an authorization from an earlier turn. Subagent requires an explicit delegation request from the user, AGENTS.md, or a skill; do not invoke them uninvited."
+			: "- Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger, and subagent requires an explicit delegation request from the user, AGENTS.md, or a skill; do not invoke them uninvited.",
 
 		"# Workflow",
 		"1. Understand first: read relevant code and project instructions, then investigate until the root cause is clear.",
-		"2. Plan when useful: for work with several non-trivial steps or real uncertainty, keep a concise plan and update it as facts change.",
+		"2. Track multi-step work: for several non-trivial steps, record progress with the task tools when they are available and update it as facts change. A todo list is not a plan proposal.",
 		"3. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
 		"4. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
 		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly. For UI-facing changes, also verify visually when a browser or screenshot tool is available; when none is, suggest installing the playwright plugin.",
 		"6. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
 
-		...planningSection,
+		...planModeSection,
 
 		...taskTrackingSection,
 
@@ -424,20 +399,6 @@ export function buildStepSystemPromptAppendix(
 	} else if (hasRead && !hasWrite && !hasExecute) {
 		sections.push(
 			"Operating mode: read-only inspection. Use the available read and discovery tools; do not mutate files or execute arbitrary commands.",
-		);
-	}
-
-	if (active.has("subagent")) {
-		sections.push(
-			[
-				"# Delegation",
-				"- Use subagent to delegate work that benefits from an isolated context: broad exploration whose intermediate output does not belong in this transcript, independent parallel tasks, or long-running work.",
-				"- Run in the foreground (the default) whenever your next step needs the result; the call returns it directly. Set run_in_background:true only for independent work you can continue without.",
-				"- A background call returns a lane_id at once. Each lane sends one <agent-notification> when it ends, at the start of a later turn; it carries the outcome, output, failure reasons, and child session paths. After starting a lane, do not sleep, poll, or call agent_send status to wait for it: end your turn or keep working on something else.",
-				'- agent_send manages a lane by lane_id. action:"reply" continues a single-agent lane\'s transcript (interrupt:false queues after its current turn; interrupt:true steers immediately); parallel and chain lanes cannot take replies, so start a new subagent call for follow-up work. action:"stop" ends the lane. action:"status" answers a specific question about a lane (state, usage, session paths, recent output); omit lane_id to list lanes.',
-				'- The default subscribe:"final" sends only the ending notification. Use subscribe:"progress" only when throttled progress matters, for example a long review or audit lane.',
-				"- Do not delegate small single-step edits; the overhead outweighs the isolation.",
-			].join("\n"),
 		);
 	}
 

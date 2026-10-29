@@ -18,8 +18,9 @@ import {
 import { useT } from "../../i18n";
 import { errorMessage } from "../../lib/api";
 import { useImeGuard } from "../../lib/ime";
+import { retainComposerDraftWork } from "../../state/composer-drafts";
 import { showError } from "../../state/session";
-import { getState, useAppStore } from "../../state/store";
+import { getState, setUi, useAppStore } from "../../state/store";
 import { addAttachments, applyLeadingCommand, uploadFile } from "./actions";
 import { FileDropOverlay } from "./FileDropOverlay";
 import { hasMarkdownSyntax, htmlToMarkdown } from "./html-to-markdown";
@@ -53,6 +54,11 @@ export interface PromptInputProps {
 	readonly id?: string;
 	/** Ignore the shared prompt-focus signal (the in-place edit editor manages its own). */
 	readonly ignoreFocusRequest?: boolean;
+	/** Inline rewrites keep commands and pasted files local, without main-input images or draft requests. */
+	readonly inlineRewrite?: boolean;
+	/** Image staging and late chip refresh belong to the originating input, not the active editor. */
+	readonly onImages?: (files: readonly File[]) => void;
+	readonly onUploadSettled?: () => void;
 	readonly disabled: boolean;
 	/** Enter without Shift, outside an IME composition. */
 	readonly onSubmit: () => void;
@@ -87,6 +93,9 @@ export function PromptInput({
 	promptRef,
 	id = "prompt",
 	ignoreFocusRequest = false,
+	inlineRewrite = false,
+	onImages,
+	onUploadSettled,
 	disabled,
 	onSubmit,
 	onSteer,
@@ -109,11 +118,12 @@ export function PromptInput({
 	const draftRequest = useAppStore((state) => state.ui.promptDraftRequest);
 	useEffect(() => {
 		const root = promptRef.current;
-		if (!root || !draftRequest) return;
+		if (!root || !draftRequest || inlineRewrite) return;
 		setPromptText(root, draftRequest.text);
 		root.focus();
 		onValueInput?.(draftRequest.text);
-	}, [draftRequest, promptRef, onValueInput]);
+		setUi({ promptDraftRequest: undefined });
+	}, [draftRequest, promptRef, onValueInput, inlineRewrite]);
 	useEffect(() => {
 		const root = promptRef.current;
 		if (!root) return;
@@ -133,13 +143,13 @@ export function PromptInput({
 
 	const changed = useCallback(() => {
 		const root = promptRef.current;
-		if (!root) return;
+		if (!root || !root.isConnected) return;
 		// A completed leading command becomes its chip before anyone reads the prompt.
-		applyLeadingCommand(root);
+		applyLeadingCommand(root, !inlineRewrite);
 		tidyEmptyPrompt(root);
 		refreshPlaceholderHint(root);
 		onValueInput?.(promptText(root));
-	}, [promptRef, onValueInput]);
+	}, [promptRef, onValueInput, inlineRewrite]);
 
 	/** Images become attachments (sent as image content); every other file an inline chip uploaded to the host. */
 	const stageFiles = useCallback(
@@ -147,17 +157,22 @@ export function PromptInput({
 			const root = promptRef.current;
 			if (!root) return;
 			const images = files.filter((file) => MODEL_IMAGE_TYPES.has(file.type));
-			if (images.length) void addAttachments(images);
+			if (images.length) {
+				if (onImages) onImages(images);
+				else if (!inlineRewrite) void addAttachments(images);
+			}
 			for (const file of files) {
-				if (MODEL_IMAGE_TYPES.has(file.type)) continue;
-				insertFileChip(root, file.name, uploadFile(file), (error) => {
+				if (images.includes(file)) continue;
+				const release = inlineRewrite ? () => {} : retainComposerDraftWork(getState().composerDraftId);
+				void insertFileChip(root, file.name, uploadFile(file), (error) => {
 					showError(t("fileUploadFailed", { name: file.name, reason: errorMessage(error) }));
-					changed();
-				});
+					if (onUploadSettled) onUploadSettled();
+					else changed();
+				}).finally(release);
 			}
 			changed();
 		},
-		[promptRef, changed, t],
+		[promptRef, changed, t, inlineRewrite, onImages, onUploadSettled],
 	);
 
 	/*
@@ -187,6 +202,7 @@ export function PromptInput({
 		};
 	}, [stageFilesRef, promptRef]);
 	useEffect(() => {
+		if (inlineRewrite) return;
 		let depth = 0;
 		const accepting = () => !disabledRef.current && !getState().ui.loginRequired;
 		const reset = () => {
@@ -233,7 +249,7 @@ export function PromptInput({
 			window.removeEventListener("drop", onDropAnywhere);
 			window.removeEventListener("dragend", reset);
 		};
-	}, [promptRef]);
+	}, [promptRef, inlineRewrite]);
 
 	const onPaste = (event: ClipboardEvent<HTMLDivElement>) => {
 		const root = promptRef.current;

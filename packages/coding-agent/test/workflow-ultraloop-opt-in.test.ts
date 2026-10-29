@@ -173,6 +173,9 @@ describe("buildUltraloopSessionReminder", () => {
 		expect(reminder).toContain("Author and run a workflow for every substantive task by default");
 		expect(reminder).toContain("most exhaustive, correct answer");
 		expect(reminder).toContain("token cost is not a constraint");
+		// Session-standing ultraloop is also the proactive-delegation switch.
+		expect(reminder).toContain("Proactive delegation is also authorized");
+		expect(reminder).toContain("requiring an explicit request before spawning subagents no longer applies");
 		expect(reminder).toContain("several workflows in sequence");
 		expect(reminder).toContain("adversarially verifying findings");
 		expect(reminder).toContain("Solo only on conversational turns");
@@ -348,6 +351,7 @@ describe("createUltraloopOptInExtension", () => {
 		};
 		expect(result.message.content).toContain("session mode is off");
 		expect(result.message.content).toContain('the keyword "ultracode"');
+		expect(result.message.content).toContain("Proactive subagent delegation no longer applies");
 		expect(result.message.details).toEqual({ source: "turn", token: "ultracode", sessionMode: false });
 		h.contextEntries.push({ type: "custom_message", ...result.message });
 		expect(startOrdinaryTurn(h)).toBeUndefined();

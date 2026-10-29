@@ -9,7 +9,7 @@ import {
 	Text,
 } from "@step-harness/pi-tui";
 import type { AssistantMessage } from "@step-harness/providers";
-import { createMarkdownTransform } from "./markdown-transform.ts";
+import { createLiveMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -17,6 +17,9 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
 /** Cached zone-marked output, keyed by the child lines it was derived from. */
 type ZoneCache = { width: number; native: string[]; lines: string[] };
+
+/** A `Markdown` instance kept alive across deltas of the same message. */
+type MarkdownSlot = { kind: "text" | "thinking"; markdown: Markdown };
 
 /**
  * Component that renders a complete assistant message
@@ -32,6 +35,15 @@ export class AssistantMessageComponent extends Container {
 	private hasToolCalls = false;
 	private isStreaming = false;
 	private zoneCache?: ZoneCache;
+	/**
+	 * Markdown children in content order.
+	 *
+	 * A streamed reply calls `updateContent` for every delta. Rebuilding the
+	 * components would throw away the markdown renderer's certified prefix, so the
+	 * instances are kept and re-pointed at the new text instead.
+	 */
+	private markdownSlots: MarkdownSlot[] = [];
+	private slotCursor = 0;
 
 	constructor(
 		message?: AssistantMessage,
@@ -80,7 +92,14 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setOutputPad(padding: number): void {
+		if (padding === this.outputPad) {
+			return;
+		}
 		this.outputPad = padding;
+		// Padding is fixed when a `Markdown` is constructed, so the slots cannot be
+		// reused across a padding change.
+		this.markdownSlots = [];
+		this.slotCursor = 0;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -121,6 +140,7 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.contentContainer.clear();
+		this.slotCursor = 0;
 
 		const hasVisibleContent = message.content.some(
 			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
@@ -136,11 +156,7 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-					}),
-				);
+				this.contentContainer.addChild(this.textMarkdown(content.text.trim()));
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
@@ -172,31 +188,14 @@ export class AssistantMessageComponent extends Container {
 					);
 				} else {
 					// Render each run of thinking blocks as one Markdown section.
-					this.contentContainer.addChild(
-						new Markdown(
-							thinkingBlocks.join("\n\n"),
-							this.outputPad,
-							0,
-							{ ...this.markdownTheme, code: (text: string) => theme.fg("muted", text) },
-							{
-								color: (text: string) => theme.fg("thinkingText", text),
-								italic: true,
-							},
-							{
-								transform: createMarkdownTransform(
-									"assistant-thinking",
-									this.isStreaming,
-									this.markdownTransformers,
-								),
-							},
-						),
-					);
+					this.contentContainer.addChild(this.thinkingMarkdown(thinkingBlocks.join("\n\n")));
 				}
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));
 				}
 			}
 		}
+		this.markdownSlots.length = this.slotCursor;
 
 		// Check if incomplete/failed - show after partial content.
 		// For aborted/error tool calls, tool execution components show the error.
@@ -222,5 +221,67 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}
+	}
+
+	/** Markdown for an assistant text block, reused while the block keeps its kind. */
+	private textMarkdown(text: string): Markdown {
+		return this.claimSlot(
+			"text",
+			(value) =>
+				new Markdown(value, this.outputPad, 0, this.markdownTheme, undefined, {
+					transform: createLiveMarkdownTransform(
+						"assistant",
+						() => this.isStreaming,
+						() => this.markdownTransformers,
+					),
+				}),
+			text,
+		);
+	}
+
+	/** Markdown for one run of thinking blocks. */
+	private thinkingMarkdown(text: string): Markdown {
+		return this.claimSlot(
+			"thinking",
+			(value) =>
+				new Markdown(
+					value,
+					this.outputPad,
+					0,
+					{ ...this.markdownTheme, code: (code: string) => theme.fg("muted", code) },
+					{
+						color: (styled: string) => theme.fg("thinkingText", styled),
+						italic: true,
+					},
+					{
+						transform: createLiveMarkdownTransform(
+							"assistant-thinking",
+							() => this.isStreaming,
+							() => this.markdownTransformers,
+						),
+					},
+				),
+			text,
+		);
+	}
+
+	/**
+	 * Return the slot at the current content position, re-pointing it at `text`.
+	 *
+	 * Slots are matched by kind rather than by content index: a message can gain a
+	 * thinking block in front of a text block, and an instance is only worth keeping
+	 * when it renders the same kind of content as before.
+	 */
+	private claimSlot(kind: MarkdownSlot["kind"], create: (text: string) => Markdown, text: string): Markdown {
+		const slot = this.markdownSlots[this.slotCursor];
+		if (slot !== undefined && slot.kind === kind) {
+			slot.markdown.setText(text);
+			this.slotCursor++;
+			return slot.markdown;
+		}
+		const markdown = create(text);
+		this.markdownSlots[this.slotCursor] = { kind, markdown };
+		this.slotCursor++;
+		return markdown;
 	}
 }

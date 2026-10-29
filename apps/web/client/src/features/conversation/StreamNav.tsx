@@ -8,7 +8,7 @@ import { setUi, useAppStore } from "../../state/store";
 import type { TimelineItem } from "../../state/types";
 
 /**
- * The conversation locator (ZCode's `ConversationTurnNavigator`): a thin rail
+ * The conversation locator: a thin rail
  * on the right of the middle column with one tick per user query. Clicking a
  * tick scrolls the stream to that message (through `ui.revealEntry`, like a
  * search hit), the tick of the query the viewport is on stays dark, and
@@ -28,7 +28,7 @@ interface NavTick {
 
 const USER_PREVIEW_MAX = 160;
 const ASSISTANT_PREVIEW_MAX = 220;
-/** Below this middle-column width the rail would crowd the message column (ZCode hides under 864px too). */
+/** Below this middle-column width the rail would crowd the message column. */
 const RAIL_MIN_WIDTH = 860;
 
 function clipText(text: string, max: number): string {
@@ -75,7 +75,7 @@ function buildTicks(items: readonly TimelineItem[], running: boolean): NavTick[]
 
 /**
  * The query the viewport is on: the first tick whose row still intersects the
- * viewport (ZCode's rule), or — when the top edge sits inside a reply — the
+ * viewport, or — when the top edge sits inside a reply — the
  * last tick entirely above it. Rows and ticks are in the same order.
  */
 function resolveActiveTick(stream: HTMLElement, ticks: readonly NavTick[]): number {
@@ -92,7 +92,7 @@ function resolveActiveTick(stream: HTMLElement, ticks: readonly NavTick[]): numb
 	return lastAbove;
 }
 
-/** Hover/focus "mountain": bars shrink and fade with distance from the focused tick (ZCode's decay). */
+/** Hover/focus "mountain": bars shrink and fade with distance from the focused tick. */
 function barVisual(
 	index: number,
 	focusIndex: number | undefined,
@@ -136,6 +136,8 @@ export function StreamNav() {
 	// whose layout containment changes how `position: fixed` descendants inside
 	// it (e.g. the composer's full-window drag overlay) are contained.
 	const [wide, setWide] = useState(false);
+	// The terminal dock's height: the rail stays over the conversation, never over the dock below it.
+	const [dockHeight, setDockHeight] = useState(0);
 	const railRef = useRef<HTMLDivElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const reducedMotion = usePrefersReducedMotion();
@@ -144,9 +146,15 @@ export function StreamNav() {
 	useEffect(() => {
 		const main = document.querySelector("main.main");
 		if (!main) return;
-		const update = () => setWide(main.clientWidth >= RAIL_MIN_WIDTH);
+		const dock = document.getElementById("terminalDock");
+		const update = () => {
+			setWide(main.clientWidth >= RAIL_MIN_WIDTH);
+			// A hidden dock measures 0.
+			setDockHeight(dock?.offsetHeight ?? 0);
+		};
 		const observer = new ResizeObserver(update);
 		observer.observe(main);
+		if (dock) observer.observe(dock);
 		update();
 		return () => observer.disconnect();
 	}, []);
@@ -214,7 +222,11 @@ export function StreamNav() {
 		setPreview(null);
 	};
 	return (
-		<nav className="stream-nav" aria-label={t("streamNavLabel")}>
+		<nav
+			className="stream-nav"
+			aria-label={t("streamNavLabel")}
+			style={dockHeight ? { bottom: dockHeight } : undefined}
+		>
 			<div className="stream-nav-rail" ref={railRef} onPointerLeave={closePreview} onScroll={closePreview}>
 				<div className="stream-nav-list" ref={listRef}>
 					{ticks.map((tick, index) => {
@@ -243,7 +255,7 @@ export function StreamNav() {
 										revealEntry: {
 											sessionId,
 											entryId: tick.entryId,
-											// ZCode's jump lands the query at the viewport top, so the
+											// The jump lands the query at the viewport top, so the
 											// tick that owns the viewport after the jump is the clicked one.
 											behavior: reducedMotion ? "auto" : "smooth",
 											block: "start",

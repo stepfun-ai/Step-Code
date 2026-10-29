@@ -155,7 +155,7 @@ test("singleton command exposes output in one step and retains output controls w
 	}
 });
 
-test("a failed sibling leaves the singleton accessible without losing group-header keyboard focus", { skip }, async () => {
+test("losing a sibling leaves the singleton accessible without losing group-header keyboard focus", { skip }, async () => {
 	const page = await browser.newPage();
 	try {
 		await page.goto(url);
@@ -166,10 +166,9 @@ test("a failed sibling leaves the singleton accessible without losing group-head
 		await header.focus();
 		await page.keyboard.press("Enter");
 		assert.equal(await page.evaluate(() => document.activeElement === document.querySelector(".tool-group-trigger")), true);
-		await page.evaluate(([first, second]) => window.fixture([first, { ...second, state: "failed" }]), [thought, command]);
+		await page.evaluate((first) => window.fixture([first]), thought);
 		await page.waitForFunction(() => document.querySelector(".process-tool-group")?.dataset.single === "true");
 		assert.equal(await header.isVisible(), false);
-		assert.equal(await page.locator('.tool-call[data-tool-state="failed"]').count(), 1);
 		assert.equal(await page.locator(".process-tool-group .tool-call").count(), 0);
 		assert.equal(
 			await page.evaluate(() => document.activeElement === document.querySelector(".thinking-summary")),
@@ -185,10 +184,45 @@ test("a failed sibling leaves the singleton accessible without losing group-head
 			document.body.append(outside);
 			outside.focus();
 		});
-		await page.evaluate(([first, second]) => window.fixture([first, { ...second, state: "failed" }]), [thought, command]);
+		await page.evaluate((first) => window.fixture([first]), thought);
 		await page.waitForFunction(() => document.querySelector(".process-tool-group")?.dataset.single === "true");
 		assert.equal(await header.isVisible(), false);
 		assert.equal(await page.evaluate(() => document.activeElement?.id), "outside-focus");
+	} finally {
+		await page.close();
+	}
+});
+
+test("a failed call folds into its process group and shows its state only when opened", { skip }, async () => {
+	const page = await browser.newPage();
+	try {
+		await page.goto(url);
+		await page.waitForFunction(() => typeof window.fixture === "function");
+		const failed = {
+			...command, itemId: "failed-command", state: "failed",
+			args: { command: "git log --skip=2" }, outputSummary: "fatal: bad revision",
+		};
+		await page.evaluate((items) => window.fixture(items), [thought, command, failed]);
+		const header = page.locator(".tool-group-trigger");
+		await header.waitFor();
+		assert.equal(await page.locator(".process-tool-group").count(), 1);
+		assert.equal(await header.getAttribute("aria-expanded"), "false");
+		assert.match(await header.innerText(), /已完成：命令执行 2 项|Completed: 2 commands/);
+		assert.equal(await page.locator(".tool-group-disclosure").getAttribute("inert"), "");
+		const row = page.locator('.process-tool-group .tool-call[data-tool-state="failed"]');
+		assert.equal(await row.count(), 1);
+		await header.click();
+		await page.waitForFunction(() => document.querySelector(".tool-group-disclosure")?.getAttribute("inert") === null);
+		const colors = await row.evaluate((el) => ({
+			verb: getComputedStyle(el.querySelector(".tool-verb")).color,
+			sibling: getComputedStyle(document.querySelector('.tool-call[data-tool-state="completed"] .tool-verb')).color,
+			glyph: getComputedStyle(el.querySelector(".tool-glyph")).color,
+		}));
+		assert.equal(colors.verb, colors.sibling, "a failed verb reads like its siblings");
+		assert.notEqual(colors.glyph, colors.verb, "only the glyph marks the failure");
+		await row.locator(".tool-toggle").click();
+		await page.getByText("fatal: bad revision", { exact: true }).waitFor();
+		assert.equal(await row.locator(".tool-cx-status.failed").count(), 1);
 	} finally {
 		await page.close();
 	}

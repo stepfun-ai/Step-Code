@@ -768,16 +768,15 @@ export function ModelEditor({
 										onTest={() => testRow(row)}
 									/>
 									<Tooltip content={t("settingsDelete")}>
-										<button
-											type="button"
+										<IconButton
+											icon="trash"
+											iconSize="xs"
 											className="settings-icon-action danger"
 											aria-label={t("settingsDelete")}
 											onClick={() =>
 												update({ models: form.models.filter((candidate) => candidate.key !== row.key) })
 											}
-										>
-											<Icon name="trash" size="xs" />
-										</button>
+										/>
 									</Tooltip>
 								</li>
 							))}

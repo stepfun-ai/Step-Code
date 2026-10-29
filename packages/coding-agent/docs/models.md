@@ -38,7 +38,7 @@ saved. It reads one of two native listing routes, chosen by `api`:
 | `api` | Listing request | Auth headers |
 |---|---|---|
 | `openai-completions`, `openai-responses` | `GET {baseUrl}/models` | `Authorization: Bearer <key>` |
-| `anthropic-messages` | `GET {root}/v1/models?limit=1000` | `x-api-key`, `anthropic-version: 2023-06-01` |
+| `anthropic-messages` | `GET {root}/v1/models?limit=1000` | `x-api-key` and `Authorization: Bearer <key>` (compatible gateways such as StepFun list only for Bearer), `anthropic-version: 2023-06-01` |
 
 `{root}` is `baseUrl` without one trailing `/v1` segment, because both spellings name the same root. The reply
 may be the standard `data` array or an enriched `models` map (whose keys are the ids requests accept), and

@@ -11,7 +11,8 @@
 	opacity: 0;
 }
 .message-actions.turn-actions:hover,
-.message-actions.turn-actions:focus-within {
+.message-actions.turn-actions:focus-within,
+.conversation-turn:has(> .message.assistant:is(:hover, :focus-within)) > .turn-actions {
 	opacity: 1;
 }
 .message-action {

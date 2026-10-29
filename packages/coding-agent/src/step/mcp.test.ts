@@ -4,7 +4,12 @@ import path from "node:path";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, test } from "vitest";
-import { appendStepPageManagementHint, describeMcpStartFailure, resolveStepMcpEnvironment } from "./mcp.ts";
+import {
+	appendStepPageManagementHint,
+	describeMcpStartFailure,
+	resolveStepMcpEnvironment,
+	StepMcpStartError,
+} from "./mcp.ts";
 
 const roots: string[] = [];
 
@@ -31,6 +36,30 @@ test("HTTP permission failures do not suggest login", () => {
 			error,
 		}),
 	).toBe(`MCP server 'figma' could not start: ${error.message}`);
+});
+
+test("a stdio start failure carries the server's redacted stderr", () => {
+	const token = "sk-abcdefghijklmnopqrstuvwxyz012345";
+	const error = new StepMcpStartError(
+		new Error("MCP error -32001: Error: MCP connection closed"),
+		`npm error code E401\nAuthorization: Bearer ${token}`,
+	);
+	const message = describeMcpStartFailure({ name: "figma-mcp", command: "npx", error });
+	expect(message).toContain(
+		"MCP server 'figma-mcp' could not start: MCP error -32001: Error: MCP connection closed\nServer stderr:\nnpm error code E401",
+	);
+	expect(message).not.toContain(token);
+});
+
+test("a wrapped missing executable still gets the install remedy", () => {
+	const spawnError = Object.assign(new Error("spawn npx ENOENT"), { code: "ENOENT" });
+	const message = describeMcpStartFailure({
+		name: "figma-mcp",
+		command: "npx",
+		error: new StepMcpStartError(spawnError, "env: node: No such file or directory"),
+	});
+	expect(message).toContain("'npx' is not installed or not on PATH");
+	expect(message).toContain("Server stderr:\nenv: node: No such file or directory");
 });
 
 test("login guidance quotes server names containing shell syntax", () => {

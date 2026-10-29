@@ -95,13 +95,16 @@ plus the app's rule for reporting what the app already shows), with the same
 
 The Step operating contract (`buildStepSystemPromptAppendix`) is attached inside  
 that shared definition rather than at the host. It carries the tool selection  
-rules, the operating mode, the sections the active tools enable (planning, task  
-tracking, coordination, long-running goals, scheduled work, delegation), and an  
+rules, the operating mode, the sections the active tools enable (plan mode, task
+tracking, coordination, long-running goals, scheduled work), and an
 `<env>` block (working directory, platform, date, Git branch and uncommitted  
 count). Sharing one definition means a host does not need to, and should not,  
 assemble its own identity: doing so drops the contract that the same tool set  
 advertises. Change the app prompt in the package; `apps/web/src/` passes the  
 value and assembles no prompt.
+
+Planning instructions are carried by collaboration-mode announcements;
+delegation guidance and authorization are owned by the `subagent` tool description.
 
 The app product also declares `interaction: "one-shot"`. The composer's plan,  
 goal, and ultracode picks mark a single message: the client prefixes the text  
@@ -436,6 +439,43 @@ idempotent so a failed refresh after a successful removal can be retried. Remova
 does not close or interrupt the active conversation, modify its history, or  
 change access to the cwd of an existing session.
 
+The conversation list has two views. The project view groups conversations by  
+workspace folder (plus Recent); the grouped view lists them by tag group.  
+"Add workspace" and the archive toggle belong to the project view and are hidden  
+in the grouped view, which has no workspace sections to add to or filter. The  
+Alt+Cmd+O / Ctrl+Alt+O shortcut stays global: it opens the same chooser from  
+either view.
+
+Each reader's own arrangement of that list is local, like the theme. The row's  
+more menu pins a conversation (or unpins it), and pinned rows are a fixed block  
+at the top of the list they belong to — they do not move into a separate  
+section, and the row pinned last is the one nearest the top. Dragging only  
+rearranges the unpinned rows inside the same list: a row dropped on another  
+project or tag section, and a row dropped on a pinned row, does nothing, so a  
+drag can never enter the pinned block or push a row above it. Alt+↑ / Alt+↓  
+moves the focused row past its visible neighbour and keeps focus on it for the  
+next press. Pinning never rewrites the unpinned order, so a row that had a place  
+keeps it while pinned and returns to it when unpinned from the menu; a row  
+pinned before it was ever arranged has no place to return to and leads the  
+unpinned rows once unpinned, like a conversation the Host lists for the first  
+time.
+
+Both preferences live in browser local storage (`state/session-order.ts`,  
+`stepcode.pinnedSessions` / `stepcode.sessionOrder`), not in Host metadata, and a  
+deleted session's pin and place are pruned with it. The stored order covers the  
+lists the reader actually moved: another project keeps following the Host, and a  
+conversation the Host lists for the first time keeps its newest-first position,  
+ahead of the arranged rows. A place belongs to the session, so retagging or  
+unarchiving one keeps the rank it already had and it joins its new list at that  
+point. A different browser profile or machine keeps the Host's order; two pages  
+of one profile share the stored arrangement without watching each other. In the  
+grouped view a row dropped on another tag section still retags it, as before.
+
+Ultracode (the `ultraloop` mode) is hidden from the composer's ＋ mode picker in  
+Web and Desktop while its interaction is unfinished. Nothing behind it was  
+removed: typing `ultracode:` or `/ultraloop` still stages the same lead chip and  
+kernel prefix, and recorded messages keep their badge.
+
 File browsing is keyed by folder, not by session, so an empty workspace can be  
 browsed. `GET /api/v1/workspace/{files,file,raw,search,completions}` take a `cwd` and answer  
 403 unless it is the launch folder, a registered workspace, or the cwd of an  
@@ -660,17 +700,23 @@ panel. Answers live in host memory for the session (bounded, like the terminal
 panel's history), appear in the snapshot so a reloaded page can show them again,  
 and are cleared by `POST /sessions/{id}/side-answers/clear`.
 
-Plan mode is visible to the model as well as to the page. `/plan <task>` enters  
-plan mode and sends the task as an ordinary user message. Every model request  
-while the mode is on carries a request-local `<system-reminder>` (never appended  
-to the session; each request drops the previous copy) that states the mode as a  
-fact: plan mode is ON, the host turned it on for the user's `/plan` request, and  
-`enter_plan_mode` must not be called; it names the plan file  
-(`.stepcode/plans/session-<id>.md`), says only that file may be written with  
-`write_file` / `edit_file`, and asks for exactly one `exit_plan_mode` call once  
-the proposal is written. A model that was only hinted at probed instead — it  
-called `enter_plan_mode` to "confirm" (answered "Already in plan mode") and  
-called `exit_plan_mode` again in later turns.
+Plan mode is visible to the model as well as to the page. Only the user starts
+it with `/plan` or `--plan`; there is no `enter_plan_mode` tool. `/plan <task>`
+enters plan mode and sends the task as an ordinary user message, expanding picked
+skills and prompt templates. The runtime appends a hidden `step-plan-mode`
+custom message containing a `<collaboration_mode>` block on mode changes. It
+names the plan file (`.stepcode/plans/session-<id>.md`), limits file mutations to
+that file, and explains how to submit a decision-complete proposal. The system
+prefix and existing tool order stay unchanged. Context projection restores a
+missing announcement after compaction and announces Default mode after exit;
+it does not append a new reminder on every unchanged request. The app's external
+handoff instruction permits leaving without a new proposal but never treats
+submission as approval to implement.
+
+Announcement details record whether the current host can leave planning without
+a proposal, so restoring the same plan on another host refreshes its handoff
+instructions. A pending Default announcement is reused by context projection
+rather than appended twice before it reaches the transcript.
 
 Plan mode ends the way it does in the terminal: the model calls  
 `exit_plan_mode`, or the user toggles `/plan`. A request that needs no proposal  
@@ -685,10 +731,10 @@ plan for review again. The terminal, which has a review
 dialog, keeps refusing a missing file and tells the model to let the user leave  
 with `/plan`. Tool results say the outcome plainly and persist it: after a  
 submit or a plain exit they report that plan mode (which the host turned on for  
-`/plan`) is now off and not to call the tool again; `enter_plan_mode` while the  
-mode is on says it changed nothing and was not needed. Leaving is never  
-announced as a transcript row: the strip closing and (for a proposal) the review  
-card are the whole report.
+`/plan`) is now off and not to call the tool again. A call while already off
+reports that only the user can start another plan round. The hidden Default-mode
+announcement reaches the model, not the visible transcript: the strip closing
+and (for a proposal) the review card are the user-facing report.
 
 The host mounts the same tool profile as the CLI (`createStepToolProfile`), so  
 the model is offered `read_file` / `write_file` / `edit_file` / `run_command`  
@@ -801,6 +847,24 @@ through coding-agent's public `models.json` / `auth.json` APIs.
   web e2e suite and `scripts/check-web-runtime.mjs` set it.
 - Failures never stop the host; the host logs one `[models]` line when it  
   imports something, never the key.
+
+## Editing a custom model provider
+
+The model settings page declares providers and keys through
+[`apps/web/src/model-providers.ts`](../apps/web/src/model-providers.ts). The form
+shows the address, protocol, name and, per model, the id, context window, max
+output, input kinds, reasoning flag and thinking-level map; a save rebuilds
+exactly those. Everything it cannot show is kept from the stored declaration:
+provider-level `headers`, `compat`, `authHeader` and `modelOverrides`, and
+per-model `api`, `baseUrl`, `cost`, `samplingParams`, `headers` and `compat`. A
+model row the form no longer sends is removed, because deleting a model is an
+edit too.
+
+That rule is not cosmetic: `compat.forceAdaptiveThinking`
+([models](../packages/coding-agent/docs/models.md#anthropic-messages-compatibility))
+turns an Anthropic request from the legacy budget payload into adaptive thinking,
+so a save made only to rotate a key must not silently change how requests are
+built.
 
 ## Subagent presentation
 
@@ -1141,8 +1205,10 @@ arguments remain inside the disclosure. A single observed thought's duration
 also remains visible on the folded process row; individual durations remain  
 available in expanded multi-thought groups.
 
-Prose, images, failures, approvals, retry rows and dedicated Subagent/workflow,  
-plan and clarification calls end a process group. Calls awaiting approval and  
+Prose, images, model request failures, approvals, retry rows and dedicated
+Subagent/workflow, plan and clarification calls end a process group. A failed
+ordinary tool call stays inside its group and counts in the settled summary;
+opening the group shows its failed label and red glyph. Calls awaiting approval and
 unresolved historical calls are never summarized as completed or running.  
 User-turn boundaries, reply attachment areas, change cards and settled footers  
 remain outside process folds. Search can reveal recorded thinking inside a  

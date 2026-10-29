@@ -37,6 +37,8 @@ export interface AgentMessagePreview {
  * A host-facing projection of the agent loop's AgentEvent union. Record-visibility
  * entries and telemetry are modeled separately (see session-record.ts and
  * host-event.ts) so the three concerns never share one over-loaded type.
+ * In-process consumers receive live frames too. A future serialized adapter
+ * must apply the coding product's session-event durability classification.
  */
 export type AgentEvent =
 	| { readonly type: "agent_start" }

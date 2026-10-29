@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { createBranch, GitBranchError, gitRunEnv, isPlausibleBranchName, listLocalBranches, readGitState, switchBranch } from "../src/git.ts";
@@ -49,13 +49,12 @@ test("a plain folder is not a repository", async () => {
 test("the state names the branch, the root and the dirty file count", async () => {
 	const { root, cleanup } = await repository();
 	try {
-		assert.deepEqual(await readGitState(root), {
-			repository: true,
-			// git reports the resolved root; on macOS /var is a symlink to /private/var.
-			root: await realpath(root),
-			branch: "main",
-			dirtyFiles: 0,
-		});
+		const state = await readGitState(root);
+		assert.deepEqual(
+			// git reports the resolved root, with `/` even on Windows; on macOS /var is a symlink to /private/var.
+			{ ...state, root: state.root && resolve(state.root) },
+			{ repository: true, root: await realpath(root), branch: "main", dirtyFiles: 0 },
+		);
 		await writeFile(join(root, "a.txt"), "changed\n");
 		await writeFile(join(root, "new.txt"), "untracked\n");
 		const dirty = await readGitState(root);

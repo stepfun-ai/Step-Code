@@ -1,11 +1,15 @@
 import { useT } from "../../i18n";
 import { defaultProjectCwd } from "../../state/session";
+import { orderedSessions } from "../../state/session-order";
 import { shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
 import { EmptyState, Icon } from "../../ui";
 import { DraftRow, draftRowCwd } from "./DraftRow";
 import { ProjectGroup } from "./ProjectGroup";
 import { SessionRow } from "./SessionRow";
+
+/** The Recent list's own id: rows there reorder against each other, not against a project's. */
+const RECENT_LIST = "recent";
 
 /**
  * `#projectView`: `#projectGroups` and `#recentGroup` (legacy
@@ -21,6 +25,8 @@ export function ProjectView() {
 			showArchived: state.showArchived,
 			foldedProjects: state.foldedProjects,
 			tags: state.tags,
+			pinnedSessions: state.pinnedSessions,
+			sessionOrder: state.sessionOrder,
 			filter: state.currentFilter,
 			hidden: state.currentView !== "project",
 		}),
@@ -87,14 +93,31 @@ export function ProjectView() {
 			: t("noProjectConversations")
 		: t("noWorkspaces");
 
+	const recentOrder = orderedSessions(recent, view.pinnedSessions, view.sessionOrder);
+	// The rows a reader can see: a filtered-out row is neither a keyboard
+	// neighbour nor a place the drop indicator can point at.
+	const drawnRecent = recentOrder.filter((session) => !hiddenIds.has(session.id)).map((session) => session.id);
+	// Each group's rows: drawn order for display, arrangement order for a drag.
+	const groups = [...projects].map(([cwd, sessions]) => {
+		const ordered = orderedSessions(sessions, view.pinnedSessions, view.sessionOrder);
+		return {
+			cwd,
+			sessions: ordered,
+			drawnIds: ordered.filter((session) => !hiddenIds.has(session.id)).map((session) => session.id),
+		};
+	});
+
 	return (
 		<div id="projectView" hidden={view.hidden}>
 			<div id="projectGroups">
-				{[...projects].map(([cwd, sessions]) => (
+				{groups.map(({ cwd, sessions, drawnIds }) => (
 					<ProjectGroup
 						key={cwd}
 						cwd={cwd}
+						// Pins lead and dragged rows keep their place; the host's own order
+						// stays the fallback (see state/session-order.ts).
 						sessions={sessions}
+						drawnIds={drawnIds}
 						folded={view.foldedProjects.has(cwd)}
 						hiddenIds={hiddenIds}
 						draft={cwd === draftCwd}
@@ -116,8 +139,14 @@ export function ProjectView() {
 				</div>
 				<div id="recentTasks">
 					{draftInRecent ? <DraftRow /> : null}
-					{recent.map((session) => (
-						<SessionRow key={session.id} session={session} filteredOut={hiddenIds.has(session.id)} />
+					{recentOrder.map((session) => (
+						<SessionRow
+							key={session.id}
+							session={session}
+							listId={RECENT_LIST}
+							drawnIds={drawnRecent}
+							filteredOut={hiddenIds.has(session.id)}
+						/>
 					))}
 				</div>
 			</div>

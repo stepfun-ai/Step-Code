@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { afterEach, test, type TestContext } from "node:test";
-import { knownWorkspaces, isDefaultProject, startDraft, workspaceForNewConversation } from "../client/src/state/session.ts";
+import {
+	isDefaultProject,
+	isDefaultWorkspace,
+	knownWorkspaces,
+	startDraft,
+	workspaceForNewConversation,
+	workspaceLabel,
+} from "../client/src/state/session.ts";
+import { t } from "../client/src/i18n/index.ts";
 import { removeWorkspace } from "../client/src/features/workspace/actions.ts";
 import { createInitialState, getState, setState, setUi } from "../client/src/state/store.ts";
 import type { SessionSummary, WebWorkspace } from "../client/src/state/types.ts";
@@ -41,6 +49,19 @@ function stubFetch(t: TestContext, workspaces: readonly WebWorkspace[] = []): vo
 function settle(): Promise<void> {
 	return new Promise((resolve) => setImmediate(resolve));
 }
+
+test("the first-use workspace is named in the reader's language, other folders by their own name", () => {
+	const first = "/Users/a/Documents/StepCode/default-workspace";
+	setState({
+		workspaces: [workspace(first, { default: true }), workspace("/work/default-workspace")],
+	});
+	assert.equal(isDefaultWorkspace(getState(), first), true);
+	assert.equal(workspaceLabel(getState(), first), t("defaultWorkspace"));
+	assert.notEqual(t("defaultWorkspace"), "default-workspace");
+	// Only the folder the host created is relabeled, not every folder sharing its name.
+	assert.equal(isDefaultWorkspace(getState(), "/work/default-workspace"), false);
+	assert.equal(workspaceLabel(getState(), "/work/default-workspace"), "default-workspace");
+});
 
 test("a hidden workspace leaves the composer's list even though its sessions remain", () => {
 	setState({

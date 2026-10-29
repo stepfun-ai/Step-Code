@@ -8,7 +8,7 @@
 	position: absolute;
 	/* Centred on the 48px title bar line. */
 	top: 9px;
-	left: 14px;
+	left: var(--sidebar-show-left);
 	z-index: 20;
 	display: none;
 	border: 1px solid var(--line);

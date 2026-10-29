@@ -87,18 +87,11 @@
   background: var(--hover);
   color: var(--ink);
 }
-/* The open mid view's entry uses the session rows' selection fill. */
+/* The open page's entry uses the session rows' selection fill, and only it is bold and in full ink. */
 .sidebar-action[aria-current="page"] {
   background: var(--selected);
   color: var(--ink);
-}
-/* New conversation stands out by weight and its accent icon alone; it shares the rows' flat hover. */
-.sidebar-action.primary {
-  color: var(--ink);
   font-weight: 600;
-}
-.sidebar-action.primary > .icon {
-  color: var(--ink);
 }
 /* Same cap as the search footer's (ui/Kbd). */
 .sidebar-search kbd {
@@ -119,6 +112,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The header's fade overhangs the list sideways; it must not add a horizontal scrollbar. */
+  overflow-x: hidden;
   /* No right padding: the stable scrollbar gutter is the row's right inset. */
   padding: 2px 0 16px 8px;
   /* Like the stream, the thumb shows only while the pointer is over the list. */

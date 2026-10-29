@@ -145,15 +145,22 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 		for (const name of ["read_file", "write_file", "edit_file", "exit_plan_mode"]) {
 			assert.ok(tools.includes(name), `${name} missing from the plan tool set (${tools.join(", ")})`);
 		}
-		// The task arrives as an ordinary user message, followed by the reminder.
+		assert.equal(tools.includes("enter_plan_mode"), false);
+		// The task arrives as an ordinary user message, followed by a mode announcement.
 		const texts = first.messages.slice(1).map(textOf);
 		assert.equal(texts[0], "add a readme");
 		const reminder = texts.at(-1) ?? "";
-		assert.match(reminder, /^<system-reminder>Plan mode is ON\./);
-		assert.ok(reminder.includes("must not call enter_plan_mode"), reminder);
-		assert.ok(reminder.includes(JSON.stringify(planPath)), reminder);
-		assert.ok(reminder.includes("call exit_plan_mode exactly once"), reminder);
-		assert.equal(texts.filter((text) => text.includes("<system-reminder>Plan mode")).length, 1);
+		assert.match(reminder, /^<collaboration_mode>\n# Plan Mode/);
+		assert.ok(reminder.includes("The user turned on Plan Mode"), reminder);
+		assert.ok(reminder.includes(planPath), reminder);
+		assert.ok(reminder.includes("call exit_plan_mode to submit it for review"), reminder);
+		assert.ok(reminder.includes("does not approve implementation"), reminder);
+		assert.equal(texts.filter((text) => text.includes("<collaboration_mode>")).length, 1);
+		for (const request of fixture.requests.slice(1, 4)) {
+			assert.deepEqual(request.messages[0], first.messages[0], "plan exit cannot rewrite the system prefix");
+			assert.deepEqual(request.tools, first.tools, "plan exit cannot reorder the tool catalog");
+			assert.equal(request.messages.filter((message) => textOf(message).startsWith("<collaboration_mode>\n# Plan Mode")).length, 1);
+		}
 
 		// Only the plan file may be written. Plan mode narrows permissions rather than
 	// the tool list, so the refusal comes from the `tool_call` guard.
@@ -166,9 +173,10 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 
 		// One exit submits; the result says not to call it again and the mode is off.
 		const afterExit = fixture.requests[3]!;
-		const exitResult = textOf(afterExit.messages.at(-1)!);
+		const exitResult = textOf(afterExit.messages.filter((message) => message.role === "tool").at(-1)!);
 		assert.ok(exitResult.includes("which the host turned on for the user's /plan request, is now off"), exitResult);
 		assert.ok(exitResult.includes("Do not call exit_plan_mode again"), exitResult);
+		assert.match(textOf(afterExit.messages.at(-1)!), /^<collaboration_mode>\n# Collaboration Mode: Default/);
 		assert.equal(afterExit.messages.filter((message) => textOf(message).includes("<system-reminder>Plan")).length, 0);
 		assert.equal((session.snapshot().planMode as { enabled: boolean }).enabled, false);
 
@@ -180,7 +188,11 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 			withSkill.some((text) => text.includes("DEMO SKILL BODY") && text.includes("tidy up")),
 			"the skill was not expanded",
 		);
-		assert.ok(withSkill.at(-1)?.startsWith("<system-reminder>Plan mode is ON."));
+		// An existing Plan announcement can still be authoritative; unchanged
+		// mode/path does not append another copy after the expanded skill.
+		const latestMode = withSkill.filter((text) => text.startsWith("<collaboration_mode>")).at(-1);
+		assert.ok(latestMode?.startsWith("<collaboration_mode>\n# Plan Mode"));
+		assert.equal((session.snapshot().planMode as { enabled: boolean }).enabled, true);
 	} finally {
 		await store?.interruptAndClose().catch(() => {});
 		await fixture.stop();

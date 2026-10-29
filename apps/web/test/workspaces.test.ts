@@ -1,10 +1,117 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { canonicalWorkspacePath, resolveDefaultWorkspace, WorkspaceRegistry } from "../src/workspaces.ts";
+import {
+	canonicalWorkspacePath,
+	firstUseWorkspaceDirectory,
+	resolveDefaultWorkspace,
+	WorkspaceRegistry,
+} from "../src/workspaces.ts";
 import { WebSessionStore } from "../src/runtime.ts";
+
+const noSessions = async (): Promise<boolean> => false;
+
+test("the first-use workspace lives under Documents only when the host is told where that is", () => {
+	assert.equal(
+		firstUseWorkspaceDirectory({ STEPCODE_WEB_DOCUMENTS_DIR: "/Users/a/Documents" }),
+		join("/Users/a/Documents", "StepCode", "default-workspace"),
+	);
+	assert.equal(firstUseWorkspaceDirectory({}), undefined);
+	assert.equal(firstUseWorkspaceDirectory({ STEPCODE_WEB_DOCUMENTS_DIR: "  " }), undefined);
+	assert.equal(firstUseWorkspaceDirectory({ STEPCODE_WEB_DOCUMENTS_DIR: "Documents" }), undefined);
+});
+
+test("a blank installation creates, registers and then reuses the first-use workspace", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-first-use-")));
+	try {
+		const file = join(base, "agent", "web-workspaces.json");
+		const directory = join(base, "Documents", "StepCode", "default-workspace");
+		const registry = new WorkspaceRegistry(file);
+		assert.equal(await registry.initializeDefault(directory, noSessions), directory);
+		assert.deepEqual(await registry.list(), [
+			{ path: directory, name: "default-workspace", available: true, default: true },
+		]);
+		assert.deepEqual(JSON.parse(await readFile(file, "utf8")), {
+			workspaces: [directory],
+			removedWorkspaces: [],
+			defaultWorkspace: directory,
+		});
+
+		// A later launch reuses it, even once it holds work and other workspaces exist.
+		const other = join(base, "project");
+		await mkdir(other);
+		const reopened = new WorkspaceRegistry(file);
+		await reopened.add(other);
+		assert.equal(await reopened.initializeDefault(join(base, "elsewhere"), async () => true), directory);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("an existing installation never gets a first-use workspace", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-first-use-")));
+	try {
+		const directory = join(base, "Documents", "StepCode", "default-workspace");
+		// Sessions already exist somewhere.
+		const withSessions = new WorkspaceRegistry(join(base, "a.json"));
+		assert.equal(await withSessions.initializeDefault(directory, async () => true), undefined);
+		// A workspace is registered, or one was removed.
+		await mkdir(join(base, "project"));
+		const registered = new WorkspaceRegistry(join(base, "b.json"));
+		await registered.add(join(base, "project"));
+		assert.equal(await registered.initializeDefault(directory, noSessions), undefined);
+		const removed = new WorkspaceRegistry(join(base, "c.json"));
+		await removed.remove(join(base, "project"));
+		assert.equal(await removed.initializeDefault(directory, noSessions), undefined);
+		await assert.rejects(access(directory));
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a removed first-use workspace is not created again until it is re-added", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-first-use-")));
+	try {
+		const file = join(base, "web-workspaces.json");
+		const directory = join(base, "Documents", "StepCode", "default-workspace");
+		const registry = new WorkspaceRegistry(file);
+		await registry.initializeDefault(directory, noSessions);
+		await registry.remove(directory);
+		const reopened = new WorkspaceRegistry(file);
+		assert.equal(await reopened.initializeDefault(directory, noSessions), undefined);
+		assert.deepEqual(await reopened.list(), [
+			{ path: directory, name: "default-workspace", available: true, hidden: true, default: true },
+		]);
+		await reopened.add(directory);
+		assert.equal(await new WorkspaceRegistry(file).initializeDefault(directory, noSessions), directory);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a first-use workspace that cannot be created leaves the registry blank and retryable", async () => {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-first-use-")));
+	try {
+		const file = join(base, "web-workspaces.json");
+		const directory = join(base, "Documents", "StepCode", "default-workspace");
+		await mkdir(join(base, "Documents", "StepCode"), { recursive: true });
+		await writeFile(directory, "occupied");
+		const registry = new WorkspaceRegistry(file);
+		await assert.rejects(registry.initializeDefault(directory, noSessions));
+		assert.deepEqual(await registry.list(), []);
+		// A session that starts while the folder is being made wins.
+		await rm(directory);
+		let calls = 0;
+		const startsMeanwhile = async (): Promise<boolean> => calls++ > 0;
+		assert.equal(await registry.initializeDefault(directory, startsMeanwhile), undefined);
+		assert.deepEqual(await registry.list(), []);
+		assert.equal(await registry.initializeDefault(directory, noSessions), directory);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
 
 test("workspaces persist across registry instances and can be removed", async () => {
 	const base = await realpath(await mkdtemp(join(tmpdir(), "stepcode-web-workspaces-")));

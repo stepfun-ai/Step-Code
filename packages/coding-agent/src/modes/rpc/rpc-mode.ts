@@ -51,7 +51,20 @@ export type {
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost): Promise<never> {
+/**
+ * Options for the RPC channel.
+ *
+ * RPC is a control channel, and its stdout is a program's stdin pipe — but a
+ * harness can redirect it to a file just as easily as `json`. It therefore
+ * defaults to durable events like the JSON channel; a caller that renders live
+ * progress (the subagent parent) opts in explicitly.
+ */
+export interface RpcModeOptions {
+	includeLiveEvents?: boolean;
+}
+
+export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: RpcModeOptions = {}): Promise<never> {
+	const includeLiveEvents = options.includeLiveEvents === true;
 	takeOverStdout();
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
@@ -325,7 +338,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost): Promise<
 		unsubscribeBackpressure?.();
 		session = nextSession;
 		unsubscribe = session.subscribe((event) => {
-			output(toJsonEvent(event));
+			// The projection owns the record policy (frames are opt-in); filtering
+			// here as well would let the two decisions drift.
+			const projected = toJsonEvent(event, { includeLiveEvents });
+			if (projected) output(projected);
 			if (event.type === "agent_settled") {
 				void checkShutdownRequested();
 			}

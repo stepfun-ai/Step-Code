@@ -402,6 +402,8 @@ export interface AgentToolResult<T> {
 
 /**
  * Callback used by tools to stream partial execution updates.
+ * An update is a replacement snapshot; intermediate frames may be coalesced
+ * before delivery. Anything that must be preserved belongs in the returned result.
  *
  * The callback is scoped to the current `execute()` invocation. Calls made after
  * the tool promise settles are ignored.

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
+import { buildPlanModePrompt } from "../src/features/plan-mode-prompt.ts";
 import {
 	buildStepSystemPromptAppendix,
 	invalidateGitEnvironmentCache,
@@ -119,33 +120,39 @@ describe("Step system prompt appendix", () => {
 		expect(withoutBrowser).toContain("playwright plugin");
 	});
 
-	it("adds event-driven delegation guidance only when the subagent tool is active", () => {
+	it("leaves delegation method to the subagent tool and keeps only the authorization gate", () => {
 		const withSubagent = buildStepSystemPromptAppendix(["read_file", "subagent", "agent_send"]);
 
-		expect(withSubagent).toContain("# Delegation");
-		expect(withSubagent).toContain("<agent-notification>");
-		expect(withSubagent).toContain("agent_send");
-		expect(withSubagent).toContain('subscribe:"final"');
-		// The S3-deleted tools are never mentioned: lanes are event-driven and
-		// agent_send is the only lane verb.
-		expect(withSubagent).not.toContain("agent_wait");
-		expect(withSubagent).not.toContain("agent_list");
-		expect(withSubagent).not.toContain("agent_reply");
-		expect(withSubagent).not.toContain("agent_interrupt");
+		// Method and lane mechanics moved into the subagent tool description.
+		expect(withSubagent).not.toContain("# Delegation");
+		expect(withSubagent).not.toContain("<agent-notification>");
+		expect(withSubagent).toContain("# Coordination primitives");
+		expect(withSubagent).toContain("Every other primitive needs explicit authorization");
+		expect(withSubagent).toContain("subagent when the user, applicable AGENTS.md, or a skill asks");
+		// The old automatic escalation is gone everywhere in the prompt.
+		expect(withSubagent).not.toContain("long or exploratory task → subagent");
+		expect(withSubagent).not.toContain("Escalate only when");
+		expect(withSubagent).not.toContain("the parent context is precious");
 
 		const withoutSubagent = buildStepSystemPromptAppendix(["read_file"]);
 		expect(withoutSubagent).not.toContain("# Delegation");
 	});
 
-	it("adds the Planning section only when enter_plan_mode is active", () => {
-		const withPlan = buildStepSystemPromptAppendix(["read_file", "enter_plan_mode", "exit_plan_mode"]);
-		expect(withPlan).toContain("# Planning");
-		expect(withPlan).toContain("There is no entry gate");
-		expect(withPlan).toContain("exit_plan_mode");
-		expect(withPlan).toContain("Skip plan mode for trivial work");
+	it("never describes plan mode as something the model enters", () => {
+		const withPlan = buildStepSystemPromptAppendix(["read_file", "exit_plan_mode"]);
+		expect(withPlan).not.toContain("# Planning");
+		expect(withPlan).not.toContain("enter_plan_mode");
+		expect(withPlan).not.toContain("There is no entry gate");
+		expect(withPlan).toContain("# Plan mode");
+		expect(withPlan).toContain("only the user starts it, with /plan or --plan");
+		expect(withPlan).toContain("<collaboration_mode>");
 
 		const withoutPlan = buildStepSystemPromptAppendix(["read_file", "write_file"]);
-		expect(withoutPlan).not.toContain("# Planning");
+		expect(withoutPlan).not.toContain("# Plan mode");
+		expect(withoutPlan).not.toContain("<collaboration_mode>");
+		// The workflow step tracks progress; it no longer asks for a standing plan.
+		expect(withoutPlan).not.toContain("Plan when useful");
+		expect(withoutPlan).toContain("A todo list is not a plan proposal");
 	});
 
 	it("adds the Task tracking section and task tool rules only when task tools are active", () => {
@@ -164,22 +171,16 @@ describe("Step system prompt appendix", () => {
 
 	it("distinguishes a proposal from execution progress and refreshes tasks after resume", () => {
 		const prompt = buildStepSystemPromptAppendix([
-			"enter_plan_mode",
 			"exit_plan_mode",
 			"task_create",
 			"task_update",
 			"task_get",
 			"task_list",
 		]);
-		expect(prompt).toContain("A plan is a Markdown proposal explaining how and why");
 		expect(prompt).toContain("Tasks are todo items in the session execution checklist");
 		expect(prompt).toContain("not to execute, delegate, or schedule work");
-		expect(prompt).toContain("submit the written proposal for review, not to approve it yourself");
-		expect(prompt).toContain("staying, requesting refinements, or cancelling keeps it active");
-		expect(prompt).toContain("exits without interactive approval");
-		expect(prompt).toContain("not a shell sandbox");
+		expect(prompt).toContain("independent of plan mode");
 		expect(prompt).toContain("resuming work or after compaction");
-		expect(prompt).toContain("caller must gate approval externally");
 		expect(prompt).not.toContain("update_plan");
 		expect(prompt).not.toContain("TodoWrite");
 	});
@@ -234,6 +235,7 @@ describe("Step system prompt appendix", () => {
 		expect(withCron).toContain("cron_create");
 		expect(withCron).toContain("workflow");
 		expect(withCron).toContain("Do not stack primitives to look busy");
+		expect(withCron).toContain("Each primitive's own tool description or section explains how to use it");
 
 		const withWorkflow = buildStepSystemPromptAppendix(["read_file", "workflow"]);
 		expect(withWorkflow).toContain("# Coordination primitives");
@@ -250,6 +252,7 @@ describe("Step system prompt appendix", () => {
 		const prompt = buildStepSystemPromptAppendix(["read_file"]);
 		expect(prompt).toContain("# Cost and consent");
 		expect(prompt).toContain("Opt-in gated tools (workflow, ultraloop) require the user's explicit trigger");
+		expect(prompt).toContain("subagent requires an explicit delegation request");
 		expect(prompt).not.toContain("necessary but not sufficient consent");
 		expect(prompt).not.toContain("so the user can steer before you spend");
 	});
@@ -371,7 +374,7 @@ describe("Step App system prompt product", () => {
 		expect(profileTools).toEqual(
 			expect.arrayContaining(["read_file", "write_file", "edit_file", "run_command", "search_web"]),
 		);
-		const featureTools = ["enter_plan_mode", "task_create", "subagent", "create_goal", "cron_create"];
+		const featureTools = ["exit_plan_mode", "task_create", "subagent", "create_goal", "cron_create"];
 		const prompt = buildSystemPrompt({
 			product: STEP_APP_SYSTEM_PROMPT_PRODUCT,
 			cwd: "/workspace/app",
@@ -382,12 +385,13 @@ describe("Step App system prompt product", () => {
 		expect(prompt).toContain("# StepCode operating contract");
 		expect(prompt).toContain("<env>");
 		expect(prompt).toContain("Operating mode: all-tools");
-		expect(prompt).toContain("# Planning");
+		expect(prompt).toContain("# Plan mode");
 		expect(prompt).toContain("# Task tracking");
 		expect(prompt).toContain("# Coordination primitives");
 		expect(prompt).toContain("# Long-running goals");
 		expect(prompt).toContain("# Scheduled work");
-		expect(prompt).toContain("# Delegation");
+		expect(prompt).toContain("subagent when the user, applicable AGENTS.md, or a skill asks");
+		expect(prompt).not.toContain("# Delegation");
 		expect(prompt).toContain("- edit_file:");
 		expect(prompt).toContain("Tool selection:");
 		// Nothing terminal-only from the CLI identity reaches the app prompt.
@@ -406,7 +410,7 @@ describe("one-shot interaction contract", () => {
 		"write_file",
 		"edit_file",
 		"run_command",
-		"enter_plan_mode",
+		"exit_plan_mode",
 		"create_goal",
 		"workflow",
 	];
@@ -436,21 +440,17 @@ describe("one-shot interaction contract", () => {
 
 	it("keeps planning as investigation: exit reports the proposal, it does not authorize work", () => {
 		const app = render("one-shot");
-		expect(app).toContain("Planning means investigation and a written proposal, not carrying the work out");
-		expect(app).toContain("exit_plan_mode reports that the investigation is finished");
-		expect(app).toContain("it does not authorize implementation");
-		// The app shows the proposal for a decision; implementation waits for it.
-		expect(app).toContain("shows the proposal to the user for a decision");
-		expect(app).toContain("never start implementing before that approval arrives");
-		expect(app).toContain("calling exit_plan_mode again");
-		// The CLI's "wait for approval" sentence would be a lie here: there is no
-		// dialog. The one-shot wording replaces it instead of weakening it.
-		expect(app).not.toContain("After the user approves execution");
-		expect(app).not.toContain("carry out the plan in the same turn");
-
-		const cli = render("session");
-		expect(cli).toContain("After the user approves execution");
-		expect(cli).not.toContain("Planning means investigation and a written proposal");
+		expect(app).toContain("Plan mode is user-controlled");
+		expect(app).toContain("<collaboration_mode> message");
+		expect(app).not.toContain("Call enter_plan_mode");
+		// Mode instructions come from the append-only announcement, not the
+		// app's system prefix. External exit is a handoff, not approval.
+		const announcement = buildPlanModePrompt("/workspace/app/plan.md", true);
+		expect(announcement).toContain("You must not perform mutating actions");
+		expect(announcement).toContain("does not approve implementation");
+		expect(announcement).toContain("exit_plan_mode hands a new proposal to an external reviewer");
+		expect(announcement).toContain("leave planning without a proposal");
+		expect(render("session")).toContain("Plan mode is user-controlled");
 	});
 
 	it("keeps goal continuation but forbids the model from replacing a goal", () => {

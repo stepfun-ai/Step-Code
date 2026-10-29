@@ -1,5 +1,5 @@
 /**
- * Secondary panels that open from `#plusMenu`'s 更多 rows, ZCode-style: a panel
+ * Secondary panels that open from `#plusMenu`'s 更多 rows: a panel
  * flies out to the right of the menu with a search field on top and a list
  * below. Plugins and skills share `PickerPanel` (one async load, then filter);
  * the session picker reads the store instead and packages the picked
@@ -166,7 +166,7 @@ function SubRow({
 }) {
 	return (
 		<button type="button" className={faded ? "plus-sub-row plus-sub-row--faded" : "plus-sub-row"} onClick={onClick}>
-			{icon ? <Icon className={`plus-sub-kind plus-sub-kind--${icon}`} name={icon} size="xs" /> : null}
+			{icon ? <Icon className={`plus-sub-kind plus-sub-kind--${icon}`} name={icon} size="md" /> : null}
 			<span className="plus-sub-body">
 				<span className="plus-sub-name">
 					{name}
@@ -315,10 +315,7 @@ export function SessionsPanel({ onPick }: { readonly onPick: (id: string) => voi
 		[sessions],
 	);
 	return (
-		<SubPanelFrame
-			placeholder={t("searchPlaceholder")}
-			footer={<span className="plus-sub-note">{t("plusSessionContextHint")}</span>}
-		>
+		<SubPanelFrame placeholder={t("searchPlaceholder")} footer={null}>
 			{(query) => {
 				const hits = rows.filter((session) =>
 					[session.name, session.firstMessage, session.cwd].some((text) => text?.toLowerCase().includes(query)),

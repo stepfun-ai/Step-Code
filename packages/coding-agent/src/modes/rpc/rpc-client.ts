@@ -36,6 +36,8 @@ export interface RpcClientOptions {
 	provider?: string;
 	/** Model ID to use */
 	model?: string;
+	/** Include live frames for streaming consumers; redirected logs become much larger. */
+	includeLiveEvents?: boolean;
 	/** Additional CLI arguments */
 	args?: string[];
 }
@@ -80,6 +82,7 @@ export class RpcClient {
 
 		const cliPath = this.options.cliPath ?? "dist/bundle/step.js";
 		const args = ["--mode", "rpc"];
+		if (this.options.includeLiveEvents) args.push("--include-live-events");
 
 		if (this.options.provider) {
 			args.push("--provider", this.options.provider);

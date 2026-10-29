@@ -1,7 +1,7 @@
 /**
  * Pure formatting helpers ported from legacy app.js. None of them reads app
  * state; strings that were translated in the legacy code are parameters here
- * (see i18n/index.ts for `formatRelativeTime`, which supplies them).
+ * (see i18n/index.ts for `formatRelativeTimeLong`, which supplies them).
  */
 
 import type { ToolArgs } from "../state/types";
@@ -102,9 +102,10 @@ export function basename(path: string | undefined | null): string {
 	);
 }
 
-/** Elapsed time as `now` / `5m` / `3h` / `2d` (legacy `relativeTime`). */
-export function relativeTime(
+/** Elapsed time spelled out in `locale`: "4 小时前" / "4 hours ago"; under a minute is `justNowLabel`. */
+export function relativeTimeLong(
 	value: string | number | Date | undefined,
+	locale: string,
 	justNowLabel: string,
 	now = Date.now(),
 ): string {
@@ -112,9 +113,10 @@ export function relativeTime(
 	if (!Number.isFinite(timestamp)) return "";
 	const elapsed = Math.max(0, now - timestamp);
 	if (elapsed < 60_000) return justNowLabel;
-	if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
-	if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
-	return `${Math.floor(elapsed / 86_400_000)}d`;
+	const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+	if (elapsed < 3_600_000) return format.format(-Math.floor(elapsed / 60_000), "minute");
+	if (elapsed < 86_400_000) return format.format(-Math.floor(elapsed / 3_600_000), "hour");
+	return format.format(-Math.floor(elapsed / 86_400_000), "day");
 }
 
 /** 45.9K rather than 45900 and 118.6M rather than 118627K, so a row stays one line. */

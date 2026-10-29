@@ -30,6 +30,65 @@
 .feedback-dialog h2 {
 	font-size: 16px;
 }
+.feedback-section {
+	display: grid;
+	gap: 8px;
+}
+.feedback-section-label {
+	color: var(--ink);
+	font-size: 13px;
+	font-weight: 500;
+}
+.feedback-required {
+	margin-left: 3px;
+	color: var(--danger);
+}
+.feedback-optional {
+	color: var(--ink-3);
+	font-weight: 400;
+}
+/* The required vote: larger than the optional topic chips, so the two rows never read as one choice. */
+.feedback-sentiments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.feedback-sentiment {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: var(--control-h-md);
+	padding: 0 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface);
+	color: var(--ink-2);
+	font-size: 13px;
+	transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+.feedback-sentiment:hover {
+	background: var(--hover);
+	color: var(--ink);
+}
+.feedback-sentiment[aria-pressed="true"] {
+	border-color: var(--ink);
+	background: var(--selected);
+	color: var(--ink);
+	font-weight: 500;
+	box-shadow: inset 0 0 0 0.5px var(--ink);
+}
+.feedback-sentiments[data-missing] .feedback-sentiment {
+	border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
+}
+.feedback-actions {
+	display: grid;
+	gap: 6px;
+}
+.feedback-required-hint {
+	color: var(--danger);
+	font-size: 12px;
+	text-align: center;
+}
 .feedback-topics {
 	display: flex;
 	flex-wrap: wrap;

@@ -48,6 +48,7 @@ import {
 	readFeedbackUsername,
 	readGlobalStepDefaults,
 	readStepBuildIdentity,
+	readSubagentLaneSnapshot,
 	resolveFeedbackEndpoint,
 	resolveFeedbackSettings,
 	resolveStepAgentDir,
@@ -68,6 +69,9 @@ import {
 	type StepMcpStatus,
 	type StepPermissionPresetId,
 	type StepSettingsManager,
+	SUBAGENT_LANE_CHANNEL,
+	SUBAGENT_RESPONSE_ENTRY,
+	type SubagentLaneSnapshot,
 	submitFeedback as submitKernelFeedback,
 	syncStepLoginProfileEndpoint,
 	THINKING_LEVEL_OPTIONS,
@@ -106,6 +110,7 @@ import { SelectionBroker, type SelectionEvent, type SelectionRequest, selectionS
 import { generateSessionTitle, type SlashCommandKind, sessionTitleInput } from "./session-title.ts";
 import { type WebSkill, webSkills } from "./skills.ts";
 import { resolveSubagentCliPath } from "./subagent-cli.ts";
+import { retainSubagentLane } from "./subagent-lane-cache.ts";
 import { projectSubagentNotification } from "./subagent-notification.ts";
 import { TextInputBroker, type TextInputEvent, textInput } from "./text-input.ts";
 import { savedThinkingTimings, THINKING_TIMING_TYPE, ThinkingClock, type ThinkingTimings } from "./thinking-timing.ts";
@@ -156,6 +161,7 @@ async function refreshStepModelCatalog(modelRuntime: ModelRuntime): Promise<void
 
 /** What this session's listeners are told; `emit` stamps each one with its revision. */
 export type WebEventBody =
+	| { type: "subagent_lane"; lane: SubagentLaneSnapshot | null }
 	| ClarificationEvent
 	| SelectionEvent
 	| TextInputEvent
@@ -337,6 +343,7 @@ export function webExtensions(
 	broker: ApprovalBroker,
 	onPermissionChange: (preset: StepPermissionPresetId) => void,
 	usageRecording?: () => WebUsageResources,
+	onLane?: (lane: SubagentLaneSnapshot | null) => void,
 ): InlineExtension[] {
 	const usage = webUsageTelemetry();
 	const telemetry = usage.reporter;
@@ -349,6 +356,13 @@ export function webExtensions(
 		name: "StepCode Web host",
 		hidden: true,
 		factory: (pi) => {
+			if (onLane) {
+				pi.events.on(SUBAGENT_LANE_CHANNEL, (value) => {
+					const lane = readSubagentLaneSnapshot(value);
+					if (lane) onLane(lane);
+				});
+				pi.on("session_shutdown", () => onLane(null));
+			}
 			pi.on("tool_call", (event) => {
 				broker.captureToolCall(event.toolCallId, event.toolName, event.input);
 			});
@@ -655,6 +669,9 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
 		...(notification ? { details: notification } : {}),
+		...(entry.type === "custom" && entry.customType === SUBAGENT_RESPONSE_ENTRY
+			? { customType: entry.customType, data: entry.data }
+			: {}),
 		...(goalRound === undefined ? {} : { goalRound }),
 		...(echo === undefined ? {} : { customType: COMMAND_ECHO_TYPE, command: echo }),
 		// A compaction row shows what it replaced: the summary, the prompt volume
@@ -823,6 +840,7 @@ export class WebSession {
 	/** `/btw` answers of this session, oldest first. Process memory, never persisted. */
 	private sideAnswers: WebSideAnswer[] = [];
 	private readonly listeners = new Set<(event: WebEvent) => void>();
+	private readonly subagentLanes = new Map<string, SubagentLaneSnapshot>();
 	private runtime!: AgentSessionRuntime;
 	private session!: AgentSession;
 	private status: WebSessionStatus = "idle";
@@ -1104,6 +1122,13 @@ export class WebSession {
 						// The session does not exist yet when the extension list is built,
 						// so recording resolves its skill list lazily, once it does.
 						() => this.usageResources(),
+						(lane) => {
+							if (!lane) this.subagentLanes.clear();
+							else {
+								retainSubagentLane(this.subagentLanes, lane);
+							}
+							this.emit({ type: "subagent_lane", lane });
+						},
 					),
 				},
 			});
@@ -2208,6 +2233,7 @@ export class WebSession {
 			interruptedTurn: hasInterruptedTurn(branch, this.isBusy()),
 			compacting: this.session.isCompacting,
 			entries: projectEntries(branch),
+			subagentLanes: [...this.subagentLanes.values()],
 			pendingApprovals: this.broker.pendingRequests(),
 			pendingClarifications: this.clarifications.pendingRequests(),
 			pendingSelections: this.selections.pendingRequests(),
@@ -2707,6 +2733,18 @@ export class WebSessionStore {
 	}
 }
 
+/** The first-use workspace, when the host prepared one in place of Desktop's home-folder fallback. */
+let launchWorkspaceOverride: string | undefined;
+
+/**
+ * Make `path` the launch folder. Called once at startup with the first-use
+ * workspace (see `WorkspaceRegistry.initializeDefault`), which only exists when
+ * Desktop had no folder of its own to launch in.
+ */
+export function setLaunchWorkspace(path: string): void {
+	launchWorkspaceOverride = path;
+}
+
 export function defaultWorkspace(): string {
-	return process.env.STEPCODE_WEB_CWD?.trim() || process.cwd();
+	return launchWorkspaceOverride ?? (process.env.STEPCODE_WEB_CWD?.trim() || process.cwd());
 }

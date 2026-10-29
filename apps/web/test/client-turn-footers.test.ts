@@ -99,6 +99,28 @@ test("unknown status, empty replies and error-only turns have no footer", () => 
 	}
 });
 
+test("metadata includes one final error without adding an error-only action footer", () => {
+	const first = { ...message("error-first", "assistant", ""), error: "first failure", timestamp: "2026-10-26T03:12:00Z" };
+	const last = { ...message("error-last", "assistant", ""), error: "last failure", timestamp: "2026-10-26T03:14:00Z" };
+	const items = [message("u", "user"), first, last, tool("trailing")];
+	assert.deepEqual(collectTurnFooters(items, "failed", false), []);
+	const metadata = collectTurnFooters(items, "failed", false, true);
+	assert.equal(metadata.length, 1);
+	assert.equal(metadata[0]?.messages.at(-1), last);
+	assert.equal(metadata[0]?.lastIndex, 3);
+	for (const status of ["running", "waiting", undefined] as const)
+		assert.deepEqual(collectTurnFooters(items, status, false, true), []);
+	assert.deepEqual(collectTurnFooters([...items, tool("pending", "pending")], "idle", false, true), []);
+});
+
+test("a final record with missing time is not replaced by an earlier recorded clock", () => {
+	const earlier = { ...message("earlier", "assistant"), timestamp: "2026-10-26T03:12:00Z" };
+	const final = message("final", "assistant");
+	const [footer] = collectTurnFooters([message("u", "user"), earlier, tool("t"), final], "idle", false, true);
+	assert.equal(footer?.messages.at(-1), final);
+	assert.equal(footer?.messages.at(-1)?.timestamp, undefined);
+});
+
 test("an interrupted historical turn is bounded by the next prompt, not tool success", () => {
 	const items = [...multiTool, tool("stopped", "pending"), message("u2", "user"), message("a4", "assistant")];
 	assert.deepEqual(collectTurnFooters(items, "running", false).map((footer) => footer.lastIndex), [6]);

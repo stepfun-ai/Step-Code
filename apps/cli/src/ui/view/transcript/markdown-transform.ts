@@ -9,6 +9,26 @@ export function createMarkdownTransform(
 		applyMarkdownTransformers(markdown, { messageType, isStreaming, availableWidth }, transformers);
 }
 
+/**
+ * Transform for a component that outlives a single frame.
+ *
+ * A reused `Markdown` instance keeps the transform it was constructed with, so the
+ * streaming state has to be read at call time: the final frame of a reply renders
+ * in "not streaming" mode, and Mermaid warnings only appear then.
+ */
+export function createLiveMarkdownTransform(
+	messageType: MarkdownTransformContext["messageType"],
+	readIsStreaming: () => boolean,
+	readTransformers: () => readonly MarkdownTransformer[],
+): (markdown: string, availableWidth: number) => string {
+	return (markdown, availableWidth) =>
+		applyMarkdownTransformers(
+			markdown,
+			{ messageType, isStreaming: readIsStreaming(), availableWidth },
+			readTransformers(),
+		);
+}
+
 function applyMarkdownTransformers(
 	markdown: string,
 	context: MarkdownTransformContext,

@@ -299,6 +299,150 @@ describe("Agent", () => {
 		expect(receivedSignal?.aborted).toBe(true);
 	});
 
+	it("should forward every tool update that is separated in time", async () => {
+		// A drain that finishes must not stop later frames from being forwarded.
+		// Caching the first delivery handle and never clearing it delivered exactly
+		// one frame per call, which silently starved live progress.
+		const toolSchema = Type.Object({});
+		const tool: AgentTool<typeof toolSchema, { step: number }> = {
+			name: "paced_tool",
+			label: "Paced Tool",
+			description: "Emits frames separated by a yield",
+			parameters: toolSchema,
+			async execute(_toolCallId, _params, _signal, onUpdate) {
+				for (let step = 0; step < 4; step += 1) {
+					onUpdate?.({ content: [{ type: "text", text: `frame ${step}` }], details: { step } });
+					// Yield so each frame is fully delivered before the next one.
+					await new Promise((resolve) => setTimeout(resolve, 0));
+				}
+				// Ends the run so the single queued model response is not replayed.
+				return { content: [{ type: "text", text: "ok" }], details: { step: 4 }, terminate: true };
+			},
+		};
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantToolUseMessage([
+							{ type: "toolCall", id: "paced-1", name: "paced_tool", arguments: {} },
+						]),
+					});
+				});
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+		await agent.prompt("run the paced tool");
+
+		const frames = events.filter((event) => event.type === "tool_execution_update");
+		expect(
+			frames.map((event) => (event as { partialResult: { details: { step: number } } }).partialResult.details.step),
+		).toEqual([0, 1, 2, 3]);
+	});
+
+	it("should deliver the newest of several frames emitted in one synchronous burst", async () => {
+		// The other half of the same contract: a burst may coalesce, but the last
+		// frame must always arrive, and frames must never be reordered.
+		const toolSchema = Type.Object({});
+		const tool: AgentTool<typeof toolSchema, { step: number }> = {
+			name: "burst_tool",
+			label: "Burst Tool",
+			description: "Emits frames without yielding",
+			parameters: toolSchema,
+			async execute(_toolCallId, _params, _signal, onUpdate) {
+				for (let step = 0; step < 50; step += 1) {
+					onUpdate?.({ content: [{ type: "text", text: `frame ${step}` }], details: { step } });
+				}
+				return { content: [{ type: "text", text: "ok" }], details: { step: 50 }, terminate: true };
+			},
+		};
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantToolUseMessage([
+							{ type: "toolCall", id: "burst-1", name: "burst_tool", arguments: {} },
+						]),
+					});
+				});
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+		await agent.prompt("run the burst tool");
+
+		const steps = events
+			.filter((event) => event.type === "tool_execution_update")
+			.map((event) => (event as { partialResult: { details: { step: number } } }).partialResult.details.step);
+		expect(steps.length).toBeGreaterThanOrEqual(1);
+		expect(steps.length).toBeLessThanOrEqual(50);
+		// The last frame is never dropped, and order is preserved.
+		expect(steps.at(-1)).toBe(49);
+		expect([...steps].sort((a, b) => a - b)).toEqual(steps);
+	});
+
+	it("reports an earlier frame delivery failure even after a later drain succeeds", async () => {
+		const schema = Type.Object({});
+		const tool: AgentTool<typeof schema> = {
+			name: "frames",
+			label: "Frames",
+			description: "Streams snapshots",
+			parameters: schema,
+			async execute(_id, _params, _signal, onUpdate) {
+				onUpdate?.({ content: [{ type: "text", text: "first" }], details: {} });
+				// Cross an event-loop checkpoint so the first drain has rejected before
+				// another update replaces its handle. No elapsed-time assumption is needed.
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				onUpdate?.({ content: [{ type: "text", text: "second" }], details: {} });
+				return { content: [{ type: "text", text: "done" }], details: {} };
+			},
+		};
+		let calls = 0;
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				const message =
+					calls++ === 0
+						? createAssistantToolUseMessage([{ type: "toolCall", id: "frames-1", name: "frames", arguments: {} }])
+						: createAssistantMessage("settled");
+				queueMicrotask(() =>
+					stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message }),
+				);
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		let updates = 0;
+		agent.subscribe((event) => {
+			events.push(event);
+			if (event.type === "tool_execution_update" && updates++ === 0) throw new Error("frame subscriber failed");
+		});
+		await expect(agent.prompt("run frames")).resolves.toBeUndefined();
+		await agent.waitForIdle();
+		expect(updates).toBe(2);
+		const end = events.find((event) => event.type === "tool_execution_end");
+		expect(end).toMatchObject({
+			isError: true,
+			result: { content: [{ type: "text", text: "frame subscriber failed" }] },
+		});
+		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
 	it("should ignore tool updates after the tool execution settles", async () => {
 		const toolSchema = Type.Object({});
 		let delayedUpdate: AgentToolUpdateCallback<{ status: string }> | undefined;

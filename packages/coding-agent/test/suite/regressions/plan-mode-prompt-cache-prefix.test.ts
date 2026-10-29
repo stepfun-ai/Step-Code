@@ -69,20 +69,26 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 	try {
 		// The shape of an ordinary Step profile: every plan tool is already active,
 		// so plan mode has nothing to add.
-		harness.session.setActiveToolsByName([...PLAN_TOOLS, "find_tools", "enter_plan_mode", "exit_plan_mode"]);
+		harness.session.setActiveToolsByName([...PLAN_TOOLS, "find_tools", "exit_plan_mode"]);
 		const planPath = getPlanFilePath(harness.sessionManager.getSessionId(), harness.tempDir);
 
 		const captured: CapturedRequest[] = [];
-		const capture = (context: { tools?: Array<{ name: string }>; systemPrompt?: string }) => {
+		const capture = (context: {
+			tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+			systemPrompt?: string;
+		}) => {
 			captured.push({
-				tools: (context.tools ?? []).map((tool) => tool.name),
+				// Names, descriptions, and schemas: everything the provider serializes.
+				tools: (context.tools ?? []).map((tool) =>
+					JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
+				),
 				systemPrompt: context.systemPrompt ?? "",
 			});
 		};
 		harness.setResponses([
 			(context) => {
 				capture(context);
-				return fauxAssistantMessage(fauxToolCall("enter_plan_mode", {}), { stopReason: "toolUse" });
+				return fauxAssistantMessage("default turn");
 			},
 			(context) => {
 				capture(context);
@@ -102,13 +108,31 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 				capture(context);
 				return fauxAssistantMessage("done");
 			},
+			(context) => {
+				capture(context);
+				return fauxAssistantMessage("back in default mode");
+			},
 		]);
 
+		// The user enters plan mode; the announcement rides in the messages, never
+		// in the tool block or system prompt. Run a default-mode turn first so the
+		// comparison spans default → plan → default.
+		await harness.session.prompt("Hello.");
+		await harness.session.prompt("/plan");
 		await harness.session.prompt("Propose an approach.");
+		await harness.session.prompt("Continue.");
 
 		// The system prompt embeds the active tool snippets, so equal tools plus an
 		// equal prompt is exactly the prefix the provider caches.
-		expect(captured).toHaveLength(4);
+		expect(captured).toHaveLength(5);
+		const announcements = harness.session.messages.filter(
+			(message) => message.role === "custom" && message.customType === "step-plan-mode",
+		);
+		expect(announcements.map((message) => (message as { details?: { mode?: string } }).details?.mode)).toEqual([
+			"plan",
+			"default",
+		]);
+		expect(captured[0]?.tools.some((tool) => tool.includes('"name":"exit_plan_mode"'))).toBe(true);
 		for (const request of captured.slice(1)) {
 			expect(request.tools).toEqual(captured[0]?.tools);
 			expect(request.systemPrompt).toBe(captured[0]?.systemPrompt);
@@ -126,11 +150,11 @@ it("still blocks non-plan mutations after entering plan mode with tools intact",
 	});
 
 	try {
-		harness.session.setActiveToolsByName([...PLAN_TOOLS, "find_tools", "enter_plan_mode", "exit_plan_mode"]);
+		harness.session.setActiveToolsByName([...PLAN_TOOLS, "find_tools", "exit_plan_mode"]);
 		const toolsBefore = harness.session.agent.state.tools.map((tool) => tool.name);
 
+		await harness.session.prompt("/plan");
 		harness.setResponses([
-			() => fauxAssistantMessage(fauxToolCall("enter_plan_mode", {}), { stopReason: "toolUse" }),
 			// The editing tool is still visible; the policy must reject the target.
 			() =>
 				fauxAssistantMessage(fauxToolCall("write_file", { path: "src/app.ts", content: "x" }), {

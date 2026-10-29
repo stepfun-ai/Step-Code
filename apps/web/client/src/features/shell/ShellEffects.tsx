@@ -16,6 +16,7 @@ import {
 	refreshWorkspaces,
 } from "../../state/session";
 import { type AppState, getState, setUi, useAppStore } from "../../state/store";
+import { handleTagGroupBeforeUnload } from "../../state/tag-group-persistence";
 import { answerSelection, answerTextInput, pendingSelection, pendingTextInput } from "../composer/actions";
 import { openTree, setPreviewOpen } from "../files/actions";
 import { closeTopmostSettingsLayer } from "../settings/actions";
@@ -140,7 +141,13 @@ const BACKGROUND_STATUS_POLL_MS = 2000;
 /** One focus can fire `focus` and `visibilitychange` back to back; read the lists once. */
 const LIST_REFRESH_MIN_INTERVAL_MS = 1000;
 
+export function watchTagGroupUnload(): () => void {
+	window.addEventListener("beforeunload", handleTagGroupBeforeUnload);
+	return () => window.removeEventListener("beforeunload", handleTagGroupBeforeUnload);
+}
+
 export function ShellEffects() {
+	useEffect(() => watchTagGroupUnload(), []);
 	useEffect(() => {
 		document.addEventListener("keydown", handleKeydown);
 		return () => document.removeEventListener("keydown", handleKeydown);

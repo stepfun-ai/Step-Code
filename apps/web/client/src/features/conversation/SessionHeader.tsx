@@ -4,7 +4,7 @@ import { hostPlatform } from "../../platform/host";
 import { sessionTitle } from "../../state/session";
 import { setUi, shallowEqual, useAppStore } from "../../state/store";
 import { Icon, IconButton, LEGACY_ICONS, Popover, Tooltip } from "../../ui";
-import { SessionMenu } from "../sidebar/SessionMenu";
+import { SessionMenu } from "../sidebar";
 import { openWorkspaceFolder } from "../workspace/actions";
 
 /** The file manager's own icon and name: Finder, File Explorer, or a plain folder elsewhere. */
@@ -17,7 +17,7 @@ const FILE_MANAGER = {
 /**
  * `#sessionHeader`: the conversation's fixed title bar — what this session is, which project
  * folder it runs in and whether it is working. The branch is the composer's branch picker's job.
- * The more button after the title opens the rename / archive / delete menu (`#streamMenu`);
+ * The more button after the title opens the pin / rename / archive / delete menu (`#streamMenu`);
  * a draft has no session to act on yet, so it waits for the first real session. The trailing
  * button shows the project folder in Finder / File Explorer.
  */

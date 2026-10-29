@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 import { createGroupAndTag, setSessionTag } from "../client/src/features/sidebar/actions.ts";
 import { createInitialState, getState, setState } from "../client/src/state/store.ts";
 import { forgetDeletedSession, refreshSessions } from "../client/src/state/session.ts";
@@ -15,7 +15,22 @@ import type { SessionSummary, TagGroup } from "../client/src/state/types.ts";
  * live exactly as long as a listed session carries their tag.
  */
 
-afterEach(() => setState(createInitialState()));
+const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const originalFetch = globalThis.fetch;
+beforeEach(() => {
+	const values = new Map<string, string>();
+	Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+		getItem: (key: string) => values.get(key) ?? null,
+		setItem: (key: string, value: string) => void values.set(key, value),
+	} });
+	setState(createInitialState());
+});
+afterEach(() => {
+	if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+	else Reflect.deleteProperty(globalThis, "localStorage");
+	globalThis.fetch = originalFetch;
+	setState(createInitialState());
+});
 
 function session(id: string, extra: Partial<SessionSummary> = {}): SessionSummary {
 	return { id, cwd: "/work/project", ...extra } as SessionSummary;
@@ -80,8 +95,11 @@ test("removing the group being filtered clears the filter instead of hiding ever
 });
 
 test("a tag whose session is gone cannot keep a group selectable after a refresh", async () => {
+	localStorage.setItem("stepcode.tagGroups", JSON.stringify({
+		version: 1, groups: [group("purple", "Ghost")], tags: [["gone", "purple"]],
+	}));
 	setState({ sessions: [], tags: new Map([["gone", "purple"]]), groups: [group("purple", "Ghost")] });
-	// The host reports no sessions; nothing carries the purple tag any more.
+	// Persisted metadata survives recovery, so only successful list pruning can remove this group.
 	globalThis.fetch = (async () => new Response(JSON.stringify({ sessions: [] }))) as typeof fetch;
 	try {
 		await refreshSessions();

@@ -19,14 +19,15 @@ import { applyPreviewWidth, PREVIEW_DEFAULT, restorePreviewWidth } from "../file
 import { useActiveTab } from "../files/PreviewBody";
 import { toggleTerminalDock } from "../terminal/actions";
 import { ContextPanel } from "./ContextPanel";
+import { ContextRing } from "./ContextRing";
 import { latestAgentRecord } from "./model";
 import { openAgentRecord } from "./open-agent";
 import { SummaryBoard } from "./SummaryBoard";
 import { SummaryHeader } from "./SummaryHeader";
 
 const PANELS: readonly { id: RightPanelId; icon: IconName; label: string }[] = [
-	{ id: "summary", icon: "layers", label: "rightSummary" },
-	{ id: "context", icon: "scanLine", label: "rightContext" },
+	{ id: "summary", icon: "clipboard", label: "rightSummary" },
+	{ id: "context", icon: "gauge", label: "rightContext" },
 	{ id: "changes", icon: "fileDiff", label: "rightChanges" },
 	{ id: "files", icon: "fileText", label: "filePreview" },
 	{ id: "subagent", icon: "bot", label: "subagents" },
@@ -37,6 +38,9 @@ export function RightToolRail() {
 	const t = useT();
 	const active = useAppStore(activeRightPanel);
 	const terminalOpen = useAppStore((state) => state.ui.terminalOpen);
+	const contextPercent = useAppStore((state) =>
+		state.contextFill && state.contextFill.sessionId === state.current?.id ? state.contextFill.percent : undefined,
+	);
 	/* The floating summary card is hidden under a mid view (market, cron), so its button must not read as pressed there. */
 	const summaryCovered = useAppStore((state) => Boolean(state.ui.midView));
 	const pressed = (id: RightPanelId) => active === id && !(id === "summary" && summaryCovered);
@@ -51,19 +55,28 @@ export function RightToolRail() {
 		if (!goal || goal.status === "complete") return undefined;
 		return goal.status === "active" ? "rail-goal-active" : "rail-goal-held";
 	});
-	const button = (panel: (typeof PANELS)[number]) => (
-		<Tooltip key={panel.id} content={t(panel.label)}>
-			<IconButton
-				data-right-panel={panel.id}
-				className={panel.id === "summary" ? goalRailClass : undefined}
-				icon={panel.icon}
-				aria-label={t(panel.label)}
-				aria-controls="rightPanel"
-				aria-pressed={pressed(panel.id)}
-				onClick={() => toggleRightPanel(panel.id)}
-			/>
-		</Tooltip>
-	);
+	const button = (panel: (typeof PANELS)[number]) => {
+		const context = panel.id === "context";
+		const label =
+			context && contextPercent !== undefined
+				? t("rightContextUsed", { percent: String(Math.round(contextPercent)) })
+				: t(panel.label);
+		return (
+			<Tooltip key={panel.id} content={label}>
+				<IconButton
+					data-right-panel={panel.id}
+					className={panel.id === "summary" ? goalRailClass : undefined}
+					icon={context ? undefined : panel.icon}
+					aria-label={label}
+					aria-controls="rightPanel"
+					aria-pressed={pressed(panel.id)}
+					onClick={() => toggleRightPanel(panel.id)}
+				>
+					{context ? <ContextRing percent={contextPercent} /> : undefined}
+				</IconButton>
+			</Tooltip>
+		);
+	};
 	return (
 		<nav className="right-tool-rail" aria-label={t("rightTools")}>
 			{PANELS.slice(0, 2).map(button)}

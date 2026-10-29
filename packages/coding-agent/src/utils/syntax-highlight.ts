@@ -50,12 +50,30 @@ for (const [name, language] of Object.entries(eagerLanguages)) {
 
 let allLanguagesPromise: Promise<void> | undefined;
 
+/**
+ * Increments when the grammar set changes.
+ *
+ * `highlight.js` resolves embedded sub-languages through the same registry, so the
+ * same source and language can produce different spans before and after the
+ * remaining grammars load — a JavaScript template literal only gets HTML colouring
+ * once the XML grammar exists. Anything memoizing highlighted output has to include
+ * this in its key, because the language name alone does not identify the result.
+ */
+let grammarRevision = 0;
+
+export function highlightGrammarRevision(): number {
+	return grammarRevision;
+}
+
 export function loadAllHighlightLanguages(): Promise<void> {
 	if (!allLanguagesPromise) {
 		allLanguagesPromise = new Promise((resolve) => {
 			setImmediate(() => {
 				void import("highlight.js/lib/index.js").then(
-					() => resolve(),
+					() => {
+						grammarRevision += 1;
+						resolve();
+					},
 					() => {
 						// Eager languages and plaintext fallback remain available.
 						resolve();

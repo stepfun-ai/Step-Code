@@ -14,6 +14,8 @@ export function collectTurnFooters(
 	items: readonly TimelineItem[],
 	status: SessionStatus | undefined,
 	pendingPrompt: boolean,
+	/** Include settled error-only turns for metadata, without adding action footers. */
+	includeErrorOnly = false,
 ): TurnFooter[] {
 	const turns: { turnId: string; lastIndex: number; messages: MessageTimelineItem[]; unsettled: boolean }[] = [];
 	items.forEach((item, index) => {
@@ -32,7 +34,8 @@ export function collectTurnFooters(
 		turn.unsettled ||= item.kind === "approval" || (item.kind === "tool" && item.state === "pending");
 	});
 	return turns.filter((turn, index) => {
-		if (!turn.messages.some((message) => message.content && !message.error)) return false;
+		if (!turn.messages.some((message) => (message.content && !message.error) || (includeErrorOnly && message.error)))
+			return false;
 		if (index < turns.length - 1) return true;
 		if (turn.unsettled) return false;
 		// A prompt not yet recorded belongs after this timeline, not to its last turn.

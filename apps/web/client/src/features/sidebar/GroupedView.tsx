@@ -1,6 +1,7 @@
 import { type DragEvent, type ReactNode, useState } from "react";
 import { type TagColor, useT } from "../../i18n";
 import { cx } from "../../lib/format";
+import { orderedSessions } from "../../state/session-order";
 import { shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary, TagGroup } from "../../state/types";
 import { EmptyState, Icon, LEGACY_ICONS } from "../../ui";
@@ -12,6 +13,10 @@ import { cssVar, SESSION_DRAG_TYPE, TAG_COLOR_KEYS, TAG_COLORS } from "./tags";
 interface GroupedSectionProps {
 	/** Only real tag groups can rename; the ungrouped and archived sections have none. */
 	readonly group?: TagGroup;
+	/** The list id its rows reorder within: the tag colour, or `ungrouped` / `archived`. */
+	readonly listId: string;
+	/** The same rows in drawn order: the neighbours a reader can see, and the drag order. */
+	readonly drawnIds: readonly string[];
 	readonly name: string;
 	readonly color: TagColor | null;
 	readonly sessions: readonly SessionSummary[];
@@ -19,7 +24,7 @@ interface GroupedSectionProps {
 }
 
 /** One coloured section of the grouped view (legacy `buildGroupedSection`, 992-1012). */
-function GroupedSection({ group, name, color, sessions, archived = false }: GroupedSectionProps) {
+function GroupedSection({ group, listId, drawnIds, name, color, sessions, archived = false }: GroupedSectionProps) {
 	const t = useT();
 	const [folded, setFolded] = useState(false);
 	const [renaming, setRenaming] = useState(false);
@@ -84,7 +89,7 @@ function GroupedSection({ group, name, color, sessions, archived = false }: Grou
 			<i className="group-spine" />
 			<div className="group-sessions">
 				{sessions.map((session) => (
-					<SessionRow key={session.id} session={session} grouped />
+					<SessionRow key={session.id} session={session} listId={listId} drawnIds={drawnIds} grouped />
 				))}
 			</div>
 		</section>
@@ -99,29 +104,63 @@ export function GroupedView() {
 			sessions: state.sessions,
 			groups: state.groups,
 			tags: state.tags,
+			pinnedSessions: state.pinnedSessions,
+			sessionOrder: state.sessionOrder,
 			hidden: state.currentView !== "group",
 		}),
 		shallowEqual,
 	);
-	const visible = view.sessions.filter((session) => !session.archived);
+	// Pins lead inside their own section, and a dragged row keeps the place it was
+	// given there (see state/session-order.ts); a section lists its rows in both
+	// orders so a drag can edit the arrangement the section is drawn from.
+	const active = view.sessions.filter((session) => !session.archived);
 	const archived = view.sessions.filter((session) => session.archived);
 	const sections: ReactNode[] = [];
+	const push = (
+		key: string,
+		listId: string,
+		name: string,
+		color: TagColor | null,
+		group: TagGroup | undefined,
+		members: readonly SessionSummary[],
+		isArchived = false,
+	) => {
+		if (!members.length) return;
+		const ordered = orderedSessions(members, view.pinnedSessions, view.sessionOrder);
+		sections.push(
+			<GroupedSection
+				key={key}
+				group={group}
+				listId={listId}
+				drawnIds={ordered.map((session) => session.id)}
+				name={name}
+				color={color}
+				sessions={ordered}
+				archived={isArchived}
+			/>,
+		);
+	};
 	for (const color of TAG_COLOR_KEYS) {
 		const group = view.groups.find((candidate) => candidate.key === color);
 		if (!group) continue;
-		const sessions = visible.filter((session) => view.tags.get(session.id) === color);
-		if (!sessions.length) continue;
-		sections.push(<GroupedSection key={color} group={group} name={group.name} color={color} sessions={sessions} />);
-	}
-	const ungrouped = visible.filter((session) => !view.tags.has(session.id));
-	if (ungrouped.length) {
-		sections.push(<GroupedSection key="ungrouped" name={t("ungrouped")} color={null} sessions={ungrouped} />);
-	}
-	if (archived.length) {
-		sections.push(
-			<GroupedSection key="archived" name={t("archivedConversations")} color={null} sessions={archived} archived />,
+		push(
+			color,
+			`tag:${color}`,
+			group.name,
+			color,
+			group,
+			active.filter((session) => view.tags.get(session.id) === color),
 		);
 	}
+	push(
+		"ungrouped",
+		"ungrouped",
+		t("ungrouped"),
+		null,
+		undefined,
+		active.filter((session) => !view.tags.has(session.id)),
+	);
+	push("archived", "archived", t("archivedConversations"), null, undefined, archived, true);
 	return (
 		<div className="grouped-view" id="groupedView" hidden={view.hidden}>
 			{sections.length ? sections : <EmptyState>{t("noGroupedConversations")}</EmptyState>}

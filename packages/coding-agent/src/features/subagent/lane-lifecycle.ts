@@ -7,17 +7,28 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { unlink } from "node:fs/promises";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
-import type { StepSubagentDetails, StepSubagentRpcSession, SubagentParams } from "../step-subagent.ts";
+import { boundToolResultContent } from "../../core/tools/tool-output.ts";
+import type {
+	StepSubagentDetails,
+	StepSubagentResultRecord,
+	StepSubagentRpcSession,
+	SubagentParams,
+} from "../step-subagent.ts";
 import type { PreparedSubagentRun, SubagentPreflight } from "./execute.ts";
 import { SUBAGENT_SESSION_ID_PREFIX } from "./helpers.ts";
 import {
 	type BackgroundLaneSubscribeLevel,
-	buildLaneFinalDetail,
-	laneSummaryLines,
+	buildLaneFinalView,
+	type CompletedSubagentResponse,
+	completedOutputHash,
+	laneReportView,
 	maybeNotifyLaneProgress,
 	notifyLaneEvent,
+	publishLaneSnapshot,
+	SUBAGENT_RESPONSE_ENTRY,
 } from "./lane-events.ts";
 
 export interface BackgroundAgentLane {
@@ -50,10 +61,16 @@ export interface BackgroundAgentLane {
 	idleTimer?: ReturnType<typeof setTimeout>;
 	/** Set when idle expiry stopped the children, so the next reply's respawn is expected. */
 	idleExpired?: boolean;
+	completedResponses?: CompletedSubagentResponse[];
+	completionWrites?: Promise<void>;
+	completionError?: string;
+	completedResponsesOmitted?: number;
+	fullDiagnosticPath?: string;
 }
 
 /** Lane-scoped runtime wiring passed by background lanes into the child runner. */
 export interface StepSubagentLaneRuntime {
+	onCompletedResponse?: (response: Omit<CompletedSubagentResponse, "laneId">) => void;
 	/** Parent-side hook invoked when the child emits a progress-report event. */
 	onNeedsInput?: (message: string) => void;
 	/** Parent-side hook fired when a dead keep-alive child is respawned. */
@@ -86,6 +103,42 @@ function getLaneSessions(sessionId: string, liveOnly = true): StepSubagentRpcSes
 		if ((id === sessionId || id.startsWith(prefix)) && (!liveOnly || session.isAlive())) sessions.push(session);
 	}
 	return sessions;
+}
+
+/**
+ * Keep the lane's roster complete enough to report the real task count.
+ *
+ * A live frame carries only the records that fit its byte budget, and the
+ * omitted count describes that frame, not the roster we hold. Merging recovers
+ * records we once saw but never the ones we have not been sent yet, so the count
+ * is recomputed from the frame's own total instead of being cleared or kept.
+ */
+export function rosterFields(
+	previous: StepSubagentDetails,
+	next: StepSubagentDetails,
+): Pick<StepSubagentDetails, "results" | "omittedResults"> {
+	// Always set the key: the caller spreads the frame under this result, so
+	// omitting it would keep the frame's own count and double-count the records
+	// the merge just recovered.
+	if (next.omittedResults === undefined) return { results: next.results, omittedResults: undefined };
+	const total = next.results.length + next.omittedResults;
+	const merged = mergeResults(previous.results, next.results).slice(0, total);
+	const omitted = Math.max(0, total - merged.length);
+	return { results: merged, omittedResults: omitted === 0 ? undefined : omitted };
+}
+
+/** Overlay a bounded live roster onto the roster the lane already knows. */
+function mergeResults(
+	previous: readonly StepSubagentResultRecord[],
+	next: readonly StepSubagentResultRecord[],
+): StepSubagentResultRecord[] {
+	const length = Math.max(previous.length, next.length);
+	const merged: StepSubagentResultRecord[] = [];
+	for (let index = 0; index < length; index += 1) {
+		const record = next[index] ?? previous[index];
+		if (record) merged.push(record);
+	}
+	return merged;
 }
 
 function laneStatusFromDetails(details: StepSubagentDetails): BackgroundAgentLane["status"] {
@@ -122,8 +175,6 @@ export const LANE_SHUTDOWN_WAIT_MS = 3_000;
  * child transcripts stay on disk.
  */
 export const MAX_RETAINED_FINISHED_LANES = 16;
-/** Tail of the last output returned by `agent_send` status. */
-const STATUS_OUTPUT_TAIL_CHARS = 32_000;
 
 /** Wiring the lane lifecycle needs from the extension factory in step-subagent.ts. */
 export interface LaneLifecycleHost {
@@ -172,10 +223,16 @@ export interface LaneLifecycle {
 type LaneTurnSource = { prepared: PreparedSubagentRun } | { params: SubagentParams };
 
 export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
-	const { pi, lanes, updateLaneWidget } = host;
+	const { pi, lanes } = host;
+	const updateLaneWidget = (lane: BackgroundAgentLane): void => {
+		publishLaneSnapshot(pi, lane);
+		host.updateLaneWidget(lane);
+	};
 	/** Bumped by shutdown; lanes and callbacks from an earlier epoch are dead. */
 	let epoch = 0;
 	const laneEpochs = new WeakMap<BackgroundAgentLane, number>();
+	const closedRetention = new WeakSet<BackgroundAgentLane>();
+	const retentionOwners = new WeakMap<BackgroundAgentLane, object>();
 	const isCurrent = (lane: BackgroundAgentLane, generation: number): boolean =>
 		laneEpochs.get(lane) === epoch && lane.runGeneration === generation;
 
@@ -218,8 +275,20 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 	const deliverFinal = async (lane: BackgroundAgentLane, generation: number): Promise<void> => {
 		pendingFinal.add(lane);
 		try {
-			const detail = await buildLaneFinalDetail(lane, host.outputDirectory(lane.ctx));
+			await lane.completionWrites;
 			if (!isCurrent(lane, generation)) return;
+			const outputDirectory = host.outputDirectory(lane.ctx);
+			updateLaneWidget(lane);
+			if (!isCurrent(lane, generation)) return;
+			const view = await buildLaneFinalView(lane, outputDirectory);
+			if (!isCurrent(lane, generation)) {
+				if (view.path)
+					await unlink(view.path).catch(() => {
+						console.error("Could not remove unused subagent diagnostic output");
+					});
+				return;
+			}
+			lane.fullDiagnosticPath = view.path;
 			notifyLaneEvent(
 				pi,
 				lane,
@@ -228,7 +297,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 					: lane.status === "aborted"
 						? "background_interrupted"
 						: "background_done",
-				detail,
+				view.text,
 			);
 		} finally {
 			pendingFinal.delete(lane);
@@ -244,12 +313,40 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 		lane.status = "running";
 		lane.updatedAt = Date.now();
 		lane.lastProgressNotifyAt = Date.now();
+		lane.completionError = undefined;
+		const retentionOwner = {};
+		retentionOwners.set(lane, retentionOwner);
+		lane.details = { ...lane.details, status: "running", updatedAt: lane.updatedAt };
+		if ("params" in source)
+			lane.details.results = lane.details.results.map((record) => ({
+				...record,
+				task: source.params.task ?? record.task,
+				status: "running",
+				exitCode: -1,
+				messages: [],
+				stderr: "",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+				activeText: undefined,
+				activeTool: undefined,
+				activeToolArgs: undefined,
+				activeToolOutput: undefined,
+				stopReason: undefined,
+				errorMessage: undefined,
+				lastEvent: undefined,
+				startedAt: lane.updatedAt,
+				updatedAt: lane.updatedAt,
+			}));
+		updateLaneWidget(lane);
 		const signal = lane.controller.signal;
 		const onUpdate = (partial: AgentToolResult<StepSubagentDetails>): void => {
 			if (!isCurrent(lane, generation)) return;
 			if (partial.details) {
 				lane.details = {
 					...partial.details,
+					// A frame is bounded by bytes, so it may omit the roster's tail.
+					// Keep the lanes already known instead of forgetting them; the
+					// final result replaces this with every task.
+					...rosterFields(lane.details, partial.details),
 					agentId: lane.id,
 					status: "running",
 					startedAt: lane.startedAt,
@@ -261,6 +358,51 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			updateLaneWidget(lane);
 		};
 		const laneRuntime: StepSubagentLaneRuntime = {
+			onCompletedResponse: (response) => {
+				if (!isCurrent(lane, generation)) return;
+				const outputDirectory = host.outputDirectory(lane.ctx);
+				// Serialize fact writes and wait for them before terminal delivery. Stop
+				// changes the generation, not ownership: already completed work survives it.
+				lane.completionWrites = (lane.completionWrites ?? Promise.resolve())
+					.then(async () => {
+						if (closedRetention.has(lane)) return;
+						const content = await boundToolResultContent(
+							[{ type: "text", text: response.output }],
+							outputDirectory,
+						);
+						if (closedRetention.has(lane)) return;
+						const completed: CompletedSubagentResponse = {
+							...response,
+							laneId: lane.id,
+							outputHash: completedOutputHash(response.output),
+							output: content
+								.filter((part) => part.type === "text")
+								.map((part) => part.text)
+								.join("\n"),
+						};
+						pi.appendEntry(SUBAGENT_RESPONSE_ENTRY, completed);
+						lane.completedResponses ??= [];
+						lane.completedResponses.push(completed);
+						while (
+							lane.completedResponses.length > 32 ||
+							(lane.completedResponses.length > 1 &&
+								lane.completedResponses.reduce(
+									(sum, response) => sum + response.output.length + response.task.length,
+									0,
+								) > 128_000)
+						) {
+							lane.completedResponses.shift();
+							lane.completedResponsesOmitted = (lane.completedResponsesOmitted ?? 0) + 1;
+						}
+					})
+					.catch((error: unknown) => {
+						// The child's transcript still owns the full answer. Report the failed
+						// parent-side retention in the terminal notification rather than losing it silently.
+						const message = error instanceof Error ? error.message : String(error);
+						if (retentionOwners.get(lane) === retentionOwner) lane.completionError = message;
+						else console.error(`Previous subagent turn retention failed (${lane.id}): ${message}`);
+					});
+			},
 			onNeedsInput: (message) => {
 				if (!isCurrent(lane, generation)) return;
 				notifyLaneEvent(pi, lane, "background_needs_input", message);
@@ -378,6 +520,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			lastProgressNotifyAt: now,
 			sessionId: `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`,
 			turnTimeoutMs,
+			completedResponses: [],
 		};
 		laneEpochs.set(lane, epoch);
 		lanes.set(id, lane);
@@ -481,21 +624,20 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 	const laneStatus = (lane: BackgroundAgentLane): string => {
 		const agents = [...new Set(lane.details.results.map((record) => record.agent))];
 		const lines = [
-			`Lane ${lane.id}: ${lane.status}${agents.length > 0 ? ` (${agents.join(", ")})` : ""}`,
-			...laneSummaryLines(lane),
+			`Lane ${lane.id}: ${lane.status}${
+				agents.length > 0
+					? ` (${agents
+							.slice(0, 8)
+							.map((agent) => agent.slice(0, 100))
+							.join(", ")}${agents.length > 8 ? `; ${agents.length - 8} more agent types` : ""})`
+					: ""
+			}`,
 		];
-		const output =
-			lane.result?.content
-				.filter((block) => block.type === "text")
-				.map((block) => block.text)
-				.join("\n")
-				.trim() ?? "";
-		if (output) {
-			const tail = output.length > STATUS_OUTPUT_TAIL_CHARS;
+		if (lane.fullDiagnosticPath)
 			lines.push(
-				`${lane.status === "running" ? "Output of the previous turn" : "Output"}${tail ? ` (last ${STATUS_OUTPUT_TAIL_CHARS} characters; the child session holds the rest)` : ""}:\n${tail ? output.slice(-STATUS_OUTPUT_TAIL_CHARS) : output}`,
+				`${lane.status === "running" ? "Previous retained diagnostics" : "Retained diagnostics"}. Full output: ${JSON.stringify(lane.fullDiagnosticPath)}`,
 			);
-		} else if (lane.status !== "running") lines.push("Output: (none)");
+		lines.push(laneReportView(lane).text);
 		if (lane.status === "running") {
 			lines.push("The lane is still running; you will be notified when it finishes. Do not poll.");
 		}
@@ -511,6 +653,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 		const sessions: StepSubagentRpcSession[] = [];
 		const runs: Promise<unknown>[] = [];
 		for (const lane of owned) {
+			if (lane.completionWrites) runs.push(lane.completionWrites);
 			clearIdleTimer(lane);
 			lane.queuedPrompts.length = 0;
 			lane.runGeneration += 1;
@@ -524,7 +667,10 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 				sessions.push(session);
 			}
 		}
-		if (runs.length === 0 && sessions.length === 0) return running;
+		if (runs.length === 0 && sessions.length === 0) {
+			for (const lane of owned) closedRetention.add(lane);
+			return running;
+		}
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const settled = Promise.all([...runs, ...sessions.map((session) => session.exited)]).then(() => true);
 		const timedOut = new Promise<boolean>((resolve) => {
@@ -532,6 +678,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			timer.unref?.();
 		});
 		const clean = await Promise.race([settled, timedOut]);
+		for (const lane of owned) closedRetention.add(lane);
 		if (timer) clearTimeout(timer);
 		if (!clean) for (const session of sessions) session.terminate();
 		return running;

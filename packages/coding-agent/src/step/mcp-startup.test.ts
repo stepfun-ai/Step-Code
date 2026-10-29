@@ -441,6 +441,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 	expect(getStepMcpStatuses()).toContainEqual({ name: "local__probe", status: "connected", toolCount: 1 });
 });
 
+test("a stdio server that exits during startup reports what it wrote to stderr", async () => {
+	// The shape of `npx` failing on a registry: an error block, then exit.
+	const script = `process.stderr.write("npm error code E401\\nnpm error Incorrect or missing password.\\n"); process.exit(1);`;
+	config.value = { mcp_servers: { launcher: { command: process.execPath, args: ["-e", script] } } };
+	const harness = await setup("tui");
+	await harness.start();
+	await vi.waitFor(() => expect(harness.notify).toHaveBeenCalled());
+	const [message, level] = harness.notify.mock.calls[0] as [string, string];
+	expect(level).toBe("warning");
+	expect(message).toMatch(/^MCP server 'launcher' could not start: .+\nServer stderr:\nnpm error code E401\n/u);
+	expect(message).toContain("npm error Incorrect or missing password.");
+	expect(getStepMcpStatuses()).toContainEqual({ name: "launcher", status: "failed", toolCount: 0, error: message });
+});
+
 test("resolves a plugin whose mcpServers points at a sibling .mcp.json", async () => {
 	const server = await slowServer(1);
 	// The string form names a real file, so this needs a real directory on disk.

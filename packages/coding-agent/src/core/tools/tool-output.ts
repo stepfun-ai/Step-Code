@@ -14,6 +14,25 @@ const OWNED_FILE = /^tool-[0-9a-f]{32}\.txt$/u;
 const PRODUCER_TRAILER_LINES = 8;
 const PRODUCER_TRAILER_BYTES = 1024;
 
+/** Save a complete diagnostic snapshot in the same owned namespace as tool output. */
+export async function retainToolOutputText(text: string, directory: string, signal?: AbortSignal): Promise<string> {
+	signal?.throwIfAborted();
+	const outputDirectory = resolve(directory);
+	await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
+	const path = join(outputDirectory, `tool-${randomBytes(16).toString("hex")}.txt`);
+	const file = await open(path, "wx", 0o600);
+	let written = false;
+	try {
+		await file.writeFile(text, { encoding: "utf8", signal });
+		written = true;
+	} finally {
+		await file.close();
+		if (!written) await unlink(path).catch(() => undefined);
+	}
+	await cleanupExpiredOutput(outputDirectory, signal);
+	return path;
+}
+
 /** Bound final model-visible text while keeping the full textual view available on disk. */
 export async function boundToolResultContent(
 	content: Content,
@@ -30,19 +49,7 @@ export async function boundToolResultContent(
 	});
 	if (!original.truncated) return content;
 
-	signal?.throwIfAborted();
-	const outputDirectory = resolve(directory);
-	await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
-	const path = join(outputDirectory, `tool-${randomBytes(16).toString("hex")}.txt`);
-	const file = await open(path, "wx", 0o600);
-	let written = false;
-	try {
-		await file.writeFile(text, { encoding: "utf8", signal });
-		written = true;
-	} finally {
-		await file.close();
-		if (!written) await unlink(path).catch(() => undefined);
-	}
+	const path = await retainToolOutputText(text, directory, signal);
 
 	const marker = (lines: number) =>
 		`[Showing first ${lines} of ${original.totalLines} lines (${original.totalBytes} bytes total). Full output: ${JSON.stringify(path)}]`;
@@ -75,7 +82,6 @@ export async function boundToolResultContent(
 	}
 	if (!marked) bounded.push({ type: "text", text: marker(preview.outputLines) });
 
-	await cleanupExpiredOutput(outputDirectory, signal);
 	return bounded;
 }
 

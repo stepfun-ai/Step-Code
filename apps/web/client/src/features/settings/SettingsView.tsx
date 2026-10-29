@@ -91,6 +91,12 @@ export function SettingsView() {
 	}, [open]);
 	return (
 		<div className="settings-view" id="settingsView" hidden={!open} ref={view}>
+			{/*
+			 * The window's title band on the macOS desktop (settings.css): a real, non-scrolling row above
+			 * the menu and the page, so the window drags and double-click zooms from it as it does from the
+			 * workspace's top band. Hidden elsewhere.
+			 */}
+			<div className="settings-titlebar" aria-hidden="true" />
 			<nav className="settings-nav" aria-label={t("settings")}>
 				{/* Labelled rows: a tooltip repeating the label would only cover the next row. */}
 				<button type="button" className="settings-back" id="settingsBack" onClick={closeSettings}>

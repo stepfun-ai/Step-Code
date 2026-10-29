@@ -4,6 +4,11 @@
  * The implementation follows Pi's plan-mode example, but uses Step's
  * model-facing tool names. State and interaction still go through Pi's
  * ExtensionAPI; there is no parallel plan state machine in the Step layer.
+ *
+ * Only the user enters plan mode (/plan or --plan). The mode is announced to
+ * the model by appending a collaboration-mode block when it changes, never by
+ * editing the system prompt or tool list, so the cached prefix survives a plan
+ * cycle.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -18,6 +23,7 @@ import type {
 import { resolveToCwd } from "../core/tools/path-utils.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
+import { buildDefaultModePrompt, buildPlanModePrompt, PLAN_MODE_MESSAGE_TYPE } from "./plan-mode-prompt.ts";
 import {
 	getPlanFilePath,
 	hashPlanContents,
@@ -35,18 +41,15 @@ const PLAN_TOOLS = [
 	"clarify_user",
 	"write_file",
 	"edit_file",
+	"exit_plan_mode",
 ];
 const MUTATING_TOOLS = new Set(["write_file", "edit_file", "write", "edit"]);
-const PLAN_TASK_TOOLS = new Set([
-	"enter_plan_mode",
-	"exit_plan_mode",
-	"task_create",
-	"task_update",
-	"task_get",
-	"task_list",
-]);
+const PLAN_TASK_TOOLS = new Set(["exit_plan_mode", "task_create", "task_update", "task_get", "task_list"]);
 
-/** Who put the session into plan mode. */
+/**
+ * Who put the session into plan mode. Only the user can now; "agent" is kept so
+ * sessions written while the enter_plan_mode tool existed still restore.
+ */
 export type StepPlanSource = "user" | "agent" | "unknown";
 
 interface PlanState {
@@ -61,7 +64,7 @@ interface PlanState {
 	 */
 	toolsBeforePlanMode?: string[];
 	planFilePath?: string;
-	/** "user" for /plan or --plan, "agent" for enter_plan_mode. */
+	/** "user" for /plan or --plan; "agent" only in sessions from the enter_plan_mode era. */
 	planSource?: StepPlanSource;
 	/**
 	 * Hash of the proposal last handed to an external reviewer (rpc/headless).
@@ -76,6 +79,77 @@ interface PlanState {
 	 * answer, even when this process never saw it submitted.
 	 */
 	planHashAtEnter?: string;
+}
+
+/** The mode a collaboration-mode block told the model about. */
+interface PlanModeAnnouncement {
+	mode: "plan" | "default";
+	planFilePath?: string;
+	/** Absent in older announcements; refreshed when a different host restores them. */
+	canLeaveWithoutProposal?: boolean;
+}
+
+interface AnnouncementRecord {
+	customType?: string;
+	details?: unknown;
+}
+
+/** Last announcement in the selected context; only runtime-authored custom messages count. */
+function lastAnnouncement(records: readonly AnnouncementRecord[]): PlanModeAnnouncement | undefined {
+	for (let index = records.length - 1; index >= 0; index--) {
+		const record = records[index]!;
+		if (record.customType !== PLAN_MODE_MESSAGE_TYPE) continue;
+		const details = record.details;
+		if (!details || typeof details !== "object" || !("mode" in details)) continue;
+		if (details.mode === "default") return { mode: "default" };
+		if (details.mode === "plan") {
+			const planFilePath =
+				"planFilePath" in details && typeof details.planFilePath === "string" ? details.planFilePath : undefined;
+			const canLeaveWithoutProposal =
+				"canLeaveWithoutProposal" in details && typeof details.canLeaveWithoutProposal === "boolean"
+					? details.canLeaveWithoutProposal
+					: undefined;
+			return { mode: "plan", planFilePath, canLeaveWithoutProposal };
+		}
+	}
+	return undefined;
+}
+
+/**
+ * The block to append so the model's view matches the live mode, or undefined
+ * when it already does. `planFilePath` is defined exactly when plan mode is on.
+ *
+ * `visible` is the last announcement the request still carries; `recorded` is
+ * the last one in the branch history, including any that compaction summarized
+ * away. An active mode must be visible, so a compacted Plan block is restored.
+ * Leaving the mode is owed a Default block whenever Plan was the last recorded
+ * announcement, even if that block was compacted: the summary can still carry
+ * its rules. A branch that never announced plan mode needs no Default block.
+ */
+function announcementFor(
+	planFilePath: string | undefined,
+	visible: PlanModeAnnouncement | undefined,
+	recorded: PlanModeAnnouncement | undefined,
+	canLeaveWithoutProposal: boolean,
+) {
+	if (planFilePath !== undefined) {
+		if (
+			visible?.mode === "plan" &&
+			visible.planFilePath === planFilePath &&
+			visible.canLeaveWithoutProposal === canLeaveWithoutProposal
+		)
+			return undefined;
+		const details: PlanModeAnnouncement = { mode: "plan", planFilePath, canLeaveWithoutProposal };
+		return {
+			customType: PLAN_MODE_MESSAGE_TYPE,
+			content: buildPlanModePrompt(planFilePath, canLeaveWithoutProposal),
+			display: false,
+			details,
+		};
+	}
+	if (recorded?.mode !== "plan" || visible?.mode === "default") return undefined;
+	const details: PlanModeAnnouncement = { mode: "default" };
+	return { customType: PLAN_MODE_MESSAGE_TYPE, content: buildDefaultModePrompt(), display: false, details };
 }
 
 function unique(values: readonly string[]): string[] {
@@ -256,44 +330,6 @@ function readPlanHash(planFilePath: string): string | undefined {
 	}
 }
 
-/**
- * The request-local reminder sent while plan mode is on.
- *
- * It states the mode as a fact, not a hint: a model that is unsure probes with
- * enter_plan_mode and calls exit_plan_mode repeatedly, which users read as the
- * plan command not working.
- */
-function planModeReminder(options: {
-	planPath: string;
-	planSource: StepPlanSource;
-	canLeaveWithoutProposal: boolean;
-	holdsEarlierPlan: boolean;
-}): string {
-	const origin =
-		options.planSource === "user"
-			? "The host turned it on because the user sent this request with /plan; you did not need to and must not call enter_plan_mode."
-			: options.planSource === "agent"
-				? "You turned it on with enter_plan_mode; do not call enter_plan_mode again."
-				: "It was turned on earlier in this session; do not call enter_plan_mode.";
-	const noPlan = options.canLeaveWithoutProposal
-		? "If the request needs no plan (a question, a trivial edit), say so, leave the plan file untouched, call exit_plan_mode once (it then only leaves plan mode), and answer directly."
-		: "If the request needs no plan (a question, a trivial edit), answer directly and tell the user they can turn plan mode off with /plan; exit_plan_mode only submits a written proposal here.";
-	return [
-		"<system-reminder>Plan mode is ON.",
-		origin,
-		"It stays on until you call exit_plan_mode or the user turns it off. This reminder is the current state: never call enter_plan_mode or exit_plan_mode to check it.",
-		`Plan file: ${JSON.stringify(options.planPath)}.`,
-		...(options.holdsEarlierPlan
-			? ["It still holds content from before this request; overwrite it with the plan for this request."]
-			: []),
-		"Only this file may be written, with write_file or edit_file; every other file mutation is blocked.",
-		"Explore first, write the complete plan there (goal, ordered steps with file paths, validation, open questions), then call exit_plan_mode exactly once to submit it.",
-		"Do not carry the work out: implementation starts only after the user approves the plan.",
-		noPlan,
-		"</system-reminder>",
-	].join(" ");
-}
-
 /** Create Step's native plan extension. */
 export const createStepPlanExtension =
 	(options: { telemetry?: StepTelemetryReporter } = {}): ExtensionFactory =>
@@ -361,30 +397,29 @@ export const createStepPlanExtension =
 			const remaining = live.filter((name) => !added.includes(name));
 			if (remaining.length !== live.length) pi.setActiveTools(remaining);
 		};
+		const recordedAnnouncement = (ctx: ExtensionContext): PlanModeAnnouncement | undefined =>
+			lastAnnouncement(ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom_message"));
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
-		const enter = (source: StepPlanSource, ctx: ExtensionContext): string => {
+		const enter = (ctx: ExtensionContext): void => {
 			enabled = true;
-			planSource = source;
+			planSource = "user";
 			planFilePath = resolvePlanFilePath(ctx);
 			// What the file held before this round: an exit that finds the same
 			// content has no proposal for this request, even if the file predates
 			// the round (a previous plan, possibly from an older build).
 			planHashAtEnter = readPlanHash(planFilePath);
 			enable();
-			recordPlanEnter(options.telemetry, source);
+			recordPlanEnter(options.telemetry, planSource);
 			updateStatus(ctx, enabled, planSource);
 			persistPlanState();
-			if (source === "user") {
-				// An announcement, not an answer: the host renders plan mode from
-				// session state, so this must not become a transcript row.
-				ctx.ui.notify(
-					`Plan mode enabled. Draft your proposal at ${planFilePath}; file-editing tools are limited to this path. Commands still use normal permissions.`,
-					"info",
-					{ transient: true },
-				);
-			}
-			return planFilePath;
+			// Presentation state, not a transcript answer; mode announcements are
+			// appended by before_agent_start below.
+			ctx.ui.notify(
+				`Plan mode enabled. Draft your proposal at ${planFilePath}; file-editing tools are limited to this path. Commands still use normal permissions.`,
+				"info",
+				{ transient: true },
+			);
 		};
 		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext, submittedHash?: string): void => {
 			recordPlanExit(options.telemetry, planSource, outcome);
@@ -399,7 +434,6 @@ export const createStepPlanExtension =
 		const planModeController: StepPlanModeController = {
 			isPlanModeActive: () => enabled,
 			enteredByUser: () => enabled && planSource === "user",
-			enterPlanMode: (ctx) => enter("agent", ctx),
 			exitPlanMode: exit,
 			resolvePlanFilePath,
 			wasSubmitted: (planHash) => submittedPlanHash === planHash,
@@ -421,7 +455,7 @@ export const createStepPlanExtension =
 						// State the host already draws; see enter().
 						ctx.ui.notify("Plan mode disabled.", "info", { transient: true });
 					} else {
-						enter("user", ctx);
+						enter(ctx);
 					}
 					return;
 				}
@@ -430,7 +464,7 @@ export const createStepPlanExtension =
 				// restriction has already been applied by enter(), so the turn starts
 				// with the plan-mode tool set. Slash commands run even mid-stream; queue
 				// the task behind the current turn in that case instead of throwing.
-				if (!enabled) enter("user", ctx);
+				if (!enabled) enter(ctx);
 				// Expand a leading `/skill:` or prompt template in the task, as the
 				// same text sent without `/plan` would be (the Web composer puts its
 				// plan prefix in front of a picked skill).
@@ -461,18 +495,27 @@ export const createStepPlanExtension =
 			return decision.block;
 		});
 
-		// Plan mode has to be visible to the model, not only to the UI.
-		//
-		// A user who picks Plan sends `/plan <task>`: the command enters plan mode
-		// and hands the task over as an ordinary user message, so without this the
-		// model sees a normal request with a restricted tool set and can truthfully
-		// say it was never told about plan mode. A model that is not told plainly
-		// probes instead: it calls enter_plan_mode to "confirm" and exit_plan_mode
-		// more than once. The reminder is request-local (it is never appended to
-		// the session) and re-issued for each request while the mode is on, so it
-		// survives compaction and tool changes. The same filter drops the copies an
-		// earlier request added, and the hidden meta messages persisted by older
-		// versions of this extension.
+		// Announce mode changes by appending a collaboration-mode block, never by
+		// rewriting the system prompt or tool list. The block persists with the
+		// turn, so later requests reuse it from the cached history.
+		pi.on("before_agent_start", async (_event, ctx) => {
+			const visible = lastAnnouncement(
+				ctx.sessionManager.buildContextEntries().filter((entry) => entry.type === "custom_message"),
+			);
+			const message = announcementFor(
+				enabled ? resolvePlanFilePath(ctx) : undefined,
+				visible,
+				recordedAnnouncement(ctx),
+				ctx.mode === "rpc" || !ctx.hasUI,
+			);
+			return message ? { message } : undefined;
+		});
+
+		// The context hook reconciles the request view without writing history.
+		// Compaction can summarize the announcement away, and the mode can change
+		// mid-run (exit_plan_mode approval, /plan while streaming) without a new
+		// before_agent_start. It also scrubs hidden meta messages persisted by
+		// sessions from older versions of this extension.
 		pi.on("context", async (event, ctx) => {
 			const messages = event.messages.filter((message) => {
 				const candidate = message as AgentMessage & { customType?: string };
@@ -480,35 +523,17 @@ export const createStepPlanExtension =
 					candidate.customType !== "step-plan-context" && candidate.customType !== "step-plan-execution-context"
 				);
 			});
-			if (!enabled) return { messages };
-			const planPath = planFilePath ?? resolvePlanFilePath(ctx);
-			const planHash = readPlanHash(planPath);
-			return {
-				messages: [
-					...messages,
-					{
-						role: "custom" as const,
-						customType: "step-plan-context",
-						display: false,
-						content: [
-							{
-								type: "text" as const,
-								text: planModeReminder({
-									planPath,
-									planSource: planSource ?? "unknown",
-									// Where no review dialog can be shown, exit_plan_mode without a new
-									// proposal just leaves; the terminal refuses it and keeps planning.
-									canLeaveWithoutProposal: ctx.mode === "rpc" || !ctx.hasUI,
-									holdsEarlierPlan:
-										planHash !== undefined &&
-										(planHash === submittedPlanHash || planModeController.unchangedSinceEnter(planHash)),
-								}),
-							},
-						],
-						timestamp: Date.now(),
-					},
-				],
-			};
+			const visible = lastAnnouncement(
+				messages.filter((message) => message.role === "custom") as readonly AnnouncementRecord[],
+			);
+			const message = announcementFor(
+				enabled ? resolvePlanFilePath(ctx) : undefined,
+				visible,
+				recordedAnnouncement(ctx),
+				ctx.mode === "rpc" || !ctx.hasUI,
+			);
+			if (!message) return { messages };
+			return { messages: [...messages, { role: "custom" as const, ...message, timestamp: Date.now() }] };
 		});
 
 		const restorePlanState = (ctx: ExtensionContext, startWithPlan = false): void => {
@@ -557,7 +582,7 @@ export const createStepPlanExtension =
 				});
 			}
 			if (startWithPlan && !enabled) {
-				enter("user", ctx);
+				enter(ctx);
 				return;
 			}
 			updateStatus(ctx, enabled, planSource);

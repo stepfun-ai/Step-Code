@@ -63,13 +63,16 @@ function TagNameInput({ sessionId, color }: { readonly sessionId: string; readon
 /**
  * Content of `#tagPicker`: choose, create or clear a session's group (legacy
  * `openTagPicker`, 1014-1060). Mounted on open, so every open starts from the group list.
+ *
+ * Picking a colour keeps the panel as it is: the chip shows as chosen and the name row
+ * opens under the chips, so the panel neither swaps its content nor moves under the
+ * pointer, and another chip can still be picked before confirming.
  */
 export function TagPicker({ sessionId }: { readonly sessionId: string }) {
 	const t = useT();
 	const data = useAppStore((state) => ({ groups: state.groups, tags: state.tags }), shallowEqual);
 	const [creating, setCreating] = useState<TagColor | null>(null);
 	const [renaming, setRenaming] = useState<TagColor | null>(null);
-	if (creating) return <TagNameInput sessionId={sessionId} color={creating} />;
 
 	const used = new Set(data.groups.map((group) => group.key));
 	const fresh = TAG_COLOR_KEYS.filter((color) => !used.has(color));
@@ -113,16 +116,17 @@ export function TagPicker({ sessionId }: { readonly sessionId: string }) {
 								<button
 									key={color}
 									type="button"
-									className="tag-swatch"
+									className={creating === color ? "tag-swatch chosen" : "tag-swatch"}
 									data-new-tag={color}
 									style={cssVar("--tag-color", TAG_COLORS[color])}
-									title={label}
 									aria-label={label}
+									aria-pressed={creating === color}
 									onClick={() => setCreating(color)}
 								/>
 							);
 						})}
 					</div>
+					{creating ? <TagNameInput sessionId={sessionId} color={creating} /> : null}
 				</>
 			) : null}
 			<div className="tag-picker-divider" />

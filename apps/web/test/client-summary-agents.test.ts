@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { summaryAgentRecords } from "../client/src/features/inspector/model.ts";
+import { activeAgentRecords, latestAgentRecord, summaryAgentRecords } from "../client/src/features/inspector/model.ts";
+import { subagentControl, withSubagentLaneState } from "../client/src/state/subagent-tasks.ts";
 import type { SubagentStatus, ToolTimelineItem } from "../client/src/state/types.ts";
 
 const tool: ToolTimelineItem = {
@@ -39,10 +40,10 @@ test("legacy child and workflow records retain navigation without inventing life
 		{ ...tool, itemId: "workflow", toolName: "workflow", workflowRun: "run" },
 		{ ...tool, itemId: "legacy-send", toolName: "agent_send", state: "failed" },
 	]);
-	assert.deepEqual(rows.map((row) => row.status), ["unknown", "unknown", "unknown"]);
+	assert.deepEqual(rows.map((row) => row.status), ["unknown", "unknown"]);
 	assert.deepEqual(rows[0].target, { kind: "child", sessionId: "child" });
 	assert.deepEqual(rows[1].target, { kind: "workflow", runId: "run" });
-	assert.deepEqual(rows[2].target, { kind: "task", toolItemId: "legacy-send", taskIndex: 0 });
+	assert.equal(rows.length, 2, "control calls are not standalone agents");
 });
 
 test("ordinary tools and model prose do not create agent records", () => {
@@ -59,4 +60,45 @@ test("new structured notifications already projected in the timeline update the 
 	assert.equal(before[0].key, after[0].key);
 	assert.equal(before[0].status, "running");
 	assert.equal(after[0].status, "failed");
+});
+
+test("reply and stop update the original agent and stay in its operation history", () => {
+	const dispatch: ToolTimelineItem = { ...tool, subagentTasks: [{ agent: "explore", task: "Inspect", backgroundAgentId: "lane-1", status: "queued" }] };
+	const controls: ToolTimelineItem[] = ["reply", "stop"].map((action, index) => ({ ...tool, itemId: `control-${action}`, toolName: "agent_send",
+		subagentControl: subagentControl({ lane_id: "lane-1", action, prompt: action === "reply" ? "supplement" : undefined }, [{ agentId: "lane-1", status: index ? "aborted" : "running", results: [{ agent: "explore", task: "supplement", sessionId: "child-1", status: index ? "aborted" : "running" }] }]),
+	}));
+	const items = withSubagentLaneState([dispatch, ...controls]);
+	const rows = summaryAgentRecords(items);
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].agent, "explore");
+	assert.equal(rows[0].task, "Inspect");
+	assert.equal(rows[0].status, "aborted");
+	assert.deepEqual(latestAgentRecord(items)?.target, { kind: "task", toolItemId: "dispatch", taskIndex: 0 });
+	const [merged] = withSubagentLaneState(items);
+	assert.equal(merged?.kind === "tool" && merged.subagentTasks?.[0]?.sessionId, "child-1");
+	assert.deepEqual(merged?.kind === "tool" && merged.subagentTasks?.[0]?.controls?.map((control) => control.action), ["reply", "stop"]);
+});
+
+test("identities deduplicate repeated child references but never collapse a parallel lane", () => {
+	const dispatch: ToolTimelineItem = { ...tool, subagentTasks: [0, 1].map((index) => ({ agent: "explore", task: `task ${index}`, backgroundAgentId: "parallel", sessionId: `child-${index}`, status: "running" })) };
+	const linked: ToolTimelineItem = { ...tool, itemId: "legacy-link", children: [{ sessionId: "child-0", label: "explore" }] };
+	const rows = summaryAgentRecords([dispatch, linked]);
+	assert.equal(rows.length, 2);
+	assert.notEqual(rows[0].key, rows[1].key);
+	assert.deepEqual(rows[0].target, { kind: "task", toolItemId: "dispatch", taskIndex: 0 });
+	assert.deepEqual(rows[1].target, { kind: "task", toolItemId: "dispatch", taskIndex: 1 });
+});
+
+test("a control with structured child results still cannot create a new agent", () => {
+	assert.deepEqual(summaryAgentRecords([{ ...tool, toolName: "agent_send", subagentTasks: [{ agent: "explore", task: "supplement", status: "aborted", sessionId: "child" }] }]), []);
+});
+
+test("summary lists and counts only running agents without removing historical navigation", () => {
+	const statuses: SubagentStatus[] = ["queued", "running", "completed", "failed", "aborted", "skipped", "unknown"];
+	const items: ToolTimelineItem[] = [{ ...tool, subagentTasks: statuses.map((status, index) => ({ agent: "explore", task: status, status, sessionId: `child-${index}` })) }];
+	assert.equal(activeAgentRecords(items).length, 1);
+	assert.equal(activeAgentRecords(items)[0].status, "running");
+	assert.equal(summaryAgentRecords(items).length, 7);
+	assert.deepEqual(summaryAgentRecords(items)[2].target, { kind: "task", toolItemId: "dispatch", taskIndex: 2 });
+	assert.equal(activeAgentRecords([{ ...tool, subagentTasks: [{ agent: "explore", task: "done", status: "completed" }] }]).length, 0);
 });

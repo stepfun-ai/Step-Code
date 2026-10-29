@@ -388,7 +388,7 @@ test("staging another mode replaces the staged one — modes are mutually exclus
 		await page.locator("#plusTrigger").click();
 		assert.equal(await page.locator(".control-option--plan").getAttribute("aria-selected"), "true");
 		assert.equal(await page.locator(".control-option--goal").getAttribute("aria-selected"), "false");
-		assert.equal(await page.locator(".control-option--ultraloop").getAttribute("aria-selected"), "false");
+		assert.equal(await page.locator(".control-option--ultraloop").count(), 0, "unfinished mode stays out of the picker");
 		await page.keyboard.press("Escape");
 		await page.waitForFunction(() => !document.querySelector(".control-popover"));
 

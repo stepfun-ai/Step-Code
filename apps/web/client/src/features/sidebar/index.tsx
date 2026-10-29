@@ -12,6 +12,8 @@ import { BrandRow, ConversationList, SidebarActions } from "./SidebarNav";
 
 export { RenameSessionDialog } from "./RenameSessionDialog";
 export { SearchModal } from "./SearchModal";
+// The conversation header shares this menu, so it is part of the sidebar's public surface.
+export { SessionMenu } from "./SessionMenu";
 export { SidebarResizer } from "./SidebarResizer";
 
 /** `.brand-row`, `nav.sidebar-actions`, `section.conversation-list` (legacy index.html 539-640). */

@@ -29,10 +29,11 @@ export function summaryActivityTurn(state: AppState): string | null {
 		// A task call only becomes a checklist row once the result names its subject.
 		const created =
 			(item.toolName === "task_create" || item.toolName === "task_update") && item.outputSummary.trim().length > 0;
-		const agents = item.toolName === "subagent" || item.toolName === "agent_send";
-		// Only a lane that reported per-task results fills the agent list.
-		const laneResults = Boolean(item.subagentTasks?.some((task) => task.status !== "unknown"));
-		if (created || agents || laneResults) activity = true;
+		// Only actual running agents fill the summary. Control calls and settled
+		// dispatches stay reachable in the conversation without opening an empty board.
+		const laneResults =
+			item.toolName !== "agent_send" && Boolean(item.subagentTasks?.some((task) => task.status === "running"));
+		if (created || laneResults) activity = true;
 	}
 	return activity ? "history" : null;
 }

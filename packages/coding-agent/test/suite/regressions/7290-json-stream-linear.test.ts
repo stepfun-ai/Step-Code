@@ -25,9 +25,11 @@ describe("regression #7290: JSON event streams stay linear", () => {
 			expect(update.assistantMessageEvent).toHaveProperty("partial");
 		}
 
-		const updates = sessionUpdates.map((event) => toJsonEvent(event));
+		// The delta projection only reaches the wire when a live consumer asks.
+		const updates = sessionUpdates.map((event) => toJsonEvent(event, { includeLiveEvents: true })!);
 		expect(updates.length).toBeGreaterThan(0);
 		for (const update of updates) {
+			expect(update).toBeDefined();
 			expect(update).not.toHaveProperty("message");
 			expect(update.assistantMessageEvent).not.toHaveProperty("partial");
 		}
