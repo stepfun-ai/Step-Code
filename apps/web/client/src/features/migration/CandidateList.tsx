@@ -4,7 +4,7 @@ import { sessionModifiedLabel } from "../../lib/format";
 import type { MigrationCandidate, MigrationDiagnostic, MigrationSource } from "../../state/types";
 import { Button, EmptyState, SegmentedControl } from "../../ui";
 import { deselectCandidate, previewCandidate, scanMigration, selectMigrationGroup, setSessionOptions } from "./actions";
-import { isActionable, isIndependentCopy, type MigrationDraft } from "./model";
+import { isActionable, isIndependentCopy } from "./model";
 import { SourceDetails } from "./SourceDetails";
 import { groupMigrationCandidates, groupSelectionState, type MigrationCandidateGroup } from "./selection";
 import { useMigrationStore } from "./store";
@@ -45,48 +45,6 @@ export function CandidateStatus({ candidate }: { readonly candidate: MigrationCa
 	return (
 		<span className="migration-status" data-status={candidate.readiness}>
 			{t(`migrationHolding.${candidate.holding}`)} · {t(`migrationReadiness.${candidate.readiness}`)}
-		</span>
-	);
-}
-/** V3 wording: a row is only promised as migratable after its own check settles. */
-export function CandidateProgressStatus({
-	candidate,
-	draft,
-}: {
-	readonly candidate: MigrationCandidate;
-	readonly draft?: MigrationDraft;
-}) {
-	const t = useT();
-	const state = !candidate.needsMigration
-		? candidate.kind === "sessions"
-			? "imported"
-			: "available"
-		: draft?.loading
-			? "checking"
-			: draft?.error
-				? "blocked"
-				: !draft?.preview
-					? draft?.selected
-						? "checking"
-						: "pending"
-					: draft.preview.blockers.length
-						? "blocked"
-						: "ready";
-	const label =
-		state === "imported"
-			? "migrationStatusImported"
-			: state === "available"
-				? "migrationStatusAvailable"
-				: state === "checking"
-					? "migrationStatusChecking"
-					: state === "pending"
-						? "migrationStatusPendingCheck"
-						: state === "blocked"
-							? "migrationStatusBlocked"
-							: "migrationStatusReady";
-	return (
-		<span className="migration-status" data-progress={state}>
-			{t(label)}
 		</span>
 	);
 }
@@ -135,10 +93,13 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 					)}
 				</div>
 				{candidate.kind === "mcp" ? <span className="migration-meta">{t("migrationMcpAfterNote")}</span> : null}
-				{!candidate.needsMigration && candidate.kind !== "sessions" ? (
+				{candidate.kind === "sessions" && !candidate.needsMigration ? (
+					<span className="migration-status" data-status="imported">
+						{t("migrationStatusImported")}
+					</span>
+				) : candidate.kind !== "sessions" && (!candidate.needsMigration || candidate.readiness !== "ready") ? (
 					<CandidateStatus candidate={candidate} />
 				) : null}
-				<CandidateProgressStatus candidate={candidate} draft={draft} />
 				{draft?.loading ? <span className="migration-meta">{t("migrationLoadingPreview")}</span> : null}
 				{draft?.preview && !draft.loading ? <DiagnosticList diagnostics={draft.preview.blockers} /> : null}
 				{/* The 已可用 status pill already says this; the verbose diagnostic would be noise. */}
@@ -175,9 +136,6 @@ function SourceGroup({ group }: { readonly group: MigrationCandidateGroup }) {
 	const checked = group.candidates.filter((item) => drafts[item.id]?.preview && !drafts[item.id]?.loading);
 	const groupBlocked = checked.filter(
 		(item) => drafts[item.id]?.preview?.blockers.length || drafts[item.id]?.error,
-	).length;
-	const groupUnchecked = group.candidates.filter(
-		(item) => item.needsMigration && !drafts[item.id]?.preview && !drafts[item.id]?.loading,
 	).length;
 	const [expanded, setExpanded] = useState(group.candidates[0]?.kind === "mcp");
 	const label = sessions
@@ -217,10 +175,8 @@ function SourceGroup({ group }: { readonly group: MigrationCandidateGroup }) {
 						<span className="migration-pill migration-pill-attention">
 							{t("migrationGroupPending", { count: groupBlocked })}
 						</span>
-					) : sessions && groupUnchecked ? (
-						<span className="migration-pill">{t("migrationStatusPendingCheck")}</span>
-					) : sessions && selection.eligible ? (
-						<span className="migration-pill migration-pill-success">{t("migrationReady")}</span>
+					) : sessions && !selection.eligible && group.candidates.length ? (
+						<span className="migration-pill">{t("migrationStatusImported")}</span>
 					) : null}
 					<span aria-hidden="true">{expanded ? "⌄" : "›"}</span>
 				</Button>
