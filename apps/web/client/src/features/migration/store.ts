@@ -22,7 +22,6 @@ export interface MigrationState {
 	readonly scan: MigrationScanResult | null;
 	readonly sessionOptions: { range: "all" | "7" | "30" | "90"; limit: 30 | 50 | 100 | null };
 	readonly scannedKinds: readonly MigrationKind[];
-	readonly skipBlocked: boolean;
 	readonly closeRequested: boolean;
 	readonly closeWhenSettled: boolean;
 	readonly scanning: boolean;
@@ -52,7 +51,6 @@ let state: MigrationState = {
 	scan: null,
 	sessionOptions: { range: "all", limit: 100 },
 	scannedKinds: [],
-	skipBlocked: false,
 	closeRequested: false,
 	closeWhenSettled: false,
 	scanning: false,
@@ -76,7 +74,7 @@ export function getMigrationState(): MigrationState {
 	return state;
 }
 export function updateMigration(patch: Partial<MigrationState>): void {
-	state = { ...state, ...(patch.drafts && patch.drafts !== state.drafts ? { skipBlocked: false } : {}), ...patch };
+	state = { ...state, ...patch };
 	for (const listener of listeners) listener();
 }
 function subscribe(listener: () => void): () => void {

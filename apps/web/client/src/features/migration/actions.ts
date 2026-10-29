@@ -365,7 +365,7 @@ export function acknowledgePreview(id: string, ack: MigrationAcknowledgement, ch
 }
 export async function createMigrationPlan(): Promise<void> {
 	const state = getMigrationState();
-	const selections = collectSelections(state.drafts, state.skipBlocked);
+	const selections = collectSelections(state.drafts);
 	updateMigration({ stage: "review" });
 	if (!selections?.length || state.busy || isActiveJob(state.job)) return;
 	const drafts = state.drafts;
@@ -373,11 +373,10 @@ export async function createMigrationPlan(): Promise<void> {
 	try {
 		const plan = await migrationRequest("/plans", isPlan, { selections });
 		if (getMigrationState().drafts !== drafts || isActiveJob(getMigrationState().job)) return;
-		const confirmedDrafts = adoptMigrationPlan(plan, drafts, state.skipBlocked);
+		const confirmedDrafts = adoptMigrationPlan(plan, drafts);
 		if (!confirmedDrafts) throw new Error("invalid-response");
 		updateMigration({
 			drafts: confirmedDrafts,
-			skipBlocked: state.skipBlocked,
 			plan,
 			startKey: crypto.randomUUID(),
 			stage: "review",
@@ -395,7 +394,7 @@ export async function startMigrationJob(): Promise<void> {
 		!state.startKey ||
 		state.busy ||
 		isActiveJob(state.job) ||
-		!planReady(state.plan, state.drafts, Date.now(), state.skipBlocked)
+		!planReady(state.plan, state.drafts, Date.now())
 	)
 		return;
 	updateMigration({ busy: "start", error: null });

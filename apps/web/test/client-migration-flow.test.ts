@@ -48,10 +48,9 @@ test("review stays reachable with pending and failed choices without sending the
 	await createMigrationPlan();
 	assert.equal(getMigrationState().stage, "review");
 	assert.equal(requests, 0);
-	updateMigration({ skipBlocked: true });
 	const state = getMigrationState();
 	updateMigration({ drafts: { ...state.drafts, session: { ...state.drafts.session!, loading: false, error: "network-error" } } });
-	assert.equal(getMigrationState().skipBlocked, false, "Changed choices require fresh skip consent");
+	assert.equal(getMigrationState().stage, "review", "A failed choice stays out of the plan and out of the way");
 });
 test("dirty close requires confirmation; Escape cancels only the confirmation", async () => {
 	reset();

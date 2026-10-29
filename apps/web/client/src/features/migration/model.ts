@@ -50,25 +50,20 @@ export function draftReady(draft: MigrationDraft, now = Date.now()): boolean {
 export function invalidateDraft(draft: MigrationDraft, request: MigrationPreviewRequest): MigrationDraft {
 	return { request, selected: draft.selected, acknowledged: [], ruleChecked: false, loading: false };
 }
-export function collectSelections(
-	drafts: Readonly<Record<string, MigrationDraft>>,
-	skipBlocked = false,
-): MigrationSelection[] | null {
-	const selected = Object.values(drafts).filter((draft) => draft.selected);
-	if (!selected.length || (!skipBlocked && selected.some((draft) => !draftReady(draft)))) return null;
-	return selected
-		.filter((draft) => draftReady(draft))
-		.flatMap((draft) =>
-			draft.preview ? [{ previewId: draft.preview.id, acknowledged: [...draft.acknowledged] }] : [],
-		);
+/** Only ready selections reach a plan; anything still loading or blocked stays out of it. */
+export function collectSelections(drafts: Readonly<Record<string, MigrationDraft>>): MigrationSelection[] | null {
+	const ready = Object.values(drafts).filter((draft) => draft.selected && draftReady(draft));
+	if (!ready.length) return null;
+	return ready.flatMap((draft) =>
+		draft.preview ? [{ previewId: draft.preview.id, acknowledged: [...draft.acknowledged] }] : [],
+	);
 }
 export function adoptMigrationPlan(
 	plan: MigrationPlan,
 	drafts: Readonly<Record<string, MigrationDraft>>,
-	skipBlocked = false,
 ): Readonly<Record<string, MigrationDraft>> | null {
-	const selected = Object.entries(drafts).filter(([, draft]) => draft.selected && (!skipBlocked || draftReady(draft)));
-	if (selected.length !== plan.items.length || new Set(plan.items.map((p) => p.candidate.id)).size !== selected.length)
+	const ready = Object.entries(drafts).filter(([, draft]) => draft.selected && draftReady(draft));
+	if (ready.length !== plan.items.length || new Set(plan.items.map((p) => p.candidate.id)).size !== ready.length)
 		return null;
 	const next = { ...drafts };
 	for (const preview of plan.items) {
@@ -93,9 +88,8 @@ export function planReady(
 	plan: MigrationPlan,
 	drafts: Readonly<Record<string, MigrationDraft>>,
 	now = Date.now(),
-	skipBlocked = false,
 ): boolean {
-	const selected = Object.values(drafts).filter((draft) => draft.selected && (!skipBlocked || draftReady(draft, now)));
+	const selected = Object.values(drafts).filter((draft) => draft.selected && draftReady(draft, now));
 	return (
 		Date.parse(plan.expiresAt) > now &&
 		plan.items.length > 0 &&

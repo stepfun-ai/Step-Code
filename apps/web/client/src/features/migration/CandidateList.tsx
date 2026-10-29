@@ -175,8 +175,6 @@ function SourceGroup({ group }: { readonly group: MigrationCandidateGroup }) {
 						<span className="migration-pill migration-pill-attention">
 							{t("migrationGroupPending", { count: groupBlocked })}
 						</span>
-					) : sessions && !selection.eligible && group.candidates.length ? (
-						<span className="migration-pill">{t("migrationStatusImported")}</span>
 					) : null}
 					<span aria-hidden="true">{expanded ? "⌄" : "›"}</span>
 				</Button>
@@ -206,8 +204,8 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 	const sources = [...new Set(candidates.map((candidate) => candidate.source))];
 	const matches = candidates.filter((candidate) => source === "all" || source === candidate.source);
 	const pending = matches.filter(isActionable);
-	// V3: session groups keep every discovered row (already-in-use ones stay visible, unselectable).
-	const groups = kind === "rules" ? null : groupMigrationCandidates(matches);
+	// Every listed session must be migratable: imported rows are filtered out entirely.
+	const groups = kind === "rules" ? null : groupMigrationCandidates(kind === "sessions" ? pending : matches);
 	const scannedKinds = useMigrationStore((state) => state.scannedKinds);
 	const drafts = useMigrationStore((state) => state.drafts);
 	const busy = useMigrationStore((state) => !!state.busy || state.scanning);

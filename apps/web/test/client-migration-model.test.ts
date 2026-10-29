@@ -77,22 +77,20 @@ test("final plan exactly matches ready selections and cannot bypass blockers or 
 	assert.equal(collectSelections({ [candidate.id]: { ...confirmed, loading: true } }), null);
 	assert.equal(collectSelections({ [candidate.id]: { ...confirmed, error: "network-error" } }), null);
 });
-test("skip-blocked requires explicit opt-in and never grants missing rule or credential consent", () => {
+test("only ready selections reach a plan; pending or failed ones never block it", () => {
 	const p = preview();
 	const ready = { ...draft(p), ruleChecked: true, acknowledged: ["rules-impact" as const] };
 	const pending = { ...draft(), request: { candidateId: "pending" }, preview: undefined, loading: true };
 	const failed = { ...pending, request: { candidateId: "failed" }, loading: false, error: "network-error" };
 	const all = { [candidate.id]: ready, pending, failed };
-	assert.equal(collectSelections(all), null);
-	assert.deepEqual(collectSelections(all, true), [{ previewId: p.id, acknowledged: ["rules-impact"] }]);
+	assert.deepEqual(collectSelections(all), [{ previewId: p.id, acknowledged: ["rules-impact"] }]);
+	assert.equal(collectSelections({ pending }), null, "nothing ready means no plan");
 	const plan: MigrationPlan = { id: "ready-only", digest: "digest", expiresAt: p.expiresAt, items: [p] };
-	assert.equal(adoptMigrationPlan(plan, all), null);
-	const adopted = adoptMigrationPlan(plan, all, true);
+	const adopted = adoptMigrationPlan(plan, all);
 	assert.ok(adopted);
 	assert.equal(adopted.pending.selected, true, "Omitted rows remain visible as requested choices");
-	assert.equal(planReady(plan, adopted), false);
-	assert.equal(planReady(plan, adopted, Date.now(), true), true);
-	assert.deepEqual(collectSelections({ rule: draft() }, true), []);
+	assert.equal(planReady(plan, adopted), true);
+	assert.equal(collectSelections({ rule: draft() }), null);
 });
 
 test("scope, independent-copy and sensitive acknowledgements stay independent", () => {

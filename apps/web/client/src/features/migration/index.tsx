@@ -150,7 +150,6 @@ export function MigrationOnboarding({
 	const selectedDrafts = Object.values(drafts).filter((draft) => draft.selected);
 	const selected = selectedDrafts.length;
 	const readyCount = selectedDrafts.filter((draft) => draftReady(draft)).length;
-	const blockedCount = selected - readyCount;
 	const selectedSessions = selectedDrafts.filter(
 		(draft) =>
 			(draft.preview?.candidate.kind ??
@@ -170,7 +169,6 @@ export function MigrationOnboarding({
 	const closeRequested = useMigrationStore((state) => state.closeRequested);
 	const confirmDialogRef = useMigrationDialogFocus(open && closeRequested);
 	const closeWhenSettled = useMigrationStore((state) => state.closeWhenSettled);
-	const skipBlocked = useMigrationStore((state) => state.skipBlocked);
 	const focusedId = useMigrationStore((state) => state.focusedId);
 	const scanning = useMigrationStore((state) => state.scanning);
 	useEffect(() => {
@@ -287,11 +285,7 @@ export function MigrationOnboarding({
 									{stage === "job"
 										? t(isActiveJob(job) ? "migrationHideContinues" : "migrationJobRecorded")
 										: stage === "review" || (stage === "select" && kind === "rules")
-											? t("migrationReviewSummary", {
-													total: selected,
-													ready: readyCount,
-													blocked: blockedCount,
-												})
+											? t("migrationReviewSelected", { count: readyCount })
 											: kind === "mcp"
 												? t("migrationMcpSelection", { selected, total: mcpTotal })
 												: t("migrationSessionSelection", {
@@ -350,7 +344,7 @@ export function MigrationOnboarding({
 										<Button
 											id="migrationStartPlan"
 											variant="primary"
-											disabled={!!busy || !plan || !planReady(plan, drafts, Date.now(), skipBlocked)}
+											disabled={!!busy || !plan || !planReady(plan, drafts, Date.now())}
 											onClick={() => void startMigrationJob()}
 										>
 											{t(busy === "start" ? "migrationStarting" : "migrationStartCount", {
