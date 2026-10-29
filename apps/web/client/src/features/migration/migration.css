@@ -291,3 +291,16 @@
 /* Single-line checks center their box with the label; the 5px offset is for multi-line consent text. */
 .migration-list-toolbar .migration-select-all .migration-check { align-items: center; }
 .migration-list-toolbar .migration-select-all .migration-check input { margin-top: 0; }
+/* ── Source panel: a fixed trigger with an overlay dropdown ─────── */
+.migration-toolbar .migration-source-locations { position: relative; }
+.migration-source-locations[open] { z-index: 6; }
+.migration-source-locations[open] > .migration-source-location-body {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 6px);
+	z-index: 6;
+	min-width: min(480px, 42vw);
+	box-shadow: 0 12px 32px rgba(16, 24, 40, 0.14);
+	border-color: var(--line-strong);
+}
+.migration-source-locations > summary::after { width: 12px; text-align: center; }

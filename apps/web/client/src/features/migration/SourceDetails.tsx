@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import { Button } from "../../ui";
@@ -29,6 +29,12 @@ export function SourceDetails() {
 			.map((workspace) => workspace.path),
 	);
 	const disabled = useMigrationStore((state) => state.scanning || !!state.busy);
+	const focusedId = useMigrationStore((state) => state.focusedId);
+	const detailsRef = useRef<HTMLDetailsElement>(null);
+	// Opening a session preview shrinks the list column; the source panel folds away to keep it breathable.
+	useEffect(() => {
+		if (focusedId && detailsRef.current?.open) detailsRef.current.open = false;
+	}, [focusedId]);
 	const picking = useRef(false);
 	const pick = async (source?: "claude-code" | "codex") => {
 		if (picking.current) return;
@@ -48,7 +54,7 @@ export function SourceDetails() {
 		}
 	};
 	return (
-		<details className="migration-source-locations">
+		<details className="migration-source-locations" ref={detailsRef}>
 			<summary>{t("migrationSourceDetails")}</summary>
 			<div className="migration-source-location-body">
 				{(scan?.sources ?? [])
