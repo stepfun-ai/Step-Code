@@ -46,28 +46,27 @@ export function MigrationPage() {
 		<div className="migration-page" id="migrationPage">
 			<h2>{t("migrationTitle")}</h2>
 			<p>{t("migrationSettingsBody")}</p>
-			{isActiveJob(job) ? (
-				<Button
-					variant="primary"
-					onClick={() => {
-						startNewMigration();
-						openMigration("settings");
-					}}
-				>
-					{t("migrationViewJob")}
-				</Button>
-			) : null}
+			<Button
+				variant="primary"
+				onClick={() => {
+					startNewMigration();
+					openMigration("settings");
+				}}
+			>
+				{t(isActiveJob(job) ? "migrationViewJob" : "migrationStartEntry")}
+			</Button>
 			<div className="migration-category-list">
 				{MIGRATION_KINDS.map((kind) => (
 					<Button
 						key={kind}
-						variant="secondary"
+						className="migration-category-card"
 						onClick={() => {
 							startNewMigration(kind);
 							openMigration("settings", kind);
 						}}
 					>
-						{t(`migrationKind.${kind}`)}
+						<strong>{t(`migrationKind.${kind}`)}</strong>
+						<span>{t(`migrationCardHint.${kind}`)}</span>
 					</Button>
 				))}
 			</div>

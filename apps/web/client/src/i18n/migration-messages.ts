@@ -146,8 +146,18 @@ const labels = {
 		"Scanning only reads a listing and never changes files; you pick exactly what to migrate at every later step.",
 	],
 	migrationSettingsBody: [
-		"检查会话与受支持的资源，或查看迁移任务记录。",
-		"Inspect sessions and supported resources, or review migration history.",
+		"可以只迁会话，不要求登录，不强制选择规则。",
+		"Sessions only is fine: no sign-in required, and rules are optional.",
+	],
+	migrationStartEntry: ["开始迁移", "Start migration"],
+	"migrationCardHint.sessions": [
+		"先预览历史，原项目可用就沿用",
+		"Preview history first; reuse the original project when it exists",
+	],
+	"migrationCardHint.mcp": ["选择工具，了解它能做什么", "Pick tools and see what each one does"],
+	"migrationCardHint.rules": [
+		"告知影响，单独确认后才迁移",
+		"Impact explained; migrated only after separate confirmation",
 	],
 	migrationScanBoundary: [
 		"全程在本机完成，无需登录；原应用的数据保持原样。",

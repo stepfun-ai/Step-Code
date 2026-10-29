@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useT } from "../../i18n";
+import { sessionModifiedLabel } from "../../lib/format";
 import { Button, EmptyState, Spinner } from "../../ui";
 import {
 	acknowledgeRecovery,
@@ -36,11 +37,12 @@ export function MigrationHistory() {
 			{!jobs.length && !loading ? <EmptyState>{t("migrationNoHistory")}</EmptyState> : null}
 			{jobs.map((job) => (
 				<div className="migration-history-row" key={job.id}>
-					<div>
-						<code>{job.createdAt}</code>
-						<p>
+					<div className="migration-history-info">
+						<strong>
 							{t(`migrationJobStatus.${job.status}`)} · {t("migrationItemCount", { count: job.items.length })}
-						</p>
+							{sessionModifiedLabel(job.createdAt) ? ` · ${sessionModifiedLabel(job.createdAt)}` : ""}
+						</strong>
+						<code>{job.createdAt}</code>
 					</div>
 					<Button variant="secondary" onClick={() => attachMigrationJob(job.id)}>
 						{t("migrationViewJob")}
