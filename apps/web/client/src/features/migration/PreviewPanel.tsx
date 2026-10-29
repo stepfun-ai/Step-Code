@@ -120,10 +120,7 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 			{preview ? (
 				<>
 					{preview.candidate.kind === "mcp" ? (
-						<p>
-							{t("migrationMcpNoDescription")} ·{" "}
-							{t(`migrationMcpTransport.${preview.candidate.mcpTransport ?? "stdio"}`)}
-						</p>
+						<p>{t(`migrationMcpTransport.${preview.candidate.mcpTransport ?? "stdio"}`)}</p>
 					) : null}
 					<div className="migration-map">
 						<div>

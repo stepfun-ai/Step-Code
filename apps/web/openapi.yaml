@@ -2934,6 +2934,7 @@ components:
         diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
         modified: { type: string }
         mcpTransport: { type: string, enum: [stdio, http], description: Safe connection type; never a command or URL }
+        targetPath: { type: string, description: Rules only; the AGENTS.md a default preview writes. The preview target is authoritative }
         sourceSessionId: { type: string, description: Source metadata only }
         messageCount: { type: integer, minimum: 0, description: Non-empty source records found during discovery; never source content }
         messageCountCapped: { type: boolean, description: True when the count is a lower bound }

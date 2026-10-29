@@ -60,11 +60,9 @@ export function ResourcePreview({
 			) : (
 				<>
 					<p className="migration-meta">
-						{t(`migrationMcpTransport.${preview?.candidate.mcpTransport ?? "stdio"}`)} ·{" "}
-						{t("migrationMcpNoDescription")}
+						{t(`migrationMcpTransport.${preview?.candidate.mcpTransport ?? "stdio"}`)}
 					</p>
 					<MigrationTargetPicker id={id} kind={kind} draft={draft} />
-					<p className="migration-meta">{t("migrationMcpAfterNote")}</p>
 					<details
 						className="migration-mcp-safety"
 						open={

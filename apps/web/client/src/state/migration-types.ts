@@ -26,6 +26,8 @@ export interface MigrationCandidate {
 	diagnostics: MigrationDiagnostic[];
 	modified?: string;
 	mcpTransport?: "stdio" | "http";
+	/** Rules only: default AGENTS.md destination; the preview target is authoritative. */
+	targetPath?: string;
 	sourceSessionId?: string;
 	messageCount?: number;
 	messageCountCapped?: boolean;

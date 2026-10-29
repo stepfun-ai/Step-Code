@@ -60,10 +60,15 @@ const labels = {
 	],
 	migrationClosePreview: ["关闭预览", "Close preview"],
 	migrationSessionHistory: ["历史对话", "Conversation history"],
-	migrationMcpAfterNote: [
-		"迁移后到 MCP 设置中启用；需要重新授权时会提示。",
-		"Enable it in MCP settings after migrating; reauthorization is requested when needed.",
+	migrationMcpCliReviewedTitle: ["MCP 已迁移", "MCP servers already migrated"],
+	migrationMcpCliReviewed: [
+		"{sources} 的 MCP 已通过 StepCode CLI 迁移，无需重复迁移。",
+		"MCP servers from {sources} were already migrated with the StepCode CLI; no need to migrate again.",
 	],
+	migrationMcpExistsInPath: ["已在 {path} 中存在", "Already exists in {path}"],
+	migrationRulesAlreadyMigrated: ["已迁移，无需重复迁移", "Already migrated; no need to migrate again"],
+	migrationMcpExistsInClaude: ["已在 Claude Code 中存在", "Already exists in Claude Code"],
+	migrationMcpExistsInStepcode: ["已在 StepCode config.toml 中存在", "Already exists in StepCode config.toml"],
 	migrationMcpRetry: ["重新查找", "Find again"],
 	migrationSessionSelection: [
 		"已选 {workspaces} 个工作区 · {sessions} 个会话",
@@ -111,10 +116,13 @@ const labels = {
 	],
 	migrationGroupSelection: ["已选 {selected}/{total}", "Selected {selected}/{total}"],
 	migrationSelectAllPending: ["全选当前结果", "Select all current results"],
-	migrationRuleIndividualSelection: [
-		"AI 行为规则需逐项审阅确认，不使用批量授权。",
-		"Review and confirm AI rules individually; bulk consent is not available.",
+	migrationRulesNoneTitle: ["未发现可迁移的规则文件", "No rule files to migrate"],
+	migrationRulesNone: [
+		"全局未找到 Claude Code 的 CLAUDE.md 或 Codex 的 AGENTS.md，无需迁移，可直接继续。",
+		"No global CLAUDE.md from Claude Code or AGENTS.md from Codex was found. Nothing to migrate; you can continue.",
 	],
+	migrationRuleSource: ["来源", "Source"],
+	migrationRuleTarget: ["目标", "Target"],
 	migrationImportMode: ["导入方式", "Import mode"],
 	migrationHistoryCopy: ["新建历史副本", "New history copy"],
 	migrationIndependentCopyMode: ["独立复制", "Independent copy"],
@@ -256,7 +264,6 @@ const labels = {
 		"CODEX_HOME/config.toml or ~/.codex/config.toml",
 	],
 	migrationMcpTargetName: ["导入名称", "Import name"],
-	migrationMcpNoDescription: ["未提供说明", "No description provided"],
 	"migrationMcpTransport.stdio": ["本地进程", "Local process"],
 	"migrationMcpTransport.http": ["HTTP 服务", "HTTP service"],
 	migrationTargetName: [
@@ -365,7 +372,7 @@ const states = {
 	"migrationKind.skills": ["技能", "Skills"],
 	"migrationKind.mcp": ["MCP", "MCP"],
 	"migrationKind.prompts": ["提示词模板", "Prompt templates"],
-	"migrationKind.rules": ["AI 行为规则", "AI behavior rules"],
+	"migrationKind.rules": ["AGENTS.md", "AGENTS.md"],
 	"migrationSource.codex": ["Codex", "Codex"],
 	"migrationSource.claude-code": ["Claude Code", "Claude Code"],
 	"migrationSource.workbuddy": ["WorkBuddy", "WorkBuddy"],
@@ -607,6 +614,10 @@ const diagnosticLabels = {
 		"无法分配可用名称，请重新选择导入名称。",
 		"No free import name was found; choose another name.",
 	],
+	"rules-already-migrated": ["已迁移，无需重复迁移", "Already migrated; no need to migrate again"],
+	"mcp-reviewed-by-cli": ["已通过 StepCode CLI 迁移", "Already migrated with the StepCode CLI"],
+	"mcp-exists-in-stepcode": ["已在 StepCode config.toml 中存在", "Already exists in StepCode config.toml"],
+	"mcp-exists-in-claude-code": ["已在 Claude Code 中存在", "Already exists in Claude Code"],
 	"mcp-configured-equal": [
 		"目标已配置相同内容；不重复写入或更改启用状态。",
 		"The target already has equivalent configuration; no duplicate write or enablement change.",
