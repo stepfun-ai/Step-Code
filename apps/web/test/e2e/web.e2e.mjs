@@ -307,11 +307,19 @@ const migrationSelect = async (item) => {
   for (const input of $$('.migration-preview .migration-check input')) if (!input.checked) input.click();
   return selected.body;
 };
+const migrationToChecklist = async () => {
+  for (let i = 0; i < 4 && !$('.migration-final-plan'); i++) {
+    await until(() => $('#migrationNextStep') && !$('#migrationNextStep').disabled, 'next step ready');
+    $('#migrationNextStep').click();
+    await until(() => $('.migration-final-plan') || $('.migration-list'), 'step advanced');
+  }
+  await until(() => $('.migration-final-plan'), 'final plan reached');
+};
 const migrationPlan = async () => {
   // A failed plan attempt leaves the review stage open, so return to the category first.
   if ($('.migration-final-plan')) { $$('#migrationModal .migration-dialog-foot button')[0].click(); await until(() => $('.migration-list'), 'back to selection'); }
-  await until(() => $('#migrationReviewPlan') && !$('#migrationReviewPlan').disabled, 'selected previews ready');
-  const result = await migrationPost('/plans', () => $('#migrationReviewPlan').click());
+  await until(() => $('#migrationNextStep') && !$('#migrationNextStep').disabled, 'selected previews ready');
+  const result = await migrationPost('/plans', migrationToChecklist);
   if (result.status !== 200) throw new Error('Plan failed: ' + JSON.stringify(result.body));
   await until(() => $('.migration-final-plan'), 'immutable final review');
   return result.body;
@@ -3865,8 +3873,7 @@ test("session migration failures are visible and preserve truthful job state", {
       await migrationPreview(broken);
       brokenRow.querySelector('input').click();
       await visibleError('.migration-preview [role="alert"]', 'fixture-preview');
-      $('#migrationReviewPlan').click();
-      await until(() => $('.migration-final-plan'), 'review reached with a failed selection');
+      await migrationToChecklist();
       if (!$('#migrationStartPlan').disabled) throw new Error('Failed selected preview remains submittable');
       $$('#migrationModal .migration-dialog-foot button')[0].click();
       await until(() => $('.migration-list'), 'back to selection');
@@ -3875,8 +3882,7 @@ test("session migration failures are visible and preserve truthful job state", {
       malformedPreview = true;
       await migrationPost('/preview', () => $('#migrationRefreshPreview').click());
       await visibleError('.migration-preview [role="alert"]', 'invalid-response');
-      $('#migrationReviewPlan').click();
-      await until(() => $('.migration-final-plan'), 'review reached with an invalid DTO');
+      await migrationToChecklist();
       if (!$('#migrationStartPlan').disabled) throw new Error('Invalid DTO passed review readiness');
       $$('#migrationModal .migration-dialog-foot button')[0].click();
       await until(() => $('.migration-list'), 'back to selection');
@@ -3885,7 +3891,7 @@ test("session migration failures are visible and preserve truthful job state", {
       $('[data-candidate-id="broken"]').querySelector('input').click();
       const healthyPreview = await migrationSelect(healthy);
       if (!$('.migration-preview .migration-diagnostics').textContent.includes('73519')) throw new Error('Compatibility warning count hidden');
-      const failedPlan = await migrationPost('/plans', () => $('#migrationReviewPlan').click());
+      const failedPlan = await migrationPost('/plans', migrationToChecklist);
       if (failedPlan.status !== 503) throw new Error('Failed plan not surfaced');
       // The review list stays reachable so the failure is visible; it must not become submittable.
       if (!$('#migrationStartPlan').disabled) throw new Error('Failed plan left a submittable review');

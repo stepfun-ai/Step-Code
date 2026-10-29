@@ -306,28 +306,17 @@ export function MigrationOnboarding({
 											>
 												{t("migrationPreviousStep")}
 											</Button>
-											{stepIndex < MIGRATION_KINDS.length - 1 ? (
-												<Button
-													variant="primary"
-													disabled={!!busy}
-													onClick={() => {
-														const next = MIGRATION_KINDS[stepIndex + 1];
-														if (next) setMigrationKind(next);
-													}}
-												>
-													{t("migrationNextStep")}
-												</Button>
-											) : null}
 											<Button
-												id="migrationReviewPlan"
-												variant={stepIndex === MIGRATION_KINDS.length - 1 ? "primary" : "secondary"}
-												disabled={!!busy && busy !== "selection"}
+												id="migrationNextStep"
+												variant="primary"
+												disabled={!!busy}
 												onClick={() => {
-													if (!selected) void finish("skipped");
+													const next = MIGRATION_KINDS[stepIndex + 1];
+													if (next) setMigrationKind(next);
 													else void createMigrationPlan();
 												}}
 											>
-												{t("migrationReviewPlan")}
+												{t("migrationNextStep")}
 											</Button>
 										</div>
 									</div>

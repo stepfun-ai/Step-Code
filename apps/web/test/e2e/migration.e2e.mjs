@@ -26,7 +26,14 @@ const kinds = ["sessions", "mcp", "rules"];
 const ruleText = "# Synthetic source rules\nAlways explain fixture changes.\n";
 const skillText = (name) => `---\nname: ${name}\ndescription: Synthetic offline skill\n---\nRead references/help.md.\n`;
 const modal = (page) => page.locator("#migrationModal");
-const reviewButton = (page) => modal(page).locator('#migrationReviewPlan, #migrationStartPlan');
+const nextButton = (page) => modal(page).locator('#migrationNextStep');
+async function openChecklist(page) {
+	for (let i = 0; i < 4 && !(await modal(page).locator('.migration-final-plan').count()); i++) {
+		await nextButton(page).click();
+		await page.waitForTimeout(350);
+	}
+	await modal(page).locator('.migration-final-plan').waitFor({ timeout: 10000 });
+}
 
 async function put(path, text) {
 	await mkdir(dirname(path), { recursive: true });
@@ -250,9 +257,9 @@ async function changePreview(page, action) {
 	return preview;
 }
 async function startJob(page) {
-	const plan = await responseFor(page, "/api/v1/migrations/plans", () => reviewButton(page).click());
+	const plan = await responseFor(page, "/api/v1/migrations/plans", () => openChecklist(page));
 	await modal(page).locator(".migration-final-plan").waitFor();
-	const started = await responseFor(page, "/api/v1/migrations", () => reviewButton(page).click());
+	const started = await responseFor(page, "/api/v1/migrations", () => modal(page).locator("#migrationStartPlan").click());
 	const job = await until(async () => {
 		const job = await api(page, `/api/v1/migrations/${started.id}`);
 		return ["completed", "interrupted", "cancelled"].includes(job.status) ? job : null;
@@ -298,9 +305,9 @@ test("grouped session selection has all/partial states and batch targets re-prev
 	assert.equal(await groupCheck.evaluate(input => input.indeterminate), true);
 	await groupCheck.check();
 	await until(async () => await groupCheck.isEnabled() && await groupCheck.isChecked(), "group selected again");
-	assert.equal(await page.evaluate(() => document.getElementById('migrationReviewPlan').disabled), false);
+	assert.equal(await page.evaluate(() => document.getElementById('migrationNextStep').disabled), false);
 	// Sessions inherit their original workspace; no destination pick is offered.
-	const response = await responseFor(page, '/api/v1/migrations/plans', () => reviewButton(page).click());
+	const response = await responseFor(page, '/api/v1/migrations/plans', () => openChecklist(page));
 	assert.equal(response.items.length, 2);
 	assert.ok(response.items.every(preview => preview.candidate.kind === 'sessions' && preview.target.scope.cwd === f.project));
 	assert.equal(existsSync(join(f.agent, 'sessions')), false, "Plan and target changes do not publish history");
@@ -417,7 +424,7 @@ test("explicit rule CREATE consent invalidates on edits; disabled MCP and sessio
 	assert.equal(rule.action, "create");
 	assert.equal(existsSync(rule.target.path), false);
 	// A reviewed rule needs no separate consent: the plan is submittable directly.
-	await reviewButton(page).click();
+	await openChecklist(page);
 	await modal(page).locator('.migration-final-plan').waitFor();
 	await until(async () => await modal(page).locator('#migrationStartPlan').isEnabled(), "a previewed rule plan is submittable");
 	await modal(page).locator('.migration-dialog-foot button').first().click();
