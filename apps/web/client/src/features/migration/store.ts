@@ -20,7 +20,7 @@ export interface MigrationState {
 	readonly projectCwds: readonly string[];
 	readonly mcpSourcePaths: Readonly<Partial<Record<"claude-code" | "codex", string>>>;
 	readonly scan: MigrationScanResult | null;
-	readonly sessionOptions: { range: "all" | "7" | "30" | "90"; limit: 30 | 50 | 100 | null; includeArchived: boolean };
+	readonly sessionOptions: { range: "all" | "7" | "30" | "90"; limit: 30 | 50 | 100 | null };
 	readonly scannedKinds: readonly MigrationKind[];
 	readonly skipBlocked: boolean;
 	readonly closeRequested: boolean;
@@ -50,7 +50,7 @@ let state: MigrationState = {
 	projectCwds: [],
 	mcpSourcePaths: {},
 	scan: null,
-	sessionOptions: { range: "all", limit: 100, includeArchived: false },
+	sessionOptions: { range: "all", limit: 100 },
 	scannedKinds: [],
 	skipBlocked: false,
 	closeRequested: false,

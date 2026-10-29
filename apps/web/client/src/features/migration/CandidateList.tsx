@@ -328,7 +328,8 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 			<div className="migration-scan-controls">
 				{kind === "sessions" ? (
 					<>
-						<label className="migration-field">
+						<label className="migration-scan-select">
+							<span>{t("migrationScanRangeLabel")}</span>
 							<select
 								aria-label={t("migrationTimeFilter")}
 								value={options.range}
@@ -346,7 +347,8 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 								))}
 							</select>
 						</label>
-						<label className="migration-field">
+						<label className="migration-scan-select">
+							<span>{t("migrationScanLimitLabel")}</span>
 							<select
 								aria-label={t("migrationSessionLimit")}
 								value={options.limit ?? "unlimited"}
@@ -368,7 +370,13 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 						</label>
 					</>
 				) : null}
-				<Button id="migrationScanButton" disabled={busy} onClick={() => void scanMigration(kind)}>
+				<Button
+					id="migrationScanButton"
+					className="migration-scan-run"
+					disabled={busy}
+					onClick={() => void scanMigration(kind)}
+				>
+					<span aria-hidden="true">↻</span>
 					{t(
 						busy
 							? "migrationScanning"
@@ -379,6 +387,7 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 				</Button>
 			</div>
 			<SegmentedControl
+				className="migration-source-tabs"
 				aria-label={t("migrationSourceFilter")}
 				value={source}
 				onChange={setSource}

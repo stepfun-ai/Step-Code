@@ -242,3 +242,27 @@
 @media (max-width: 560px) { .migration-dialog-head { grid-template-areas: "heading close" "hint hint"; } }
 .migration-create-workspace { display: grid; gap: 10px; padding-top: 4px; }
 .migration-create-workspace-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Source tabs and source-location rows: icon/text alignment, app names ── */
+.migration-source-tabs button { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }
+.migration-source-tabs .migration-source-logo { width: 16px; height: 16px; }
+.migration-source-location { align-items: center; row-gap: 4px; }
+.migration-source-location > strong { font-weight: 650; }
+.migration-source-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.migration-source-actions-row { margin: 0 0 6px; }
+.migration-source-location .migration-source-action { padding: 4px 10px; font-size: 12px; color: var(--ink-2); background: var(--surface-soft); border: 1px solid var(--line); border-radius: var(--radius-chip); }
+.migration-source-location .migration-source-action:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
+/* ── Premium-minimal scan controls and source trigger ───────────── */
+.migration-scan-select { display: inline-flex; align-items: center; gap: 2px; height: 32px; padding: 0 4px 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.migration-scan-select > span { font-size: 11px; color: var(--ink-2); }
+.migration-scan-select select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; padding: 0 22px 0 4px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); cursor: pointer; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 3.5 5 6.5 8 3.5' fill='none' stroke='%23656b75' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>"); background-repeat: no-repeat; background-position: right 6px center; }
+.migration-scan-select select:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; border-radius: 999px; }
+.migration-scan-controls .migration-scan-run { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 16px; border-radius: 999px; background: var(--ink); color: var(--surface); border: 1px solid var(--ink); font-size: 12px; font-weight: 600; }
+.migration-scan-controls .migration-scan-run:hover:not(:disabled) { opacity: .86; }
+.migration-scan-controls .migration-scan-run > span[aria-hidden] { font-size: 13px; line-height: 1; }
+.migration-source-locations > summary { list-style: none; cursor: pointer; width: fit-content; display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; user-select: none; }
+.migration-source-locations > summary::-webkit-details-marker { display: none; }
+.migration-source-locations > summary:hover { color: var(--ink); }
+.migration-source-locations > summary::after { content: "⌄"; font-size: 11px; }
+.migration-source-locations[open] > summary::after { content: "⌃"; }
+.migration-source-location > div:first-of-type { flex: 1; min-width: 0; }

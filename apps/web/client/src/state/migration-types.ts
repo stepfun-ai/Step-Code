@@ -35,14 +35,14 @@ export interface MigrationSourceReport {
 	source: MigrationSource;
 	scope: MigrationScope;
 	path: string;
-	status: "ok" | "missing" | "empty" | "error" | "unsupported";
+	status: "ok" | "missing" | "empty" | "error" | "partial" | "unsupported";
 	diagnostics: MigrationDiagnostic[];
 }
 export interface MigrationScanRequest {
 	kinds?: MigrationKind[];
 	projectCwds?: string[];
 	mcpSourcePaths?: Partial<Record<"claude-code" | "codex", string>>;
-	sessionOptions?: { range?: "all" | "7" | "30" | "90"; limit?: 30 | 50 | 100 | null; includeArchived?: boolean };
+	sessionOptions?: { range?: "all" | "7" | "30" | "90"; limit?: 30 | 50 | 100 | null };
 }
 export interface MigrationScanResult {
 	candidates: MigrationCandidate[];
