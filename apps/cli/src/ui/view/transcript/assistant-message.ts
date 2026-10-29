@@ -22,6 +22,43 @@ type ZoneCache = { width: number; native: string[]; lines: string[] };
 type MarkdownSlot = { kind: "text" | "thinking"; markdown: Markdown };
 
 /**
+ * Normalize a provider-assembled content array so that thinking blocks always
+ * render before the answer. Most models emit the reasoning stream first, but
+ * some turns flush it only after the answer text, which would otherwise paint
+ * the thinking block below the answer in those turns and above it in every
+ * other turn of the same conversation.
+ *
+ * Only the degenerate text/thinking shape is rewritten: every visible answer
+ * block precedes every visible thinking block, with no tool-call boundary to
+ * preserve. In that case the thinking suffix is hoisted ahead of the answer
+ * (stable within each group). Interleaved answers and thinking stay in their
+ * original order, so a mid-turn reasoning block never moves across an answer
+ * or tool call that it followed.
+ */
+export function withThinkingBeforeAnswer(content: AssistantMessage["content"]): AssistantMessage["content"] {
+	let firstText = -1;
+	let firstThinking = -1;
+	let lastText = -1;
+	for (let i = 0; i < content.length; i++) {
+		const block = content[i];
+		if (block === undefined) continue;
+		if (block.type === "toolCall") return content;
+		if (block.type === "text" && block.text.trim().length > 0) {
+			if (firstText === -1) firstText = i;
+			lastText = i;
+		}
+		if (firstThinking === -1 && block.type === "thinking" && block.thinking.trim().length > 0) firstThinking = i;
+	}
+	if (firstText === -1 || firstThinking === -1 || firstThinking < firstText || lastText > firstThinking) {
+		return content;
+	}
+	return [
+		...content.filter((block) => block.type === "thinking"),
+		...content.filter((block) => block.type !== "thinking"),
+	];
+}
+
+/**
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
@@ -150,17 +187,19 @@ export class AssistantMessageComponent extends Container {
 			this.contentContainer.addChild(new Spacer(1));
 		}
 
+		const orderedContent = withThinkingBeforeAnswer(message.content);
+
 		// Render content in order
-		for (let i = 0; i < message.content.length; i++) {
-			const content = message.content[i];
+		for (let i = 0; i < orderedContent.length; i++) {
+			const content = orderedContent[i];
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				this.contentContainer.addChild(this.textMarkdown(content.text.trim()));
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
-				for (; i < message.content.length; i++) {
-					const thinkingContent = message.content[i];
+				for (; i < orderedContent.length; i++) {
+					const thinkingContent = orderedContent[i];
 					if (thinkingContent.type !== "thinking") {
 						break;
 					}
@@ -177,7 +216,7 @@ export class AssistantMessageComponent extends Container {
 
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
+				const hasVisibleContentAfter = orderedContent
 					.slice(i + 1)
 					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 

@@ -176,6 +176,86 @@ describe("Step message presentation", () => {
 		expect(finalAnswer).toBeGreaterThan(followUpThinking);
 	});
 
+	test("preserves answer segments around a middle thinking block", () => {
+		initTheme("step-blue");
+		const component = new StepAssistantMessageComponent(
+			assistantMessage([
+				{ type: "text", text: "first answer" },
+				{ type: "thinking", thinking: "middle reasoning" },
+				{ type: "text", text: "second answer" },
+			]),
+			false,
+			getMarkdownTheme(),
+		);
+		const lines = plain(component.render(80));
+		const firstAnswer = lines.findIndex((line) => line.includes("first answer"));
+		const thinking = lines.findIndex((line) => line.includes("middle reasoning"));
+		const secondAnswer = lines.findIndex((line) => line.includes("second answer"));
+		expect(firstAnswer).toBeLessThan(thinking);
+		expect(thinking).toBeLessThan(secondAnswer);
+	});
+
+	test("hoists thinking ahead of the answer when the model streams it last", () => {
+		initTheme("step-blue");
+		const component = new StepAssistantMessageComponent(
+			assistantMessage([
+				{ type: "text", text: "the answer" },
+				{ type: "thinking", thinking: "late reasoning" },
+			]),
+			false,
+			getMarkdownTheme(),
+		);
+		const lines = plain(component.render(80));
+		const thinking = lines.findIndex((line) => line.includes("late reasoning"));
+		const answer = lines.findIndex((line) => line.includes("the answer"));
+		expect(thinking).toBeGreaterThanOrEqual(0);
+		expect(answer).toBeGreaterThanOrEqual(0);
+		expect(thinking).toBeLessThan(answer);
+	});
+
+	test("keeps streamed thinking placement consistent across content updates", () => {
+		initTheme("step-blue");
+		const component = new StepAssistantMessageComponent(
+			assistantMessage([{ type: "text", text: "first answer" }]),
+			false,
+			getMarkdownTheme(),
+		);
+		expect(plain(component.render(80)).join("\n")).toContain("• first answer");
+
+		component.updateContent(
+			assistantMessage([
+				{ type: "text", text: "first answer" },
+				{ type: "thinking", thinking: "late reasoning" },
+			]),
+			true,
+		);
+		let lines = plain(component.render(80));
+		const hoistedThinking = lines.findIndex((line) => line.includes("late reasoning"));
+		const hoistedAnswer = lines.findIndex((line) => line.includes("first answer"));
+		expect(hoistedThinking).toBeGreaterThanOrEqual(0);
+		expect(hoistedAnswer).toBeGreaterThanOrEqual(0);
+		expect(hoistedThinking).toBeLessThan(hoistedAnswer);
+
+		component.updateContent(
+			assistantMessage([
+				{ type: "text", text: "first answer" },
+				{ type: "thinking", thinking: "late reasoning" },
+				{ type: "text", text: "second answer" },
+			]),
+			true,
+		);
+		lines = plain(component.render(80));
+		const firstAnswer = lines.findIndex((line) => line.includes("first answer"));
+		const thinking = lines.findIndex((line) => line.includes("late reasoning"));
+		const secondAnswer = lines.findIndex((line) => line.includes("second answer"));
+		expect(firstAnswer).toBeGreaterThanOrEqual(0);
+		expect(thinking).toBeGreaterThanOrEqual(0);
+		expect(secondAnswer).toBeGreaterThanOrEqual(0);
+		expect(firstAnswer).toBeLessThan(thinking);
+		expect(thinking).toBeLessThan(secondAnswer);
+		expect(lines.filter((line) => line.includes("late reasoning"))).toHaveLength(1);
+	});
+
 	test("updates output padding without dropping the first character", () => {
 		initTheme("step-blue");
 		const assistant = new StepAssistantMessageComponent(
