@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useT } from "../../i18n";
 import { sessionModifiedLabel } from "../../lib/format";
+import type { MigrationItemResult } from "../../state/types";
 import { Button, EmptyState, Spinner } from "../../ui";
 import {
 	acknowledgeRecovery,
@@ -13,7 +14,7 @@ import {
 } from "./actions";
 import { DiagnosticList } from "./CandidateList";
 import { isActiveJob, resultCounts } from "./model";
-import { type MigrationFeatureProps, PreviewText, ScopeLabel } from "./PreviewPanel";
+import { type MigrationFeatureProps, PreviewText } from "./PreviewPanel";
 import { updateMigration, useMigrationStore } from "./store";
 
 export function MigrationHistory() {
@@ -118,23 +119,10 @@ export function MigrationJobView({ onOpenSession }: MigrationFeatureProps) {
 						</span>
 					</header>
 					<p>
-						{t(`migrationKind.${item.kind}`)} · {t(`migrationSource.${item.source}`)} ·{" "}
+						{t(`migrationSource.${item.source}`)} {t(`migrationKind.${item.kind}`)}{" "}
 						{t(`migrationAction.${item.action}`)}
 					</p>
-					<div className="migration-map">
-						<div>
-							<span>{t("migrationRequestedTarget")}</span>
-							<code>{item.requestedTarget.path}</code>
-							<ScopeLabel scope={item.requestedTarget.scope} />
-						</div>
-						{item.actualTarget ? (
-							<div>
-								<span>{t("migrationActualTarget")}</span>
-								<code>{item.actualTarget.path}</code>
-								<ScopeLabel scope={item.actualTarget.scope} />
-							</div>
-						) : null}
-					</div>
+					<JobItemTarget item={item} />
 					<p>{t(`migrationActivation.${item.activation}`)}</p>
 					<DiagnosticList diagnostics={item.diagnostics} />
 					{item.status === "imported" && item.sessionId && onOpenSession ? (
@@ -173,6 +161,29 @@ export function MigrationJobView({ onOpenSession }: MigrationFeatureProps) {
 				</article>
 			))}
 		</section>
+	);
+}
+/** One line: the project (when scoped) and where the item went, or was asked to go before it finished. */
+function JobItemTarget({ item }: { readonly item: MigrationItemResult }) {
+	const t = useT();
+	const target = item.status === "imported" ? (item.actualTarget ?? item.requestedTarget) : item.requestedTarget;
+	const migrated = item.status === "imported";
+	const values = {
+		path: target.path,
+		cwd: target.scope.kind === "project" ? target.scope.cwd : "",
+	};
+	const key =
+		target.scope.kind === "project"
+			? migrated
+				? "migrationJobProjectMigratedTo"
+				: "migrationJobProjectTarget"
+			: migrated
+				? "migrationJobMigratedTo"
+				: "migrationJobTarget";
+	return (
+		<p className="migration-job-target" data-job-target="">
+			{t(key, values)}
+		</p>
 	);
 }
 export function RecoveryReview() {

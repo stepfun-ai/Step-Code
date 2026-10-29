@@ -63,6 +63,7 @@
 .migration-row > input { align-self: flex-start; margin: 3px 0 0; flex-shrink: 0; }
 .migration-row-body { min-width: 0; flex: 1; }
 .migration-row-title { text-align: left; font-weight: 600; overflow-wrap: anywhere; }
+.migration-job-target { color: var(--ink-2); overflow-wrap: anywhere; }
 .migration-rule-paths { display: grid; gap: 6px; margin: 8px 0 0; font-size: 13px; }
 .migration-rule-paths > div { display: flex; gap: 16px; min-width: 0; }
 .migration-rule-paths dt { flex-shrink: 0; color: var(--ink-3); }
