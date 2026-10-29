@@ -257,11 +257,28 @@ describe("migration safety boundaries", () => {
 		put(source, "before");
 		const c = await candidate("rules");
 		const p = await service.preview({ candidateId: c.id });
+		// The scan states the default destination before any preview, and the preview agrees.
+		expect(c.targetPath).toBe(join(agent, "AGENTS.md"));
+		expect(p.target.path).toBe(c.targetPath);
 		put(source, "after");
 		await expect(service.plan([{ previewId: p.id, acknowledged: ["rules-impact"] }])).rejects.toMatchObject({
 			code: "preview-changed",
 		});
 		expect(existsSync(join(agent, "AGENTS.md"))).toBe(false);
+	});
+	it("appends to an existing AGENTS.md by default and skips one that already holds the source", async () => {
+		const source = join(home, ".codex", "AGENTS.md");
+		put(source, "codex rules");
+		put(join(agent, "AGENTS.md"), "existing rules");
+		const c = await candidate("rules");
+		const p = await service.preview({ candidateId: c.id });
+		expect(p.action).toBe("append");
+		expect(p.blockers).toEqual([]);
+		put(join(agent, "AGENTS.md"), "existing rules\n\ncodex rules\n");
+		const migrated = await candidate("rules");
+		expect(migrated.needsMigration).toBe(false);
+		expect(migrated.diagnostics).toContainEqual({ code: "rules-already-migrated", path: join(agent, "AGENTS.md") });
+		expect((await service.preview({ candidateId: migrated.id })).action).toBe("skip");
 	});
 });
 
@@ -674,11 +691,13 @@ describe("offline migration resources", () => {
 		put(join(home, ".codex", "config.toml"), '[mcp_servers.a]\ncommand="server"\ndisabled_tools=["delete"]\n');
 		put(join(dirname(agent), "config.toml"), '[mcp_servers.a]\ncommand="server"\ndisabled_tools=["other"]\n');
 		const c = await candidate("mcp");
-		expect(c.needsMigration).toBe(true);
-		const p = await service.preview({ candidateId: c.id });
-		expect(p.blockers).toEqual([]);
-		expect(p.target.name).toBe("a-codex");
-		expect(p.warnings.map((b) => b.code)).toContain("mcp-name-conflict");
+		// A different declaration under a name StepCode already holds is shown, not offered.
+		expect(c).toMatchObject({ holding: "stepcode", needsMigration: false });
+		expect(c.diagnostics).toContainEqual(
+			expect.objectContaining({ code: "mcp-exists-in-stepcode", path: expect.stringContaining("config.toml") }),
+		);
+		const p = await service.preview({ candidateId: c.id, action: "import" });
+		expect(p.blockers).toContainEqual({ code: "mcp-exists-in-stepcode" });
 		put(
 			join(dirname(agent), "config.toml"),
 			'[mcp_servers.other]\ncommand="server"\ndisabled_tools=["delete"]\nenabled=false\n',

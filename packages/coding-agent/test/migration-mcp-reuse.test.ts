@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -46,37 +46,53 @@ afterEach(async () => {
 });
 
 describe("shared MCP migration planning", () => {
-	it("renames around an existing different server before confirmation", async () => {
+	it("shows a server whose name StepCode config.toml already holds without offering it", async () => {
 		claude({ docs: { command: "incoming" } });
 		put(join(home, ".profile", "config.toml"), '[mcp_servers.docs]\ncommand="existing"\n');
-		const [preview] = await previews();
-		expect(preview?.blockers).toEqual([]);
-		expect(preview?.target.name).toBe("docs-claude");
-		const job = await run(await plan([preview!]));
-		expect(job.items[0]?.status).toBe("imported");
-		const text = readFileSync(join(home, ".profile", "config.toml"), "utf8");
-		expect(text).toContain('command = "existing"');
-		expect(text).toContain("mcp_servers.docs-claude");
+		const scan = await service.scan({ kinds: ["mcp"] });
+		expect(scan.candidates[0]).toMatchObject({ name: "docs", holding: "stepcode", needsMigration: false });
+		expect(scan.candidates[0]?.diagnostics).toContainEqual(
+			expect.objectContaining({ code: "mcp-exists-in-stepcode", path: expect.stringContaining("config.toml") }),
+		);
+		const skipped = await service.preview({ candidateId: scan.candidates[0]!.id });
+		expect(skipped.action).toBe("skip");
+		const forced = await service.preview({ candidateId: scan.candidates[0]!.id, action: "import" });
+		expect(forced.blockers).toContainEqual({ code: "mcp-exists-in-stepcode" });
 	});
 
-	it("allocates the selected cross-source names in the returned immutable plan", async () => {
-		claude({ docs: { command: "claude-server" } });
+	it("offers only the Claude Code server when Codex declares the same name", async () => {
+		claude({ docs: { command: "claude-server" }, other: { command: "claude-other" } });
 		put(join(home, ".codex", "config.toml"), '[mcp_servers.docs]\ncommand="codex-server"\n');
-		const selected = await previews();
-		const p = await plan(selected);
-		expect(p.items.map((i) => i.target.name)).toEqual(["docs", "docs-codex"]);
+		const scan = await service.scan({ kinds: ["mcp"] });
+		const codex = scan.candidates.find((c) => c.source === "codex");
+		expect(codex).toMatchObject({ name: "docs", needsMigration: false });
+		expect(codex?.diagnostics).toContainEqual({ code: "mcp-exists-in-claude-code" });
+		expect(scan.candidates.filter((c) => c.source === "claude-code").every((c) => c.needsMigration)).toBe(true);
+		const forced = await service.preview({ candidateId: codex!.id, action: "import" });
+		expect(forced.blockers).toContainEqual({ code: "mcp-exists-in-claude-code" });
+		const claudeItems = await Promise.all(
+			scan.candidates.filter((c) => c.source === "claude-code").map((c) => service.preview({ candidateId: c.id })),
+		);
+		const p = await plan(claudeItems);
+		expect(p.items.map((i) => i.target.name)).toEqual(["docs", "other"]);
 		expect((await run(p)).items.map((i) => i.status)).toEqual(["imported", "imported"]);
 	});
 
-	it("allows selecting either source of a duplicate and writes a selected duplicate group once", async () => {
-		claude({ docs: { command: "same" } });
-		put(join(home, ".codex", "config.toml"), '[mcp_servers.docs]\ncommand="same"\n');
-		const selected = await previews();
-		const onlySecond = await plan([selected[1]!]);
-		expect(onlySecond.items[0]?.action).toBe("import");
-		const both = await plan(selected);
-		expect(both.items.map((i) => i.action)).toEqual(["import", "skip"]);
-		expect((await run(both)).items.map((i) => i.status)).toEqual(["imported", "skipped"]);
+	it("does not offer default MCP sources the CLI import review already handled", async () => {
+		claude({ docs: { command: "claude-server" } });
+		put(join(home, ".codex", "config.toml"), '[mcp_servers.other]\ncommand="codex-server"\n');
+		put(join(home, ".profile", "config.toml"), '[mcp_import]\nreviewed = [".claude"]\n');
+		const partial = await service.scan({ kinds: ["mcp"] });
+		expect(partial.candidates.map((c) => c.source)).toEqual(["codex"]);
+		expect(partial.sources.find((r) => r.source === "claude-code")?.diagnostics).toContainEqual({
+			code: "mcp-reviewed-by-cli",
+		});
+		put(join(home, ".profile", "config.toml"), '[mcp_import]\nreviewed = [".claude", ".codex"]\n');
+		expect((await service.scan({ kinds: ["mcp"] })).candidates).toEqual([]);
+		const custom = join(home, "chosen.json");
+		put(custom, JSON.stringify({ mcpServers: { chosen: { command: "chosen" } } }));
+		const chosen = await service.scan({ kinds: ["mcp"], mcpSourcePaths: { "claude-code": custom } });
+		expect(chosen.candidates.map((c) => c.name)).toEqual(["chosen"]);
 	});
 
 	it("uses explicit MCP source files without changing other source roots or creating a target", async () => {

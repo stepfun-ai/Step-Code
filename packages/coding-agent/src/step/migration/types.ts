@@ -31,6 +31,8 @@ export interface MigrationCandidate {
 	modified?: string;
 	/** Safe declaration metadata; command, URL and literal values never enter the DTO. */
 	mcpTransport?: "stdio" | "http";
+	/** Rules only: the AGENTS.md a default preview writes. The preview target remains authoritative. */
+	targetPath?: string;
 	/** Native session identity is metadata, not an authority to read an arbitrary file. */
 	sourceSessionId?: string;
 	/** Non-empty source records found during discovery; never source content. */

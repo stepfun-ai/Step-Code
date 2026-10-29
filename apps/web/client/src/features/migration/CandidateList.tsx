@@ -48,12 +48,37 @@ export function CandidateStatus({ candidate }: { readonly candidate: MigrationCa
 		</span>
 	);
 }
+/**
+ * Row diagnostics already stated elsewhere: the 已可用 / 已存在 pills, or MCP notes the preview step repeats.
+ */
+const HIDDEN_ROW_DIAGNOSTICS = new Set([
+	"session-already-imported",
+	"sensitive-values-omitted",
+	"mcp-configured-equal",
+	"mcp-exists-in-stepcode",
+	"mcp-exists-in-claude-code",
+	"rules-already-migrated",
+]);
+/** Where an MCP server that cannot be selected already lives, mirroring the CLI import review. */
+function mcpExistingOwner(candidate: MigrationCandidate): "stepcode" | "claude-code" | null {
+	if (candidate.kind !== "mcp") return null;
+	const codes = new Set(candidate.diagnostics.map((item) => item.code));
+	if (codes.has("mcp-exists-in-stepcode") || codes.has("mcp-configured-equal")) return "stepcode";
+	if (codes.has("mcp-exists-in-claude-code")) return "claude-code";
+	return null;
+}
 const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candidate: MigrationCandidate }) {
 	const t = useT();
 	const draft = useMigrationStore((state) => state.drafts[candidate.id]);
 	const focused = useMigrationStore((state) => state.focusedId === candidate.id);
 	const canSelect = isActionable(candidate);
 	const busy = useMigrationStore((state) => !!state.busy || state.scanning);
+	const mcpExists = mcpExistingOwner(candidate);
+	// The host names the local config.toml that already holds the server; older hosts send no path.
+	const stepcodeConfig = candidate.diagnostics.find(
+		(item) => item.code === "mcp-exists-in-stepcode" || item.code === "mcp-configured-equal",
+	)?.path;
+	const ruleMigrated = candidate.diagnostics.some((item) => item.code === "rules-already-migrated");
 	return (
 		<div className={`migration-row${focused ? " migration-row-focused" : ""}`} data-candidate-id={candidate.id}>
 			<input
@@ -67,33 +92,58 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 						: deselectCandidate(candidate.id)
 				}
 			/>
-			<SourceLogo source={candidate.source} />
 			<div className="migration-row-body">
-				<Button
-					className="migration-row-title"
-					disabled={busy || draft?.loading}
-					onClick={() => void previewCandidate(candidate.id)}
-				>
-					{candidate.name}
-				</Button>
-				<div className="migration-meta">
+				<div className="migration-row-heading">
+					<Button
+						className="migration-row-title"
+						disabled={busy || draft?.loading}
+						onClick={() => void previewCandidate(candidate.id)}
+					>
+						{candidate.name}
+					</Button>
 					{candidate.kind === "mcp" ? (
-						<>
-							{t(`migrationMcpTransport.${candidate.mcpTransport ?? "stdio"}`)} ·{" "}
-							{t("migrationMcpNoDescription")}
-						</>
-					) : (
-						<>
-							{t(`migrationSource.${candidate.source}`)}
-							{candidate.modified ? ` · ${sessionModifiedLabel(candidate.modified)}` : ""}
-							{candidate.kind === "sessions" && candidate.messageCount !== undefined
-								? ` · ${candidate.messageCount}${candidate.messageCountCapped ? "+" : ""} ${t("migrationMessages")}`
-								: ""}
-						</>
-					)}
+						<span className="migration-meta">
+							({t(`migrationMcpTransport.${candidate.mcpTransport ?? "stdio"}`)})
+						</span>
+					) : null}
 				</div>
-				{candidate.kind === "mcp" ? <span className="migration-meta">{t("migrationMcpAfterNote")}</span> : null}
-				{candidate.kind === "sessions" && !candidate.needsMigration ? (
+				{candidate.kind === "rules" ? (
+					<dl className="migration-rule-paths">
+						<div>
+							<dt>{t("migrationRuleSource")}</dt>
+							<dd>
+								<code>{candidate.sourcePath}</code>
+							</dd>
+						</div>
+						<div>
+							<dt>{t("migrationRuleTarget")}</dt>
+							<dd>
+								<code>{draft?.preview?.target.path ?? candidate.targetPath}</code>
+							</dd>
+						</div>
+					</dl>
+				) : candidate.kind === "mcp" ? null : (
+					<div className="migration-meta">
+						{t(`migrationSource.${candidate.source}`)}
+						{candidate.modified ? ` · ${sessionModifiedLabel(candidate.modified)}` : ""}
+						{candidate.kind === "sessions" && candidate.messageCount !== undefined
+							? ` · ${candidate.messageCount}${candidate.messageCountCapped ? "+" : ""} ${t("migrationMessages")}`
+							: ""}
+					</div>
+				)}
+				{mcpExists ? (
+					<span className="migration-status" data-status="exists" data-mcp-exists={mcpExists}>
+						{mcpExists === "claude-code"
+							? t("migrationMcpExistsInClaude")
+							: stepcodeConfig
+								? t("migrationMcpExistsInPath", { path: stepcodeConfig })
+								: t("migrationMcpExistsInStepcode")}
+					</span>
+				) : ruleMigrated ? (
+					<span className="migration-status" data-status="exists" data-rules-migrated="">
+						{t("migrationRulesAlreadyMigrated")}
+					</span>
+				) : candidate.kind === "sessions" && !candidate.needsMigration ? (
 					<span className="migration-status" data-status="imported">
 						{t("migrationStatusImported")}
 					</span>
@@ -102,9 +152,8 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 				) : null}
 				{draft?.loading ? <span className="migration-meta">{t("migrationLoadingPreview")}</span> : null}
 				{draft?.preview && !draft.loading ? <DiagnosticList diagnostics={draft.preview.blockers} /> : null}
-				{/* The 已可用 status pill already says this; the verbose diagnostic would be noise. */}
 				<DiagnosticList
-					diagnostics={candidate.diagnostics.filter((item) => item.code !== "session-already-imported")}
+					diagnostics={candidate.diagnostics.filter((item) => !HIDDEN_ROW_DIAGNOSTICS.has(item.code))}
 				/>
 				{draft?.error ? (
 					<p className="migration-danger">
@@ -203,6 +252,25 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 	const drafts = useMigrationStore((state) => state.drafts);
 	const busy = useMigrationStore((state) => !!state.busy || state.scanning);
 	const selection = groupSelectionState(pending, drafts);
+	const cliReviewed =
+		kind === "mcp"
+			? [
+					...new Set(
+						(scan?.sources ?? [])
+							.filter(
+								(report) =>
+									report.kind === "mcp" &&
+									report.diagnostics.some((item) => item.code === "mcp-reviewed-by-cli"),
+							)
+							.map((report) => report.source),
+					),
+				]
+			: [];
+	// Every offered MCP source was already handled by the CLI: say so instead of an empty list.
+	const allReviewed = cliReviewed.length > 0 && candidates.length === 0;
+	// No global CLAUDE.md / AGENTS.md: explain that there is nothing to do instead of an empty filtered list.
+	const noRules = kind === "rules" && !!scan && candidates.length === 0;
+	const reviewedNames = cliReviewed.map((value) => t(`migrationSource.${value}`)).join(" / ");
 	return (
 		<div className="migration-list">
 			<div className="migration-toolbar">
@@ -257,7 +325,8 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 						</>
 					) : null}
 				</div>
-				<SourceDetails />
+				{/* MCP and AGENTS.md read only the default global sources; only sessions keep a source picker. */}
+				{kind === "sessions" ? <SourceDetails /> : null}
 				<Button
 					id="migrationScanButton"
 					className="migration-scan-run"
@@ -274,7 +343,23 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 					)}
 				</Button>
 			</div>
-			<div className="migration-list-toolbar">
+			{noRules ? (
+				<div className="migration-notice" data-rules-none="">
+					<strong>{t("migrationRulesNoneTitle")}</strong>
+					<p className="migration-meta">{t("migrationRulesNone")}</p>
+				</div>
+			) : null}
+			{allReviewed ? (
+				<div className="migration-cli-reviewed" data-mcp-cli-reviewed="all">
+					<strong>{t("migrationMcpCliReviewedTitle")}</strong>
+					<p className="migration-meta">{t("migrationMcpCliReviewed", { sources: reviewedNames })}</p>
+				</div>
+			) : cliReviewed.length ? (
+				<p className="migration-meta" data-mcp-cli-reviewed="partial">
+					{t("migrationMcpCliReviewed", { sources: reviewedNames })}
+				</p>
+			) : null}
+			<div className="migration-list-toolbar" hidden={allReviewed || noRules}>
 				<SegmentedControl
 					className="migration-source-tabs"
 					aria-label={t("migrationSourceFilter")}
@@ -308,15 +393,13 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 							/>
 							{t("migrationSelectAllPending")}
 						</label>
-					) : (
-						<span>{t("migrationRuleIndividualSelection")}</span>
-					)}
+					) : null}
 					<span className="migration-meta">
 						{t("migrationGroupSelection", { selected: selection.selected, total: selection.eligible })}
 					</span>
 				</div>
 			</div>
-			{groups ? (
+			{allReviewed || noRules ? null : groups ? (
 				groups.length ? (
 					groups.map((group) => <SourceGroup key={group.id} group={group} />)
 				) : (

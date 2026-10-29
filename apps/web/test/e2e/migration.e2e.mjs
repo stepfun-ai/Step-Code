@@ -333,17 +333,9 @@ test("offline first use, skip persistence, Settings entry, focus and all themes"
 	assert.equal(await page.locator(".app").getAttribute("inert"), "");
 	await page.keyboard.press("Tab");
 	assert.equal(await page.evaluate(() => !!document.activeElement.closest("#migrationModal")), true);
-	// A picked source folder joins the read-only scan without workspace registration.
-	const workspacesBefore = await api(page, "/api/v1/workspaces");
+	// MCP and AGENTS.md read only the default global sources; the source picker stays on sessions.
 	await category(page, "rules");
-	await modal(page).locator(".migration-source-locations summary").click();
-	await modal(page).locator("#migrationAddSourceFolder").click();
-	await until(async () => (await modal(page).locator(".migration-source-locations").innerText()).includes(f.target),
-		"picked source joins the scan list");
-	assert.deepEqual(await page.evaluate(() => window.pickerPurposes), ["resource"]);
-	assert.match(await modal(page).locator(".migration-source-locations").innerText(), /未登记|Unregistered/u,
-		"An unregistered picked source stays marked as such");
-	assert.deepEqual(await api(page, "/api/v1/workspaces"), workspacesBefore, "A source pick never registers a workspace");
+	assert.equal(await modal(page).locator(".migration-source-locations").count(), 0);
 	await modal(page).locator(".migration-dialog-foot button").last().click();
 	await modal(page).waitFor({ state: "hidden" });
 	assert.equal((await api(page, "/api/v1/desktop-onboarding")).status, "skipped");

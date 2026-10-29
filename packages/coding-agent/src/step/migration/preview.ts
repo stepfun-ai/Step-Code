@@ -160,6 +160,10 @@ export function prepareResource(
 				dto.warnings.push(...allocated.diagnostics);
 				if (!allocated.config) block("mcp-name-exhausted");
 			}
+			// An explicit new target name resolves the name clash; otherwise an owned name is never offered.
+			if (dto.action !== "skip" && request.targetName === undefined)
+				for (const code of ["mcp-exists-in-stepcode", "mcp-exists-in-claude-code"])
+					if (candidate.diagnostics.some((diagnostic) => diagnostic.code === code)) block(code);
 		}
 		targetHash = text(path, true) === undefined ? null : hash(text(path)!);
 		dto.sourceText = original ? redactedMcp(original) : "[unsupported configuration]";
@@ -200,6 +204,10 @@ export function prepareResource(
 			dto.allowedActions.push(
 				...(targetText === undefined ? ["create" as const] : ["append" as const, "replace" as const]),
 			);
+			// "create" is only the default for a missing file. An existing AGENTS.md is appended to, never
+			// replaced implicitly, and one that already contains the source needs no write at all.
+			if (request.action === undefined && dto.action === "create" && targetText !== undefined)
+				dto.action = targetText.includes(source.sourceText.trim()) ? "skip" : "append";
 			if (dto.action === "append") result = `${targetText ?? ""}\n\n${source.sourceText}`;
 			const inspection = ruleImpact(paths, scope, path, result);
 			dto.ruleImpact = inspection.impact;

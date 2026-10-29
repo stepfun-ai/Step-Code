@@ -228,10 +228,16 @@ export async function previewCandidate(
 		existing ?? { request, selected: false, acknowledged: [], ruleChecked: false, loading: false },
 		request,
 	);
+	const drafts = { ...state.drafts };
+	// Claude Code and Codex rules both write the same AGENTS.md, so choosing one rule deselects the others.
+	if (select && candidate?.kind === "rules")
+		for (const other of state.scan?.candidates ?? [])
+			if (other.kind === "rules" && other.id !== id && drafts[other.id]?.selected)
+				drafts[other.id] = { ...drafts[other.id]!, selected: false };
 	updateMigration({
 		...(focus ? { focusedId: id } : {}),
 		drafts: {
-			...state.drafts,
+			...drafts,
 			[id]: { ...draft, preview: existing?.preview, selected: select ?? draft.selected, loading: true },
 		},
 		plan: null,

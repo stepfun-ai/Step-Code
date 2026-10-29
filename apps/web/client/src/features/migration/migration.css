@@ -56,11 +56,20 @@
 .migration-resource-rules { grid-template-columns: minmax(230px, .55fr) minmax(420px, 1.45fr); }
 .migration-list { display: grid; gap: 14px; min-width: 0; }
 .migration-list > [aria-label] { flex-wrap: wrap; }
-.migration-row { display: flex; gap: 10px; padding: 14px 10px; border-bottom: 1px solid var(--line); border-radius: var(--radius-row); }
+.migration-row { display: flex; align-items: flex-start; gap: 10px; padding: 14px 10px; border-bottom: 1px solid var(--line); border-radius: var(--radius-row); }
+.migration-cli-reviewed, .migration-notice { display: grid; gap: 6px; justify-items: center; padding: 40px 16px; text-align: center; color: var(--ink-2); background: var(--surface-soft); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.migration-cli-reviewed strong, .migration-notice strong { color: var(--ink); font-size: 15px; }
 .migration-row-focused { background: var(--selected); }
-.migration-row > input { margin-top: 5px; flex-shrink: 0; }
+.migration-row > input { align-self: flex-start; margin: 3px 0 0; flex-shrink: 0; }
 .migration-row-body { min-width: 0; flex: 1; }
 .migration-row-title { text-align: left; font-weight: 600; overflow-wrap: anywhere; }
+.migration-job-target { color: var(--ink-2); overflow-wrap: anywhere; }
+.migration-rule-paths { display: grid; gap: 6px; margin: 8px 0 0; font-size: 13px; }
+.migration-rule-paths > div { display: flex; gap: 16px; min-width: 0; }
+.migration-rule-paths dt { flex-shrink: 0; color: var(--ink-3); }
+.migration-rule-paths dd { margin: 0; min-width: 0; }
+.migration-rule-paths code { color: var(--ink-2); overflow-wrap: anywhere; }
+.migration-row-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .migration-meta, .migration-path { color: var(--ink-2); font-size: 12px; }
 .migration-path { display: block; }
 .migration-dialog code, .migration-page code { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -111,6 +120,11 @@
 .migration-history-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
 .migration-final-plan, .migration-job { display: grid; gap: 18px; }
 .migration-plan-item, .migration-job-item { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); display: grid; gap: 10px; }
+/* A long session title must not squeeze the status into a wrapped two-line pill. */
+.migration-job-item > header { flex-wrap: nowrap; align-items: flex-start; }
+.migration-job-item > header h4 { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.migration-job-item > header .migration-status { flex-shrink: 0; margin-top: 0; padding: 3px 10px; font-size: 12px; line-height: 18px; white-space: nowrap; border-radius: 999px; }
+.migration-job-item > header .migration-status[data-status="imported"] { background: color-mix(in srgb, var(--success) 12%, transparent); }
 .migration-counts { display: flex; flex-wrap: wrap; gap: 24px; margin: 0; background: var(--surface-soft); border-radius: var(--radius-panel); padding: 16px; }
 .migration-counts dt { font-size: 12px; color: var(--ink-2); }
 .migration-counts dd { font: 24px var(--mono); margin: 4px 0 0; }
@@ -176,7 +190,6 @@
 .migration-list { gap: 12px; }
 .migration-preview { position: sticky; top: 0; }
 .migration-source-logo { width: 23px; height: 23px; object-fit: contain; flex-shrink: 0; border-radius: var(--radius-chip); }
-.migration-row > .migration-source-logo { margin-top: 2px; }
 .migration-source-locations { color: var(--ink-2); font-size: 12px; margin-bottom: 16px; }
 .migration-source-locations summary, .migration-target-details summary, .migration-mcp-safety summary { cursor: pointer; }
 .migration-source-location-body { padding: 4px 0; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); margin-top: 8px; }

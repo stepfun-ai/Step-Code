@@ -53,6 +53,10 @@ export class MigrationPaths {
 		}
 		this.mcpSourcePaths = next;
 	}
+	/** True when the host chose this MCP source file explicitly instead of the default location. */
+	customMcpSource(source: "claude-code" | "codex"): boolean {
+		return this.mcpSourcePaths[source] !== undefined;
+	}
 	mcpSource(source: "claude-code" | "codex"): string {
 		return (
 			this.mcpSourcePaths[source] ??
