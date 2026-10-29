@@ -13,6 +13,7 @@ import {
 	setSessionOptions,
 } from "./actions";
 import { isActionable, isIndependentCopy, type MigrationDraft } from "./model";
+import { SourceDetails } from "./SourceDetails";
 import { groupMigrationCandidates, groupSelectionState, type MigrationCandidateGroup } from "./selection";
 import { useMigrationStore } from "./store";
 export function SourceLogo({ source }: { readonly source: MigrationSource }) {
@@ -320,56 +321,59 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 	const selection = groupSelectionState(pending, drafts);
 	return (
 		<div className="migration-list">
-			{kind === "mcp" && !busy && pending.length ? (
-				<p className="migration-meta" data-mcp-found="">
-					{t("migrationMcpFound", { count: pending.length })}
-				</p>
-			) : null}
-			<div className="migration-scan-controls">
-				{kind === "sessions" ? (
-					<>
-						<label className="migration-scan-select">
-							<span>{t("migrationScanRangeLabel")}</span>
-							<select
-								aria-label={t("migrationTimeFilter")}
-								value={options.range}
-								disabled={busy}
-								onChange={(event) => {
-									const range = event.currentTarget.value;
-									if (range === "all" || range === "7" || range === "30" || range === "90")
-										setSessionOptions({ range });
-								}}
-							>
-								{["all", "7", "30", "90"].map((value) => (
-									<option key={value} value={value}>
-										{t(`migrationTimeRange.${value}`)}
-									</option>
-								))}
-							</select>
-						</label>
-						<label className="migration-scan-select">
-							<span>{t("migrationScanLimitLabel")}</span>
-							<select
-								aria-label={t("migrationSessionLimit")}
-								value={options.limit ?? "unlimited"}
-								disabled={busy}
-								onChange={(event) => {
-									const limit = event.currentTarget.value;
-									setSessionOptions({
-										limit: limit === "30" ? 30 : limit === "50" ? 50 : limit === "100" ? 100 : null,
-									});
-								}}
-							>
-								{[30, 50, 100].map((limit) => (
-									<option key={limit} value={limit}>
-										{t("migrationLimitCount", { count: limit })}
-									</option>
-								))}
-								<option value="unlimited">{t("migrationUnlimited")}</option>
-							</select>
-						</label>
-					</>
+			<div className="migration-toolbar">
+				{kind === "mcp" && !busy && pending.length ? (
+					<p className="migration-meta" data-mcp-found="">
+						{t("migrationMcpFound", { count: pending.length })}
+					</p>
 				) : null}
+				<div className="migration-scan-controls">
+					{kind === "sessions" ? (
+						<>
+							<label className="migration-scan-select">
+								<span>{t("migrationScanRangeLabel")}</span>
+								<select
+									aria-label={t("migrationTimeFilter")}
+									value={options.range}
+									disabled={busy}
+									onChange={(event) => {
+										const range = event.currentTarget.value;
+										if (range === "all" || range === "7" || range === "30" || range === "90")
+											setSessionOptions({ range });
+									}}
+								>
+									{["all", "7", "30", "90"].map((value) => (
+										<option key={value} value={value}>
+											{t(`migrationTimeRange.${value}`)}
+										</option>
+									))}
+								</select>
+							</label>
+							<label className="migration-scan-select">
+								<span>{t("migrationScanLimitLabel")}</span>
+								<select
+									aria-label={t("migrationSessionLimit")}
+									value={options.limit ?? "unlimited"}
+									disabled={busy}
+									onChange={(event) => {
+										const limit = event.currentTarget.value;
+										setSessionOptions({
+											limit: limit === "30" ? 30 : limit === "50" ? 50 : limit === "100" ? 100 : null,
+										});
+									}}
+								>
+									{[30, 50, 100].map((limit) => (
+										<option key={limit} value={limit}>
+											{t("migrationLimitCount", { count: limit })}
+										</option>
+									))}
+									<option value="unlimited">{t("migrationUnlimited")}</option>
+								</select>
+							</label>
+						</>
+					) : null}
+				</div>
+				<SourceDetails />
 				<Button
 					id="migrationScanButton"
 					className="migration-scan-run"
@@ -386,47 +390,48 @@ export function CandidateList({ onPickTarget }: { readonly onPickTarget?: () => 
 					)}
 				</Button>
 			</div>
-			<SegmentedControl
-				className="migration-source-tabs"
-				aria-label={t("migrationSourceFilter")}
-				value={source}
-				onChange={setSource}
-				items={[
-					{ value: "all", label: t("migrationAllSources") },
-					...sources.map((value) => ({
-						value,
-						label: (
-							<>
-								<SourceLogo source={value} />
-								{t(`migrationSource.${value}`)}
-							</>
-						),
-					})),
-				]}
-			/>
-			<div className="migration-select-all">
-				{kind !== "rules" ? (
-					<label className="migration-check">
-						<input
-							type="checkbox"
-							aria-label={t("migrationSelectAllPending")}
-							ref={(input) => {
-								if (input) input.indeterminate = selection.indeterminate;
-							}}
-							checked={selection.checked}
-							disabled={busy || !selection.eligible}
-							onChange={(event) => void selectMigrationGroup(pending, event.currentTarget.checked)}
-						/>
-						{t("migrationSelectAllPending")}
-					</label>
-				) : (
-					<span>{t("migrationRuleIndividualSelection")}</span>
-				)}
-				<span className="migration-meta">
-					{t("migrationGroupSelection", { selected: selection.selected, total: selection.eligible })}
-				</span>
+			<div className="migration-list-toolbar">
+				<SegmentedControl
+					className="migration-source-tabs"
+					aria-label={t("migrationSourceFilter")}
+					value={source}
+					onChange={setSource}
+					items={[
+						{ value: "all", label: t("migrationAllSources") },
+						...sources.map((value) => ({
+							value,
+							label: (
+								<>
+									<SourceLogo source={value} />
+									{t(`migrationSource.${value}`)}
+								</>
+							),
+						})),
+					]}
+				/>
+				<div className="migration-select-all">
+					{kind !== "rules" ? (
+						<label className="migration-check">
+							<input
+								type="checkbox"
+								aria-label={t("migrationSelectAllPending")}
+								ref={(input) => {
+									if (input) input.indeterminate = selection.indeterminate;
+								}}
+								checked={selection.checked}
+								disabled={busy || !selection.eligible}
+								onChange={(event) => void selectMigrationGroup(pending, event.currentTarget.checked)}
+							/>
+							{t("migrationSelectAllPending")}
+						</label>
+					) : (
+						<span>{t("migrationRuleIndividualSelection")}</span>
+					)}
+					<span className="migration-meta">
+						{t("migrationGroupSelection", { selected: selection.selected, total: selection.eligible })}
+					</span>
+				</div>
 			</div>
-			<h3>{t("migrationNeedsMigration", { count: pending.length })}</h3>
 			{groups ? (
 				groups.length ? (
 					groups.map((group) => <SourceGroup key={group.id} group={group} onPickTarget={onPickTarget} />)

@@ -257,7 +257,7 @@
 .migration-scan-select > span { font-size: 11px; color: var(--ink-2); }
 .migration-scan-select select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; padding: 0 22px 0 4px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); cursor: pointer; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 3.5 5 6.5 8 3.5' fill='none' stroke='%23656b75' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>"); background-repeat: no-repeat; background-position: right 6px center; }
 .migration-scan-select select:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; border-radius: 999px; }
-.migration-scan-controls .migration-scan-run { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 16px; border-radius: 999px; background: var(--ink); color: var(--surface); border: 1px solid var(--ink); font-size: 12px; font-weight: 600; }
+.migration-toolbar .migration-scan-run { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 16px; border-radius: 999px; background: var(--ink); color: var(--surface); border: 1px solid var(--ink); font-size: 12px; font-weight: 600; }
 .migration-scan-controls .migration-scan-run:hover:not(:disabled) { opacity: .86; }
 .migration-scan-controls .migration-scan-run > span[aria-hidden] { font-size: 13px; line-height: 1; }
 .migration-source-locations > summary { list-style: none; cursor: pointer; width: fit-content; display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; user-select: none; }
@@ -266,3 +266,10 @@
 .migration-source-locations > summary::after { content: "⌄"; font-size: 11px; }
 .migration-source-locations[open] > summary::after { content: "⌃"; }
 .migration-source-location > div:first-of-type { flex: 1; min-width: 0; }
+/* ── One-glance toolbars: scope → advanced → action; tabs + select-all ── */
+.migration-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.migration-toolbar .migration-scan-controls { margin: 0; }
+.migration-toolbar .migration-source-locations { margin-left: auto; margin-bottom: 0; }
+.migration-toolbar > .migration-meta[data-mcp-found] { margin: 0; }
+.migration-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.migration-list-toolbar .migration-select-all { display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: 0; border-radius: 0; }

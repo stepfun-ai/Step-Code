@@ -25,7 +25,6 @@ import { MigrationHistory, MigrationJobView, RecoveryReview } from "./JobView";
 import { draftReady, isActiveJob, MIGRATION_KINDS, planReady } from "./model";
 import { type MigrationFeatureProps, PreviewPanel } from "./PreviewPanel";
 import { FinalPlan } from "./ReviewPlan";
-import { SourceDetails } from "./SourceDetails";
 import { getMigrationState, updateMigration, useMigrationStore } from "./store";
 import "./migration.css";
 
@@ -265,7 +264,6 @@ export function MigrationOnboarding({
 						) : null}
 						{stage === "select" || stage === "invitation" ? (
 							<>
-								<SourceDetails />
 								<div
 									className={`migration-resource-layout${focusedId ? " migration-has-preview" : ""}${kind === "rules" ? " migration-resource-rules" : ""}`}
 								>
