@@ -30,7 +30,17 @@ const config = vi.hoisted(() => ({ value: {} as StepConfigDocument }));
 const builtin = vi.hoisted(() => ({ enabled: false, disabledUser: false }));
 const preinstall = vi.hoisted(() => vi.fn<() => Promise<{ installed: []; warnings: string[] }>>());
 const readiness = vi.hoisted(() => vi.fn<(input: { signal?: AbortSignal }) => Promise<StepPageReadiness>>());
-vi.mock("./config-toml.ts", () => ({ readGlobalStepConfig: () => config.value }));
+const projectConfigs = vi.hoisted(() => ({ value: {} as Record<string, { mcp_servers?: Record<string, unknown> }> }));
+vi.mock("./config-toml.ts", () => ({
+	readGlobalStepConfig: () => config.value,
+	readStepConfig: (path: string) => {
+		const found = projectConfigs.value[path];
+		if (!found) throw new Error(`ENOENT: ${path}`);
+		return found;
+	},
+	resolveStepConfigPath: (_env: unknown, cwd?: string) =>
+		cwd ? `${cwd}/.stepcode/config.toml` : "/global/config.toml",
+}));
 const pluginMocks = vi.hoisted(() => ({
 	dirs: [] as string[],
 	manifests: new Map<string, unknown>(),
@@ -377,6 +387,45 @@ test("expands header templates and reports a variable with no fallback", () => {
 	expect(expandHeaderTemplate(`Bearer ${placeholder("STEP_TEST_ABSENT", "")}`)).toBeUndefined();
 	expect(expandHeaderTemplate(`cost: ${"$$"}5 ${placeholder("STEP_TEST_PRESENT")}`)).toBe("cost: $5 value");
 	delete process.env.STEP_TEST_PRESENT;
+});
+
+test("a trusted project may declare its own MCP servers", async () => {
+	config.value = {};
+	projectConfigs.value = {
+		"/proj/.stepcode/config.toml": { mcp_servers: { local: { command: "local-server" } } },
+	};
+	const discovered = await discoverStepMcpServers("/proj", true);
+	expect(discovered.map((s) => s.name)).toEqual(["local"]);
+	expect(discovered[0]?.declaration.command).toBe("local-server");
+});
+
+test("a project declaration overrides the global one, including turning it off", async () => {
+	config.value = { mcp_servers: { shared: { command: "global-server" }, off: { command: "global-off" } } };
+	projectConfigs.value = {
+		"/proj/.stepcode/config.toml": {
+			mcp_servers: { shared: { command: "project-server" }, off: { enabled: false } },
+		},
+	};
+	const discovered = await discoverStepMcpServers("/proj", true);
+	const names = discovered.map((s) => s.name);
+	expect(names).toEqual(["shared"]);
+	expect(discovered.find((s) => s.name === "shared")?.declaration.command).toBe("project-server");
+});
+
+test("an untrusted project contributes no ordinary MCP servers", async () => {
+	config.value = { mcp_servers: { global: { command: "global-server" } } };
+	projectConfigs.value = {
+		"/proj/.stepcode/config.toml": { mcp_servers: { local: { command: "local-server" } } },
+	};
+	const discovered = await discoverStepMcpServers("/proj", false);
+	expect(discovered.map((s) => s.name)).toEqual(["global"]);
+});
+
+test("a broken project config leaves global discovery working", async () => {
+	config.value = { mcp_servers: { global: { command: "global-server" } } };
+	projectConfigs.value = {};
+	const discovered = await discoverStepMcpServers("/proj", true);
+	expect(discovered.map((s) => s.name)).toEqual(["global"]);
 });
 
 test("a plugin stdio server runs from the plugin root unless it names an absolute cwd", async () => {

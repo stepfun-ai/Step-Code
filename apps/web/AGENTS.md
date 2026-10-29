@@ -213,6 +213,19 @@ When to add or change one:
 
 - Every route is under `/api/v1/` (plus `/auth/*`, `/healthz`). It must pass the auth cookie and Origin checks in
   `server.ts`; the server listens on `127.0.0.1` only. Never log the launch token or the cookie secret.
+- `/api/v1/session-imports` adapts the coding-agent offline migration service.
+  Scan the Host machine, exclude archives by default, and require previewed
+  fingerprints plus explicit destination directories before importing. Close
+  the importer before the session index. Imported tools never create native
+  child-agent links, revertable file changes or running-state indicators.
+- `/api/v1/migrations` owns reviewed local session/resource migration plans and durable job presentation.
+  The coding-agent migration module owns format translation, readiness, fingerprints, consent and publication;
+  the Host only validates protocol input, explicit paths and authentication. Scan/preview can read supported resource
+  configuration and instruction text, but must not write resources, execute extensions, connect MCP or grant trust.
+  Ordinary MCP migration writes global configuration only and starts disabled. All AI rule writes, including new files,
+  require content/scope/loading-impact consent bound to the preview. Expired or changed targets require a new preview.
+  Close hides the UI; cancellation stops remaining work after the current unit settles. Keep legacy import records
+  separately readable and never dispatch their IDs through the unified job API. See `docs/desktop-migration.md`.
 - Adding or changing a route or payload: update `openapi.yaml` in the same change, update `client/src/state/types.ts`,
   and add a unit test.
 - Session snapshots and every SSE event carry `revision`, monotonic per bound session. `renderSnapshot` ignores a
@@ -244,6 +257,9 @@ When to add or change one:
   lifecycle calls separate. Preserve original
   timeline indices for turn footers, file deliveries and search reveal. Group
   completion counts tool results, never canonical Tasks or child-agent success.
+  Imported ordinary calls with unknown outcomes may join folded groups; a group
+  containing unconfirmed results uses a neutral recorded-call summary, never a
+  completion claim. Historical tool calls cannot make a group running.
 - A subagent record is context the main agent produced, so its inspector has no prompt surface:
   the child's input is a collapsed "task message received" receipt, never a bubble or box. Do not add a
   composer, inline editor or send control to the child view. Inspection is read-only; the session is not.
@@ -419,8 +435,9 @@ When to add or change one:
 - `/api/v1/settings/*` is the settings screen's own surface (MCP servers, plugins, marketplaces, skills). It reads
   and writes the user's global StepCode configuration through `@step-harness/coding-agent` — the same files
   `step mcp`, `/plugin` and the TUI resource selector use — and never project scope. Only user-scope state moves;
-  a change reaches a session when that session starts (MCP tools register at `session_start`, skills load with its
-  resources), so the client says so instead of reloading sessions. The host holds the global MCP servers from
+  changes to ordinary MCP declarations reach running sessions through the product's awaited reconciliation hooks
+  before subsequent requests; skills and prompt/context resources retain their resource-loading lifecycle. Do not
+  force a session reload to refresh display metadata. The Host holds the global MCP servers from
   startup (`createStepMcpHostWarmup`) and re-syncs them after MCP/plugin settings changes, sign-in and sign-out;
   sessions share those pooled connections. `send` waits for the session's extension startup, so a first message
   carries the MCP tools.
@@ -437,11 +454,12 @@ When to add or change one:
   `POST /api/v1/logout` is the Step sign-out (same as `step logout`: stop running
   sessions, remove the credential and account session); `POST /auth/logout` only
   expires the page cookie. Keep the launch cookie through a Step sign-out so
-  Desktop reloads into `#loginGate` without a new terminal link. A Step account
-  is optional: the gate opens only when no model can run (no Step credential
-  and `customModels: false`); the gate itself has no "Use your own models"
-  link. Signed out, the sidebar account button opens Settings > Account
-  directly (no menu), not the gate. Never remove custom providers on a
+  Desktop can browse history, configure models and use local migration without signing in. Missing model readiness
+  is presented when an ordinary prompt is sent, keeping input and attachments. Plain Web retains its explicit
+  sign-out gate. The launch cookie remains required regardless of account state; never fake configured credentials
+  to bypass model checks. A Step account
+  is optional; the existing login UI remains available from Account settings. Signed out, the sidebar account button
+  opens Settings > Account directly (no menu), not the gate. Never remove custom providers on a
   Step sign-out. No
   balance/allowance placeholders.
 - Do not depend on `process.cwd()` being the workspace; the desktop starts the server elsewhere (macOS privacy

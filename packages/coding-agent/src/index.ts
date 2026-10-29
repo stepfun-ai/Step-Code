@@ -352,6 +352,23 @@ export {
 	sessionEventDurability,
 } from "./core/session-event-durability.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
+export type {
+	ImportScanOptions,
+	ImportScanResult,
+	ReservedSessionImport,
+	ReservedSessionImports,
+} from "./core/session-import/service.ts";
+export { SessionImportError, SessionImportService } from "./core/session-import/service.ts";
+export type {
+	ImportCandidate,
+	ImportJob,
+	ImportPreview,
+	ImportProvenance,
+	ImportResult,
+	ImportSelection,
+	ImportSource,
+	ImportWarning,
+} from "./core/session-import/types.ts";
 export * from "./core/session-index/index.ts";
 export type {
 	SessionFilePersistedEvent,
@@ -754,6 +771,43 @@ export {
 } from "./step/mcp.ts";
 export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
+export {
+	applyMcpSettingsPatch,
+	applyValidatedMcpSettingsPatch,
+	getMcpSettingsView,
+	MCP_SETTINGS_FIELDS,
+	type McpSettingsField,
+	type McpSettingsFieldChange,
+	type McpSettingsPatch,
+	McpSettingsPatchError,
+	type McpSettingsView,
+	parseMcpSettingsServerConfig,
+} from "./step/mcp-settings-secrets.ts";
+export { MigrationError, MigrationService } from "./step/migration/service.ts";
+export type {
+	MigrationAcknowledgement,
+	MigrationAction,
+	MigrationCandidate,
+	MigrationDiagnostic,
+	MigrationHolding,
+	MigrationItemResult,
+	MigrationJob,
+	MigrationKind,
+	MigrationLocation,
+	MigrationPlan,
+	MigrationPreview,
+	MigrationPreviewRequest,
+	MigrationReadiness,
+	MigrationRecoveryPreview,
+	MigrationRuleImpact,
+	MigrationScanRequest,
+	MigrationScanResult,
+	MigrationScope,
+	MigrationSelection,
+	MigrationSource,
+	MigrationSourceReport,
+	MigrationStartRequest,
+} from "./step/migration/types.ts";
 export { resolveStepLoginProfiles, type StepLoginProfile, type StepLoginProfileId } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,

@@ -1,9 +1,14 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readGlobalStepConfig } from "./config-toml.ts";
-import { applyStepMcpImport, planStepMcpImport } from "./mcp-import.ts";
+import { readGlobalStepConfig, updateGlobalMcpConfig } from "./config-toml.ts";
+import {
+	allocateStepMcpImportCandidates,
+	applyStepMcpImport,
+	parseStepMcpImportSource,
+	planStepMcpImport,
+} from "./mcp-import.ts";
 import { describeStepMcpImportOutcome, planPendingStepMcpImport } from "./mcp-import-prompt.ts";
 import {
 	hasReviewedStepMcpImportSource,
@@ -40,7 +45,157 @@ function plan() {
 	return planStepMcpImport({ homeDir: home, env });
 }
 
+describe("parseStepMcpImportSource", () => {
+	it("parses user-scoped Claude servers and counts but does not import project scope", () => {
+		const raw = JSON.stringify({
+			mcpServers: { docs: { command: "docs" }, ide: { type: "ws-ide" } },
+			projects: { "/fixture": { mcpServers: { local: { command: "local" } } } },
+		});
+		const read = parseStepMcpImportSource(".claude", raw);
+		expect(read.state).toBe("ok");
+		expect(read.projectScopedCount).toBe(1);
+		expect(read.servers.map((server) => server.name)).toEqual(["docs"]);
+		expect(read.warnings[0]).toContain("1 project-scoped");
+		writeClaude(JSON.parse(raw));
+		expect(plan().candidates[0]?.config).toEqual(read.servers[0]?.config);
+	});
+
+	it("parses Codex tool restrictions without widening an empty allowlist", () => {
+		const read = parseStepMcpImportSource(".codex", '[mcp_servers.docs]\ncommand = "docs"\nenabled_tools = []\n');
+		expect(read.state).toBe("ok");
+		expect(read.servers[0]?.config?.enabled_tools).toEqual([]);
+	});
+
+	it("reports empty and malformed input without echoing raw parser errors", () => {
+		expect(parseStepMcpImportSource(".claude", "{}").state).toBe("empty");
+		expect(parseStepMcpImportSource(".codex", "").state).toBe("empty");
+		for (const source of [".claude", ".codex"] as const) {
+			const read = parseStepMcpImportSource(source, "fixture-private-marker = !");
+			expect(read.state).toBe("error");
+			expect(read.servers).toEqual([]);
+			expect(JSON.stringify(read)).not.toContain("fixture-private-marker");
+		}
+	});
+
+	it.each(["null", "[]", '{"mcpServers":[]}'])("rejects invalid source structure %s", (raw) => {
+		expect(parseStepMcpImportSource(".claude", raw).state).toBe("error");
+	});
+});
+
+describe("MCP import diagnostics", () => {
+	it("carries only safe codes and counts alongside backwards-compatible warnings", () => {
+		const claude = parseStepMcpImportSource(
+			".claude",
+			JSON.stringify({
+				mcpServers: {
+					"fixture-name": { type: "fixture-transport" },
+					broken: { type: "http" },
+					docs: { command: "docs", "fixture-field": "fixture-value", extra: true },
+				},
+			}),
+		);
+		expect(claude.servers.map((server) => server.diagnostics)).toEqual([
+			[{ code: "mcp-unsupported-transport" }],
+			[{ code: "mcp-incomplete-config" }],
+			[{ code: "mcp-fields-not-translated", count: 2 }],
+		]);
+		expect(claude.servers[2]?.warnings[0]).toContain("fixture-field");
+		writeCodex('[mcp_servers.docs]\ncommand = "docs"\nenabled_tools = false\n');
+		expect(plan().candidates[0]?.diagnostics).toEqual([{ code: "mcp-invalid-tool-filter" }]);
+		const codex = parseStepMcpImportSource(
+			".codex",
+			[
+				"[mcp_servers.docs]",
+				'command = "docs"',
+				'env_vars = [{ name = "fixture-env", source = "remote" }, "inherited"]',
+			].join("\n"),
+		);
+		expect(codex.servers[0]?.diagnostics).toEqual([{ code: "mcp-remote-env-unsupported", count: 1 }]);
+		expect(codex.servers[0]?.warnings[0]).toContain("fixture-env");
+		expect(JSON.stringify([...claude.servers, ...codex.servers].map((server) => server.diagnostics))).not.toContain(
+			"fixture",
+		);
+	});
+});
+
+describe("allocateStepMcpImportCandidates", () => {
+	it("defaults to strict config equality and the CLI name chain", () => {
+		const { servers } = parseStepMcpImportSource(".claude", '{"mcpServers":{"docs":{"command":"docs"}}}');
+		expect(allocateStepMcpImportCandidates(servers, { other: { command: "docs" } })[0]?.targetName).toBe("docs");
+		const existing = { docs: { command: "docs", enabled: false } };
+		const strict = allocateStepMcpImportCandidates(servers, existing);
+		expect(strict[0]?.targetName).toBe("docs-claude");
+		expect(strict[0]?.diagnostics).toEqual([{ code: "mcp-name-conflict" }]);
+		const custom = allocateStepMcpImportCandidates(servers, existing, {
+			sameConfig: (left, right) => left.command === right.command,
+		});
+		expect(custom[0]?.blocked?.kind).toBe("duplicate");
+		expect(custom[0]?.diagnostics).toEqual([{ code: "mcp-duplicate" }]);
+		expect(existing).toEqual({ docs: { command: "docs", enabled: false } });
+		expect(servers[0]?.diagnostics).toEqual([]);
+	});
+
+	it("can match any existing or earlier allocated name with caller equality", () => {
+		const { servers } = parseStepMcpImportSource(
+			".claude",
+			'{"mcpServers":{"docs":{"command":"docs"},"renamed":{"command":"docs"}}}',
+		);
+		const options = {
+			matchAnyName: true,
+			sameConfig: (left: { command?: string }, right: { command?: string }) => left.command === right.command,
+		};
+		const existing = allocateStepMcpImportCandidates(
+			servers,
+			{ unrelated: { command: "docs", enabled: false } },
+			options,
+		);
+		expect(existing.map((candidate) => candidate.targetName)).toEqual(["unrelated", "unrelated"]);
+		expect(existing.every((candidate) => candidate.blocked?.kind === "duplicate")).toBe(true);
+		const pending = allocateStepMcpImportCandidates(servers, {}, options);
+		expect(pending.map((candidate) => candidate.targetName)).toEqual(["docs", "docs"]);
+		expect(pending[1]?.blocked?.detail).toContain("same server as Claude Code");
+	});
+
+	it("carries translation and normalization diagnostics into renamed candidates", () => {
+		const { servers } = parseStepMcpImportSource(
+			".claude",
+			'{"mcpServers":{"docs.name":{"command":"docs","extra":true}}}',
+		);
+		const result = allocateStepMcpImportCandidates(servers, { "docs-name": { command: "other" } });
+		expect(result[0]?.targetName).toBe("docs-name-claude");
+		expect(result[0]?.diagnostics).toEqual([
+			{ code: "mcp-fields-not-translated", count: 1 },
+			{ code: "mcp-name-normalized" },
+			{ code: "mcp-name-conflict" },
+		]);
+	});
+
+	it("reports exhausted fallback names without overwriting or dropping the row", () => {
+		const { servers } = parseStepMcpImportSource(".claude", '{"mcpServers":{"docs":{"command":"docs"}}}');
+		const names = ["docs", "docs-claude", ...Array.from({ length: 63 }, (_, index) => `docs-claude-${index + 2}`)];
+		const result = allocateStepMcpImportCandidates(
+			servers,
+			Object.fromEntries(names.map((name) => [name, { command: "other" }])),
+		);
+		expect(result[0]?.config).toBeUndefined();
+		expect(result[0]?.blocked?.kind).toBe("name-exhausted");
+		expect(result[0]?.diagnostics).toEqual([{ code: "mcp-name-conflict" }, { code: "mcp-name-exhausted" }]);
+	});
+});
+
 describe("planStepMcpImport", () => {
+	it("prefers explicit source files over CODEX_HOME without reading defaults", () => {
+		const override = join(home, "profile", "config.toml");
+		mkdirSync(dirname(override), { recursive: true });
+		writeFileSync(override, '[mcp_servers.profile]\ncommand="profile"\n');
+		const custom = join(home, "chosen.toml");
+		writeFileSync(custom, '[mcp_servers.chosen]\ncommand="chosen"\n');
+		const options = { homeDir: home, env: { ...env, CODEX_HOME: dirname(override) }, existing: {} };
+		expect(planStepMcpImport(options).candidates.map((c) => c.name)).toEqual(["profile"]);
+		expect(
+			planStepMcpImport({ ...options, sourcePaths: { ".codex": custom } }).candidates.map((c) => c.name),
+		).toEqual(["chosen"]);
+	});
 	it("reports a specific reason for each source that has nothing to offer", () => {
 		const sources = plan().sources;
 		expect(sources.map((source) => source.state)).toEqual(["missing", "missing"]);
@@ -133,6 +288,32 @@ describe("planStepMcpImport", () => {
 		});
 	});
 
+	it("preserves an explicit empty tool allowlist through import", () => {
+		writeCodex('[mcp_servers.docs]\ncommand = "docs"\nenabled_tools = []\ndisabled_tools = []\nenabled = false\n');
+		const preview = plan();
+		expect(preview.candidates[0]?.config?.enabled_tools).toEqual([]);
+		expect(preview.candidates[0]?.config?.disabled_tools).toEqual([]);
+		expect(applyStepMcpImport(preview, ["docs"], env).imported).toEqual(["docs"]);
+		expect(readGlobalStepConfig(env).mcp_servers?.docs).toMatchObject({
+			enabled_tools: [],
+			disabled_tools: [],
+			enabled: false,
+		});
+	});
+
+	it.each([
+		["enabled_tools", '"read"'],
+		["disabled_tools", "true"],
+		["enabled_tools", '["read", 1]'],
+		["disabled_tools", '["write", false]'],
+	])("blocks invalid %s = %s without widening permissions", (field, value) => {
+		writeCodex(`[mcp_servers.docs]\ncommand = "docs"\n${field} = ${value}\n`);
+		const preview = plan();
+		expect(preview.candidates[0]?.config).toBeUndefined();
+		expect(preview.candidates[0]?.blocked?.kind).toBe("incomplete");
+		expect(applyStepMcpImport(preview, ["docs"], env).imported).toEqual([]);
+	});
+
 	it("warns about keys it could not translate", () => {
 		writeClaude({
 			mcpServers: {
@@ -144,6 +325,28 @@ describe("planStepMcpImport", () => {
 });
 
 describe("applyStepMcpImport", () => {
+	it("does not overwrite a different config created after preview", () => {
+		writeClaude({ mcpServers: { docs: { command: "imported-docs" }, extra: { command: "extra" } } });
+		const preview = plan();
+		updateGlobalMcpConfig(env, () => ({ docs: { command: "new-docs", enabled: false } }));
+		const result = applyStepMcpImport(preview, ["docs", "extra"], env);
+		expect(result.imported).toEqual(["extra"]);
+		expect(result.skipped).toEqual([{ name: "docs", reason: expect.stringContaining("different") }]);
+		expect(readGlobalStepConfig(env).mcp_servers).toEqual({
+			docs: { command: "new-docs", enabled: false },
+			extra: { command: "extra" },
+		});
+	});
+
+	it("skips an identical config when the same plan is replayed", () => {
+		writeClaude({ mcpServers: { docs: { command: "docs" } } });
+		const preview = plan();
+		expect(applyStepMcpImport(preview, ["docs"], env).imported).toEqual(["docs"]);
+		const replay = applyStepMcpImport(preview, ["docs"], env);
+		expect(replay.imported).toEqual([]);
+		expect(replay.skipped).toEqual([{ name: "docs", reason: expect.stringContaining("already") }]);
+		expect(readGlobalStepConfig(env).mcp_servers).toEqual({ docs: { command: "docs" } });
+	});
 	it("writes only the selected servers and leaves the source files untouched", () => {
 		writeClaude({
 			mcpServers: {

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { SessionImportService, SessionManager } from "@step-harness/coding-agent";
 import { chromium } from "playwright-core";
 import { createServer } from "vite";
 
@@ -26,10 +27,12 @@ import "/src/features/conversation/stream.css";
 import {IconSprite} from "/src/ui";
 import {ConversationStream} from "/src/features/conversation/ConversationStream.tsx";
 import {setState} from "/src/state/store.ts";
+import {timelineFromEntries} from "/src/state/session.ts";
 window.fixture = (items, running = false) => setState({
- current:{id:"singleton-test",cwd:"/fixture",status:running?"running":"idle",entries:[]},
+ booted:true,current:{id:"singleton-test",cwd:"/fixture",status:running?"running":"idle",entries:[]},
  timelineItems:items
 });
+window.importedFixture = entries => window.fixture(timelineFromEntries(entries));
 createRoot(document.getElementById("root")).render(<><IconSprite/><ConversationStream/></>);
 `;
 let vite;
@@ -77,6 +80,62 @@ const command = {
 	inputSummary: "printf fixture", args: { command: "printf fixture" },
 	outputSummary: "fixture output",
 };
+
+async function importedToolEntries(source) {
+	const root = await mkdtemp(join(tmpdir(), "stepcode-imported-tool-groups-"));
+	const sourceDir = join(root, "source");
+	await mkdir(sourceDir);
+	const timestamp = "2026-10-27T00:00:00.000Z";
+	const sessionId = `groups-${source}`;
+	const records = source === "codex" ? [
+		{ type: "session_meta", timestamp, payload: { id: sessionId, cwd: root } },
+		{ type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Historical tools" }] } },
+	] : [
+		{ type: "workspace-directories", sessionId },
+		{ type: "user", uuid: "user", parentUuid: null, sessionId, cwd: root, timestamp, message: { content: "Historical tools" } },
+	];
+	let parentUuid = "user";
+	for (let index = 0; index < 11; index++) {
+		const id = `call-${index}`;
+		const args = index
+			? { [source === "qoder" ? "file_path" : "path"]: `水果${String(index).padStart(2, "0")}.md`, content: "Historical file content" }
+			: { [source === "codex" ? "cmd" : "command"]: "ls -la" };
+		if (source === "codex") {
+			records.push(
+				{ type: "response_item", timestamp, payload: { type: "function_call", call_id: id, name: index ? "write_file" : "exec_command", arguments: JSON.stringify(args) } },
+				{ type: "response_item", timestamp, payload: { type: "function_call_output", call_id: id, output: `Historical result ${index}` } },
+			);
+		} else {
+			records.push(
+				{ type: "assistant", uuid: `assistant-${index}`, parentUuid, sessionId, timestamp, message: { content: [{ type: "tool_use", id, name: index ? "Write" : "Bash", input: args }] } },
+				{ type: "user", uuid: `result-${index}`, parentUuid: `assistant-${index}`, sessionId, timestamp, message: { content: [{ type: "tool_result", tool_use_id: id, content: `Historical result ${index}` }] } },
+			);
+			parentUuid = `result-${index}`;
+		}
+	}
+	if (source === "qoder") records.push({ type: "active-leaf", sessionId, leafUuid: parentUuid });
+	await writeFile(join(sourceDir, `${source}.jsonl`), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+	const service = new SessionImportService({ agentDir: join(root, "agent"), sessionRoot: join(root, "sessions") });
+	try {
+		const scan = await service.scan({ customRoot: sourceDir });
+		const candidate = scan.candidates.find((item) => item.source === source);
+		assert.ok(candidate, `Missing ${source} fixture`);
+		const preview = await service.preview(candidate.id);
+		let job = await service.start([{ candidateId: candidate.id, fingerprint: preview.fingerprint, cwd: root }]);
+		const deadline = Date.now() + 5000;
+		while (job.status === "running" && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			job = await service.getJob(job.id);
+		}
+		assert.equal(job.status, "completed");
+		assert.equal(job.results[0].status, "imported");
+		assert.equal(existsSync(join(root, "水果01.md")), false, "Import must not execute writes");
+		return SessionManager.open(job.results[0].path).getEntries();
+	} finally {
+		await service.close();
+		await rm(root, { recursive: true, force: true });
+	}
+}
 
 test("singleton thinking has one disclosure; streaming growth preserves its mounted body and manual choice", { skip }, async () => {
 	const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -259,3 +318,46 @@ test("unopened singletons grow into folded groups; single-level layouts fit narr
 		await page.close();
 	}
 });
+
+for (const source of ["codex", "qoder"]) {
+	test(`${source} imported tools are folded with truthful states and expandable details`, { skip }, async () => {
+		const entries = await importedToolEntries(source);
+		const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+		try {
+			await page.emulateMedia({ reducedMotion: "reduce" });
+			await page.goto(url);
+			await page.waitForFunction(() => typeof window.importedFixture === "function");
+			await page.evaluate((items) => window.importedFixture(items), entries);
+			const group = page.locator(".process-tool-group");
+			const header = page.locator(".tool-group-trigger");
+			await header.waitFor({ state: "visible" });
+			assert.equal(await group.count(), 1);
+			assert.equal(await group.getAttribute("data-running"), "false");
+			assert.match(await header.innerText(), /工具调用 11 项|Recorded tool calls: 11/);
+			assert.doesNotMatch(await header.innerText(), /已完成|Completed/);
+			assert.equal(await header.getAttribute("aria-expanded"), "false");
+			const body = page.locator(".tool-group-disclosure");
+			assert.equal(await body.getAttribute("inert"), "");
+			assert.ok(await body.evaluate((element) => element.getBoundingClientRect().height < 1));
+			assert.equal(await page.locator('.tool-call[data-tool-state="unknown"]').count(), 11);
+			const screenshots = process.env.STEPCODE_WEB_QA_DIR || join(tmpdir(), "stepcode-imported-tool-group-qa");
+			await mkdir(screenshots, { recursive: true });
+			await page.screenshot({ path: join(screenshots, `${source}-folded.png`) });
+			await header.focus();
+			await page.keyboard.press("Enter");
+			assert.equal(await header.getAttribute("aria-expanded"), "true");
+			assert.equal(await body.getAttribute("inert"), null);
+			await page.locator(".tool-toggle").first().click();
+			await page.getByText("Historical result 0", { exact: true }).waitFor();
+			await page.screenshot({ path: join(screenshots, `${source}-expanded.png`) });
+			await header.click();
+			assert.equal(await header.getAttribute("aria-expanded"), "false");
+			assert.ok(await body.evaluate((element) => element.getBoundingClientRect().height < 1));
+			await header.click();
+			assert.equal(await page.locator(".tool-toggle").first().getAttribute("aria-expanded"), "true");
+			console.log(`${source} imported tool screenshots: ${screenshots}`);
+		} finally {
+			await page.close();
+		}
+	});
+}

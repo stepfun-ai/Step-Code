@@ -6,6 +6,7 @@ import { setUi, useAppStore } from "../../state/store";
 import type { MessageTimelineItem, SteeringMessage, TimelineItem } from "../../state/types";
 import { Icon } from "../../ui";
 import { Composer } from "../composer";
+import { openSettings } from "../settings/actions";
 import { ClarificationPanel } from "./ClarificationPanel";
 import { CommandRow } from "./CommandRow";
 import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
@@ -35,12 +36,26 @@ import { collectTurnFooters } from "./turn-footers";
  */
 function EmptyConversation() {
 	const t = useT();
+	const draft = useAppStore((state) => state.current === null);
 	return (
-		<div className="empty-state">
-			<span className="empty-mark" aria-hidden="true">
-				<Icon name="stepcode" />
-			</span>
-			<h1 className="empty-title">{t("emptyTitle")}</h1>
+		<div className="empty-conversation">
+			<div className="empty-state">
+				<span className="empty-mark" aria-hidden="true">
+					<Icon name="stepcode" />
+				</span>
+				<h1 className="empty-title">{t("emptyTitle")}</h1>
+			</div>
+			{draft ? (
+				<button
+					type="button"
+					id="emptySessionImport"
+					className="empty-session-import"
+					onClick={() => openSettings("migration")}
+				>
+					<Icon name="folder" size="sm" />
+					<span>{t("emptySessionImport")}</span>
+				</button>
+			) : null}
 		</div>
 	);
 }

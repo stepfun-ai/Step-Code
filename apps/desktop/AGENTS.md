@@ -60,6 +60,11 @@ apps/desktop/
 
 ## Security rules (do not relax)
 
+- Folder picking distinguishes ordinary workspace selection from `purpose: "resource"`.
+  Resource selection must not update `lastWorkspace`, offer directory creation, register a workspace or switch the draft.
+  Keep this distinction validated in preload/main and in the browser fallback; default picks preserve existing behaviour.
+- Sessions, migration jobs and first-use migration decisions remain Host-owned. Desktop migration is available without
+  account sign-in, but Host cookie/Origin authentication is still required and model requests retain credential checks.
 - `BrowserWindow` keeps `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, `webSecurity: true`,
   `webviewTag: false`.
 - The window may only navigate within the server origin (`http://127.0.0.1:<port>`). Other http(s) links open in the

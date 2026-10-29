@@ -13,6 +13,7 @@ import { api, apiSend, errorMessage, setUnauthorizedHandler } from "../lib/api";
 import { splitAttachedFiles } from "../lib/attached-files";
 import { writeClipboard } from "../lib/clipboard";
 import { basename, clipDetail, compact, toolArgs, toolInputDetail, toolInputSummary } from "../lib/format";
+import { stripImportedUserControls } from "../lib/imported-content";
 import { contentText, skillInvocation } from "../lib/markdown";
 import { FULL_ACCESS_PRESET, isFullAccessRisk } from "../lib/permissions";
 import { isDesktopHost } from "../platform/host";
@@ -44,6 +45,7 @@ import type {
 	ChildAgentLink,
 	ClarificationRequest,
 	ContentPart,
+	DesktopOnboardingState,
 	DraftModels,
 	FileChange,
 	LoginReport,
@@ -585,8 +587,10 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 			if (duplicate) continue;
 		}
 		const index = messagePosition.get(entry.id) ?? 0;
-		const text = contentText(message.content);
+		const rawText = contentText(message.content);
+		const text = entry.imported && message.role === "user" ? stripImportedUserControls(rawText).text : rawText;
 		const images = message.role === "user" ? imageSources(message.content) : [];
+		if (entry.imported && message.role === "user" && !text && !images.length) continue;
 		// A failed request leaves an assistant message with no content; without a row the error was invisible.
 		const error =
 			message.role === "assistant" && message.stopReason === "error"
@@ -650,12 +654,21 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					continue;
 				}
 				const result = toolResults.get(String(block.id));
-				const change = fileChange(String(block.name ?? ""), block.arguments, result);
-				const links = childAgents(String(block.name ?? ""), result?.details);
+				const imported = Boolean(entry.imported);
+				const importedUnknown =
+					imported &&
+					(!result ||
+						(result.details &&
+							typeof result.details === "object" &&
+							"importedStatus" in result.details &&
+							result.details.importedStatus === "unknown"));
+				const change = imported ? undefined : fileChange(String(block.name ?? ""), block.arguments, result);
+				const links = imported ? {} : childAgents(String(block.name ?? ""), result?.details);
 				items.push({
 					itemId: `tool-${block.id}`,
 					kind: "tool",
-					state: result?.isError ? "failed" : result ? "completed" : "pending",
+					state: importedUnknown ? "unknown" : result?.isError ? "failed" : result ? "completed" : "pending",
+					...(imported ? { imported: true } : {}),
 					toolName: String(block.name ?? ""),
 					inputSummary: toolInputSummary(block.arguments),
 					outputSummary: result ? compact(contentText(result.content)) : "",
@@ -666,12 +679,12 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					...links,
 					// The proposal comes from the persisted result, not the live event, so
 					// a snapshot refresh (which follows every finished message) keeps the
-					// review card. Without this it flashed once and vanished.
-					...(block.name === "exit_plan_mode" ? planReview(result?.details) : {}),
-					...(block.name === "agent_send"
+					// review card. Imported calls are history, never native review requests.
+					...(!imported && block.name === "exit_plan_mode" ? planReview(result?.details) : {}),
+					...(!imported && block.name === "agent_send"
 						? { subagentControl: subagentControl(block.arguments, result?.details) }
 						: {}),
-					...(block.name === "subagent"
+					...(!imported && block.name === "subagent"
 						? {
 								subagentTasks: subagentTasks(
 									block.arguments,
@@ -1708,23 +1721,37 @@ export async function refreshWorkspaces(): Promise<void> {
 	}));
 }
 
-/** Open a session and follow its stream (legacy `openSession`, 3122-3130). */
-export async function openSession(id: string): Promise<void> {
+let sessionOpeningGeneration = 0;
+export type SessionOpenOutcome = "opened" | "failed" | "superseded";
+
+/** Legacy action keeps its void contract; navigation-sensitive callers use the explicit outcome. */
+export async function openSession(id: string, options: { reportErrors?: boolean } = {}): Promise<void> {
+	await openSessionWithOutcome(id, options);
+}
+
+/** Only this invocation applying its snapshot and stream can report opened, never an existing current ID. */
+export async function openSessionWithOutcome(
+	id: string,
+	options: { reportErrors?: boolean } = {},
+): Promise<SessionOpenOutcome> {
+	const generation = ++sessionOpeningGeneration;
 	choseSession = true;
-	// The draft this page left behind is gone: it was never a session, so its
-	// placeholder row must not survive under the workspace it named.
 	setUi({ midView: null, childView: null, openingSession: id, draftRow: null });
 	setState({ pendingTurn: null });
+	const ownsOpening = () => generation === sessionOpeningGeneration && getState().ui.openingSession === id;
 	try {
 		const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${id}`);
-		// A later pick owns the pane; this answer arriving late must not repaint it.
-		if (getState().ui.openingSession !== id) return;
+		if (!ownsOpening()) return "superseded";
+		if (snapshot.id !== id) return "failed";
 		renderSnapshot(snapshot);
 		connectStream(id);
+		return "opened";
 	} catch (error) {
-		if (getState().ui.openingSession === id) showError(errorMessage(error));
+		if (!ownsOpening()) return "superseded";
+		if (options.reportErrors !== false) showError(errorMessage(error));
+		return "failed";
 	} finally {
-		if (getState().ui.openingSession === id) setUi({ openingSession: null });
+		if (ownsOpening()) setUi({ openingSession: null });
 	}
 }
 
@@ -1998,9 +2025,9 @@ export function continueWithoutLogin(): void {
 /**
  * Whether bootstrap must wait behind the sign-in gate.
  *
- * Only when no model can run at all: no Step credential and no usable custom
- * model. Desktop asks on every such start; plain Web keeps its terminal
- * `step login` path and asks only after an explicit sign-out from the page.
+ * Desktop stays usable without an account for local history, settings and migration.
+ * Plain Web keeps its terminal `step login` path and asks after an explicit sign-out.
+ * Model readiness is checked when the user actually sends a request.
  */
 export function signInGateNeeded(input: {
 	readonly desktop: boolean;
@@ -2009,15 +2036,48 @@ export function signInGateNeeded(input: {
 	readonly customModels: boolean;
 }): boolean {
 	if (!input.login || input.login.configured || input.customModels) return false;
-	return input.desktop || input.signedOut;
+	return !input.desktop && input.signedOut;
 }
 
-/**
- * Sign in, load workspaces and sessions, then open the most relevant session
- * (or start a draft in the launch folder). Runs once per page load; a second
- * call (React StrictMode double effects) is ignored because the launch token
- * cannot be exchanged twice.
- */
+let onboardingWrite: Promise<void> = Promise.resolve();
+function serializeOnboardingWrite(operation: () => Promise<void>): Promise<void> {
+	const result = onboardingWrite.then(operation);
+	// A failed optional write is reported by its caller; it must not poison later explicit actions.
+	onboardingWrite = result.catch(() => {});
+	return result;
+}
+
+/** Keep a durable pointer when the invitation starts a job; this does not change the job's state. */
+export function recordMigrationOnboardingJob(lastJobId: string): Promise<void> {
+	return serializeOnboardingWrite(async () => {
+		const current = getState().desktopOnboarding;
+		if (!current || current.status === "completed" || current.status === "skipped") return;
+		const next = await apiSend<DesktopOnboardingState>("/api/v1/desktop-onboarding", "PATCH", {
+			expectedRevision: current.revision,
+			status: "in_progress",
+			lastJobId,
+		});
+		setState({ desktopOnboarding: next });
+	});
+}
+
+/** Persist the user's decision; completing the invitation does not assert that every item imported. */
+export async function finishMigrationOnboarding(status: "completed" | "skipped", lastJobId?: string): Promise<void> {
+	await serializeOnboardingWrite(async () => {
+		const current = getState().desktopOnboarding;
+		if (!current) throw new Error("onboarding-unavailable");
+		const next = await apiSend<DesktopOnboardingState>("/api/v1/desktop-onboarding", "PATCH", {
+			expectedRevision: current.revision,
+			status,
+			...(lastJobId ? { lastJobId } : {}),
+		});
+		setState({ desktopOnboarding: next });
+		setUi({ migrationInvitation: false });
+	});
+	await Promise.all([refreshWorkspaces(), refreshSessions()]);
+}
+
+/** Establish local authentication, initialize once, then open history or a draft without a Desktop login barrier. */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 	if (bootstrapped) return;
 	bootstrapped = true;
@@ -2041,6 +2101,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 			defaultCwdFallback: boot.defaultCwdFallback === true,
 			directoryPicker: boot.directoryPicker === "native" ? "native" : "browse",
 			login: boot.login ?? null,
+			desktopOnboarding: boot.desktopOnboarding ?? null,
+			migrationAvailable: boot.migrationAvailable === true,
 			draftCwd: boot.cwd,
 			// Only what the host actually reported: an absent field stays absent
 			// rather than being invented from the page's own bundle.
@@ -2073,6 +2135,24 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 		}
 		await refreshWorkspaces();
 		await refreshSessions();
+		if (
+			isDesktopHost() &&
+			boot.migrationAvailable &&
+			boot.migrationSuggested &&
+			boot.desktopOnboarding?.status === "unseen"
+		) {
+			try {
+				const offered = await apiSend<DesktopOnboardingState>("/api/v1/desktop-onboarding", "PATCH", {
+					expectedRevision: boot.desktopOnboarding.revision,
+					status: "offered",
+				});
+				setState({ desktopOnboarding: offered });
+				setUi({ migrationInvitation: true });
+			} catch {
+				// Optional onboarding cannot prevent local use; its settings entry remains available.
+				showError(t("migrationOnboardingUnavailable"), false);
+			}
+		}
 		const sessions = getState().sessions;
 		const first =
 			sessions.find((session) => !session.archived && session.cwdAvailable !== false && session.cwd === boot.cwd) ??
