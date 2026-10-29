@@ -300,7 +300,7 @@ export function MigrationOnboarding({
 														sessions: selectedSessions.length,
 													})}
 								</span>
-								{stage === "select" ? (
+								{stage === "select" && !isActiveJob(job) ? (
 									<div className="migration-selection-footer">
 										{kind === "mcp" ? <MigrationBatchControls kind={kind} /> : null}
 										<div className="migration-selection-nav">
