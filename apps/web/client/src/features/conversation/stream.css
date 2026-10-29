@@ -1789,6 +1789,22 @@ button.compaction-head:focus-visible {
 	overflow-wrap: anywhere;
 	white-space: pre-wrap;
 }
+.notice-toggle {
+	margin-top: 2px;
+	padding: 0;
+	color: var(--ink-3);
+	font-size: 12px;
+	line-height: 1.6;
+	cursor: pointer;
+}
+.notice-toggle:hover {
+	color: var(--ink);
+}
+.notice-toggle:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 2px;
+	border-radius: 2px;
+}
 .notice-markdown {
 	color: var(--ink-2);
 	font-size: 13px;
