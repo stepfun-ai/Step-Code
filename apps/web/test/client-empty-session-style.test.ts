@@ -54,8 +54,8 @@ test("migration stays below the centred mark and question without an application
 	assert.doesNotMatch(component, /emptySessionImportSources/u);
 	assert.doesNotMatch(css, /\.empty-session-import small/u);
 	const messages = await readFile(new URL("../client/src/i18n/messages.ts", import.meta.url), "utf8");
-	assert.match(messages, /emptySessionImport: "从其他AI应用导入会话"/u);
-	assert.match(messages, /emptySessionImport: "Import sessions from other AI apps"/u);
+	assert.match(messages, /emptySessionImport: "迁移历史会话到 StepCode"/u);
+	assert.match(messages, /emptySessionImport: "Migrate sessions into StepCode"/u);
 	assert.doesNotMatch(messages, /emptySessionImportSources/u);
 });
 
