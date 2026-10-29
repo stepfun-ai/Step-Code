@@ -8,10 +8,7 @@ const labels = {
 		"规则会影响后续模型行为。暂不迁移也能继续；写入前需完整审阅并单独确认。",
 		"Rules shape future model behavior. Skipping is fine; writes need a full review and separate confirmation.",
 	],
-	migrationPlanHint: [
-		"这里会列出可迁移和待处理项。只在明确确认后执行，不让一个异常条目卡住全部流程。",
-		"Ready and blocked items are listed here. Nothing runs without explicit confirmation, and one broken item never blocks the rest.",
-	],
+	migrationPlanHint: ["", ""],
 	migrationCheckingNotice: [
 		"正在检查 {count} 项所选内容，完成后可开始迁移。",
 		"Checking {count} selected items; migration can start once checks finish.",
