@@ -45,7 +45,7 @@ function row(
 		},
 	};
 }
-function caps(id: string, role = "user", parentCwd?: string): Record<string, unknown> {
+function caps(id: string, role = "user", parentCwd?: string, parentSessionId?: string): Record<string, unknown> {
 	return {
 		type: "custom",
 		id: `cap-${id}`,
@@ -57,12 +57,24 @@ function caps(id: string, role = "user", parentCwd?: string): Record<string, unk
 			sessionId: id,
 			sessionRole: role,
 			parentCwd,
+			...(parentSessionId ? { parentSessionId } : {}),
 			skillDiscovery: true,
 			skillActivation: true,
 			pluginInvocation: true,
 		},
 	};
 }
+function provenance(id: string, usageEntryId: string, level = "high"): Record<string, unknown> {
+	return {
+		type: "custom",
+		id: `provenance-${id}`,
+		parentId: null,
+		timestamp,
+		customType: "step.usage_provenance",
+		data: { version: 1, sessionId: id, originSessionId: id, usageEntryId, reasoningAtDispatch: level },
+	};
+}
+
 function mainRows(): Record<string, unknown>[] {
 	return [
 		caps("main"),
@@ -187,6 +199,79 @@ describe("annual local activity and cache", () => {
 		expect((await scanActivity(options(path))).tokens).toBe(235);
 	});
 
+	it("counts delegated usage once across parent and child files, including cache hits", async () => {
+		const path = root(),
+			main = join(path, "sessions", "A", "main.jsonl"),
+			child = join(path, "sessions", "C", "child.jsonl"),
+			workflowChild = join(path, "sessions", "E", "workflow-child.jsonl"),
+			backgroundChild = join(path, "sessions", "D", "background-child.jsonl");
+		write(main, [
+			header("main"),
+			caps("main"),
+			row("parent", 10, 1),
+			{
+				type: "message",
+				id: "delegated",
+				parentId: null,
+				timestamp,
+				message: {
+					role: "toolResult",
+					toolName: "subagent",
+					usage: { input: 20, output: 2, cacheRead: 0, cacheWrite: 0 },
+					details: { results: [{ sessionId: "child" }] },
+				},
+			},
+			{
+				type: "message",
+				id: "workflow-usage",
+				parentId: null,
+				timestamp,
+				message: {
+					role: "toolResult",
+					toolName: "workflow",
+					usage: { input: 40, output: 4, cacheRead: 0, cacheWrite: 0 },
+					details: { childSessionIds: ["workflow-child"] },
+				},
+			},
+			{
+				type: "custom",
+				id: "background-usage",
+				parentId: null,
+				timestamp,
+				customType: "step-subagent-usage",
+				data: {
+					usage: { input: 30, output: 3, cacheRead: 0, cacheWrite: 0 },
+					childSessionIds: ["background-child"],
+				},
+			},
+		]);
+		write(child, [
+			header("child", "/work/child"),
+			caps("child", "subagent", "/work/A", "main"),
+			provenance("child", "child-call"),
+			row("child-call", 20, 2),
+		]);
+		write(workflowChild, [
+			header("workflow-child", "/work/workflow"),
+			caps("workflow-child", "subagent", "/work/A", "main"),
+			provenance("workflow-child", "workflow-call"),
+			row("workflow-call", 40, 4),
+		]);
+		write(backgroundChild, [
+			header("background-child", "/work/background"),
+			caps("background-child", "subagent", "/work/A", "main"),
+			provenance("background-child", "background-call"),
+			row("background-call", 30, 3),
+		]);
+		const opts = options(path),
+			first = await scanActivity(opts),
+			second = await scanActivity(opts);
+		expect(first.tokens).toBe(110);
+		expect(second.tokens).toBe(110);
+		expect(first.reasoning.filter(([level]) => level === "high")).toEqual([["high", 3]]);
+		expect(second.reasoning.filter(([level]) => level === "high")).toEqual([["high", 3]]);
+	});
+
 	it("deduplicates forks and excludes child chats, including project attribution", async () => {
 		const path = root(),
 			main = join(path, "sessions", "A", "main.jsonl"),
@@ -194,7 +279,11 @@ describe("annual local activity and cache", () => {
 			child = join(path, "sessions", "C", "child.jsonl");
 		write(main, [header("main"), ...mainRows()]);
 		write(fork, [header("fork", "/work/B", main), ...mainRows(), caps("fork"), row("new", 20, 2)]);
-		write(child, [header("child", "/work/isolated"), caps("child", "subagent", "/work/A"), row("child-call", 30, 3)]);
+		write(child, [
+			header("child", "/work/isolated"),
+			caps("child", "subagent", "/work/A", "main"),
+			row("child-call", 30, 3),
+		]);
 		const checksum = createHash("sha256").update(readFileSync(main)).digest("hex");
 		const all = await scanActivity(options(path));
 		expect(all).toMatchObject({ tokens: 290, chats: 2 });

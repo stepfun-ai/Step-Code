@@ -105,9 +105,13 @@ not hide active tasks. Phase and log updates use the same live update path.
 
 Each `onUpdate` has readable text and a complete `WorkflowProgress` snapshot in
 `details`, including for RPC consumers. Snapshots are independent of later
-mutations. The final result remains `WorkflowRunResult`; the current tool row
-retains its last progress snapshot when displaying that result or an error.
-Updates from late child cleanup are ignored once the tool call has settled.
+mutations. The final result remains `WorkflowRunResult`; its `usage` field
+contains the run's aggregate delegated usage, and `childSessionIds` identifies
+the child transcripts covered by that parent-side total. Terminal workflow
+errors carry the same fields on the thrown error, which the agent loop preserves
+on the error tool result. The current tool row retains its last progress
+snapshot when displaying that result or an error. Updates from late child
+cleanup are ignored once the tool call has settled.
 This projection describes assigned tasks and lifecycle states; child tool and
 model output remain in the child trajectories.
 
@@ -186,7 +190,11 @@ it finishes, fails, or is stopped. It wakes an idle parent. The body opens with 
 summary such as `Lane lane_1a2b3c4d finished: 2 completed, 1 failed.`. That
 summary is followed by duration, usage, child session ids and JSONL paths, any
 dialogs the child raised that were auto-cancelled, failure reasons, and the
-output. The text passes through the shared [tool-output retention
+output. Usage accounting is independent of these notifications: each settled
+lane turn writes one `step-subagent-usage` entry with its aggregate usage and
+covered child session ids. Queued turns, interrupted turns and shutdown settle
+usage without requiring a terminal notification, and the lane/turn key prevents
+duplicate accounting. The text passes through the shared [tool-output retention
 boundary](../packages/coding-agent/docs/tool-output-retention.md): oversized
 output is saved under the session's `tool-output` directory and replaced by a
 preview with its path. `subscribe: "progress"` adds throttled progress messages

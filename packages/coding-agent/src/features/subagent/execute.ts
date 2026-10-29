@@ -602,10 +602,30 @@ export async function runPreparedSubagent(
 		} catch (error) {
 			if (worktree && task.retainWorktree === false) await worktree.cleanup().catch(() => undefined);
 			const message = error instanceof Error ? error.message : String(error);
-			const failed = {
-				...makeFailureResult(agent.name, task.task, message, agent.source),
-				sessionId,
-			};
+			const observed = records[index];
+			const failed = observed
+				? resultRecord(
+						agent.name,
+						task.task,
+						{
+							...observed,
+							stderr: message,
+							exitCode: 1,
+							stopReason: "error",
+							errorMessage: message,
+						},
+						{
+							agentSource: agent.source,
+							worktreePath: worktree?.path,
+							worktreeBranch: worktree?.branch,
+						},
+					)
+				: {
+						...makeFailureResult(agent.name, task.task, message, agent.source),
+						sessionId,
+					};
+			// The observed record carries its previous status through resultRecord; the catch is the terminal failure.
+			failed.status = "failed";
 			records[index] = failed;
 			emit(mode);
 			reportFinished(failed, index);

@@ -370,6 +370,36 @@ interface Origin {
 	cwd: string;
 	role: "user" | "subagent";
 }
+
+function stringValues(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/** Parent-side delegated usage and the child transcripts it replaces in Overview. */
+function delegatedRecord(entry: Row): { usage: unknown; childSessionIds: string[] } | undefined {
+	const message = entry.message as Row | undefined;
+	if (
+		entry.type === "message" &&
+		message?.role === "toolResult" &&
+		["subagent", "workflow"].includes(String(message.toolName))
+	) {
+		const details = message.details as Row | undefined,
+			results = Array.isArray(details?.results) ? details.results : [];
+		return {
+			usage: message.usage,
+			childSessionIds: [
+				...stringValues(details?.childSessionIds),
+				...results.map((record) => (record as Row).sessionId).filter((id): id is string => typeof id === "string"),
+			],
+		};
+	}
+	if (entry.type === "custom" && entry.customType === "step-subagent-usage") {
+		const data = entry.data as Row | undefined;
+		return { usage: data?.usage, childSessionIds: stringValues(data?.childSessionIds) };
+	}
+	return undefined;
+}
+
 function validID(id: unknown): id is string {
 	return typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/u.test(id);
 }
@@ -477,6 +507,17 @@ function buildOverview(
 		resolving.delete(key);
 		return result;
 	};
+	// A parent delegated record is authoritative only for the child sessions it names.
+	// Other child transcripts, including those written before parent accounting existed,
+	// remain the fallback rather than being suppressed at the whole-parent-session level.
+	const coveredChildSessions = new Set<string>();
+	for (const file of files.values()) {
+		for (const entry of file.entries) {
+			const delegated = delegatedRecord(entry);
+			if (!delegated || !normalizeUsage(delegated.usage)) continue;
+			for (const sessionId of delegated.childSessionIds) coveredChildSessions.add(sessionId);
+		}
+	}
 	const recordedSince = new Map<string, number>();
 	for (const file of files.values())
 		if (file.header && validID(file.header.id))
@@ -528,23 +569,31 @@ function buildOverview(
 			}
 			const picked = entryUsage(entry),
 				usage = normalizeUsage(picked.raw);
+			const coveredByParent =
+				origin.role === "subagent" &&
+				picked.assistant &&
+				(coveredChildSessions.has(String(file.header.id)) || coveredChildSessions.has(origin.sessionId));
 			if (picked.expected && !usage) limited.add(picked.raw === undefined ? "Missing usage" : "Invalid usage");
 			if (usage && !dedup.has(key)) {
 				if (entry.customType === "step-auto-clm-usage" && data?.sessionId !== origin.sessionId) {
 					limited.add("Usage origin conflict");
 					continue;
 				}
-				if (!Number.isSafeInteger(globalTokens + usage.total)) {
-					limited.add("Token sum exceeds exact numeric range");
-					continue;
+				if (!coveredByParent) {
+					if (!Number.isSafeInteger(globalTokens + usage.total)) {
+						limited.add("Token sum exceeds exact numeric range");
+						continue;
+					}
+					day.tokens += usage.total;
+					globalTokens += usage.total;
+					if (picked.assistant && origin.role === "user") {
+						day.chats.add(origin.sessionId);
+						chats.add(origin.sessionId);
+					}
 				}
+				// Token suppression and reasoning coverage are independent: parent-side accounting
+				// must not erase the child's dispatch metadata or duplicate it through a fork.
 				dedup.add(key);
-				day.tokens += usage.total;
-				globalTokens += usage.total;
-				if (picked.assistant && origin.role === "user") {
-					day.chats.add(origin.sessionId);
-					chats.add(origin.sessionId);
-				}
 				if (picked.assistant) {
 					const level = provenance.get(id) ?? levels.get(id) ?? "unknown";
 					if (!provenance.has(id)) limited.add("Reasoning coverage is limited");

@@ -252,6 +252,36 @@ describe("AgentSession.getSessionStats", () => {
 			session.dispose();
 		}
 	});
+	it("includes background subagent usage entries in session totals", async () => {
+		const { session, sessionManager } = await createSession();
+		const usage: Usage = {
+			input: 10,
+			output: 20,
+			cacheRead: 30,
+			cacheWrite: 40,
+			totalTokens: 100,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 1 },
+		};
+		try {
+			sessionManager.appendCustomMessageEntry("agent-notification", "progress", false, {
+				event: "background_progress",
+			});
+			sessionManager.appendCustomEntry("step-subagent-usage", {
+				version: 1,
+				laneId: "lane_00000001",
+				turn: 1,
+				childSessionIds: ["child-1"],
+				usage,
+			});
+
+			const stats = session.getSessionStats();
+			expect(stats.tokens).toEqual({ input: 10, output: 20, cacheRead: 30, cacheWrite: 40, total: 100 });
+			expect(stats.cost).toBe(1);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("counts each automatic CLM request once including rejected and late responses", async () => {
 		const { session, sessionManager } = await createSession();
 		const usage: Usage = {

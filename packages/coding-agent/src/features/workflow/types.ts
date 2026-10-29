@@ -75,6 +75,8 @@ export interface WorkflowAgentRunResult {
 	/** Structured provider failure class for a failed run; never inferred from text. */
 	errorKind?: import("@step-harness/providers").ProviderErrorKind;
 	model?: string;
+	/** Child session behind this agent call, when the runner uses isolated sessions. */
+	sessionId?: string;
 	/** True when every tool start was reported through onToolExecutionStart. */
 	toolActivityObserved?: boolean;
 }
@@ -145,6 +147,10 @@ export interface WorkflowRunResult {
 	startedAt: number;
 	finishedAt: number;
 	spentTokens: number;
+	/** Full delegated usage for session accounting; runtime-produced results always include it. */
+	usage?: WorkflowUsage;
+	/** Child transcripts covered by this run's parent-side usage, used by Overview deduplication. */
+	childSessionIds?: string[];
 	cacheHits: number;
 	agentCalls: number;
 	phases: WorkflowPhase[];

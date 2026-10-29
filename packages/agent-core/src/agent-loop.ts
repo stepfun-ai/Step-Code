@@ -10,6 +10,7 @@ import {
 	classifyProviderError,
 	EventStream,
 	type ToolResultMessage,
+	type Usage,
 	validateToolArguments,
 } from "@step-harness/providers";
 import { getDefaultStreamFn } from "./stream-fn.ts";
@@ -775,7 +776,7 @@ async function prepareToolCall(
 	} catch (error) {
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+			result: createThrownToolResult(error),
 			isError: true,
 		};
 	}
@@ -863,7 +864,8 @@ async function executePreparedToolCall(
 		// second cause and must not be hidden by it (or repeat it).
 		const causes = deliveryFailure && deliveryFailure.error !== error ? [error, deliveryFailure.error] : [error];
 		return {
-			result: createErrorToolResult(
+			result: createThrownToolResult(
+				error,
 				causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
 			),
 			isError: true,
@@ -906,7 +908,7 @@ async function finalizeExecutedToolCall(
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+			result = createThrownToolResult(error);
 			isError = true;
 		}
 	}
@@ -918,10 +920,20 @@ async function finalizeExecutedToolCall(
 	};
 }
 
-function createErrorToolResult(message: string): AgentToolResult<any> {
+function createThrownToolResult(error: unknown, message?: string): AgentToolResult<any> {
+	const fields = error && typeof error === "object" ? (error as { usage?: Usage; details?: unknown }) : undefined;
+	return createErrorToolResult(
+		message ?? (error instanceof Error ? error.message : String(error)),
+		fields?.usage,
+		fields?.details,
+	);
+}
+
+function createErrorToolResult(message: string, usage?: Usage, details: unknown = {}): AgentToolResult<any> {
 	return {
 		content: [{ type: "text", text: message }],
-		details: {},
+		details,
+		...(usage ? { usage } : {}),
 	};
 }
 

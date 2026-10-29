@@ -561,6 +561,57 @@ describe("agentLoop with AgentMessage", () => {
 		});
 	});
 
+	it("preserves usage and details from a tool that throws after nested model work", async () => {
+		const usage = {
+			input: 10,
+			output: 20,
+			cacheRead: 2,
+			cacheWrite: 3,
+			totalTokens: 35,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 },
+		};
+		const tool: AgentTool = {
+			name: "workflow",
+			label: "Workflow",
+			description: "Run nodes",
+			parameters: Type.Object({}),
+			execute: async () => {
+				throw Object.assign(new Error("workflow failed"), { usage, details: { childSessionIds: ["child-1"] } });
+			},
+		};
+		let calls = 0;
+		const stream = agentLoop(
+			[createUserMessage("run")],
+			{ systemPrompt: "", messages: [], tools: [tool] },
+			{ model: createModel(), convertToLlm: identityConverter },
+			undefined,
+			() => {
+				const response = new MockAssistantStream();
+				response.push({
+					type: "done",
+					reason: calls++ === 0 ? "toolUse" : "stop",
+					message:
+						calls === 1
+							? createAssistantMessage(
+									[{ type: "toolCall", id: "wf", name: "workflow", arguments: {} }],
+									"toolUse",
+								)
+							: createAssistantMessage([{ type: "text", text: "failed" }]),
+				});
+				return response;
+			},
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+		expect((await stream.result()).find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+			usage,
+			details: { childSessionIds: ["child-1"] },
+			content: [{ type: "text", text: "workflow failed" }],
+		});
+	});
+
 	it("should not execute tool calls from a length-truncated assistant message", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

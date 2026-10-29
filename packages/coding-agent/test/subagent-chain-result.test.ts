@@ -310,3 +310,33 @@ test("admitted parallel subagents ask the runner to hold their slot until the ch
 	});
 	expect(seen).toEqual([true, undefined]);
 });
+
+test("worktree cleanup failure preserves the completed child's usage", async () => {
+	const result = await executeSubagent(
+		{ agent: "explore", task: "finish then clean", isolateWorkspace: true, retainWorktree: false },
+		undefined,
+		undefined,
+		ctx,
+		{
+			agentDir: "/tmp/step-agent-test",
+			configDirName: ".step",
+			includeBuiltinAgents: true,
+			maxParallelTasks: 8,
+			maxConcurrency: 4,
+			worktreeManager: {
+				allocate: async () => ({
+					path: "/tmp/test-worktree",
+					branch: "test-worktree",
+					cleanup: async () => {
+						throw new Error("cleanup failed");
+					},
+				}),
+			},
+			runner: async () => runResult({ text: "completed" }),
+		},
+	);
+
+	expect(result.isError).toBe(true);
+	expect(result.usage).toMatchObject({ input: 1, output: 2, totalTokens: 3 });
+	expect(result.details?.results[0]).toMatchObject({ status: "failed", errorMessage: "cleanup failed" });
+});

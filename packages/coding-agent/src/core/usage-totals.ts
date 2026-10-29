@@ -24,6 +24,49 @@ export interface UsageTotals {
 	cost: number;
 }
 
+/** Common usage shape reported by delegated agents and workflows. */
+export interface DelegatedUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+}
+
+/** Sum usage defensively because restored and test records may predate delegated usage. */
+export function sumDelegatedUsage(records: readonly { usage?: DelegatedUsage }[]): DelegatedUsage {
+	return records.reduce(
+		(total, record) => {
+			if (!record.usage) return total;
+			return {
+				input: total.input + record.usage.input,
+				output: total.output + record.usage.output,
+				cacheRead: total.cacheRead + record.usage.cacheRead,
+				cacheWrite: total.cacheWrite + record.usage.cacheWrite,
+				cost: total.cost + record.usage.cost,
+			};
+		},
+		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+	);
+}
+
+export function hasDelegatedUsage(usage: DelegatedUsage): boolean {
+	return usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0 || usage.cost > 0;
+}
+
+/** Adapt delegated usage to the provider Usage persisted on tool results and custom entries. */
+export function delegatedUsageToUsage(usage: DelegatedUsage): Usage {
+	return {
+		input: usage.input,
+		output: usage.output,
+		cacheRead: usage.cacheRead,
+		cacheWrite: usage.cacheWrite,
+		totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+		// Runners report aggregate cost only; preserve that total without inventing a component split.
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: usage.cost },
+	};
+}
+
 export function createUsageTotals(): UsageTotals {
 	return {
 		input: 0,
@@ -65,6 +108,10 @@ export function entryUsage(value: unknown): { raw?: unknown; expected: boolean; 
 		return { raw: message.usage, expected: message.usage !== undefined, assistant: false };
 	if (entry.type === "compaction" || entry.type === "branch_summary")
 		return { raw: entry.usage, expected: entry.usage !== undefined, assistant: false };
+	if (entry.type === "custom" && entry.customType === "step-subagent-usage") {
+		const data = entry.data as Record<string, unknown> | undefined;
+		return { raw: data?.usage, expected: data?.usage !== undefined, assistant: false };
+	}
 	if (entry.type === "custom" && entry.customType === "step-auto-clm-usage") {
 		const data = entry.data as Record<string, unknown> | undefined;
 		return { raw: data?.usage, expected: true, assistant: false };

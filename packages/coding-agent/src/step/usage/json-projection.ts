@@ -26,6 +26,7 @@ const dataKeys = new Set([
 	"originSessionId",
 	"sourceLeafId",
 	"usageEntryId",
+	"childSessionIds",
 	"reasoningAtDispatch",
 	"requestedProvider",
 	"requestedModel",
@@ -66,8 +67,16 @@ function keepPath(path: string[]): boolean {
 	if (path[0] === "usage") return path.length === 2 && usageKeys.has(path[1]);
 	if (path[0] === "message") {
 		if (path.length === 2)
-			return ["role", "usage", "provider", "model", "responseModel", "timestamp"].includes(path[1]);
-		return path[1] === "usage" && path.length === 3 && usageKeys.has(path[2]);
+			return ["role", "usage", "provider", "model", "responseModel", "timestamp", "toolName", "details"].includes(
+				path[1],
+			);
+		if (path[1] === "usage") return path.length === 3 && usageKeys.has(path[2]);
+		if (path[1] === "details") {
+			if (path.length === 2) return true;
+			if (path[2] === "childSessionIds") return path.length === 3;
+			if (path[2] === "results") return path.length === 3 || (path[3] === "sessionId" && path.length === 4);
+		}
+		return false;
 	}
 	if (path[0] === "data") {
 		if (!dataKeys.has(path[1])) return false;

@@ -80,6 +80,7 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 				// A killed or crashed child can lose a tool event in its unread output.
 				toolActivityObserved: result.exitCode === 0 && result.stopReason !== "aborted",
 				...(result.model ? { model: result.model } : {}),
+				...(result.sessionId ? { sessionId: result.sessionId } : {}),
 			};
 		}
 		const text = finalOutput(result.messages) || resultText(result);
@@ -89,6 +90,7 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 			status: "completed",
 			toolActivityObserved: true,
 			...(result.model ? { model: result.model } : {}),
+			...(result.sessionId ? { sessionId: result.sessionId } : {}),
 		};
 	};
 }

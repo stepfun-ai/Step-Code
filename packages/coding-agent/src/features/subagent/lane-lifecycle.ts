@@ -11,6 +11,7 @@ import { unlink } from "node:fs/promises";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import { boundToolResultContent } from "../../core/tools/tool-output.ts";
+import { delegatedUsageToUsage, hasDelegatedUsage, sumDelegatedUsage } from "../../core/usage-totals.ts";
 import type {
 	StepSubagentDetails,
 	StepSubagentResultRecord,
@@ -236,6 +237,48 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 	const isCurrent = (lane: BackgroundAgentLane, generation: number): boolean =>
 		laneEpochs.get(lane) === epoch && lane.runGeneration === generation;
 
+	const recordedLaneTurns = new WeakMap<BackgroundAgentLane, Set<number>>(),
+		laneTurnDetails = new WeakMap<BackgroundAgentLane, Map<number, StepSubagentDetails>>();
+	const setLaneTurnDetails = (lane: BackgroundAgentLane, generation: number, details: StepSubagentDetails): void => {
+		let turns = laneTurnDetails.get(lane);
+		if (!turns) {
+			turns = new Map<number, StepSubagentDetails>();
+			laneTurnDetails.set(lane, turns);
+		}
+		turns.set(generation, details);
+	};
+	/** Persist one independent usage entry per settled lane turn, including turns without a notification. */
+	const recordLaneUsage = (
+		lane: BackgroundAgentLane,
+		generation: number,
+		result?: AgentToolResult<StepSubagentDetails>,
+	): void => {
+		let recorded = recordedLaneTurns.get(lane);
+		if (!recorded) {
+			recorded = new Set<number>();
+			recordedLaneTurns.set(lane, recorded);
+		}
+		if (recorded.has(generation)) return;
+		recorded.add(generation);
+		if (result?.details) setLaneTurnDetails(lane, generation, result.details);
+		const records = laneTurnDetails.get(lane)?.get(generation)?.results ?? [],
+			usage = sumDelegatedUsage(records);
+		if (!hasDelegatedUsage(usage)) return;
+		try {
+			host.pi.appendEntry("step-subagent-usage", {
+				version: 1,
+				laneId: lane.id,
+				turn: generation,
+				childSessionIds: records
+					.map((record) => record.sessionId)
+					.filter((id): id is string => typeof id === "string"),
+				usage: delegatedUsageToUsage(usage),
+			});
+		} catch {
+			// Accounting must not reopen or interrupt teardown; the result still retains its own usage.
+		}
+	};
+
 	const clearIdleTimer = (lane: BackgroundAgentLane): void => {
 		if (lane.idleTimer) clearTimeout(lane.idleTimer);
 		lane.idleTimer = undefined;
@@ -338,9 +381,11 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			}));
 		updateLaneWidget(lane);
 		const signal = lane.controller.signal;
+		setLaneTurnDetails(lane, generation, { ...lane.details, results: [] });
 		const onUpdate = (partial: AgentToolResult<StepSubagentDetails>): void => {
 			if (!isCurrent(lane, generation)) return;
 			if (partial.details) {
+				setLaneTurnDetails(lane, generation, partial.details);
 				lane.details = {
 					...partial.details,
 					// A frame is bounded by bytes, so it may omit the roster's tail.
@@ -452,6 +497,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 				};
 				lane.status = lane.details.status ?? "completed";
 				lane.updatedAt = Date.now();
+				recordLaneUsage(lane, generation, result);
 				const next = lane.status === "aborted" ? undefined : lane.queuedPrompts.shift();
 				if (next) {
 					startLane(lane, { params: followUpParams(lane, next) });
@@ -471,6 +517,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 					`Background lane ${lane.id} failed: ${error instanceof Error ? error.message : String(error)}`,
 					lane.details,
 				);
+				recordLaneUsage(lane, generation);
 				updateLaneWidget(lane);
 				armIdleTimer(lane);
 				void deliverFinal(lane, generation);
@@ -541,7 +588,8 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			return `Lane ${lane.id} is ${lane.status}; shut down ${processes}`;
 		}
 		lane.queuedPrompts.length = 0;
-		const generation = lane.runGeneration + 1;
+		const interruptedGeneration = lane.runGeneration,
+			generation = interruptedGeneration + 1;
 		lane.runGeneration = generation;
 		const interrupted = lane.promise;
 		lane.controller.abort();
@@ -555,9 +603,11 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 		// Notify only after the aborted run has actually wound down, with what it
 		// produced. The generation bump above keeps the run's own .then from
 		// double-firing.
+		let interruptedResult: AgentToolResult<StepSubagentDetails> | undefined;
 		void interrupted
 			.then(
 				(result) => {
+					interruptedResult = result;
 					if (!isCurrent(lane, generation)) return;
 					lane.result = result;
 					if (result.details) {
@@ -567,7 +617,10 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 				() => undefined,
 			)
 			.then(() => {
-				if (isCurrent(lane, generation) && lane.status === "aborted") return deliverFinal(lane, generation);
+				if (isCurrent(lane, generation) && lane.status === "aborted") {
+					recordLaneUsage(lane, interruptedGeneration, interruptedResult);
+					return deliverFinal(lane, generation);
+				}
 				pendingFinal.delete(lane);
 			});
 		return `Stopped lane ${lane.id}; you will get one notification once it has wound down`;
@@ -608,8 +661,14 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 				lane.queuedPrompts.push(prompt);
 				return `Queued follow-up for lane ${lane.id}`;
 			}
+			const previousGeneration = lane.runGeneration,
+				previous = lane.promise;
 			lane.controller.abort();
 			lane.queuedPrompts.length = 0;
+			void previous.then(
+				(result) => recordLaneUsage(lane, previousGeneration, result),
+				() => recordLaneUsage(lane, previousGeneration),
+			);
 			startLane(lane, { params: followUpParams(lane, prompt) });
 			return `Interrupted lane ${lane.id} and started the follow-up`;
 		}
@@ -656,11 +715,18 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			if (lane.completionWrites) runs.push(lane.completionWrites);
 			clearIdleTimer(lane);
 			lane.queuedPrompts.length = 0;
+			const generation = lane.runGeneration,
+				previous = lane.promise;
 			lane.runGeneration += 1;
 			if (lane.status === "running") {
 				lane.controller.abort();
 				lane.status = "aborted";
-				runs.push(lane.promise.catch(() => undefined));
+				runs.push(
+					previous.then(
+						(result) => recordLaneUsage(lane, generation, result),
+						() => recordLaneUsage(lane, generation),
+					),
+				);
 			}
 			for (const session of getLaneSessions(lane.sessionId, false)) {
 				session.stop();

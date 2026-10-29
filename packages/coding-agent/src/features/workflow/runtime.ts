@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
+import type { Usage } from "@step-harness/providers";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
+import { delegatedUsageToUsage, hasDelegatedUsage } from "../../core/usage-totals.ts";
 import {
 	type StepTelemetryKnownEventName,
 	type StepTelemetryProperties,
@@ -135,6 +137,7 @@ export class WorkflowRuntime {
 	private sequence = 0;
 	private agentCount = 0;
 	private cacheHits = 0;
+	private readonly childSessions = new Set<string>();
 	/**
 	 * Set once a live call in this run may have changed the environment. Cached
 	 * results recorded against the previous environment are then stale unless the
@@ -284,6 +287,8 @@ export class WorkflowRuntime {
 				startedAt: this.startedAt,
 				finishedAt,
 				spentTokens: this.budget.spent(),
+				usage: this.budget.usageSnapshot(),
+				childSessionIds: [...this.childSessions],
 				cacheHits: this.cacheHits,
 				agentCalls: this.agentCount,
 				phases: [...this.phases],
@@ -317,6 +322,18 @@ export class WorkflowRuntime {
 				spent_tokens: this.budget.spent(),
 			});
 			await Promise.all([this.journal.flush(), this.progress.flush()]).catch(() => undefined);
+			const usage = this.budget.usageSnapshot();
+			if (hasDelegatedUsage(usage)) {
+				const withUsage =
+					error && typeof error === "object" && Object.isExtensible(error)
+						? error
+						: new Error(errorMessage(error), { cause: error });
+				Object.assign(withUsage, {
+					usage: delegatedUsageToUsage(usage),
+					details: { childSessionIds: [...this.childSessions] },
+				} satisfies { usage: Usage; details: { childSessionIds: string[] } });
+				throw withUsage;
+			}
 			throw error;
 		} finally {
 			this.lifecycle = "closed";
@@ -596,6 +613,7 @@ export class WorkflowRuntime {
 						},
 					});
 					raw = await Promise.race([runnerPromise, cancelled]);
+					if (raw.sessionId) this.childSessions.add(raw.sessionId);
 					if (raw.toolActivityObserved !== true) toolActivityObserved = false;
 				} catch (error: unknown) {
 					// A thrown attempt cannot vouch that every tool start was reported.
@@ -604,6 +622,7 @@ export class WorkflowRuntime {
 					// them when it settles, after the race has already been decided.
 					const late = await settleRunner();
 					if (late) {
+						if (late.sessionId) this.childSessions.add(late.sessionId);
 						const lateUsage = normalizeUsage(late.usage);
 						totalUsage = mergeWorkflowUsage(totalUsage, lateUsage);
 						try {
@@ -1227,6 +1246,7 @@ export function workflowToolResult(value: WorkflowRunResult): AgentToolResult<Wo
 			},
 		],
 		details: value,
+		...(value.usage ? { usage: delegatedUsageToUsage(value.usage) } : {}),
 		isError: value.status !== "completed",
 	};
 }
