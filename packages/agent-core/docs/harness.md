@@ -2678,6 +2678,8 @@ For each live tool batch, the harness resolves `toolContext` exactly once, cache
 
 `executeToolBatch` (the exported successor of the source's private `executeToolCalls`) preserves the existing sequential/parallel behavior: source-ordered preparation and dispatch, concurrent effects in parallel mode, source-ordered finalization/results, no effect for blocked/invalid/genuine-length calls, and `terminate: true` only when every finalized outcome terminates. Compatibility wrappers keep existing public loop signatures and events.
 
+The loop's optional `beforeModelRequest` hook runs before every provider request (the first request of a prompt or continuation, and every follow-up), after injected steering, and may replace the request context, model, or thinking level; see the [package README](../README.md). It must not throw. Products use it for request-time maintenance such as compaction, so any phase refactor must keep calling it once per provider request and keep the post-hook steering poll for follow-up requests.
+
 ## 5.8 Telemetry
 
 Use the existing callback-based `TelemetryContext`, no-op/reference implementations, typed schema machinery, and agent-owned schemas. Do not invent a second contract. Context is passed explicitly; no core `AsyncLocalStorage` or global active span.
