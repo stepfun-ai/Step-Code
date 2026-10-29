@@ -269,9 +269,10 @@
 .migration-source-locations[open] > summary::after { content: "⌃"; }
 
 /* ── One-glance toolbars: scope → advanced → action; tabs + select-all ── */
-.migration-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.migration-toolbar .migration-scan-controls { margin: 0; }
-.migration-toolbar .migration-source-locations { margin-left: auto; margin-bottom: 0; }
+.migration-toolbar { display: flex; align-items: flex-start; gap: 10px; flex-wrap: nowrap; }
+.migration-toolbar .migration-scan-controls { margin: 0; flex-wrap: wrap; row-gap: 8px; min-width: 0; }
+.migration-toolbar .migration-source-locations { margin-left: auto; margin-bottom: 0; flex-shrink: 0; align-self: center; }
+.migration-toolbar .migration-scan-run { flex-shrink: 0; }
 .migration-toolbar > .migration-meta[data-mcp-found] { margin: 0; }
 .migration-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .migration-list-toolbar .migration-select-all { display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: 0; border-radius: 0; }
