@@ -477,42 +477,6 @@
 	width: 100%;
 }
 
-/*
- * A jump target (turn locator, search hit) flashes once. The user bubble gets a
- * ring 3px off its own edge, following its corners; any other row a rounded
- * wash that reaches a little past its text.
- */
-.reveal-flash {
-	border-radius: var(--radius-surface);
-	animation: reveal-wash 1.6s ease-out;
-}
-.message.user .message-body.reveal-flash {
-	border-radius: var(--radius-bubble) var(--radius-bubble) var(--radius-inline-code) var(--radius-bubble);
-	animation-name: reveal-ring;
-}
-@keyframes reveal-wash {
-	from {
-		background-color: var(--selection);
-		box-shadow: 0 0 0 8px var(--selection);
-	}
-	to {
-		background-color: transparent;
-		box-shadow: 0 0 0 8px transparent;
-	}
-}
-@keyframes reveal-ring {
-	from {
-		box-shadow:
-			0 0 0 3px var(--canvas),
-			0 0 0 6px var(--selection);
-	}
-	to {
-		box-shadow:
-			0 0 0 3px var(--canvas),
-			0 0 0 6px transparent;
-	}
-}
-
 /* Same text metrics as .message .message-body so the reply replaces it without a jump. */
 .thinking-indicator {
 	font-size: 14px;
