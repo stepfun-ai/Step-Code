@@ -208,41 +208,56 @@ function answerText(questions: readonly NormalizedQuestion[], answers: readonly 
 		.join("\n\n");
 }
 
-async function executeFallback(
-	questions: NormalizedQuestion[],
-	ctx: ExtensionContext,
-): Promise<StepQuestionnaireDetails> {
+interface FallbackOutcome {
+	details: StepQuestionnaireDetails;
+	error?: string;
+}
+
+async function executeFallback(questions: NormalizedQuestion[], ctx: ExtensionContext): Promise<FallbackOutcome> {
 	const answers: StepQuestionnaireAnswer[] = [];
+	const finish = (cancelled: boolean, error?: string): FallbackOutcome => ({
+		details: { questions, answers, cancelled },
+		...(error === undefined ? {} : { error }),
+	});
+	const readFreeform = async (question: NormalizedQuestion): Promise<{ value?: string; error?: string }> => {
+		const answer = await ctx.ui.input(question.question, undefined, { signal: ctx.signal });
+		if (answer === undefined) return {};
+		const value = answer.trim();
+		return value ? { value } : { error: "Error: clarify_user requires a non-empty freeform answer" };
+	};
 	for (const question of questions) {
 		if (question.options.length === 0) {
-			const answer = await ctx.ui.input(question.question);
-			if (answer === undefined) return { questions, answers, cancelled: true };
+			const result = await readFreeform(question);
+			if (result.error) return finish(true, result.error);
+			if (result.value === undefined) return finish(true);
 			answers.push({
 				id: question.id,
-				value: answer,
-				label: answer,
+				value: result.value,
+				label: result.value,
 				wasCustom: true,
 			});
 			continue;
 		}
 		const labels = question.options.map((option) => option.label);
 		if (question.allowFreeform) labels.push("Type a custom answer");
-		const selected = await ctx.ui.select(question.question, labels);
-		if (selected === undefined) return { questions, answers, cancelled: true };
+		const selected = await ctx.ui.select(question.question, labels, { signal: ctx.signal });
+		if (selected === undefined) return finish(true);
 		const index = labels.indexOf(selected);
 		if (index === question.options.length) {
-			const answer = await ctx.ui.input(question.question);
-			if (answer === undefined) return { questions, answers, cancelled: true };
+			const result = await readFreeform(question);
+			if (result.error) return finish(true, result.error);
+			if (result.value === undefined) return finish(true);
 			answers.push({
 				id: question.id,
-				value: answer,
-				label: answer,
+				value: result.value,
+				label: result.value,
 				wasCustom: true,
 			});
 			continue;
 		}
+		if (index < 0) return finish(true, "Error: clarify_user received an option that was not offered");
 		const option = question.options[index];
-		if (!option) return { questions, answers, cancelled: true };
+		if (!option) return finish(true, "Error: clarify_user received an option that was not offered");
 		answers.push({
 			id: question.id,
 			value: option.value,
@@ -251,7 +266,7 @@ async function executeFallback(
 			index: index + 1,
 		});
 	}
-	return { questions, answers, cancelled: false };
+	return finish(false);
 }
 
 async function executeNativeDialog(
@@ -523,7 +538,8 @@ async function executeQuestionnaire(
 	telemetry?: StepTelemetryReporter,
 ): Promise<AgentToolResult<StepQuestionnaireDetails>> {
 	const questions = normalizeQuestions(params);
-	if (!ctx.hasUI || ctx.mode !== "tui") {
+	const supportsQuestionnaire = ctx.mode === "tui" || ctx.mode === "rpc";
+	if (!ctx.hasUI || !supportsQuestionnaire) {
 		return response({ questions, answers: [], cancelled: true }, "Error: clarify_user requires an interactive UI");
 	}
 	if (questions.length === 0 || questions.some((item) => !item.question)) {
@@ -535,12 +551,26 @@ async function executeQuestionnaire(
 			"Error: allow_freeform=false requires at least one option",
 		);
 	}
+	if (new Set(questions.map((item) => item.id)).size !== questions.length) {
+		return response({ questions, answers: [], cancelled: true }, "Error: question ids must be unique");
+	}
+	for (const question of questions) {
+		const labels = question.options.map((option) => option.label.trim());
+		if (new Set(labels).size !== labels.length) {
+			return response(
+				{ questions, answers: [], cancelled: true },
+				"Error: option labels must be unique within each question",
+			);
+		}
+	}
 
 	const askedAt = Date.now();
-	const details =
-		typeof ctx.ui.custom === "function"
-			? await executeNativeDialog(questions, ctx)
+	const execution =
+		ctx.mode === "tui" && typeof ctx.ui.custom === "function"
+			? { details: await executeNativeDialog(questions, ctx) }
 			: await executeFallback(questions, ctx);
+	const { details, error } = execution;
+	if (error) return response(details, error);
 	const outcome = details.cancelled
 		? "cancelled"
 		: details.answers.some((answer) => answer.wasCustom)
@@ -583,6 +613,10 @@ export function registerStepClarifyUserExtension(pi: ExtensionAPI, telemetry?: S
 				const block = result.content.find((item) => item.type === "text");
 				return new Text(block?.type === "text" ? block.text : "", 0, 0);
 			}
+			const errorText = result.content.find(
+				(item): item is { type: "text"; text: string } => item.type === "text" && item.text.startsWith("Error:"),
+			)?.text;
+			if (errorText) return new Text(theme.fg("warning", errorText), 0, 0);
 			if (details.cancelled) {
 				return new Text(theme.fg("warning", "Clarification cancelled"), 0, 0);
 			}

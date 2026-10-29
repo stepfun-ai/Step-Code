@@ -1232,6 +1232,10 @@ Some `ExtensionUIContext` methods are not supported or degraded in RPC mode beca
 
 Note: `ctx.mode` is `"rpc"` and `ctx.hasUI` is `true` in RPC mode because the dialog and fire-and-forget methods are functional via the extension UI sub-protocol. Use `ctx.mode === "tui"` to guard TUI-specific features like `custom()` that require a real terminal.
 
+The built-in `clarify_user` tool accepts question groups and emits one existing `select` or `input` request per question in RPC mode. Dialogs carry the question text and option labels; question ids, labels, reasons, and group structure remain in the tool result rather than the dialog payload. Structured option values, trimmed non-empty freeform answers, cancellation, and abort signals are preserved. Empty freeform answers and responses that do not match an offered option label return an explicit error result. The error result still sets `cancelled: true`; clients should display the error text rather than treating it as a user cancellation. The tool does not use `custom()` in RPC mode. The native TUI dialog is unchanged, and non-interactive `print` and `json` modes continue to reject clarification requests.
+
+After an abort, the runtime settles the pending dialog and ignores late responses to that request id, but it does not emit a separate invalidation event. Clients must dismiss any pending clarification dialog when the turn is aborted or ends.
+
 ### Extension UI Requests (stdout)
 
 All requests have `type: "extension_ui_request"`, a unique `id`, and a `method` field.
