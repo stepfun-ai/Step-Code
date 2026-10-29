@@ -21,6 +21,10 @@ What the shell adds on top of the browser version:
   `getTheme()` and `setTheme(choice)` restore and persist appearance in this desktop profile, independently of
   the server port. They accept `system`, `light`, `dark` and `violet`; failed writes reject and show a client notice.
   Plain browsers keep their origin-scoped localStorage. A valid local choice is imported when the profile has none.
+  `pickDirectory({ purpose: "resource" })` selects an existing migration target without saving it as the next-launch
+  workspace or offering directory creation. Omitted purpose keeps ordinary workspace-picking behaviour.
+  First-use migration does not require account sign-in; Settings keeps the same migration entry. See
+  [migration boundaries and confirmation](../../docs/desktop-migration.md).
 - The user's login-shell environment (macOS / Linux GUI launches), so the agent's bash tool finds the same `git`,
   `node`, Homebrew tools, etc. as in a terminal. On macOS/Linux, a private `node` wrapper also makes Electron's
   bundled Node available when no system `node` is on PATH, including to StepPage's installer and MCP launcher.

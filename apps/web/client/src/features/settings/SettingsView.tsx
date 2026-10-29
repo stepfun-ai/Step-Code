@@ -9,6 +9,7 @@ import { useT } from "../../i18n";
 import { cx } from "../../lib/format";
 import { type SettingsPage, useAppStore } from "../../state/store";
 import { Icon, type IconName } from "../../ui";
+import { MigrationPage } from "../migration";
 import { AccountPage } from "./AccountPage";
 import { AppearancePage } from "./AppearancePage";
 import { closeSettings, showSettingsPage } from "./actions";
@@ -16,6 +17,7 @@ import { GeneralPage } from "./GeneralPage";
 import { McpPage } from "./McpPage";
 import { ModelsPage } from "./ModelsPage";
 import { PluginsPage } from "./PluginsPage";
+import { SessionImportPage } from "./SessionImportPage";
 import { SkillsPage } from "./SkillsPage";
 
 interface MenuEntry {
@@ -32,6 +34,7 @@ const MENU: ReadonlyArray<{ readonly title: string; readonly entries: readonly M
 			{ page: "general", label: "settingsGeneral", icon: "sliders" },
 			{ page: "models", label: "settingsModels", icon: "cube" },
 			{ page: "appearance", label: "settingsAppearance", icon: "palette" },
+			{ page: "migration", label: "migrationTitle", icon: "folder" },
 		],
 	},
 	{
@@ -44,7 +47,7 @@ const MENU: ReadonlyArray<{ readonly title: string; readonly entries: readonly M
 	},
 ];
 
-function pageContent(page: SettingsPage): ReactNode {
+function pageContent(page: SettingsPage, migrationAvailable: boolean): ReactNode {
 	switch (page) {
 		case "general":
 			return <GeneralPage />;
@@ -60,12 +63,15 @@ function pageContent(page: SettingsPage): ReactNode {
 			return <McpPage />;
 		case "skills":
 			return <SkillsPage />;
+		case "migration":
+			return migrationAvailable ? <MigrationPage /> : <SessionImportPage />;
 	}
 }
 
 export function SettingsView() {
 	const t = useT();
 	const page = useAppStore((state) => state.ui.settingsPage);
+	const migrationAvailable = useAppStore((state) => state.migrationAvailable);
 	const open = page !== null;
 	const view = useRef<HTMLDivElement>(null);
 	/*
@@ -125,7 +131,7 @@ export function SettingsView() {
 			<main className="settings-main">
 				{page ? (
 					<div className="settings-content" key={page} data-page={page}>
-						{pageContent(page)}
+						{pageContent(page, migrationAvailable)}
 					</div>
 				) : null}
 			</main>

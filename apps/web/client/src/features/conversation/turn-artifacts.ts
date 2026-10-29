@@ -37,7 +37,7 @@ export function turnArtifacts(
 	const keyOf = (path: string) => (windows ? path.toLowerCase() : path);
 	for (let index = Math.max(0, start); index <= footer.lastIndex; index++) {
 		const item = items[index];
-		if (item.kind !== "tool" || item.state !== "completed") continue;
+		if (item.kind !== "tool" || item.state !== "completed" || item.imported) continue;
 		if (!["edit", "write", "edit_file", "write_file", "apply_patch"].includes(item.toolName)) continue;
 		const raw = item.change?.path ?? item.args?.path;
 		const path = raw ? workspaceFilePath(cwd, raw) : undefined;

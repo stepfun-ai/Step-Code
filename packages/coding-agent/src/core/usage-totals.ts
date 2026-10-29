@@ -1,4 +1,5 @@
 import type { Usage } from "@step-harness/providers/compat";
+import { isImportProvenance } from "./session-import/types.ts";
 import type { SessionEntry } from "./session-manager.ts";
 
 export interface SessionUsage extends NormalizedUsage {
@@ -58,6 +59,7 @@ export function normalizeUsage(raw: unknown): NormalizedUsage | undefined {
 export function entryUsage(value: unknown): { raw?: unknown; expected: boolean; assistant: boolean } {
 	if (!value || typeof value !== "object") return { expected: false, assistant: false };
 	const entry = value as Record<string, unknown>;
+	if (isImportProvenance(entry.imported)) return { expected: false, assistant: false };
 	const message = entry.message as Record<string, unknown> | undefined;
 	if (entry.type === "message" && message?.role === "assistant")
 		return { raw: message.usage, expected: true, assistant: true };

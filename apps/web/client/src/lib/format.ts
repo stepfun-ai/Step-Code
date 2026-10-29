@@ -119,6 +119,17 @@ export function relativeTimeLong(
 	return format.format(-Math.floor(elapsed / 86_400_000), "day");
 }
 
+/** V3 session rows read as 今天 10:42 / 昨天 09:20 / 60 天前, never a raw ISO timestamp. */
+export function sessionModifiedLabel(value: string | undefined, now = Date.now()): string {
+	const timestamp = new Date(value ?? Number.NaN).getTime();
+	if (!Number.isFinite(timestamp)) return "";
+	const days = Math.floor((now - timestamp) / 86_400_000);
+	const clock = new Date(timestamp);
+	const time = `${String(clock.getHours()).padStart(2, "0")}:${String(clock.getMinutes()).padStart(2, "0")}`;
+	if (days <= 0) return `今天 ${time}`;
+	if (days === 1) return `昨天 ${time}`;
+	return `${days} 天前`;
+}
 /** 45.9K rather than 45900 and 118.6M rather than 118627K, so a row stays one line. */
 export function formatTokens(count: number): string {
 	if (count < 1000) return String(count);

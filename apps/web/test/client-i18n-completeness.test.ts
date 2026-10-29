@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { MESSAGES } from "../client/src/i18n/messages.ts";
 
 const root = new URL("../client/src/", import.meta.url);
 
@@ -35,22 +36,9 @@ async function sourceFiles(directory: URL): Promise<URL[]> {
 }
 
 async function keysPerDictionary(): Promise<{ zh: Set<string>; en: Set<string> }> {
-	const text = await readFile(new URL("i18n/messages.ts", root), "utf8");
-	const zhStart = text.indexOf("const zhCN = {");
-	const enStart = text.indexOf("const enUS");
-	// The locale map after the dictionaries reuses quoted keys ("zh-CN"), so the
-	// slice has to stop where the dictionary does.
-	const enEnd = text.indexOf("export const MESSAGES");
-	assert.ok(zhStart !== -1, "the zh-CN dictionary moved; update this scan");
-	assert.ok(enStart > zhStart, "the en-US dictionary moved; update this scan");
-	assert.ok(enEnd > enStart, "the locale map moved; update this scan");
-	const keys = (slice: string): Set<string> => {
-		const found = new Set<string>();
-		for (const match of slice.matchAll(/^\t"([^"]+)":/gmu)) found.add(match[1]!);
-		for (const match of slice.matchAll(/^\t([A-Za-z_$][\w$]*):/gmu)) found.add(match[1]!);
-		return found;
-	};
-	return { zh: keys(text.slice(zhStart, enStart)), en: keys(text.slice(enStart, enEnd)) };
+	// Inspect the dictionary consumed by t(), including typed paired modules composed by spread.
+	// A source-only regex cannot see those keys and would reject complete runtime dictionaries.
+	return { zh: new Set(Object.keys(MESSAGES["zh-CN"])), en: new Set(Object.keys(MESSAGES["en-US"])) };
 }
 
 async function usedKeys(): Promise<Map<string, string>> {

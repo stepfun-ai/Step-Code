@@ -23,8 +23,12 @@ export interface StepcodeDesktopBridge {
 	getTheme(): Promise<DesktopThemeChoice | null>;
 	/** Persist a theme across server ports and app launches; rejects if the write fails. */
 	setTheme(theme: DesktopThemeChoice): Promise<void>;
-	/** Open the native folder chooser. Resolves to an absolute path, or null when cancelled. */
-	pickDirectory(options?: { readonly title?: string; readonly defaultPath?: string }): Promise<string | null>;
+	/** Open the native folder chooser. Resource picks do not change the next-launch workspace. */
+	pickDirectory(options?: {
+		readonly title?: string;
+		readonly defaultPath?: string;
+		readonly purpose?: "workspace" | "resource";
+	}): Promise<string | null>;
 	/** Open an http(s) URL in the system browser. */
 	openExternal(url: string): Promise<void>;
 	/** Reveal a file or folder in Finder / Explorer / the file manager. */

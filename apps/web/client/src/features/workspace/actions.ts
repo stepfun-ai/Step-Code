@@ -79,9 +79,66 @@ export function closeWorkspacePopover(): void {
 	setUi({ workspacePopoverOpen: false });
 }
 
-/** Hide the in-page folder browser (legacy `closeWorkspaceBrowser`, 1136-1138). */
+let resourceDirectoryAnswer: ((path: string | null) => void) | undefined;
+
+/** Hide the browser and settle any resource pick, without changing workspace registration or the draft. */
 export function closeWorkspaceBrowser(): void {
-	setUi({ workspaceBrowserOpen: false });
+	setUi({ workspaceBrowserOpen: false, workspaceBrowserPurpose: "workspace" });
+	const answer = resourceDirectoryAnswer;
+	resourceDirectoryAnswer = undefined;
+	answer?.(null);
+}
+
+export async function confirmWorkspaceBrowser(path: string): Promise<void> {
+	if (getState().ui.workspaceBrowserPurpose === "resource") {
+		const answer = resourceDirectoryAnswer;
+		resourceDirectoryAnswer = undefined;
+		setUi({ workspaceBrowserOpen: false, workspaceBrowserPurpose: "workspace" });
+		answer?.(path);
+	} else {
+		closeWorkspaceBrowser();
+		await addWorkspace(path);
+	}
+}
+
+/**
+ * Select an existing directory for migration without registering it as a workspace,
+ * switching the draft or mutating the next-launch workspace. The title distinguishes
+ * destination picks from read-only source picks in dialogs.
+ */
+export async function chooseResourceDirectory(title: string = t("migrationPickTarget")): Promise<string | null> {
+	if (getState().pickingFolder || resourceDirectoryAnswer || getState().ui.workspaceBrowserOpen) return null;
+	setState({ pickingFolder: true });
+	try {
+		const state = getState();
+		const bridge = getDesktopBridge();
+		try {
+			if (bridge)
+				return await bridge.pickDirectory({
+					title,
+					defaultPath: state.draftCwd || state.bootstrapCwd || undefined,
+					purpose: "resource",
+				});
+			if (state.directoryPicker === "native") {
+				const result = await apiSend<{ path?: string | null }>("/api/v1/workspaces/pick", "POST", {
+					title,
+					startIn: state.draftCwd || state.bootstrapCwd,
+				});
+				return result.path ?? null;
+			}
+		} catch {
+			// Unavailable native dialogs fall back to the same in-page browser, with resource-only ownership.
+		}
+		setUi({ workspaceBrowserOpen: true, workspaceBrowserPurpose: "resource" });
+		const result = new Promise<string | null>((resolve) => {
+			resourceDirectoryAnswer = resolve;
+		});
+		await loadWorkspaceDirectory(state.draftCwd || state.bootstrapCwd);
+		document.getElementById("workspacePathInput")?.focus();
+		return await result;
+	} finally {
+		setState({ pickingFolder: false });
+	}
 }
 
 /** List one directory in the in-page browser (legacy `loadWorkspaceDirectory`, 1164-1178). */

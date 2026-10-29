@@ -350,6 +350,19 @@ test("hasInterruptedTurn reads the newest turn, not the newest message kind", ()
 		"an interrupted turn the user retried is no longer the newest",
 	);
 	assert.equal(hasInterruptedTurn([], false), false);
+	const imported: NonNullable<SessionEntry["imported"]> = {
+		source: "codex",
+		sessionId: "source-session",
+		itemId: "source-item",
+	};
+	const importedEntry = (entry: SessionEntry): SessionEntry => ({ ...entry, imported });
+	for (const tail of [user("iu"), assistant("ia", "toolUse"), assistant("ab", "aborted"), toolResult("ir")]) {
+		const history = [importedEntry(user("iu0")), importedEntry(tail)];
+		assert.equal(hasInterruptedTurn(history, false), false, "a source snapshot is not a native interruption");
+		assert.equal(hasInterruptedTurn([...history, user("nu")], false), true, "a native continuation remains checked");
+		assert.equal(hasInterruptedTurn([...history, assistant("na", "aborted")], false), true);
+		assert.equal(hasInterruptedTurn([...history, assistant("nc", "stop")], false), false);
+	}
 	// Tool work: a killed host leaves an assistant whose calls never answered.
 	assert.equal(hasInterruptedTurn([user("u"), assistant("a", "toolUse", [call])], false), true);
 	assert.equal(

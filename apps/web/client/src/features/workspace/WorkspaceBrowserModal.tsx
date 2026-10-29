@@ -3,7 +3,7 @@ import { useT } from "../../i18n";
 import { useImeGuard } from "../../lib/ime";
 import { getState, useAppStore } from "../../state/store";
 import { Button, EmptyState, Icon, IconButton, LEGACY_ICONS, Modal, SearchInput } from "../../ui";
-import { addWorkspace, closeWorkspaceBrowser, loadWorkspaceDirectory } from "./actions";
+import { closeWorkspaceBrowser, confirmWorkspaceBrowser, loadWorkspaceDirectory } from "./actions";
 
 /**
  * `#workspaceBrowserModal`, the in-page folder browser (legacy index.html
@@ -17,6 +17,7 @@ import { addWorkspace, closeWorkspaceBrowser, loadWorkspaceDirectory } from "./a
 export function WorkspaceBrowserModal() {
 	const t = useT();
 	const open = useAppStore((state) => state.ui.workspaceBrowserOpen);
+	const purpose = useAppStore((state) => state.ui.workspaceBrowserPurpose);
 	const browser = useAppStore((state) => state.workspaceBrowser);
 	const [query, setQuery] = useState("");
 	const pathRef = useRef<HTMLInputElement | null>(null);
@@ -44,7 +45,7 @@ export function WorkspaceBrowserModal() {
 			onClose={closeWorkspaceBrowser}
 		>
 			<header>
-				<h2 id="workspaceBrowserTitle">{t("addWorkspace")}</h2>
+				<h2 id="workspaceBrowserTitle">{t(purpose === "resource" ? "migrationPickTarget" : "addWorkspace")}</h2>
 				<IconButton
 					id="workspaceBrowserClose"
 					icon="close"
@@ -129,11 +130,10 @@ export function WorkspaceBrowserModal() {
 						onClick={() => {
 							const path = getState().workspaceBrowser.path;
 							if (!path) return;
-							closeWorkspaceBrowser();
-							void addWorkspace(path);
+							void confirmWorkspaceBrowser(path);
 						}}
 					>
-						{t("openFolder")}
+						{t(purpose === "resource" ? "migrationUseTarget" : "openFolder")}
 					</Button>
 				</div>
 			</footer>

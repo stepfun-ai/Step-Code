@@ -12,7 +12,7 @@ import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelc
 import type { AgentToolResult } from "@step-harness/agent-core";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
-import { readGlobalStepConfig } from "./config-toml.ts";
+import { readGlobalStepConfig, readStepConfig, resolveStepConfigPath } from "./config-toml.ts";
 import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
 import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
@@ -731,15 +731,40 @@ function disabledGlobalServerNames(): string[] {
 		.map(([name]) => name);
 }
 
+/** Project-declared MCP servers. An unreadable project config must not take MCP down with it. */
+function readProjectMcpServers(cwd: string): Record<string, unknown> {
+	try {
+		return readStepConfig(resolveStepConfigPath(process.env, cwd)).mcp_servers ?? {};
+	} catch {
+		return {};
+	}
+}
+
 export async function discoverStepMcpServers(cwd: string, projectTrusted: boolean): Promise<DiscoveredServer[]> {
 	const roots = [defaultStepPluginsDir(process.env)];
 	if (projectTrusted) roots.push(defaultStepPluginsDir(process.env, { cwd, project: true }));
 	const result: DiscoveredServer[] = [];
 	const globalServers = new Map<string, DiscoveredServer>();
 	const seen = new Set<string>();
+	// A trusted project may declare its own servers; they take precedence over the global
+	// ones by name, including turning one off. Nothing read them before, so this is additive.
+	if (projectTrusted && cwd) {
+		for (const [name, declaration] of Object.entries(readProjectMcpServers(cwd))) {
+			if (!isRecord(declaration)) continue;
+			seen.add(name);
+			if (declaration.enabled === false || !hasTransport(declaration)) continue;
+			const normalized = normalizeDeclaration(declaration);
+			if (typeof normalized.command !== "string" && typeof normalized.url !== "string") continue;
+			const server = { name, declaration: normalized };
+			result.push(server);
+			globalServers.set(name, server);
+		}
+	}
 	const config = readGlobalStepConfig(process.env);
 	for (const [name, declaration] of Object.entries(config.mcp_servers ?? {})) {
 		if (!isRecord(declaration)) continue;
+		// A project declaration already claimed this name, so the global one yields.
+		if (seen.has(name)) continue;
 		if (declaration.enabled === false) {
 			seen.add(name);
 			continue;

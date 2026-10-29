@@ -261,7 +261,7 @@ export function turnChanges(entries: readonly SessionEntry[], turnId: string): T
 	const calls = new Map<string, { name: string; path?: string }>();
 	for (const entry of entries.slice(start + 1)) {
 		if (isUserMessage(entry)) break;
-		if (entry.type !== "message") continue;
+		if (entry.type !== "message" || entry.imported) continue;
 		const message = entry.message as {
 			role: string;
 			content?: unknown;
@@ -529,6 +529,7 @@ async function replayFile(
 	const calls = new Map<string, { name: string; path?: string; content?: unknown }>();
 	let content: string | undefined;
 	for (const entry of entries.slice(0, end)) {
+		if (entry.imported) continue;
 		if (entry.type === "custom_message" && entry.customType === TURN_REVERT_TYPE) {
 			const turnId = (entry.details as { turnId?: unknown } | undefined)?.turnId;
 			if (typeof turnId !== "string") continue;

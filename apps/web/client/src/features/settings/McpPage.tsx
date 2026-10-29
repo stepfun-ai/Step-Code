@@ -1,18 +1,17 @@
 /**
  * MCP servers: the user's servers from config.toml (create, edit, import JSON,
  * delete, switch on/off) and the servers installed plugins provide (switch
- * on/off only). Connection state is the host's last known state; servers
- * connect when a session starts.
+ * on/off only). Connection state is the host's last known state; settings
+ * changes reconcile pooled connections and reach sessions before their next request.
  */
 
 import { useMemo, useState } from "react";
 import { type TranslateFn, useT } from "../../i18n";
-import { apiSend, errorMessage } from "../../lib/api";
-import { cx } from "../../lib/format";
+import { apiSend } from "../../lib/api";
 import { showError } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsMcpServer } from "../../state/types";
-import { Icon, IconButton, SearchInput, Switch, Tooltip } from "../../ui";
+import { Button, Icon, IconButton, SearchInput, Switch, Tooltip } from "../../ui";
 import { closeSettingsEditor, openSettingsEditor, useSettingsResource } from "./actions";
 import { McpEditor } from "./McpEditor";
 import { Badge, EmptyBox, PageHeader, ResourceState, SectionHeader, SettingsCard, StatusDot } from "./parts";
@@ -21,9 +20,7 @@ const MCP_PATH = "/api/v1/settings/mcp";
 
 function summary(t: TranslateFn, server: SettingsMcpServer): string {
 	if (server.source === "plugin") return t("settingsMcpFromPlugin", { plugin: server.pluginName ?? "" });
-	const config = server.config;
-	if (!config) return "";
-	return config.url ?? [config.command, ...(config.args ?? [])].join(" ");
+	return t("settingsMcpStoredHidden");
 }
 
 function status(t: TranslateFn, server: SettingsMcpServer): { tone: string; label: string } {
@@ -64,13 +61,11 @@ function McpRow({
 					<Badge>{server.transport === "stdio" ? "stdio" : "HTTP"}</Badge>
 					<StatusDot tone={state.tone} label={state.label} />
 				</div>
-				<div
-					// Commands and URLs read as code; the "from plugin" sentence does not.
-					className={cx("settings-list-desc", server.source !== "plugin" && "mono")}
-					title={server.error ?? summary(t, server)}
-				>
-					{server.error && server.enabled ? server.error : summary(t, server)}
-				</div>
+				<Tooltip content={server.error && server.enabled ? t("settingsMcpSafeFailure") : summary(t, server)}>
+					<div className="settings-list-desc">
+						{server.error && server.enabled ? t("settingsMcpSafeFailure") : summary(t, server)}
+					</div>
+				</Tooltip>
 			</div>
 			<div className="settings-list-actions">
 				{server.source === "user" ? (
@@ -137,8 +132,8 @@ export function McpPage() {
 	const toggle = async (server: SettingsMcpServer, enabled: boolean) => {
 		try {
 			await apiSend(`${MCP_PATH}/${encodeURIComponent(server.name)}`, "PATCH", { enabled });
-		} catch (error) {
-			showError(errorMessage(error));
+		} catch {
+			showError(t("settingsMcpPatchFailed"));
 		}
 		resource.reload();
 	};
@@ -147,8 +142,8 @@ export function McpPage() {
 		try {
 			await apiSend(`${MCP_PATH}/${encodeURIComponent(server.name)}`, "DELETE");
 			showError(t("settingsMcpDeleted", { name: server.name }), false);
-		} catch (error) {
-			showError(errorMessage(error));
+		} catch {
+			showError(t("settingsMcpPatchFailed"));
 		}
 		resource.reload();
 	};
@@ -190,15 +185,15 @@ export function McpPage() {
 								onClick={resource.reload}
 							/>
 						</Tooltip>
-						<button
+						<Button
 							type="button"
 							className="settings-btn"
 							onClick={() => openSettingsEditor({ kind: "mcp", json: true })}
 						>
 							<Icon name="download" size="xs" />
 							{t("settingsImport")}
-						</button>
-						<button
+						</Button>
+						<Button
 							type="button"
 							className="settings-btn primary"
 							id="settingsMcpNew"
@@ -206,13 +201,13 @@ export function McpPage() {
 						>
 							<Icon name="plus" size="xs" />
 							{t("settingsNew")}
-						</button>
+						</Button>
 					</>
 				}
 			/>
 			<ResourceState
 				loading={resource.loading}
-				error={resource.error}
+				error={resource.error ? t("settingsMcpLoadFailed") : undefined}
 				hasData={resource.data !== undefined}
 				loadingLabel={t("settingsLoading")}
 			/>
@@ -227,22 +222,22 @@ export function McpPage() {
 						actions={
 							query ? undefined : (
 								<>
-									<button
+									<Button
 										type="button"
 										className="settings-btn primary"
 										onClick={() => openSettingsEditor({ kind: "mcp" })}
 									>
 										<Icon name="plus" size="xs" />
 										{t("settingsMcpNew")}
-									</button>
-									<button
+									</Button>
+									<Button
 										type="button"
 										className="settings-btn"
 										onClick={() => openSettingsEditor({ kind: "mcp", json: true })}
 									>
 										<Icon name="download" size="xs" />
 										{t("settingsMcpImportJson")}
-									</button>
+									</Button>
 								</>
 							)
 						}
