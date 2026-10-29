@@ -119,6 +119,11 @@
 .migration-history-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
 .migration-final-plan, .migration-job { display: grid; gap: 18px; }
 .migration-plan-item, .migration-job-item { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); display: grid; gap: 10px; }
+/* A long session title must not squeeze the status into a wrapped two-line pill. */
+.migration-job-item > header { flex-wrap: nowrap; align-items: flex-start; }
+.migration-job-item > header h4 { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.migration-job-item > header .migration-status { flex-shrink: 0; margin-top: 0; padding: 3px 10px; font-size: 12px; line-height: 18px; white-space: nowrap; border-radius: 999px; }
+.migration-job-item > header .migration-status[data-status="imported"] { background: color-mix(in srgb, var(--success) 12%, transparent); }
 .migration-counts { display: flex; flex-wrap: wrap; gap: 24px; margin: 0; background: var(--surface-soft); border-radius: var(--radius-panel); padding: 16px; }
 .migration-counts dt { font-size: 12px; color: var(--ink-2); }
 .migration-counts dd { font: 24px var(--mono); margin: 4px 0 0; }

@@ -171,12 +171,17 @@ function JobItemTarget({ item }: { readonly item: MigrationItemResult }) {
 	const values = {
 		path: target.path,
 		cwd: target.scope.kind === "project" ? target.scope.cwd : "",
+		source: t(`migrationSource.${item.source}`),
 	};
 	const key =
 		target.scope.kind === "project"
-			? migrated
-				? "migrationJobProjectMigratedTo"
-				: "migrationJobProjectTarget"
+			? item.kind === "sessions"
+				? migrated
+					? "migrationJobSessionMigratedTo"
+					: "migrationJobSessionTarget"
+				: migrated
+					? "migrationJobProjectMigratedTo"
+					: "migrationJobProjectTarget"
 			: migrated
 				? "migrationJobMigratedTo"
 				: "migrationJobTarget";

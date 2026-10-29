@@ -123,6 +123,14 @@ const labels = {
 	],
 	migrationJobMigratedTo: ["已迁移至 {path}", "Migrated to {path}"],
 	migrationJobProjectMigratedTo: ["项目：{cwd}，已迁移至 {path}", "Project: {cwd}, migrated to {path}"],
+	migrationJobSessionMigratedTo: [
+		"{cwd} 项目下的 {source} 会话，已迁移至 {path}",
+		"{source} session from project {cwd}, migrated to {path}",
+	],
+	migrationJobSessionTarget: [
+		"{cwd} 项目下的 {source} 会话，迁移目标：{path}",
+		"{source} session from project {cwd}, target: {path}",
+	],
 	migrationJobTarget: ["迁移目标：{path}", "Target: {path}"],
 	migrationJobProjectTarget: ["项目：{cwd}，迁移目标：{path}", "Project: {cwd}, target: {path}"],
 	migrationRuleSource: ["来源", "Source"],
