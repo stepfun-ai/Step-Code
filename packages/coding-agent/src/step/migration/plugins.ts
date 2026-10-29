@@ -5,7 +5,7 @@ import type { MigrationPaths } from "./paths.ts";
 import type { MigrationScope } from "./types.ts";
 
 export interface PluginResourceRoot {
-	kind: "skills" | "prompts";
+	kind: "skills";
 	scope: MigrationScope;
 	path: string;
 	pluginRoot: string;
@@ -76,7 +76,7 @@ function inspectPluginResources(
 				return fail("invalid-plugin-config");
 			}
 			if (typeof manifest.id !== "string" && typeof manifest.name !== "string") fail("invalid-plugin-config");
-			for (const field of ["skills", "commands"] as const) {
+			for (const field of ["skills"] as const) {
 				const declared = manifest[field] ?? (info(join(pluginRoot, field)) ? [field] : []);
 				if (!Array.isArray(declared) || declared.some((value) => typeof value !== "string"))
 					fail("invalid-plugin-config");
@@ -84,7 +84,7 @@ function inspectPluginResources(
 					const path = resolve(pluginRoot, value);
 					if (!inside(pluginRoot, path)) fail("unsafe-plugin-path");
 					safePath(path);
-					result.push({ kind: field === "skills" ? "skills" : "prompts", path, scope: root.scope, pluginRoot });
+					result.push({ kind: "skills", path, scope: root.scope, pluginRoot });
 				}
 			}
 		}

@@ -1,8 +1,7 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { SkillIgnoreMatcher } from "@step-harness/agent-core";
 import { minimatch } from "minimatch";
-import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
 import {
 	bytes,
@@ -26,7 +25,7 @@ import {
 	sanitizedMcp,
 	targetServers,
 } from "./mcp.ts";
-import { configDocument, type MigrationPaths, resourceName } from "./paths.ts";
+import { configDocument, type MigrationPaths } from "./paths.ts";
 import { destinationPluginResources, installedPluginResources } from "./plugins.ts";
 import { isDirectRule, RULE_NAMES } from "./rules.ts";
 import type {
@@ -66,45 +65,6 @@ export function renamedSkill(content: string, path: string, name: string): strin
 		.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
 		.join("\n")}\n---\n${parsed.body}\n`;
 }
-export function promptCompatible(content: string): boolean {
-	try {
-		const { frontmatter, body } = parseFrontmatter(content);
-		return (
-			Object.keys(record(frontmatter)).every((key) => ["description", "argument-hint"].includes(key)) &&
-			!/!`|!\$\(|(?:^|\s)@(?:[~./]|[\w-]+\/)/mu.test(body)
-		);
-	} catch {
-		return false;
-	}
-}
-export function promptName(value: unknown): string {
-	const name = resourceName(value);
-	if (
-		BUILTIN_SLASH_COMMANDS.some((command) => command.name === name) ||
-		[
-			"skill",
-			"mcp",
-			"plugin",
-			"plugins",
-			"login",
-			"logout",
-			"init",
-			"plan",
-			"task",
-			"tasks",
-			"goal",
-			"cron",
-			"model",
-			"compact",
-			"clear",
-			"help",
-			"exit",
-			"quit",
-		].includes(name)
-	)
-		fail("reserved-prompt-name");
-	return name;
-}
 
 function enabled(path: string, patterns: string[], base: string): boolean {
 	const values = [
@@ -124,13 +84,9 @@ function enabled(path: string, patterns: string[], base: string): boolean {
 	if (patterns.filter((p) => p.startsWith("-")).some((p) => exact(p.slice(1)))) result = false;
 	return result;
 }
-function settingsPatterns(
-	paths: MigrationPaths,
-	scope: MigrationScope,
-	kind: "skills" | "prompts",
-): { patterns: string[]; uncertain: boolean } {
+function settingsPatterns(paths: MigrationPaths, scope: MigrationScope): { patterns: string[]; uncertain: boolean } {
 	const config = configDocument(paths.configFor(scope));
-	const value = config[kind];
+	const value = config.skills;
 	if (value !== undefined && (!Array.isArray(value) || value.some((p) => typeof p !== "string")))
 		fail("invalid-target-config");
 	const patterns: string[] = Array.isArray(value) ? value : [];
@@ -148,24 +104,15 @@ export function copiedSkillEnabled(files: PackageFile[]): boolean {
 	return !matcher.ignores("SKILL.md");
 }
 
-export function targetResourceUncertain(
-	paths: MigrationPaths,
-	scope: MigrationScope,
-	kind: "skills" | "prompts",
-): boolean {
-	return settingsPatterns(paths, scope, kind).uncertain;
+export function targetResourceUncertain(paths: MigrationPaths, scope: MigrationScope): boolean {
+	return settingsPatterns(paths, scope).uncertain;
 }
 
-export function targetResourceEnabled(
-	paths: MigrationPaths,
-	scope: MigrationScope,
-	kind: "skills" | "prompts",
-	path: string,
-): boolean {
+export function targetResourceEnabled(paths: MigrationPaths, scope: MigrationScope, path: string): boolean {
 	return (
-		enabled(path, settingsPatterns(paths, scope, kind).patterns, paths.resourceRoot(scope)) &&
-		!settingsPatterns(paths, scope, kind).uncertain &&
-		!skillIgnored(join(paths.resourceRoot(scope), kind), path)
+		enabled(path, settingsPatterns(paths, scope).patterns, paths.resourceRoot(scope)) &&
+		!settingsPatterns(paths, scope).uncertain &&
+		!skillIgnored(join(paths.resourceRoot(scope), "skills"), path)
 	);
 }
 
@@ -191,6 +138,8 @@ export class ResourceInspector {
 	scan(kinds: MigrationKind[]): { result: MigrationScanResult; records: ResourceCandidate[] } {
 		const result: MigrationScanResult = { candidates: [], sources: [], truncated: false };
 		const records: ResourceCandidate[] = [];
+		// On case-insensitive filesystems AGENTS.md and AGENTS.MD are one file; list it once.
+		const ruleFiles = new Set<string>();
 		const add = (
 			kind: MigrationKind,
 			source: MigrationSource,
@@ -221,12 +170,26 @@ export class ResourceInspector {
 						report.diagnostics.push({ code: "project-mcp-source-unsupported", count });
 					}).map((mcp) => ({ path: root, mcp }));
 				else if (kind === "rules") files = [{ path: root }];
+				// (rule dedupe happens per candidate below)
 				else if (info(root)?.isFile()) files = [{ path: root }];
 				else files = this.discover(root, kind === "skills", source === "claude-code" || source === "codex");
 				for (const file of files) {
 					if (records.length >= 2000) {
 						result.truncated = true;
 						break;
+					}
+					if (kind === "rules") {
+						// Identity by device+inode: AGENTS.md and AGENTS.MD are one file on a
+						// case-insensitive volume, and realpath alone does not collapse them.
+						let identity: string;
+						try {
+							const stats = statSync(file.path);
+							identity = `${stats.dev}:${stats.ino}`;
+						} catch {
+							identity = `path:${file.path}`;
+						}
+						if (ruleFiles.has(identity)) continue;
+						ruleFiles.add(identity);
 					}
 					const dto: MigrationCandidate = {
 						id: hash(`${kind}\0${file.path}\0${file.mcp?.name ?? ""}\0${stable(scope)}`),
@@ -237,7 +200,7 @@ export class ResourceInspector {
 							(kind === "skills"
 								? basename(dirname(file.path))
 								: relative(root, file.path).replace(/\.md$/u, "").split(/[\\/]/u).join("-") ||
-									basename(file.path, kind === "prompts" ? ".md" : undefined)),
+									basename(file.path)),
 						sourcePath: file.path,
 						sourceScope: scope,
 						holding: source === "stepcode" ? "stepcode" : source === "plugin" ? "plugin" : "external",
@@ -270,14 +233,11 @@ export class ResourceInspector {
 			["stepcode", join(this.paths.home, this.paths.configDir)],
 		] as const) {
 			add("skills", source, global, join(root, "skills"));
-			if (source === "claude-code") add("prompts", source, global, join(root, "commands"));
-			if (source === "codex") add("prompts", source, global, join(root, "prompts"));
 		}
 		if (this.paths.claude !== join(this.paths.home, ".claude"))
 			add("skills", "claude-code", global, join(this.paths.home, ".claude", "skills"));
-		add("prompts", "stepcode", global, join(this.paths.agent, "prompts"));
-		add("mcp", "claude-code", global, join(this.paths.home, ".claude.json"));
-		add("mcp", "codex", global, join(this.paths.codex, "config.toml"));
+		add("mcp", "claude-code", global, this.paths.mcpSource("claude-code"));
+		add("mcp", "codex", global, this.paths.mcpSource("codex"));
 		for (const [source, root] of [
 			["claude-code", this.paths.claude],
 			["codex", this.paths.codex],
@@ -292,10 +252,7 @@ export class ResourceInspector {
 				["stepcode", this.paths.configDir],
 			] as const) {
 				add("skills", source, scope, join(cwd, dir, "skills"));
-				if (source === "claude-code") add("prompts", source, scope, join(cwd, dir, "commands"));
-				if (source === "codex") add("prompts", source, scope, join(cwd, dir, "prompts"));
 			}
-			add("prompts", "stepcode", scope, join(cwd, this.paths.configDir, "prompts"));
 			let ancestor = cwd;
 			while (!info(join(ancestor, ".git")) && dirname(ancestor) !== ancestor) {
 				ancestor = dirname(ancestor);
@@ -317,12 +274,12 @@ export class ResourceInspector {
 					diagnostics: [{ code: "project-mcp-source-unsupported" }],
 				});
 		}
-		if (kinds.includes("skills") || kinds.includes("prompts")) {
+		if (kinds.includes("skills")) {
 			try {
 				for (const resource of installedPluginResources(this.paths))
 					add(resource.kind, "plugin", resource.scope, resource.path, resource.pluginRoot);
 			} catch (error) {
-				for (const kind of ["skills", "prompts"] as const)
+				for (const kind of ["skills"] as const)
 					if (kinds.includes(kind))
 						result.sources.push({
 							kind,
@@ -333,7 +290,7 @@ export class ResourceInspector {
 							diagnostics: [{ code: diagnosticCode(error) }],
 						});
 				for (const item of records)
-					if (["skills", "prompts"].includes(item.dto.kind)) {
+					if (item.dto.kind === "skills") {
 						item.dto.readiness = "unknown";
 						item.dto.diagnostics.push({ code: "resource-inspection-incomplete" });
 					}
@@ -401,7 +358,7 @@ export class ResourceInspector {
 		};
 		for (const entry of roots) {
 			safePath(entry.root);
-			const settings = settingsPatterns(this.paths, entry.scope, "skills");
+			const settings = settingsPatterns(this.paths, entry.scope);
 			uncertain ||= settings.uncertain;
 			controls.push([entry.root, resourceIgnoreFingerprint(entry.root, join(entry.root, "SKILL.md"))]);
 			if (!info(entry.root)) continue;
@@ -441,7 +398,7 @@ export class ResourceInspector {
 			if (count > 2000 || size > 32 * 1024 * 1024) fail("resource-limit");
 			controls.push([resource.path, treeHash(snapshot)]);
 			if (resource.kind !== "skills") continue;
-			const settings = settingsPatterns(this.paths, resource.scope, "skills");
+			const settings = settingsPatterns(this.paths, resource.scope);
 			uncertain ||= settings.uncertain;
 			const trusted = resource.scope.kind === "global" || this.paths.trusted(resource.scope.cwd);
 			const files = entry.isDirectory()
@@ -522,6 +479,10 @@ export class ResourceInspector {
 		if (dto.source === "plugin" && dto.sourceScope.kind === "project" && !this.paths.trusted(dto.sourceScope.cwd))
 			dto.readiness = "untrusted";
 		if (dto.kind === "mcp") {
+			if (item.mcp) {
+				dto.diagnostics.push(...item.mcp.translated.diagnostics);
+				dto.mcpTransport = item.mcp.translated.transport;
+			}
 			if (!item.mcp?.config) fail("unsupported-mcp-config");
 			const config = item.mcp.config;
 			const match = Object.entries(targetServers(this.paths)).find(
@@ -541,7 +502,6 @@ export class ResourceInspector {
 					dto.diagnostics.push({ code: "plugin-provided", path: plugins[0]!.path });
 				}
 			}
-			if (item.mcp.warnings) dto.diagnostics.push({ code: "mcp-fields-not-translated", count: item.mcp.warnings });
 			if (sanitizedMcp(config, false).stripped) dto.diagnostics.push({ code: "sensitive-values-omitted" });
 			return;
 		}
@@ -554,14 +514,9 @@ export class ResourceInspector {
 			}
 			return;
 		}
-		if (dto.kind === "prompts") {
-			promptName(dto.name);
-			if (!promptCompatible(content)) fail("unsupported-prompt-syntax");
-			return;
-		}
 		const metadata = skillMetadata(content, dto.sourcePath);
 		dto.name = metadata.name;
-		const settings = settingsPatterns(this.paths, dto.sourceScope, "skills");
+		const settings = settingsPatterns(this.paths, dto.sourceScope);
 		const shared =
 			dto.source === "shared" ||
 			dto.source === "stepcode" ||

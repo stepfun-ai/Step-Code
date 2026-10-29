@@ -68,6 +68,27 @@ export type StepMcpImportBlock =
 	/** Every fallback name was taken by a different server. */
 	| { kind: "name-exhausted"; detail: string };
 
+interface StepMcpTranslationDiagnostic {
+	readonly code:
+		| "mcp-unsupported-transport"
+		| "mcp-incomplete-config"
+		| "mcp-invalid-tool-filter"
+		| "mcp-fields-not-translated"
+		| "mcp-remote-env-unsupported";
+	readonly count?: number;
+}
+
+/** Safe for presentation without exposing source names, values, or parser errors. */
+export interface StepMcpImportDiagnostic {
+	readonly code:
+		| StepMcpTranslationDiagnostic["code"]
+		| "mcp-name-normalized"
+		| "mcp-name-conflict"
+		| "mcp-duplicate"
+		| "mcp-name-exhausted";
+	readonly count?: number;
+}
+
 export interface StepMcpImportCandidate {
 	readonly source: StepMcpImportSource;
 	readonly sourceLabel: string;
@@ -81,6 +102,7 @@ export interface StepMcpImportCandidate {
 	readonly config?: StepMcpServerConfig;
 	readonly blocked?: StepMcpImportBlock;
 	readonly warnings: readonly string[];
+	readonly diagnostics: readonly StepMcpImportDiagnostic[];
 }
 
 /** What reading one source produced, including the reason when it produced nothing. */
@@ -106,6 +128,8 @@ export interface PlanStepMcpImportOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	/** Existing `mcp_servers`; read from the global config when omitted. */
 	readonly existing?: Record<string, StepMcpServerConfig>;
+	/** Explicit per-source configuration files; source contents are read-only. */
+	readonly sourcePaths?: Partial<Record<StepMcpImportSource, string>>;
 	/**
 	 * Sources to consider; all of them when omitted.
 	 *
@@ -128,35 +152,33 @@ export function planStepMcpImport(options: PlanStepMcpImportOptions = {}): StepM
 	const warnings: string[] = [];
 	const existing = options.existing ?? readExistingServers(env, warnings);
 
-	const candidates: StepMcpImportCandidate[] = [];
-	const sources: StepMcpImportSourceStatus[] = [];
-	// Seeded with what config.toml already holds so an imported name can never
-	// land on an existing entry, then grown as this run allocates names. The
-	// value is kept, not just the key, so a later source can recognise that a
-	// name is taken by an identical server rather than blindly renaming.
-	const allocated = new Map<string, AllocatedServer>();
-	for (const [name, config] of Object.entries(existing)) {
-		allocated.set(name, { config, origin: "config" });
-	}
-
 	const wantedSources = options.sources ?? STEP_MCP_IMPORT_SOURCES;
-	for (const source of STEP_MCP_IMPORT_SOURCES) {
-		if (!wantedSources.includes(source)) continue;
-		const read = source === ".claude" ? readClaudeSource(homeDir) : readCodexSource(homeDir);
+	const reads = STEP_MCP_IMPORT_SOURCES.filter((source) => wantedSources.includes(source)).map((source) => {
+		const path =
+			options.sourcePaths?.[source] ??
+			(source === ".codex" && env.CODEX_HOME?.trim()
+				? join(env.CODEX_HOME.trim(), "config.toml")
+				: stepMcpImportSourcePath(source, homeDir));
+		const read = readImportSource(source, path);
 		warnings.push(...read.warnings);
-
-		const resolved = read.servers.map((server) => resolveCandidate(server, allocated));
-		candidates.push(...resolved);
-		sources.push({
+		return { source, path, read };
+	});
+	const candidates = allocateStepMcpImportCandidates(
+		reads.flatMap(({ read }) => read.servers),
+		existing,
+	);
+	const sources: StepMcpImportSourceStatus[] = reads.map(({ source, path, read }) => {
+		const resolved = candidates.filter((candidate) => candidate.source === source);
+		return {
 			source,
 			label: describeStepMcpImportSource(source),
-			path: stepMcpImportSourcePath(source, homeDir),
+			path,
 			state: read.state,
 			detail: read.detail,
 			importable: resolved.filter((candidate) => candidate.config !== undefined).length,
 			total: resolved.length,
-		});
-	}
+		};
+	});
 
 	return { candidates, sources, warnings };
 }
@@ -184,7 +206,7 @@ export function applyStepMcpImport(
 	const wanted = new Set(selected);
 	const imported: string[] = [];
 	const skipped: { name: string; reason: string }[] = [];
-	const additions: Record<string, StepMcpServerConfig> = {};
+	const additions = new Map<string, StepMcpServerConfig>();
 
 	// A de-duplicated row shares its target name with the row that will write it,
 	// so selecting that name must not also report the twin as skipped.
@@ -200,29 +222,69 @@ export function applyStepMcpImport(
 			}
 			continue;
 		}
-		additions[candidate.targetName] = candidate.config;
-		imported.push(candidate.targetName);
+		additions.set(candidate.targetName, candidate.config);
 	}
 
-	if (imported.length === 0) {
+	if (additions.size === 0) {
 		return { imported, skipped };
 	}
 
 	try {
-		const configPath = updateGlobalMcpConfig(env, (servers) => ({ ...servers, ...additions }));
+		const configPath = updateGlobalMcpConfig(env, (servers) => {
+			const next = { ...servers };
+			for (const [name, config] of additions) {
+				// Check the current value under the settings lock, not the preview snapshot.
+				if (Object.hasOwn(servers, name)) {
+					skipped.push({
+						name,
+						reason: isSameServerConfig(servers[name], config)
+							? "already in config.toml with identical configuration"
+							: "name now holds a different configuration; review again",
+					});
+					continue;
+				}
+				Object.defineProperty(next, name, { value: config, enumerable: true, configurable: true, writable: true });
+				imported.push(name);
+			}
+			return next;
+		});
 		return { imported, skipped, configPath };
 	} catch (error) {
 		return {
 			imported: [],
 			skipped: [
 				...skipped,
-				...imported.map((name) => ({ name, reason: `could not write config.toml (${errorMessage(error)})` })),
+				...Array.from(additions.keys())
+					.filter((name) => !skipped.some((entry) => entry.name === name))
+					.map((name) => ({ name, reason: `could not write config.toml (${errorMessage(error)})` })),
 			],
 		};
 	}
 }
 
 // --- name allocation -----------------------------------------------------
+
+/**
+ * Allocates in source order without changing the supplied servers or settings.
+ * Defaults preserve CLI equality and name-chain matching; hosts may compare
+ * effective configurations across all names with an explicit policy.
+ */
+export function allocateStepMcpImportCandidates(
+	servers: readonly TranslatedServer[],
+	existing: Record<string, StepMcpServerConfig>,
+	options: {
+		sameConfig?: (left: StepMcpServerConfig, right: StepMcpServerConfig) => boolean;
+		matchAnyName?: boolean;
+	} = {},
+): StepMcpImportCandidate[] {
+	const allocated = new Map<string, AllocatedServer>();
+	for (const [name, config] of Object.entries(existing)) {
+		allocated.set(name, { config, origin: "config" });
+	}
+	return servers.map((server) =>
+		resolveCandidate(server, allocated, options.sameConfig ?? isSameServerConfig, options.matchAnyName ?? false),
+	);
+}
 
 /** A name already spoken for, and by what. */
 interface AllocatedServer {
@@ -250,10 +312,17 @@ interface AllocatedServer {
  * name that already holds it, whether that name came from `config.toml` or from
  * the source processed earlier in this same run.
  */
-function resolveCandidate(server: TranslatedServer, allocated: Map<string, AllocatedServer>): StepMcpImportCandidate {
+function resolveCandidate(
+	server: TranslatedServer,
+	allocated: Map<string, AllocatedServer>,
+	sameConfig: (left: StepMcpServerConfig, right: StepMcpServerConfig) => boolean,
+	matchAnyName: boolean,
+): StepMcpImportCandidate {
 	const warnings = [...server.warnings];
+	const diagnostics: StepMcpImportDiagnostic[] = [...server.diagnostics];
 	const base = sanitizeServerName(server.name);
 	if (base !== server.name) {
+		diagnostics.push({ code: "mcp-name-normalized" });
 		warnings.push(
 			`mcpServer '${server.name}' from ${server.sourceLabel} contains characters Step cannot use in a tool name; it is imported as '${base}'.`,
 		);
@@ -266,13 +335,19 @@ function resolveCandidate(server: TranslatedServer, allocated: Map<string, Alloc
 		transport: server.transport,
 		summary: server.summary,
 		warnings,
+		diagnostics,
 	} as const;
 
 	if (!server.config) {
 		return { ...shared, targetName: base, blocked: server.blocked };
 	}
 
-	for (const candidateName of nameCandidates(base, server.source)) {
+	const config = server.config;
+	const duplicate = matchAnyName
+		? Array.from(allocated).find(([, current]) => sameConfig(current.config, config))
+		: undefined;
+	const names = duplicate ? [duplicate[0]] : nameCandidates(base, server.source);
+	for (const candidateName of names) {
 		const current = allocated.get(candidateName);
 		if (!current) {
 			allocated.set(candidateName, {
@@ -282,7 +357,8 @@ function resolveCandidate(server: TranslatedServer, allocated: Map<string, Alloc
 			});
 			return { ...shared, targetName: candidateName, config: server.config };
 		}
-		if (isSameServerConfig(current.config, server.config)) {
+		if (sameConfig(current.config, server.config)) {
+			diagnostics.push({ code: "mcp-duplicate" });
 			return {
 				...shared,
 				targetName: candidateName,
@@ -295,8 +371,11 @@ function resolveCandidate(server: TranslatedServer, allocated: Map<string, Alloc
 				},
 			};
 		}
+		if (!diagnostics.some((diagnostic) => diagnostic.code === "mcp-name-conflict"))
+			diagnostics.push({ code: "mcp-name-conflict" });
 	}
 
+	diagnostics.push({ code: "mcp-name-exhausted" });
 	return {
 		...shared,
 		targetName: base,
@@ -355,7 +434,7 @@ function readExistingServers(env: NodeJS.ProcessEnv, warnings: string[]): Record
 
 // --- source reading ------------------------------------------------------
 
-interface TranslatedServer {
+export interface TranslatedServer {
 	readonly source: StepMcpImportSource;
 	readonly sourceLabel: string;
 	readonly name: string;
@@ -364,13 +443,15 @@ interface TranslatedServer {
 	readonly config?: StepMcpServerConfig;
 	readonly blocked?: StepMcpImportBlock;
 	readonly warnings: readonly string[];
+	readonly diagnostics: readonly StepMcpTranslationDiagnostic[];
 }
 
-interface SourceRead {
+export interface StepMcpImportSourceRead {
 	readonly servers: readonly TranslatedServer[];
 	readonly warnings: readonly string[];
-	readonly state: StepMcpImportSourceStatus["state"];
+	readonly state: "ok" | "empty" | "error" | "missing";
 	readonly detail?: string;
+	readonly projectScopedCount?: number;
 }
 
 // --- Claude Code ---------------------------------------------------------
@@ -388,72 +469,72 @@ const CLAUDE_IDE_TRANSPORTS = new Set(["sse-ide", "stdio-ide", "ws-ide"]);
 const CLAUDE_STDIO_KEYS = new Set(["type", "command", "args", "env"]);
 const CLAUDE_HTTP_KEYS = new Set(["type", "url", "headers"]);
 
-function readClaudeSource(homeDir: string): SourceRead {
-	const configPath = stepMcpImportSourcePath(".claude", homeDir);
-	const raw = readTextFile(configPath);
-	if (raw.error) {
-		return { servers: [], warnings: [], state: "error", detail: raw.error };
-	}
-	if (raw.value === undefined) {
-		return { servers: [], warnings: [], state: "missing", detail: `${describePath(configPath)} does not exist` };
-	}
-
+/** Translates raw source content without reading files or resolving environment values. */
+export function parseStepMcpImportSource(source: StepMcpImportSource, raw: string): StepMcpImportSourceRead {
+	const label = describeStepMcpImportSource(source);
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(raw.value);
-	} catch (error) {
-		// Claude Code rewrites ~/.claude.json on every launch, so a read can land
-		// mid-write and see truncated JSON. That is transient, not a broken
-		// config, which is why it degrades to a message rather than an exception.
+		parsed = source === ".claude" ? JSON.parse(raw) : parseToml(raw);
+	} catch {
+		// Parser errors may include source lines containing credentials.
 		return {
 			servers: [],
 			warnings: [],
 			state: "error",
-			detail: `could not parse ${describePath(configPath)} as JSON (${errorMessage(error)})`,
+			detail: `could not parse ${label} config as ${source === ".claude" ? "JSON" : "TOML"}`,
 		};
 	}
-
 	const root = readRecord(parsed);
-	const declared = readRecord(root?.mcpServers) ?? {};
+	const key = source === ".claude" ? "mcpServers" : "mcp_servers";
+	if (!root || (Object.hasOwn(root, key) && !readRecord(root[key]))) {
+		return {
+			servers: [],
+			warnings: [],
+			state: "error",
+			detail: `${label} config must contain an object of MCP servers`,
+		};
+	}
+	const declared = readRecord(root[key]) ?? {};
 	const warnings: string[] = [];
 	const servers: TranslatedServer[] = [];
-
 	for (const [name, entry] of Object.entries(declared)) {
 		const record = readRecord(entry);
 		if (!record) {
 			servers.push(
-				blockedServer(".claude", name, {
+				blockedServer(source, name, {
 					kind: "incomplete",
-					detail: "the entry is not an object",
+					detail: source === ".claude" ? "the entry is not an object" : "the entry is not a table",
 				}),
 			);
 			continue;
 		}
-		const translated = translateClaudeServer(name, record);
+		const translated =
+			source === ".claude" ? translateClaudeServer(name, record) : translateCodexServer(name, record);
 		if (translated) servers.push(translated);
 	}
-
-	// Claude's per-directory "local scope" servers live under
-	// projects["<abs path>"].mcpServers. They are deliberately not read: the
-	// scoping rule is Claude's own cwd notion, which does not line up with a
-	// Step workspace. Say so, so a user who configured servers there does not
-	// read the omission as a bug.
-	const projectScoped = countClaudeProjectScopedServers(root?.projects);
-	if (projectScoped > 0) {
+	// Foreign project scope is not promoted into Step's global settings.
+	const projectScopedCount = source === ".claude" ? countClaudeProjectScopedServers(root.projects) : undefined;
+	if (projectScopedCount) {
 		warnings.push(
-			`Claude Code declares ${projectScoped} project-scoped MCP server(s) under projects[...].mcpServers; only user-scoped servers are offered here.`,
+			`Claude Code declares ${projectScopedCount} project-scoped MCP server(s) under projects[...].mcpServers; only user-scoped servers are offered here.`,
 		);
 	}
+	return {
+		servers,
+		warnings,
+		projectScopedCount,
+		state: servers.length > 0 ? "ok" : "empty",
+		detail: servers.length > 0 ? undefined : `${label} config declares no user-scoped MCP servers`,
+	};
+}
 
-	if (servers.length === 0) {
-		return {
-			servers,
-			warnings,
-			state: "empty",
-			detail: `${describePath(configPath)} declares no user-scoped MCP servers`,
-		};
+function readImportSource(source: StepMcpImportSource, configPath: string): StepMcpImportSourceRead {
+	const raw = readTextFile(configPath);
+	if (raw.error) return { servers: [], warnings: [], state: "error", detail: raw.error };
+	if (raw.value === undefined) {
+		return { servers: [], warnings: [], state: "missing", detail: `${describePath(configPath)} does not exist` };
 	}
-	return { servers, warnings, state: "ok" };
+	return parseStepMcpImportSource(source, raw.value);
 }
 
 export function translateClaudeServer(name: string, record: Record<string, unknown>): TranslatedServer | undefined {
@@ -484,7 +565,7 @@ export function translateClaudeServer(name: string, record: Record<string, unkno
 			// `type` is consumed and dropped: Step infers the transport from
 			// whether the entry has a command or a url.
 			config: compact({ url, http_headers: readStringMap(record.headers) }),
-			warnings: reportUnconsumedKeys(name, "Claude Code", record, CLAUDE_HTTP_KEYS),
+			...reportUnconsumedKeys(name, "Claude Code", record, CLAUDE_HTTP_KEYS),
 		};
 	}
 
@@ -507,7 +588,7 @@ export function translateClaudeServer(name: string, record: Record<string, unkno
 		transport: "stdio",
 		summary: [command, ...(args ?? [])].join(" "),
 		config: compact({ command, args, env: readStringMap(record.env) }),
-		warnings: reportUnconsumedKeys(name, "Claude Code", record, CLAUDE_STDIO_KEYS),
+		...reportUnconsumedKeys(name, "Claude Code", record, CLAUDE_STDIO_KEYS),
 	};
 }
 
@@ -549,69 +630,37 @@ const CODEX_HTTP_KEYS = new Set([
 	"tool_timeout_sec",
 ]);
 
-function readCodexSource(homeDir: string): SourceRead {
-	const configPath = stepMcpImportSourcePath(".codex", homeDir);
-	const raw = readTextFile(configPath);
-	if (raw.error) {
-		return { servers: [], warnings: [], state: "error", detail: raw.error };
-	}
-	if (raw.value === undefined) {
-		return { servers: [], warnings: [], state: "missing", detail: `${describePath(configPath)} does not exist` };
-	}
-
-	let parsed: unknown;
-	try {
-		parsed = parseToml(raw.value);
-	} catch (error) {
-		return {
-			servers: [],
-			warnings: [],
-			state: "error",
-			detail: `could not parse ${describePath(configPath)} as TOML (${errorMessage(error)})`,
-		};
-	}
-
-	const declared = readRecord(readRecord(parsed)?.mcp_servers) ?? {};
-	const servers: TranslatedServer[] = [];
-
-	for (const [name, entry] of Object.entries(declared)) {
-		const record = readRecord(entry);
-		if (!record) {
-			servers.push(blockedServer(".codex", name, { kind: "incomplete", detail: "the entry is not a table" }));
-			continue;
-		}
-		servers.push(translateCodexServer(name, record));
-	}
-
-	if (servers.length === 0) {
-		return {
-			servers,
-			warnings: [],
-			state: "empty",
-			detail: `${describePath(configPath)} declares no [mcp_servers] entries`,
-		};
-	}
-	return { servers, warnings: [], state: "ok" };
-}
-
 /**
  * Codex's schema and Step's are the same shape, so this is close to an identity
  * translation: both express the transport by which of `command` / `url` is set,
  * and both keep the startup and tool timeouts separately.
  */
 export function translateCodexServer(name: string, record: Record<string, unknown>): TranslatedServer {
-	const warnings: string[] = [];
+	for (const field of ["enabled_tools", "disabled_tools"] as const) {
+		if (Object.hasOwn(record, field) && !isStringArray(record[field])) {
+			return blockedServer(
+				".codex",
+				name,
+				{
+					kind: "incomplete",
+					detail: `${field} must be an array of strings`,
+				},
+				readNonEmptyString(record.url) ? "http" : "stdio",
+				"mcp-invalid-tool-filter",
+			);
+		}
+	}
 	const common = compact({
 		enabled: typeof record.enabled === "boolean" ? record.enabled : undefined,
-		enabled_tools: readStringArray(record.enabled_tools),
-		disabled_tools: readStringArray(record.disabled_tools),
+		// An empty allowlist means no tools, not an absent restriction.
+		enabled_tools: isStringArray(record.enabled_tools) ? [...record.enabled_tools] : undefined,
+		disabled_tools: isStringArray(record.disabled_tools) ? [...record.disabled_tools] : undefined,
 		startup_timeout_sec: readPositiveNumber(record.startup_timeout_sec),
 		tool_timeout_sec: readPositiveNumber(record.tool_timeout_sec),
 	});
 
 	const url = readNonEmptyString(record.url);
 	if (url) {
-		warnings.push(...reportUnconsumedKeys(name, "Codex", record, CODEX_HTTP_KEYS));
 		return {
 			source: ".codex",
 			sourceLabel: "Codex",
@@ -627,7 +676,7 @@ export function translateCodexServer(name: string, record: Record<string, unknow
 				bearer_token_env_var: readNonEmptyString(record.bearer_token_env_var),
 				...common,
 			}),
-			warnings,
+			...reportUnconsumedKeys(name, "Codex", record, CODEX_HTTP_KEYS),
 		};
 	}
 
@@ -636,8 +685,12 @@ export function translateCodexServer(name: string, record: Record<string, unknow
 		return blockedServer(".codex", name, { kind: "incomplete", detail: "neither command nor url" });
 	}
 
-	warnings.push(...reportUnconsumedKeys(name, "Codex", record, CODEX_STDIO_KEYS));
-	warnings.push(...reportCodexEnvVars(name, record));
+	const unconsumed = reportUnconsumedKeys(name, "Codex", record, CODEX_STDIO_KEYS);
+	const remoteEnvWarnings = reportCodexEnvVars(name, record);
+	const diagnostics = [...unconsumed.diagnostics];
+	if (remoteEnvWarnings.length > 0) {
+		diagnostics.push({ code: "mcp-remote-env-unsupported", count: remoteEnvWarnings.length });
+	}
 	const args = readStringArray(record.args);
 	return {
 		source: ".codex",
@@ -652,7 +705,8 @@ export function translateCodexServer(name: string, record: Record<string, unknow
 			env: readStringMap(record.env),
 			...common,
 		}),
-		warnings,
+		warnings: [...unconsumed.warnings, ...remoteEnvWarnings],
+		diagnostics,
 	};
 }
 
@@ -690,6 +744,9 @@ function blockedServer(
 	name: string,
 	blocked: StepMcpImportBlock,
 	transport: "stdio" | "http" = "stdio",
+	code: StepMcpTranslationDiagnostic["code"] = blocked.kind === "unsupported"
+		? "mcp-unsupported-transport"
+		: "mcp-incomplete-config",
 ): TranslatedServer {
 	return {
 		source,
@@ -699,6 +756,7 @@ function blockedServer(
 		summary: blocked.detail,
 		blocked,
 		warnings: [],
+		diagnostics: [{ code }],
 	};
 }
 
@@ -714,14 +772,17 @@ function reportUnconsumedKeys(
 	sourceLabel: string,
 	record: Record<string, unknown>,
 	consumed: ReadonlySet<string>,
-): string[] {
+): Pick<TranslatedServer, "warnings" | "diagnostics"> {
 	const ignored = Object.keys(record)
 		.filter((key) => !consumed.has(key))
 		.sort((left, right) => left.localeCompare(right));
-	if (ignored.length === 0) return [];
-	return [
-		`mcpServer '${name}' from ${sourceLabel} sets ${ignored.join(", ")}, which Step has no equivalent for; ${ignored.length === 1 ? "it is" : "they are"} ignored.`,
-	];
+	if (ignored.length === 0) return { warnings: [], diagnostics: [] };
+	return {
+		warnings: [
+			`mcpServer '${name}' from ${sourceLabel} sets ${ignored.join(", ")}, which Step has no equivalent for; ${ignored.length === 1 ? "it is" : "they are"} ignored.`,
+		],
+		diagnostics: [{ code: "mcp-fields-not-translated", count: ignored.length }],
+	};
 }
 
 function readTextFile(filePath: string): { value?: string; error?: string } {
@@ -754,6 +815,10 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readNonEmptyString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function readStringArray(value: unknown): string[] | undefined {

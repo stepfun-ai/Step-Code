@@ -29,6 +29,9 @@ function put(path: string, content: string): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, content);
 }
+function skill(name: string): string {
+	return `---\nname: ${name}\ndescription: Fixture skill\n---\nRead references/help.md.\n`;
+}
 function create(): MigrationService {
 	const value = new MigrationService({ agentDir: agent, env, sessions });
 	services.push(value);
@@ -100,9 +103,9 @@ describe("confirmed migration regressions", () => {
 		},
 	);
 	it("rejects a deleted selected project before any batch write", async () => {
-		put(join(home, ".claude", "commands", "fixture.md"), "fixture");
+		put(join(home, ".codex", "skills", "fixture", "SKILL.md"), skill("fixture"));
 		put(join(agent, "trust.json"), JSON.stringify({ [project]: true }));
-		const c = (await service.scan({ kinds: ["prompts"], projectCwds: [project] })).candidates[0]!;
+		const c = (await service.scan({ kinds: ["skills"], projectCwds: [project] })).candidates[0]!;
 		const p = await service.preview({ candidateId: c.id, target: { kind: "project", cwd: project } });
 		const global = await service.preview({ candidateId: c.id, target: { kind: "global" } });
 		const plan = await service.plan([
@@ -115,12 +118,12 @@ describe("confirmed migration regressions", () => {
 		);
 		expect(existsSync(project)).toBe(false);
 		expect(existsSync(join(agent, "migration"))).toBe(false);
-		expect(existsSync(join(agent, "prompts", "fixture.md"))).toBe(false);
+		expect(existsSync(join(agent, "skills", "fixture", "SKILL.md"))).toBe(false);
 	});
 	it.each(["preview", "plan", "start"])("rejects replaced project identity at %s", async (phase) => {
-		put(join(home, ".claude", "commands", "fixture.md"), "fixture");
+		put(join(home, ".codex", "skills", "fixture", "SKILL.md"), skill("fixture"));
 		put(join(agent, "trust.json"), JSON.stringify({ [project]: true }));
-		const c = (await service.scan({ kinds: ["prompts"], projectCwds: [project] })).candidates[0]!;
+		const c = (await service.scan({ kinds: ["skills"], projectCwds: [project] })).candidates[0]!;
 		const input = { candidateId: c.id, target: { kind: "project" as const, cwd: project } };
 		const p = phase === "preview" ? undefined : await service.preview(input);
 		const plan = phase === "start" ? await service.plan([{ previewId: p!.id, acknowledged: [] }]) : undefined;
@@ -136,9 +139,9 @@ describe("confirmed migration regressions", () => {
 		expect(existsSync(join(project, ".profile"))).toBe(false);
 	});
 	it("does not recreate a project deleted after its durable resource intent", async () => {
-		put(join(home, ".claude", "commands", "fixture.md"), "fixture");
+		put(join(home, ".codex", "skills", "fixture", "SKILL.md"), skill("fixture"));
 		put(join(agent, "trust.json"), JSON.stringify({ [project]: true }));
-		const c = (await service.scan({ kinds: ["prompts"], projectCwds: [project] })).candidates[0]!;
+		const c = (await service.scan({ kinds: ["skills"], projectCwds: [project] })).candidates[0]!;
 		const p = await service.preview({ candidateId: c.id, target: { kind: "project", cwd: project } });
 		const write = MigrationJournalStore.prototype.write;
 		vi.spyOn(MigrationJournalStore.prototype, "write").mockImplementation(function (
@@ -152,32 +155,23 @@ describe("confirmed migration regressions", () => {
 		expect(job.items[0]).toMatchObject({ status: "failed", diagnostics: [{ code: "invalid-projects" }] });
 		expect(existsSync(project)).toBe(false);
 	});
-	it.each([
-		["skills", ".ignore"],
-		["prompts", ".ignore"],
-		["skills", ".gitignore"],
-		["prompts", ".gitignore"],
-		["skills", ".fdignore"],
-		["prompts", ".fdignore"],
-	] as const)("reports ignored destination %s via %s and fingerprints ignore content", async (kind, ignoreName) => {
-		put(
-			kind === "skills"
-				? join(home, ".codex", "skills", "fixture", "SKILL.md")
-				: join(home, ".codex", "prompts", "fixture.md"),
-			kind === "skills" ? "---\nname: fixture\ndescription: Fixture\n---\nFixture" : "Fixture",
-		);
-		const ignore = join(agent, kind, ignoreName);
-		put(ignore, kind === "skills" ? "fixture/\n" : "fixture.md\n");
-		const c = (await service.scan({ kinds: [kind] })).candidates.find((v) => v.source === "codex")!;
-		const p = await service.preview({ candidateId: c.id });
-		expect(p.activation).toBe("disabled");
-		expect(p.warnings).toContainEqual({ code: "target-disabled" });
-		const plan = await service.plan([{ previewId: p.id, acknowledged: [] }]);
-		put(ignore, `${kind === "skills" ? "fixture/\n" : "fixture.md\n"}# changed, still ignored\n`);
-		await expect(service.start({ planId: plan.id, digest: plan.digest, idempotencyKey: p.id })).rejects.toMatchObject(
-			{ code: "preview-changed" },
-		);
-	});
+	it.each([".ignore", ".gitignore", ".fdignore"])(
+		"reports ignored destination skills via %s and fingerprints ignore content",
+		async (ignoreName) => {
+			put(join(home, ".codex", "skills", "fixture", "SKILL.md"), skill("fixture"));
+			const ignore = join(agent, "skills", ignoreName);
+			put(ignore, "fixture/\n");
+			const c = (await service.scan({ kinds: ["skills"] })).candidates.find((v) => v.source === "codex")!;
+			const p = await service.preview({ candidateId: c.id });
+			expect(p.activation).toBe("disabled");
+			expect(p.warnings).toContainEqual({ code: "target-disabled" });
+			const plan = await service.plan([{ previewId: p.id, acknowledged: [] }]);
+			put(ignore, "fixture/\n# changed, still ignored\n");
+			await expect(
+				service.start({ planId: plan.id, digest: plan.digest, idempotencyKey: p.id }),
+			).rejects.toMatchObject({ code: "preview-changed" });
+		},
+	);
 	it.each(["", "subdir", "../escape"])("matches runtime plugin cwd normalization for %s", (cwd) => {
 		const root = join(home, ".profile", "plugins", "fixture");
 		put(

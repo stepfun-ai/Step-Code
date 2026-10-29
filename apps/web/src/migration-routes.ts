@@ -16,7 +16,7 @@ export type MigrationRouteService = Pick<
 	MigrationService,
 	"scan" | "preview" | "plan" | "start" | "listJobs" | "getJob" | "cancel" | "previewRecovery" | "recover"
 >;
-const KINDS: MigrationKind[] = ["sessions", "skills", "mcp", "prompts", "rules"];
+const KINDS: MigrationKind[] = ["sessions", "skills", "mcp", "rules"];
 const ACTIONS: MigrationAction[] = ["copy", "import", "create", "append", "replace", "skip"];
 const ACKS: MigrationAcknowledgement[] = ["rules-impact", "scope-expansion", "independent-copy", "sensitive-values"];
 const BODY_LIMIT = 64 * 1024;
@@ -89,23 +89,27 @@ async function directory(value: unknown): Promise<string> {
 		fail("invalid-migration-path");
 	}
 }
-async function sourceDirectory(
-	value: unknown,
-	knownWorkspace: (input: string | null) => Promise<string | undefined>,
-): Promise<string> {
-	const canonical = await directory(value);
-	const known = await knownWorkspace(canonical);
-	if (!known || (await directory(known)) !== canonical) fail("migration-workspace-forbidden", 403);
-	return canonical;
-}
-async function target(value: unknown): Promise<MigrationScope> {
-	const input = object(value, ["kind", "cwd"]);
+async function target(value: unknown): Promise<MigrationScope & { create?: true }> {
+	const input = object(value, ["kind", "cwd", "create"]);
 	if (input.kind === "global") {
-		if ("cwd" in input) fail();
+		if ("cwd" in input || "create" in input) fail();
 		return { kind: "global" };
 	}
 	if (input.kind !== "project") fail();
-	return { kind: "project", cwd: await directory(input.cwd) };
+	if (input.create !== undefined && input.create !== true) fail();
+	const cwd = text(input.cwd, 4096);
+	if (!isAbsolute(cwd)) fail("invalid-migration-path");
+	try {
+		const canonical = await realpath(cwd);
+		if (!(await stat(canonical)).isDirectory()) fail("invalid-migration-path");
+		return { kind: "project", cwd: canonical };
+	} catch (error) {
+		// A vanished destination must not prevent the product from returning readable history and a blocker.
+		// `create` marks an explicitly requested new workspace folder; the service creates it on preview.
+		if (error instanceof Error && "code" in error && ["ENOENT", "EACCES", "EPERM"].includes(String(error.code)))
+			return input.create === true ? { kind: "project", cwd, create: true } : { kind: "project", cwd };
+		fail("invalid-migration-path");
+	}
 }
 function reply(response: ServerResponse, status: number, value: unknown): void {
 	response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -114,9 +118,11 @@ function reply(response: ServerResponse, status: number, value: unknown): void {
 
 /**
  * Dispatch only after the caller has authorized the Host cookie and Origin.
- * Scan source projects must be registered; scanning never registers or trusts a project.
- * An explicit preview target may be any existing canonical directory (including an unregistered
- * source cwd). Selection authorizes a destination, not source reads or workspace registration;
+ * A scan source may be any existing canonical directory: picking one neither registers
+ * nor trusts it. Skill readiness retains the product trust gate; rules instead require
+ * explicit loading-impact consent. Workspace registration itself is not a trust grant.
+ * An explicit preview target may equally be any existing canonical directory.
+ * Selection authorizes a destination, not source reads or workspace registration;
  * the product service still owns immutable plans, consent, containment and publication.
  */
 export async function migrationRoute(
@@ -125,7 +131,6 @@ export async function migrationRoute(
 	url: URL,
 	request: IncomingMessage,
 	response: ServerResponse,
-	knownWorkspace: (input: string | null) => Promise<string | undefined>,
 ): Promise<void> {
 	try {
 		const expectedPath = `/api/v1/migrations${parts.length ? `/${parts.join("/")}` : ""}`;
@@ -151,14 +156,49 @@ export async function migrationRoute(
 			);
 		}
 		if (parts.length === 1 && method === "POST" && parts[0] === "scan") {
-			const input = object(await body(request), ["kinds", "projectCwds"]);
+			const input = object(await body(request), ["kinds", "projectCwds", "mcpSourcePaths", "sessionOptions"]);
 			const kinds = input.kinds === undefined ? undefined : array(input.kinds, (kind) => choice(kind, KINDS), 5);
 			const projects = input.projectCwds === undefined ? undefined : array(input.projectCwds, (cwd) => cwd, 30);
 			const projectCwds =
-				projects === undefined
-					? undefined
-					: await Promise.all(projects.map((cwd) => sourceDirectory(cwd, knownWorkspace)));
-			return reply(response, 200, await service.scan({ kinds, projectCwds }));
+				projects === undefined ? undefined : await Promise.all(projects.map((cwd) => directory(cwd)));
+			const mcpSourcePaths: Partial<Record<"claude-code" | "codex", string>> = {};
+			if (input.mcpSourcePaths !== undefined) {
+				const sources = object(input.mcpSourcePaths, ["claude-code", "codex"]);
+				for (const source of ["claude-code", "codex"] as const) {
+					if (sources[source] === undefined) continue;
+					const path = text(sources[source], 4096);
+					if (!isAbsolute(path)) fail("invalid-migration-path");
+					mcpSourcePaths[source] = path;
+				}
+			}
+			let sessionOptions:
+				| { range?: "all" | "7" | "30" | "90"; limit?: 30 | 50 | 100 | null; includeArchived?: boolean }
+				| undefined;
+			if (input.sessionOptions !== undefined) {
+				const options = object(input.sessionOptions, ["range", "limit", "includeArchived"]);
+				sessionOptions = {};
+				if (options.range !== undefined)
+					sessionOptions.range = choice(options.range, ["all", "7", "30", "90"] as const);
+				if (options.limit !== undefined) {
+					if (options.limit !== null && options.limit !== 30 && options.limit !== 50 && options.limit !== 100)
+						fail();
+					sessionOptions.limit = options.limit;
+				}
+				if (options.includeArchived !== undefined) {
+					if (typeof options.includeArchived !== "boolean") fail();
+					sessionOptions.includeArchived = options.includeArchived;
+				}
+			}
+			return reply(
+				response,
+				200,
+				await service.scan({
+					kinds,
+					projectCwds,
+					...(sessionOptions ? { sessionOptions } : {}),
+					...(input.mcpSourcePaths !== undefined ? { mcpSourcePaths } : {}),
+				}),
+			);
 		}
 		if (parts.length === 1 && method === "POST" && parts[0] === "preview") {
 			const input = object(await body(request), [

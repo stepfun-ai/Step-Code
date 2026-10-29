@@ -3,12 +3,15 @@ import { ApiError } from "../../lib/api";
 import { appStore } from "../../state/store";
 import type {
 	MigrationAcknowledgement,
+	MigrationCandidate,
 	MigrationKind,
 	MigrationPreviewRequest,
 	MigrationScope,
+	MigrationTargetRequest,
 } from "../../state/types";
 import {
 	acceptJob,
+	adoptMigrationPlan,
 	backoffDelay,
 	collectSelections,
 	initialPreviewRequest,
@@ -35,18 +38,47 @@ export function openMigration(origin: MigrationOrigin, kind?: MigrationKind): vo
 		open: true,
 		origin,
 		error: null,
-		...(kind && !isActiveJob(state.job) ? { kind, scanKinds: [kind], stage: "invitation" as const } : {}),
+		...(kind && !isActiveJob(state.job) ? { kind, scanKinds: [kind], stage: "select" as const } : {}),
+		...(!kind && state.stage === "invitation" ? { stage: "select" as const } : {}),
+		closeRequested: false,
+		closeWhenSettled: false,
 		...(isActiveJob(state.job) ? { stage: "job" as const } : {}),
 	});
 	reconcilePolling();
 }
 export function closeMigration(): void {
-	updateMigration({ open: false });
+	const state = getMigrationState();
+	if (
+		isActiveJob(state.job) ||
+		(state.stage !== "job" && Object.values(state.drafts).some((draft) => draft.selected))
+	) {
+		updateMigration({ closeRequested: true });
+		return;
+	}
+	finishClosingMigration();
+}
+export function finishClosingMigration(): void {
+	updateMigration({ open: false, closeRequested: false, closeWhenSettled: false });
 	reconcilePolling();
+}
+export async function confirmCloseMigration(): Promise<void> {
+	if (isActiveJob(getMigrationState().job)) {
+		updateMigration({ closeRequested: false, closeWhenSettled: true });
+		await stopMigrationJob();
+		if (getMigrationState().error) updateMigration({ closeWhenSettled: false });
+		else if (!isActiveJob(getMigrationState().job)) finishClosingMigration();
+	} else {
+		updateMigration({ drafts: {}, plan: null, startKey: null });
+		finishClosingMigration();
+	}
 }
 export function handleMigrationEscape(): boolean {
 	const state = getMigrationState();
 	if (!state.open) return false;
+	if (state.closeRequested) {
+		updateMigration({ closeRequested: false });
+		return true;
+	}
 	if (state.recovery) {
 		if (state.busy !== "recovery") updateMigration({ recovery: null, recoveryAcknowledged: [] });
 	} else closeMigration();
@@ -54,6 +86,7 @@ export function handleMigrationEscape(): boolean {
 }
 export function setMigrationKind(kind: MigrationKind): void {
 	updateMigration({ kind, stage: "select", focusedId: null, error: null });
+	if (!getMigrationState().scannedKinds.includes(kind) && !getMigrationState().scanning) void scanMigration(kind);
 }
 export function showMigrationStage(stage: "invitation" | "select" | "review" | "job"): void {
 	updateMigration({ stage, error: null });
@@ -61,28 +94,57 @@ export function showMigrationStage(stage: "invitation" | "select" | "review" | "
 export function setSourceProjects(projectCwds: readonly string[]): void {
 	if (!getMigrationState().scanning) updateMigration({ projectCwds: [...projectCwds] });
 }
+export function setMcpSourcePath(source: "claude-code" | "codex", path?: string): void {
+	const state = getMigrationState();
+	if (state.scanning || state.busy || isActiveJob(state.job)) return;
+	const mcpSourcePaths = { ...state.mcpSourcePaths };
+	if (path) mcpSourcePaths[source] = path;
+	else delete mcpSourcePaths[source];
+	updateMigration({ mcpSourcePaths, plan: null, startKey: null });
+}
 export function startNewMigration(kind?: MigrationKind): void {
 	const state = getMigrationState();
-	if (isActiveJob(state.job) || state.busy) {
+	if (isActiveJob(state.job)) {
 		updateMigration({ stage: "job" });
 		return;
 	}
-	updateMigration({ stage: "invitation", scanKinds: kind ? [kind] : MIGRATION_KINDS, kind: kind ?? "sessions" });
+	if (state.busy || state.scanning) return;
+	updateMigration({
+		stage: "select",
+		scanKinds: kind ? [kind] : MIGRATION_KINDS,
+		kind: kind ?? "sessions",
+		...(state.stage === "job" ? { job: null, drafts: {}, plan: null, startKey: null, scannedKinds: [] } : {}),
+	});
 }
-export async function scanMigration(): Promise<void> {
+export function setSessionOptions(patch: Partial<ReturnType<typeof getMigrationState>["sessionOptions"]>): void {
+	const state = getMigrationState();
+	if (state.scanning || state.busy || isActiveJob(state.job)) return;
+	updateMigration({ sessionOptions: { ...state.sessionOptions, ...patch } });
+	void scanMigration("sessions");
+}
+export async function scanMigration(kind = getMigrationState().kind): Promise<void> {
 	const state = getMigrationState();
 	if (isActiveJob(state.job) || state.busy) return;
 	const generation = ++scanGeneration;
 	scanController?.abort();
-	for (const controller of previewControllers.values()) controller.abort();
-	previewControllers.clear();
-	previewGenerations.clear();
+	for (const [id, controller] of previewControllers) {
+		if (!state.scan?.candidates.some((candidate) => candidate.id === id && candidate.kind === kind)) continue;
+		controller.abort();
+		previewControllers.delete(id);
+		previewGenerations.delete(id);
+	}
 	const controller = new AbortController();
 	scanController = controller;
 	updateMigration({
 		scanning: true,
-		scan: null,
-		drafts: {},
+		drafts: Object.fromEntries(
+			Object.entries(state.drafts).map(([id, draft]) => [
+				id,
+				state.scan?.candidates.some((item) => item.id === id && item.kind === kind)
+					? { ...draft, loading: false, acknowledged: [], ruleChecked: false, error: "preview-expired" }
+					: draft,
+			]),
+		),
 		focusedId: null,
 		plan: null,
 		startKey: null,
@@ -92,15 +154,33 @@ export async function scanMigration(): Promise<void> {
 		const scan = await migrationRequest(
 			"/scan",
 			isScan,
-			{ kinds: [...state.scanKinds], projectCwds: [...state.projectCwds] },
+			{
+				kinds: [kind],
+				projectCwds: [...state.projectCwds],
+				...(kind === "mcp" ? { mcpSourcePaths: { ...state.mcpSourcePaths } } : {}),
+				...(kind === "sessions" ? { sessionOptions: { ...state.sessionOptions } } : {}),
+			},
 			controller.signal,
 		);
 		if (generation !== scanGeneration) return;
+		const latest = getMigrationState();
 		updateMigration({
-			scan,
+			scan: {
+				...scan,
+				candidates: [...(latest.scan?.candidates ?? []).filter((item) => item.kind !== kind), ...scan.candidates],
+				sources: [...(latest.scan?.sources ?? []).filter((item) => item.kind !== kind), ...scan.sources],
+			},
+			scannedKinds: [...new Set([...latest.scannedKinds, kind])],
+			drafts: Object.fromEntries(
+				Object.entries(latest.drafts).map(([id, draft]) => [
+					id,
+					state.scan?.candidates.some((item) => item.id === id && item.kind === kind)
+						? { ...draft, acknowledged: [], ruleChecked: false, loading: false, error: "preview-expired" }
+						: draft,
+				]),
+			),
 			scanning: false,
 			stage: isActiveJob(getMigrationState().job) ? "job" : "select",
-			kind: state.scanKinds[0] ?? "sessions",
 		});
 	} catch (error) {
 		if (generation === scanGeneration && !controller.signal.aborted)
@@ -117,6 +197,7 @@ export async function previewCandidate(
 	id: string,
 	patch: Partial<MigrationPreviewRequest> = {},
 	select?: boolean,
+	focus = true,
 ): Promise<void> {
 	const state = getMigrationState();
 	if (isActiveJob(state.job) || state.busy === "start") return;
@@ -130,7 +211,14 @@ export async function previewCandidate(
 		...(app.defaultCwd ? [app.defaultCwd] : []),
 	];
 	const initial = candidate ? initialPreviewRequest(candidate, offeredProjects) : {};
-	const request = { ...initial, ...existing?.request, ...patch, candidateId: id };
+	const defaultTarget = candidate ? state.defaultTargets[candidate.kind] : undefined;
+	const request = {
+		...initial,
+		...(defaultTarget ? { target: defaultTarget } : {}),
+		...existing?.request,
+		...patch,
+		candidateId: id,
+	};
 	const generation = (previewGenerations.get(id) ?? 0) + 1;
 	previewGenerations.set(id, generation);
 	previewControllers.get(id)?.abort();
@@ -141,7 +229,7 @@ export async function previewCandidate(
 		request,
 	);
 	updateMigration({
-		focusedId: id,
+		...(focus ? { focusedId: id } : {}),
 		drafts: {
 			...state.drafts,
 			[id]: { ...draft, preview: existing?.preview, selected: select ?? draft.selected, loading: true },
@@ -170,7 +258,100 @@ export async function previewCandidate(
 		if (previewControllers.get(id) === controller) previewControllers.delete(id);
 	}
 }
-export function changeTarget(id: string, target: MigrationScope): void {
+/** Group selection only reviews eligible items; it never grants rule, scope or credential consent. */
+export async function selectMigrationGroup(candidates: readonly MigrationCandidate[], checked: boolean): Promise<void> {
+	const state = getMigrationState();
+	if (state.busy || isActiveJob(state.job) || state.scanning) return;
+	const eligible = candidates.filter(
+		(candidate) =>
+			candidate.kind !== "rules" &&
+			candidate.needsMigration &&
+			candidate.readiness === "ready" &&
+			candidate.holding !== "plugin",
+	);
+	if (!checked) {
+		for (const candidate of eligible) deselectCandidate(candidate.id);
+		return;
+	}
+	const review = eligible.filter((candidate) => !state.drafts[candidate.id]?.selected);
+	const drafts = { ...state.drafts };
+	for (const candidate of review) {
+		const previous = drafts[candidate.id];
+		drafts[candidate.id] = {
+			...(previous ?? { request: { candidateId: candidate.id } }),
+			selected: true,
+			loading: true,
+			acknowledged: [],
+			ruleChecked: false,
+			error: undefined,
+		};
+	}
+	updateMigration({ busy: "selection", drafts, plan: null, startKey: null });
+	try {
+		for (const candidate of review) {
+			if (!getMigrationState().open || getMigrationState().scan !== state.scan) break;
+			await previewCandidate(candidate.id, {}, true, false);
+		}
+	} finally {
+		const current = getMigrationState();
+		const settled = { ...current.drafts };
+		for (const candidate of review) {
+			const pending = settled[candidate.id];
+			if (pending?.loading) settled[candidate.id] = { ...pending, loading: false };
+		}
+		if (current.busy === "selection") updateMigration({ busy: null, drafts: settled });
+	}
+}
+
+/** Changing a shared target re-previews selected items, invalidating any earlier acknowledgements. */
+export async function changeMigrationBatchTarget(kind: MigrationKind, target?: MigrationScope): Promise<void> {
+	const state = getMigrationState();
+	if (kind === "rules" || state.busy || state.scanning || isActiveJob(state.job)) return;
+	const defaultTargets = { ...state.defaultTargets };
+	if (target) defaultTargets[kind] = target;
+	else delete defaultTargets[kind];
+	updateMigration({ defaultTargets, plan: null, startKey: null });
+	if (!target) return; // Existing explicit destinations remain intact; only the future default is reset.
+	const ids = (state.scan?.candidates ?? [])
+		.filter((candidate) => candidate.kind === kind && state.drafts[candidate.id]?.selected)
+		.map((candidate) => candidate.id);
+	const drafts = { ...state.drafts };
+	for (const id of ids) {
+		const existing = drafts[id];
+		if (existing) drafts[id] = { ...invalidateDraft(existing, { ...existing.request, target }), loading: true };
+	}
+	updateMigration({ busy: "selection", drafts });
+	try {
+		for (const id of ids) {
+			// Hiding the dialog does not cancel a target operation already explicitly requested.
+			if (getMigrationState().scan !== state.scan) break;
+			await previewCandidate(id, { target });
+		}
+	} finally {
+		const current = getMigrationState();
+		const settled = { ...current.drafts };
+		for (const id of ids) {
+			const pending = settled[id];
+			if (pending?.loading) settled[id] = { ...pending, loading: false };
+		}
+		if (current.busy === "selection") updateMigration({ busy: null, drafts: settled });
+	}
+}
+
+export async function changeMigrationGroupTarget(ids: readonly string[], target: MigrationScope): Promise<void> {
+	const state = getMigrationState();
+	if (state.busy || state.scanning || isActiveJob(state.job)) return;
+	updateMigration({ busy: "selection", plan: null, startKey: null });
+	try {
+		for (const id of ids) {
+			if (!getMigrationState().open || getMigrationState().scan !== state.scan) break;
+			if (getMigrationState().drafts[id]?.selected) await previewCandidate(id, { target }, undefined, false);
+		}
+	} finally {
+		if (getMigrationState().busy === "selection") updateMigration({ busy: null });
+	}
+}
+export function changeTarget(id: string, target: MigrationTargetRequest): void {
 	void previewCandidate(id, { target });
 }
 export function acknowledgePreview(id: string, ack: MigrationAcknowledgement, checked: boolean): void {
@@ -201,14 +382,23 @@ export function checkRuleConsent(id: string, checked: boolean): void {
 }
 export async function createMigrationPlan(): Promise<void> {
 	const state = getMigrationState();
-	const selections = collectSelections(state.drafts);
-	if (!selections || state.busy || isActiveJob(state.job)) return;
+	const selections = collectSelections(state.drafts, state.skipBlocked);
+	updateMigration({ stage: "review" });
+	if (!selections?.length || state.busy || isActiveJob(state.job)) return;
 	const drafts = state.drafts;
 	updateMigration({ busy: "plan", error: null, plan: null });
 	try {
 		const plan = await migrationRequest("/plans", isPlan, { selections });
 		if (getMigrationState().drafts !== drafts || isActiveJob(getMigrationState().job)) return;
-		updateMigration({ plan, startKey: crypto.randomUUID(), stage: "review" });
+		const confirmedDrafts = adoptMigrationPlan(plan, drafts, state.skipBlocked);
+		if (!confirmedDrafts) throw new Error("invalid-response");
+		updateMigration({
+			drafts: confirmedDrafts,
+			skipBlocked: state.skipBlocked,
+			plan,
+			startKey: crypto.randomUUID(),
+			stage: "review",
+		});
 	} catch (error) {
 		updateMigration({ error: errorCode(error) });
 	} finally {
@@ -217,7 +407,13 @@ export async function createMigrationPlan(): Promise<void> {
 }
 export async function startMigrationJob(): Promise<void> {
 	const state = getMigrationState();
-	if (!state.plan || !state.startKey || state.busy || isActiveJob(state.job) || !planReady(state.plan, state.drafts))
+	if (
+		!state.plan ||
+		!state.startKey ||
+		state.busy ||
+		isActiveJob(state.job) ||
+		!planReady(state.plan, state.drafts, Date.now(), state.skipBlocked)
+	)
 		return;
 	updateMigration({ busy: "start", error: null });
 	try {
@@ -409,6 +605,7 @@ async function pollJob(id: string, generation: number, failures: number): Promis
 		});
 		failures = 0;
 		if (!isActiveJob(accepted)) {
+			if (getMigrationState().closeWhenSettled) finishClosingMigration();
 			stopPolling();
 			return;
 		}

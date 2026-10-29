@@ -10,9 +10,10 @@ paths:
     post:
       security: [{ HostCookie: [] }]
       description: >-
-        Offline discovery of sessions, skills, MCP, prompts and rules on the Host. No Step account or model
+        Offline discovery of sessions, skills, MCP and rules on the Host. No Step account or model
         required. Inherits Host cookie, allowed-Origin and fetch-metadata checks; loopback only.
-        Source projects must be explicitly selected existing canonical registered workspaces. Scanning
+        Source projects are explicitly selected existing canonical directories; selecting one neither registers
+        nor trusts it. Scanning
         never registers or trusts them. MCP discovery parses config; this is not a metadata-only scan.
         All migration URLs reject query strings, trailing slashes and encoded path segments. JSON bodies
         are limited to 65536 bytes; unknown fields are rejected. No resource is applied by scanning.
@@ -29,11 +30,6 @@ paths:
               schema: { $ref: "#/components/schemas/MigrationScanResult" }
         "400": { $ref: "#/components/responses/MigrationInvalid" }
         "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
-        "403":
-          description: migration-workspace-forbidden (selected source is not a registered canonical workspace)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MigrationError" }
         "409": { $ref: "#/components/responses/MigrationConflict" }
         "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
         "415": { $ref: "#/components/responses/MigrationContentType" }
@@ -176,7 +172,7 @@ paths:
       security: [{ HostCookie: [] }]
       description: >-
         Preview restoring the backup of an existing rules file modified by append/replace. Not a general
-        job undo: skills, prompts, MCP, sessions and newly created rules have no recovery here. Target
+        job undo: skills, MCP, sessions and newly created rules have no recovery here. Target
         and backup must match journal hashes; project must be selected again after restart. Does not write.
       requestBody:
         required: true
@@ -2685,7 +2681,7 @@ components:
       minLength: 1
       maxLength: 512
       pattern: '^[^\x00-\x1f\x7f]+$'
-    MigrationKind: { type: string, enum: [sessions, skills, mcp, prompts, rules] }
+    MigrationKind: { type: string, enum: [sessions, skills, mcp, rules] }
     MigrationSource: { type: string, enum: [claude-code, codex, workbuddy, qoder, shared, stepcode, plugin] }
     MigrationAction: { type: string, enum: [copy, import, create, append, replace, skip] }
     MigrationAcknowledgement: { type: string, enum: [rules-impact, scope-expansion, independent-copy, sensitive-values] }
@@ -2709,6 +2705,16 @@ components:
               pattern: '^[^\x00-\x1f\x7f]+$'
               description: Explicit existing absolute destination, canonicalized by Host and pinned by the service without adding it to source scans.
       discriminator: { propertyName: kind }
+    MigrationTargetRequest:
+      oneOf:
+        - $ref: "#/components/schemas/MigrationScope"
+        - type: object
+          additionalProperties: false
+          required: [kind, cwd, create]
+          properties:
+            kind: { type: string, const: project }
+            cwd: { type: string, minLength: 1, maxLength: 4096 }
+            create: { type: boolean, const: true }
     MigrationScanRequest:
       type: object
       additionalProperties: false
@@ -2722,13 +2728,27 @@ components:
             Omission retains the service's previous choice; [] clears it.
             Paths are canonicalized, but choosing a project does not register it or grant trust.
           items: { type: string, minLength: 1, maxLength: 4096, pattern: '^[^\x00-\x1f\x7f]+$' }
+        sessionOptions:
+          type: object
+          additionalProperties: false
+          properties:
+            range: { type: string, enum: [all, '7', '30', '90'], default: all, description: Source file modification-time window }
+            limit: { type: [integer, 'null'], enum: [30, 50, 100, null], default: 100, description: Global candidate display limit; null does not remove safety limits }
+            includeArchived: { type: boolean, default: false }
+        mcpSourcePaths:
+          type: object
+          additionalProperties: false
+          description: Explicit absolute MCP configuration files only; omission resets MCP sources to defaults, without affecting other scan roots.
+          properties:
+            claude-code: { type: string, minLength: 1, maxLength: 4096, pattern: '^[^\x00-\x1f\x7f]+$' }
+            codex: { type: string, minLength: 1, maxLength: 4096, pattern: '^[^\x00-\x1f\x7f]+$' }
     MigrationPreviewRequest:
       type: object
       additionalProperties: false
       required: [candidateId]
       properties:
         candidateId: { $ref: "#/components/schemas/MigrationId" }
-        target: { $ref: "#/components/schemas/MigrationScope" }
+        target: { $ref: "#/components/schemas/MigrationTargetRequest" }
         action: { $ref: "#/components/schemas/MigrationAction" }
         targetName:
           type: string
@@ -2738,8 +2758,8 @@ components:
           description: >-
             Adapter limit 255; service resource names are at most 64 ASCII alphanumeric/underscore/hyphen
             starting alphanumeric, excluding __proto__, constructor and prototype. Skills require lowercase
-            alphanumeric segments separated by hyphens; prompts reject reserved slash-command names.
-            Rules may only name AGENTS.md. Sessions retain the source title.
+            alphanumeric segments separated by hyphens. Rules may only name AGENTS.md. Sessions retain the
+            source title.
         includeSensitiveValues:
           type: boolean
           default: false
@@ -2795,6 +2815,15 @@ components:
         - journal-limit
         - journal-write-failed
         - mcp-configured-equal
+        - invalid-mcp-sources
+        - mcp-unsupported-transport
+        - mcp-incomplete-config
+        - mcp-invalid-tool-filter
+        - mcp-remote-env-unsupported
+        - mcp-name-normalized
+        - mcp-name-conflict
+        - mcp-duplicate
+        - mcp-name-exhausted
         - mcp-fields-not-translated
         - mcp-global-only
         - migration-blocked
@@ -2807,7 +2836,6 @@ components:
         - migration-lock-lost
         - migration-route-not-found
         - migration-unavailable
-        - migration-workspace-forbidden
         - plan-expired
         - plan-limit
         - plan-not-found
@@ -2905,7 +2933,10 @@ components:
         needsMigration: { type: boolean, description: False for already configured, direct references and plugin-owned resources; do not auto-copy them }
         diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
         modified: { type: string }
+        mcpTransport: { type: string, enum: [stdio, http], description: Safe connection type; never a command or URL }
         sourceSessionId: { type: string, description: Source metadata only }
+        messageCount: { type: integer, minimum: 0, description: Non-empty source records found during discovery; never source content }
+        messageCountCapped: { type: boolean, description: True when the count is a lower bound }
     MigrationSourceReport:
       type: object
       required: [kind, source, scope, path, status, diagnostics]
@@ -2914,7 +2945,7 @@ components:
         source: { $ref: "#/components/schemas/MigrationSource" }
         scope: { $ref: "#/components/schemas/MigrationScope" }
         path: { type: string }
-        status: { type: string, enum: [ok, missing, empty, error, unsupported] }
+        status: { type: string, enum: [ok, missing, empty, partial, error, unsupported] }
         diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
     MigrationScanResult:
       type: object
@@ -2992,13 +3023,17 @@ components:
           type: string
           pattern: '^[a-zA-Z0-9_-]{1,128}$'
           description: Service limit 128 ASCII alphanumeric/underscore/hyphen (adapter text limit 512).
+    LegacyMigrationKind:
+      type: string
+      enum: [sessions, skills, mcp, rules, prompts]
+      description: Historical job results may contain prompts; current scans and previews accept only MigrationKind.
     MigrationItemResult:
       type: object
       required: [id, candidateId, kind, source, name, sourceScope, requestedTarget, action, status, diagnostics, activation]
       properties:
         id: { type: string }
         candidateId: { type: string }
-        kind: { $ref: "#/components/schemas/MigrationKind" }
+        kind: { $ref: "#/components/schemas/LegacyMigrationKind" }
         source: { $ref: "#/components/schemas/MigrationSource" }
         name: { type: string }
         sourceScope: { $ref: "#/components/schemas/MigrationScope" }

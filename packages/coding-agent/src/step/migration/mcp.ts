@@ -1,46 +1,40 @@
 import { readdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import type { StepMcpServerConfig } from "../config-toml.ts";
-import { translateClaudeServer, translateCodexServer } from "../mcp-import.ts";
+import { allocateStepMcpImportCandidates, parseStepMcpImportSource, type TranslatedServer } from "../mcp-import.ts";
 import { fail, hash, info, inside, record, safePath, stable, text } from "./filesystem.ts";
-import { configDocument, type MigrationPaths, resourceName } from "./paths.ts";
-import type { MigrationSource } from "./types.ts";
+import { configDocument, type MigrationPaths } from "./paths.ts";
+import type { MigrationScope, MigrationSource } from "./types.ts";
 
 export interface McpDeclaration {
 	name: string;
 	config?: StepMcpServerConfig;
-	warnings: number;
+	translated: TranslatedServer;
 }
 export function declarations(
 	path: string,
 	source: MigrationSource,
 	unsupportedProjects?: (count: number) => void,
 ): McpDeclaration[] {
-	const raw = text(path)!;
-	let parsed: Record<string, unknown>;
-	try {
-		parsed = record(source === "codex" ? parseToml(raw) : JSON.parse(raw));
-	} catch {
-		return fail("invalid-source-config");
+	if (source !== "codex" && source !== "claude-code") return fail("unsupported-mcp-config");
+	const parsed = parseStepMcpImportSource(source === "codex" ? ".codex" : ".claude", text(path)!);
+	if (parsed.state === "error") return fail("invalid-source-config");
+	if (parsed.projectScopedCount) unsupportedProjects?.(parsed.projectScopedCount);
+	return parsed.servers.map((translated) => ({ name: translated.name, config: translated.config, translated }));
+}
+
+export function allocateMcpNames(
+	declarations: readonly TranslatedServer[],
+	existing: Record<string, unknown>,
+	sameConfig: (left: StepMcpServerConfig, right: StepMcpServerConfig) => boolean = (left, right) =>
+		mcpIdentity(left) === mcpIdentity(right),
+) {
+	const servers: Record<string, StepMcpServerConfig> = {};
+	for (const [name, value] of Object.entries(existing)) {
+		if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid-target-config");
+		servers[name] = record(value);
 	}
-	if (source === "claude-code" && parsed.projects !== undefined) {
-		let count = 0;
-		// Inspect declaration metadata only, never embedded cwd paths or server values.
-		for (const project of Object.values(record(parsed.projects))) {
-			const servers = record(project).mcpServers;
-			if (servers !== undefined) count += Object.keys(record(servers)).length;
-		}
-		if (count) unsupportedProjects?.(count);
-	}
-	const table = source === "codex" ? parsed.mcp_servers : parsed.mcpServers;
-	if (table === undefined) return [];
-	return Object.entries(record(table)).map(([name, entry]) => {
-		resourceName(name);
-		const translated =
-			source === "codex" ? translateCodexServer(name, record(entry)) : translateClaudeServer(name, record(entry));
-		return { name, config: translated?.config, warnings: translated?.warnings.length ?? 0 };
-	});
+	return allocateStepMcpImportCandidates(declarations, servers, { sameConfig, matchAnyName: true });
 }
 
 /** Compare the entire declaration; absent enabled/shared carry the runtime defaults. */
@@ -48,8 +42,11 @@ export function mcpIdentity(value: unknown): string {
 	const normalized = { ...record(value), enabled: true, shared: record(value).shared ?? true };
 	return hash(stable(normalized));
 }
-export function targetServers(paths: MigrationPaths): Record<string, unknown> {
-	const doc = configDocument(paths.config);
+export function targetServers(
+	paths: MigrationPaths,
+	scope: MigrationScope = { kind: "global" },
+): Record<string, unknown> {
+	const doc = configDocument(paths.configFor(scope));
 	return doc.mcp_servers === undefined ? {} : record(doc.mcp_servers);
 }
 const reference = /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::-)?\}$/u;

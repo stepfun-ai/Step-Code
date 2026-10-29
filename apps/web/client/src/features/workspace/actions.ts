@@ -101,8 +101,12 @@ export async function confirmWorkspaceBrowser(path: string): Promise<void> {
 	}
 }
 
-/** Select an existing migration destination. No draft switch, registration or next-launch workspace mutation. */
-export async function chooseResourceDirectory(): Promise<string | null> {
+/**
+ * Select an existing directory for migration without registering it as a workspace,
+ * switching the draft or mutating the next-launch workspace. The title distinguishes
+ * destination picks from read-only source picks in dialogs.
+ */
+export async function chooseResourceDirectory(title: string = t("migrationPickTarget")): Promise<string | null> {
 	if (getState().pickingFolder || resourceDirectoryAnswer || getState().ui.workspaceBrowserOpen) return null;
 	setState({ pickingFolder: true });
 	try {
@@ -111,13 +115,13 @@ export async function chooseResourceDirectory(): Promise<string | null> {
 		try {
 			if (bridge)
 				return await bridge.pickDirectory({
-					title: t("migrationPickTarget"),
+					title,
 					defaultPath: state.draftCwd || state.bootstrapCwd || undefined,
 					purpose: "resource",
 				});
 			if (state.directoryPicker === "native") {
 				const result = await apiSend<{ path?: string | null }>("/api/v1/workspaces/pick", "POST", {
-					title: t("migrationPickTarget"),
+					title,
 					startIn: state.draftCwd || state.bootstrapCwd,
 				});
 				return result.path ?? null;

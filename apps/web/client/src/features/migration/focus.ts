@@ -3,7 +3,7 @@ import { type KeyboardEvent, useEffect, useRef } from "react";
 const focusable =
 	'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]';
 export function trapMigrationFocus(event: KeyboardEvent<HTMLElement>): void {
-	if (event.key !== "Tab") return;
+	if (event.key !== "Tab" || event.defaultPrevented) return;
 	const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(focusable)).filter(
 		(item) => !item.closest("[hidden], [inert]") && item.getClientRects().length > 0,
 	);

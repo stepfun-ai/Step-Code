@@ -10,7 +10,7 @@ import type {
 	MigrationSelection,
 } from "../../state/types";
 
-export const MIGRATION_KINDS: readonly MigrationKind[] = ["sessions", "skills", "mcp", "prompts", "rules"];
+export const MIGRATION_KINDS: readonly MigrationKind[] = ["sessions", "mcp", "rules"];
 export interface MigrationDraft {
 	readonly request: MigrationPreviewRequest;
 	readonly selected: boolean;
@@ -23,16 +23,9 @@ export interface MigrationDraft {
 
 export function initialPreviewRequest(
 	candidate: MigrationCandidate,
-	offeredProjects: readonly string[],
+	_offeredProjects: readonly string[],
 ): MigrationPreviewRequest {
-	return {
-		candidateId: candidate.id,
-		...(candidate.kind === "sessions" &&
-		candidate.sourceScope.kind === "project" &&
-		offeredProjects.includes(candidate.sourceScope.cwd)
-			? { target: candidate.sourceScope }
-			: {}),
-	};
+	return { candidateId: candidate.id, ...(candidate.kind === "mcp" ? { target: { kind: "global" as const } } : {}) };
 }
 
 export function isActionable(candidate: MigrationCandidate): boolean {
@@ -63,19 +56,52 @@ export function draftReady(draft: MigrationDraft, now = Date.now()): boolean {
 export function invalidateDraft(draft: MigrationDraft, request: MigrationPreviewRequest): MigrationDraft {
 	return { request, selected: draft.selected, acknowledged: [], ruleChecked: false, loading: false };
 }
-export function collectSelections(drafts: Readonly<Record<string, MigrationDraft>>): MigrationSelection[] | null {
+export function collectSelections(
+	drafts: Readonly<Record<string, MigrationDraft>>,
+	skipBlocked = false,
+): MigrationSelection[] | null {
 	const selected = Object.values(drafts).filter((draft) => draft.selected);
-	if (!selected.length || selected.some((draft) => !draftReady(draft))) return null;
-	return selected.flatMap((draft) =>
-		draft.preview ? [{ previewId: draft.preview.id, acknowledged: [...draft.acknowledged] }] : [],
-	);
+	if (!selected.length || (!skipBlocked && selected.some((draft) => !draftReady(draft)))) return null;
+	return selected
+		.filter((draft) => draftReady(draft))
+		.flatMap((draft) =>
+			draft.preview ? [{ previewId: draft.preview.id, acknowledged: [...draft.acknowledged] }] : [],
+		);
 }
+export function adoptMigrationPlan(
+	plan: MigrationPlan,
+	drafts: Readonly<Record<string, MigrationDraft>>,
+	skipBlocked = false,
+): Readonly<Record<string, MigrationDraft>> | null {
+	const selected = Object.entries(drafts).filter(([, draft]) => draft.selected && (!skipBlocked || draftReady(draft)));
+	if (selected.length !== plan.items.length || new Set(plan.items.map((p) => p.candidate.id)).size !== selected.length)
+		return null;
+	const next = { ...drafts };
+	for (const preview of plan.items) {
+		const draft = drafts[preview.candidate.id];
+		if (!draft?.selected || !draftReady(draft) || !draft.preview) return null;
+		if (preview.candidate.kind !== "mcp") {
+			if (preview.id !== draft.preview.id || preview.fingerprint !== draft.preview.fingerprint) return null;
+		} else if (
+			preview.target.path !== draft.preview.target.path ||
+			preview.target.scope.kind !== "global" ||
+			!hasConsent(preview, draft.acknowledged) ||
+			preview.blockers.length ||
+			!["import", "skip"].includes(preview.action)
+		)
+			return null;
+		next[preview.candidate.id] = { ...draft, preview };
+	}
+	return next;
+}
+
 export function planReady(
 	plan: MigrationPlan,
 	drafts: Readonly<Record<string, MigrationDraft>>,
 	now = Date.now(),
+	skipBlocked = false,
 ): boolean {
-	const selected = Object.values(drafts).filter((draft) => draft.selected);
+	const selected = Object.values(drafts).filter((draft) => draft.selected && (!skipBlocked || draftReady(draft, now)));
 	return (
 		Date.parse(plan.expiresAt) > now &&
 		plan.items.length > 0 &&

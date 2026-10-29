@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { resolveStepConfigDir, resolveStepHomeDir } from "../environment.ts";
@@ -23,10 +24,40 @@ export class MigrationPaths {
 		this.configDir = resolveStepConfigDir(env);
 		if (basename(this.configDir) !== this.configDir || [".", ".."].includes(this.configDir))
 			fail("invalid-config-namespace");
+		// Anchor every path this object hands out: on macOS /var and /tmp are symlinks, and a
+		// raw value would make safePath() reject StepCode's own plugin directory as an unsafe link.
 		this.env = { ...env, HOME: this.home, STEP_CODING_AGENT_DIR: this.agent };
+		if (env.STEPCODE_STORAGE_ROOT_DIR?.trim()) {
+			// Resolve symlinks first: a storage root reached through one is still the same directory.
+			const requested = resolve(env.STEPCODE_STORAGE_ROOT_DIR.trim());
+			this.env.STEPCODE_STORAGE_ROOT_DIR = this.inputPath(
+				existsSync(requested) ? realpathSync(requested) : requested,
+			);
+		}
 		this.config = join(dirname(this.agent), "config.toml");
 		this.claude = this.sourceRoot(env.CLAUDE_CONFIG_DIR, ".claude");
 		this.codex = this.sourceRoot(env.CODEX_HOME, ".codex");
+	}
+	private mcpSourcePaths: Partial<Record<"claude-code" | "codex", string>> = {};
+	chooseMcpSources(value: unknown): void {
+		if (value === undefined) {
+			this.mcpSourcePaths = {};
+			return;
+		}
+		if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid-mcp-sources");
+		const next: Partial<Record<"claude-code" | "codex", string>> = {};
+		for (const [source, path] of Object.entries(value)) {
+			if (source !== "claude-code" && source !== "codex") fail("invalid-mcp-sources");
+			if (typeof path !== "string" || path.length > 4096) fail("invalid-mcp-sources");
+			next[source] = this.inputPath(path);
+		}
+		this.mcpSourcePaths = next;
+	}
+	mcpSource(source: "claude-code" | "codex"): string {
+		return (
+			this.mcpSourcePaths[source] ??
+			(source === "codex" ? join(this.codex, "config.toml") : join(this.home, ".claude.json"))
+		);
 	}
 	private sourceRoot(value: string | undefined, fallback: string): string {
 		return this.inputPath(value?.trim() || join(this.home, fallback));
@@ -75,13 +106,34 @@ export class MigrationPaths {
 	chooseTarget(value: unknown): void {
 		if (value === undefined) return;
 		const input = record(value);
-		if (input.kind === "global") return;
+		if (input.kind === "global") {
+			if (input.create !== undefined) fail("invalid-scope");
+			return;
+		}
 		if (input.kind !== "project" || typeof input.cwd !== "string") fail("invalid-scope");
+		if (input.create !== undefined && input.create !== true) fail("invalid-scope");
 		const cwd = this.inputPath(input.cwd);
+		// `create` is the user's explicit request for a workspace folder that does not exist yet;
+		// it is the single preview-time write, bounded to one level under an existing directory.
+		if (input.create === true) this.ensureTargetDirectory(cwd);
 		const identity = this.existingProjectIdentity(cwd);
 		const known = this.projectIdentities.get(cwd) ?? this.targetIdentities.get(cwd);
 		if (known && known !== identity) fail("invalid-projects");
 		this.targetIdentities.set(cwd, identity);
+	}
+	private ensureTargetDirectory(cwd: string): void {
+		if (info(cwd)?.isDirectory()) return; // Explicit creation is idempotent when the folder already exists.
+		const parent = dirname(cwd);
+		const parentInfo = info(parent);
+		if (!parentInfo?.isDirectory() || parentInfo.isSymbolicLink()) fail("invalid-projects");
+		safePath(parent);
+		const name = basename(cwd);
+		if (!name || name.length > 60 || name.includes("\0")) fail("invalid-projects");
+		try {
+			mkdirSync(cwd, { mode: 0o755 });
+		} catch {
+			fail("invalid-projects");
+		}
 	}
 	projectIdentity(scope: MigrationScope): string | undefined {
 		if (scope.kind === "global") return undefined;

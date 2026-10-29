@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
 	existsSync,
 	mkdirSync,
@@ -68,27 +69,27 @@ afterEach(async () => {
 
 describe("migration safety boundaries", () => {
 	it("uses an explicitly chosen target without treating it as a source project", async () => {
-		put(join(home, ".claude", "commands", "review.md"), "Review the fixture");
+		put(join(home, ".codex", "skills", "review", "SKILL.md"), skill("review"));
 		const target = join(home, "new-target");
 		mkdirSync(target);
 		put(join(agent, "trust.json"), JSON.stringify({ [target]: true }));
-		put(join(target, ".claude", "commands", "private.md"), "DO_NOT_SCAN_UNSELECTED_PROJECT");
-		const scan = await service.scan({ kinds: ["prompts"], projectCwds: [] });
+		put(join(target, ".claude", "skills", "private", "SKILL.md"), skill("private"));
+		const scan = await service.scan({ kinds: ["skills"], projectCwds: [] });
 		const source = scan.candidates.find((item) => item.name === "review");
 		expect(source).toBeDefined();
 		const preview = await service.preview({ candidateId: source!.id, target: { kind: "project", cwd: target } });
 		expect(preview.target.scope).toEqual({ kind: "project", cwd: target });
 		expect(preview.blockers).toEqual([]);
-		const again = await service.scan({ kinds: ["prompts"], projectCwds: [] });
+		const again = await service.scan({ kinds: ["skills"], projectCwds: [] });
 		expect(again.candidates.some((item) => item.name === "private")).toBe(false);
 		const job = await complete(preview, preview.requiredAcknowledgements);
 		expect(job.items[0]?.status).toBe("imported");
-		expect(readFileSync(preview.target.path, "utf8")).toContain("Review the fixture");
+		expect(readFileSync(join(preview.target.path, "SKILL.md"), "utf8")).toContain("Fixture skill");
 	});
 
 	it("does not recreate an explicitly selected destination removed after preview", async () => {
-		put(join(home, ".claude", "commands", "review.md"), "Review the fixture");
-		const source = await candidate("prompts", "review");
+		put(join(home, ".codex", "skills", "review", "SKILL.md"), skill("review"));
+		const source = await candidate("skills", "review");
 		const target = join(home, "new-target");
 		mkdirSync(target);
 		const preview = await service.preview({ candidateId: source.id, target: { kind: "project", cwd: target } });
@@ -99,8 +100,8 @@ describe("migration safety boundaries", () => {
 		expect(existsSync(target)).toBe(false);
 	});
 	it("reconciles a published intent after interruption without replay or source text in the journal", async () => {
-		put(join(home, ".claude", "commands", "review.md"), "SOURCE_TEXT_ONLY_IN_RESOURCE");
-		const c = await candidate("prompts");
+		put(join(home, ".codex", "skills", "review", "SKILL.md"), skill("review"));
+		const c = await candidate("skills");
 		const p = await service.preview({ candidateId: c.id });
 		const job = await complete(p);
 		await service.close();
@@ -182,8 +183,8 @@ describe("migration safety boundaries", () => {
 	});
 
 	it("rejects target links, traversal and unselected projects before publication", async () => {
-		put(join(home, ".claude", "commands", "review.md"), "review");
-		const c = await candidate("prompts");
+		put(join(home, ".codex", "skills", "review", "SKILL.md"), skill("review"));
+		const c = await candidate("skills");
 		await expect(service.preview({ candidateId: c.id, targetName: "../escape" })).rejects.toMatchObject({
 			code: "invalid-resource-name",
 		});
@@ -194,7 +195,7 @@ describe("migration safety boundaries", () => {
 		).rejects.toThrow();
 		mkdirSync(agent, { recursive: true });
 		mkdirSync(join(home, "outside"));
-		symlinkSync(join(home, "outside"), join(agent, "prompts"));
+		symlinkSync(join(home, "outside"), join(agent, "skills"));
 		await expect(service.preview({ candidateId: c.id })).rejects.toMatchObject({ code: "unsafe-link" });
 		expect(readdirSync(join(home, "outside"))).toEqual([]);
 	});
@@ -472,11 +473,11 @@ describe("offline migration rules and jobs", () => {
 
 	it("invalidates the entire batch if a source, target or effective rule set changes", async () => {
 		put(join(home, ".claude", "CLAUDE.md"), "Reviewed rules.");
-		put(join(home, ".claude", "commands", "review.md"), "Review static text");
+		put(join(home, ".codex", "skills", "review", "SKILL.md"), skill("review"));
 		const rule = await candidate("rules");
-		const prompt = await candidate("prompts");
+		const resource = await candidate("skills");
 		const p = await service.preview({ candidateId: rule.id });
-		const q = await service.preview({ candidateId: prompt.id });
+		const q = await service.preview({ candidateId: resource.id });
 		const plan = await service.plan([
 			{ previewId: q.id, acknowledged: [] },
 			{ previewId: p.id, acknowledged: ["rules-impact"] },
@@ -485,10 +486,38 @@ describe("offline migration rules and jobs", () => {
 		await expect(
 			service.start({ planId: plan.id, digest: plan.digest, idempotencyKey: "stale-plan" }),
 		).rejects.toMatchObject({ code: "preview-changed", status: 409 });
-		expect(existsSync(join(agent, "prompts", "review.md"))).toBe(false);
+		expect(existsSync(join(agent, "skills", "review", "SKILL.md"))).toBe(false);
 		expect(service.listJobs()).toEqual([]);
 		const blocked = await service.preview({ candidateId: rule.id });
 		expect(blocked.blockers.map((b) => b.code)).toContain("rule-higher-priority-override");
+	});
+
+	it("keeps a foreign MCP importable when StepCode storage sits under a symlinked root", async () => {
+		// macOS /var and /tmp are symlinks; a raw storage root must not fail plugin inspection.
+		const real = join(home, "real-storage");
+		mkdirSync(join(real, "plugins"), { recursive: true });
+		// Reach the storage through a symlink, the way /var and /tmp resolve on macOS.
+		const storage = join(home, "linked-storage");
+		symlinkSync(real, storage);
+		put(join(home, ".claude.json"), JSON.stringify({ mcpServers: { docs: { command: "fixture-docs" } } }));
+		env = { ...env, STEPCODE_STORAGE_ROOT_DIR: storage };
+		service = create();
+		const scan = await service.scan({ kinds: ["mcp"] });
+		const docs = scan.candidates.find((c) => c.name === "docs");
+		expect(docs?.readiness).toBe("ready");
+		expect(docs?.needsMigration).toBe(true);
+		expect(docs?.diagnostics).toEqual([]);
+	});
+
+	it("lists one rule file once on case-insensitive filesystems", async () => {
+		put(join(home, ".codex", "AGENTS.md"), "# Codex fixture rules\n");
+		const scan = await service.scan({ kinds: ["rules"] });
+		const codex = scan.candidates.filter((c) => c.source === "codex");
+		// AGENTS.md and AGENTS.MD name the same file here; only one may be offered.
+		assert.equal(codex.length, 1);
+		assert.equal(codex[0]?.name, "AGENTS.md");
+		const preview = await service.preview({ candidateId: codex[0]!.id });
+		assert.equal(preview.action, "create");
 	});
 
 	it("preserves project root rules already consumed by the loader", async () => {
@@ -525,8 +554,8 @@ describe("offline migration rules and jobs", () => {
 	});
 
 	it("persists idempotency across service instances without replaying writes", async () => {
-		put(join(home, ".claude", "commands", "review.md"), "static template");
-		const c = await candidate("prompts");
+		put(join(home, ".codex", "skills", "review", "SKILL.md"), skill("review"));
+		const c = await candidate("skills");
 		const p = await service.preview({ candidateId: c.id });
 		const plan = await service.plan([{ previewId: p.id, acknowledged: [] }]);
 		const job = await complete(p);
@@ -541,13 +570,13 @@ describe("offline migration rules and jobs", () => {
 	});
 
 	it("cancels before the first publication and protects one active job per agent directory", async () => {
-		put(join(home, ".claude", "commands", "one.md"), "one");
-		put(join(home, ".claude", "commands", "two.md"), "two");
-		const c = await candidate("prompts", "one");
+		put(join(home, ".codex", "skills", "one", "SKILL.md"), skill("one"));
+		put(join(home, ".codex", "skills", "two", "SKILL.md"), skill("two"));
+		const c = await candidate("skills", "one");
 		const p = await service.preview({ candidateId: c.id });
 		const plan = await service.plan([{ previewId: p.id, acknowledged: [] }]);
 		const other = create();
-		const otherCandidate = (await other.scan({ kinds: ["prompts"] })).candidates[0]!;
+		const otherCandidate = (await other.scan({ kinds: ["skills"] })).candidates[0]!;
 		const otherPreview = await other.preview({ candidateId: otherCandidate.id });
 		const otherPlan = await other.plan([{ previewId: otherPreview.id, acknowledged: [] }]);
 		const job = await service.start({ planId: plan.id, digest: plan.digest, idempotencyKey: "cancel" });
@@ -557,7 +586,7 @@ describe("offline migration rules and jobs", () => {
 		service.cancel(job.id);
 		await service.close();
 		expect(service.getJob(job.id)).toMatchObject({ status: "cancelled", items: [{ status: "not-run" }] });
-		expect(existsSync(join(agent, "prompts", "one.md"))).toBe(false);
+		expect(existsSync(join(agent, "skills", "one", "SKILL.md"))).toBe(false);
 	});
 });
 
@@ -600,14 +629,16 @@ describe("offline migration resources", () => {
 		expect(journal).not.toMatch(/PRIVATE_QUERY|PRIVATE_HEADER|fixture.invalid|FIXTURE_TOKEN/u);
 	});
 
-	it("requires explicit sensitive inclusion and rejects a project MCP target", async () => {
+	it("requires explicit sensitive inclusion and writes a project MCP target", async () => {
 		put(
 			join(home, ".claude.json"),
 			JSON.stringify({ mcpServers: { local: { command: "server", env: { API_KEY: "PRIVATE_LITERAL" } } } }),
 		);
+		put(join(agent, "trust.json"), JSON.stringify({ [project]: true }));
 		const c = await candidate("mcp");
 		const projectPreview = await service.preview({ candidateId: c.id, target: { kind: "project", cwd: project } });
-		expect(projectPreview.blockers.map((b) => b.code)).toContain("mcp-global-only");
+		expect(projectPreview.blockers).toEqual([]);
+		expect(projectPreview.target.path).toBe(join(project, ".profile", "config.toml"));
 		const p = await service.preview({ candidateId: c.id, includeSensitiveValues: true });
 		expect(JSON.stringify(p)).not.toContain("PRIVATE_LITERAL");
 		await expect(service.plan([{ previewId: p.id, acknowledged: [] }])).rejects.toMatchObject({
@@ -618,13 +649,38 @@ describe("offline migration resources", () => {
 		expect(readFileSync(join(dirname(agent), "config.toml"), "utf8")).toContain("PRIVATE_LITERAL");
 	});
 
+	it("writes an MCP server into a trusted project config and leaves the global one alone", async () => {
+		put(join(home, ".claude.json"), JSON.stringify({ mcpServers: { local: { command: "server" } } }));
+		put(join(agent, "trust.json"), JSON.stringify({ [project]: true }));
+		const c = await candidate("mcp");
+		const p = await service.preview({ candidateId: c.id, target: { kind: "project", cwd: project } });
+		expect(p.blockers).toEqual([]);
+		const job = await complete(p);
+		expect(job.items[0]?.status).toBe("imported");
+		const written = readFileSync(join(project, ".profile", "config.toml"), "utf8");
+		expect(written).toContain("[mcp_servers.local]");
+		expect(written).toContain('command = "server"');
+		expect(written).toContain("enabled = false");
+		// The global config must not gain the server; an empty file may exist from reads.
+		const global = existsSync(join(dirname(agent), "config.toml"))
+			? readFileSync(join(dirname(agent), "config.toml"), "utf8")
+			: "";
+		expect(global).not.toContain("mcp_servers.local");
+		// Re-previewing against the same project must report it as already configured.
+		const again = await service.preview({ candidateId: c.id, target: { kind: "project", cwd: project } });
+		expect(again.action).toBe("skip");
+		expect(again.blockers).toEqual([]);
+	});
+
 	it("compares complete MCP declarations without treating reviewed as proof of import", async () => {
 		put(join(home, ".codex", "config.toml"), '[mcp_servers.a]\ncommand="server"\ndisabled_tools=["delete"]\n');
 		put(join(dirname(agent), "config.toml"), '[mcp_servers.a]\ncommand="server"\ndisabled_tools=["other"]\n');
 		const c = await candidate("mcp");
 		expect(c.needsMigration).toBe(true);
 		const p = await service.preview({ candidateId: c.id });
-		expect(p.blockers.map((b) => b.code)).toContain("target-conflict");
+		expect(p.blockers).toEqual([]);
+		expect(p.target.name).toBe("a-codex");
+		expect(p.warnings.map((b) => b.code)).toContain("mcp-name-conflict");
 		put(
 			join(dirname(agent), "config.toml"),
 			'[mcp_servers.other]\ncommand="server"\ndisabled_tools=["delete"]\nenabled=false\n',
@@ -686,19 +742,5 @@ describe("offline migration resources", () => {
 		symlinkSync(join(home, "private"), join(source, "linked"));
 		const c = await candidate("skills", "demo");
 		await expect(service.preview({ candidateId: c.id })).rejects.toMatchObject({ code: "unsafe-link" });
-	});
-
-	it("flattens nested prompt names and rejects dynamic or permission syntax", async () => {
-		put(join(home, ".claude", "commands", "team", "review.md"), "Review $ARGUMENTS");
-		put(join(home, ".claude", "commands", "danger.md"), "---\nallowed-tools: bash\n---\n!`run`\n");
-		const c = await candidate("prompts", "team-review");
-		const p = await service.preview({ candidateId: c.id });
-		const job = await complete(p);
-		expect(job.items[0]?.status).toBe("imported");
-		expect(readFileSync(join(agent, "prompts", "team-review.md"), "utf8")).toBe("Review $ARGUMENTS");
-		expect((await candidate("prompts", "danger")).readiness).toBe("unsupported");
-		await expect(service.preview({ candidateId: c.id, targetName: "help" })).rejects.toMatchObject({
-			code: "reserved-prompt-name",
-		});
 	});
 });

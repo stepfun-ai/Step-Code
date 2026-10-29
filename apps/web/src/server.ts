@@ -796,7 +796,7 @@ const server = createServer(async (request, response) => {
 		if (parts[2] === "voice") return await voiceRoute(voice, parts.slice(3), request, response);
 		if (parts[2] === "migrations") {
 			if (!migrations) return json(response, 503, { error: "migration-unavailable", code: "migration-unavailable" });
-			return await migrationRoute(migrations, parts.slice(3), url, request, response, knownWorkspace);
+			return await migrationRoute(migrations, parts.slice(3), url, request, response);
 		}
 		if (parts[2] === "desktop-onboarding" && parts.length === 3) {
 			if (!onboarding)

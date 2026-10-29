@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { StepMcpServerConfig } from "../config-toml.ts";
-import { hash, info, type PackageFile, stable, text } from "./filesystem.ts";
-import { mcpIdentity, redactedMcp, sanitizedMcp, targetServers } from "./mcp.ts";
+import { fail, hash, info, type PackageFile, stable, text } from "./filesystem.ts";
+import { allocateMcpNames, mcpIdentity, redactedMcp, sanitizedMcp, targetServers } from "./mcp.ts";
 import { type MigrationPaths, resourceName } from "./paths.ts";
 import {
 	copiedSkillEnabled,
-	promptName,
 	type ResourceCandidate,
 	ResourceInspector,
 	renamedSkill,
@@ -21,6 +20,8 @@ import type { MigrationPreview, MigrationPreviewRequest } from "./types.ts";
 export interface PreparedMigration {
 	dto: MigrationPreview;
 	request: MigrationPreviewRequest;
+	/** Original user request, before batch naming/deduplication; used when selections change. */
+	planningRequest?: MigrationPreviewRequest;
 	item?: ResourceCandidate;
 	sourceHash: string;
 	targetHash: string | null;
@@ -31,6 +32,46 @@ export interface PreparedMigration {
 	session?: { candidateId: string; fingerprint: string; cwd: string };
 }
 export const PREVIEW_TTL = 15 * 60 * 1000;
+
+/** Final names are allocated only over the chosen MCP declarations, before the user confirms the plan. */
+export function prepareMcpBatch(paths: MigrationPaths, selected: PreparedMigration[]): PreparedMigration[] {
+	const pending = selected.filter(
+		(p) =>
+			p.mcp && p.item?.mcp && p.dto.candidate.needsMigration && (p.planningRequest ?? p.request).action !== "skip",
+	);
+	if (!pending.length) return selected;
+	const identities = new Map<StepMcpServerConfig, string>();
+	const declarations = pending.map((p) => {
+		const original = p.item!.mcp!.translated;
+		const request = p.planningRequest ?? p.request;
+		// Never merge distinct source declarations merely because their sensitive values were omitted.
+		identities.set(p.mcp!, `${mcpIdentity(original.config)}\0${mcpIdentity(p.mcp)}`);
+		return { ...original, name: request.targetName ?? original.name, config: p.mcp };
+	});
+	const identity = (config: StepMcpServerConfig): string =>
+		identities.get(config) ?? `${mcpIdentity(config)}\0${mcpIdentity(config)}`;
+	const allocations = allocateMcpNames(declarations, targetServers(paths), (a, b) => identity(a) === identity(b));
+	const replacements = new Map<PreparedMigration, PreparedMigration>();
+	for (const [index, previous] of pending.entries()) {
+		const allocated = allocations[index]!;
+		const request = previous.planningRequest ?? previous.request;
+		if (allocated.blocked && allocated.blocked.kind !== "duplicate") fail("mcp-name-exhausted", 409);
+		if (request.targetName !== undefined && request.targetName !== allocated.targetName)
+			fail("batch-target-conflict", 409);
+		const prepared = prepareResource(
+			paths,
+			previous.item!,
+			{ ...request, targetName: allocated.targetName, ...(allocated.blocked ? { action: "skip" as const } : {}) },
+			[],
+		);
+		if (prepared.sourceHash !== previous.sourceHash || prepared.targetHash !== previous.targetHash)
+			fail("preview-changed", 409);
+		prepared.planningRequest = structuredClone(request);
+		prepared.dto.expiresAt = previous.dto.expiresAt;
+		replacements.set(previous, prepared);
+	}
+	return selected.map((p) => replacements.get(p) ?? p);
+}
 export function prepareResource(
 	paths: MigrationPaths,
 	item: ResourceCandidate,
@@ -46,14 +87,13 @@ export function prepareResource(
 	);
 	let name = request.targetName ?? candidate.name;
 	if (candidate.kind === "skills") name = resourceName(name, true);
-	else if (candidate.kind === "prompts") name = promptName(name);
-	else if (candidate.kind === "mcp") name = resourceName(name);
+	else if (candidate.kind === "mcp" && request.targetName !== undefined) name = resourceName(name);
 	let path =
 		candidate.kind === "mcp"
-			? paths.config
+			? paths.configFor(scope)
 			: candidate.kind === "rules"
 				? join(scope.kind === "global" ? paths.agent : scope.cwd, "AGENTS.md")
-				: join(paths.resourceRoot(scope), candidate.kind, candidate.kind === "skills" ? name : `${name}.md`);
+				: join(paths.resourceRoot(scope), "skills", name);
 	const dto: MigrationPreview = {
 		id: randomUUID(),
 		candidate,
@@ -95,8 +135,9 @@ export function prepareResource(
 			: undefined;
 	if (candidate.kind === "mcp") {
 		dto.activation = "disabled";
-		if (scope.kind !== "global") block("mcp-global-only");
-		const servers = targetServers(paths);
+		// Ordinary MCP now loads from a trusted project's own config, so a project target is
+		// allowed; an untrusted one is already blocked above as target-untrusted.
+		const servers = targetServers(paths, scope);
 		const original = item.mcp?.config;
 		if (!original) block("unsupported-mcp-config");
 		else {
@@ -110,7 +151,15 @@ export function prepareResource(
 				name = same[0];
 				dto.target.name = name;
 				dto.action = "skip";
-			} else if (servers[name]) block("target-conflict");
+			} else if (request.targetName !== undefined) {
+				if (servers[name]) block("target-conflict");
+			} else if (item.mcp) {
+				const allocated = allocateMcpNames([item.mcp.translated], servers)[0]!;
+				name = resourceName(allocated.targetName);
+				dto.target.name = name;
+				dto.warnings.push(...allocated.diagnostics);
+				if (!allocated.config) block("mcp-name-exhausted");
+			}
 		}
 		targetHash = text(path, true) === undefined ? null : hash(text(path)!);
 		dto.sourceText = original ? redactedMcp(original) : "[unsupported configuration]";
@@ -167,22 +216,15 @@ export function prepareResource(
 	}
 	if (
 		dto.action !== "skip" &&
-		(candidate.kind === "skills" || candidate.kind === "prompts") &&
-		(!targetResourceEnabled(
-			paths,
-			scope,
-			candidate.kind,
-			candidate.kind === "skills" ? join(path, "SKILL.md") : path,
-		) ||
-			(candidate.kind === "skills" && !copiedSkillEnabled(files)))
+		candidate.kind === "skills" &&
+		(!targetResourceEnabled(paths, scope, join(path, "SKILL.md")) || !copiedSkillEnabled(files))
 	) {
 		dto.activation = "disabled";
 		dto.warnings.push({ code: "target-disabled" });
 	}
-	if (dto.action !== "skip" && (candidate.kind === "skills" || candidate.kind === "prompts")) {
+	if (dto.action !== "skip" && candidate.kind === "skills") {
 		dto.warnings.push({ code: "resource-load-timing-only" });
-		if (targetResourceUncertain(paths, scope, candidate.kind))
-			dto.warnings.push({ code: "target-activation-unknown" });
+		if (targetResourceUncertain(paths, scope)) dto.warnings.push({ code: "target-activation-unknown" });
 	}
 	if (candidate.holding === "plugin") dto.allowedActions = ["skip"];
 	if (dto.action === "skip") {
@@ -205,12 +247,12 @@ export function prepareResource(
 			destination: destination?.fingerprint,
 			projectIdentity: paths.projectIdentity(dto.target.scope),
 			ignore:
-				dto.action !== "skip" && (candidate.kind === "skills" || candidate.kind === "prompts")
+				dto.action !== "skip" && candidate.kind === "skills"
 					? {
 							source: resourceIgnoreFingerprint(item.root, candidate.sourcePath),
 							target: resourceIgnoreFingerprint(
 								join(paths.resourceRoot(scope), candidate.kind),
-								candidate.kind === "skills" ? join(dto.target.path, "SKILL.md") : dto.target.path,
+								join(dto.target.path, "SKILL.md"),
 							),
 						}
 					: undefined,

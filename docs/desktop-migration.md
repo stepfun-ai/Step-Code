@@ -1,7 +1,7 @@
 # StepCode Desktop local migration
 
 StepCode Desktop and Web share an offline migration service for **sessions,
-skills, ordinary MCP declarations, prompt templates and instruction rules**.
+skills, ordinary MCP declarations and instruction rules**.
 This guide describes the implemented local workflow, not a general document,
 account or application-state migration. The Host delegates migration to the
 coding-agent service; it does not implement a second session store.
@@ -52,7 +52,6 @@ state does not disable existing chats; use the explicit API to inspect its error
 | Sessions | Claude Code, Codex, WorkBuddy and Qoder local supported JSONL history | Import a reviewed history snapshot into an explicitly selected project; preserve source provenance. Archives and child sessions are excluded by default in unified scan. No source process, credentials, approvals, file checkpoints or hidden reasoning are restored. |
 | Skills | Claude Code and Codex skills; shared `.agents/skills`; StepCode-owned skills; installed plugin skill declarations; selected-project equivalents | Copy a complete `SKILL.md` package including supporting files when needed. Plain standalone Markdown is not a copyable skill package. Direct references and plugin-owned resources do not need automatic physical migration. |
 | Ordinary MCP | Global Claude Code `mcpServers` and Codex `mcp_servers` declarations | Translate supported stdio/HTTP declarations into global StepCode config only, initially disabled. Project `.mcp.json` and project entries embedded in Claude config are reported unsupported, not imported globally. Equivalent configured/plugin-provided declarations are not duplicated. |
-| Prompts | Claude Code `commands`, Codex `prompts`, StepCode `prompts`, and installed plugin command declarations, globally and in selected projects | Copy compatible Markdown prompt templates. Only `description`/`argument-hint` frontmatter is supported; shell execution and file-expansion syntax are rejected. Reserved command names are rejected. Equal target content is skipped; differing target content is a conflict. |
 | Rules | Global Claude Code/Codex rule files and direct selected-project rule files | Recognize `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`; write only the destination `AGENTS.md` after rule-impact review and confirmation. Already effective project rules are references, not automatic copies. |
 
 The session adapters support Codex response-item/rollout records, Claude message
@@ -84,12 +83,12 @@ are examples, not fixed roots for all embeddings:
 | Agent resources/state | Injected `agentDir`; Web supplies `resolveStepAgentDir()` (`STEP_CODING_AGENT_DIR`, otherwise `<home>/<namespace>/agent`) |
 | Namespace | `STEPCODE_CONFIG_DIR`, otherwise `.stepcode`; migration requires a single directory name |
 | Global config | `config.toml` beside the agent directory, not inside it |
-| Skills/prompts targets | `<agentDir>/skills/<name>/` and `<agentDir>/prompts/<name>.md`; project targets are `<cwd>/<namespace>/skills/` and `prompts/` |
+| Skills targets | `<agentDir>/skills/<name>/`; project targets are `<cwd>/<namespace>/skills/` |
 | Rules target | `<agentDir>/AGENTS.md` globally, or `<cwd>/AGENTS.md` for a project |
 | Sessions | Injected session root (`STEP_CODING_AGENT_SESSION_DIR`), otherwise `<agentDir>/sessions`; item results report the actual published path and scope |
 | Durable migration state | `<agentDir>/migration/`; invitation state is `<agentDir>/desktop-onboarding.json` |
 | Claude Code sources | `CLAUDE_CONFIG_DIR` or `<home>/.claude` for projects/skills/commands/global rules; ordinary MCP comes from `<home>/.claude.json` |
-| Codex sources | `CODEX_HOME` or `<home>/.codex` for sessions/skills/prompts/global rules/MCP config |
+| Codex sources | `CODEX_HOME` or `<home>/.codex` for sessions/skills/global rules/MCP config |
 | WorkBuddy/Qoder sessions | `<home>/.workbuddy/projects` and `<home>/.qoder/projects` |
 
 StepCode discovery also inspects `<home>/<namespace>/skills`, in addition to
@@ -103,16 +102,21 @@ still determine their readiness. Uncertain resource configuration is not
 presented as certainly active.
 
 `scan.projectCwds` is an explicit list of existing absolute source directories.
-The Host canonicalizes each and requires it to be a registered workspace. It
-never infers project-resource directories from every historical session cwd,
-registers a directory during scanning, or grants trust. The effective service
+The Host canonicalizes each; the invitation's folder picker may choose any
+existing directory, not only registered workspaces. Picking a folder is a
+read-only source choice: scanning never infers project-resource directories
+from every historical session cwd, registers a directory, or grants trust.
+Project skills retain the product's path-based trust and enabled rules; workspace
+registration alone does not grant trust. Rules use their separate loading-impact
+consent and must not be described as blocked solely by workspace registration.
+The effective service
 limit is 30 selected source projects in both the HTTP adapter and service.
 Omitting `projectCwds` retains the previous service selection; `[]` clears it.
 
 Preview project targets must be explicitly chosen existing canonical directories.
 The service pins their identities without adding them to the source scan set. A session must have an
 explicit project target; ordinary MCP has only a global target. Selecting a
-folder is not a trust grant. Untrusted projects block skill/prompt activation;
+folder is not a trust grant. Untrusted projects block skill activation;
 rules have a separate explicit impact acknowledgement rather than silently
 changing the trust store. The stricter rule inspection follows default-loader
 ancestor precedence and supported nested-worktree deduplication, and rejects
@@ -121,6 +125,30 @@ are refused; system-owned macOS `/var` and `/tmp` aliases are canonicalized.
 
 See [configuration and trust](step-configuration.md) for the shared directory
 contract. Use returned locations instead of synthesizing paths from the client.
+
+## Grouped selection and destination controls
+
+The wizard has four resource steps followed by the final plan. Sessions, skills and
+MCP candidates are grouped by their actual source, scope and root. Expand a group
+to inspect individual items; group and overall selection show checked, unchecked
+or indeterminate state. Selection starts bounded sequential previews; it does not
+confirm sensitive values, scope expansion or AI-rule impact on the user's behalf.
+Already usable references, disabled resources and plugin contributions do not
+enter the ordinary select-all set.
+
+The footer offers Previous/Continue and an explicit final-plan action. The supported
+import mode is shown, not guessed from the source: history creates new copies,
+skill packages are independent copies, and ordinary MCP configuration is merged
+in global scope and remains disabled. Link-based migration is not offered.
+A category-wide destination change invalidates existing previews and confirmations
+and re-previews selected items. Hiding the dialog does not leave some items ready
+at their earlier destinations. The category default also applies to new selections;
+resetting the default does not silently remap existing explicit destinations.
+AI rules retain individual target and content review, never bulk consent.
+Historical prompt job results remain readable, but prompts are not a current
+scan, preview or selection category.
+
+All controls inherit the active client theme and shared UI primitives.
 
 ## Preview, confirmation and publication
 
@@ -203,7 +231,7 @@ snapshot already exists. No whole-job transactional rollback is promised.
 Recovery is narrower than migration:
 
 - Only a rules append/replace with an existing-file backup supports recovery.
-  New rules, copied skills/prompts, MCP and imported sessions have no undo through
+  New rules, copied skills, MCP and imported sessions have no undo through
   this API. Recovery does not delete their targets or touch the source app.
 - `POST /migrations/recoveries/preview` takes `jobId`/`itemId`. It requires a
   recoverable journal item, matching current-target and backup hashes, and a
@@ -310,6 +338,6 @@ Migration errors return `{error: code, code}` using safe known diagnostic codes.
 preview, plan, job or unavailable recovery, 409 stale consent/conflict/busy,
 413 an oversized migration body, 415 an unsupported supplied Content-Type,
 429 cache limits and 503 unavailable migration. Host authorization failures are
-401 with the existing `{error: "Authentication required"}` envelope; forbidden
-scan source workspaces are 403 with `migration-workspace-forbidden`. MCP settings
+401 with the existing `{error: "Authentication required"}` envelope; a scan
+source that is not an existing canonical directory is 400 `invalid-migration-path`. MCP settings
 use their existing error envelope rather than the migration envelope.

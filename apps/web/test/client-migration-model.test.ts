@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { MigrationCandidate, MigrationItemResult, MigrationJob, MigrationPlan, MigrationPreview } from "../client/src/state/types.ts";
 import {
-	acceptJob, backoffDelay, collectSelections, draftReady, hasConsent, initialPreviewRequest, invalidateDraft,
+	acceptJob, adoptMigrationPlan, backoffDelay, collectSelections, draftReady, hasConsent, initialPreviewRequest, invalidateDraft,
 	isActionable, isActiveJob, isIndependentCopy, type MigrationDraft, planReady, resultCounts,
 } from "../client/src/features/migration/model.ts";
 import { migrationMessages } from "../client/src/i18n/migration-messages.ts";
-import { isJob, isPreview, isScan } from "../client/src/features/migration/transport.ts";
+import { isJob, isJobs, isPreview, isScan } from "../client/src/features/migration/transport.ts";
 
 const candidate: MigrationCandidate = {
 	id: "fixture-rule", kind: "rules", source: "claude-code", name: "fixture-rule", sourcePath: "/fixture/source/CLAUDE.md",
@@ -27,9 +27,9 @@ function draft(p: MigrationPreview = preview()): MigrationDraft {
 function job(status: MigrationJob["status"], revision = 1): MigrationJob {
 	return { id: "fixture-job", createdAt: "2026-01-01T00:00:00Z", revision, status, items: [] };
 }
-test("native session cwd is preserved only when offered; a missing project requires an explicit target", () => {
+test("session previews let the backend resolve original cwd before validating explicit targets", () => {
 	const session: MigrationCandidate = { ...candidate, kind: "sessions", sourceScope: { kind: "project", cwd: "/fixture/native-project" } };
-	assert.deepEqual(initialPreviewRequest(session, ["/fixture/native-project"]), { candidateId: session.id, target: session.sourceScope });
+	assert.deepEqual(initialPreviewRequest(session, ["/fixture/native-project"]), { candidateId: session.id });
 	assert.deepEqual(initialPreviewRequest(session, ["/fixture/other-project"]), { candidateId: session.id });
 	assert.deepEqual(initialPreviewRequest({ ...session, sourceScope: { kind: "global" } }, ["/fixture/other-project"]), { candidateId: session.id });
 	assert.deepEqual(initialPreviewRequest({ ...candidate, sourceScope: session.sourceScope }, ["/fixture/native-project"]), { candidateId: candidate.id });
@@ -80,6 +80,24 @@ test("final plan exactly matches ready selections and cannot bypass blockers or 
 	assert.equal(collectSelections({ [candidate.id]: { ...confirmed, loading: true } }), null);
 	assert.equal(collectSelections({ [candidate.id]: { ...confirmed, error: "network-error" } }), null);
 });
+test("skip-blocked requires explicit opt-in and never grants missing rule or credential consent", () => {
+	const p = preview();
+	const ready = { ...draft(p), ruleChecked: true, acknowledged: ["rules-impact" as const] };
+	const pending = { ...draft(), request: { candidateId: "pending" }, preview: undefined, loading: true };
+	const failed = { ...pending, request: { candidateId: "failed" }, loading: false, error: "network-error" };
+	const all = { [candidate.id]: ready, pending, failed };
+	assert.equal(collectSelections(all), null);
+	assert.deepEqual(collectSelections(all, true), [{ previewId: p.id, acknowledged: ["rules-impact"] }]);
+	const plan: MigrationPlan = { id: "ready-only", digest: "digest", expiresAt: p.expiresAt, items: [p] };
+	assert.equal(adoptMigrationPlan(plan, all), null);
+	const adopted = adoptMigrationPlan(plan, all, true);
+	assert.ok(adopted);
+	assert.equal(adopted.pending.selected, true, "Omitted rows remain visible as requested choices");
+	assert.equal(planReady(plan, adopted), false);
+	assert.equal(planReady(plan, adopted, Date.now(), true), true);
+	assert.deepEqual(collectSelections({ rule: draft() }, true), []);
+});
+
 test("scope, independent-copy and sensitive acknowledgements stay independent", () => {
 	const p = preview({ candidate: { ...candidate, kind: "mcp" }, action: "import", requiredAcknowledgements: ["scope-expansion", "sensitive-values"] });
 	assert.equal(hasConsent(p, ["scope-expansion"]), false);
@@ -98,7 +116,31 @@ test("job completion is not all-success and read backoff is capped", () => {
 	assert.equal(backoffDelay(0), 1000);
 	assert.equal(backoffDelay(100), 30_000);
 });
-test("wire guards reject malformed authoritative states and preserve actual source names", () => {
+test("historical prompt results remain readable but cannot enter current scans or previews", () => {
+	const old = { ...job("completed"), items: [{ id: "old", candidateId: "old-candidate", kind: "prompts", source: "codex",
+		name: "old-template", sourceScope: { kind: "global" }, requestedTarget: preview().target, action: "copy",
+		status: "imported", diagnostics: [], activation: "next-resource-load" }] };
+	assert.equal(isJob(old), true);
+	assert.equal(isJobs({ jobs: [job("completed"), old] }), true);
+	assert.equal(isPreview({ ...preview(), candidate: { ...candidate, kind: "prompts" } }), false);
+	assert.equal(isScan({ candidates: [{ ...candidate, kind: "prompts" }], sources: [], truncated: false }), false);
+});
+
+test("MCP final allocation updates preview bindings without granting new consent", () => {
+	const c = { ...candidate, kind: "mcp" as const };
+	const before = preview({ candidate: c, action: "import", allowedActions: ["import", "skip"], requiredAcknowledgements: [], ruleImpact: undefined, activation: "disabled" });
+	const drafts = { [c.id]: draft(before) };
+	const allocated = { ...before, id: "allocated", fingerprint: "allocated-hash", target: { ...before.target, name: "docs-codex" } };
+	const p: MigrationPlan = { id: "plan", digest: "digest", expiresAt: allocated.expiresAt, items: [allocated] };
+	const next = adoptMigrationPlan(p, drafts);
+	assert.ok(next);
+	assert.equal(planReady(p, next), true);
+	assert.equal(next[c.id].request.targetName, undefined);
+	assert.equal(adoptMigrationPlan({ ...p, items: [{ ...allocated, requiredAcknowledgements: ["sensitive-values"] }] }, drafts), null);
+	assert.equal(adoptMigrationPlan({ ...p, items: [] }, drafts), null);
+});
+
+test("wire guards reject malformed states and preserve actual source names", () => {
 	assert.equal(isPreview(preview()), true);
 	assert.equal(isPreview(preview({ candidate: { ...candidate, source: "claude-code" } })), true);
 	assert.equal(isPreview({ ...preview(), blockers: "none" }), false);

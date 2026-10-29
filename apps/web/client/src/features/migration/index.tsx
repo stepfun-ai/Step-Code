@@ -1,128 +1,38 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
-import { Button, IconButton, Modal, Spinner, Tooltip } from "../../ui";
+import { Button, IconButton, Modal, Tooltip } from "../../ui";
 import {
 	closeMigration,
+	confirmCloseMigration,
 	createMigrationPlan,
+	finishClosingMigration,
 	handleMigrationEscape,
 	openMigration,
 	refreshMigrationHistory,
 	scanMigration,
 	setMigrationKind,
-	setSourceProjects,
 	showMigrationStage,
 	startMigrationJob,
 	startNewMigration,
 	useMigrationVisibility,
 } from "./actions";
+import { MigrationBatchControls } from "./BatchControls";
 import { CandidateList, DiagnosticList } from "./CandidateList";
 import { useMigrationExpiry } from "./expiry";
 import { trapMigrationFocus, useMigrationDialogFocus } from "./focus";
 import { MigrationHistory, MigrationJobView, RecoveryReview } from "./JobView";
-import { collectSelections, isActiveJob, MIGRATION_KINDS, planReady } from "./model";
-import { type MigrationFeatureProps, PreviewPanel, ScopeLabel } from "./PreviewPanel";
-import { updateMigration, useMigrationStore } from "./store";
+import { draftReady, isActiveJob, MIGRATION_KINDS, planReady } from "./model";
+import { type MigrationFeatureProps, PreviewPanel } from "./PreviewPanel";
+import { FinalPlan } from "./ReviewPlan";
+import { SourceDetails } from "./SourceDetails";
+import { getMigrationState, updateMigration, useMigrationStore } from "./store";
 import "./migration.css";
 
 export { migrationMessages } from "../../i18n/migration-messages";
 export { closeMigration, handleMigrationEscape, openMigration } from "./actions";
 export type { MigrationFeatureProps } from "./PreviewPanel";
 
-function MigrationInvitation() {
-	const t = useT();
-	const workspaces = useAppStore((state) => state.workspaces);
-	const defaultCwd = useAppStore((state) => state.defaultCwd);
-	const projects = useMigrationStore((state) => state.projectCwds);
-	const scanning = useMigrationStore((state) => state.scanning);
-	const scanKinds = useMigrationStore((state) => state.scanKinds);
-	const paths = [
-		...new Set([
-			...workspaces
-				.filter((workspace) => workspace.available && !workspace.hidden)
-				.map((workspace) => workspace.path),
-			...(defaultCwd ? [defaultCwd] : []),
-		]),
-	];
-	return (
-		<section className="migration-invitation">
-			<h2>{t("migrationInvitationTitle")}</h2>
-			<p>{t("migrationInvitationBody")}</p>
-			<div className="migration-category-list">
-				{scanKinds.map((kind) => (
-					<span key={kind}>{t(`migrationKind.${kind}`)}</span>
-				))}
-			</div>
-			<p>{t("migrationScanBoundary")}</p>
-			<p>{t("migrationSourcePreserved")}</p>
-			<fieldset disabled={scanning}>
-				<legend>{t("migrationSourceProjects")}</legend>
-				<p>{t("migrationSourceProjectsHelp")}</p>
-				{paths.map((cwd) => (
-					<label className="migration-check" key={cwd}>
-						<input
-							type="checkbox"
-							checked={projects.includes(cwd)}
-							onChange={(event) =>
-								setSourceProjects(
-									event.currentTarget.checked ? [...projects, cwd] : projects.filter((path) => path !== cwd),
-								)
-							}
-						/>
-						<code>{cwd}</code>
-					</label>
-				))}
-			</fieldset>
-			<Button variant="primary" disabled={scanning} onClick={() => void scanMigration()}>
-				{scanning ? <Spinner /> : null}
-				{t(scanning ? "migrationScanning" : "migrationStartScan")}
-			</Button>
-		</section>
-	);
-}
-function FinalPlan() {
-	const t = useT();
-	const plan = useMigrationStore((state) => state.plan);
-	if (!plan) return <p>{t("migrationPlanRequired")}</p>;
-	return (
-		<section className="migration-final-plan">
-			<h3>{t("migrationFinalPlan")}</h3>
-			<p>{t("migrationPlanImmutable")}</p>
-			{plan.items.map((preview) => (
-				<article className="migration-plan-item" key={preview.id}>
-					<h4>
-						{preview.candidate.name} · {t(`migrationAction.${preview.action}`)}
-					</h4>
-					<div className="migration-map">
-						<div>
-							<span>{t("migrationSourcePath")}</span>
-							<code>{preview.candidate.sourcePath}</code>
-						</div>
-						<div>
-							<span>{t("migrationTargetPath")}</span>
-							<code>{preview.target.path}</code>
-							<ScopeLabel scope={preview.target.scope} />
-						</div>
-					</div>
-					<p>{t(`migrationActivation.${preview.activation}`)}</p>
-					{preview.candidate.kind === "rules" && preview.action !== "skip" ? (
-						<p className="migration-attention">
-							{preview.target.scope.kind === "global"
-								? t("migrationRuleGlobalScope")
-								: t("migrationRuleProjectScope", { cwd: preview.target.scope.cwd })}
-							<br />
-							{t("migrationRuleModel")}
-						</p>
-					) : null}
-					<DiagnosticList diagnostics={preview.warnings} />
-					<div className="migration-danger">
-						<DiagnosticList diagnostics={preview.blockers} />
-					</div>
-				</article>
-			))}
-		</section>
-	);
-}
 /** Settings slot. App must keep MigrationOnboarding mounted as the shared dialog host. */
 export function MigrationPage() {
 	const t = useT();
@@ -136,15 +46,17 @@ export function MigrationPage() {
 		<div className="migration-page" id="migrationPage">
 			<h2>{t("migrationTitle")}</h2>
 			<p>{t("migrationSettingsBody")}</p>
-			<Button
-				variant="primary"
-				onClick={() => {
-					startNewMigration();
-					openMigration("settings");
-				}}
-			>
-				{t(isActiveJob(job) ? "migrationViewJob" : "migrationNew")}
-			</Button>
+			{isActiveJob(job) ? (
+				<Button
+					variant="primary"
+					onClick={() => {
+						startNewMigration();
+						openMigration("settings");
+					}}
+				>
+					{t("migrationViewJob")}
+				</Button>
+			) : null}
 			<div className="migration-category-list">
 				{MIGRATION_KINDS.map((kind) => (
 					<Button
@@ -173,7 +85,7 @@ export interface MigrationOnboardingProps extends MigrationFeatureProps {
 	readonly onFinish: (status: "completed" | "skipped", lastJobId?: string) => Promise<void>;
 	readonly onJobStarted?: (lastJobId: string) => Promise<void>;
 }
-/** One always-mounted host serves onboarding and Settings, including hidden background jobs. */
+/** One always-mounted host serves onboarding and Settings, with settled cancellation before closing. */
 export function MigrationOnboarding({
 	open: invited,
 	onFinish,
@@ -229,16 +141,53 @@ export function MigrationOnboarding({
 	const finish = async (status: "completed" | "skipped") => {
 		setFinishing(true);
 		try {
-			await onFinish(status, job?.id);
-			closeMigration();
+			if (origin === "onboarding") await onFinish(status, job?.id);
+			updateMigration({ drafts: {}, plan: null, startKey: null });
+			finishClosingMigration();
 		} catch {
 			updateMigration({ error: "onboarding-save-failed" });
 		} finally {
 			setFinishing(false);
 		}
 	};
-	const selected = Object.values(drafts).filter((draft) => draft.selected).length;
-	const ready = collectSelections(drafts) !== null;
+	const selectedDrafts = Object.values(drafts).filter((draft) => draft.selected);
+	const selected = selectedDrafts.length;
+	const readyCount = selectedDrafts.filter((draft) => draftReady(draft)).length;
+	const blockedCount = selected - readyCount;
+	const selectedSessions = selectedDrafts.filter(
+		(draft) =>
+			(draft.preview?.candidate.kind ??
+				getMigrationState().scan?.candidates.find((item) => item.id === draft.request.candidateId)?.kind) ===
+			"sessions",
+	);
+	const selectedWorkspaces = new Set(
+		selectedSessions.map((draft) => {
+			const candidate =
+				draft.preview?.candidate ??
+				getMigrationState().scan?.candidates.find((item) => item.id === draft.request.candidateId);
+			return candidate?.sourceScope.kind === "project" ? candidate.sourceScope.cwd : "";
+		}),
+	).size;
+	const stepIndex = MIGRATION_KINDS.indexOf(kind);
+	const mcpTotal = (getMigrationState().scan?.candidates ?? []).filter((candidate) => candidate.kind === "mcp").length;
+	const closeRequested = useMigrationStore((state) => state.closeRequested);
+	const confirmDialogRef = useMigrationDialogFocus(open && closeRequested);
+	const closeWhenSettled = useMigrationStore((state) => state.closeWhenSettled);
+	const skipBlocked = useMigrationStore((state) => state.skipBlocked);
+	const focusedId = useMigrationStore((state) => state.focusedId);
+	const scanning = useMigrationStore((state) => state.scanning);
+	useEffect(() => {
+		if (
+			open &&
+			stage === "select" &&
+			!getMigrationState().scannedKinds.includes(kind) &&
+			!getMigrationState().scanning
+		)
+			void scanMigration(kind);
+	}, [open, kind, stage]);
+	useEffect(() => {
+		if (closeWhenSettled && !isActiveJob(job) && !busy) finishClosingMigration();
+	}, [closeWhenSettled, job, busy]);
 	return (
 		<Modal
 			id="migrationModal"
@@ -249,18 +198,12 @@ export function MigrationOnboarding({
 			className="migration-dialog"
 			dialogProps={{ ref: dialogRef, tabIndex: -1, onKeyDown: trapMigrationFocus }}
 		>
-			<header className="migration-dialog-head">
-				<h2 id="migrationDialogTitle">{t("migrationTitle")}</h2>
-				<Tooltip content={t("migrationHide")}>
-					<IconButton icon="close" aria-label={t("migrationHide")} onClick={closeMigration} />
-				</Tooltip>
-			</header>
 			<div className="migration-wizard" hidden={!!recovery}>
 				<nav className="migration-step-rail" aria-label={t("migrationSteps")}>
 					{MIGRATION_KINDS.map((value, index) => (
 						<Button
 							key={value}
-							disabled={stage === "invitation" || !!busy || isActiveJob(job)}
+							disabled={!!busy || scanning || isActiveJob(job)}
 							className={`migration-step${stage === "select" && kind === value ? " migration-step-active" : ""}`}
 							aria-current={stage === "select" && kind === value ? "step" : undefined}
 							onClick={() => setMigrationKind(value)}
@@ -271,45 +214,180 @@ export function MigrationOnboarding({
 					))}
 					<Button
 						className={`migration-step${stage === "review" || stage === "job" ? " migration-step-active" : ""}`}
-						disabled={!ready || !!busy || stage === "invitation" || isActiveJob(job)}
+						disabled={(!!busy && busy !== "selection") || isActiveJob(job)}
 						onClick={() => void createMigrationPlan()}
 					>
-						<span className="migration-step-number">6</span>
+						<span className="migration-step-number">{MIGRATION_KINDS.length + 1}</span>
 						{t("migrationConfirmStep")}
 					</Button>
-					<p>{t("migrationLocalOnly")}</p>
 				</nav>
 				<div className="migration-main">
-					{(stage === "select" || stage === "review") && consentExpired ? (
-						<p className="migration-attention">{t("migrationDiagnostic.preview-expired")}</p>
-					) : null}
-					{stage === "review" && planExpired ? (
-						<p className="migration-attention">{t("migrationDiagnostic.plan-expired")}</p>
-					) : null}
-					{error ? (
-						<div role="alert" className="migration-danger">
-							<DiagnosticList diagnostics={[{ code: error }]} />
+					<header className="migration-dialog-head">
+						<div className="migration-heading">
+							<span className="migration-eyebrow">
+								{t(origin === "onboarding" ? "migrationEntryFirst" : "migrationEntrySettings")}
+							</span>
+							<h2 id="migrationDialogTitle">
+								{t(
+									stage === "select"
+										? `migrationKind.${kind}`
+										: stage === "review"
+											? "migrationConfirmStep"
+											: isActiveJob(job)
+												? "migrationJobRunning"
+												: "migrationJobResult",
+								)}
+							</h2>
 						</div>
-					) : null}
-					{stage === "invitation" ? (
-						<MigrationInvitation />
-					) : stage === "select" ? (
-						<>
-							<h3>{t(`migrationKind.${kind}`)}</h3>
-							<p className="migration-meta">{t(`migrationCategoryHelp.${kind}`)}</p>
-							<div className={`migration-resource-layout${kind === "rules" ? " migration-resource-rules" : ""}`}>
-								<CandidateList key={kind} />
-								<PreviewPanel {...featureProps} />
+						<p className="migration-step-hint">
+							{t(
+								stage === "select"
+									? `migrationStepHint.${kind}`
+									: stage === "review"
+										? "migrationPlanHint"
+										: "migrationLocalOnly",
+							)}
+						</p>
+						<Tooltip content={t("migrationCloseWizard")}>
+							<IconButton icon="close" aria-label={t("migrationCloseWizard")} onClick={closeMigration} />
+						</Tooltip>
+					</header>
+					<div className="migration-main-content">
+						{(stage === "select" || stage === "review") && consentExpired ? (
+							<p className="migration-attention">{t("migrationDiagnostic.preview-expired")}</p>
+						) : null}
+						{stage === "review" && planExpired ? (
+							<p className="migration-attention">{t("migrationDiagnostic.plan-expired")}</p>
+						) : null}
+						{error ? (
+							<div role="alert" className="migration-danger">
+								<DiagnosticList diagnostics={[{ code: error }]} />
 							</div>
-						</>
-					) : stage === "review" ? (
-						<FinalPlan />
-					) : (
-						<MigrationJobView {...featureProps} />
-					)}
+						) : null}
+						{stage === "select" || stage === "invitation" ? (
+							<>
+								<SourceDetails />
+								<div
+									className={`migration-resource-layout${focusedId ? " migration-has-preview" : ""}${kind === "rules" ? " migration-resource-rules" : ""}`}
+								>
+									<CandidateList key={kind} onPickTarget={featureProps.onPickTarget} />
+									<PreviewPanel {...featureProps} />
+								</div>
+							</>
+						) : stage === "review" ? (
+							<FinalPlan />
+						) : (
+							<MigrationJobView {...featureProps} />
+						)}
+					</div>
+					<footer className="migration-dialog-foot">
+						{recovery ? (
+							<Button variant="secondary" disabled={!!busy} onClick={handleMigrationEscape}>
+								{t("migrationCancelRecovery")}
+							</Button>
+						) : (
+							<>
+								<span className="migration-meta">
+									{stage === "job"
+										? t(isActiveJob(job) ? "migrationHideContinues" : "migrationJobRecorded")
+										: stage === "review" || (stage === "select" && kind === "rules")
+											? t("migrationReviewSummary", {
+													total: selected,
+													ready: readyCount,
+													blocked: blockedCount,
+												})
+											: kind === "mcp"
+												? t("migrationMcpSelection", { selected, total: mcpTotal })
+												: t("migrationSessionSelection", {
+														workspaces: selectedWorkspaces,
+														sessions: selectedSessions.length,
+													})}
+								</span>
+								{stage === "select" ? (
+									<div className="migration-selection-footer">
+										{kind === "mcp" ? <MigrationBatchControls kind={kind} /> : null}
+										<div className="migration-selection-nav">
+											<Button
+												variant="secondary"
+												disabled={!!busy || stepIndex <= 0}
+												onClick={() => {
+													const previous = MIGRATION_KINDS[stepIndex - 1];
+													if (previous) setMigrationKind(previous);
+												}}
+											>
+												{t("migrationPreviousStep")}
+											</Button>
+											{stepIndex < MIGRATION_KINDS.length - 1 ? (
+												<Button
+													variant="primary"
+													disabled={!!busy}
+													onClick={() => {
+														const next = MIGRATION_KINDS[stepIndex + 1];
+														if (next) setMigrationKind(next);
+													}}
+												>
+													{t("migrationNextStep")}
+												</Button>
+											) : null}
+											<Button
+												id="migrationReviewPlan"
+												variant={stepIndex === MIGRATION_KINDS.length - 1 ? "primary" : "secondary"}
+												disabled={!!busy && busy !== "selection"}
+												onClick={() => {
+													if (!selected) void finish("skipped");
+													else void createMigrationPlan();
+												}}
+											>
+												{t("migrationReviewPlan")}
+											</Button>
+										</div>
+									</div>
+								) : null}
+								{stage === "review" ? (
+									<>
+										<Button
+											variant="secondary"
+											disabled={!!busy}
+											onClick={() => showMigrationStage("select")}
+										>
+											{t("migrationBackToSelection")}
+										</Button>
+										<Button
+											id="migrationStartPlan"
+											variant="primary"
+											disabled={!!busy || !plan || !planReady(plan, drafts, Date.now(), skipBlocked)}
+											onClick={() => void startMigrationJob()}
+										>
+											{t(busy === "start" ? "migrationStarting" : "migrationStartCount", {
+												count: readyCount,
+											})}
+										</Button>
+									</>
+								) : null}
+								{origin === "onboarding" ? (
+									<Button
+										variant="secondary"
+										disabled={finishing || !!busy}
+										onClick={() => {
+											if (stage === "job" && !isActiveJob(job)) void finish("completed");
+											else if (isActiveJob(job) || selected) closeMigration();
+											else void finish("skipped");
+										}}
+									>
+										{t(stage === "job" && !isActiveJob(job) ? "migrationFinish" : "migrationSkip")}
+									</Button>
+								) : null}
+							</>
+						)}
+					</footer>
 				</div>
 			</div>
 			<RecoveryReview />
+			<div hidden={!recovery}>
+				<Button variant="secondary" disabled={!!busy} onClick={handleMigrationEscape}>
+					{t("migrationCancelRecovery")}
+				</Button>
+			</div>
 			{recovery && recoveryExpired ? (
 				<p className="migration-attention">{t("migrationDiagnostic.recovery-preview-expired")}</p>
 			) : null}
@@ -318,58 +396,29 @@ export function MigrationOnboarding({
 					<DiagnosticList diagnostics={[{ code: error }]} />
 				</div>
 			) : null}
-			<footer className="migration-dialog-foot">
-				{recovery ? (
-					<Button variant="secondary" disabled={!!busy} onClick={handleMigrationEscape}>
-						{t("migrationCancelRecovery")}
+
+			<Modal
+				id="migrationCloseConfirm"
+				open={closeRequested}
+				onClose={() => updateMigration({ closeRequested: false })}
+				labelledBy="migrationCloseTitle"
+				className="migration-close-confirm"
+				closeOnBackdrop={false}
+				dialogProps={{ ref: confirmDialogRef, tabIndex: -1, onKeyDown: trapMigrationFocus }}
+			>
+				<h3 id="migrationCloseTitle">
+					{t(isActiveJob(job) ? "migrationStopCloseTitle" : "migrationDiscardTitle")}
+				</h3>
+				<p>{t(isActiveJob(job) ? "migrationStopCloseBody" : "migrationDiscardBody")}</p>
+				<div className="migration-toolbar">
+					<Button variant="secondary" onClick={() => updateMigration({ closeRequested: false })}>
+						{t("migrationBackToSelection")}
 					</Button>
-				) : (
-					<>
-						<span className="migration-meta">{t("migrationSelected", { count: selected })}</span>
-						{stage === "select" ? (
-							<>
-								<Button variant="secondary" disabled={!!busy} onClick={() => showMigrationStage("invitation")}>
-									{t("migrationScanAgain")}
-								</Button>
-								<Button
-									variant="primary"
-									disabled={!ready || !!busy}
-									onClick={() => void createMigrationPlan()}
-								>
-									{t("migrationReviewPlan")}
-								</Button>
-							</>
-						) : null}
-						{stage === "review" ? (
-							<>
-								<Button variant="secondary" disabled={!!busy} onClick={() => showMigrationStage("select")}>
-									{t("migrationBackToSelection")}
-								</Button>
-								<Button
-									variant="primary"
-									disabled={!!busy || !plan || !planReady(plan, drafts)}
-									onClick={() => void startMigrationJob()}
-								>
-									{t(busy === "start" ? "migrationStarting" : "migrationStart")}
-								</Button>
-							</>
-						) : null}
-						{origin === "onboarding" ? (
-							<Button
-								variant="secondary"
-								disabled={finishing || !!busy}
-								onClick={() => void finish(stage === "job" && !isActiveJob(job) ? "completed" : "skipped")}
-							>
-								{t(stage === "job" && !isActiveJob(job) ? "migrationFinish" : "migrationSkip")}
-							</Button>
-						) : (
-							<Button variant="secondary" onClick={closeMigration}>
-								{t("migrationHide")}
-							</Button>
-						)}
-					</>
-				)}
-			</footer>
+					<Button variant="primary" disabled={!!busy} onClick={() => void confirmCloseMigration()}>
+						{t(isActiveJob(job) ? "migrationStopAndClose" : "migrationDiscardClose")}
+					</Button>
+				</div>
+			</Modal>
 		</Modal>
 	);
 }

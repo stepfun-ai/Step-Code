@@ -1,6 +1,8 @@
 import type { ImportSource } from "../../core/session-import/types.ts";
 
-export type MigrationKind = "sessions" | "skills" | "mcp" | "prompts" | "rules";
+export type MigrationKind = "sessions" | "skills" | "mcp" | "rules";
+/** Legacy journals may still record prompt items from before prompt migration was removed. */
+export type LegacyMigrationKind = MigrationKind | "prompts";
 export type MigrationSource = ImportSource | "shared" | "stepcode" | "plugin";
 export type MigrationScope = { kind: "global" } | { kind: "project"; cwd: string };
 export type MigrationAction = "copy" | "import" | "create" | "append" | "replace" | "skip";
@@ -27,8 +29,14 @@ export interface MigrationCandidate {
 	needsMigration: boolean;
 	diagnostics: MigrationDiagnostic[];
 	modified?: string;
+	/** Safe declaration metadata; command, URL and literal values never enter the DTO. */
+	mcpTransport?: "stdio" | "http";
 	/** Native session identity is metadata, not an authority to read an arbitrary file. */
 	sourceSessionId?: string;
+	/** Non-empty source records found during discovery; never source content. */
+	messageCount?: number;
+	/** True when the count is a lower bound because the source exceeded the counting cap. */
+	messageCountCapped?: boolean;
 }
 
 export interface MigrationSourceReport {
@@ -36,25 +44,43 @@ export interface MigrationSourceReport {
 	source: MigrationSource;
 	scope: MigrationScope;
 	path: string;
-	status: "ok" | "missing" | "empty" | "error" | "unsupported";
+	status: "ok" | "missing" | "empty" | "partial" | "error" | "unsupported";
 	diagnostics: MigrationDiagnostic[];
 }
 
+export interface MigrationSessionScanOptions {
+	range?: "all" | "7" | "30" | "90";
+	limit?: 30 | 50 | 100 | null;
+	includeArchived?: boolean;
+}
 export interface MigrationScanRequest {
 	kinds?: MigrationKind[];
 	/** Explicitly chosen, host-validated source projects; never inferred from every historical cwd. */
 	projectCwds?: string[];
+	/** Explicit per-source MCP configuration files; does not change session or skill roots. */
+	sessionOptions?: MigrationSessionScanOptions;
+	mcpSourcePaths?: Partial<Record<"claude-code" | "codex", string>>;
 }
 
 export interface MigrationScanResult {
 	candidates: MigrationCandidate[];
 	sources: MigrationSourceReport[];
 	truncated: boolean;
+	sessionSummary?: {
+		total: number;
+		shown: number;
+		incomplete: boolean;
+		range: "all" | "7" | "30" | "90";
+		limit: 30 | 50 | 100 | null;
+	};
 }
+
+/** Session destinations may additionally ask for the workspace folder to be created. */
+export type MigrationTargetRequest = MigrationScope | { kind: "project"; cwd: string; create: true };
 
 export interface MigrationPreviewRequest {
 	candidateId: string;
-	target?: MigrationScope;
+	target?: MigrationTargetRequest;
 	action?: MigrationAction;
 	targetName?: string;
 	includeSensitiveValues?: boolean;
@@ -116,7 +142,8 @@ export interface MigrationStartRequest {
 export interface MigrationItemResult {
 	id: string;
 	candidateId: string;
-	kind: MigrationKind;
+	/** Legacy journal items may name the removed prompt kind. */
+	kind: LegacyMigrationKind;
 	source: MigrationSource;
 	name: string;
 	sourceScope: MigrationScope;

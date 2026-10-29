@@ -20,6 +20,10 @@ export interface ImportCandidate {
 	version: string;
 	/** Absolute source JSONL path discovered by the offline scanner. */
 	sourcePath?: string;
+	/** Non-empty source records found by the bounded discovery read. */
+	messageCount?: number;
+	/** True when the source is larger than the counting cap, so the count is a lower bound. */
+	messageCountCapped?: boolean;
 }
 
 export interface ImportWarning {

@@ -1,9 +1,10 @@
 import { useT } from "../../i18n";
 import type { MigrationAcknowledgement, MigrationPreview, MigrationScope } from "../../state/types";
-import { Button, EmptyState, Spinner } from "../../ui";
+import { Button, Spinner } from "../../ui";
 import { acknowledgePreview, checkRuleConsent, confirmRule, deselectCandidate, previewCandidate } from "./actions";
 import { DiagnosticList } from "./CandidateList";
 import { useMigrationExpiry } from "./expiry";
+import { ResourcePreview } from "./ResourcePreview";
 import { useMigrationStore } from "./store";
 import { MigrationTargetPicker } from "./TargetPicker";
 
@@ -79,14 +80,13 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 	const candidate = useMigrationStore((state) => state.scan?.candidates.find((item) => item.id === id));
 	const open = useMigrationStore((state) => state.open);
 	const expired = useMigrationExpiry(open, draft?.preview?.expiresAt ?? null);
-	if (!id || !draft)
-		return (
-			<aside className="migration-preview">
-				<EmptyState>{t("migrationChoosePreview")}</EmptyState>
-			</aside>
-		);
+	if (!id || !draft) return <aside className="migration-preview" hidden />;
 	const preview = draft.preview;
 	const candidateKind = preview?.candidate.kind ?? candidate?.kind;
+	if (candidateKind === "sessions" || candidateKind === "mcp")
+		return (
+			<ResourcePreview id={id} kind={candidateKind} draft={draft} expired={expired} onPickTarget={onPickTarget} />
+		);
 	const isRule = candidateKind === "rules";
 	const confirmKey =
 		preview?.ruleImpact?.backupRequired && preview.action === "append"
@@ -127,6 +127,12 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 			) : null}
 			{preview ? (
 				<>
+					{preview.candidate.kind === "mcp" ? (
+						<p>
+							{t("migrationMcpNoDescription")} ·{" "}
+							{t(`migrationMcpTransport.${preview.candidate.mcpTransport ?? "stdio"}`)}
+						</p>
+					) : null}
 					<div className="migration-map">
 						<div>
 							<span>{t("migrationSourcePath")}</span>
@@ -157,7 +163,9 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 					</label>
 					{!isRule && preview.candidate.kind !== "sessions" ? (
 						<label className="migration-field">
-							<span>{t("migrationTargetName")}</span>
+							<span>
+								{t(preview.candidate.kind === "mcp" ? "migrationMcpTargetName" : "migrationTargetName")}
+							</span>
 							<input
 								key={`${id}:name`}
 								defaultValue={draft.request.targetName ?? preview.target.name}

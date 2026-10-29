@@ -3,7 +3,13 @@ import { readdirSync, renameSync, unlinkSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { isMigrationDiagnosticCode } from "./diagnostics.ts";
 import { durableWrite, fail, hash, info, privateDir, record, safePath, stable, syncDir, text } from "./filesystem.ts";
-import type { MigrationItemResult, MigrationJob, MigrationLocation, MigrationScope } from "./types.ts";
+import type {
+	LegacyMigrationKind,
+	MigrationItemResult,
+	MigrationJob,
+	MigrationLocation,
+	MigrationScope,
+} from "./types.ts";
 
 export interface WriteIntent {
 	itemId: string;
@@ -83,7 +89,7 @@ function parseJournal(raw: string): Journal {
 			return {
 				id: item.id,
 				candidateId: string(item.candidateId),
-				kind: member(item.kind, ["sessions", "skills", "mcp", "prompts", "rules"]),
+				kind: member(item.kind, ["sessions", "skills", "mcp", "prompts", "rules"]) as LegacyMigrationKind,
 				source: member(item.source, ["codex", "claude-code", "workbuddy", "qoder", "shared", "stepcode", "plugin"]),
 				name: string(item.name),
 				sourceScope: scope(item.sourceScope),

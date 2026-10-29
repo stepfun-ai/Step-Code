@@ -22,12 +22,11 @@ const chrome = [process.env.CHROME_PATH, "/Applications/Google Chrome.app/Conten
 	"/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/bin/google-chrome", "/usr/bin/chromium",
 	"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"].find((path) => path && existsSync(path));
 const options = { skip: chrome ? false : "No installed Chrome; set CHROME_PATH (no downloads)", timeout: 90_000 };
-const kinds = ["sessions", "skills", "mcp", "prompts", "rules"];
+const kinds = ["sessions", "mcp", "rules"];
 const ruleText = "# Synthetic source rules\nAlways explain fixture changes.\n";
-const promptText = "---\ndescription: Synthetic prompt\n---\nReview only synthetic inputs.\n";
 const skillText = (name) => `---\nname: ${name}\ndescription: Synthetic offline skill\n---\nRead references/help.md.\n`;
 const modal = (page) => page.locator("#migrationModal");
-const reviewButton = (page) => modal(page).locator(".migration-dialog-foot button").nth(1);
+const reviewButton = (page) => modal(page).locator('#migrationReviewPlan, #migrationStartPlan');
 
 async function put(path, text) {
 	await mkdir(dirname(path), { recursive: true });
@@ -82,7 +81,6 @@ async function stop(child) {
 	const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
 	try { await exited; } finally { clearTimeout(timer); }
 }
-
 async function fixture(t, { existingRule = false, legacy = false } = {}) {
 	assert.ok(existsSync(join(webRoot, "dist/public/index.html")), "Run pnpm --filter @step-harness/web build:client first");
 	const temp = await realpath(await mkdtemp(join(tmpdir(), "migration-browser-")));
@@ -108,8 +106,7 @@ async function fixture(t, { existingRule = false, legacy = false } = {}) {
 	await put(join(home, ".codex/skills/import-skill/references/help.md"), "Nested fixture reference\n");
 	await put(join(home, ".agents/skills/reference-skill/SKILL.md"), skillText("reference-skill"));
 	await put(join(home, ".codex/skills/disabled-source/SKILL.md"), skillText("disabled-source"));
-	await put(join(home, ".codex/prompts/fixture-prompt.md"), promptText);
-	await put(join(home, ".codex/prompts/skip-prompt.md"), "This prompt must not be copied.\n");
+	await put(join(home, ".codex/skills/skip-skill/SKILL.md"), skillText("skip-skill"));
 	await put(join(home, ".codex/sessions/rollout-fixture.jsonl"), [
 		{ type: "session_meta", payload: { id: "synthetic-codex", cwd: project } },
 		{ type: "response_item", payload: { type: "message", role: "user",
@@ -201,7 +198,6 @@ Socket.prototype.connect=function(...args){
 	});
 	return { page, context, temp, home, agent, config, project, target, requests, sessionSource, legacyId, legacyPath };
 }
-
 async function api(page, path) {
 	return page.evaluate(async (path) => {
 		const response = await fetch(path);
@@ -218,21 +214,33 @@ async function responseFor(page, path, action) {
 	assert.ok(result.ok(), `${new URL(result.url()).pathname} returned HTTP ${result.status()}`);
 	return result.json();
 }
+/** Re-running a scan is explicit; entering a step scans that kind once on its own. */
 async function scan(page) {
-	const result = await responseFor(page, "/api/v1/migrations/scan", () =>
-		modal(page).locator(".migration-invitation button").click());
+	// Capture the response before clicking, and only while no other scan is in flight,
+	// so the returned candidate ids are the ones the UI just rendered.
+	await until(async () => await modal(page).locator("#migrationScanButton").isEnabled(), "previous scan settled");
+	const pending = page.waitForResponse((response) =>
+		new URL(response.url()).pathname === "/api/v1/migrations/scan" && response.request().method() === "POST");
+	await modal(page).locator("#migrationScanButton").click();
+	const response = await pending;
+	assert.ok(response.ok(), `scan returned HTTP ${response.status()}`);
 	await modal(page).locator(".migration-list").waitFor();
-	return result;
+	return response.json();
 }
+/** Each category scans its own kind on entry; an explicit rescan keeps the result deterministic. */
 async function category(page, kind) {
 	await modal(page).locator(".migration-step-rail button").nth(kinds.indexOf(kind)).click();
 	await modal(page).locator(".migration-list").waitFor();
+	await until(async () => await modal(page).locator("#migrationScanButton").isEnabled(), "entry scan settled");
+	return scan(page);
 }
 async function candidate(page, item, select = true) {
 	const row = modal(page).locator(`[data-candidate-id="${item.id}"]`);
-	if (await row.locator("input").isDisabled()) await modal(page).locator(".migration-other").evaluate((el) => { el.open = true; });
-	const preview = await responseFor(page, "/api/v1/migrations/preview", () => select
-		? row.locator("input").check() : row.locator(".migration-row-title").click());
+	const group = modal(page).locator('.migration-group').filter({ has: page.locator(`[data-candidate-id="${item.id}"]`) });
+	if (await group.count() && !await row.isVisible()) await group.locator('.migration-group-toggle').click();
+	// Opening the history/declaration and selecting it are separate actions, so drive both.
+	const preview = await responseFor(page, "/api/v1/migrations/preview", () => row.locator(".migration-row-title").click());
+	if (select && !(await row.locator("input").isChecked())) await row.locator("input").check();
 	await until(async () => !(await modal(page).locator(".migration-preview select").first().isDisabled()), "preview UI settled");
 	return preview;
 }
@@ -272,19 +280,71 @@ function item(scan, kind, name) {
 	assert.ok(result, `Expected fixture candidate: ${kind}/${name}`);
 	return result;
 }
+/** The wizard opens straight into the first category; there is no separate invitation screen. */
 async function newFlow(page) {
-	await page.locator("#migrationPage > button").click();
-	await modal(page).locator(".migration-invitation").waitFor();
+	await page.locator("#migrationPage .migration-category-list button").first().click();
+	await modal(page).locator(".migration-list").waitFor();
 }
+test("grouped session selection has all/partial states and batch targets re-preview without writes", options, async (t) => {
+	const f = await fixture(t);
+	const { page } = f;
+	const scanResult = await scan(page);
+	const session = scanResult.candidates.find((c) => c.kind === "sessions" && c.source === "claude-code");
+	assert.ok(session, "Claude synthetic history must be discovered");
+	const group = modal(page).locator('.migration-group').filter({ has: page.locator(`[data-candidate-id="${session.id}"]`) });
+	const groupCheck = group.locator('.migration-group-head > input');
+	assert.equal(await group.locator('.migration-group-toggle').getAttribute('aria-expanded'), 'false',
+		"Workspace groups start collapsed so a bulk pick stays deliberate");
+	await groupCheck.check();
+	await until(async () => await groupCheck.isEnabled() && await groupCheck.isChecked(), "group reviews settle");
+	assert.match(await modal(page).locator('.migration-select-all .migration-meta').textContent(), /2\/2/u,
+		"The list reports its own selected/total counts");
+	await group.locator('.migration-group-toggle').click();
+	await group.locator(`[data-candidate-id="${session.id}"] > input`).uncheck();
+	assert.equal(await groupCheck.evaluate(input => input.indeterminate), true);
+	await groupCheck.check();
+	await until(async () => await groupCheck.isEnabled() && await groupCheck.isChecked(), "group selected again");
+	assert.equal(await page.evaluate(() => document.getElementById('migrationReviewPlan').disabled), false);
+	// V3 sets a destination per selected workspace group, never as a hidden category-wide default.
+	await group.locator('.migration-workspace-target select').selectOption(f.project);
+	await until(async () => await group.locator('.migration-workspace-target select').isEnabled(), "group target re-preview settles");
+	const response = await responseFor(page, '/api/v1/migrations/plans', () => reviewButton(page).click());
+	assert.equal(response.items.length, 2);
+	assert.ok(response.items.every(preview => preview.candidate.kind === 'sessions' && preview.target.scope.cwd === f.project));
+	assert.equal(existsSync(join(f.agent, 'sessions')), false, "Plan and target changes do not publish history");
+	await modal(page).locator('.migration-dialog-foot button').first().click();
+	await category(page, 'rules');
+	assert.equal(await modal(page).locator('.migration-select-all input').count(), 0, "Rules do not get bulk consent");
+	assert.equal(await modal(page).locator('.migration-rule-consent').count(), 0, "Group selection never selects a rule");
+	const mcpScan = await category(page, 'mcp');
+	await candidate(page, item(mcpScan, "mcp", "fresh"), false);
+	const scope = modal(page).locator('.migration-preview select').first();
+	assert.equal(await scope.inputValue(), 'global', "Ordinary MCP defaults to the global configuration");
+	const destinations = await scope.locator('option:not([disabled])').evaluateAll((els) => els.map((el) => el.value));
+	assert.ok(destinations.includes('global'), "A global destination stays available");
+	assert.ok(destinations.includes(f.project), "A trusted project destination is offered too");
+});
 
-test("offline Desktop invitation, skip persistence, Settings entry, focus and all themes", options, async (t) => {
+test("offline first use, skip persistence, Settings entry, focus and all themes", options, async (t) => {
 	const f = await fixture(t);
 	const { page } = f;
 	assert.equal(await page.locator("html").getAttribute("data-host"), "desktop");
-	assert.equal(await modal(page).locator(".migration-invitation").isVisible(), true);
+	assert.equal(await modal(page).isVisible(), true);
+	assert.equal(await modal(page).locator(".migration-invitation").count(), 0, "The wizard starts on the first category");
 	assert.equal(await page.locator(".app").getAttribute("inert"), "");
 	await page.keyboard.press("Tab");
 	assert.equal(await page.evaluate(() => !!document.activeElement.closest("#migrationModal")), true);
+	// A picked source folder joins the read-only scan without workspace registration.
+	const workspacesBefore = await api(page, "/api/v1/workspaces");
+	await category(page, "rules");
+	await modal(page).locator(".migration-source-locations summary").click();
+	await modal(page).locator("#migrationAddSourceFolder").click();
+	await until(async () => (await modal(page).locator(".migration-source-locations").innerText()).includes(f.target),
+		"picked source joins the scan list");
+	assert.deepEqual(await page.evaluate(() => window.pickerPurposes), ["resource"]);
+	assert.match(await modal(page).locator(".migration-source-locations").innerText(), /未登记|Unregistered/u,
+		"An unregistered picked source stays marked as such");
+	assert.deepEqual(await api(page, "/api/v1/workspaces"), workspacesBefore, "A source pick never registers a workspace");
 	await modal(page).locator(".migration-dialog-foot button").last().click();
 	await modal(page).waitFor({ state: "hidden" });
 	assert.equal((await api(page, "/api/v1/desktop-onboarding")).status, "skipped");
@@ -308,7 +368,7 @@ test("offline Desktop invitation, skip persistence, Settings entry, focus and al
 			return { surface: rgb(style.backgroundColor), ink: rgb(style.color) };
 		});
 		assert.notDeepEqual(colors[theme].surface, colors[theme].ink, "Ink must not disappear into dialog surface");
-		const brightness = (rgb) => rgb.reduce((sum, component) => sum + component, 0);
+		const brightness = (rgb) => rgb.reduce((sum, component) => sum + component);
 		assert.ok(Math.abs(brightness(colors[theme].surface) - brightness(colors[theme].ink)) > 300,
 			`${theme} must maintain readable surface/ink separation`);
 		await modal(page).screenshot({ path: join(f.temp, `migration-${theme}.png`) });
@@ -323,41 +383,32 @@ test("offline Desktop invitation, skip persistence, Settings entry, focus and al
 	assert.deepEqual(colors.system, colors.dark, "System dark uses the same computed dialog palette");
 });
 
-test("scan and preview preserve sources/targets; reference, disabled and existing MCP are not redundant imports", options, async (t) => {
+test("scan and preview preserve sources/targets; an already configured MCP is not a redundant import", options, async (t) => {
 	const f = await fixture(t);
 	const { page } = f;
 	const before = await readFile(join(f.config, "config.toml"), "utf8");
 	const result = await scan(page);
 	assert.ok(result.sources.some((source) => source.source === "claude-code"));
 	assert.ok(result.sources.some((source) => source.source === "codex"));
-	await category(page, "skills");
-	const sources = [...new Set(result.candidates.filter((c) => c.kind === "skills").map((c) => c.source))];
+	assert.ok(result.sessionSummary, "Session scans report their own totals");
 	const filters = modal(page).locator(".migration-list > div[aria-label] button");
-	await filters.nth(sources.indexOf("codex") + 1).click();
-	assert.equal(await modal(page).locator(`[data-candidate-id="${item(result, "skills", "reference-skill").id}"]`).count(), 0,
+	const sessionSources = [...new Set(result.candidates.filter((c) => c.kind === "sessions").map((c) => c.source))];
+	await filters.nth(sessionSources.indexOf("codex") + 1).click();
+	assert.equal(await modal(page).locator(`[data-candidate-id="${item(result, "sessions", result.candidates.find((c) => c.kind === "sessions" && c.source === "claude-code").name).id}"]`).count(), 0,
 		"Source filter excludes other sources without mutating scan results");
 	await filters.first().click();
-	for (const [name, readiness] of [["reference-skill", "ready"], ["disabled-source", "disabled"]]) {
-		const c = item(result, "skills", name);
-		assert.equal(c.needsMigration, false);
-		assert.equal(c.readiness, readiness);
-		await modal(page).locator(".migration-other").evaluate((el) => { el.open = true; });
-		assert.equal(await modal(page).locator(`[data-candidate-id="${c.id}"] > input`).isDisabled(), true);
-	}
-	await candidate(page, item(result, "skills", "import-skill"), false);
-	await category(page, "prompts");
-	await candidate(page, item(result, "prompts", "fixture-prompt"), false);
-	await category(page, "mcp");
-	const existing = item(result, "mcp", "existing");
-	assert.equal(existing.needsMigration, false);
-	assert.equal(existing.readiness, "disabled");
-	assert.equal((await candidate(page, existing, false)).action, "skip");
-	await candidate(page, item(result, "mcp", "fresh"), false);
-	assert.deepEqual(await modal(page).locator(".migration-preview select").first().locator("option:not([disabled])")
-		.evaluateAll((els) => els.map((el) => el.value)), ["global"], "MCP has only a global destination");
-	await category(page, "rules");
-	await candidate(page, item(result, "rules", "CLAUDE.md"), false);
-	for (const path of [join(f.agent, "skills"), join(f.agent, "prompts"), join(f.agent, "AGENTS.md"), join(f.target, "AGENTS.md")]) {
+	const mcpScan = await category(page, "mcp");
+	assert.equal(item(mcpScan, "mcp", "existing").needsMigration, false, "An already configured server is not offered again");
+	assert.equal(item(mcpScan, "mcp", "existing").readiness, "disabled");
+	await candidate(page, item(mcpScan, "mcp", "existing"), false);
+	await candidate(page, item(mcpScan, "mcp", "fresh"), false);
+	const scope = modal(page).locator(".migration-preview .migration-target-details select, .migration-preview select").first();
+	const destinations = await scope.locator("option:not([disabled])").evaluateAll((els) => els.map((el) => el.value));
+	assert.ok(destinations.includes("global"), "MCP keeps a global destination");
+	assert.ok(destinations.includes(f.project), "MCP also offers a trusted project destination");
+	const ruleScan = await category(page, "rules");
+	await candidate(page, item(ruleScan, "rules", "CLAUDE.md"), false);
+	for (const path of [join(f.agent, "skills"), join(f.agent, "AGENTS.md"), join(f.target, "AGENTS.md"), join(f.agent, "sessions")]) {
 		assert.equal(existsSync(path), false, "Scan/preview must not create resource targets");
 	}
 	assert.equal(await readFile(join(f.config, "config.toml"), "utf8"), before);
@@ -365,21 +416,33 @@ test("scan and preview preserve sources/targets; reference, disabled and existin
 	assert.equal(f.requests.filter(({ path }) => path === "/api/v1/migrations").length, 0);
 });
 
-test("explicit rule CREATE consent invalidates on edits; real skill, prompt, disabled MCP and session publication", options, async (t) => {
+test("explicit rule CREATE consent invalidates on edits; disabled MCP and session publication", options, async (t) => {
 	const f = await fixture(t, { legacy: true });
 	const { page } = f;
-	const result = await scan(page);
-	await category(page, "rules");
-	const rule = await candidate(page, item(result, "rules", "CLAUDE.md"));
+	await scan(page);
+	const ruleScan = await category(page, "rules");
+	const rule = await candidate(page, item(ruleScan, "rules", "CLAUDE.md"));
 	assert.equal(rule.action, "create");
 	assert.equal(existsSync(rule.target.path), false);
-	assert.equal(await reviewButton(page).isDisabled(), true, "Cannot submit the first unacknowledged rule preview");
+	// The review list stays reachable so the unacknowledged rule is shown as blocked, not hidden.
+	assert.equal(await reviewButton(page).isDisabled(), false, "Review stays reachable with an unacknowledged rule");
+	await reviewButton(page).click();
+	await modal(page).locator('.migration-final-plan').waitFor();
+	assert.equal(await modal(page).locator('#migrationStartPlan').isDisabled(), true,
+		"An unacknowledged rule keeps the write disabled");
+	await modal(page).locator('.migration-dialog-foot button').first().click();
+	await modal(page).locator('.migration-list').waitFor();
 	const consent = modal(page).locator(".migration-rule-consent");
-	assert.equal(await consent.locator("button").isDisabled(), true);
+	assert.equal(await consent.locator("button").isDisabled(), true, "The checkbox alone is not confirmation");
 	await consent.locator("input").check();
-	assert.equal(await reviewButton(page).isDisabled(), true, "Checkbox alone is not confirmation");
+	assert.equal(await consent.locator("button").isDisabled(), false, "The checkbox enables the explicit confirmation");
 	await consent.locator("button").click();
-	assert.equal(await reviewButton(page).isDisabled(), false);
+	assert.equal(await consent.locator("p").count(), 1, "Explicit confirmation must be acknowledged");
+	await reviewButton(page).click();
+	await modal(page).locator('.migration-final-plan').waitFor();
+	await until(async () => await modal(page).locator('#migrationStartPlan').isEnabled(), "a confirmed rule plan is submittable");
+	await modal(page).locator('.migration-dialog-foot button').first().click();
+	await modal(page).locator('.migration-list').waitFor();
 	// A genuine Desktop resource pick must not register a workspace or switch the draft.
 	const workspacesBefore = await api(page, "/api/v1/workspaces");
 	const changed = await changePreview(page, () => modal(page).locator(".migration-preview > button").nth(0).click());
@@ -392,43 +455,35 @@ test("explicit rule CREATE consent invalidates on edits; real skill, prompt, dis
 	await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("skip"));
 	await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("create"));
 	assert.equal(await consent.locator("input").isChecked(), false, "Action change clears rule consent");
-	assert.equal(await reviewButton(page).isDisabled(), true);
+	assert.equal(await consent.locator("p").count(), 0, "Action change clears the explicit acknowledgement");
 	await confirmRule(page);
-	await category(page, "skills");
-	const skill = await candidate(page, item(result, "skills", "import-skill"));
-	await category(page, "prompts");
-	const prompt = await candidate(page, item(result, "prompts", "fixture-prompt"));
-	await candidate(page, item(result, "prompts", "skip-prompt"));
-	const skipped = await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("skip"));
-	await category(page, "mcp");
-	await candidate(page, item(result, "mcp", "fresh"));
-	await category(page, "sessions");
-	const sourceSession = result.candidates.find((c) => c.kind === "sessions" && c.source === "claude-code");
+	const mcpScan = await category(page, "mcp");
+	const mcp = await candidate(page, item(mcpScan, "mcp", "fresh"));
+	assert.equal(mcp.target.scope.kind, "global");
+	const sessionScan = await category(page, "sessions");
+	const sourceSession = sessionScan.candidates.find((c) => c.kind === "sessions" && c.source === "claude-code");
 	assert.ok(sourceSession, "Claude synthetic history must be discovered");
-	await candidate(page, sourceSession);
+	const session = await candidate(page, sourceSession);
+	assert.equal(session.target.scope.cwd, f.project, "An existing original workspace is reused without registration");
 	const { plan, job } = await startJob(page);
-	assert.equal(plan.items.length, 6);
+	assert.equal(plan.items.length, 3);
 	assert.equal(job.status, "completed");
-	assert.equal(job.items.filter((item) => item.status === "imported").length, 5, "No false successful result");
-	assert.equal(job.items.filter((item) => item.status === "skipped").length, 1);
+	assert.equal(job.items.filter((item) => item.status === "imported").length, 3, "No false successful result");
+	assert.equal(job.items.filter((item) => item.status === "skipped").length, 0);
 	assert.equal(job.items.filter((item) => item.status === "failed").length, 0);
-	assert.equal(existsSync(skipped.target.path), false, "Skipped item must have no resource write");
 	assert.equal(await readFile(join(f.target, "AGENTS.md"), "utf8"), ruleText);
 	assert.equal(existsSync(join(f.agent, "AGENTS.md")), false, "Resource picker did not write global rules");
-	assert.equal(await readFile(join(skill.target.path, "SKILL.md"), "utf8"), skillText("import-skill"));
-	assert.equal(await readFile(join(skill.target.path, "references/help.md"), "utf8"), "Nested fixture reference\n");
-	assert.equal(await readFile(prompt.target.path, "utf8"), promptText);
 	const servers = await api(page, "/api/v1/settings/mcp");
 	assert.equal(JSON.stringify(servers).includes("fixture-never-start-new"), false, "Stored executable fields must not be returned to the browser");
 	assert.ok(servers.servers.find((server) => server.name === "fresh")?.protectedFields.includes("command"));
 	const configText = await readFile(join(f.config, "config.toml"), "utf8");
-	const mcp = parseToml(configText).mcp_servers;
-	assert.equal(mcp.fresh.command, "fixture-never-start-new");
-	assert.equal(mcp.fresh.enabled, false, "Imported MCP must never connect");
-	assert.equal(mcp.existing.enabled, false, "Existing MCP must remain disabled");
+	const imported = parseToml(configText).mcp_servers;
+	assert.equal(imported.fresh.command, "fixture-never-start-new");
+	assert.equal(imported.fresh.enabled, false, "Imported MCP must never connect");
+	assert.equal(imported.existing.enabled, false, "Existing MCP must remain disabled");
 	assert.equal(job.items.find((item) => item.kind === "mcp").activation, "disabled");
-	const imported = job.items.find((item) => item.kind === "sessions");
-	const persisted = await readFile(imported.actualTarget.path, "utf8");
+	const published = job.items.find((item) => item.kind === "sessions");
+	const persisted = await readFile(published.actualTarget.path, "utf8");
 	assert.match(persisted, /Synthetic historical question/u);
 	assert.match(persisted, /Synthetic historical answer/u);
 	assert.equal(await readFile(join(f.home, ".claude/CLAUDE.md"), "utf8"), ruleText);
@@ -446,12 +501,12 @@ test("explicit rule CREATE consent invalidates on edits; real skill, prompt, dis
 	const legacyBefore = await readFile(f.legacyPath, "utf8");
 	await page.locator("#migrationPage > .migration-history > .migration-history-row button").click();
 	await modal(page).locator(".migration-job").waitFor();
-	const open = modal(page).locator(".migration-job-item").filter({ has: page.locator("h4", { hasText: imported.name }) }).locator("button");
+	const open = modal(page).locator(".migration-job-item").filter({ has: page.locator("h4", { hasText: published.name }) }).locator("button");
 	await open.click();
 	await modal(page).waitFor({ state: "hidden" });
 	await until(async () => (await page.locator("#stream").textContent()).includes("Synthetic historical answer"), "result opens actual history");
 	assert.equal(await page.locator("#settingsView").isVisible(), false);
-	const afterOpen = await readFile(imported.actualTarget.path, "utf8");
+	const afterOpen = await readFile(published.actualTarget.path, "utf8");
 	assert.ok(afterOpen.startsWith(persisted), "Opening cannot rewrite imported history");
 	const appended = afterOpen.slice(persisted.length).split("\n").filter(Boolean).map(line => JSON.parse(line));
 	assert.ok(appended.every(entry => entry.type === "thinking_level_change" || (entry.type === "custom" && ["step.activity", "step.activity_capabilities"].includes(entry.customType))),
@@ -464,9 +519,9 @@ test("rule replace creates real backup; recovery preview is read-only and explic
 	const { page } = f;
 	const rulePath = join(f.agent, "AGENTS.md");
 	const original = await readFile(rulePath, "utf8");
-	const result = await scan(page);
-	await category(page, "rules");
-	await candidate(page, item(result, "rules", "CLAUDE.md"));
+	await scan(page);
+	const ruleScan = await category(page, "rules");
+	await candidate(page, item(ruleScan, "rules", "CLAUDE.md"));
 	const replacement = await changePreview(page, () => modal(page).locator(".migration-preview select").nth(1).selectOption("replace"));
 	assert.equal(replacement.ruleImpact.backupRequired, true);
 	assert.equal(await readFile(rulePath, "utf8"), original, "Replace preview must not mutate rules");

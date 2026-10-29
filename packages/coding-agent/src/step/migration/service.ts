@@ -1,8 +1,14 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { renameSync } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
-import type { ReservedSessionImports, SessionImportService } from "../../core/session-import/service.ts";
+import {
+	type ReservedSessionImports,
+	type SessionImportService,
+	workbuddyProjectsRoot,
+} from "../../core/session-import/service.ts";
 import { acquireSettingsLockSync } from "../../core/settings-manager.ts";
 import {
 	anchor,
@@ -23,11 +29,12 @@ import {
 } from "./filesystem.ts";
 import { type Journal, MigrationJournalStore, validId, type WriteIntent } from "./journal.ts";
 import { MigrationPaths, resourceName } from "./paths.ts";
-import { PREVIEW_TTL, type PreparedMigration, prepareResource } from "./preview.ts";
+import { PREVIEW_TTL, type PreparedMigration, prepareMcpBatch, prepareResource } from "./preview.ts";
 import { type ResourceCandidate, ResourceInspector } from "./resources.ts";
 import { ruleImpact } from "./rules.ts";
 import type {
 	MigrationAcknowledgement,
+	MigrationCandidate,
 	MigrationJob,
 	MigrationKind,
 	MigrationPlan,
@@ -43,7 +50,7 @@ import { currentHash, publishResource } from "./writer.ts";
 
 export { MigrationError } from "./filesystem.ts";
 
-const KINDS: MigrationKind[] = ["sessions", "skills", "mcp", "prompts", "rules"];
+const KINDS: MigrationKind[] = ["sessions", "skills", "mcp", "rules"];
 const ACKS: MigrationAcknowledgement[] = ["rules-impact", "scope-expansion", "independent-copy", "sensitive-values"];
 interface StoredPlan {
 	dto: MigrationPlan;
@@ -58,6 +65,57 @@ interface Recovery {
 }
 
 /** Offline migration coordinator. It never owns the injected session service's lifecycle. */
+/** Source identities StepCode already holds, so a rescan never offers the same history twice. */
+async function importedSessionKeys(sessionRoot: string): Promise<Set<string>> {
+	const keys = new Set<string>();
+	let names: readonly string[];
+	try {
+		names = await readdir(join(sessionRoot, "imported"));
+	} catch {
+		// A missing or unreadable import directory simply means nothing is deduplicated yet.
+		return keys;
+	}
+	for (const name of names) {
+		if (keys.size >= 5000) break;
+		if (!name.endsWith(".jsonl")) continue;
+		try {
+			const handle = await open(join(sessionRoot, "imported", name), "r");
+			try {
+				const buffer = Buffer.alloc(64 * 1024);
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+				// The file opens with a session header; provenance rides on the first imported entries.
+				for (const line of buffer.subarray(0, bytesRead).toString("utf8").split("\n").slice(0, 16)) {
+					if (!line.trim()) continue;
+					let parsed: unknown;
+					try {
+						parsed = JSON.parse(line);
+					} catch {
+						break;
+					}
+					const entry = record(parsed);
+					const imported = entry.imported;
+					if (
+						imported &&
+						typeof imported === "object" &&
+						!Array.isArray(imported) &&
+						typeof (imported as Record<string, unknown>).source === "string" &&
+						typeof (imported as Record<string, unknown>).sessionId === "string"
+					) {
+						const provenance = imported as Record<string, unknown>;
+						keys.add(`${provenance.source}\0${provenance.sessionId}`);
+						break;
+					}
+				}
+			} finally {
+				await handle.close();
+			}
+		} catch {
+			// An unreadable imported record must not stop the scan; the source stays offerable.
+		}
+	}
+	return keys;
+}
+
 export class MigrationService {
 	private readonly paths: MigrationPaths;
 	private readonly inspector: ResourceInspector;
@@ -66,6 +124,7 @@ export class MigrationService {
 	private records: ResourceCandidate[] = [];
 	private readonly candidates = new Map<string, ResourceCandidate>();
 	private readonly sessionCandidates = new Set<string>();
+	private readonly sessionRecords = new Map<string, MigrationCandidate>();
 	private readonly previews = new Map<string, PreparedMigration>();
 	private readonly plans = new Map<string, StoredPlan>();
 	private readonly journals = new Map<string, Journal>();
@@ -162,61 +221,101 @@ export class MigrationService {
 		if (r.kinds !== undefined && (!Array.isArray(r.kinds) || r.kinds.some((k) => !KINDS.includes(k))))
 			fail("invalid-kinds");
 		this.paths.chooseProjects(r.projectCwds);
+		if ((input.kinds ?? KINDS).includes("mcp")) this.paths.chooseMcpSources(r.mcpSourcePaths);
 		const kinds = input.kinds ?? KINDS;
 		const resource = this.inspector.scan(kinds);
 		for (const [id, item] of this.candidates) if (kinds.includes(item.dto.kind)) this.candidates.delete(id);
 		this.records = resource.records;
 		for (const item of this.records) this.candidates.set(item.dto.id, item);
 		if (kinds.includes("sessions")) {
+			const imported = await importedSessionKeys(
+				this.paths.env.STEP_CODING_AGENT_SESSION_DIR || join(this.paths.agent, "sessions"),
+			);
+			const options = input.sessionOptions ?? {};
+			if (
+				!options ||
+				typeof options !== "object" ||
+				Array.isArray(options) ||
+				(options.range !== undefined && !["all", "7", "30", "90"].includes(options.range)) ||
+				(options.limit !== undefined && options.limit !== null && ![30, 50, 100].includes(options.limit)) ||
+				(options.includeArchived !== undefined && typeof options.includeArchived !== "boolean")
+			)
+				fail("invalid-session-scan-options");
+			const modifiedSince =
+				options.range && options.range !== "all" ? Date.now() - Number(options.range) * 86400000 : undefined;
 			const result = await this.sessions
 				.scan({
 					claudeRoot: join(this.paths.claude, "projects"),
 					codexRoot: this.paths.codex,
-					workbuddyRoot: join(this.paths.home, ".workbuddy", "projects"),
+					workbuddyRoot: workbuddyProjectsRoot(this.paths.home),
 					qoderRoot: join(this.paths.home, ".qoder", "projects"),
+					includeArchived: options.includeArchived,
+					modifiedSince,
 				})
 				.catch(() => fail("session-scan-failed", 409));
 			this.open();
 			this.sessionCandidates.clear();
-			for (const item of result.candidates) {
+			this.sessionRecords.clear();
+			resource.result.truncated ||= result.errors.some((e) => /limit exceeded/i.test(e.message));
+			const sorted = [...result.candidates].sort(
+				(a, b) => b.modified.localeCompare(a.modified) || a.sessionId.localeCompare(b.sessionId),
+			);
+			const visible = options.limit === null ? sorted : sorted.slice(0, options.limit ?? 100);
+			resource.result.sessionSummary = {
+				total: sorted.length,
+				shown: visible.length,
+				incomplete: result.errors.length > 0,
+				range: options.range ?? "all",
+				limit: options.limit === undefined ? 100 : options.limit,
+			};
+			for (const item of visible) {
 				this.sessionCandidates.add(item.id);
-				resource.result.candidates.push({
+				const alreadyImported = imported.has(`${item.source}\0${item.sessionId}`);
+				const dto: MigrationCandidate = {
 					id: item.id,
 					kind: "sessions",
 					source: item.source,
 					name: item.title,
 					sourcePath: item.sourcePath ?? "",
 					sourceScope: item.cwd ? { kind: "project", cwd: item.cwd } : { kind: "global" },
-					holding: "external",
+					holding: alreadyImported ? "stepcode" : "external",
 					readiness: "ready",
-					needsMigration: true,
-					diagnostics: [],
+					needsMigration: !alreadyImported,
+					diagnostics: alreadyImported ? [{ code: "session-already-imported" }] : [],
 					modified: item.modified,
 					sourceSessionId: item.sessionId,
-				});
+					...(item.messageCount === undefined ? {} : { messageCount: item.messageCount }),
+					...(item.messageCountCapped ? { messageCountCapped: true } : {}),
+				};
+				this.sessionRecords.set(item.id, dto);
+				resource.result.candidates.push(dto);
 			}
 			const roots = {
 				"claude-code": join(this.paths.claude, "projects"),
 				codex: this.paths.codex,
-				workbuddy: join(this.paths.home, ".workbuddy", "projects"),
+				workbuddy: workbuddyProjectsRoot(this.paths.home),
 				qoder: join(this.paths.home, ".qoder", "projects"),
 			};
 			for (const [source, path] of Object.entries(roots)) {
-				const error = result.errors.some((e) => e.source === source);
+				const failures = result.errors.filter((e) => e.source === source);
 				const exists = result.roots[source as keyof typeof roots] !== undefined;
 				resource.result.sources.push({
 					kind: "sessions",
 					source: source as keyof typeof roots,
 					scope: { kind: "global" },
 					path,
-					status: error
-						? "error"
-						: !exists
-							? "missing"
-							: result.candidates.some((c) => c.source === source)
-								? "ok"
+					// A source that yielded candidates but lost some records is partial, not unreadable.
+					status: !exists
+						? "missing"
+						: result.candidates.some((c) => c.source === source)
+							? failures.length
+								? "partial"
+								: "ok"
+							: failures.length
+								? "error"
 								: "empty",
-					diagnostics: error ? [{ code: "session-source-read-error" }] : [],
+					// Report how many records could not be read; never the parser text, which can quote source content.
+					diagnostics: failures.length ? [{ code: "session-source-read-error", count: failures.length }] : [],
 				});
 			}
 		}
@@ -233,10 +332,10 @@ export class MigrationService {
 				!["copy", "import", "create", "append", "replace", "skip"].includes(String(r.action)))
 		)
 			fail("invalid-preview-request");
-		this.paths.chooseTarget(input.target);
 		let prepared: PreparedMigration;
 		if (this.sessionCandidates.has(input.candidateId)) prepared = await this.prepareSession(input);
 		else {
+			this.paths.chooseTarget(input.target);
 			const known = this.candidates.get(input.candidateId);
 			if (!known) fail("candidate-not-found", 404);
 			const fresh = this.inspector.scan([known.dto.kind]);
@@ -259,8 +358,17 @@ export class MigrationService {
 
 	private async prepareSession(input: MigrationPreviewRequest): Promise<PreparedMigration> {
 		const preview = await this.sessions.preview(input.candidateId).catch(() => fail("session-preview-failed", 409));
-		const scope = this.paths.scope(input.target);
-		if (scope.kind !== "project") fail("session-project-required");
+		let scope: { kind: "global" } | { kind: "project"; cwd: string } = { kind: "global" };
+		let targetIssue: string | undefined;
+		const requested = input.target ?? (preview.cwd ? { kind: "project" as const, cwd: preview.cwd } : undefined);
+		if (requested?.kind === "project") {
+			try {
+				this.paths.chooseTarget(requested);
+				scope = this.paths.scope(requested);
+			} catch {
+				targetIssue = input.target ? "session-target-unavailable" : "session-original-directory-missing";
+			}
+		} else targetIssue = preview.cwd ? "session-target-unavailable" : "session-workspace-not-recorded";
 		if (input.action !== undefined && !["import", "skip"].includes(input.action)) fail("unsupported-action");
 		const action = input.action ?? "import";
 		const dto: MigrationPreview = {
@@ -268,7 +376,8 @@ export class MigrationService {
 			fingerprint: hash(
 				stable({
 					fingerprint: preview.fingerprint,
-					cwd: scope.cwd,
+					cwd: scope.kind === "project" ? scope.cwd : null,
+					targetIssue,
 					projectIdentity: this.paths.projectIdentity(scope),
 					action,
 				}),
@@ -286,6 +395,7 @@ export class MigrationService {
 				needsMigration: true,
 				diagnostics: [],
 				sourceSessionId: preview.sessionId,
+				messageCount: preview.messageCount,
 			},
 			target: {
 				scope,
@@ -296,14 +406,18 @@ export class MigrationService {
 			allowedActions: ["import", "skip"],
 			sourceText: preview.excerpt,
 			requiredAcknowledgements: [],
-			blockers: [],
+			blockers: targetIssue && action !== "skip" ? [{ code: targetIssue }] : [],
 			warnings: preview.warnings,
 			activation: action === "skip" ? "unchanged" : "history",
 		};
 		return {
 			dto,
-			request: structuredClone(input),
-			session: { candidateId: preview.id, fingerprint: preview.fingerprint, cwd: scope.cwd },
+			request: { ...structuredClone(input), ...(scope.kind === "project" ? { target: scope } : {}) },
+			session: {
+				candidateId: preview.id,
+				fingerprint: preview.fingerprint,
+				cwd: scope.kind === "project" ? scope.cwd : "",
+			},
 			sourceHash: preview.fingerprint,
 			targetHash: null,
 			projectIdentity: this.paths.projectIdentity(scope),
@@ -348,7 +462,9 @@ export class MigrationService {
 	async plan(selections: MigrationSelection[]): Promise<MigrationPlan> {
 		this.open();
 		if (!Array.isArray(selections) || !selections.length || selections.length > 200) fail("invalid-selections");
-		const prepared: PreparedMigration[] = [];
+		let prepared: PreparedMigration[] = [];
+		const candidateIds = new Set<string>();
+		const acknowledgements = new Map<string, MigrationAcknowledgement[]>();
 		const targets = new Set<string>();
 		let ruleWrites = 0;
 		for (const value of selections) {
@@ -359,18 +475,29 @@ export class MigrationService {
 			if (p.dto.blockers.length) fail("migration-blocked", 409);
 			if (p.dto.requiredAcknowledgements.some((ack) => !acknowledged.includes(ack)))
 				fail("acknowledgement-required");
-			if (prepared.includes(p)) fail("duplicate-selection");
+			if (prepared.includes(p) || (p.dto.candidate.kind === "mcp" && candidateIds.has(p.dto.candidate.id)))
+				fail("duplicate-selection");
+			candidateIds.add(p.dto.candidate.id);
+			acknowledgements.set(p.dto.candidate.id, acknowledged);
+			await this.revalidate(p);
+			prepared.push(p);
+		}
+		prepared = prepareMcpBatch(this.paths, prepared);
+		for (const p of prepared) {
+			if (p.dto.blockers.length) fail("migration-blocked", 409);
+			if (p.dto.requiredAcknowledgements.some((ack) => !acknowledgements.get(p.dto.candidate.id)?.includes(ack)))
+				fail("acknowledgement-required");
 			if (p.dto.action !== "skip") {
 				const target = `${p.dto.target.path}\0${p.mcp ? p.dto.target.name : p.session ? p.session.candidateId : ""}`;
 				if (targets.has(target)) fail("batch-target-conflict", 409);
 				targets.add(target);
 				if (p.dto.candidate.kind === "rules" && ++ruleWrites > 1) fail("rule-batch-impact-conflict", 409);
 			}
-			await this.revalidate(p);
-			prepared.push(p);
 		}
 		this.open();
 		this.expireCaches();
+		if (this.previews.size + prepared.filter((p) => !this.previews.has(p.dto.id)).length > 500)
+			fail("preview-limit", 429);
 		if (this.plans.size >= 100) fail("plan-limit", 429);
 		const dto: MigrationPlan = {
 			id: randomUUID(),
@@ -378,6 +505,7 @@ export class MigrationService {
 			expiresAt: new Date(Math.min(...prepared.map((p) => Date.parse(p.dto.expiresAt)))).toISOString(),
 			items: prepared.map((p) => p.dto),
 		};
+		for (const p of prepared) this.previews.set(p.dto.id, p);
 		this.plans.set(dto.id, { dto, prepared });
 		return structuredClone(dto);
 	}

@@ -48,6 +48,13 @@ async function dispatch(s: MigrationRouteService, parts: string[], method = "POS
 	} finally { socket.destroy(); }
 }
 
+test("accepts explicit MCP source files but rejects unknown sources and relative paths", async () => {
+	const s = service();
+	assert.equal((await dispatch(s, ["scan"], "POST", { kinds: ["mcp"], mcpSourcePaths: { codex: "/fixture/custom.toml" } })).status, 200);
+	assert.equal((await dispatch(s, ["scan"], "POST", { mcpSourcePaths: { codex: "relative.toml" } })).status, 400);
+	assert.equal((await dispatch(s, ["scan"], "POST", { mcpSourcePaths: { unknown: "/fixture/custom.toml" } })).status, 400);
+});
+
 test("dispatches all operations with awaited responses and no-store JSON", async () => {
 	const s = service();
 	assert.deepEqual((await dispatch(s, [], "GET")).value, { jobs: [job] });
@@ -86,19 +93,23 @@ test("requires known canonical source projects but allows an explicitly selected
 	const s = service();
 	let received: unknown;
 	s.scan = async (input) => { received = input; return { candidates: [], sources: [], truncated: false }; };
-	assert.equal((await dispatch(s, ["scan"], "POST", { projectCwds: [alias] })).status, 403);
-	const known = mock.fn(async (cwd: string | null) => cwd === canonical ? canonical : undefined);
-	assert.equal((await dispatch(s, ["scan"], "POST", { kinds: ["rules"], projectCwds: [alias] }, { known })).status, 200);
+	// Any existing canonical directory may be a read-only scan source, registered or not.
+	assert.equal((await dispatch(s, ["scan"], "POST", { projectCwds: [alias] })).status, 200);
+	assert.deepEqual(received, { kinds: undefined, projectCwds: [canonical] });
+	assert.equal((await dispatch(s, ["scan"], "POST", { kinds: ["rules"], projectCwds: [alias] })).status, 200);
 	assert.deepEqual(received, { kinds: ["rules"], projectCwds: [canonical] });
 	s.preview = async (input) => { received = input; return preview; };
 	assert.equal((await dispatch(s, ["preview"], "POST", { candidateId: "candidate-1", target: { kind: "project", cwd: alias } })).status, 200);
 	assert.deepEqual(received, { candidateId: "candidate-1", target: { kind: "project", cwd: canonical } });
+	// Missing destinations are forwarded for product-level preview blockers, never authorized as writable targets.
+	assert.equal((await dispatch(s, ["preview"], "POST", { candidateId: "candidate-1", target: { kind: "project", cwd: join(root, "missing") } })).status, 200);
+	assert.equal((await dispatch(s, ["scan"], "POST", { projectCwds: [join(root, "missing")] })).status, 400);
 	const file = join(root, "file");
 	await writeFile(file, "fixture");
-	for (const cwd of ["relative", file, join(root, "missing"), "\0"]) {
+	for (const cwd of ["relative", file, "\0"]) {
 		assert.equal((await dispatch(s, ["preview"], "POST", { candidateId: "candidate-1", target: { kind: "project", cwd } })).status, 400);
+		assert.equal((await dispatch(s, ["scan"], "POST", { projectCwds: [cwd] })).status, 400);
 	}
-	assert.equal((await dispatch(s, ["scan"], "POST", { projectCwds: [project] }, { known: async () => root })).status, 403);
 });
 
 test("rejects malformed JSON, unknown keys, wrong types, oversize and unreadable requests", async () => {

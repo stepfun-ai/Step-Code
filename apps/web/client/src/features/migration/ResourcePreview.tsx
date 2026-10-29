@@ -1,0 +1,165 @@
+import { useEffect, useState } from "react";
+import { useT } from "../../i18n";
+import { Button, IconButton, Spinner } from "../../ui";
+import { acknowledgePreview, deselectCandidate, previewCandidate } from "./actions";
+import { DiagnosticList } from "./CandidateList";
+import type { MigrationDraft } from "./model";
+import { PreviewText } from "./PreviewPanel";
+import { updateMigration } from "./store";
+import { MigrationTargetPicker } from "./TargetPicker";
+
+export function ResourcePreview({
+	id,
+	kind,
+	draft,
+	expired,
+	onPickTarget,
+}: {
+	readonly id: string;
+	readonly kind: "sessions" | "mcp";
+	readonly draft: MigrationDraft;
+	readonly expired: boolean;
+	readonly onPickTarget?: () => Promise<string | null>;
+}) {
+	const t = useT();
+	const preview = draft.preview;
+	const missing =
+		!!preview &&
+		kind === "sessions" &&
+		(preview.target.scope.kind !== "project" ||
+			preview.blockers.some((item) =>
+				[
+					"session-workspace-not-recorded",
+					"session-original-directory-missing",
+					"session-target-unavailable",
+					"session-target-required",
+				].includes(item.code),
+			));
+	const [targetExpanded, setTargetExpanded] = useState(missing);
+	useEffect(() => {
+		if (missing) setTargetExpanded(true);
+	}, [missing]);
+	return (
+		<aside className="migration-preview" aria-label={t("migrationPreview")}>
+			<header className="migration-toolbar">
+				<h3>{preview?.candidate.name ?? t("migrationPreview")}</h3>
+				<IconButton
+					icon="close"
+					aria-label={t("migrationClosePreview")}
+					onClick={() => updateMigration({ focusedId: null })}
+				/>
+			</header>
+			{draft.loading ? (
+				<output>
+					<Spinner /> {t("migrationLoadingPreview")}
+				</output>
+			) : null}
+			{draft.error ? (
+				<div role="alert">
+					<DiagnosticList diagnostics={[{ code: draft.error }]} />
+				</div>
+			) : null}
+			{expired ? <DiagnosticList diagnostics={[{ code: "preview-expired" }]} /> : null}
+			{kind === "sessions" ? (
+				<>
+					{preview ? <PreviewText label={t("migrationSessionHistory")} text={preview.sourceText} /> : null}
+					{preview ? <DiagnosticList diagnostics={preview.warnings} /> : null}
+					{preview ? (
+						<div className="migration-danger">
+							<DiagnosticList diagnostics={preview.blockers} />
+						</div>
+					) : null}
+					{preview?.target.scope.kind === "project" && !missing ? (
+						<p className="migration-target-note" data-target-note="">
+							{t("migrationTargetNote", { cwd: preview.target.scope.cwd })}
+						</p>
+					) : null}
+					<details
+						className="migration-target-details"
+						open={targetExpanded}
+						onToggle={(event) => setTargetExpanded(event.currentTarget.open)}
+					>
+						<summary>
+							{t("migrationTargetWorkspace")}
+							{preview?.target.scope.kind === "project" && !missing ? (
+								<code>{preview.target.scope.cwd}</code>
+							) : null}
+						</summary>
+						<MigrationTargetPicker
+							id={id}
+							kind={kind}
+							draft={draft}
+							onPickTarget={onPickTarget}
+							labelled={false}
+						/>
+					</details>
+				</>
+			) : (
+				<>
+					<p className="migration-meta">
+						{t(`migrationMcpTransport.${preview?.candidate.mcpTransport ?? "stdio"}`)} ·{" "}
+						{t("migrationMcpNoDescription")}
+					</p>
+					<MigrationTargetPicker id={id} kind={kind} draft={draft} />
+					<p className="migration-meta">{t("migrationMcpAfterNote")}</p>
+					<details
+						className="migration-mcp-safety"
+						open={
+							!!draft.request.includeSensitiveValues ||
+							!!preview?.requiredAcknowledgements.length ||
+							!!preview?.blockers.length
+						}
+					>
+						<summary>{t("migrationMcpSafetyDetails")}</summary>
+						<p>{t("migrationMcpBoundary")}</p>
+						<label className="migration-check">
+							<input
+								type="checkbox"
+								checked={draft.request.includeSensitiveValues ?? false}
+								disabled={draft.loading}
+								onChange={(event) =>
+									void previewCandidate(id, { includeSensitiveValues: event.currentTarget.checked })
+								}
+							/>
+							{t("migrationIncludeSensitive")}
+						</label>
+						{preview ? (
+							<>
+								<DiagnosticList diagnostics={preview.warnings} />
+								<div className="migration-danger">
+									<DiagnosticList diagnostics={preview.blockers} />
+								</div>
+								{preview.requiredAcknowledgements.map((ack) => (
+									<label className="migration-check" key={`${preview.id}:${ack}`}>
+										<input
+											type="checkbox"
+											checked={draft.acknowledged.includes(ack)}
+											disabled={draft.loading}
+											onChange={(event) => acknowledgePreview(id, ack, event.currentTarget.checked)}
+										/>
+										{t(`migrationAcknowledgement.${ack}`)}
+									</label>
+								))}
+							</>
+						) : null}
+					</details>
+				</>
+			)}
+			<Button id="migrationRefreshPreview" disabled={draft.loading} onClick={() => void previewCandidate(id)}>
+				{t("migrationRefreshPreview")}
+			</Button>
+			<Button
+				variant={draft.selected ? "secondary" : "primary"}
+				disabled={draft.loading}
+				onClick={() => void previewCandidate(id, {}, !draft.selected, false)}
+			>
+				{t(draft.selected ? "migrationDeselectItem" : "migrationSelectThis")}
+			</Button>
+			{draft.selected ? (
+				<Button variant="secondary" onClick={() => deselectCandidate(id)}>
+					{t("migrationDoNotMigrate")}
+				</Button>
+			) : null}
+		</aside>
+	);
+}

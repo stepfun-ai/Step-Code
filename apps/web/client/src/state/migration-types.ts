@@ -1,5 +1,7 @@
 /** HTTP-only migration shapes. Keep paired with coding-agent's product types; never import its implementation. */
-export type MigrationKind = "sessions" | "skills" | "mcp" | "prompts" | "rules";
+export type MigrationKind = "sessions" | "skills" | "mcp" | "rules";
+/** Legacy job history may still record the removed prompt kind. */
+export type LegacyMigrationKind = MigrationKind | "prompts";
 export type MigrationSource = "codex" | "claude-code" | "workbuddy" | "qoder" | "shared" | "stepcode" | "plugin";
 export type MigrationScope = { kind: "global" } | { kind: "project"; cwd: string };
 export type MigrationAction = "copy" | "import" | "create" | "append" | "replace" | "skip";
@@ -23,7 +25,10 @@ export interface MigrationCandidate {
 	needsMigration: boolean;
 	diagnostics: MigrationDiagnostic[];
 	modified?: string;
+	mcpTransport?: "stdio" | "http";
 	sourceSessionId?: string;
+	messageCount?: number;
+	messageCountCapped?: boolean;
 }
 export interface MigrationSourceReport {
 	kind: MigrationKind;
@@ -36,15 +41,28 @@ export interface MigrationSourceReport {
 export interface MigrationScanRequest {
 	kinds?: MigrationKind[];
 	projectCwds?: string[];
+	mcpSourcePaths?: Partial<Record<"claude-code" | "codex", string>>;
+	sessionOptions?: { range?: "all" | "7" | "30" | "90"; limit?: 30 | 50 | 100 | null; includeArchived?: boolean };
 }
 export interface MigrationScanResult {
 	candidates: MigrationCandidate[];
 	sources: MigrationSourceReport[];
 	truncated: boolean;
+	/** Only present for session scans; totals describe this scan, never a guarantee over all history. */
+	sessionSummary?: {
+		total: number;
+		shown: number;
+		incomplete: boolean;
+		range: "all" | "7" | "30" | "90";
+		limit: 30 | 50 | 100 | null;
+	};
 }
+/** Session destinations may ask for a missing workspace folder to be created. */
+export type MigrationTargetRequest = MigrationScope | { kind: "project"; cwd: string; create: true };
+
 export interface MigrationPreviewRequest {
 	candidateId: string;
-	target?: MigrationScope;
+	target?: MigrationTargetRequest;
 	action?: MigrationAction;
 	targetName?: string;
 	includeSensitiveValues?: boolean;
@@ -97,7 +115,8 @@ export interface MigrationStartRequest {
 export interface MigrationItemResult {
 	id: string;
 	candidateId: string;
-	kind: MigrationKind;
+	/** Legacy job history may still record the removed prompt kind. */
+	kind: LegacyMigrationKind;
 	source: MigrationSource;
 	name: string;
 	sourceScope: MigrationScope;

@@ -272,35 +272,52 @@ const migrationOpen = async () => {
   if ($('#migrationModal') && !$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
   if ($('#settingsView').hidden) $('#settingsButton').click();
   $('[data-settings-page="migration"]').click();
-  await until(() => $('#migrationPage > button'), 'migration Settings entry');
-  $('#migrationPage > button').click();
-  await until(() => !$('#migrationModal').hidden && $('.migration-invitation button'), 'explicit scan invitation');
+  await until(() => $('#migrationPage .migration-category-list button'), 'migration Settings entry');
+  $('#migrationPage .migration-category-list button').click();
+  await until(() => !$('#migrationModal').hidden && $('#migrationScanButton'), 'explicit scan invitation');
 };
 const migrationScan = async () => {
-  const result = await migrationPost('/scan', () => $('.migration-invitation button').click());
+  const result = await migrationPost('/scan', () => $('#migrationScanButton').click());
   if (result.status !== 200) throw new Error('Scan failed: ' + JSON.stringify(result.body));
   await until(() => $('.migration-list'), 'scan rendered');
   return result.body;
 };
-const migrationSelect = async (item) => {
+const migrationExpand = (row) => {
+  const group = row.closest('.migration-group');
+  if (group && group.querySelector('.migration-group-items')?.hidden) group.querySelector('.migration-group-toggle').click();
+};
+const migrationPreview = async (item) => {
   const row = $('[data-candidate-id="' + item.id + '"]');
   if (!row || row.querySelector('input').disabled) throw new Error('Candidate not selectable: ' + item.name);
-  const result = await migrationPost('/preview', () => row.querySelector('input').click());
-  if (result.status !== 200) throw new Error('Preview failed: ' + JSON.stringify(result.body));
+  migrationExpand(row);
+  const result = await migrationPost('/preview', () => row.querySelector('.migration-row-title').click());
+  // A failed preview must stay observable in the panel, so callers assert on it themselves.
+  if (result.status === 200)
+    await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
+  return result.body;
+};
+const migrationSelect = async (item) => {
+  const row = $('[data-candidate-id="' + item.id + '"]');
+  await migrationPreview(item);
+  // Selecting re-reviews the same request, so the reviewed snapshot is the one the plan must freeze.
+  const selected = await migrationPost('/preview', () => row.querySelector('input').click());
+  if (selected.status !== 200) throw new Error('Selection preview failed: ' + JSON.stringify(selected.body));
   await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
   if (!row.querySelector('input').checked) throw new Error('Explicit selection lost');
   for (const input of $$('.migration-preview .migration-check input')) if (!input.checked) input.click();
-  return result.body;
+  return selected.body;
 };
 const migrationPlan = async () => {
-  await until(() => !migrationFooter()[1].disabled, 'selected previews ready');
-  const result = await migrationPost('/plans', () => migrationFooter()[1].click());
+  // A failed plan attempt leaves the review stage open, so return to the category first.
+  if ($('.migration-final-plan')) { $$('#migrationModal .migration-dialog-foot button')[0].click(); await until(() => $('.migration-list'), 'back to selection'); }
+  await until(() => $('#migrationReviewPlan') && !$('#migrationReviewPlan').disabled, 'selected previews ready');
+  const result = await migrationPost('/plans', () => $('#migrationReviewPlan').click());
   if (result.status !== 200) throw new Error('Plan failed: ' + JSON.stringify(result.body));
   await until(() => $('.migration-final-plan'), 'immutable final review');
   return result.body;
 };
 const migrationStart = async () => {
-  const result = await migrationPost('', () => migrationFooter()[1].click());
+  const result = await migrationPost('', () => $('#migrationStartPlan').click());
   if (result.status !== 202) throw new Error('Start failed: ' + JSON.stringify(result.body));
   const job = await until(async () => {
     const job = await migrationRead('/' + result.body.id);
@@ -3120,7 +3137,10 @@ test("plan mode's proposal keeps its review card after a reload and its approval
     const stripHidden = $("#planStrip").hidden;
     $("#planApprove").click();
     await until(() => !$("#planApprove"), "card settles after the decision");
-    await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed", "approval turn settles");
+    await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/${id}")).json();
+      return value.status === "completed" && $$(".message.user").some(node => node.textContent.includes("同意执行"));
+    }, "this approval turn settles and its decision is rendered");
     return {
       contents,
       approve,
@@ -3649,17 +3669,15 @@ test("session migration imports reviewed snapshots while sources continue writin
       const response = await fetch('/api/v1/migrations/scan', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({[key]: '/must-not-scan'}) });
       if (response.status !== 400) throw new Error('Custom source override accepted: ' + key);
     }
-    const search = $('.migration-list input[type="search"]');
-    search.value = 'rollout-migration.jsonl';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    await until(() => $$('.migration-row').length === 1, 'source path search');
-    search.value = 'no-matching-migration-session';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    await until(() => !$('.migration-row'), 'empty search');
-    if (!$('.migration-list .empty-list')) throw new Error('Empty search explanation missing');
-    search.value = '';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    await until(() => $$('.migration-row').length === 2, 'cleared search');
+    // Workspace groups stay collapsed until the user opens one, so expand before counting rows.
+    for (const toggle of $$('.migration-group-toggle')) if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+    // The list keeps only source filtering (matching the prototype); no search field.
+    if ($('.migration-list input[type="search"]')) throw new Error('Migration list must not expose a search field');
+    const sourceTabs = $$('.migration-list > div[aria-label] button');
+    sourceTabs[sourceTabs.length - 1].click();
+    await until(() => $$('.migration-row').length === 1, 'source filter');
+    sourceTabs[0].click();
+    await until(() => $$('.migration-row').length === 2, 'cleared source filter');
     const previews = [];
     for (const item of [...sessions].sort((a, b) => a.source.localeCompare(b.source))) previews.push(await migrationSelect(item));
     const codex = previews.find(preview => preview.candidate.source === 'codex');
@@ -3821,54 +3839,70 @@ test("session migration failures are visible and preserve truthful job state", {
         await until(() => calls.history > before && !$('.migration-history > header button').disabled, 'history read settled');
       };
       await migrationOpen();
-      if (calls.scan || calls.previews.length || calls.starts.length) throw new Error('Settings navigation auto-scanned or started migration');
+      // Entering the first category scans that kind once; navigation must never preview or start a job.
+      if (calls.previews.length || calls.starts.length) throw new Error('Settings navigation previewed or started migration');
+      const scansAfterOpen = calls.scan;
       $('#migrationModal .migration-dialog-head button').click();
       await until(() => $('.migration-history-row'), 'saved history loaded');
       historyFailure = true;
       await refresh();
       await visibleError('#migrationPage [role="alert"]', 'fixture-history');
       if ($$('.migration-history-row').length !== 1) throw new Error('Failed history read discarded last known saved job');
-      if (calls.scan) throw new Error('History failure triggered scan');
+      if (calls.scan !== scansAfterOpen) throw new Error('History failure triggered scan');
       historyFailure = false;
       await refresh();
       await migrationOpen();
       scanFailure = true;
-      const failedScan = await migrationPost('/scan', () => $('.migration-invitation button').click());
-      if (failedScan.status !== 503 || $('.migration-row')) throw new Error('Failed scan fabricated candidates');
+      const failedScan = await migrationPost('/scan', () => $('#migrationScanButton').click());
+      if (failedScan.status !== 503) throw new Error('Failed scan not surfaced');
       await visibleError('#migrationModal [role="alert"]', 'fixture-scan');
+      if (!$('[data-candidate-id="healthy"]')) throw new Error('Failed rescan discarded the last good list');
       scanFailure = false;
       await migrationScan();
-      if (!$('.migration-source-reports').open || !$('[data-scan-status="error"]').textContent.includes('/fixture/claude')) throw new Error('Partial source failure hidden');
+      $('.migration-source-locations summary').click();
+      if (!$('[data-scan-status="error"]').textContent.includes('/fixture/claude')) throw new Error('Partial source failure hidden');
       const brokenRow = $('[data-candidate-id="broken"]');
-      await migrationPost('/preview', () => brokenRow.querySelector('input').click());
+      await migrationPreview(broken);
+      brokenRow.querySelector('input').click();
       await visibleError('.migration-preview [role="alert"]', 'fixture-preview');
-      if (!migrationFooter()[1].disabled) throw new Error('Failed selected preview remains submittable');
+      $('#migrationReviewPlan').click();
+      await until(() => $('.migration-final-plan'), 'review reached with a failed selection');
+      if (!$('#migrationStartPlan').disabled) throw new Error('Failed selected preview remains submittable');
+      $$('#migrationModal .migration-dialog-foot button')[0].click();
+      await until(() => $('.migration-list'), 'back to selection');
       if (!$('[data-candidate-id="healthy"]')) throw new Error('Partial failure removed healthy candidate');
       previewFailure = false;
       malformedPreview = true;
-      await migrationPost('/preview', () => $('.migration-preview > header button').click());
+      await migrationPost('/preview', () => $('#migrationRefreshPreview').click());
       await visibleError('.migration-preview [role="alert"]', 'invalid-response');
-      if (!migrationFooter()[1].disabled) throw new Error('Invalid DTO passed review readiness');
+      $('#migrationReviewPlan').click();
+      await until(() => $('.migration-final-plan'), 'review reached with an invalid DTO');
+      if (!$('#migrationStartPlan').disabled) throw new Error('Invalid DTO passed review readiness');
+      $$('#migrationModal .migration-dialog-foot button')[0].click();
+      await until(() => $('.migration-list'), 'back to selection');
       malformedPreview = false;
-      brokenRow.querySelector('input').click();
+      // Re-query: earlier renders replaced the row node, so a stale reference would silently do nothing.
+      $('[data-candidate-id="broken"]').querySelector('input').click();
       const healthyPreview = await migrationSelect(healthy);
       if (!$('.migration-preview .migration-diagnostics').textContent.includes('73519')) throw new Error('Compatibility warning count hidden');
-      const failedPlan = await migrationPost('/plans', () => migrationFooter()[1].click());
-      if (failedPlan.status !== 503 || $('.migration-final-plan')) throw new Error('Failed plan fabricated review');
+      const failedPlan = await migrationPost('/plans', () => $('#migrationReviewPlan').click());
+      if (failedPlan.status !== 503) throw new Error('Failed plan not surfaced');
+      // The review list stays reachable so the failure is visible; it must not become submittable.
+      if (!$('#migrationStartPlan').disabled) throw new Error('Failed plan left a submittable review');
       await visibleError('#migrationModal [role="alert"]', 'fixture-plan');
       if (calls.starts.length) throw new Error('Plan failure started job');
       planFailure = false;
       const plan = await migrationPlan();
       if (plan.items.length !== 1 || plan.items[0].id !== healthyPreview.id || calls.plans.at(-1).selections.length !== 1)
         throw new Error('Plan included unselected or failed candidate');
-      const failedStart = await migrationPost('', () => migrationFooter()[1].click());
+      const failedStart = await migrationPost('', () => $('#migrationStartPlan').click());
       if (failedStart.status !== 503 || $('.migration-job')) throw new Error('Failed start fabricated running job');
       await visibleError('#migrationModal [role="alert"]', 'fixture-start');
       await settle();
       if (calls.starts.length !== 1 || calls.cancel) throw new Error('Uncertain start automatically retried');
-      if (!$('.migration-final-plan') || migrationFooter()[1].disabled) throw new Error('Explicit retry lost frozen plan');
+      if (!$('.migration-final-plan') || $('#migrationStartPlan').disabled) throw new Error('Explicit retry lost frozen plan');
       startFailure = false;
-      await migrationPost('', () => migrationFooter()[1].click());
+      await migrationPost('', () => $('#migrationStartPlan').click());
       await until(() => calls.poll >= 2, 'failed read polling with backoff');
       await visibleError('.migration-job [role="alert"]', 'fixture-poll');
       const stillRunning = () => {
@@ -3877,9 +3911,15 @@ test("session migration failures are visible and preserve truthful job state", {
         if ($$('.migration-job-item button').length) throw new Error('Pending result offered successful session');
       };
       stillRunning();
-      const cancel = await migrationPost('/fixture-running/cancel', () => $('.migration-job > header button').click());
+      // Stopping a running job asks first, then cancels the remaining items.
+      const cancel = await migrationPost('/fixture-running/cancel', async () => {
+        $('.migration-job > header button').click();
+        await until(() => !$('#migrationCloseConfirm')?.hidden, 'close confirmation');
+        const buttons = $$('#migrationCloseConfirm button');
+        buttons[buttons.length - 1].click();
+      });
       if (cancel.status !== 503) throw new Error('Cancel failure not injected');
-      await visibleError('#migrationModal .migration-main > [role="alert"]', 'fixture-cancel');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-cancel');
       stillRunning();
       const starts = calls.starts;
       if (starts.length !== 2 || starts[0].planId !== 'fixture-plan' || starts[0].digest !== 'immutable-digest' || !starts[0].idempotencyKey ||
@@ -4034,7 +4074,7 @@ test("new conversation offers a lightweight shortcut to session migration", { sk
     await browser.run(`
       $('#emptySessionImport').click();
       await until(() => !$('#settingsView').hidden && $('[data-page="migration"]'), 'migration settings');
-      if (!$('#migrationPage > button') || !$('[data-settings-page="migration"]').classList.contains('active')) throw new Error('Migration Settings entry did not open');
+      if (!$('#migrationPage .migration-category-list button') || !$('[data-settings-page="migration"]').classList.contains('active')) throw new Error('Migration Settings entry did not open');
       if (!$('#migrationModal').hidden) throw new Error('Lightweight shortcut must not bypass the Settings entry or explicit scan');
       $('#settingsBack').click();
     `)

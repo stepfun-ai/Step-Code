@@ -9,7 +9,6 @@ import {
 	previewMigrationRecovery,
 	refreshMigrationHistory,
 	retryMigrationFailures,
-	stopMigrationJob,
 } from "./actions";
 import { DiagnosticList } from "./CandidateList";
 import { LegacyHistory } from "./LegacyHistory";
@@ -68,16 +67,11 @@ export function MigrationJobView({ onOpenSession }: MigrationFeatureProps) {
 			<header className="migration-toolbar">
 				<h3>{t(`migrationJobStatus.${job.status}`)}</h3>
 				{active ? (
-					<Button
-						variant="secondary"
-						disabled={!!busy || job.status === "stopping"}
-						onClick={() => void stopMigrationJob()}
-					>
+					<Button variant="secondary" disabled={!!busy || job.status === "stopping"} onClick={closeMigration}>
 						{t(job.status === "stopping" ? "migrationStopping" : "migrationStopRemaining")}
 					</Button>
 				) : null}
 			</header>
-			<p className="migration-meta">{t("migrationHideContinues")}</p>
 			{pollError ? (
 				<div role="alert" className="migration-attention">
 					<p>{t("migrationPollFailed")}</p>
@@ -92,6 +86,24 @@ export function MigrationJobView({ onOpenSession }: MigrationFeatureProps) {
 					</div>
 				))}
 			</dl>
+			<div
+				className="migration-progress"
+				role="progressbar"
+				aria-label={t("migrationJob")}
+				aria-valuemin={0}
+				aria-valuemax={job.items.length}
+				aria-valuenow={counts.imported + counts.skipped + counts.failed + counts.notRun}
+			>
+				<i
+					style={{
+						width: `${
+							job.items.length
+								? ((counts.imported + counts.skipped + counts.failed + counts.notRun) / job.items.length) * 100
+								: 0
+						}%`,
+					}}
+				/>
+			</div>
 			{!active && (counts.failed || counts.notRun) ? (
 				<Button variant="secondary" disabled={!!busy} onClick={() => void retryMigrationFailures()}>
 					{t("migrationRetryFailures")}

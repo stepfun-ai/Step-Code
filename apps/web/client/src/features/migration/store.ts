@@ -6,6 +6,7 @@ import type {
 	MigrationPlan,
 	MigrationRecoveryPreview,
 	MigrationScanResult,
+	MigrationScope,
 } from "../../state/types";
 import type { MigrationDraft } from "./model";
 
@@ -17,13 +18,20 @@ export interface MigrationState {
 	readonly kind: MigrationKind;
 	readonly scanKinds: readonly MigrationKind[];
 	readonly projectCwds: readonly string[];
+	readonly mcpSourcePaths: Readonly<Partial<Record<"claude-code" | "codex", string>>>;
 	readonly scan: MigrationScanResult | null;
+	readonly sessionOptions: { range: "all" | "7" | "30" | "90"; limit: 30 | 50 | 100 | null; includeArchived: boolean };
+	readonly scannedKinds: readonly MigrationKind[];
+	readonly skipBlocked: boolean;
+	readonly closeRequested: boolean;
+	readonly closeWhenSettled: boolean;
 	readonly scanning: boolean;
 	readonly drafts: Readonly<Record<string, MigrationDraft>>;
+	readonly defaultTargets: Readonly<Partial<Record<MigrationKind, MigrationScope>>>;
 	readonly focusedId: string | null;
 	readonly plan: MigrationPlan | null;
 	readonly startKey: string | null;
-	readonly busy: "plan" | "start" | "cancel" | "recovery" | null;
+	readonly busy: "selection" | "plan" | "start" | "cancel" | "recovery" | null;
 	readonly job: MigrationJob | null;
 	readonly jobs: readonly MigrationJob[];
 	readonly historyLoading: boolean;
@@ -38,11 +46,18 @@ let state: MigrationState = {
 	origin: "settings",
 	stage: "invitation",
 	kind: "sessions",
-	scanKinds: ["sessions", "skills", "mcp", "prompts", "rules"],
+	scanKinds: ["sessions", "mcp", "rules"],
 	projectCwds: [],
+	mcpSourcePaths: {},
 	scan: null,
+	sessionOptions: { range: "all", limit: 100, includeArchived: false },
+	scannedKinds: [],
+	skipBlocked: false,
+	closeRequested: false,
+	closeWhenSettled: false,
 	scanning: false,
 	drafts: {},
+	defaultTargets: {},
 	focusedId: null,
 	plan: null,
 	startKey: null,
@@ -61,7 +76,7 @@ export function getMigrationState(): MigrationState {
 	return state;
 }
 export function updateMigration(patch: Partial<MigrationState>): void {
-	state = { ...state, ...patch };
+	state = { ...state, ...(patch.drafts && patch.drafts !== state.drafts ? { skipBlocked: false } : {}), ...patch };
 	for (const listener of listeners) listener();
 }
 function subscribe(listener: () => void): () => void {

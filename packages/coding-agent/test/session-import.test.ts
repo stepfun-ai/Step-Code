@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseForeignSession } from "../src/core/session-import/parsers.ts";
-import { SessionImportService } from "../src/core/session-import/service.ts";
+import { SessionImportService, workbuddyProjectsRoot } from "../src/core/session-import/service.ts";
 import { buildSessionContext, SessionManager } from "../src/core/session-manager.ts";
 import { createWriteTool } from "../src/core/tools/write.ts";
 import { collectSessionUsage } from "../src/core/usage-totals.ts";
@@ -499,6 +499,57 @@ describe("foreign adapters", () => {
 		);
 		expect(parsed.warnings).toContainEqual({ code: "claude_compaction", count: 2 });
 		expect(JSON.stringify(buildSessionContext(parsed.entries).messages)).toContain("previous task facts");
+	});
+});
+
+describe("WorkBuddy current and legacy layouts", () => {
+	it("prefers ~/.workbuddy-ai/projects and falls back to the legacy ~/.workbuddy/projects", async () => {
+		const f = await fixture();
+		expect(workbuddyProjectsRoot(f.root)).toBe(join(f.root, ".workbuddy", "projects"));
+		await mkdir(join(f.root, ".workbuddy-ai", "projects"), { recursive: true });
+		expect(workbuddyProjectsRoot(f.root)).toBe(join(f.root, ".workbuddy-ai", "projects"));
+	});
+
+	it("discovers minimal WorkBuddy transcripts without session-meta through their flat message records", async () => {
+		const f = await fixture();
+		// Real-world shape: only message/file-history-snapshot records, sessionId and cwd on each record.
+		await writeFile(
+			join(f.workbuddyRoot, "125435ae.jsonl"),
+			jsonl([
+				{
+					type: "message",
+					id: "r1",
+					sessionId: "125435ae",
+					cwd: f.cwd,
+					role: "user",
+					timestamp: 1790000000000,
+					content: [{ type: "input_text", text: "Continue the archived task" }],
+				},
+				{ type: "file-history-snapshot", id: "r2", sessionId: "125435ae", cwd: f.cwd, timestamp: 1790000000001 },
+				{
+					type: "message",
+					id: "r3",
+					sessionId: "125435ae",
+					cwd: f.cwd,
+					role: "assistant",
+					timestamp: 1790000000002,
+					content: [{ type: "output_text", text: "Resumed with history intact" }],
+				},
+			]),
+		);
+		const scan = await f.service.scan({
+			workbuddyRoot: f.workbuddyRoot,
+			claudeRoot: f.claudeRoot,
+			qoderRoot: f.qoderRoot,
+			codexRoot: f.codexRoot,
+		});
+		expect(scan.errors).toEqual([]);
+		const candidate = scan.candidates.find((c) => c.source === "workbuddy");
+		expect(candidate?.sessionId).toBe("125435ae");
+		expect(candidate?.cwd).toBe(f.cwd);
+		expect(candidate?.title).toBe("Continue the archived task");
+		const preview = await f.service.preview(candidate?.id ?? "");
+		expect(preview.messageCount).toBeGreaterThan(0);
 	});
 });
 

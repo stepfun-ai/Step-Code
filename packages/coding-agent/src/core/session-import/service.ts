@@ -1,5 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import {
+	type FileHandle,
+	lstat,
+	mkdir,
+	open,
+	readdir,
+	readFile,
+	realpath,
+	rename,
+	stat,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -123,6 +136,33 @@ async function sourceAttachments(input: string, root: string): Promise<{ input: 
 	return { input: lines.join("\n"), digest: fingerprints.join("\n") };
 }
 
+/** Counts non-empty JSONL records up to a per-file cap; a capped count is a lower bound. */
+async function countRecords(
+	handle: FileHandle,
+	from: number,
+	size: number,
+	cap = 4 * 1024 * 1024,
+): Promise<{ count: number; capped: boolean }> {
+	const end = Math.min(size, from + cap);
+	let position = from;
+	let count = 0;
+	let trailing = false;
+	while (position < end) {
+		const buffer = Buffer.alloc(Math.min(64 * 1024, end - position));
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+		if (!bytesRead) break;
+		position += bytesRead;
+		for (const byte of buffer.subarray(0, bytesRead)) {
+			if (byte === 10) {
+				if (trailing) count += 1;
+				trailing = false;
+			} else trailing = true;
+		}
+	}
+	if (trailing) count += 1;
+	return { count, capped: end < size };
+}
+
 interface CandidateFile {
 	candidate: ImportCandidate;
 	path: string;
@@ -143,6 +183,17 @@ export interface ImportScanOptions {
 	codexRoot?: string;
 	claudeRoot?: string;
 	includeArchived?: boolean;
+	/** Source file modification cutoff; evaluated before reading discovery records. */
+	modifiedSince?: number;
+}
+
+/**
+ * WorkBuddy moved its transcripts from `~/.workbuddy/projects` to `~/.workbuddy-ai/projects`;
+ * prefer the current layout and fall back to the legacy one only when it is absent.
+ */
+export function workbuddyProjectsRoot(home: string): string {
+	const current = join(home, ".workbuddy-ai", "projects");
+	return existsSync(current) ? current : join(home, ".workbuddy", "projects");
 }
 
 export interface ImportScanResult {
@@ -180,10 +231,7 @@ export class SessionImportService {
 		if (this.closed) throw new SessionImportError("Importer is closed", 503);
 		const result: ImportScanResult = { existingCount: 0, roots: {}, candidates: [], errors: [] };
 		const roots: [ImportSource, string][] = [
-			[
-				"workbuddy",
-				options.customRoot?.trim() || options.workbuddyRoot?.trim() || join(homedir(), ".workbuddy", "projects"),
-			],
+			["workbuddy", options.customRoot?.trim() || options.workbuddyRoot?.trim() || workbuddyProjectsRoot(homedir())],
 			["qoder", options.customRoot?.trim() || options.qoderRoot?.trim() || join(homedir(), ".qoder", "projects")],
 			[
 				"codex",
@@ -273,7 +321,13 @@ export class SessionImportService {
 							if (candidates.size >= MAX_CANDIDATES)
 								throw new Error("Session limit exceeded; select a narrower source directory");
 							try {
-								const candidate = await this.discover(source, path, root, !!options.customRoot);
+								const candidate = await this.discover(
+									source,
+									path,
+									root,
+									!!options.customRoot,
+									options.modifiedSince,
+								);
 								if (!candidate || (candidate.archived && !options.includeArchived)) continue;
 								const indexedTitle = readableTitle(titles.get(candidate.sessionId));
 								if (indexedTitle) {
@@ -311,10 +365,12 @@ export class SessionImportService {
 		path: string,
 		root: string,
 		allowOtherFormat = false,
+		modifiedSince?: number,
 	): Promise<ImportCandidate | undefined> {
 		const handle = await open(path, "r");
 		try {
 			const info = await handle.stat();
+			if (modifiedSince !== undefined && info.mtimeMs < modifiedSince) return undefined;
 			if (!info.isFile() || info.size > MAX_SOURCE_BYTES)
 				throw new Error("Source is not a regular file or exceeds 128 MiB");
 			let metadata: Record<string, unknown> | undefined;
@@ -337,6 +393,9 @@ export class SessionImportService {
 				const r = record(value);
 				if (r.type === "workspace-directories" || r.type === "runtime-config") detected = "qoder";
 				if (r.type === "session-meta" || r.type === "ai-title") detected = "workbuddy";
+				// Flat message records with a role only exist in WorkBuddy transcripts; Claude-derived
+				// clients use type:"user"/"assistant", so this cannot cross-detect another harness.
+				if (r.type === "message" && (r.role === "user" || r.role === "assistant")) detected = "workbuddy";
 				if (typeof r.cwd === "string" && !projectCwd) projectCwd = r.cwd;
 				if (source === "codex") {
 					const p = record(r.payload);
@@ -349,6 +408,8 @@ export class SessionImportService {
 					if (!firstUser && r.type === "event_msg" && p.type === "user_message") firstUser = userTitle(p.message);
 				} else if (source === "workbuddy") {
 					if (r.type === "session-meta" && typeof r.sessionId === "string") metadata ??= r;
+					// Minimal transcripts carry no session-meta; any record with a session ID identifies them.
+					if (!metadata && typeof r.sessionId === "string") metadata = r;
 					if (r.type === "ai-title") title = readableTitle(r.aiTitle) || title;
 					if (r.type === "message" && r.role === "user" && !firstUser) firstUser = userTitle(r.content);
 				} else {
@@ -413,7 +474,7 @@ export class SessionImportService {
 				sourcePath: path,
 				source,
 				sessionId,
-				title: title || firstUser || `${basename(cwd) || source} · ${sessionId.slice(0, 8)}`,
+				title: title || firstUser || `${cwd ? basename(cwd) : source} · ${sessionId.slice(0, 8)}`,
 				cwd,
 				modified: info.mtime.toISOString(),
 				archived,
@@ -425,6 +486,10 @@ export class SessionImportService {
 							: "unknown",
 			};
 			if (title) this.explicitTitles.add(candidate);
+			// A bounded record count keeps the row informative without reading unbounded history.
+			const counted = await countRecords(handle, 0, info.size);
+			candidate.messageCount = counted.count;
+			if (counted.capped) candidate.messageCountCapped = true;
 			return candidate;
 		} finally {
 			await handle.close();

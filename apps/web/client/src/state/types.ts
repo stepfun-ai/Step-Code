@@ -30,6 +30,7 @@ export type {
 	MigrationSource,
 	MigrationSourceReport,
 	MigrationStartRequest,
+	MigrationTargetRequest,
 } from "./migration-types";
 
 /** Host-owned interactive shells; independent of Agent tool execution. */

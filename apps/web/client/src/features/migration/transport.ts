@@ -37,7 +37,8 @@ function location(value: unknown): boolean {
 function member(value: unknown, values: readonly string[]): boolean {
 	return typeof value === "string" && values.includes(value);
 }
-const kinds = ["sessions", "skills", "mcp", "prompts", "rules"];
+const kinds = ["sessions", "skills", "mcp", "rules"];
+const legacyResultKinds = [...kinds, "prompts"];
 const actions = ["copy", "import", "create", "append", "replace", "skip"];
 const sources = ["codex", "claude-code", "workbuddy", "qoder", "shared", "stepcode", "plugin"];
 const activations = ["history", "disabled", "next-resource-load", "unchanged"];
@@ -59,6 +60,9 @@ function candidate(value: unknown): value is MigrationCandidate {
 		member(value.holding, ["external", "reference", "stepcode", "plugin"]) &&
 		member(value.readiness, ["ready", "disabled", "shadowed", "untrusted", "unsupported", "unknown"]) &&
 		typeof value.needsMigration === "boolean" &&
+		(value.mcpTransport === undefined || (value.kind === "mcp" && member(value.mcpTransport, ["stdio", "http"]))) &&
+		(value.messageCount === undefined || typeof value.messageCount === "number") &&
+		(value.messageCountCapped === undefined || typeof value.messageCountCapped === "boolean") &&
 		diagnostics(value.diagnostics)
 	);
 }
@@ -68,6 +72,13 @@ export function isScan(value: unknown): value is MigrationScanResult {
 		Array.isArray(value.candidates) &&
 		value.candidates.every(candidate) &&
 		typeof value.truncated === "boolean" &&
+		(value.sessionSummary === undefined ||
+			(record(value.sessionSummary) &&
+				typeof value.sessionSummary.total === "number" &&
+				typeof value.sessionSummary.shown === "number" &&
+				typeof value.sessionSummary.incomplete === "boolean" &&
+				member(value.sessionSummary.range, ["all", "7", "30", "90"]) &&
+				(value.sessionSummary.limit === null || [30, 50, 100].includes(value.sessionSummary.limit as number)))) &&
 		Array.isArray(value.sources) &&
 		value.sources.every(
 			(item) =>
@@ -76,7 +87,7 @@ export function isScan(value: unknown): value is MigrationScanResult {
 				member(item.source, sources) &&
 				scope(item.scope) &&
 				typeof item.path === "string" &&
-				member(item.status, ["ok", "missing", "empty", "error", "unsupported"]) &&
+				member(item.status, ["ok", "missing", "empty", "partial", "error", "unsupported"]) &&
 				diagnostics(item.diagnostics),
 		)
 	);
@@ -136,7 +147,7 @@ export function isJob(value: unknown): value is MigrationJob {
 				record(item) &&
 				typeof item.id === "string" &&
 				typeof item.candidateId === "string" &&
-				member(item.kind, kinds) &&
+				member(item.kind, legacyResultKinds) &&
 				member(item.source, sources) &&
 				typeof item.name === "string" &&
 				scope(item.sourceScope) &&
