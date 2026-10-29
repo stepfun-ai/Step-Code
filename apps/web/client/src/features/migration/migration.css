@@ -75,7 +75,8 @@
 .migration-check { display: flex; gap: 10px; align-items: flex-start; overflow-wrap: anywhere; }
 .migration-check input, .migration-row input { accent-color: var(--accent); }
 .migration-check input { margin-top: 5px; flex-shrink: 0; }
-.migration-dialog :is(input, select, summary):focus-visible { outline: 2px solid var(--focus-border); outline-offset: 3px; }
+.migration-dialog :is(input, select, summary, button, textarea):focus-visible { outline: 2px solid var(--focus-border); outline-offset: 3px; }
+.migration-dialog:focus-visible { outline: none; }
 .migration-diagnostics { padding-left: 18px; margin: 0; font-size: 12px; }
 .migration-diagnostics:empty { display: none; }
 .migration-diagnostics code { display: block; }
