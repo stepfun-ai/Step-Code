@@ -3,6 +3,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { SkillIgnoreMatcher } from "@step-harness/agent-core";
 import { minimatch } from "minimatch";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
+import { readStepMcpImportReviewedSources } from "../mcp-import-store.ts";
 import {
 	bytes,
 	diagnosticCode,
@@ -140,6 +141,7 @@ export class ResourceInspector {
 		const records: ResourceCandidate[] = [];
 		// On case-insensitive filesystems AGENTS.md and AGENTS.MD are one file; list it once.
 		const ruleFiles = new Set<string>();
+		const cliReviewed = kinds.includes("mcp") ? this.cliReviewedMcpSources() : undefined;
 		const add = (
 			kind: MigrationKind,
 			source: MigrationSource,
@@ -157,6 +159,12 @@ export class ResourceInspector {
 				diagnostics: [],
 			};
 			result.sources.push(report);
+			if (kind === "mcp" && cliReviewed?.has(source)) {
+				// The CLI's first-run review already offered this source; the web wizard does not ask again.
+				report.status = "ok";
+				report.diagnostics.push({ code: "mcp-reviewed-by-cli" });
+				return;
+			}
 			try {
 				safePath(root);
 				if (!info(root)) {
@@ -215,6 +223,17 @@ export class ResourceInspector {
 						dto.readiness = "unsupported";
 						dto.needsMigration = false;
 						dto.diagnostics.push({ code: diagnosticCode(error) });
+					}
+					if (kind === "mcp" && source === "codex" && dto.needsMigration) {
+						// Claude Code is read first and owns a shared server name; the Codex twin is shown, not offered.
+						const claimed = records.some(
+							(other) =>
+								other.dto.kind === "mcp" && other.dto.source === "claude-code" && other.dto.name === dto.name,
+						);
+						if (claimed) {
+							dto.needsMigration = false;
+							dto.diagnostics.push({ code: "mcp-exists-in-claude-code" });
+						}
 					}
 					records.push(item);
 				}
@@ -446,6 +465,25 @@ export class ResourceInspector {
 		return { skills, uncertain, fingerprint: hash(stable({ controls, skills })) };
 	}
 
+	/**
+	 * Default MCP sources the CLI import review (`[mcp_import] reviewed` in config.toml) already handled.
+	 * An explicitly chosen source file is always scanned: the user asked for that file.
+	 */
+	private cliReviewedMcpSources(): Set<MigrationSource> {
+		let reviewed: string[];
+		try {
+			// Scan stays read-only: parse the file directly instead of the CLI store, which may create directories.
+			reviewed = readStepMcpImportReviewedSources(configDocument(this.paths.configFor({ kind: "global" })));
+		} catch {
+			// A malformed config.toml is reported by MCP inspection itself; offering every source is the safe default.
+			reviewed = [];
+		}
+		const sources = new Set<MigrationSource>();
+		if (reviewed.includes(".claude") && !this.paths.customMcpSource("claude-code")) sources.add("claude-code");
+		if (reviewed.includes(".codex") && !this.paths.customMcpSource("codex")) sources.add("codex");
+		return sources;
+	}
+
 	private discover(
 		root: string,
 		skills: boolean,
@@ -485,14 +523,19 @@ export class ResourceInspector {
 			}
 			if (!item.mcp?.config) fail("unsupported-mcp-config");
 			const config = item.mcp.config;
-			const match = Object.entries(targetServers(this.paths)).find(
-				([, target]) => mcpIdentity(target) === mcpIdentity(config),
-			);
+			const servers = targetServers(this.paths);
+			const match = Object.entries(servers).find(([, target]) => mcpIdentity(target) === mcpIdentity(config));
 			if (match) {
 				dto.holding = "stepcode";
 				dto.needsMigration = false;
 				dto.readiness = record(match[1]).enabled === false ? "disabled" : "ready";
-				dto.diagnostics.push({ code: "mcp-configured-equal" });
+				dto.diagnostics.push({ code: "mcp-configured-equal", path: this.paths.configFor({ kind: "global" }) });
+			} else if (Object.hasOwn(servers, dto.name)) {
+				// Same name, different declaration: StepCode's own entry wins, matching the CLI import review,
+				// which never offers to overwrite or rename around a server the user already configured.
+				dto.holding = "stepcode";
+				dto.needsMigration = false;
+				dto.diagnostics.push({ code: "mcp-exists-in-stepcode", path: this.paths.configFor({ kind: "global" }) });
 			} else {
 				const plugins = pluginMcpMatches(this.paths, config);
 				if (plugins.length) {
@@ -507,6 +550,14 @@ export class ResourceInspector {
 		}
 		const content = text(dto.sourcePath)!;
 		if (dto.kind === "rules") {
+			dto.targetPath = join(dto.sourceScope.kind === "global" ? this.paths.agent : dto.sourceScope.cwd, "AGENTS.md");
+			const migrated = text(dto.targetPath, true);
+			// The destination already carries this source's text (an earlier migration); do not offer it again.
+			if (content.trim() && migrated?.includes(content.trim()) && dto.targetPath !== dto.sourcePath) {
+				dto.needsMigration = false;
+				dto.diagnostics.push({ code: "rules-already-migrated", path: dto.targetPath });
+				return;
+			}
 			if (isDirectRule(this.paths, dto.sourcePath, dto.sourceScope)) {
 				dto.holding = "reference";
 				dto.needsMigration = false;

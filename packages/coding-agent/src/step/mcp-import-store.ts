@@ -59,14 +59,18 @@ function readLegacyState(env: NodeJS.ProcessEnv): StepMcpImportSource[] {
 	}
 }
 
+/** Reads the reviewed sources from an already parsed `config.toml` document without touching the filesystem. */
+export function readStepMcpImportReviewedSources(document: Record<string, unknown>): StepMcpImportSource[] {
+	const table = document[STEP_MCP_IMPORT_CONFIG_KEY];
+	if (typeof table !== "object" || table === null || Array.isArray(table)) return [];
+	return readSources((table as { reviewed?: unknown }).reviewed);
+}
+
 /** Reads the record; anything unreadable or malformed reads as "nothing reviewed". */
 export function readStepMcpImportState(env: NodeJS.ProcessEnv = process.env): StepMcpImportState {
 	let fromConfig: StepMcpImportSource[] = [];
 	try {
-		const table = readGlobalStepConfig(env)[STEP_MCP_IMPORT_CONFIG_KEY];
-		if (typeof table === "object" && table !== null && !Array.isArray(table)) {
-			fromConfig = readSources((table as { reviewed?: unknown }).reviewed);
-		}
+		fromConfig = readStepMcpImportReviewedSources(readGlobalStepConfig(env));
 	} catch {
 		// An unreadable config costs one extra prompt, not a failed launch.
 	}

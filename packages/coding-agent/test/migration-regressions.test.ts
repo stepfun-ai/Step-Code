@@ -84,10 +84,12 @@ describe("confirmed migration regressions", () => {
 			expect(JSON.stringify(p)).not.toContain("PRIVATE_FALLBACK");
 			await complete(p);
 			expect(readFileSync(join(dirname(agent), "config.toml"), "utf8")).not.toContain("PRIVATE_FALLBACK");
-			const explicit = await service.preview({ candidateId: c.id, includeSensitiveValues: true });
+			// The first import now holds the name, so later previews must ask for import explicitly.
+			const explicit = await service.preview({ candidateId: c.id, action: "import", includeSensitiveValues: true });
 			expect(explicit.requiredAcknowledgements).toContain("sensitive-values");
 			const consent = await service.preview({
 				candidateId: c.id,
+				action: "import",
 				includeSensitiveValues: true,
 				targetName: "consented",
 			});
