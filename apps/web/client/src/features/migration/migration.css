@@ -326,3 +326,10 @@
    stretches the card and drags in a horizontal scrollbar. */
 .migration-preview .migration-toolbar { min-width: 0; }
 .migration-preview .migration-toolbar h3 { min-width: 0; overflow: hidden; }
+/* ── The preview card fills its column; the history excerpt adapts inside it ── */
+.migration-resource-layout.migration-has-preview { align-items: stretch; }
+.migration-preview { height: calc(100dvh - 300px); max-height: calc(100dvh - 300px); display: flex; flex-direction: column; }
+.migration-preview > .migration-toolbar { flex: 0 0 auto; }
+.migration-preview .migration-text { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.migration-preview .migration-text h4 { flex: 0 0 auto; }
+.migration-preview .migration-text pre { flex: 1 1 auto; min-height: 60px; max-height: none; }
