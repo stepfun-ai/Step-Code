@@ -91,7 +91,8 @@
   --action: var(--ink);
   --action-hover: color-mix(in srgb, var(--ink) 84%, var(--canvas));
   --action-ink: var(--canvas);
-  --caret: #df9a14;
+  /* Text and terminal carets follow the theme's accent; there is no separate caret hue. */
+  --caret: var(--accent);
   /* ── Depth ───────────────────────────────────────────────────────── */
   --shadow: rgb(16 16 18 / 12%);
   --scrim: rgb(16 16 18 / 26%);
@@ -257,7 +258,6 @@ html[data-theme="dark"] {
   --accent-ink: #15121f;
   --accent-soft: rgb(160 143 255 / 12%);
   --accent-ring: rgb(237 237 239 / 10%);
-  --caret: #f6b73c;
   --shadow: rgb(0 0 0 / 46%);
   --scrim: rgb(6 6 10 / 58%);
   --edge-light: rgb(255 255 255 / 5%);
@@ -294,6 +294,8 @@ html[data-theme="dark"] {
 html[data-theme="violet"] {
   --workbench: #f4f5fc;
   --sidebar-glass: rgb(244 245 252 / 72%);
+  /* The terminal keeps its "a touch deeper than the workbench" step, in lilac instead of blue. */
+  --term-bg: #f1f1fc;
 }
 html[data-theme="violet"] .sidebar {
   --hover: #e8eaf6;

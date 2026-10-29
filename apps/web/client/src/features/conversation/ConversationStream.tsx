@@ -169,10 +169,14 @@ export function ConversationStream() {
 		}
 		stick.current = false;
 		target.scrollIntoView({ block: reveal.block ?? "center", behavior: reveal.behavior });
-		target.animate([{ backgroundColor: "var(--selection)" }, { backgroundColor: "transparent" }], {
-			duration: 1600,
-			easing: "ease-out",
-		});
+		// A user row flashes its bubble (a ring with a gap), any other row a rounded wash: never a square full-width bar.
+		const flash = target.matches(".message.user")
+			? (target.querySelector<HTMLElement>(".message-body") ?? target)
+			: target;
+		flash.classList.remove("reveal-flash");
+		void flash.offsetWidth;
+		flash.classList.add("reveal-flash");
+		flash.addEventListener("animationend", () => flash.classList.remove("reveal-flash"), { once: true });
 	}, [reveal, sessionId, items, t]);
 	// The live reply grows between store updates (smooth reveal), so watch the size too.
 	useEffect(() => {

@@ -136,6 +136,8 @@ export function StreamNav() {
 	// whose layout containment changes how `position: fixed` descendants inside
 	// it (e.g. the composer's full-window drag overlay) are contained.
 	const [wide, setWide] = useState(false);
+	// The terminal dock's height: the rail stays over the conversation, never over the dock below it.
+	const [dockHeight, setDockHeight] = useState(0);
 	const railRef = useRef<HTMLDivElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const reducedMotion = usePrefersReducedMotion();
@@ -144,9 +146,15 @@ export function StreamNav() {
 	useEffect(() => {
 		const main = document.querySelector("main.main");
 		if (!main) return;
-		const update = () => setWide(main.clientWidth >= RAIL_MIN_WIDTH);
+		const dock = document.getElementById("terminalDock");
+		const update = () => {
+			setWide(main.clientWidth >= RAIL_MIN_WIDTH);
+			// A hidden dock measures 0.
+			setDockHeight(dock?.offsetHeight ?? 0);
+		};
 		const observer = new ResizeObserver(update);
 		observer.observe(main);
+		if (dock) observer.observe(dock);
 		update();
 		return () => observer.disconnect();
 	}, []);
@@ -214,7 +222,11 @@ export function StreamNav() {
 		setPreview(null);
 	};
 	return (
-		<nav className="stream-nav" aria-label={t("streamNavLabel")}>
+		<nav
+			className="stream-nav"
+			aria-label={t("streamNavLabel")}
+			style={dockHeight ? { bottom: dockHeight } : undefined}
+		>
 			<div className="stream-nav-rail" ref={railRef} onPointerLeave={closePreview} onScroll={closePreview}>
 				<div className="stream-nav-list" ref={listRef}>
 					{ticks.map((tick, index) => {
