@@ -388,9 +388,9 @@ export function MigrationOnboarding({
 					{t(isActiveJob(job) ? "migrationStopCloseTitle" : "migrationDiscardTitle")}
 				</h3>
 				<p>{t(isActiveJob(job) ? "migrationStopCloseBody" : "migrationDiscardBody")}</p>
-				<div className="migration-toolbar">
+				<div className="migration-close-actions">
 					<Button variant="secondary" onClick={() => updateMigration({ closeRequested: false })}>
-						{t("migrationBackToSelection")}
+						{t("migrationCloseCancel")}
 					</Button>
 					<Button variant="primary" disabled={!!busy} onClick={() => void confirmCloseMigration()}>
 						{t(isActiveJob(job) ? "migrationStopAndClose" : "migrationDiscardClose")}

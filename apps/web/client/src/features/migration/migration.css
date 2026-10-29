@@ -202,7 +202,10 @@
 .migration-plan-info { flex: 1; min-width: 0; }
 .migration-plan-info .migration-diagnostics { margin-top: 6px; }
 .migration-skip-blocked { padding: 18px 0; }
-.migration-close-confirm { display: grid; gap: 18px; }
+.migration-close-confirm { display: grid; gap: 14px; width: min(400px, calc(100vw - 48px)); padding: 26px 26px 22px; }
+.migration-close-confirm h3 { font-size: 16px; font-weight: 650; letter-spacing: -0.2px; }
+.migration-close-confirm p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.65; }
+.migration-close-confirm .migration-close-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 @media (max-width: 850px) {
 	.migration-wizard { grid-template-columns: 145px minmax(0, 1fr); }
 	.migration-resource-layout.migration-has-preview { grid-template-columns: minmax(0, 1fr); }

@@ -69,6 +69,7 @@ const labels = {
 		"Selected items will not be migrated. Original data stays unchanged.",
 	],
 	migrationDiscardClose: ["放弃并关闭", "Discard and close"],
+	migrationCloseCancel: ["取消", "Cancel"],
 	migrationStopCloseTitle: ["停止后续迁移并关闭？", "Stop remaining migration and close?"],
 	migrationStopCloseBody: [
 		"当前条目处理结束后停止剩余条目，再关闭窗口；已完成的迁移不会撤销。",
