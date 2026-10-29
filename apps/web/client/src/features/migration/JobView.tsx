@@ -11,7 +11,6 @@ import {
 	retryMigrationFailures,
 } from "./actions";
 import { DiagnosticList } from "./CandidateList";
-import { LegacyHistory } from "./LegacyHistory";
 import { isActiveJob, resultCounts } from "./model";
 import { type MigrationFeatureProps, PreviewText, ScopeLabel } from "./PreviewPanel";
 import { updateMigration, useMigrationStore } from "./store";
@@ -48,7 +47,6 @@ export function MigrationHistory() {
 					</Button>
 				</div>
 			))}
-			<LegacyHistory />
 		</section>
 	);
 }

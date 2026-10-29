@@ -378,62 +378,6 @@ const labels = {
 	migrationStarting: ["正在提交任务…", "Submitting job…"],
 	migrationFinish: ["完成引导", "Finish onboarding"],
 	migrationSkip: ["跳过引导", "Skip onboarding"],
-	migrationLegacyHistory: ["此前会话迁移记录", "Earlier session import history"],
-	migrationLegacyReadOnly: [
-		"只读展示此前保存的会话迁移结果，与新的迁移任务分开。刷新只读取记录，不取消或重新迁移。",
-		"Read-only saved session import results, separate from new migration jobs. Refresh only reads records; it does not cancel or re-import.",
-	],
-	migrationLegacyEmpty: ["没有此前会话迁移记录。", "No earlier session import records."],
-	migrationLegacyUnknown: ["未记录 / 未知", "Not recorded / unknown"],
-	migrationLegacyUntitled: ["未记录会话标题", "Session title not recorded"],
-	migrationLegacyRequestedCwd: [
-		"明确选择的目录（可能不是实际目标）",
-		"Explicitly selected directory (may not be the actual target)",
-	],
-	migrationLegacyActualUnknown: [
-		"旧记录未确认实际目标，请在打开会话后核对。",
-		"The old record does not confirm the actual target. Check after opening the session.",
-	],
-	migrationLegacyRecorded: [
-		"已记录结果 {recorded} 项 / 请求总数 {total} 项",
-		"{recorded} recorded results / {total} requested items",
-	],
-	migrationLegacyResultsUnknown: [
-		"逐项结果缺失或格式无法识别，不能确认成功。",
-		"Item results are missing or unrecognized; success cannot be confirmed.",
-	],
-	migrationLegacyLoadFailed: [
-		"无法读取此前记录，请刷新重试。已显示的记录保留，但可能不是最新状态；这不代表没有记录。",
-		"Earlier records could not be read. Refresh to retry. Displayed records are retained but may be stale; this does not mean no records exist.",
-	],
-	migrationLegacyOpenFailed: [
-		"无法打开此会话，请重试；迁移记录未更改。",
-		"This session could not be opened. Retry; import records were not changed.",
-	],
-	migrationLegacySessionUnknown: [
-		"旧记录缺少有效会话标识，无法直接打开。",
-		"The old record has no valid session identifier and cannot be opened directly.",
-	],
-	migrationLegacyFailure: [
-		"旧记录报告迁移失败，未计作已迁入；技术错误详情不在此展示。",
-		"The old record reports an import failure, not a successful import. Technical error details are not displayed here.",
-	],
-	migrationLegacyWarning: [
-		"旧记录包含警告，请核对会话与目标；不在此展示原始诊断内容。",
-		"The old record includes a warning. Check the session and target; raw diagnostics are not displayed here.",
-	],
-	"migrationLegacyJob.running": [
-		"旧记录状态：执行中（仅上次记录，不确认当前仍运行）",
-		"Recorded as running (last recorded state, not confirmation it is still running)",
-	],
-	"migrationLegacyJob.completed": ["旧任务已结束，请核对逐项结果", "Old job ended; review individual results"],
-	"migrationLegacyJob.cancelled": ["旧任务已取消，已保存结果仍保留", "Old job cancelled; saved results retained"],
-	"migrationLegacyJob.interrupted": ["旧任务中断，请核对已保存结果", "Old job interrupted; review saved results"],
-	"migrationLegacyJob.unknown": ["旧任务状态未知，不计作成功", "Old job status unknown; not counted as successful"],
-	"migrationLegacyResult.imported": ["已迁入（旧记录）", "Imported (old record)"],
-	"migrationLegacyResult.skipped": ["已跳过（不计作本次已迁入）", "Skipped (not counted as imported by this job)"],
-	"migrationLegacyResult.failed": ["迁移失败", "Import failed"],
-	"migrationLegacyResult.unknown": ["结果未知，不计作已迁入", "Unknown result; not counted as imported"],
 	migrationScanIncompleteSources: [
 		"部分来源未能读取，当前结果不代表全部历史。",
 		"Some sources could not be read, so this result is not the full history.",
