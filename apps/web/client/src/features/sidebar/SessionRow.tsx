@@ -248,6 +248,18 @@ export function SessionRow({
 				<i className="session-dot" aria-hidden="true" />
 				<span className="session-title-wrap">
 					<span className="session-title">{title}</span>
+					{/* Beside the title, not in the meta column: the times of tagged and untagged rows line up. */}
+					{tag ? (
+						<Tooltip content={row.tagName}>
+							<button
+								className="tag-diamond session-tag"
+								type="button"
+								style={cssVar("--tag-color", TAG_COLORS[tag])}
+								aria-label={row.tagName}
+								onClick={onTagClick}
+							/>
+						</Tooltip>
+					) : null}
 				</span>
 				<span className="session-meta">
 					{status === "running" || status === "waiting" || status === "failed" ? (
@@ -308,17 +320,6 @@ export function SessionRow({
 							</Tooltip>
 						</Popover>
 					)}
-					{tag ? (
-						<Tooltip content={row.tagName}>
-							<button
-								className="tag-diamond session-tag"
-								type="button"
-								style={cssVar("--tag-color", TAG_COLORS[tag])}
-								aria-label={row.tagName}
-								onClick={onTagClick}
-							/>
-						</Tooltip>
-					) : null}
 					{/* The row's last slot, after the hover actions, so every pin lines up at the
 				    same right edge. A pinned row always shows its solid pin, so hovering the row
 				    adds "…" and the tag button to its left without moving it; an unpinned row

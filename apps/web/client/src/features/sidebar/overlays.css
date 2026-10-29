@@ -322,10 +322,14 @@
 .tag-picker .tag-swatch:hover {
 	/* Keeps the colour over the generic `.tag-picker button:hover` grey. */
 	background: var(--tag-color);
-	transform: rotate(45deg) scale(1.2);
+	transform: rotate(45deg) scale(1.15);
+}
+/* The chip picked for the new group: a ring in the panel's own fill, inside the 9px gap. */
+.tag-picker .tag-swatch.chosen {
+	background: var(--tag-color);
 	box-shadow:
-		0 0 0 2px var(--sidebar),
-		0 0 0 4px var(--tag-color);
+		0 0 0 2px var(--surface),
+		0 0 0 3.5px var(--tag-color);
 }
 .tag-picker .tag-swatch:focus-visible {
 	outline: 2px solid var(--ink-2);

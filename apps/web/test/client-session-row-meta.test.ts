@@ -1,8 +1,9 @@
 /**
- * A session row's right end: the relative time and the tag diamond by default;
- * hovering the row swaps the time for the hover actions (more, then tag) — the
- * diamond keeps its place. A pinned row ends with its pin, after everything
- * else, so hovering never moves it. In the grouped view the status dot owns that
+ * A session row's right end: the relative time by default; hovering the row
+ * swaps the time for the hover actions (more, then tag). The tag diamond sits
+ * right after the title, so the times of tagged and untagged rows share one
+ * column. A pinned row ends with its pin, after everything else, so hovering
+ * never moves it. In the grouped view the status dot owns that
  * corner, so there the time yields to the dot instead.
  */
 
@@ -23,7 +24,7 @@ function rule(selector: string): string {
 	return css.slice(brace, end);
 }
 
-test("the title grows so the time and diamond ride to the row's right end", () => {
+test("the title grows so the time rides to the row's right end", () => {
 	assert.match(rule(".session-title-wrap"), /flex:\s*1/u);
 });
 
@@ -40,9 +41,10 @@ test("the hover actions stay put while their menu is anchored open", () => {
 test("off hover, the actions take no space and the diamond keeps showing", () => {
 	assert.match(rule(".session-tag-button"), /display:\s*none/u, "no reserved hover column beside the time");
 	assert.doesNotMatch(css, /tagged .session-time/u, "the diamond must not hide the time");
+	const diamond = row.indexOf('className="tag-diamond session-tag"');
 	assert.ok(
-		row.indexOf('className="session-time"') < row.indexOf('className="tag-diamond session-tag"'),
-		"the time leads the right cluster, the diamond ends it",
+		row.indexOf('className="session-title"') < diamond && diamond < row.indexOf('className="session-meta"'),
+		"the diamond follows the title, outside the time column",
 	);
 });
 
@@ -55,10 +57,9 @@ test("in the grouped view the status dot owns the right corner", () => {
 test("the pin slot ends the row, after the hover actions, and toggles the pin on click", () => {
 	const menu = row.indexOf('className="session-menu-button"');
 	const tagButton = row.indexOf('className="session-tag-button"');
-	const diamond = row.indexOf('className="tag-diamond session-tag"');
 	const pin = row.indexOf('row.pinned ? "session-pin" : "session-pin-action"');
 	assert.ok(menu < tagButton, "the more action leads the hover actions");
-	assert.ok(tagButton < diamond && diamond < pin, "the pin is the row's last slot");
+	assert.ok(tagButton < pin, "the pin is the row's last slot");
 	assert.match(row, /onPinClick[\s\S]*toggleSessionPin\(session\.id\)/u, "clicking the pin toggles it");
 	assert.doesNotMatch(rule(".session-pin,"), /display:\s*none/u, "a pinned row's pin shows without hover");
 	assert.match(css, /\}\n\.session-pin-action \{\n\tdisplay:\s*none;/u, "an unpinned row's pin waits for hover");

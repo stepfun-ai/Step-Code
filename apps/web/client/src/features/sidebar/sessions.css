@@ -128,9 +128,12 @@
 .draft-row.active {
 	background: var(--selected);
 }
-/* While the market or cron covers the pane, the sidebar entry for it is the one selection. */
-.sidebar:has(.sidebar-action[aria-current="page"]) .session-row.active {
+/* While a sidebar entry's page covers the pane (new conversation, market, cron), that entry is the one selection. */
+.sidebar:has(.sidebar-action[aria-current="page"]) :is(.session-row, .draft-row).active {
 	background: none;
+}
+.sidebar:has(.sidebar-action[aria-current="page"]) :is(.session-row, .draft-row).active .session-title {
+	font-weight: 400;
 }
 .session-row.active .session-title,
 .draft-row.active .session-title {
@@ -153,7 +156,7 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	/* Grows so the meta column (time + diamond) rides to the row's right end. */
+	/* Grows so the meta column (time, hover actions) rides to the row's right end. */
 	flex: 1;
 	min-width: 0;
 }
@@ -205,7 +208,7 @@
 	gap: 6px;
 	color: var(--ink-3);
 	font-size: 12px;
-	/* The diamond never drops to a second line: the title column shrinks instead. */
+	/* The meta never drops to a second line: the title column shrinks instead. */
 	white-space: nowrap;
 }
 .session-badge {
@@ -273,13 +276,13 @@
 	position: relative;
 	top: 1px;
 }
-/* Hover (or a menu anchored open) swaps the time for the hover actions; the diamond keeps its corner. */
+/* Hover (or a menu anchored open) swaps the time for the hover actions; the diamond stays beside the title. */
 .session-row:hover .session-time,
 .session-row:has(.session-menu-button[aria-expanded="true"]) .session-time,
 .session-row:has(.session-tag-button[aria-expanded="true"]) .session-time {
 	display: none;
 }
-.session-meta > .session-tag {
+.session-title-wrap > .session-tag {
 	display: block;
 }
 .grouped-view {
