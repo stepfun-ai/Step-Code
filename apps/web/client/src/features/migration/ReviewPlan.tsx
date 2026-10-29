@@ -28,9 +28,9 @@ export function FinalPlan() {
 	return (
 		<section className="migration-final-plan">
 			{checking.length ? (
-				<p className="migration-checking" role="status">
+				<output className="migration-checking">
 					<Spinner /> {t("migrationCheckingNotice", { count: checking.length })}
-				</p>
+				</output>
 			) : null}
 			{ready.map(([id, draft]) => (
 				<PlanRow key={id} id={id} draft={draft} ready />
