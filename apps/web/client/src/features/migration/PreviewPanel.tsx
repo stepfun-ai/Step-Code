@@ -95,7 +95,7 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 		>
 			<header className="migration-toolbar">
 				<h3>{preview?.candidate.name ?? t("migrationPreview")}</h3>
-				<Button onClick={() => void previewCandidate(id)} disabled={draft.loading}>
+				<Button id="migrationRefreshPreview" onClick={() => void previewCandidate(id)} disabled={draft.loading}>
 					{t("migrationRefreshPreview")}
 				</Button>
 			</header>

@@ -1,6 +1,6 @@
 import { useT } from "../../i18n";
-import { Button, IconButton, Spinner } from "../../ui";
-import { acknowledgePreview, deselectCandidate, previewCandidate } from "./actions";
+import { IconButton, Spinner } from "../../ui";
+import { acknowledgePreview, previewCandidate } from "./actions";
 import { DiagnosticList } from "./CandidateList";
 import type { MigrationDraft } from "./model";
 import { PreviewText } from "./PreviewPanel";
@@ -43,20 +43,8 @@ export function ResourcePreview({
 			) : null}
 			{expired ? <DiagnosticList diagnostics={[{ code: "preview-expired" }]} /> : null}
 			{kind === "sessions" ? (
-				<>
-					{preview ? <PreviewText label={t("migrationSessionHistory")} text={preview.sourceText} /> : null}
-					{preview ? <DiagnosticList diagnostics={preview.warnings} /> : null}
-					{preview ? (
-						<div className="migration-danger">
-							<DiagnosticList diagnostics={preview.blockers} />
-						</div>
-					) : null}
-					{preview?.target.scope.kind === "project" ? (
-						<p className="migration-target-note" data-target-note="">
-							{t("migrationTargetNote", { cwd: preview.target.scope.cwd })}
-						</p>
-					) : null}
-				</>
+				// A session card is a viewer: the row checkbox selects; nothing else is needed.
+				<>{preview ? <PreviewText label={t("migrationSessionHistory")} text={preview.sourceText} /> : null}</>
 			) : (
 				<>
 					<p className="migration-meta">
@@ -108,21 +96,6 @@ export function ResourcePreview({
 					</details>
 				</>
 			)}
-			<Button id="migrationRefreshPreview" disabled={draft.loading} onClick={() => void previewCandidate(id)}>
-				{t("migrationRefreshPreview")}
-			</Button>
-			<Button
-				variant={draft.selected ? "secondary" : "primary"}
-				disabled={draft.loading}
-				onClick={() => void previewCandidate(id, {}, !draft.selected, false)}
-			>
-				{t(draft.selected ? "migrationDeselectItem" : "migrationSelectThis")}
-			</Button>
-			{draft.selected ? (
-				<Button variant="secondary" onClick={() => deselectCandidate(id)}>
-					{t("migrationDoNotMigrate")}
-				</Button>
-			) : null}
 		</aside>
 	);
 }
