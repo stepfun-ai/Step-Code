@@ -1248,9 +1248,9 @@
 	cursor: pointer;
 }
 
-/* One catalog row: a card of labelled fields — id, display name, context window,
-   max output, input types — with its remove action beside them. Every field
-   carries its own title, so an empty row still says what goes where. */
+/* One catalog row: the id and display name with the row actions on one line,
+   and a panel under them — opened by the chevron — for context window, max
+   output, input types and compaction threshold. */
 .settings-model-rows {
 	display: grid;
 	gap: 10px;
@@ -1260,15 +1260,34 @@
 }
 .settings-model-row {
 	display: grid;
-	grid-template-columns:
-		minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.9fr)
-		auto auto auto;
-	align-items: start;
-	gap: 10px;
-	padding: 12px;
+	gap: 12px;
+	padding: 10px 12px;
 	border: 1px solid var(--line);
 	border-radius: var(--radius-panel);
 	background: var(--surface-soft);
+}
+.settings-model-row-head {
+	display: grid;
+	grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto auto;
+	align-items: center;
+	gap: 10px;
+}
+.settings-model-expand .icon {
+	transition: transform var(--fast);
+}
+.settings-model-row[data-expanded] .settings-model-expand .icon {
+	transform: rotate(90deg);
+}
+.settings-model-details {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	align-items: start;
+	gap: 10px;
+	padding-top: 12px;
+	border-top: 1px solid var(--line);
+}
+.settings-model-details[hidden] {
+	display: none;
 }
 .settings-model-field {
 	display: grid;
@@ -1314,17 +1333,14 @@
 	border-color: var(--focus-border);
 	box-shadow: 0 0 0 3px var(--accent-ring);
 }
-/*
- * The row actions (connection test, delete) sit on the inputs' line: bottom-aligned with the fields and
- * centred on their height, however tall the label above the inputs renders.
- */
-.settings-model-row > .settings-icon-action,
-.settings-model-row > .settings-model-test {
-	align-self: end;
-	margin: 0 0 calc((var(--control-h-md) - 30px) / 2);
+.settings-model-field input[aria-invalid="true"] {
+	border-color: var(--danger);
 }
-/* The connection-test mark: the zap/spinner/answer slot beside the delete
- * action, aligned with the inputs the same way. */
+.settings-model-field input[aria-invalid="true"]:focus {
+	border-color: var(--danger);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
+}
+/* The connection-test mark: the zap/spinner/answer slot beside the delete action. */
 .settings-model-test {
 	display: inline-flex;
 	align-items: center;
@@ -1399,15 +1415,7 @@
 }
 
 @media (max-width: 1180px) {
-	.settings-model-row {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-	}
-	/* Five fields do not fit three columns: the two row actions move to a line of
-	 * their own instead of sharing a field's cell. */
-	.settings-model-row > .settings-model-test,
-	.settings-model-row > .settings-icon-action {
-		grid-row: 3;
-		margin: 0;
-		justify-self: start;
+	.settings-model-details {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 }
