@@ -1,17 +1,24 @@
+import { CONTEXT_SAFETY_TOKENS } from "@step-harness/providers";
 import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_COMPACTION_TRIGGER_RATIO,
+	MIN_RESPONSE_OUTPUT_TOKENS,
 	resolveCompactionThreshold,
 	resolveCompactionTriggerSettings,
 } from "../src/core/compaction/trigger-policy.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
-const model = (contextWindow: number, id = "m") => ({ provider: "p", id, contextWindow });
+const model = (contextWindow: number, id = "m", maxTokens?: number) => ({
+	provider: "p",
+	id,
+	contextWindow,
+	maxTokens,
+});
 
 describe("compaction trigger policy", () => {
 	it.each([
-		[64_000, 57_600],
 		[128_000, 115_200],
+		[131_072, 117_964],
 		[200_000, 180_000],
 		[1_000_000, 900_000],
 	])("triggers at 90%% of a %i-token window by default", (contextWindow, threshold) => {
@@ -20,6 +27,33 @@ describe("compaction trigger policy", () => {
 		expect(settings.policy).toBe("v2");
 		expect(settings.triggerRatio).toBe(DEFAULT_COMPACTION_TRIGGER_RATIO);
 		expect(resolveCompactionThreshold(model(contextWindow), settings)).toBe(threshold);
+	});
+
+	it.each([
+		// window, model output limit, threshold
+		[65_536, 65_536, 53_248],
+		[64_000, undefined, 51_712],
+		[32_768, 32_768, 20_480],
+		[32_768, 4_096, 24_576],
+		[16_384, 16_384, 8_192],
+		[8_192, 8_192, 4_096],
+	])("keeps response room on a %i-token window with output limit %s", (contextWindow, maxTokens, threshold) => {
+		const settings = resolveCompactionTriggerSettings().settings;
+		expect(resolveCompactionThreshold(model(contextWindow, "m", maxTokens), settings)).toBe(threshold);
+		// Below the floor, the threshold is half the window; otherwise the provider's
+		// context-clamped output budget at the threshold is at least the reserved room.
+		if (threshold > contextWindow / 2) {
+			const reserved = Math.min(maxTokens ?? MIN_RESPONSE_OUTPUT_TOKENS, MIN_RESPONSE_OUTPUT_TOKENS);
+			expect(contextWindow - threshold - CONTEXT_SAFETY_TOKENS).toBeGreaterThanOrEqual(reserved);
+		}
+	});
+
+	it("lets a lower ratio trigger earlier than the response-room ceiling", () => {
+		const { settings } = resolveCompactionTriggerSettings({ triggerRatio: 0.5 });
+		expect(resolveCompactionThreshold(model(32_768, "m", 32_768), settings)).toBe(16_384);
+		// A higher per-model ratio cannot exceed the ceiling on a small window.
+		const high = resolveCompactionTriggerSettings({ modelTriggerRatios: { "p/m": 0.95 } }).settings;
+		expect(resolveCompactionThreshold(model(32_768, "m", 32_768), high)).toBe(20_480);
 	});
 
 	it("applies global and per-model ratios", () => {

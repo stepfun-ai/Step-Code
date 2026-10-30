@@ -51,10 +51,13 @@ A `length` response remains an incomplete summary and is never saved as a succes
 Auto-compaction triggers when:
 
 ```
-contextTokens > floor(contextWindow * triggerRatio)
+contextTokens > min(
+  floor(contextWindow * triggerRatio),
+  max(contextWindow - 4096 - min(model.maxTokens, 8192), floor(contextWindow * 0.5))
+)
 ```
 
-`triggerRatio` defaults to `0.9` for every model (configurable globally or per model in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). No fixed output reserve is subtracted: providers clamp each request's `max_tokens` to the remaining context, and a response truncated by that clamp goes through the overflow/length recovery below. `tokenLimit` can only make compaction trigger earlier. An explicitly configured `reserveTokens` keeps its old effect as an additional ceiling, `contextWindow - reserveTokens`.
+`triggerRatio` defaults to `0.9` for every model (configurable globally or per model in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). Providers clamp each request's `max_tokens` to the remaining context minus a 4096-token safety margin, so the second term keeps room for the next response: on a small window 10% of the context is less than that margin. The trigger never drops below half the window. With an 8K-or-larger output limit, a 32K window compacts at 20,480 tokens (62.5%), 64K at 53,248 (81.25%), and 128K or larger at 90%. A response truncated by the clamp still goes through the overflow/length recovery below. `tokenLimit` can only make compaction trigger earlier. An explicitly configured `reserveTokens` keeps its old effect as an additional ceiling, `contextWindow - reserveTokens`.
 
 Step checks the threshold once immediately before every model request: before the first request of a prompt (counting the incoming prompt), before every follow-up request inside a tool loop (counting the new tool results and injected steering), and before the first request of a continuation. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. Steering queued while a follow-up request compacts is delivered to that same request. Input queued while the pre-run check compacts (or added by an `agent_start` listener) joins the first request and is measured again before it is sent; input typed while that first request's own check compacts is delivered with the next request. A final answer that crosses the threshold does not compact on its own; the next request compacts first. Context-overflow and truncated-length recovery still run after the failed response. If measuring or preparing maintenance throws unexpectedly, the request is sent unchanged and overflow recovery remains the fallback.
 
@@ -446,7 +449,7 @@ keepRecentTokens = 20000
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `triggerRatio` | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95) |
+| `triggerRatio` | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
 | `modelTriggerRatios` | none | Per-model `triggerRatio`, keyed by `provider/model-id` |
 | `tokenLimit` | none | Absolute token ceiling; can only trigger earlier |
 | `triggerPolicy` | `"v2"` | `"legacy"` restores the previous threshold and checkpoints |

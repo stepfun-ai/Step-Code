@@ -66,8 +66,9 @@ leaves less context headroom. This avoids starving a reasoning-enabled summary
 with a smaller fixed cap. The coding-agent and generic harness follow this rule.
 
 Under the default `v2` trigger policy, automatic compaction fires at
-`contextWindow * triggerRatio`; `tokenLimit` and an explicit
-`compaction.reserveTokens` smaller than the context window can only move it
+`contextWindow * triggerRatio`, capped so the next request keeps the provider
+safety margin plus up to 8192 output tokens, and never below half the window.
+`tokenLimit` and an explicit `compaction.reserveTokens` can only move it
 earlier. The `legacy` policy keeps `contextTokens > contextWindow - reserveTokens`.
 The positional reserve argument to `generateSummary`
 and `generateSummaryWithUsage` remains accepted for caller compatibility but is

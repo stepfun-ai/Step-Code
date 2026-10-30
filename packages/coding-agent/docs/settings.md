@@ -109,7 +109,7 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.triggerRatio` | number | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95) |
+| `compaction.triggerRatio` | number | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
 | `compaction.modelTriggerRatios` | object | `{}` | Per-model trigger ratios keyed by `provider/model-id` |
 | `compaction.tokenLimit` | number | - | Absolute trigger ceiling; can only trigger earlier |
 | `compaction.triggerPolicy` | string | `"v2"` | `"legacy"` restores the previous `contextWindow - reserveTokens` trigger and checkpoints |
