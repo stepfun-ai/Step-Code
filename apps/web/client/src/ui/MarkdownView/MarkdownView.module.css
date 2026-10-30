@@ -4,9 +4,8 @@
  */
 .root {
   & a {
-    color: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--line-strong);
+    color: var(--link);
+    text-decoration: none;
     text-decoration-thickness: 1px;
     text-underline-offset: 3px;
     overflow-wrap: anywhere;
@@ -14,7 +13,15 @@
 
   & a:hover,
   & a:focus-visible {
-    text-decoration-color: currentColor;
+    color: var(--link-hover);
+    text-decoration: underline;
+  }
+
+  & :global(.md-link-icon) {
+    width: 1em;
+    height: 1em;
+    margin-right: 0.25em;
+    vertical-align: -0.15em;
   }
 
   & a:focus-visible {

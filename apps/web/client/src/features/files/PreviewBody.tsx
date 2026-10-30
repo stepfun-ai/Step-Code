@@ -4,16 +4,16 @@
  */
 
 import { type CSSProperties, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useT } from "../../i18n";
+import { useMarkdownLabels, useT } from "../../i18n";
 import { localFileApi, workspaceApi } from "../../lib/api";
 import { basename, cx, formatBytes } from "../../lib/format";
-import { renderMarkdown } from "../../lib/markdown";
 import { copyText } from "../../state/session";
 import { type FilePreviewTab, type PreviewTab, type SideAnswerTab, useAppStore } from "../../state/store";
 import { Icon, MarkdownView, Spinner } from "../../ui";
 import { openFileReference } from "./actions";
 import { codeViewHtml, isMarkdownPath, PREVIEW_LINE_LIMIT } from "./highlight";
-import { sideAnswerHtml } from "./side-answer-html";
+
+const copyCode = (code: string) => copyText(code, null);
 
 /** The tab the preview shows, or undefined when there are no tabs. */
 export function useActiveTab(): PreviewTab | undefined {
@@ -95,10 +95,7 @@ function CodeView({ content, path }: { readonly content: string; readonly path: 
 
 function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 	const t = useT();
-	const html = useMemo(
-		() => sideAnswerHtml(tab.text, { code: t("code"), copy: t("copy"), table: t("markdownTable") }),
-		[tab.text, t],
-	);
+	const labels = useMarkdownLabels();
 	if (tab.pending) {
 		return (
 			<div className="side-answer" data-pending="true">
@@ -115,8 +112,9 @@ function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 			<p className="side-answer-question">{tab.question}</p>
 			<MarkdownView
 				className="side-answer-body message-body"
-				html={html}
-				onCopyCode={(code) => copyText(code, null)}
+				source={tab.text}
+				labels={labels}
+				onCopyCode={copyCode}
 				copiedLabel={t("copied")}
 			/>
 			<p className="side-answer-note">{t("btwNotSaved")}</p>
@@ -126,6 +124,7 @@ function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 
 function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 	const t = useT();
+	const labels = useMarkdownLabels();
 	if (tab.kind === "btw") return <SideAnswer tab={tab} />;
 	const file = tab.file;
 	if (tab.loading) return <PreviewMessage>{t("loadingFile")}</PreviewMessage>;
@@ -152,12 +151,10 @@ function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 		return (
 			<MarkdownView
 				className="preview-markdown message-body"
-				html={renderMarkdown(
-					file.content,
-					{ code: t("code"), copy: t("copy"), table: t("markdownTable") },
-					{ localFiles: true },
-				)}
-				onCopyCode={(code) => copyText(code, null)}
+				source={file.content}
+				labels={labels}
+				localFiles
+				onCopyCode={copyCode}
 				copiedLabel={t("copied")}
 				onFileReference={(path) => void openFileReference(tab.cwd, path, tab.path)}
 			/>

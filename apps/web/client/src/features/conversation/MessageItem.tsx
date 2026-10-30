@@ -1,11 +1,9 @@
-import { memo, useMemo, useRef, useState } from "react";
-import { useT } from "../../i18n";
-import { type AttachedFile, FILE_MARKER, markAttachedFiles, splitAttachedFiles } from "../../lib/attached-files";
+import { memo, useCallback, useMemo, useState } from "react";
+import { useMarkdownLabels, useT } from "../../i18n";
+import { type AttachedFile, markAttachedFiles, splitAttachedFiles } from "../../lib/attached-files";
 import { formatBytes, formatTokens } from "../../lib/format";
 import {
-	escapeHtml,
 	pluginInstallInvocation,
-	renderMarkdown,
 	type SessionContextQuote,
 	sessionContextOf,
 	skillInvocation,
@@ -14,24 +12,47 @@ import {
 import { copyText } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
 import type { MessageTimelineItem } from "../../state/types";
-import { Icon, MarkdownView } from "../../ui";
+import { Icon, type IconName, MarkdownView } from "../../ui";
 import { commandLeadIcon } from "../composer";
 import { openFileReference } from "../files/actions";
-import { highlightFence } from "../files/index";
 import { forkAtEntry } from "./actions";
 import { CopyAction } from "./CopyAction";
 import { openFeedback, type Sentiment } from "./feedback";
 import { fullDateTime } from "./message-meta";
-import { useFadeIn, useSmoothText } from "./streaming";
+import { useSmoothText } from "./streaming";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { MessageAttachments } from "./TurnArtifacts";
 import type { TurnArtifact } from "./turn-artifacts";
 
 /** Same markup as the composer's chip (`prompt-editor.ts` `createChip`), so a sent message reads like its draft. */
-function fileChipHtml(file: AttachedFile | undefined): string {
-	if (!file) return "";
-	const title = escapeHtml(`${file.path} · ${formatBytes(file.bytes)}`);
-	return `<span class="message-file" title="${title}"><svg class="icon icon--xs" aria-hidden="true"><use href="#i-fileText"></use></svg><span>${escapeHtml(file.name)}</span></span>`;
+function MessageFileChip({ file }: { readonly file: AttachedFile | undefined }) {
+	if (!file) return null;
+	return (
+		<span className="message-file" title={`${file.path} · ${formatBytes(file.bytes)}`}>
+			<Icon name="fileText" size="xs" />
+			<span>{file.name}</span>
+		</span>
+	);
+}
+
+/** The command, skill, plugin or ultraloop badge that leads an invoking message's first line. */
+function InvocationBadge({
+	kind,
+	icon,
+	label,
+}: {
+	readonly kind: string;
+	readonly icon: IconName;
+	readonly label: string;
+}) {
+	return (
+		<span className={`message-skill message-skill--${kind}`} title={label}>
+			<span className="tool-glyph" aria-hidden="true">
+				<Icon name={icon} size="xs" className="tool-kind-icon" />
+			</span>
+			{label}
+		</span>
+	);
 }
 
 /** `/code-review 123` -> the command name and what followed it; null when the line is not a command. */
@@ -79,10 +100,7 @@ export const MessageItem = memo(function MessageItem({
 	const currentCwd = useAppStore((state) => state.current?.cwd ?? "");
 	const cwd = fileCwd ?? currentCwd;
 	const live = item.itemId.startsWith("message-live");
-	const codeLabel = t("code");
-	const copyLabel = t("copy");
-	const tableLabel = t("markdownTable");
-	const bodyRef = useRef<HTMLDivElement>(null);
+	const labels = useMarkdownLabels();
 	// Pasted or dropped files arrive as blocks after the user's text; the bubble shows them as inline chips where the user put them.
 	const attached = useMemo(
 		() => (role === "user" ? splitAttachedFiles(item.content) : { text: item.content, files: [] }),
@@ -103,58 +121,47 @@ export const MessageItem = memo(function MessageItem({
 		live,
 	);
 	const images = role === "user" ? (item.images ?? []) : [];
-	// Memoised: a streaming turn re-renders the timeline per frame, and parsing every earlier message each time made long sessions crawl.
 	const files = pendingFiles ?? attached.files;
-	const html = useMemo(() => {
-		if (!files.length)
-			return renderMarkdown(
-				content,
-				{ code: codeLabel, copy: copyLabel, table: tableLabel },
-				{ localFiles: role === "assistant" && Boolean(cwd), highlightCode: highlightFence },
-			);
-		return renderMarkdown(
-			markAttachedFiles(content, files),
-			{ code: codeLabel, copy: copyLabel, table: tableLabel },
-			{ highlightCode: highlightFence },
-		).replace(FILE_MARKER, (_match, index: string) => fileChipHtml(files[Number(index)]));
-	}, [content, files, codeLabel, copyLabel, tableLabel, role, cwd]);
+	// Memoised so the renderer, itself memoised on its props, does not reparse settled messages while a turn streams.
+	const source = useMemo(() => (files.length ? markAttachedFiles(content, files) : content), [content, files]);
+	const fileNames = useMemo(() => files.map((file) => file.name), [files]);
+	const renderFile = useCallback((index: number) => <MessageFileChip file={files[index]} />, [files]);
+	const copyCode = useCallback((code: string) => copyText(code, null), []);
+	const openReference = useCallback((path: string) => void openFileReference(cwd, path), [cwd]);
 	/*
 	 * An invoked message carries its badge inline at the head of the markdown's
-	 * first line — prepended into the rendered html, so the command chip and
-	 * the prompt share one bubble with native typography.
+	 * first line, so the command chip and the prompt share one bubble with
+	 * native typography.
 	 */
-	const badgeLabel = command ? `/${command.name}` : (skill?.name ?? pluginInstall?.name ?? t("modeUltraloop"));
-	const badgeIcon = command ? commandLeadIcon(command.name) : skill ? "wrench" : ultraloop ? "orbit" : "puzzle";
-	const badgeKind = command ? "command" : skill ? "skill" : ultraloop ? "ultraloop" : "plugin";
-	const badgeHtml = `<span class="message-skill message-skill--${badgeKind}" title="${escapeHtml(badgeLabel)}"><span class="tool-glyph" aria-hidden="true"><svg class="icon icon--xs tool-kind-icon" aria-hidden="true"><use href="#i-${badgeIcon}"></use></svg></span>${escapeHtml(badgeLabel)}</span>`;
-	// A bare prompt command (no arguments) is the badge alone, like an echoed kernel command.
-	const invokedHtml =
-		command && !html
-			? badgeHtml
-			: (skill || ultraloop || pluginInstall || command) && html
-				? `${badgeHtml}${html}`
-				: html;
-	useFadeIn(bodyRef, html, live);
+	const badge =
+		command || skill || ultraloop || pluginInstall ? (
+			<InvocationBadge
+				kind={command ? "command" : skill ? "skill" : ultraloop ? "ultraloop" : "plugin"}
+				icon={command ? commandLeadIcon(command.name) : skill ? "wrench" : ultraloop ? "orbit" : "puzzle"}
+				label={command ? `/${command.name}` : (skill?.name ?? pluginInstall?.name ?? t("modeUltraloop"))}
+			/>
+		) : null;
 	if (item.error) return <MessageError item={item} inlineTimestamp={inlineTimestamp} />;
 	// The live turn before its first text (reasoning, or waiting on the first token).
 	if (role === "assistant" && !content) return <ThinkingIndicator />;
-	/*
-	 * A command-invoking message carries its badge inside the bubble, inline
-	 * before the text — the command and the prompt share one bubble, exactly
-	 * like the composer showed them.
-	 */
 	return (
 		<article className={`message ${role}`} data-content={item.content || ""} data-entry-id={item.entryId}>
 			{/* A user message can be images only; it still opens a turn, so it gets a row. */}
 			{images.length ? <MessageImages images={images} /> : null}
 			{content || command ? (
 				<MarkdownView
-					ref={bodyRef}
-					className="message-body"
-					html={invokedHtml}
-					onCopyCode={(code) => copyText(code, null)}
+					className={badge ? "message-body message-body--invoked" : "message-body"}
+					source={source}
+					labels={labels}
+					streaming={live}
+					// A bare prompt command (no arguments) is the badge alone, like an echoed kernel command.
+					lead={badge}
+					localFiles={!files.length && role === "assistant" && Boolean(cwd)}
+					fileNames={fileNames}
+					renderFile={renderFile}
+					onCopyCode={copyCode}
 					copiedLabel={t("copied")}
-					onFileReference={(path) => void openFileReference(cwd, path)}
+					onFileReference={openReference}
 				/>
 			) : null}
 			{attachments?.length ? <MessageAttachments artifacts={attachments} cwd={cwd} /> : null}

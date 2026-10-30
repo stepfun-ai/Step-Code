@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { browserKeyRoute } from "../client/src/features/browser/actions.ts";
+import {
+	addressLabel,
+	browserAddress,
+	clampZoom,
+	isLocalAddress,
+	readStoredTabs,
+} from "../client/src/features/browser/address.ts";
 import { closePreviewTab, showPreviewFiles } from "../client/src/features/files/actions.ts";
 import { activeRightPanel, closeRightPanel, openRightPanel } from "../client/src/state/right-panel.ts";
 import { createInitialState, getState, setState, setUi } from "../client/src/state/store.ts";
@@ -36,21 +42,62 @@ test("opening another inspector only changes presentation, not conversation sele
 	assert.equal(getState().current?.status, "running");
 });
 
-test("browser keys: AltGr and macOS Option characters are typed text, Ctrl/Cmd chords stay keys", () => {
-	const plain = { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, altGraph: false };
-	// Plain characters and paste go through the native input; copy reads the page selection.
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "a" }, false), { kind: "native" });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "v", ctrlKey: true }, false), { kind: "native" });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "c", metaKey: true }, true), { kind: "copy" });
-	// AltGr: reported as AltGraph, or as Ctrl+Alt on Windows. Neither is a Ctrl shortcut.
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "@", altGraph: true, ctrlKey: true, altKey: true }, false), { kind: "native" });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "€", ctrlKey: true, altKey: true }, false), { kind: "native" });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "c", ctrlKey: true, altKey: true }, false), { kind: "native" });
-	// macOS Option prints characters; Option with a non-character key is still a key.
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "π", altKey: true }, true), { kind: "native" });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "ArrowLeft", altKey: true }, true), { kind: "key", key: "ArrowLeft", modifiers: 1 });
-	// Elsewhere Alt+letter types nothing in a textarea, so it reaches the page as a chord.
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "f", altKey: true }, false), { kind: "key", key: "f", modifiers: 1 });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "a", metaKey: true }, true), { kind: "key", key: "a", modifiers: 4 });
-	assert.deepEqual(browserKeyRoute({ ...plain, key: "AltGraph", altGraph: true }, false), { kind: "ignore" });
+const APP = "http://127.0.0.1:3077";
+
+test("the address bar accepts http(s), completes bare hosts and refuses everything else", () => {
+	assert.deepEqual(browserAddress("example.com/docs", APP), { ok: true, url: "https://example.com/docs" });
+	// A bare local host is a dev server or preview: plain http.
+	assert.deepEqual(browserAddress("localhost:5173", APP), { ok: true, url: "http://localhost:5173/" });
+	assert.deepEqual(browserAddress("127.0.0.1:8000/a", APP), { ok: true, url: "http://127.0.0.1:8000/a" });
+	assert.deepEqual(browserAddress("  http://example.com  ", APP), { ok: true, url: "http://example.com/" });
+	assert.deepEqual(browserAddress("", APP), { ok: false, reason: "invalid" });
+	assert.deepEqual(browserAddress("http://exa mple.com", APP), { ok: false, reason: "invalid" });
+	for (const blocked of ["file:///etc/passwd", "ftp://example.com/", "https://user:secret@example.com/"]) {
+		assert.deepEqual(browserAddress(blocked, APP), { ok: false, reason: "blocked" }, blocked);
+	}
+});
+
+test("the address bar never frames StepCode's own page, on any loopback name", () => {
+	for (const own of ["http://127.0.0.1:3077/", "localhost:3077", "http://[::1]:3077/api/v1/sessions", "app.localhost:3077"]) {
+		assert.deepEqual(browserAddress(own, APP), { ok: false, reason: "blocked" }, own);
+	}
+	// The same port on a remote host is another site.
+	assert.deepEqual(browserAddress("https://example.com:3077/", APP), { ok: true, url: "https://example.com:3077/" });
+	// A preview origin on its own port stays loadable.
+	assert.equal(browserAddress("http://localhost:61000/token/index.html", APP).ok, true);
+});
+
+test("stored tabs are validated before a reload reopens them", () => {
+	const raw = JSON.stringify({
+		activeId: "b",
+		tabs: [
+			{ id: "a", url: "https://example.com/", title: "Example", zoom: 1.24 },
+			{ id: "b", url: "", title: "", zoom: 9 },
+			{ id: "c", url: "file:///etc/passwd", title: "", zoom: 1 },
+			{ id: "d", url: "http://127.0.0.1:3077/", title: "", zoom: 1 },
+			{ url: "https://no-id.example/" },
+			"junk",
+		],
+	});
+	assert.deepEqual(readStoredTabs(raw, APP), {
+		activeId: "b",
+		tabs: [
+			{ id: "a", url: "https://example.com/", title: "Example", zoom: 1.2 },
+			{ id: "b", url: "", title: "", zoom: 2 },
+		],
+	});
+	assert.deepEqual(readStoredTabs("{not json", APP), { activeId: null, tabs: [] });
+	assert.deepEqual(readStoredTabs(null, APP), { activeId: null, tabs: [] });
+	// A missing active tab falls back to the last one.
+	assert.equal(readStoredTabs(JSON.stringify({ activeId: "gone", tabs: [{ id: "x", url: "" }] }), APP).activeId, "x");
+});
+
+test("browser helpers: zoom steps, labels and local addresses", () => {
+	assert.equal(clampZoom(0.3), 0.5);
+	assert.equal(clampZoom(1.05), 1.1);
+	assert.equal(clampZoom(Number.NaN), 1);
+	assert.equal(addressLabel("https://example.com:8443/path"), "example.com:8443");
+	assert.equal(addressLabel("not a url"), "not a url");
+	assert.equal(isLocalAddress("http://localhost:5173/"), true);
+	assert.equal(isLocalAddress("https://example.com/"), false);
 });

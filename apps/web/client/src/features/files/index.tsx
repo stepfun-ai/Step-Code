@@ -12,6 +12,6 @@ import "./session-scope.ts";
 
 export { FileTreePanel } from "./FileTreePanel";
 /** Code shown outside the preview: a tool call's excerpt and diff use the same tokens and families. */
-export { fileLanguage, highlightFence, highlightLines } from "./highlight";
+export { fileLanguage, highlightLines } from "./highlight";
 export { PreviewPanel } from "./PreviewPanel";
 export { askSideQuestion, beginSideAnswer, failSideAnswer } from "./side-answers";

@@ -40,6 +40,7 @@ const LIVE_STRING_FIELDS = [
 	"stopReason",
 	"errorMessage",
 	"activeText",
+	"activeThinking",
 	"activeTool",
 	"activeToolArgs",
 	"activeToolOutput",

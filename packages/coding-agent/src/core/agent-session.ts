@@ -61,6 +61,7 @@ import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
+	type CompactionSettings,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
@@ -70,6 +71,7 @@ import {
 	type ProjectionByRuleStats,
 	prepareCompaction,
 	projectContextForRequest,
+	resolveCompactionThreshold,
 	shouldCompact,
 } from "./compaction/index.ts";
 import { AutoClmController, type AutoClmResult } from "./compaction/live-context/auto-compaction.ts";
@@ -319,9 +321,18 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	return tokens;
 }
 
+/** Approximate tokens of the system prompt and tool schemas, using the same chars/4 heuristic as messages. */
+function estimateRequestOverheadTokens(context: AgentContext): number {
+	const tools = (context.tools ?? []).map(({ name, description, parameters }) => ({ name, description, parameters }));
+	return Math.ceil(((context.systemPrompt ?? "").length + JSON.stringify(tools).length) / 4);
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
+
+/** Consecutive automatic threshold-compaction failures after which v2 pauses automatic compaction. */
+const AUTO_COMPACTION_FAILURE_LIMIT = 3;
 
 // ============================================================================
 // AgentSession Class
@@ -370,6 +381,13 @@ export class AgentSession {
 	private _autoClmAbortController?: AbortController;
 	private _manualClm = false;
 	private _nativeThresholdBoundary?: string;
+	/** Consecutive failed automatic threshold compactions; v2 pauses automatic compaction at the limit. */
+	private _thresholdCompactionFailures = 0;
+	/**
+	 * What `_runAgentPrompt` measured for the prompt's first request. The before-request hook skips its
+	 * check only when the outgoing request still matches, so input added afterwards is measured again.
+	 */
+	private _checkedInitialRequest: { messageCount: number; lastMessage: AgentMessage; model: Model<any> } | undefined;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -461,6 +479,7 @@ export class AgentSession {
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
+		this._installBeforeModelRequestCompaction();
 		this._installContextProjection();
 		this._installLiveContext();
 
@@ -638,13 +657,16 @@ export class AgentSession {
 
 	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
 		const model = this.model;
-		const settings = this.settingsManager.getCompactionSettings();
 
 		if (
 			!model ||
 			this._blocksNativeThreshold() ||
 			model.contextWindow <= 0 ||
-			!shouldCompact(this._workingContextTokens(context), model.contextWindow, settings)
+			!shouldCompact(
+				this._workingContextTokens(context),
+				model.contextWindow,
+				this._triggerCompactionSettings(model),
+			)
 		) {
 			return context;
 		}
@@ -656,6 +678,102 @@ export class AgentSession {
 		};
 	}
 
+	/**
+	 * Run automatic CLM maintenance or native threshold compaction for the request about to be sent.
+	 * Returns the input context unless native compaction rebuilt canonical state.
+	 */
+	private async _compactForRequest(context: AgentContext, signal?: AbortSignal): Promise<AgentContext> {
+		// While paused, skip measurement too: a persistent estimator fault must stop being retried.
+		if (this._thresholdCompactionPaused()) return context;
+		const previousCompaction = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		try {
+			const automatic = await this._runAutomaticClm(context, signal);
+			if (!automatic?.attempted) {
+				const model = this.model;
+				if (
+					model &&
+					model.contextWindow > 0 &&
+					!this._blocksNativeThreshold() &&
+					shouldCompact(
+						this._workingContextTokens(context),
+						model.contextWindow,
+						this._triggerCompactionSettings(model),
+					)
+				) {
+					await this._runAutoCompaction("threshold", false);
+				}
+			}
+		} catch (error) {
+			// Maintenance is optional for this request: send it as-is, and let overflow recovery cover a
+			// request that does not fit. _runAutoCompaction reports its own failures.
+			if (!signal?.aborted) this._recordMaintenanceFault(error);
+		}
+		// Only native compaction rebuilds canonical state. Otherwise keep the loop context, which may
+		// exclude parser-resampled responses, while CLM overlays its existing prefix.
+		if (getLatestCompactionEntry(this.sessionManager.getBranch())?.id === previousCompaction) return context;
+		return { ...context, messages: this.agent.state.messages.slice() };
+	}
+
+	private _installBeforeModelRequestCompaction(): void {
+		const previous = this.agent.beforeModelRequest;
+		this.agent.beforeModelRequest = async (request, signal) => {
+			let context = request.context;
+			const checked = this._checkedInitialRequest;
+			this._checkedInitialRequest = undefined;
+			const alreadyChecked =
+				request.phase === "initial" &&
+				checked !== undefined &&
+				context.messages.length === checked.messageCount &&
+				context.messages.at(-1) === checked.lastMessage &&
+				// Same model object: a registry refresh replaces it even for the same id (e.g. a new window).
+				this.model === checked.model;
+			if (this._usesTriggerPolicyV2() && !alreadyChecked && !signal?.aborted) {
+				context = await this._compactForRequest(context, signal);
+			}
+			const previousUpdate = await previous?.({ ...request, context }, signal);
+			// A model/thinking-only update from a chained hook must not drop the compacted context.
+			const nextContext = previousUpdate?.context ?? context;
+			if (!previousUpdate && nextContext === request.context) return undefined;
+			return { ...previousUpdate, context: nextContext };
+		};
+	}
+
+	private _usesTriggerPolicyV2(): boolean {
+		return this.settingsManager.getCompactionTriggerSettings().policy === "v2";
+	}
+
+	/**
+	 * Compaction settings whose `reserveTokens` encodes the active automatic trigger, so
+	 * `shouldCompact()` and CLM decisions fire above `resolveCompactionThreshold()` under v2.
+	 * Only trigger decisions read this value; summary requests do not set an output cap.
+	 */
+	private _triggerCompactionSettings(model: Model<any>): CompactionSettings {
+		const settings = this.settingsManager.getCompactionSettings();
+		const trigger = this.settingsManager.getCompactionTriggerSettings();
+		if (trigger.policy !== "v2") return settings;
+		const threshold = resolveCompactionThreshold(model, trigger);
+		if (threshold === undefined) return settings;
+		return { ...settings, reserveTokens: model.contextWindow - threshold };
+	}
+
+	/** Automatic threshold maintenance pauses after repeated failures until a compaction succeeds. */
+	private _thresholdCompactionPaused(): boolean {
+		return this._usesTriggerPolicyV2() && this._thresholdCompactionFailures >= AUTO_COMPACTION_FAILURE_LIMIT;
+	}
+
+	/**
+	 * Record an unexpected throw while measuring or preparing automatic maintenance. It is persisted as a
+	 * compaction failure diagnostic and counts toward the pause, so a persistent fault stops being retried.
+	 */
+	private _recordMaintenanceFault(error: unknown): void {
+		this._thresholdCompactionFailures++;
+		try {
+			this._recordCompactionFailure(error, "threshold");
+		} catch {
+			// Callers must not throw; the counted failure above still bounds retries.
+		}
+	}
+
 	private _installAgentNextTurnRefresh(): void {
 		const previousPrepareNextTurnWithContext =
 			this.agent.prepareNextTurnWithContext ??
@@ -663,15 +781,18 @@ export class AgentSession {
 				? async (_turn: PrepareNextTurnContext, signal?: AbortSignal) => await this.agent.prepareNextTurn?.(signal)
 				: undefined);
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
-			const previousCompaction = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
-			const automatic = await this._runAutomaticClm(turn.context, signal);
 			let context = turn.context;
-			if (!automatic?.attempted) {
-				context = await this._compactBeforeNextAssistantResponse(turn.context);
-			} else if (getLatestCompactionEntry(this.sessionManager.getBranch())?.id !== previousCompaction) {
-				// Only native compaction rebuilds canonical state. Keep parser-resampling
-				// exclusions in the loop context while CLM overlays its existing prefix.
-				context = { ...turn.context, messages: this.agent.state.messages.slice() };
+			// Under v2 the before-request hook owns automatic compaction, after steering is injected.
+			if (!this._usesTriggerPolicyV2()) {
+				const previousCompaction = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+				const automatic = await this._runAutomaticClm(turn.context, signal);
+				if (!automatic?.attempted) {
+					context = await this._compactBeforeNextAssistantResponse(turn.context);
+				} else if (getLatestCompactionEntry(this.sessionManager.getBranch())?.id !== previousCompaction) {
+					// Only native compaction rebuilds canonical state. Keep parser-resampling
+					// exclusions in the loop context while CLM overlays its existing prefix.
+					context = { ...turn.context, messages: this.agent.state.messages.slice() };
+				}
 			}
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.({ ...turn, context }, signal);
 			const nextContext = previousSnapshot?.context ?? context;
@@ -822,12 +943,13 @@ export class AgentSession {
 			this._manualClm ||
 			this._autoClmAbortController ||
 			this._blocksNativeThreshold() ||
+			this._thresholdCompactionPaused() ||
 			signal?.aborted ||
 			interrupted()
 		)
 			return undefined;
 		const tokens = this._workingContextTokens({ ...context, messages: [...context.messages, ...incoming] });
-		const native = this.settingsManager.getCompactionSettings();
+		const native = this._triggerCompactionSettings(model);
 		if (
 			tokens < settings.minContextTokens ||
 			tokens >= model.contextWindow ||
@@ -872,6 +994,8 @@ export class AgentSession {
 			this._autoClmAbortController = undefined;
 		}
 		if (!result.attempted) return result;
+		// An accepted CLM edit is a successful automatic maintenance; it ends a failure streak.
+		if (result.accepted) this._thresholdCompactionFailures = 0;
 		if (result.outcome) this._emit({ type: "live_context", outcome: result.outcome });
 		this._emit({ type: "auto_clm_end", result });
 		if (result.fallback && !signal?.aborted && !interrupted()) {
@@ -882,7 +1006,23 @@ export class AgentSession {
 
 	private _workingContextTokens(context: AgentContext): number {
 		const live = this._getLiveContext();
-		if (!live) return estimateContextTokens(context.messages).tokens;
+		if (!live) {
+			const estimate = estimateContextTokens(context.messages);
+			// The legacy trigger policy keeps its original measurement for a faithful rollback.
+			if (!this._usesTriggerPolicyV2()) return estimate.tokens;
+			const usageMessage = estimate.lastUsageIndex === null ? undefined : context.messages[estimate.lastUsageIndex];
+			const compaction = getLatestCompactionEntry(this.sessionManager.getBranch());
+			// Usage reported before the latest compaction measured the old, larger context;
+			// trusting it would retrigger compaction immediately after one completed.
+			const staleUsage =
+				compaction !== null &&
+				usageMessage?.role === "assistant" &&
+				usageMessage.timestamp <= new Date(compaction.timestamp).getTime();
+			if (estimate.lastUsageIndex !== null && !staleUsage) return estimate.tokens;
+			// Without trustworthy usage, estimate everything the provider will receive: provider usage
+			// includes the system prompt and tool schemas, so a message-only estimate would undercount.
+			return estimateMessagesTokens(context.messages) + estimateRequestOverheadTokens(context);
+		}
 		return live.estimate({
 			systemPrompt: context.systemPrompt + live.guidance(this._liveContextGuidanceOptions()),
 			messages: convertToLlm(live.project(context.messages)),
@@ -1253,6 +1393,7 @@ export class AgentSession {
 				this.agent.state.messages,
 				signal ?? this._agentRunAbortController?.signal,
 			);
+			if (outcome?.accepted) this._thresholdCompactionFailures = 0;
 			if (outcome) this._emit({ type: "live_context", outcome });
 		}
 	};
@@ -1720,23 +1861,59 @@ export class AgentSession {
 				messages: this.agent.state.messages,
 				tools: this.agent.state.tools,
 			};
-			const automatic = await this._runAutomaticClm(context, runAbortController.signal, incoming);
-			if (
-				!automatic?.attempted &&
+			const triggerV2 = this._usesTriggerPolicyV2();
+			// Under v2 a maintenance fault must not reject the prompt (same fail-open contract as the
+			// before-request hook). It is recorded and counted, and the first request stays unmarked so
+			// the hook checks it again. Cancellation and the legacy policy keep propagating errors.
+			let maintenanceFailed = false;
+			const failOpen = async <T>(step: () => T | Promise<T>): Promise<T | undefined> => {
+				if (!triggerV2) return await step();
+				try {
+					return await step();
+				} catch (error) {
+					if (runAbortController.signal.aborted) throw error;
+					this._recordMaintenanceFault(error);
+					maintenanceFailed = true;
+					return undefined;
+				}
+			};
+			const automatic = await failOpen(() => this._runAutomaticClm(context, runAbortController.signal, incoming));
+			const model = this.model;
+			// The pre-run check measures the incoming prompt before it is persisted, so CLM can
+			// protect it. Queued input defers the check to the loop's before-request hook.
+			const preRunCheck =
 				!runAbortController.signal.aborted &&
 				!this.agent.hasQueuedMessages() &&
 				this.pendingMessageCount === 0 &&
-				this._getLiveContext() &&
-				this.model &&
-				shouldCompact(
-					this._workingContextTokens({ ...context, messages: [...context.messages, ...incoming] }),
-					this.model.contextWindow,
-					this.settingsManager.getCompactionSettings(),
-				)
+				(triggerV2 || this._getLiveContext() !== undefined);
+			if (
+				!automatic?.attempted &&
+				!maintenanceFailed &&
+				preRunCheck &&
+				model &&
+				model.contextWindow > 0 &&
+				!this._thresholdCompactionPaused() &&
+				(await failOpen(() =>
+					shouldCompact(
+						this._workingContextTokens({ ...context, messages: [...context.messages, ...incoming] }),
+						model.contextWindow,
+						this._triggerCompactionSettings(model),
+					),
+				))
 			) {
 				await this._runAutoCompaction("threshold", false);
 			}
 			if (runAbortController.signal.aborted) return;
+			// Record what was measured. The before-request hook re-checks if the actual first request
+			// differs, e.g. steering queued during the pre-run compaction or by an agent_start listener.
+			this._checkedInitialRequest =
+				triggerV2 && model && !maintenanceFailed && (automatic?.attempted === true || preRunCheck)
+					? {
+							messageCount: this.agent.state.messages.length + incoming.length,
+							lastMessage: incoming[incoming.length - 1],
+							model,
+						}
+					: undefined;
 			await this.agent.prompt(messages);
 			while (
 				!runAbortController.signal.aborted &&
@@ -1746,6 +1923,7 @@ export class AgentSession {
 				await this.agent.continue();
 			}
 		} finally {
+			this._checkedInitialRequest = undefined;
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
@@ -1799,7 +1977,9 @@ export class AgentSession {
 			return false;
 		}
 
-		if (await this._checkCompaction(msg)) {
+		// Under the v2 trigger policy, threshold compaction waits for the next request's
+		// before-request check; only overflow and truncation recovery run here.
+		if (await this._checkCompaction(msg, true, this._usesTriggerPolicyV2())) {
 			return true;
 		}
 
@@ -1912,12 +2092,13 @@ export class AgentSession {
 			// The user's new prompt is sent below, so do not call agent.continue() here.
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
-				// CLM threshold maintenance needs the incoming prompt assembled below.
-				// Real overflow recovery still runs immediately.
+				// Threshold maintenance needs the incoming prompt assembled below: CLM and the v2
+				// trigger policy check it in _runAgentPrompt. Real overflow recovery still runs immediately.
 				await this._checkCompaction(
 					lastAssistant,
 					false,
-					!!this._getLiveContext() && this.settingsManager.getAutoClmSettings().enabled && !this._manualClm,
+					this._usesTriggerPolicyV2() ||
+						(!!this._getLiveContext() && this.settingsManager.getAutoClmSettings().enabled && !this._manualClm),
 				);
 			}
 
@@ -2341,6 +2522,8 @@ export class AgentSession {
 		source: "set" | "cycle" | "restore",
 	): Promise<void> {
 		if (modelsAreEqual(previousModel, nextModel)) return;
+		// A different model has its own window and summarizer behavior; give automatic compaction a fresh start.
+		this._thresholdCompactionFailures = 0;
 		await this._extensionRunner.emit({
 			type: "model_select",
 			model: nextModel,
@@ -2734,6 +2917,7 @@ export class AgentSession {
 			}
 			this._liveContext?.invalidate();
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			this._thresholdCompactionFailures = 0;
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2976,8 +3160,10 @@ export class AgentSession {
 		const runSignal = this._agentRunAbortController?.signal;
 		if (runSignal?.aborted) return false;
 		if (reason === "threshold" && this._blocksNativeThreshold()) return false;
+		if (reason === "threshold" && this._thresholdCompactionPaused()) return false;
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
+		let committed = false;
 		let fromExtension = false;
 
 		try {
@@ -3099,6 +3285,8 @@ export class AgentSession {
 			}
 			this._liveContext?.invalidate();
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			committed = true;
+			this._thresholdCompactionFailures = 0;
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -3149,11 +3337,19 @@ export class AgentSession {
 			if (started) {
 				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;
 				const failureDetails = aborted ? undefined : this._recordCompactionFailure(error, reason);
-				const formattedErrorMessage = aborted
+				let formattedErrorMessage = aborted
 					? undefined
 					: reason === "overflow"
 						? `Context overflow recovery failed: ${failureDetails}`
 						: `Auto-compaction failed: ${failureDetails}`;
+				// A throw after the compaction was persisted (for example from a session_compact
+				// handler) is not a failed compaction, so it does not count toward the pause.
+				if (!aborted && !committed && reason === "threshold") {
+					this._thresholdCompactionFailures++;
+					if (this._thresholdCompactionPaused()) {
+						formattedErrorMessage += `\nAutomatic compaction is paused for this session after ${AUTO_COMPACTION_FAILURE_LIMIT} consecutive failures. Run /compact to retry; a successful compaction resumes it.`;
+					}
+				}
 				this._emit({
 					type: "compaction_end",
 					reason,
@@ -3290,6 +3486,8 @@ export class AgentSession {
 		}
 
 		this.agent.state.model = refreshedModel;
+		// A changed window moves the trigger, like a model switch; give automatic compaction a fresh start.
+		if (refreshedModel.contextWindow !== currentModel.contextWindow) this._thresholdCompactionFailures = 0;
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {

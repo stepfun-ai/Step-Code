@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { artifactKind, localFileReference, workspaceFilePath, workspaceFileReference } from "../client/src/lib/file-references.ts";
-import { markdownFileReferences, renderMarkdown } from "../client/src/lib/markdown.ts";
+import { markdownFileReferences } from "../client/src/lib/markdown.ts";
+import { MarkdownContent } from "../client/src/ui/MarkdownView/markdown-content.ts";
 import { turnArtifacts, withTurnChanges } from "../client/src/features/conversation/turn-artifacts.ts";
 import { collectTurnFooters } from "../client/src/features/conversation/turn-footers.ts";
 import { openFileReference, toggleDeliveryFile } from "../client/src/features/files/actions.ts";
@@ -9,7 +12,11 @@ import { activeRightPanel, openRightPanel } from "../client/src/state/right-pane
 import { createInitialState, getState, setState } from "../client/src/state/store.ts";
 import type { TimelineItem } from "../client/src/state/types.ts";
 
-const labels = { code: "Code", copy: "Copy", table: "Table" };
+const labels = { code: "Code", copy: "Copy", table: "Table", diagram: "Diagram" };
+
+function renderMarkdown(source: string, options: { readonly localFiles?: boolean } = {}): string {
+	return renderToStaticMarkup(createElement(MarkdownContent, { source, labels, ...options }));
+}
 afterEach(() => { mock.restoreAll(); setState(createInitialState()); });
 
 test("normalizes Windows, encoded file URLs, line suffixes and relative preview links", () => {
@@ -37,12 +44,12 @@ test("rejects unsafe schemes, network shares, malformed encodings and workspace 
 
 test("file references are opt-in keyboard buttons, not browser file navigation", () => {
 	const text = "[Report](<file:///D:/Work/report%20one.md>) and `Output/report.md:10`";
-	const html = renderMarkdown(text, labels, { localFiles: true });
+	const html = renderMarkdown(text, { localFiles: true });
 	assert.match(html, /<button type="button" class="md-file-reference" data-file-path="file:\/\/\/D:\/Work\/report%20one.md">Report<\/button>/);
 	assert.match(html, /<code>Output\/report.md:10<\/code>/);
 	assert.doesNotMatch(html, /data-file-path="Output/);
 	assert.doesNotMatch(html, /href="file:/);
-	assert.doesNotMatch(renderMarkdown(text, labels), /md-file-reference/);
+	assert.doesNotMatch(renderMarkdown(text), /md-file-reference/);
 });
 
 test("delivery recognition shares renderer parsing and ignores complete or unfinished code fences", () => {

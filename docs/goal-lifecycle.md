@@ -63,27 +63,24 @@ failure leaves the prior limit authoritative. `/goal status` shows spent tokens
 even when the goal has no limit, for example `Tokens: 123 (unbounded)`.
 
 The exact arguments `stop`, `off`, `reset`, `none`, and `cancel` are aliases for
-`clear`, matching Claude Code. Longer text such as `/goal stop flaky tests from
+`clear`. Longer text such as `/goal stop flaky tests from
 failing` is still an objective. If a pause persists but the host cannot interrupt
 the continuation, the paused footer remains visible and the command reports the
 interruption failure instead of claiming the run stopped.
 
-## Claude Code comparison
+## Completion decisions and follow-ups
 
 StepCode uses explicit `update_goal` tool results from the working agent for
 completion and blocker decisions. It has no separate completion evaluator.
-[Claude Code's documented goal behavior](https://code.claude.com/docs/en/goal)
-uses a small model to evaluate the conversation after each turn and record a
-verdict and reason. Adding that evaluator is a separate follow-up: it needs a
-provider/model selection policy, evidence inputs, token accounting, and a stop
-policy when evaluation fails or no progress is made.
+An evaluator that judges the conversation after each turn and records a verdict
+and reason is a separate follow-up: it needs a provider/model selection policy,
+evidence inputs, token accounting, and a stop policy when evaluation fails or no
+progress is made.
 
 StepCode also preserves counters on resume and rejects replacement of an
-unfinished goal. Claude Code documents resetting usage baselines on resume and
-replacing an active goal with a new condition. These are product differences,
-not behaviors introduced by the command aliases. Goal budgets count uncached
+unfinished goal. Goal budgets count uncached
 input plus output and gate subsequent continuations; an in-flight model request
 can exceed the remaining limit.
 
 See [workflow and cron lifecycle](orchestration-lifecycle.md) for the neighboring
-coordination primitives and remaining Claude Code differences.
+coordination primitives and remaining follow-ups.

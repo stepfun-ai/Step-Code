@@ -926,6 +926,12 @@ test(
 			return until(() => $("[data-model-row='e2e-model-large'] [data-model-field='maxTokens']"), "the max-output field");
 		};
 		const first = await openEditor();
+		// A stored row starts folded; its chevron opens the parameter panel.
+		const panel = first.closest(".settings-model-details");
+		const startedClosed = panel.hidden;
+		const chevron = $("[data-model-row='e2e-model-large'] .settings-model-expand");
+		chevron.click();
+		await until(() => !panel.hidden && chevron.getAttribute("aria-expanded") === "true", "the opened parameter panel");
 		const before = {
 			value: first.value,
 			placeholder: first.placeholder,
@@ -935,22 +941,46 @@ test(
 		Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(first, "64000");
 		first.dispatchEvent(new Event("input", { bubbles: true }));
 		await until(() => first.value === "64000", "the typed max-output value");
+		const threshold = $("[data-model-row='e2e-model-large'] [data-model-field='compactionThreshold']");
+		const setValue = (input, value) => {
+			Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		};
+		// Out of range: the save is held, the row's panel opens on the field.
+		setValue(threshold, "0.3");
+		$("#settingsModelEditor button[type='submit']").click();
+		await until(() => threshold.getAttribute("aria-invalid") === "true", "the out-of-range threshold flagged");
+		const heldOpen = !threshold.closest(".settings-model-details").hidden && Boolean($("#settingsModelEditor"));
+		setValue(threshold, "0.7");
+		await until(() => threshold.value === "0.7", "the typed threshold");
 		$("#settingsModelEditor button[type='submit']").click();
 		await until(() => !$("#settingsModelEditor"), "the editor to close after saving");
-		const saved = (await (await fetch("/api/v1/settings/models")).json()).providers
+		const savedModel = (await (await fetch("/api/v1/settings/models")).json()).providers
 			.find((entry) => entry.id === "e2e-gw").models
-			.find((entry) => entry.id === "e2e-model-large").maxTokens;
+			.find((entry) => entry.id === "e2e-model-large");
+		const saved = savedModel.maxTokens;
+		const savedThreshold = savedModel.compactionThreshold;
 		const again = await openEditor();
 		const reopened = again.value;
+		const reopenedThreshold = $("[data-model-row='e2e-model-large'] [data-model-field='compactionThreshold']").value;
 		$("#settingsModelEditor .settings-form-footer button[type='button']").click();
 		await until(() => !$("#settingsModelEditor"), "the editor to close after cancelling");
-		return { before, saved, reopened };
+		return { before, saved, reopened, heldOpen, savedThreshold, reopenedThreshold, startedClosed };
 	`)
     assert.equal(maxOutput.before.value, "", "a model saved without a cap keeps the field empty")
     assert.equal(maxOutput.before.title, "最大输出")
     assert.match(maxOutput.before.placeholder, /16384/u, "the placeholder names the kernel default")
     assert.equal(maxOutput.saved, 64000, "the typed cap reaches models.json")
     assert.equal(maxOutput.reopened, "64000", "the stored cap comes back into the form")
+    assert.equal(maxOutput.startedClosed, true, "a stored model's parameters start folded")
+    assert.equal(maxOutput.heldOpen, true, "an out-of-range threshold keeps the editor open on that row")
+    assert.equal(maxOutput.savedThreshold, 0.7, "the threshold is saved as the model's trigger ratio")
+    assert.equal(maxOutput.reopenedThreshold, "0.7", "the stored threshold comes back into the form")
+    assert.match(
+      await readFile(join(base, "config.toml"), "utf8"),
+      /"e2e-gw\/e2e-model-large" = 0\.7/u,
+      "the CLI reads the ratio from compaction.modelTriggerRatios in config.toml",
+    )
 
     // Discovery asks the provider's endpoint, and the endpoint's refusal is reported.
     const discovered = await browser.run(`

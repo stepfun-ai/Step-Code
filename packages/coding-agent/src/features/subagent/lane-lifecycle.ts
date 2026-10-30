@@ -327,6 +327,7 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 				stderr: "",
 				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 				activeText: undefined,
+				activeThinking: undefined,
 				activeTool: undefined,
 				activeToolArgs: undefined,
 				activeToolOutput: undefined,

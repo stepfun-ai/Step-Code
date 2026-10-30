@@ -155,13 +155,15 @@ test("live background state arrives while the parent is idle and fills the child
 	setState(createInitialState());
 	const history = entries({ agentId: "lane-1", status: "running", results: [{ agent: "explore", task: "Inspect", status: "queued" }] });
 	renderSnapshot({ id: "parent", cwd: "/w", status: "idle", entries: history });
-	const lane = { laneId: "lane-1", status: "running", details: { agentId: "lane-1", results: [{ agent: "explore", task: "short", status: "running", sessionId: "child-live", activeText: "live-only marker" }] } };
+	const lane = { laneId: "lane-1", status: "running", details: { agentId: "lane-1", results: [{ agent: "explore", task: "short", status: "running", sessionId: "child-live", activeText: "live-only marker", activeThinking: "live reasoning" }] } };
 	applySubagentLane("other-parent", lane);
 	assert.equal(getState().current?.subagentLanes, undefined);
 	applySubagentLane("parent", lane);
 	const row = getState().timelineItems.find((item) => item.kind === "tool");
 	assert.equal(row?.kind === "tool" && row.subagentTasks?.[0]?.sessionId, "child-live");
 	assert.equal(row?.kind === "tool" && row.subagentTasks?.[0]?.activeText, "live-only marker");
+	// Reasoning arrives in its own field, so the panel can show it as thinking rather than as the reply.
+	assert.equal(row?.kind === "tool" && row.subagentTasks?.[0]?.activeThinking, "live reasoning");
 	assert.equal(row?.kind === "tool" && row.subagentTasks?.[0]?.status, "running");
 	assert.equal(getState().current?.status, "idle");
 	// Reconnect uses the same snapshot channel; no model turn is needed.

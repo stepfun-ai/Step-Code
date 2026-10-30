@@ -43,6 +43,17 @@ import {
 import type { RuntimeContext } from "./context.ts";
 import { keepLatestTaskUpdateResult, registerTaskUpdateCall } from "./task-update-transcript.ts";
 
+/**
+ * Automatic compaction can run before a provider request inside an active agent loop, after
+ * `turn_start` already showed the working indicator. Clearing the compaction indicator would
+ * otherwise leave the streaming response without one until the next `turn_start`.
+ */
+function restoreWorkingIndicatorAfterCompaction(ctx: RuntimeContext): void {
+	if (ctx.session?.agent?.state.isStreaming && ctx.workingVisible && ctx.activeStatusIndicator?.kind !== "working") {
+		ctx.showWorkingStatusIndicator();
+	}
+}
+
 /** Subscribe to the session's agent events. Returns/records the unsubscribe handle (owned by the composition root). */
 export function subscribeToAgent(ctx: RuntimeContext): void {
 	ctx.unsubscribe = ctx.session.subscribe(async (event) => {
@@ -368,6 +379,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				ctx.autoCompactionEscapeHandler = undefined;
 			}
 			ctx.clearStatusIndicator("compaction");
+			restoreWorkingIndicatorAfterCompaction(ctx);
 			void ctx.flushCompactionQueue({ willRetry: true });
 			ctx.redraw.requestRender();
 			break;
@@ -380,6 +392,7 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				ctx.autoCompactionEscapeHandler = undefined;
 			}
 			ctx.clearStatusIndicator("compaction");
+			restoreWorkingIndicatorAfterCompaction(ctx);
 			if (event.aborted) {
 				if (event.reason === "manual") {
 					ctx.showError("Compaction cancelled");

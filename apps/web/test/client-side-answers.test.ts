@@ -6,7 +6,9 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sideAnswerHtml } from "../client/src/features/files/side-answer-html.ts";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MarkdownContent } from "../client/src/ui/MarkdownView/markdown-content.ts";
 import {
 	beginSideAnswer,
 	failSideAnswer,
@@ -89,8 +91,13 @@ test("restoring a session's answers reuses tabs and keeps an open file in front"
 });
 
 test("the answer body is Markdown, not its source", () => {
-	const html = sideAnswerHtml("- the **blocking** issue is fixed", { code: "Code", copy: "Copy", table: "Table" });
+	const html = renderToStaticMarkup(
+		createElement(MarkdownContent, {
+			source: "- the **blocking** issue is fixed",
+			labels: { code: "Code", copy: "Copy", table: "Table", diagram: "Diagram" },
+		}),
+	);
 	assert.match(html, /<strong>blocking<\/strong>/u);
 	assert.equal(html.includes("**"), false);
-	assert.match(html, /md-li/u);
+	assert.match(html, /<li>/u);
 });

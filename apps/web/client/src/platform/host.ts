@@ -1,6 +1,11 @@
 import type { StepcodeDesktopBridge } from "./desktop-bridge";
 
-export type { DesktopBrowserInfo, StepcodeDesktopBridge } from "./desktop-bridge";
+export type {
+	DesktopBrowserEvent,
+	DesktopBrowserGuest,
+	DesktopBrowserInfo,
+	StepcodeDesktopBridge,
+} from "./desktop-bridge";
 
 /** The desktop shell's bridge (apps/desktop preload), or undefined in a plain browser. */
 export function getDesktopBridge(): StepcodeDesktopBridge | undefined {

@@ -249,7 +249,6 @@ describe.each<SummaryPath>(["history", "prefix"])("%s summary context overflow r
 			expectProtectedContent(request);
 			expect(request.context.systemPrompt).toBe(SUMMARIZATION_SYSTEM_PROMPT);
 			expect(request.options).toMatchObject({
-				maxTokens: 32000,
 				cacheRetention: "none",
 				sessionId: "summary-session",
 				apiKey: "test-key",
@@ -257,6 +256,7 @@ describe.each<SummaryPath>(["history", "prefix"])("%s summary context overflow r
 				env: { TEST_SUMMARY_ENV: "value" },
 				reasoning: "medium",
 			});
+			expect(request.options).not.toHaveProperty("maxTokens");
 		}
 		// Everything after the source conversation is fixed, including previous-summary whitespace.
 		expect(prompt(requests[1]!).split("</conversation>")[1]).toBe(prompt(requests[0]!).split("</conversation>")[1]);

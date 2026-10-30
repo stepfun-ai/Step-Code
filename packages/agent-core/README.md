@@ -159,6 +159,8 @@ const stream = agentLoop(
 
 `shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason. The `AgentOptions` callback also receives the active run's `AbortSignal` as its second argument.
 
+To change the context right before a provider request instead of stopping, set `beforeModelRequest` (on `AgentLoopConfig`, `AgentOptions`, or the `Agent` instance). It runs before every provider request: `phase: "initial"` for the first request of a prompt or `continue()`, and `phase: "follow-up"` for each later request. The context it receives already contains the prompts, completed tool results, and steering injected for that request. Return `{ context, model, thinkingLevel }` replacements, or `undefined` to send the context unchanged. Tool-call markup resampling of the same request does not call it again. On follow-up requests that have not received steering yet, the loop polls steering once more after the hook, so input queued during a long hook such as compaction reaches the same request. `prepareNextTurn` keeps its existing timing: after `turn_end`, before steering is polled.
+
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
 ### continue() Event Sequence

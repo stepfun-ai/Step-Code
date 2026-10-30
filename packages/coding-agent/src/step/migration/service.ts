@@ -136,7 +136,16 @@ export class MigrationService {
 	private preparation?: Promise<void>;
 	private stopping = false;
 
-	constructor(options: { agentDir: string; env?: NodeJS.ProcessEnv; sessions: SessionImportService }) {
+	private readonly onMcpChanged?: () => void;
+
+	constructor(options: {
+		agentDir: string;
+		env?: NodeJS.ProcessEnv;
+		sessions: SessionImportService;
+		/** Called after a job wrote MCP declarations, so a long-running host can connect them right away. */
+		onMcpChanged?: () => void;
+	}) {
+		this.onMcpChanged = options.onMcpChanged;
 		this.paths = new MigrationPaths(options.agentDir, options.env ?? process.env);
 		this.inspector = new ResourceInspector(this.paths);
 		this.sessions = options.sessions;
@@ -726,6 +735,7 @@ export class MigrationService {
 			}
 			journal.job.status = this.closed || this.stopping ? "cancelled" : "completed";
 			this.persist(journal);
+			if (ownConfigHashes.size) this.notifyMcpChanged();
 		} catch {
 			journal.job.status = "interrupted";
 			for (const item of journal.job.items)
@@ -734,6 +744,13 @@ export class MigrationService {
 					item.diagnostics.push({ code: "journal-write-failed" });
 				}
 			// The last durable intent remains available for next-start reconciliation; do not claim a durable outcome.
+		}
+	}
+	private notifyMcpChanged(): void {
+		try {
+			this.onMcpChanged?.();
+		} catch {
+			// The declarations are already durable; running sessions still reconcile them before their next request.
 		}
 	}
 	private persist(journal: Journal): void {

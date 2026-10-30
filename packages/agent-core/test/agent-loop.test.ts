@@ -1297,6 +1297,169 @@ describe("agentLoop with AgentMessage", () => {
 		expect(convertedSecondTurnSystemPrompt).toBe("second prompt");
 	});
 
+	it("calls beforeModelRequest before every provider request with the full outgoing context", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `echoed: ${params.value}` }], details: { value: params.value } };
+			},
+		};
+		const steering = createUserMessage("steer");
+		let steeringDelivered = false;
+		const seen: Array<{ phase: string; roles: string[] }> = [];
+		const requestPrompts: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			getSteeringMessages: async () => {
+				if (seen.length === 1 && !steeringDelivered) {
+					steeringDelivered = true;
+					return [steering];
+				}
+				return [];
+			},
+			beforeModelRequest: async ({ phase, context: requestContext }) => {
+				seen.push({ phase, roles: requestContext.messages.map((message) => message.role) });
+				return { context: { ...requestContext, systemPrompt: `request ${seen.length}` } };
+			},
+		};
+
+		let llmCalls = 0;
+		const stream = agentLoop(
+			[createUserMessage("echo something")],
+			{ systemPrompt: "base", messages: [], tools: [tool] },
+			config,
+			undefined,
+			(_model, ctx) => {
+				llmCalls++;
+				requestPrompts.push(ctx.systemPrompt ?? "");
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message =
+						llmCalls === 1
+							? createAssistantMessage(
+									[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+									"toolUse",
+								)
+							: createAssistantMessage([{ type: "text", text: "done" }]);
+					mockStream.push({
+						type: "done",
+						reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+						message,
+					});
+				});
+				return mockStream;
+			},
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+
+		expect(llmCalls).toBe(2);
+		expect(seen).toEqual([
+			{ phase: "initial", roles: ["user"] },
+			{ phase: "follow-up", roles: ["user", "assistant", "toolResult", "user"] },
+		]);
+		expect(requestPrompts).toEqual(["request 1", "request 2"]);
+	});
+
+	it("delivers steering queued during a follow-up beforeModelRequest to the same request, once per turn", async () => {
+		const toolSchema = Type.Object({});
+		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "noop",
+			label: "Noop",
+			description: "Noop",
+			parameters: toolSchema,
+			async execute() {
+				return { content: [{ type: "text", text: "ok" }], details: {} };
+			},
+		};
+		const queue: AgentMessage[] = [];
+		const requests: string[][] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			// one-at-a-time delivery
+			getSteeringMessages: async () => (queue.length > 0 ? [queue.shift()!] : []),
+			beforeModelRequest: async ({ phase }) => {
+				// Simulate input typed while a long hook (compaction) runs.
+				if (phase === "follow-up" && requests.length === 1) {
+					queue.push(createUserMessage("during hook A"), createUserMessage("during hook B"));
+				}
+				return undefined;
+			},
+		};
+		let llmCalls = 0;
+		const stream = agentLoop(
+			[createUserMessage("start")],
+			{ systemPrompt: "", messages: [], tools: [tool] },
+			config,
+			undefined,
+			(_model, ctx) => {
+				llmCalls++;
+				requests.push(
+					ctx.messages
+						.filter((message) => message.role === "user")
+						.map((message) => (typeof message.content === "string" ? message.content : "")),
+				);
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message =
+						llmCalls === 1
+							? createAssistantMessage([{ type: "toolCall", id: "t1", name: "noop", arguments: {} }], "toolUse")
+							: createAssistantMessage([{ type: "text", text: "done" }]);
+					mockStream.push({
+						type: "done",
+						reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+						message,
+					});
+				});
+				return mockStream;
+			},
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+		// Request 2 receives only the first queued message (one-at-a-time); request 3 the second.
+		expect(requests).toEqual([["start"], ["start", "during hook A"], ["start", "during hook A", "during hook B"]]);
+	});
+
+	it("calls beforeModelRequest for the first request of a continuation", async () => {
+		const phases: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			beforeModelRequest: ({ phase }) => {
+				phases.push(phase);
+				return undefined;
+			},
+		};
+		const stream = agentLoopContinue(
+			{ systemPrompt: "", messages: [createUserMessage("resume")], tools: [] },
+			config,
+			undefined,
+			() => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					mockStream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage([{ type: "text", text: "done" }]),
+					});
+				});
+				return mockStream;
+			},
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+		expect(phases).toEqual(["initial"]);
+	});
+
 	it("should stop after the current turn when shouldStopAfterTurn returns true", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

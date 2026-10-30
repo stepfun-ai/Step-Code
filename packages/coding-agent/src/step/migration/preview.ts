@@ -134,17 +134,18 @@ export function prepareResource(
 			? new ResourceInspector(paths).destinationSkills(scope, records, publishedSkills)
 			: undefined;
 	if (candidate.kind === "mcp") {
-		dto.activation = "disabled";
+		// Migrated MCP is enabled; running sessions pick it up through their declaration reconciliation.
+		dto.activation = "next-resource-load";
 		// Ordinary MCP now loads from a trusted project's own config, so a project target is
 		// allowed; an untrusted one is already blocked above as target-untrusted.
 		const servers = targetServers(paths, scope);
 		const original = item.mcp?.config;
 		if (!original) block("unsupported-mcp-config");
 		else {
-			const sanitized = sanitizedMcp(original, request.includeSensitiveValues === true);
+			// Credentials (headers, env, API keys) migrate by default; only an explicit `false` strips literals.
+			const sanitized = sanitizedMcp(original, request.includeSensitiveValues !== false);
 			mcp = sanitized.config;
 			if (sanitized.stripped) dto.warnings.push({ code: "sensitive-values-omitted" });
-			if (request.includeSensitiveValues) dto.requiredAcknowledgements.push("sensitive-values");
 			if (original.cwd && !original.cwd.startsWith("/")) block("relative-mcp-path-unsupported");
 			const same = Object.entries(servers).find(([, value]) => mcpIdentity(value) === mcpIdentity(original));
 			if (same) {

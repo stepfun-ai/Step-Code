@@ -54,9 +54,11 @@ size before an ordinary prompt and between completed tool turns. A successful
 final response with no queued continuation defers routine maintenance until the
 next request. This avoids an unused context-edit/summary call after a completed
 task, while explicit maintenance commands and error recovery keep their normal
-behavior. By default it uses the original native compact trigger:
-`contextTokens > contextWindow - compaction.reserveTokens`. The default reserve
-is 16,384 tokens, so a 131,072-token window triggers above 114,688 tokens (87.5%).
+behavior. By default it uses the native compact trigger,
+`contextTokens > floor(contextWindow * compaction.triggerRatio)` with a default
+ratio of 0.9, so a 131,072-token window triggers above 117,964 tokens. Smaller
+windows trigger earlier to keep room for the next response. See
+[Compaction](compaction.md#when-it-triggers) for the exact rule, per-model ratios, and the legacy policy.
 With at least 8,000 context tokens and enough editable old text, CLM gets the first
 maintenance attempt at that threshold. No `/clm-compact` command,
 completed-plan signal, or reminder to the task model is needed.

@@ -127,27 +127,6 @@ export function highlightLines(content: string, language: string): string[] {
 	return lines;
 }
 
-/** Names a Markdown fence uses for languages the families know by extension. */
-const FENCE_ALIASES: Readonly<Record<string, string>> = {
-	javascript: "js",
-	typescript: "ts",
-	python: "py",
-	shell: "sh",
-	console: "sh",
-	ruby: "rb",
-	rust: "rs",
-	golang: "go",
-	kotlin: "kt",
-	csharp: "cs",
-	"c++": "cpp",
-	yml: "yaml",
-};
-
-/** A fenced code block in a reply, coloured with the file preview's token classes. */
-export function highlightFence(code: string, language: string): string {
-	return highlightLines(code, FENCE_ALIASES[language] ?? language).join("\n");
-}
-
 export interface CodeViewHtml {
 	/** `.code-line` rows (plus the truncation notice), for the `.code-view` element. */
 	readonly html: string;

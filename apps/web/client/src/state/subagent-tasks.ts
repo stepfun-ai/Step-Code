@@ -105,6 +105,7 @@ export function subagentTasks(
 				// does not have to re-add a transcript it may only partly read.
 				...subagentUsage(usage),
 				activeText: typeof item.activeText === "string" ? item.activeText : undefined,
+				activeThinking: typeof item.activeThinking === "string" ? item.activeThinking : undefined,
 				activeTool: typeof item.activeTool === "string" ? item.activeTool : undefined,
 				activeToolOutput: typeof item.activeToolOutput === "string" ? item.activeToolOutput : undefined,
 				error: typeof item.errorMessage === "string" && item.errorMessage ? item.errorMessage : undefined,

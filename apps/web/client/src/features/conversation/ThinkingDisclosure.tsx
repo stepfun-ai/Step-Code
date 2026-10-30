@@ -1,12 +1,13 @@
-import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
-import { useT } from "../../i18n";
-import { renderMarkdown } from "../../lib/markdown";
+import { memo, useEffect, useId, useRef, useState } from "react";
+import { useMarkdownLabels, useT } from "../../i18n";
 import { copyText } from "../../state/session";
 import { thinkingElapsed } from "../../state/thinking-timing";
 import type { ThinkingTimelineItem } from "../../state/types";
 import { Icon, MarkdownView } from "../../ui";
-import { useFadeIn, useSmoothText, useTypewriter } from "./streaming";
+import { useSmoothText, useTypewriter } from "./streaming";
 import { thinkingPreview } from "./thinking-preview";
+
+const copyCode = (code: string) => copyText(code, null);
 
 /** Folded by default inside the Simple process group; only an actual live block animates. */
 export const ThinkingDisclosure = memo(function ThinkingDisclosure({
@@ -26,14 +27,9 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 	// keyboard focus is on the row, so a sentence can be finished without it moving.
 	const [held, setHeld] = useState(false);
 	const wasRunning = useRef(running);
-	const bodyRef = useRef<HTMLDivElement>(null);
 	const id = useId();
 	const text = useSmoothText(item.content, running);
-	const code = t("code");
-	const copy = t("copy");
-	const table = t("markdownTable");
-	const html = useMemo(() => renderMarkdown(text, { code, copy, table }), [text, code, copy, table]);
-	useFadeIn(bodyRef, html, running);
+	const labels = useMarkdownLabels();
 	useEffect(() => {
 		if (wasRunning.current && !running) setExpanded(false);
 		wasRunning.current = running;
@@ -76,10 +72,11 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 			>
 				<div className="thinking-body">
 					<MarkdownView
-						ref={bodyRef}
 						className="message-body"
-						html={html}
-						onCopyCode={(value) => copyText(value, null)}
+						source={text}
+						labels={labels}
+						streaming={running}
+						onCopyCode={copyCode}
 						copiedLabel={t("copied")}
 					/>
 				</div>

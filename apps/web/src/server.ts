@@ -27,9 +27,7 @@ import {
 import { AccountProfileCache } from "./account.ts";
 import { WebAuth } from "./auth.ts";
 import { formatStartupBanner, launchUrl, resolveLaunchPort } from "./banner.ts";
-import { WebBrowser } from "./browser.ts";
 import { recordBrowserOpened, shouldOpenBrowser } from "./browser-open.ts";
-import { browserRoute } from "./browser-routes.ts";
 import { listWorkflowChildren, readChildTranscript } from "./child-sessions.ts";
 import {
 	DesktopOnboardingError,
@@ -333,7 +331,13 @@ const store = new WebSessionStore({ index: sessionSearch });
 let migrations: MigrationService | undefined;
 let onboarding: DesktopOnboardingStore | undefined;
 try {
-	migrations = new MigrationService({ agentDir: resolveStepAgentDir(), sessions: sessionImports, env: process.env });
+	migrations = new MigrationService({
+		agentDir: resolveStepAgentDir(),
+		sessions: sessionImports,
+		env: process.env,
+		// Migrated MCP servers are enabled: connect them now so the next message can use their tools.
+		onMcpChanged: () => resyncMcp(),
+	});
 } catch {
 	// Optional migration data must not prevent the host from serving existing chats.
 }
@@ -343,7 +347,6 @@ try {
 	// An unsafe or unavailable onboarding directory is reported by its API, never reset silently.
 }
 const workspaces = new WorkspaceRegistry(join(resolveStepAgentDir(), WORKSPACES_FILE));
-const embeddedBrowser = new WebBrowser([port, launchPort]);
 /** Rendered previews of workspace files, on their own origin (see site-preview.ts). */
 const sitePreview = new SitePreviewServer();
 const terminals = new WebTerminals();
@@ -783,6 +786,10 @@ function imageRefused(response: ServerResponse, file: WorkspaceFile, inputPath: 
 }
 
 const server = createServer(async (request, response) => {
+	// The client must never render inside a frame: the embedded browser's Web iframe could otherwise be
+	// navigated to the Host origin, where a same-origin sandboxed frame can lift its own sandbox.
+	response.setHeader("content-security-policy", "frame-ancestors 'none'");
+	response.setHeader("x-frame-options", "DENY");
 	try {
 		const method = request.method ?? "GET";
 		const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -816,7 +823,6 @@ const server = createServer(async (request, response) => {
 
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api" || parts[1] !== "v1") return error(response, 404, "Not found");
-		if (parts[2] === "browser") return await browserRoute(embeddedBrowser, parts.slice(3), request, response);
 		if (parts[2] === "terminals")
 			return await terminalRoute(terminals, parts.slice(3), url, request, response, knownWorkspace);
 		if (parts[2] === "voice") return await voiceRoute(voice, parts.slice(3), request, response);
@@ -1484,7 +1490,6 @@ const shutdown = async (): Promise<void> => {
 	let failed = false;
 	try {
 		const results = await Promise.allSettled([
-			embeddedBrowser.close(),
 			sitePreview.close(),
 			terminals.stopAll(),
 			voice.stopAll(),

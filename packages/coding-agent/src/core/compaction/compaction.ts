@@ -156,42 +156,13 @@ export interface CompactionSettings {
 	keepRecentTokens: number;
 }
 
-/**
- * Hard upper bound on summary output tokens, regardless of `reserveTokens`.
- * Chosen to sit under Anthropic's 32k-per-response cap while giving rich
- * long-horizon sessions enough room to emit a full 8-section handoff without
- * hitting the `stopReason:"length"` guard.
- */
-export const SUMMARY_OUTPUT_TOKENS_CEILING = 32000;
-
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
-	// Bumped from 16384: content-rich sessions were flirting with the
-	// 0.8 * 16384 = 13107 maxTokens cap and getting rejected on length-stop.
-	// 24576 gives ~19660-token headroom for the summary (or up to the ceiling
-	// on models that expose a larger native output cap), while still leaving
-	// ~keepRecentTokens for the retained tail.
+	// Reserve room for the next response when choosing the automatic trigger.
+	// Summary output is sized separately by the provider.
 	reserveTokens: 24576,
 	keepRecentTokens: 20000,
 };
-
-/**
- * Pick the summary output cap without letting the trigger reserve bypass output limits.
- * Valid existing budgets are preserved. A positive model limit and the summary
- * ceiling bound the final budget; an unknown model limit uses the reserve fraction
- * bounded by {@link SUMMARY_OUTPUT_TOKENS_CEILING}.
- */
-export function pickSummaryMaxTokens(
-	model: { readonly maxTokens: number },
-	reserveTokens: number,
-	reserveFraction: number,
-): number {
-	const reserveBudget = Math.floor(reserveFraction * reserveTokens);
-	const modelBudget = model.maxTokens > 0 ? Math.min(model.maxTokens, SUMMARY_OUTPUT_TOKENS_CEILING) : 0;
-	// reserveTokens also controls the trigger threshold; an early trigger must not expand the output cap.
-	const requestedBudget = Math.max(reserveBudget, modelBudget) || reserveBudget;
-	return Math.min(requestedBudget, modelBudget || SUMMARY_OUTPUT_TOKENS_CEILING);
-}
 
 // ============================================================================
 // Token calculation
@@ -618,7 +589,6 @@ export function getSummarizationFailure(
 
 function createSummarizationOptions(
 	model: Model<any>,
-	maxTokens: number,
 	apiKey: string | undefined,
 	headers: Record<string, string> | undefined,
 	env: Record<string, string> | undefined,
@@ -626,7 +596,7 @@ function createSummarizationOptions(
 	thinkingLevel: ThinkingLevel | undefined,
 	sessionId: string | undefined,
 ): SimpleStreamOptions {
-	const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers, env, sessionId };
+	const options: SimpleStreamOptions = { signal, apiKey, headers, env, sessionId };
 	if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
 		options.reasoning = thinkingLevel;
 	}
@@ -693,7 +663,8 @@ export async function completeSummarization(
 export async function generateSummary(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
+	// Retained for caller compatibility; the provider sizes summary output.
+	_reserveTokens: number | undefined,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
@@ -710,7 +681,7 @@ export async function generateSummary(
 		await generateSummaryWithUsage(
 			currentMessages,
 			model,
-			reserveTokens,
+			_reserveTokens,
 			apiKey,
 			headers,
 			signal,
@@ -856,7 +827,8 @@ async function completeSummaryWithOverflowRecovery(
 export async function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
+	// Retained for caller compatibility; the provider sizes summary output.
+	_reserveTokens: number | undefined,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
@@ -869,8 +841,6 @@ export async function generateSummaryWithUsage(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.8);
-
 	// Use update prompt if we have a previous summary, otherwise initial prompt
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (customInstructions) {
@@ -886,16 +856,7 @@ export async function generateSummaryWithUsage(
 		return promptText + basePrompt;
 	};
 
-	const completionOptions = createSummarizationOptions(
-		model,
-		maxTokens,
-		apiKey,
-		headers,
-		env,
-		signal,
-		thinkingLevel,
-		sessionId,
-	);
+	const completionOptions = createSummarizationOptions(model, apiKey, headers, env, signal, thinkingLevel, sessionId);
 
 	const response = await completeSummaryWithOverflowRecovery(
 		currentMessages,
@@ -911,7 +872,11 @@ export async function generateSummaryWithUsage(
 	if (response.stopReason === "aborted") {
 		throw new DOMException(response.errorMessage || "Summarization aborted", "AbortError");
 	}
-	const failure = getSummarizationFailure(response, "Summarization", maxTokens);
+	const failure = getSummarizationFailure(
+		response,
+		"Summarization",
+		getSummaryDiagnostics(response)?.observedMaxTokens,
+	);
 	if (failure) {
 		throw summaryFailure(failure, response);
 	}
@@ -1088,7 +1053,6 @@ export async function compact(
 		previousSummary,
 		fileOps,
 		activeSkills = [],
-		settings,
 	} = preparation;
 
 	// Generate summaries and merge into one
@@ -1103,7 +1067,7 @@ export async function compact(
 			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				model,
-				settings.reserveTokens,
+				undefined,
 				apiKey,
 				headers,
 				signal,
@@ -1122,7 +1086,6 @@ export async function compact(
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
 			model,
-			settings.reserveTokens,
 			apiKey,
 			headers,
 			env,
@@ -1141,7 +1104,7 @@ export async function compact(
 		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
-			settings.reserveTokens,
+			undefined,
 			apiKey,
 			headers,
 			signal,
@@ -1186,7 +1149,6 @@ export async function compact(
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	env?: Record<string, string>,
@@ -1197,14 +1159,13 @@ async function generateTurnPrefixSummary(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	// Smaller output budget for turn-prefix summaries: the suffix of the turn
-	// is retained verbatim, so the summary only needs to describe the prefix.
-	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.5);
+	// The suffix of the turn is retained verbatim, so the summary only needs
+	// to describe the prefix.
 	const response = await completeSummaryWithOverflowRecovery(
 		messages,
 		(conversation) => `<conversation>\n${conversation}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`,
 		model,
-		createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel, sessionId),
+		createSummarizationOptions(model, apiKey, headers, env, signal, thinkingLevel, sessionId),
 		"Turn prefix summarization",
 		streamFn,
 		retry,
@@ -1214,7 +1175,11 @@ async function generateTurnPrefixSummary(
 	if (response.stopReason === "aborted") {
 		throw new DOMException(response.errorMessage || "Turn prefix summarization aborted", "AbortError");
 	}
-	const failure = getSummarizationFailure(response, "Turn prefix summarization", maxTokens);
+	const failure = getSummarizationFailure(
+		response,
+		"Turn prefix summarization",
+		getSummaryDiagnostics(response)?.observedMaxTokens,
+	);
 	if (failure) {
 		throw summaryFailure(failure, response);
 	}

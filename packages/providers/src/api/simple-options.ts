@@ -9,7 +9,12 @@ import type {
 } from "../types.ts";
 import { estimateContextTokens } from "../utils/estimate.ts";
 
-const CONTEXT_SAFETY_TOKENS = 4096;
+/**
+ * Tokens left unused when a request's `max_tokens` is clamped to the remaining context.
+ * Callers that choose when to shrink context (for example, automatic compaction) must
+ * account for it: output room is `contextWindow - input - CONTEXT_SAFETY_TOKENS`.
+ */
+export const CONTEXT_SAFETY_TOKENS = 4096;
 const MIN_MAX_TOKENS = 1;
 
 export function clampMaxTokensToContext(model: Model<Api>, context: Context, maxTokens: number): number {

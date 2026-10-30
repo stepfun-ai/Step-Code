@@ -17,6 +17,13 @@ import { containedWorkspacePath } from "./files.ts";
  * page cannot ride the cookie into the Host either (`server.ts`). The embedded
  * browser's port block covers only the Host ports, so this origin stays reachable.
  *
+ * URLs name the host `localhost`, not `127.0.0.1` (the listener is still on
+ * 127.0.0.1, where Chromium resolves `localhost`). The client is served from
+ * 127.0.0.1, and a page on another port of the same host is same-site: in the
+ * Web embedded browser's iframe it shared the client's renderer process and main
+ * thread, so a busy animation dropped the conversation UI from 60 to ~25 fps.
+ * `localhost` is a different site, so the frame gets its own process.
+ *
  * Each workspace gets one unguessable token, minted on demand by an
  * authenticated Host route; the URL path is `/<token>/<workspace-relative path>`.
  * Without the token nothing is served. Only GET and HEAD, no directory listings,
@@ -194,7 +201,7 @@ export class SitePreviewServer {
 			this.tokens.set(root, token);
 			this.sites.set(token, root);
 		}
-		return `http://127.0.0.1:${port}/${token}/${encodeSitePath(path)}`;
+		return `http://localhost:${port}/${token}/${encodeSitePath(path)}`;
 	}
 
 	/** The port, starting the listener on first use. */

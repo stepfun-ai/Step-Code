@@ -12,15 +12,21 @@
 import { join } from "node:path";
 import {
 	AuthStorage,
+	createStepSettingsManager,
 	type DiscoveredModel,
 	discoverModels,
 	getStepAuthPath,
+	MAX_COMPACTION_TRIGGER_RATIO,
+	MIN_COMPACTION_TRIGGER_RATIO,
 	ModelDiscoveryError,
 	ModelRuntime,
 	normalizeProviderBaseUrl,
 	readModelsJsonProviders,
 	readStoredCredential,
+	resolveStepAgentDir,
+	resolveStepConfigDir,
 	resolveStepConfigRoot,
+	resolveStepHomeDir,
 	updateModelsJsonProvider,
 } from "@step-harness/coding-agent";
 import { SettingsError } from "./settings.ts";
@@ -76,6 +82,12 @@ export interface WebModelEntry {
 	readonly reasoning?: boolean;
 	/** The effort value sent for each level; `null` hides a level. */
 	readonly thinkingLevelMap?: ThinkingLevelMap;
+	/**
+	 * Fraction of the context window that triggers automatic compaction for this
+	 * model. Not part of `models.json`: it is `compaction.modelTriggerRatios`
+	 * in the user's `config.toml`, keyed by `provider/id`.
+	 */
+	readonly compactionThreshold?: number;
 }
 
 /** The levels a `thinkingLevelMap` may name (providers `ModelThinkingLevel`). */
@@ -121,6 +133,68 @@ function modelsJsonPath(): string {
 /** The credential file the kernel reads, honouring the host's own override. */
 function modelsAuthPath(): string {
 	return process.env.STEPCODE_AUTH_PATH?.trim() || join(resolveStepConfigRoot(), "auth.json");
+}
+
+/**
+ * The user-scope settings that hold `compaction.modelTriggerRatios`. Resolved
+ * from the home directory, like the other settings screens, so no project file
+ * is read or written: this page edits the user's own configuration.
+ */
+function userSettings() {
+	return createStepSettingsManager(resolveStepHomeDir(), resolveStepAgentDir(), {
+		configDirName: resolveStepConfigDir(),
+	});
+}
+
+/** The `compaction.modelTriggerRatios` key the kernel looks a model up by. */
+function triggerRatioKey(providerId: string, modelId: string): string {
+	return `${providerId}/${modelId}`;
+}
+
+/**
+ * Set this provider's per-model trigger ratios to exactly `ratios` (model id ->
+ * ratio). The table is rewritten under the settings file lock from what is on
+ * disk then, so keys of other providers (even ones the trigger policy ignores)
+ * and keys another process wrote meanwhile are kept. `action` names what the
+ * caller already did, for an error that arrives after it.
+ */
+async function replaceProviderTriggerRatios(
+	providerId: string,
+	ratios: ReadonlyMap<string, number>,
+	action: string,
+): Promise<void> {
+	const prefix = `${providerId}/`;
+	const failed = (message: string) =>
+		new SettingsError(500, `${action}, but its compaction thresholds could not be saved: ${message}`);
+	const settings = userSettings();
+	// Load-time reports (an invalid value elsewhere in the file) are not this
+	// write's failure; drop them so only errors from the write below remain.
+	settings.drainErrors();
+	try {
+		settings.updateGlobalCompactionModelTriggerRatios((existing) => {
+			const next = Object.fromEntries(Object.entries(existing).filter(([key]) => !key.startsWith(prefix)));
+			for (const [modelId, ratio] of ratios) next[triggerRatioKey(providerId, modelId)] = ratio;
+			return next;
+		});
+	} catch (error) {
+		throw failed((error as Error).message);
+	}
+	await settings.flush();
+	const [failure] = settings.drainErrors();
+	if (failure) throw failed(failure.error.message);
+}
+
+/**
+ * The user's per-model trigger ratios for the list. An unreadable or unwritable
+ * config must not hide the providers, so it reads as "no thresholds" here; the
+ * save path reports the same problem when the user tries to change one.
+ */
+function readTriggerRatios(): Record<string, number> {
+	try {
+		return userSettings().getGlobalCompactionModelTriggerRatios();
+	} catch {
+		return {};
+	}
 }
 
 function stringOf(value: unknown): string {
@@ -189,6 +263,7 @@ export async function hasUsableCustomModel(): Promise<boolean> {
 /** Every custom provider in `models.json`, sorted so the list is stable between reads. */
 export async function listModelProviders(): Promise<WebModelProvider[]> {
 	const stored = await storedCredentialIds();
+	const ratios = readTriggerRatios();
 	const providers: WebModelProvider[] = [];
 	for (const [id, config] of Object.entries(readModelsJsonProviders(modelsJsonPath()))) {
 		providers.push({
@@ -198,7 +273,11 @@ export async function listModelProviders(): Promise<WebModelProvider[]> {
 			api: stringOf(config.api),
 			models: (Array.isArray(config.models) ? config.models : [])
 				.map(entryOf)
-				.filter((entry): entry is WebModelEntry => entry !== undefined),
+				.filter((entry): entry is WebModelEntry => entry !== undefined)
+				.map((entry) => {
+					const ratio = ratios[triggerRatioKey(id, entry.id)];
+					return ratio === undefined ? entry : { ...entry, compactionThreshold: ratio };
+				}),
 			credential: stored.has(id) ? "stored" : stringOf(config.apiKey) ? "configured" : "none",
 		});
 	}
@@ -277,6 +356,35 @@ function parseModelEntries(input: unknown): DeclaredModel[] {
 			...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 		};
 	});
+}
+
+/**
+ * Each listed model's compaction threshold, by model id; a blank value means
+ * "use the default" and is left out. Called on input `parseModelEntries`
+ * already accepted, so every row is an object with a unique id.
+ */
+function parseCompactionThresholds(input: unknown): Map<string, number> {
+	const thresholds = new Map<string, number>();
+	if (!Array.isArray(input)) return thresholds;
+	for (const raw of input) {
+		if (!isRecord(raw)) continue;
+		const id = stringOf(raw.id);
+		const value = raw.compactionThreshold;
+		if (value === undefined || value === null || value === "") continue;
+		if (
+			typeof value !== "number" ||
+			!Number.isFinite(value) ||
+			value < MIN_COMPACTION_TRIGGER_RATIO ||
+			value > MAX_COMPACTION_TRIGGER_RATIO
+		) {
+			throw new SettingsError(
+				400,
+				`model '${id}' compaction threshold must be a number from ${MIN_COMPACTION_TRIGGER_RATIO} to ${MAX_COMPACTION_TRIGGER_RATIO}`,
+			);
+		}
+		thresholds.set(id, value);
+	}
+	return thresholds;
 }
 
 /**
@@ -425,6 +533,7 @@ export async function saveModelProvider(
 ): Promise<void> {
 	checkProviderId(id);
 	const declaration = parseModelProvider(input);
+	const thresholds = parseCompactionThresholds(input.models);
 	const key = stringOf(input.apiKey);
 	updateModelsJsonProvider(modelsJsonPath(), id, (existing) => {
 		if (options.replace && !existing) throw new SettingsError(404, `Model provider '${id}' does not exist`);
@@ -443,6 +552,10 @@ export async function saveModelProvider(
 	});
 	if (key) await setStoredApiKey(id, key);
 	else if (options.removeKey) await setStoredApiKey(id, undefined);
+	// Written last, like the key: a threshold without its provider would be
+	// unreachable, while a provider whose threshold failed to save still runs
+	// at the default and the error says so.
+	await replaceProviderTriggerRatios(id, thresholds, `Provider '${id}' was saved`);
 }
 
 /** Remove one provider and the key this page stored for it. */
@@ -455,6 +568,7 @@ export async function deleteModelProvider(id: string): Promise<void> {
 	// Only an api-key credential this page could have written is cleared; an
 	// account login for the same id would not be an api_key entry.
 	await setStoredApiKey(id, undefined);
+	await replaceProviderTriggerRatios(id, new Map(), `Provider '${id}' was removed`);
 }
 
 export interface DiscoverModelsInput {

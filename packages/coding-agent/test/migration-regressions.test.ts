@@ -63,11 +63,11 @@ describe("confirmed migration regressions", () => {
 		expect(sanitizedMcp({ command: "fixture", env: { KEY: value } }, false).config.env).toEqual({ KEY: value });
 	});
 	it.each([`\${KEY:-PRIVATE_FALLBACK}`, `\${KEY:-\${OTHER:-PRIVATE_FALLBACK}}`])(
-		"omits literal fallback %s without consent",
+		"omits literal fallback %s only when sensitive values are excluded",
 		async (value) => {
 			expect(
 				sanitizedMcp({ command: "fixture", env: { KEY: value }, http_headers: { Authorization: value } }, false),
-			).toMatchObject({ stripped: true, config: { enabled: false } });
+			).toMatchObject({ stripped: true, config: { enabled: true } });
 			expect(sanitizedMcp({ command: "fixture", env: { KEY: value } }, false).config.env).toBeUndefined();
 			expect(
 				sanitizedMcp({ command: "fixture", http_headers: { Authorization: value } }, false).config.http_headers,
@@ -80,23 +80,14 @@ describe("confirmed migration regressions", () => {
 				JSON.stringify({ mcpServers: { fixture: { command: "fixture", env: { KEY: value } } } }),
 			);
 			const c = (await service.scan({ kinds: ["mcp"] })).candidates[0]!;
-			const p = await service.preview({ candidateId: c.id });
+			const p = await service.preview({ candidateId: c.id, includeSensitiveValues: false });
 			expect(JSON.stringify(p)).not.toContain("PRIVATE_FALLBACK");
 			await complete(p);
 			expect(readFileSync(join(dirname(agent), "config.toml"), "utf8")).not.toContain("PRIVATE_FALLBACK");
-			// The first import now holds the name, so later previews must ask for import explicitly.
-			const explicit = await service.preview({ candidateId: c.id, action: "import", includeSensitiveValues: true });
-			expect(explicit.requiredAcknowledgements).toContain("sensitive-values");
-			const consent = await service.preview({
-				candidateId: c.id,
-				action: "import",
-				includeSensitiveValues: true,
-				targetName: "consented",
-			});
-			await expect(service.plan([{ previewId: consent.id, acknowledged: [] }])).rejects.toMatchObject({
-				code: "acknowledgement-required",
-			});
-			const plan = await service.plan([{ previewId: consent.id, acknowledged: ["sensitive-values"] }]);
+			// Sensitive values migrate by default, without a separate acknowledgement; the preview stays redacted.
+			const consent = await service.preview({ candidateId: c.id, action: "import", targetName: "consented" });
+			expect(consent.requiredAcknowledgements).not.toContain("sensitive-values");
+			const plan = await service.plan([{ previewId: consent.id, acknowledged: [] }]);
 			const job = await service.start({ planId: plan.id, digest: plan.digest, idempotencyKey: consent.id });
 			await expect.poll(() => service.getJob(job.id).status).toBe("completed");
 			expect(service.getJob(job.id).items[0]?.status).toBe("imported");

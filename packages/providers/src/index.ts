@@ -10,6 +10,7 @@ export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from
 export * from "./api/lazy.ts";
 export type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
 export type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
+export { CONTEXT_SAFETY_TOKENS } from "./api/simple-options.ts";
 export * from "./auth/context.ts";
 export * from "./auth/credential-store.ts";
 export * from "./auth/helpers.ts";

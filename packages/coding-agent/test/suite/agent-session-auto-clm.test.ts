@@ -40,6 +40,7 @@ async function setup(
 		native?: boolean;
 		alignNativeThreshold?: boolean;
 		contextWindow?: number;
+		triggerPolicy?: "v2" | "legacy";
 		tools?: AgentTool[];
 		extensions?: HarnessOptions["extensionFactories"];
 	} = {},
@@ -49,6 +50,7 @@ async function setup(
 		settings: {
 			compaction: {
 				...(options.mode === undefined ? {} : { contextProjection: options.mode }),
+				...(options.triggerPolicy === undefined ? {} : { triggerPolicy: options.triggerPolicy }),
 				enabled: options.native ?? true,
 				reserveTokens: options.contextWindow ? 2048 : 8192,
 				keepRecentTokens: options.contextWindow ? 4000 : 20000,
@@ -125,6 +127,15 @@ describe("automatic CLM maintenance", () => {
 		expect(h.session.getSessionStats().contextUsage!.tokens).toBeLessThan(beforeTokens);
 		expect(JSON.stringify(taskRequest?.messages)).toContain("NEW REQUIREMENT");
 		expect(JSON.stringify(taskRequest?.messages)).toContain("csv.reader");
+	});
+	it("treats an accepted automatic CLM edit as a success that ends a native failure streak", async () => {
+		const h = await setup({ alignNativeThreshold: true });
+		seed(h, "old completed observation\n".repeat(8800));
+		(h.session as unknown as { _thresholdCompactionFailures: number })._thresholdCompactionFailures = 2;
+		h.setResponses([(context) => automaticEdit(context), fauxAssistantMessage("done")]);
+		await h.session.prompt("NEW REQUIREMENT: preserve output order");
+		expect(h.session.getLiveContextStatus()!.revision).toBe(1);
+		expect((h.session as unknown as { _thresholdCompactionFailures: number })._thresholdCompactionFailures).toBe(0);
 	});
 	it("uses the same native threshold after a complete parallel tool turn", async () => {
 		let completed = 0;
@@ -210,8 +221,8 @@ describe("automatic CLM maintenance", () => {
 		expect(h.getPendingResponseCount()).toBe(0);
 	});
 
-	it("retains the existing eager native behavior when CLM is off", async () => {
-		const h = await setup({ alignNativeThreshold: true, mode: "off" });
+	it("retains the existing eager native behavior when CLM is off under the legacy trigger policy", async () => {
+		const h = await setup({ alignNativeThreshold: true, mode: "off", triggerPolicy: "legacy" });
 		h.setResponses([
 			fauxAssistantMessage("completed task output ".repeat(2900)),
 			fauxAssistantMessage("## Goal\nTask completed. Preserve its result."),
@@ -219,6 +230,23 @@ describe("automatic CLM maintenance", () => {
 		await h.session.prompt("complete this step without CLM");
 		expect(h.eventsOfType("auto_clm_start")).toHaveLength(0);
 		expect(h.eventsOfType("compaction_start")).toHaveLength(1);
+		expect(h.getPendingResponseCount()).toBe(0);
+	});
+	it("defers native threshold compaction to the next request when CLM is off", async () => {
+		const h = await setup({ alignNativeThreshold: true, mode: "off" });
+		h.setResponses([fauxAssistantMessage("completed task output ".repeat(2900))]);
+		await h.session.prompt("complete this step without CLM");
+		expect(h.eventsOfType("compaction_start")).toHaveLength(0);
+		h.setResponses([
+			fauxAssistantMessage("## Goal\nTask completed. Preserve its result."),
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("NEXT: continue from the summary");
+				return fauxAssistantMessage("continued");
+			},
+		]);
+		await h.session.prompt("NEXT: continue from the summary");
+		expect(h.eventsOfType("compaction_start")).toEqual([{ type: "compaction_start", reason: "threshold" }]);
+		expect(h.eventsOfType("auto_clm_start")).toHaveLength(0);
 		expect(h.getPendingResponseCount()).toBe(0);
 	});
 	it("runs before an ordinary user prompt with no manual compact or model reminder", async () => {

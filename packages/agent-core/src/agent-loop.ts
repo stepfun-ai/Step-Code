@@ -17,6 +17,7 @@ import type {
 	AgentContext,
 	AgentEvent,
 	AgentLoopConfig,
+	AgentLoopTurnUpdate,
 	AgentMessage,
 	AgentTool,
 	AgentToolCall,
@@ -173,6 +174,20 @@ function createAgentStream(): AgentLoopStream {
 	);
 }
 
+/** Apply a model/thinking replacement returned by a turn or request preparation hook. */
+function applyTurnUpdate(config: AgentLoopConfig, update: AgentLoopTurnUpdate): AgentLoopConfig {
+	return {
+		...config,
+		model: update.model ?? config.model,
+		reasoning:
+			update.thinkingLevel === undefined
+				? config.reasoning
+				: update.thinkingLevel === "off"
+					? undefined
+					: update.thinkingLevel,
+	};
+}
+
 /**
  * Main loop logic shared by agentLoop and agentLoopContinue.
  */
@@ -200,16 +215,7 @@ async function runLoop(
 				const nextTurnSnapshot = await config.prepareNextTurn?.(lastCompletedTurn);
 				if (nextTurnSnapshot) {
 					currentContext = nextTurnSnapshot.context ?? currentContext;
-					config = {
-						...config,
-						model: nextTurnSnapshot.model ?? config.model,
-						reasoning:
-							nextTurnSnapshot.thinkingLevel === undefined
-								? config.reasoning
-								: nextTurnSnapshot.thinkingLevel === "off"
-									? undefined
-									: nextTurnSnapshot.thinkingLevel,
-					};
+					config = applyTurnUpdate(config, nextTurnSnapshot);
 				}
 				// Preparation can be long-running (for example, compaction). Pick up steering
 				// queued while it ran. Only poll again if the earlier poll returned nothing;
@@ -221,14 +227,36 @@ async function runLoop(
 			}
 
 			// Process pending messages (inject before next assistant response)
-			if (pendingMessages.length > 0) {
-				for (const message of pendingMessages) {
+			const injectPending = async (messages: AgentMessage[]) => {
+				for (const message of messages) {
 					await emit({ type: "message_start", message });
 					await emit({ type: "message_end", message });
 					currentContext.messages.push(message);
 					newMessages.push(message);
 				}
+			};
+			const injectedSteering = pendingMessages.length > 0;
+			if (injectedSteering) {
+				await injectPending(pendingMessages);
 				pendingMessages = [];
+			}
+
+			if (config.beforeModelRequest) {
+				const requestSnapshot = await config.beforeModelRequest({
+					phase: lastCompletedTurn ? "follow-up" : "initial",
+					context: currentContext,
+					newMessages,
+				});
+				if (requestSnapshot) {
+					currentContext = requestSnapshot.context ?? currentContext;
+					config = applyTurnUpdate(config, requestSnapshot);
+				}
+				// The request hook can be long-running (for example, compaction). As after
+				// prepareNextTurn, pick up steering queued while it ran, but only when this
+				// turn has not delivered any yet so one-at-a-time mode stays one per turn.
+				if (lastCompletedTurn && !injectedSteering && !signal?.aborted) {
+					await injectPending((await config.getSteeringMessages?.()) || []);
+				}
 			}
 
 			// Stream assistant response

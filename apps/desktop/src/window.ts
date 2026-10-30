@@ -4,7 +4,9 @@
  * Security posture: context isolation, sandboxed renderer, no Node
  * integration. The only privileged surface is the preload bridge. Navigation
  * is pinned to the web server origin; other http(s) links open in the system
- * browser, and new windows are never created.
+ * browser, and new windows are never created. `<webview>` is enabled for the
+ * embedded browser only: `browser-guests.ts` refuses any webview without a
+ * lease the main process issued, and fixes every guest's preferences.
  */
 
 import {
@@ -16,7 +18,9 @@ import {
 	screen,
 	session,
 	shell,
+	type WebContents,
 } from "electron";
+import type { DesktopBrowserGuests } from "./browser-guests.ts";
 import { VERSION_ARGUMENT } from "./ipc-channels.ts";
 import { canvasColor } from "./pages.ts";
 import { isAllowedPermission, originOf } from "./permissions.ts";
@@ -37,6 +41,8 @@ export interface MainWindowOptions {
 	readonly icon: string;
 	/** Origin the window may navigate within; undefined while the server is down. */
 	readonly getServerOrigin: () => string | undefined;
+	/** Lease and policy owner for the embedded browser's `<webview>` guests. */
+	readonly browserGuests: DesktopBrowserGuests;
 }
 
 function openIfWeb(url: string): void {
@@ -83,8 +89,9 @@ function configureSession(getServerOrigin: () => string | undefined): void {
 	});
 }
 
-function installContextMenu(window: BrowserWindow): void {
-	window.webContents.on("context-menu", (_event, { isEditable, selectionText, editFlags }) => {
+/** Edit menu for the window's own page and for embedded-browser guests, which Electron gives none. */
+function installContextMenu(window: BrowserWindow, contents: WebContents = window.webContents): void {
+	contents.on("context-menu", (_event, { isEditable, selectionText, editFlags }) => {
 		const items: MenuItemConstructorOptions[] = [];
 		if (isEditable) {
 			items.push(
@@ -142,7 +149,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 			sandbox: true,
 			nodeIntegration: false,
 			webSecurity: true,
-			webviewTag: false,
+			webviewTag: true,
 			spellcheck: false,
 			additionalArguments: [`${VERSION_ARGUMENT}${options.version}`],
 		},
@@ -164,7 +171,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 	};
 	window.webContents.on("will-navigate", guard);
 	window.webContents.on("will-redirect", guard);
-	window.webContents.on("will-attach-webview", (event) => event.preventDefault());
+	options.browserGuests.bind(window, (guest) => installContextMenu(window, guest));
 	// The page title is the product name; keep it stable in the Dock / taskbar.
 	window.on("page-title-updated", (event) => event.preventDefault());
 

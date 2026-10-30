@@ -91,6 +91,8 @@ export {
 	generateSummary,
 	generateSummaryWithUsage,
 	getLastAssistantUsage,
+	MAX_COMPACTION_TRIGGER_RATIO,
+	MIN_COMPACTION_TRIGGER_RATIO,
 	prepareBranchEntries,
 	serializeConversation,
 	shouldCompact,

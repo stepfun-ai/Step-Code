@@ -166,6 +166,9 @@ function truncateForSummary(text: string, options: ToolResultTruncationOptions):
  * does not treat the history as a conversation to continue. Callers convert
  * agent messages via convertToLlm() first to handle custom message types.
  * Oversized tool results are truncated per {@link ToolResultTruncationOptions}.
+ * Thinking is omitted: replayed reasoning may no longer be part of the live
+ * provider context, so including it can make a summary request larger than the
+ * context being compacted. Visible text and tool executions retain the facts.
  */
 export function serializeConversation(
 	messages: Message[],
@@ -179,13 +182,10 @@ export function serializeConversation(
 			const content = contentText(msg.content, "");
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
-			const thinkingParts: string[] = [];
 			const toolCalls: string[] = [];
 
 			for (const block of msg.content) {
-				if (block.type === "thinking") {
-					thinkingParts.push(block.thinking);
-				} else if (block.type === "toolCall") {
+				if (block.type === "toolCall") {
 					const args = block.arguments as Record<string, unknown>;
 					const argsStr = Object.entries(args)
 						.map(([k, v]) => `${k}=${safeJsonStringify(v)}`)
@@ -194,9 +194,6 @@ export function serializeConversation(
 				}
 			}
 
-			if (thinkingParts.length > 0) {
-				parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
-			}
 			if (msg.content.some((block) => block.type === "text")) {
 				parts.push(`[Assistant]: ${contentText(msg.content)}`);
 			}

@@ -251,7 +251,7 @@ export async function generateBranchSummary(
 		models,
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ signal, maxTokens: 2048 },
+		{ signal },
 		retry,
 		callbacks,
 	);

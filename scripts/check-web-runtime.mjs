@@ -113,6 +113,13 @@ try {
 
 	const health = await request("/healthz");
 	if (health.body?.ok !== true) throw new Error("healthz failed");
+	// The embedded browser's Web iframe must never be able to show the Host itself.
+	const page = await request("/", {}, cookie);
+	for (const response of [health.response, page.response]) {
+		if (response.headers.get("content-security-policy") !== "frame-ancestors 'none'")
+			throw new Error("Host responses must refuse framing (frame-ancestors 'none')");
+		if (response.headers.get("x-frame-options") !== "DENY") throw new Error("Host responses must send X-Frame-Options: DENY");
+	}
 	const created = await request("/api/v1/sessions", {
 		method: "POST",
 		headers: { "content-type": "application/json" },

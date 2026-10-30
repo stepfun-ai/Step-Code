@@ -94,13 +94,26 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 			/>
 			<div className="migration-row-body">
 				<div className="migration-row-heading">
-					<Button
-						className="migration-row-title"
-						disabled={busy || draft?.loading}
-						onClick={() => void previewCandidate(candidate.id)}
-					>
-						{candidate.name}
-					</Button>
+					{candidate.kind === "rules" ? (
+						// A rule has no detail view: the row already shows its source and target.
+						<span className="migration-row-title">{candidate.name}</span>
+					) : (
+						<Button
+							className="migration-row-title"
+							disabled={busy || draft?.loading}
+							onClick={() =>
+								candidate.kind !== "mcp"
+									? void previewCandidate(candidate.id)
+									: !canSelect
+										? undefined
+										: draft?.selected
+											? deselectCandidate(candidate.id)
+											: void previewCandidate(candidate.id, {}, true, false)
+							}
+						>
+							{candidate.name}
+						</Button>
+					)}
 					{candidate.kind === "mcp" ? (
 						<span className="migration-meta">
 							({t(`migrationMcpTransport.${candidate.mcpTransport ?? "stdio"}`)})
