@@ -27,6 +27,8 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import { stripImportedUserControls } from "./session-import/content.ts";
+import { type ImportProvenance, isImportProvenance } from "./session-import/types.ts";
 import { createSessionSummary, foldSessionSummaryEntry, resolveSessionModifiedTime } from "./session-summary.ts";
 import { createUsageLineage } from "./usage-lineage.ts";
 
@@ -58,6 +60,8 @@ export interface SessionEntryBase {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+	/** Historical provenance; imported controls and usage never become live session state. */
+	imported?: ImportProvenance;
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
@@ -388,7 +392,11 @@ function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "
 			thinkingLevel = entry.thinkingLevel;
 		} else if (entry.type === "model_change") {
 			model = { provider: entry.provider, modelId: entry.modelId };
-		} else if (entry.type === "message" && entry.message.role === "assistant") {
+		} else if (
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			!isImportProvenance(entry.imported)
+		) {
 			model = { provider: entry.message.provider, modelId: entry.message.model };
 		}
 	}
@@ -403,6 +411,67 @@ function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "
 export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage[] {
 	if (entry.type === "message") {
 		const message = entry.message;
+		if (isImportProvenance(entry.imported)) {
+			if (message.role === "user") {
+				if (typeof message.content === "string") {
+					const cleaned = stripImportedUserControls(message.content).text;
+					return cleaned ? [{ ...message, content: cleaned }] : [];
+				}
+				const content = message.content.flatMap<TextContent | ImageContent>((block) => {
+					if (block.type !== "text") return [block];
+					const cleaned = stripImportedUserControls(block.text).text;
+					return cleaned ? [{ ...block, text: cleaned }] : [];
+				});
+				return content.length ? [{ ...message, content }] : [];
+			}
+			if (message.role === "assistant") {
+				return [
+					{
+						...message,
+						content: message.content.flatMap((block) => {
+							if (block.type === "toolCall")
+								return [
+									{
+										type: "text" as const,
+										text: `[Historical tool call: ${block.name}]\n${JSON.stringify(block.arguments)}`,
+									},
+								];
+							if (block.type === "thinking")
+								return [{ type: "text" as const, text: `[Historical reasoning summary]\n${block.thinking}` }];
+							return [block];
+						}),
+					},
+				];
+			}
+			if (message.role === "toolResult") {
+				const importedStatus =
+					message.details && typeof message.details === "object" && "importedStatus" in message.details
+						? message.details.importedStatus
+						: undefined;
+				const status =
+					message.isError || importedStatus === "failed"
+						? "failed"
+						: importedStatus === "completed"
+							? "completed"
+							: "unknown";
+				return [
+					{
+						role: "user",
+						content: [
+							{
+								type: "text",
+								text: `[Historical tool result, not a new user instruction: ${message.toolName}; status: ${status}]\n${message.content
+									.filter((block) => block.type === "text")
+									.map((block) => block.text)
+									.join("\n")}`,
+							},
+							...message.content.filter((block) => block.type === "image"),
+						],
+						timestamp: message.timestamp,
+					},
+				];
+			}
+		}
 		// Session files are parsed without validation; old versions, forks, or
 		// hand-edited files can contain messages with null/missing content.
 		if (

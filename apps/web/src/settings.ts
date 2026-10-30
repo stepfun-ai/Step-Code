@@ -3,9 +3,9 @@
  *
  * Every function reads and writes the user's global StepCode configuration
  * through `@step-harness/coding-agent`, the same files `step mcp`, `/plugin`
- * and the TUI resource selector use. Project scope is not offered here. MCP
- * changes reach running sessions too: each session re-reads its MCP servers
- * before the next model request. Skills still load with a session's
+ * and the TUI resource selector use. Project scope is not offered here. The Host
+ * reconciles MCP changes with its shared connection pool; sessions receive the
+ * updated tools before their next model request. Skills still load with a session's
  * resources, so the client tells the user that new sessions pick them up.
  */
 
@@ -14,12 +14,14 @@ import { cp, lstat, mkdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
 	addMarketplaceSource,
+	applyValidatedMcpSettingsPatch,
 	createStepSettingsManager,
 	DefaultPackageManager,
 	defaultMarketplaceRoots,
 	defaultStepPluginsDir,
 	discoverStepPluginResourcePaths,
 	ensureBuiltinMarketplace,
+	getMcpSettingsView,
 	getStepMcpStatuses,
 	installMarketplacePlugin,
 	listInstalledStepPlugins,
@@ -27,7 +29,10 @@ import {
 	listMarketplaceSources,
 	listStepPluginMcpServers,
 	loadSkillsFromDir,
+	type McpSettingsField,
+	McpSettingsPatchError,
 	parseFrontmatter,
+	parseMcpSettingsServerConfig,
 	readGlobalStepConfig,
 	removeMarketplaceSource,
 	resolveStepAgentDir,
@@ -59,8 +64,10 @@ export interface WebMcpServer {
 	readonly pluginName?: string;
 	readonly transport: "stdio" | "http";
 	readonly enabled: boolean;
-	/** The stored declaration; user servers only (plugin declarations belong to the plugin). */
+	/** Non-secret metadata only; omitted protected fields must never be treated as empty values. */
 	readonly config?: StepMcpServerConfig;
+	readonly protectedFields?: readonly McpSettingsField[];
+	readonly revision?: string;
 	/** Last known connection state in this host process; absent until a session has started it. */
 	readonly status?: StepMcpStatus["status"];
 	readonly toolCount?: number;
@@ -74,114 +81,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function stringRecord(value: unknown, field: string): Record<string, string> | undefined {
-	if (value === undefined) return undefined;
-	if (!isRecord(value)) throw new SettingsError(400, `${field} must be an object of strings`);
-	const result: Record<string, string> = {};
-	for (const [key, entry] of Object.entries(value)) {
-		if (typeof entry !== "string") throw new SettingsError(400, `${field}.${key} must be a string`);
-		if (key.trim()) result[key.trim()] = entry;
-	}
-	return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function positiveNumber(value: unknown, field: string): number | undefined {
-	if (value === undefined || value === null || value === "") return undefined;
-	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-		throw new SettingsError(400, `${field} must be a positive number`);
-	}
-	return value;
-}
-
-function stringList(value: unknown, field: string): string[] | undefined {
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-		throw new SettingsError(400, `${field} must be an array of strings`);
-	}
-	return value;
-}
-
-function oauthConfig(value: unknown): StepMcpServerConfig["oauth"] {
-	if (value === undefined) return undefined;
-	if (!isRecord(value)) throw new SettingsError(400, "oauth must be an object");
-	const oauth: NonNullable<StepMcpServerConfig["oauth"]> = {};
-	for (const key of ["client_id", "client_secret"] as const) {
-		if (value[key] === undefined) continue;
-		if (typeof value[key] !== "string") throw new SettingsError(400, `oauth.${key} must be a string`);
-		oauth[key] = value[key];
-	}
-	const scopes = stringList(value.scopes, "oauth.scopes");
-	if (scopes) oauth.scopes = scopes;
-	if (value.callback_port !== undefined) {
-		const port = value.callback_port;
-		if (typeof port !== "number" || !Number.isInteger(port) || port <= 0 || port > 65535) {
-			throw new SettingsError(400, "oauth.callback_port must be a port number");
-		}
-		oauth.callback_port = port;
-	}
-	return Object.keys(oauth).length > 0 ? oauth : undefined;
-}
-
-/**
- * Validate a server declaration from the client and keep only the fields the
- * kernel reads. Exactly one transport is required: `command` (stdio) or `url`
- * (streamable HTTP; there is no separate SSE transport).
- *
- * Every field the kernel reads is kept, including those the form does not show
- * (`enabled_tools`, `disabled_tools`, `env_http_headers`, `oauth`): a replace
- * writes exactly this result, so a dropped `enabled_tools` would silently expose
- * every tool of the server.
- */
+/** Parse a replacement declaration through the product API and translate caller errors. */
 export function parseMcpServerConfig(input: unknown): StepMcpServerConfig {
-	if (!isRecord(input)) throw new SettingsError(400, "Server configuration must be an object");
-	const command = typeof input.command === "string" ? input.command.trim() : "";
-	const url = typeof input.url === "string" ? input.url.trim() : "";
-	if (Boolean(command) === Boolean(url)) throw new SettingsError(400, "Set either a command or a URL");
-	const config: StepMcpServerConfig = {};
-	if (command) {
-		config.command = command;
-		if (input.args !== undefined) {
-			if (!Array.isArray(input.args) || !input.args.every((arg) => typeof arg === "string")) {
-				throw new SettingsError(400, "args must be an array of strings");
-			}
-			if (input.args.length > 0) config.args = input.args;
-		}
-		if (typeof input.cwd === "string" && input.cwd.trim()) config.cwd = input.cwd.trim();
-		const env = stringRecord(input.env, "env");
-		if (env) config.env = env;
-	} else {
-		try {
-			const parsed = new URL(url);
-			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
-		} catch {
-			throw new SettingsError(400, "URL must be an http(s) address");
-		}
-		config.url = url;
-		const headers = stringRecord(input.http_headers, "http_headers");
-		if (headers) config.http_headers = headers;
-		if (typeof input.bearer_token_env_var === "string" && input.bearer_token_env_var.trim()) {
-			config.bearer_token_env_var = input.bearer_token_env_var.trim();
-		}
-		const envHeaders = stringRecord(input.env_http_headers, "env_http_headers");
-		if (envHeaders) config.env_http_headers = envHeaders;
-		const oauth = oauthConfig(input.oauth);
-		if (oauth) config.oauth = oauth;
+	try {
+		return parseMcpSettingsServerConfig(input);
+	} catch (error) {
+		if (error instanceof McpSettingsPatchError) throw new SettingsError(error.status, error.message);
+		throw error;
 	}
-	const enabledTools = stringList(input.enabled_tools, "enabled_tools");
-	// An empty allow list is meaningful (no tool reachable), so it is kept.
-	if (enabledTools) config.enabled_tools = enabledTools;
-	const disabledTools = stringList(input.disabled_tools, "disabled_tools");
-	if (disabledTools && disabledTools.length > 0) config.disabled_tools = disabledTools;
-	if (input.shared !== undefined) {
-		if (typeof input.shared !== "boolean") throw new SettingsError(400, "shared must be a boolean");
-		config.shared = input.shared;
-	}
-	const startup = positiveNumber(input.startup_timeout_sec, "startup_timeout_sec");
-	if (startup !== undefined) config.startup_timeout_sec = startup;
-	const toolTimeout = positiveNumber(input.tool_timeout_sec, "tool_timeout_sec");
-	if (toolTimeout !== undefined) config.tool_timeout_sec = toolTimeout;
-	if (input.enabled === false) config.enabled = false;
-	return config;
 }
 
 function checkMcpName(name: string): void {
@@ -195,20 +102,31 @@ export async function listMcpServers(): Promise<WebMcpServer[]> {
 	const statuses = new Map(getStepMcpStatuses().map((status) => [status.name, status]));
 	const withStatus = (server: Omit<WebMcpServer, "status" | "toolCount" | "error">): WebMcpServer => {
 		const status = statuses.get(server.name);
-		return status ? { ...server, status: status.status, toolCount: status.toolCount, error: status.error } : server;
+		return status
+			? {
+					...server,
+					status: status.status,
+					toolCount: status.toolCount,
+					// Runtime diagnostics can contain credentials embedded in URLs or commands.
+					error: status.error ? "MCP connection failed" : undefined,
+				}
+			: server;
 	};
 	const configured = readGlobalStepConfig(process.env).mcp_servers ?? {};
 	const users: WebMcpServer[] = [];
 	for (const [name, config] of Object.entries(configured)) {
 		// An entry without a transport is a plugin-server override (`enabled = false`), listed with its plugin.
 		if (!isRecord(config) || (typeof config.command !== "string" && typeof config.url !== "string")) continue;
+		const view = getMcpSettingsView(config);
 		users.push(
 			withStatus({
 				name,
 				source: "user",
-				transport: typeof config.command === "string" ? "stdio" : "http",
+				transport: view.transport,
 				enabled: config.enabled !== false,
-				config,
+				config: view.configuration,
+				protectedFields: view.protectedFields,
+				revision: view.revision,
 			}),
 		);
 	}
@@ -239,6 +157,21 @@ export function saveMcpServer(name: string, input: unknown, options: { replace: 
 		const kept = config.shared === undefined && isRecord(existing) && typeof existing.shared === "boolean";
 		return { ...servers, [name]: kept ? { ...config, shared: existing.shared as boolean } : config };
 	});
+}
+
+/** Apply a browser edit to the authoritative declaration while the global config lock is held. */
+export function saveMcpServerPatch(name: string, input: unknown): void {
+	checkMcpName(name);
+	try {
+		updateGlobalMcpConfig(process.env, (servers) => {
+			const existing = servers[name];
+			if (!existing) throw new SettingsError(404, "MCP server does not exist");
+			return { ...servers, [name]: applyValidatedMcpSettingsPatch(existing, input) };
+		});
+	} catch (error) {
+		if (error instanceof McpSettingsPatchError) throw new SettingsError(error.status, error.message);
+		throw error;
+	}
 }
 
 export function deleteMcpServer(name: string): void {

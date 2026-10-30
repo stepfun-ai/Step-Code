@@ -651,7 +651,10 @@ function goalRoundOf(entry: SessionEntry): number | undefined {
 
 export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 	// Only assistant turns carry usage; other message kinds have none to report.
-	const usage = entry.type === "message" && entry.message.role === "assistant" ? entry.message.usage : undefined;
+	const usage =
+		entry.type === "message" && entry.message.role === "assistant" && !entry.imported
+			? entry.message.usage
+			: undefined;
 	const notification =
 		entry.type === "custom_message" ? projectSubagentNotification(entry.customType, entry.details) : undefined;
 	// The command echo's text rides the custom entry's data.
@@ -661,6 +664,7 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		id: entry.id,
 		type: entry.type,
 		timestamp: entry.timestamp,
+		...(entry.imported ? { imported: entry.imported } : {}),
 		...(entry.type === "message" ? { message: entry.message } : {}),
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
@@ -742,6 +746,8 @@ export function hasInterruptedTurn(entries: readonly SessionEntry[], running: bo
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
 		if (entry?.type !== "message") continue;
+		// Imported tails are source snapshots, not evidence of a stopped native turn.
+		if (entry.imported) return false;
 		const message = entry.message;
 		if (message.role === "user") return true;
 		if (message.role === "toolResult") return hasUnansweredToolCall(entries, index);

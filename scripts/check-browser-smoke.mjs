@@ -57,7 +57,7 @@ function checkWebClientSurface() {
     "/model",
     "/files",
     "/api/v1/logout",
-    "renderMarkdown",
+    "MarkdownContent",
     "workspaceBrowserModal",
     "stepcode.theme",
     "stepcode.locale",

@@ -99,7 +99,7 @@ test("the toggle renders the draft as Markdown and Escape returns to the editor"
 		assert.equal(await preview(page).locator("em").textContent(), "斜体");
 		assert.equal(await preview(page).locator("del").textContent(), "删除");
 		assert.equal(await preview(page).locator("h2").textContent(), "标题");
-		assert.equal(await preview(page).locator(".md-li").textContent(), "列表");
+		assert.equal(await preview(page).locator("li").textContent(), "列表");
 		// The editor keeps the text (only hidden), so the send path still reads it.
 		assert.equal(await promptValue(page), draft);
 		await page.waitForFunction(() => document.activeElement?.classList.contains("prompt-preview"));

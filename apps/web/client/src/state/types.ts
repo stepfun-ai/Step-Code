@@ -7,6 +7,32 @@
 
 import type { TagColor } from "../i18n/messages";
 
+export type {
+	MigrationAcknowledgement,
+	MigrationAction,
+	MigrationCandidate,
+	MigrationDiagnostic,
+	MigrationHolding,
+	MigrationItemResult,
+	MigrationJob,
+	MigrationKind,
+	MigrationLocation,
+	MigrationPlan,
+	MigrationPreview,
+	MigrationPreviewRequest,
+	MigrationReadiness,
+	MigrationRecoveryPreview,
+	MigrationRuleImpact,
+	MigrationScanRequest,
+	MigrationScanResult,
+	MigrationScope,
+	MigrationSelection,
+	MigrationSource,
+	MigrationSourceReport,
+	MigrationStartRequest,
+	MigrationTargetRequest,
+} from "./migration-types";
+
 /** Host-owned interactive shells; independent of Agent tool execution. */
 export interface TerminalInfo {
 	readonly id: string;
@@ -149,6 +175,44 @@ export interface SessionEntry {
 	/** Lifecycle-only metadata on custom_message / agent-notification entries. */
 	readonly details?: unknown;
 	readonly [key: string]: unknown;
+}
+
+export interface ImportCandidate {
+	readonly id: string;
+	readonly source: "codex" | "claude-code" | "workbuddy" | "qoder";
+	readonly sessionId: string;
+	readonly title: string;
+	readonly cwd: string;
+	readonly modified: string;
+	readonly archived: boolean;
+	readonly version: string;
+	readonly sourcePath?: string;
+}
+
+export interface ImportPreview extends ImportCandidate {
+	readonly fingerprint: string;
+	readonly messageCount: number;
+	readonly toolCount: number;
+	readonly warnings: readonly { readonly code: string; readonly count: number }[];
+	readonly excerpt: string;
+}
+
+export interface ImportJob {
+	readonly id: string;
+	readonly createdAt: string;
+	readonly status: "running" | "completed" | "cancelled" | "interrupted";
+	readonly total: number;
+	readonly results: readonly {
+		readonly candidateId: string;
+		readonly source?: "codex" | "claude-code" | "workbuddy" | "qoder";
+		readonly sourcePath?: string;
+		readonly path?: string;
+		readonly title?: string;
+		readonly status: "imported" | "skipped" | "failed";
+		readonly sessionId?: string;
+		readonly error?: string;
+		readonly warning?: string;
+	}[];
 }
 
 /** A row of GET /api/v1/sessions. Snapshots are merged into these rows too. */
@@ -418,7 +482,7 @@ export interface MessageTimelineItem {
 	readonly promptCommand?: boolean;
 }
 
-export type ToolState = "pending" | "completed" | "failed";
+export type ToolState = "pending" | "completed" | "failed" | "unknown";
 
 export interface ThinkingTiming {
 	readonly startedAt: number;
@@ -438,6 +502,7 @@ export interface ThinkingTimelineItem {
 }
 
 export interface ToolTimelineItem {
+	readonly imported?: boolean;
 	readonly itemId: string;
 	readonly kind: "tool";
 	readonly state: ToolState;
@@ -726,6 +791,15 @@ export interface BrowserLoginState {
 	readonly error?: string;
 }
 
+export interface DesktopOnboardingState {
+	readonly schemaVersion: 1;
+	readonly flowVersion: 1;
+	readonly revision: number;
+	readonly status: "unseen" | "offered" | "in_progress" | "completed" | "skipped";
+	readonly lastJobId?: string;
+	readonly updatedAt: string;
+}
+
 export interface BootstrapPayload {
 	readonly cwd: string;
 	/**
@@ -739,6 +813,9 @@ export interface BootstrapPayload {
 	readonly login?: LoginReport | null;
 	/** A custom models.json model runs without a Step credential, so no sign-in gate is needed. */
 	readonly customModels?: boolean;
+	readonly migrationAvailable?: boolean;
+	readonly migrationSuggested?: boolean;
+	readonly desktopOnboarding?: DesktopOnboardingState;
 	/** The running build's product version, e.g. `0.1.0`. */
 	readonly version?: string;
 	/** When the installed build was produced; absent for a source checkout. */
@@ -850,6 +927,10 @@ export interface SettingsMcpServer {
 	readonly transport: "stdio" | "http";
 	readonly enabled: boolean;
 	readonly config?: McpServerConfig;
+	/** Fields omitted from config because their stored values must not be sent to the browser. */
+	readonly protectedFields?: readonly (keyof McpServerConfig)[];
+	/** Revision of the full declaration, including protected values and permission lists. */
+	readonly revision?: string;
 	readonly status?: McpServerStatus["status"];
 	readonly toolCount?: number;
 	readonly error?: string;

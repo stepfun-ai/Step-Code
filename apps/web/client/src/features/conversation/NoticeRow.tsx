@@ -13,8 +13,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { useT } from "../../i18n";
-import { renderMarkdown } from "../../lib/markdown";
+import { useMarkdownLabels, useT } from "../../i18n";
 import { copyText, dismissNotice } from "../../state/session";
 import type { NoticeItem } from "../../state/types";
 import { Button, IconButton, MarkdownView, Tooltip } from "../../ui";
@@ -30,26 +29,23 @@ function collapsedHeadline(notice: NoticeItem): string | null {
 	return lines[0] ?? "";
 }
 
+const copyCode = (code: string) => copyText(code, null);
+
 export function NoticeRow({ notice }: { readonly notice: NoticeItem }) {
 	const t = useT();
+	const labels = useMarkdownLabels();
 	const [expanded, setExpanded] = useState(false);
 	const headline = useMemo(() => collapsedHeadline(notice), [notice]);
-	const html = useMemo(
-		() =>
-			notice.markdown
-				? renderMarkdown(notice.text, { code: t("code"), copy: t("copy"), table: t("markdownTable") })
-				: "",
-		[notice.markdown, notice.text, t],
-	);
 	const folded = headline !== null && !expanded;
 	return (
 		<section className="notice-row" data-level={notice.level} data-notice-id={notice.id}>
 			<div className="notice-content">
 				{notice.markdown ? (
 					<MarkdownView
-						html={html}
+						source={notice.text}
+						labels={labels}
 						className="notice-markdown"
-						onCopyCode={(code) => copyText(code, null)}
+						onCopyCode={copyCode}
 						copiedLabel={t("copied")}
 					/>
 				) : (

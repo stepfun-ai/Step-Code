@@ -9,6 +9,7 @@ import { readInitialTagGroups } from "./tag-groups";
 import type {
 	AccountReport,
 	Attachment,
+	DesktopOnboardingState,
 	DirectoryListing,
 	DraftModels,
 	LoginReport,
@@ -150,7 +151,7 @@ export interface PreviewState {
 }
 
 /** Pages of the settings view, in menu order. */
-export type SettingsPage = "general" | "account" | "appearance" | "models" | "plugins" | "mcp" | "skills";
+export type SettingsPage = "general" | "account" | "appearance" | "models" | "plugins" | "mcp" | "skills" | "migration";
 
 /**
  * What a settings editor edits. `mcp` with a name edits that server, without one
@@ -194,6 +195,7 @@ export interface UiState {
 	readonly branchCreateOpen: boolean;
 	/** `#workspaceBrowserModal` visible */
 	readonly workspaceBrowserOpen: boolean;
+	readonly workspaceBrowserPurpose: "workspace" | "resource";
 	readonly workspaceRemoval: { readonly path: string; readonly pending: boolean } | null;
 	/** `#settingsView`: the open settings page, or null while the workspace shows. */
 	readonly settingsPage: SettingsPage | null;
@@ -220,6 +222,7 @@ export interface UiState {
 	readonly logoutConfirm: { readonly pending: boolean } | null;
 	/** `#loginGate` visible: no model can run yet (no Step credential, no custom model), and the app waits behind it. */
 	readonly loginRequired: boolean;
+	readonly migrationInvitation: boolean;
 	/** Incremented to ask the composer to focus `#prompt` (legacy `$("#prompt").focus()`). */
 	readonly promptFocusRequest: number;
 	/** The user message being rewritten in place: its entry, the fork point, and its text. */
@@ -374,6 +377,8 @@ export interface AppState {
 	readonly currentView: ConversationView;
 	readonly currentFilter: TagColor | null;
 	readonly login: LoginReport | null;
+	readonly desktopOnboarding: DesktopOnboardingState | null;
+	readonly migrationAvailable: boolean;
 	/** The signed-in account's name and avatar; null until the host answers. */
 	readonly account: AccountReport | null;
 	/** The in-page workspace browser (legacy workspaceBrowserPath/Parent, workspaceDirectories). */
@@ -469,6 +474,8 @@ export function createInitialState(): AppState {
 		currentView: "project",
 		currentFilter: null,
 		login: null,
+		desktopOnboarding: null,
+		migrationAvailable: false,
 		account: null,
 		workspaceBrowser: { path: "", parent: "", directories: [] },
 		directoryPicker: "browse",
@@ -509,6 +516,7 @@ export function createInitialState(): AppState {
 			branchPopoverOpen: false,
 			branchCreateOpen: false,
 			workspaceBrowserOpen: false,
+			workspaceBrowserPurpose: "workspace",
 			workspaceRemoval: null,
 			settingsPage: null,
 			settingsEditor: null,
@@ -521,6 +529,7 @@ export function createInitialState(): AppState {
 			renameSession: null,
 			logoutConfirm: null,
 			loginRequired: false,
+			migrationInvitation: false,
 			promptFocusRequest: 0,
 			editingPrompt: null,
 			midView: null,

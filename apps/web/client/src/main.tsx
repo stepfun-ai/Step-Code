@@ -5,6 +5,8 @@
 // (font-display: swap, per-script unicode-range), so they never block paint.
 import "@fontsource-variable/geist/wght.css";
 import "@fontsource-variable/geist-mono/wght.css";
+// KaTeX's fonts and layout for math in rendered Markdown (ui/MarkdownView).
+import "katex/dist/katex.min.css";
 import "./styles/global.css";
 import "./ui";
 

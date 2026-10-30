@@ -140,14 +140,22 @@
 .main:has(.empty-state):not(:has(.stream[data-opening])) > .composer-zone {
 	flex: 1 1 auto;
 }
-/* The mark leads the question on one line, centred on the column, just above the composer. */
+.empty-conversation {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: flex-end;
+	flex: 1;
+	padding: 0 2px 16px;
+}
+/* The mark and question stay centred on one line, independently of the migration shortcut. */
 .empty-state {
 	display: flex;
 	align-items: flex-end;
 	justify-content: center;
 	gap: 14px;
-	flex: 1;
-	padding: 0 2px 16px;
+	flex: 0 0 auto;
+	width: 100%;
 	color: var(--ink-2);
 	text-align: center;
 }
@@ -196,6 +204,21 @@
 		transform: translateY(6px);
 	}
 }
+
+.empty-session-import {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 20px;
+	padding: 8px 12px;
+	border-radius: var(--radius-control);
+	color: var(--ink-2);
+	font-size: 13px;
+	text-align: left;
+	transition: background-color var(--fast), color var(--fast);
+}
+.empty-session-import:hover { background: var(--hover); color: var(--ink); }
+.empty-session-import:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
 
 .message {
 	display: flex;
@@ -459,6 +482,7 @@
 /* The Markdown body is block-level, so the badge floats to stay on the first
  * text line, in front of the words — the input box's chip position. */
 .message-body--invoked > .message-skill {
+	float: left;
 	margin: 0 6px 0 0;
 }
 .message .message-md {
@@ -553,23 +577,9 @@
 @media (prefers-reduced-motion: reduce) {
 	.thinking-disclosure,
 	.tool-disclosure,
-	.thinking-chevron,
-	.thinking .stream-fade {
+	.thinking-chevron {
 		transition: none;
 		animation: none;
-	}
-}
-
-/* Text the live reply just added fades in (features/conversation/streaming.ts sets a negative delay per chunk). */
-.stream-fade {
-	animation: stream-fade 420ms ease-out both;
-}
-@keyframes stream-fade {
-	from {
-		opacity: 0;
-	}
-	to {
-		opacity: 1;
 	}
 }
 

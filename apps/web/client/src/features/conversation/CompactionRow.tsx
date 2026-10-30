@@ -11,9 +11,8 @@
  * banner: the same glyph, the same muted metadata, one chevron.
  */
 
-import { useMemo, useState } from "react";
-import { useT } from "../../i18n";
-import { renderMarkdown } from "../../lib/markdown";
+import { useState } from "react";
+import { useMarkdownLabels, useT } from "../../i18n";
 import type { CompactionTimelineItem } from "../../state/types";
 import { Icon, MarkdownView } from "../../ui";
 
@@ -71,15 +70,7 @@ export function CompactionRunningRow() {
 export function CompactionRow({ item }: { readonly item: CompactionTimelineItem }) {
 	const t = useT();
 	const [expanded, setExpanded] = useState(false);
-	const html = useMemo(
-		() =>
-			renderMarkdown(item.summary, {
-				code: t("code"),
-				copy: t("copy"),
-				table: t("markdownTable"),
-			}),
-		[item.summary, t],
-	);
+	const labels = useMarkdownLabels();
 	const tokens = Number.isFinite(item.tokensBefore) ? (item.tokensBefore as number).toLocaleString() : "";
 	const status =
 		item.removedMessages > 0
@@ -89,7 +80,7 @@ export function CompactionRow({ item }: { readonly item: CompactionTimelineItem 
 		<section className="compaction-row" data-expanded={expanded || undefined}>
 			<CompactionHeader status={status} expanded={expanded} onToggle={() => setExpanded((value) => !value)} />
 			<div className="compaction-body" hidden={!expanded}>
-				<MarkdownView html={html} className="compaction-summary" />
+				<MarkdownView source={item.summary} labels={labels} className="compaction-summary" />
 			</div>
 		</section>
 	);

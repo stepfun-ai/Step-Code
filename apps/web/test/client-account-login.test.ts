@@ -170,7 +170,8 @@ test("the sign-in gate waits only when no model can run", async () => {
 	const signedOut = { ...report, source: "none", configured: false, session: { state: "missing" as const } };
 	const gate = (input: Partial<Parameters<typeof signInGateNeeded>[0]>) =>
 		signInGateNeeded({ desktop: true, signedOut: false, login: signedOut, customModels: false, ...input });
-	assert.equal(gate({}), true, "Desktop with nothing to run asks");
+	assert.equal(gate({}), false, "Desktop startup never waits for an account before local migration");
+	assert.equal(gate({ signedOut: true }), false, "Desktop stays usable after sign-out too");
 	assert.equal(gate({ customModels: true }), false, "custom models need no Step account");
 	assert.equal(gate({ login: report }), false, "a Step credential needs no gate");
 	assert.equal(gate({ login: null }), false, "no report, no gate");

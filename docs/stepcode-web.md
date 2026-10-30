@@ -18,6 +18,16 @@ server binds to `127.0.0.1` by default. `POST /auth/logout` expires the page
 cookie; re-entry then requires a fresh terminal launch link. That is page access  
 only; the Step sign-out is `POST /api/v1/logout` (see Account below).
 
+### Local migration
+
+Desktop and Web use the shared offline migration service for sessions, skills,
+ordinary global MCP, prompt templates and instruction rules. The first-use
+invitation is Desktop-only; settings provides the later entry. Local migration
+requires the Host launch cookie but no Step account, model credential or model
+request. See [Desktop local migration](desktop-migration.md) for supported
+sources, explicit project selection, immutable consent, cancellation and guarded
+rules recovery, and [OpenAPI](../apps/web/openapi.yaml) for the wire contracts.
+
 The credential lives in `~/.stepcode/auth.json` (`STEPCODE_AUTH_PATH` overrides  
 it). It is written by `step login` in a terminal or by the sign-in dialog of  
 Web and Desktop (see "Sign-in dialog" below), in the same shape, so CLI, Web and  
@@ -47,7 +57,7 @@ credential itself is never part of the response. A separate Account settings
 page shows the channel, region and credential verdict. Optional `userId` is a  
 bounded stored OAuth UID matching the kernel's valid checked account; profile  
 labels and environment keys never stand in for an identity. General settings  
-retain language only. Account uses the DFSC Step platform mark and four  
+retain language only. Account uses the Step platform mark and four\
 channel choices, without balance or allowance placeholders.
 
 The Account page reuses the existing browser/API-key sign-in routes, including  
@@ -218,7 +228,10 @@ transcript already renders them. It is false while a turn runs or is starting, s
 a prompt waiting for its first token is not called interrupted. The client draws
 it as a quiet divider under the transcript. Because it is read from the file, a
 reopened session says the same thing a live page did, instead of the run silently
-disappearing.
+disappearing. Imported message tails are source snapshots with unobserved outcomes,
+not evidence of native interruption; later native continuation messages still use
+the same interruption checks. Shutdown drains imports alongside stopping live turns,
+then closes their shared session index after both cleanup operations settle.
 
 The transcript file itself starts at the first prompt, not at the first reply
 (`SessionManager`'s conversation guard), so a first turn cut off by a restart
@@ -531,7 +544,7 @@ it; Alt+Cmd+P opens the tree for the current workspace.
 
 The token indicator left of the model picker derives input/output totals from  
 the usage each assistant turn reports and hides until a turn reports usage.  
-Task summaries live in the DFSC-style floating Summary board instead of the original  
+Task summaries live in the content-height floating Summary board instead of the original\
 floating banner. Task completion comes from canonical task state, not completed  
 `task_create` / `task_update` calls.
 
@@ -793,7 +806,7 @@ The production build emits `apps/web/dist/server.js`, the browser assets, and
 `apps/web/dist/openapi.yaml`.
 
 The browser UI retains its cwd-grouped conversations and centered composer.  
-The local DFSC presentation migration adds a right tool rail and a mutually  
+The local presentation update adds a right tool rail and a mutually\
 exclusive inspector area; it does not add a main-area header or Goal HUD.
 
 The first release connects sessions, message/tool streaming, approvals, status,  
@@ -868,7 +881,7 @@ built.
 
 ## Subagent presentation
 
-The Web client uses the DFSC Standard task rows: a persistent Bot icon, a  
+The Web client uses fixed task rows: a persistent Bot icon, a\
 separate status icon, an agent label, task summary and trailing disclosure.  
 Structured `details.results` own the six task states; missing legacy statuses  
 remain unknown. Planned single, parallel and chain calls show queued tasks,  
@@ -940,7 +953,7 @@ The trigger is consumed once per selected session/turn: same-turn updates do
 not undo manual dismissal, and activity never displaces another inspector.  
 Tool outcomes only trigger presentation; they do not determine task completion.
 
-Summary uses DFSC's local light/dark neutral palette, rose running tint, green  
+Summary uses a scoped light/dark neutral palette, rose running tint, green\
 completion and amber MCP failure status. Task and MCP disclosures animate their  
 height; task chevrons appear on hover, focus or expansion. A live task completion  
 contracts and regrows its fixed icon slot over 660ms, then draws the check mark;  
@@ -979,7 +992,7 @@ or package is changed.
 
 The Browser inspector uses a host-owned Chromium process controlled through  
 `playwright-core`. This is streamed webpage rendering and input forwarding,  
-not DFSC's native Electron WebContentsView. The dependency includes no browser  
+not a native Electron WebContentsView. The dependency includes no browser\
 binary. Install compatible Chrome, Edge or Chromium, or set  
 `STEPCODE_WEB_BROWSER_PATH` to its executable. Detection covers common Windows,  
 macOS and Linux locations; only Windows Chrome has been exercised locally.  
@@ -1074,7 +1087,7 @@ Agent model context, tool execution or the user's provider credentials.
 
 ## Composer performance
 
-A compact DFSC-style row below the composer shows run elapsed time, average  
+A compact performance row below the composer shows run elapsed time, average\
 output throughput, cumulative session input/output tokens and cache hit rate.  
 The existing usage menu remains available. Tokens come from the SDK statistics  
 on the existing inspector endpoint, not rendered message rows; input includes  
@@ -1191,7 +1204,7 @@ Non-redacted thinking supplied by the provider remains expandable in history;
 sessions without thinking blocks do not acquire invented records. Opaque  
 thinking signatures and redacted blocks are never rendered.
 
-The main transcript uses DFSC Simple as a fixed presentation default, without  
+The main transcript uses compact process groups as a fixed presentation default, without\
 a complexity setting. A single thinking or ordinary tool record shows only its  
 own disclosure, without a second group heading or group indentation. Two or more  
 consecutive records share one folded process row. Member components retain their  
@@ -1220,7 +1233,7 @@ and a short content preview. Text/tool output, message completion or a settled
 session stops the running state and folds an open live thought. A settled  
 thought can be reopened manually. Reduced-motion skips folding/shimmer effects.  
 The host observes each block's structured thinking start/delta/end events.  
-The label shows DFSC-style elapsed seconds, ticks once per second only while  
+The label shows elapsed seconds, ticks once per second only while\
 that block is active, and freezes before prose or tool arguments start.  
 Each assistant message's completed observations are saved through  
 `SessionManager.appendCustomEntry` as `stepcode-web.thinking-timing` metadata  
