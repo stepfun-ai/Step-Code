@@ -24,7 +24,7 @@ describe("regression #7911: JSON message updates retain usage", () => {
 			throw new Error("Expected an assistant update with populated usage");
 		}
 
-		const wireUpdate = toJsonEvent(update);
+		const wireUpdate = toJsonEvent(update, { includeLiveEvents: true })!;
 		expect(wireUpdate.usage).toEqual(update.message.usage);
 		expect(wireUpdate).not.toHaveProperty("message");
 		expect(wireUpdate.assistantMessageEvent).not.toHaveProperty("partial");

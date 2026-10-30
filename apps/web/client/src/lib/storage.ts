@@ -5,6 +5,7 @@
 
 /** Keys the legacy client persisted; kept verbatim so existing preferences survive. */
 export const STORAGE_KEYS = {
+	tagGroups: "stepcode.tagGroups",
 	theme: "stepcode.theme",
 	locale: "stepcode.locale",
 	previewWrap: "stepcode.previewWrap",

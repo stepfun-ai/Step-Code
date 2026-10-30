@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { formatBytes } from "../../lib/format";
-import { IconButton, Modal } from "../../ui";
+import { Icon, IconButton, Modal } from "../../ui";
 import {
 	closeFeedback,
 	FEEDBACK_TOPIC_LABELS,
@@ -14,9 +14,13 @@ import {
 	useFeedbackState,
 } from "./feedback";
 
-const SENTIMENTS: readonly { readonly value: Sentiment; readonly labelKey: "feedbackGood" | "feedbackBad" }[] = [
-	{ value: "up", labelKey: "feedbackGood" },
-	{ value: "down", labelKey: "feedbackBad" },
+const SENTIMENTS: readonly {
+	readonly value: Sentiment;
+	readonly labelKey: "feedbackGood" | "feedbackBad";
+	readonly icon: "thumbsUp" | "thumbsDown";
+}[] = [
+	{ value: "up", labelKey: "feedbackGood", icon: "thumbsUp" },
+	{ value: "down", labelKey: "feedbackBad", icon: "thumbsDown" },
 ];
 
 /**
@@ -34,11 +38,40 @@ export function FeedbackModal() {
 	const t = useT();
 	const feedback = useFeedbackState();
 	const commentRef = useRef<HTMLTextAreaElement>(null);
+	const sentimentsRef = useRef<HTMLDivElement>(null);
+	const sentimentLabelId = useId();
+	const requiredHintId = useId();
+	// Set when the user tries to submit without a sentiment; cleared on each open and once one is picked.
+	const [missingSentiment, setMissingSentiment] = useState(false);
 	useEffect(() => {
 		if (!feedback.openSeq) return;
+		setMissingSentiment(false);
 		const frame = requestAnimationFrame(() => commentRef.current?.focus());
 		return () => cancelAnimationFrame(frame);
 	}, [feedback.openSeq]);
+	const showRequired = missingSentiment && feedback.sentiment === null;
+	const submit = () => {
+		if (feedback.sentiment !== null) {
+			void submitFeedback();
+			return;
+		}
+		// The submit button stays enabled so a missing choice can say what it is, instead of a silent grey button.
+		setMissingSentiment(true);
+		const group = sentimentsRef.current;
+		group?.querySelector<HTMLButtonElement>("button")?.focus();
+		if (group && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			group.animate(
+				[
+					{ transform: "translateX(0)" },
+					{ transform: "translateX(-4px)" },
+					{ transform: "translateX(4px)" },
+					{ transform: "translateX(-2px)" },
+					{ transform: "translateX(0)" },
+				],
+				{ duration: 280, easing: "ease-out" },
+			);
+		}
+	};
 	return (
 		<Modal
 			open={feedback.open}
@@ -53,38 +86,61 @@ export function FeedbackModal() {
 				<h2 id="feedbackTitle">{t("submitFeedback")}</h2>
 				<IconButton id="feedbackClose" icon="close-sm" title="关闭" aria-label="关闭" onClick={closeFeedback} />
 			</header>
-			{/* biome-ignore lint/a11y/useSemanticElements: legacy markup is div[role=group]; a fieldset would change the chip layout. */}
-			<div className="feedback-topics" id="feedbackSentiments" role="group" aria-label={t("submitFeedback")}>
-				{SENTIMENTS.map((sentiment) => (
-					<button
-						key={sentiment.value}
-						className="feedback-topic"
-						type="button"
-						data-sentiment={sentiment.value}
-						aria-pressed={feedback.sentiment === sentiment.value}
-						onClick={() => setFeedbackSentiment(sentiment.value)}
-					>
-						{t(sentiment.labelKey)}
-					</button>
-				))}
-			</div>
-			{/* biome-ignore lint/a11y/useSemanticElements: legacy markup is div[role=group]; a fieldset would change the chip layout. */}
-			<div className="feedback-topics" id="feedbackTopics" role="group" aria-label="反馈主题">
-				{FEEDBACK_TOPICS.map((topic) => {
-					const key = `feedbackTopic.${topic}`;
-					const label = t(key) === key ? FEEDBACK_TOPIC_LABELS[topic] : t(key);
-					return (
+			<div className="feedback-section">
+				<p className="feedback-section-label" id={sentimentLabelId}>
+					{t("feedbackSentimentLabel")}
+					<span className="feedback-required" aria-hidden="true">
+						*
+					</span>
+				</p>
+				{/* biome-ignore lint/a11y/useSemanticElements: legacy markup is div[role=group]; a fieldset would change the chip layout. */}
+				<div
+					ref={sentimentsRef}
+					className="feedback-sentiments"
+					id="feedbackSentiments"
+					role="group"
+					aria-labelledby={sentimentLabelId}
+					aria-describedby={showRequired ? requiredHintId : undefined}
+					data-missing={showRequired || undefined}
+				>
+					{SENTIMENTS.map((sentiment) => (
 						<button
-							key={topic}
-							className="feedback-topic"
+							key={sentiment.value}
+							className="feedback-sentiment"
 							type="button"
-							aria-pressed={feedback.topic === topic}
-							onClick={() => toggleFeedbackTopic(topic)}
+							data-sentiment={sentiment.value}
+							aria-pressed={feedback.sentiment === sentiment.value}
+							onClick={() => setFeedbackSentiment(sentiment.value)}
 						>
-							{label}
+							<Icon name={sentiment.icon} size="sm" />
+							{t(sentiment.labelKey)}
 						</button>
-					);
-				})}
+					))}
+				</div>
+			</div>
+			<div className="feedback-section">
+				<p className="feedback-section-label">
+					{t("feedbackTopicsLabel")}
+					<span className="feedback-optional">{t("feedbackOptional")}</span>
+				</p>
+				{/* biome-ignore lint/a11y/useSemanticElements: legacy markup is div[role=group]; a fieldset would change the chip layout. */}
+				<div className="feedback-topics" id="feedbackTopics" role="group" aria-label={t("feedbackTopicsLabel")}>
+					{FEEDBACK_TOPICS.map((topic) => {
+						const key = `feedbackTopic.${topic}`;
+						const label = t(key) === key ? FEEDBACK_TOPIC_LABELS[topic] : t(key);
+						return (
+							<button
+								key={topic}
+								className="feedback-topic"
+								type="button"
+								aria-pressed={feedback.topic === topic}
+								onClick={() => toggleFeedbackTopic(topic)}
+							>
+								{label}
+							</button>
+						);
+					})}
+				</div>
 			</div>
 			<textarea
 				id="feedbackComment"
@@ -95,18 +151,23 @@ export function FeedbackModal() {
 				onChange={(event) => setFeedbackComment(event.target.value)}
 			/>
 			<FeedbackAttachments />
-			<button
-				className="feedback-submit"
-				id="feedbackSubmit"
-				type="button"
-				// The evidence list is what the user consents to. Before it arrives the
-				// report would be prepared by the host unseen, so wait for it — unless
-				// the preview failed, where submitting is still the user's choice.
-				disabled={feedback.submitting || feedback.sentiment === null || (!feedback.draft && !feedback.previewError)}
-				onClick={() => void submitFeedback()}
-			>
-				{t("submit")}
-			</button>
+			<div className="feedback-actions">
+				<button
+					className="feedback-submit"
+					id="feedbackSubmit"
+					type="button"
+					// The evidence list is what the user consents to. Before it arrives the
+					// report would be prepared by the host unseen, so wait for it — unless
+					// the preview failed, where submitting is still the user's choice.
+					disabled={feedback.submitting || (!feedback.draft && !feedback.previewError)}
+					onClick={submit}
+				>
+					{t("submit")}
+				</button>
+				<p className="feedback-required-hint" id={requiredHintId} role="alert" hidden={!showRequired}>
+					{t("feedbackSentimentRequired")}
+				</p>
+			</div>
 		</Modal>
 	);
 }

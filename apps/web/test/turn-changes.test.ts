@@ -645,6 +645,29 @@ test("turn versions replay from a recorded write, whatever happened to the file 
 	});
 });
 
+test("imported file writes cannot replace native delivery versions", async () => {
+	await withRoot(async (root) => {
+		const s = session(root);
+		ask(s, "native-write");
+		await stepWrite(s, "native-call", "index.html", "<p>native workspace</p>\n");
+		const historical = [
+			entry("imported-user", { role: "user", content: "Historical task" }),
+			entry("imported-call", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "historical-write", name: "write_file", arguments: { path: "index.html", content: "<p>historical evidence</p>\n" } }],
+			}),
+			entry("imported-result", { role: "toolResult", toolCallId: "historical-write", isError: false }),
+		].map((item) => ({ ...item, imported: { source: "workbuddy" as const, sessionId: "foreign", itemId: item.id } }));
+		s.entries.push(...historical);
+		ask(s, "native-reference");
+		assert.deepEqual(turnChanges(s.entries, "imported-user"), { changes: [], skipped: [] });
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "native-reference", "index.html", root), { exact: true });
+		assert.equal(await content(join(root, "index.html")), "<p>native workspace</p>\n");
+		await unlink(join(root, "index.html"));
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "native-reference", "index.html", root), { text: "<p>native workspace</p>\n", exact: true });
+	});
+});
+
 test("a forward patch applies the recorded change and refuses content that moved on", () => {
 	assert.equal(applyPatch("a\nb\nc\n", PATCHES.edit), "a\nB\nc\nd\n");
 	assert.equal(applyPatch("a\nb", PATCHES.appendNoEol), "a\nb\nc");

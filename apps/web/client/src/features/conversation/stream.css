@@ -140,14 +140,22 @@
 .main:has(.empty-state):not(:has(.stream[data-opening])) > .composer-zone {
 	flex: 1 1 auto;
 }
-/* The mark leads the question on one line, centred on the column, just above the composer. */
+.empty-conversation {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: flex-end;
+	flex: 1;
+	padding: 0 2px 16px;
+}
+/* The mark and question stay centred on one line, independently of the migration shortcut. */
 .empty-state {
 	display: flex;
 	align-items: flex-end;
 	justify-content: center;
 	gap: 14px;
-	flex: 1;
-	padding: 0 2px 16px;
+	flex: 0 0 auto;
+	width: 100%;
 	color: var(--ink-2);
 	text-align: center;
 }
@@ -197,6 +205,21 @@
 	}
 }
 
+.empty-session-import {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 20px;
+	padding: 8px 12px;
+	border-radius: var(--radius-control);
+	color: var(--ink-2);
+	font-size: 13px;
+	text-align: left;
+	transition: background-color var(--fast), color var(--fast);
+}
+.empty-session-import:hover { background: var(--hover); color: var(--ink); }
+.empty-session-import:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
+
 .message {
 	display: flex;
 	flex-direction: column;
@@ -205,8 +228,12 @@
 .message.user {
 	align-items: flex-end;
 }
+.conversation-turn {
+	display: contents;
+}
 /* A user message opens a turn: more room above it than between the steps of a turn. */
-.stream-inner > .message.user:not(:first-child) {
+.stream-inner > .message.user:not(:first-child),
+.stream-inner > .conversation-turn:not(:first-child) > .message.user {
 	margin-top: 18px;
 }
 /*
@@ -371,12 +398,7 @@
 	color: var(--ink-3);
 	font-size: 11px;
 }
-/*
- * A message's model and clock time, as bare text with no label: under a sent
- * bubble, and once under the reply that finished a turn. Hidden until its row is
- * hovered or focused, so the transcript stays quiet; it reserves no space when
- * absent (a pending bubble has no timestamp yet).
- */
+/* Recorded timestamps reserve their space while hover and keyboard focus reveal them. */
 /* A user bubble's copy / rewrite affordances, quiet until hovered. */
 .prompt-actions {
 	display: inline-flex;
@@ -386,6 +408,7 @@
 	transition: opacity var(--fast);
 }
 .message:hover .prompt-actions,
+.message:focus-within .prompt-actions,
 .prompt-actions:focus-within {
 	opacity: 1;
 }
@@ -398,11 +421,12 @@
 	color: var(--ink-3);
 	font-size: 11px;
 	opacity: 0;
-	transition: opacity 160ms ease;
-	pointer-events: none;
+	transition: opacity var(--fast);
 }
 .message:hover .message-meta,
-.message:focus-within .message-meta {
+.message:focus-within .message-meta,
+.turn-actions:is(:hover, :focus-within) .message-meta,
+.conversation-turn:has(> .message.assistant:is(:hover, :focus-within)) > .turn-actions .message-meta {
 	opacity: 1;
 }
 /* A user bubble's copy / rewrite affordances, quiet until hovered. */
@@ -414,8 +438,19 @@
 	transition: opacity var(--fast);
 }
 .message:hover .prompt-actions,
+.message:focus-within .prompt-actions,
 .prompt-actions:focus-within {
 	opacity: 1;
+}
+.prompt-actions {
+	align-items: center;
+}
+.prompt-actions .message-meta {
+	margin-top: 0;
+}
+.message-meta-time:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 2px;
 }
 .message-meta-time {
 	font-variant-numeric: tabular-nums;
@@ -682,7 +717,7 @@
 .tool-row.pending .tool-verb {
 	transform: skewX(-8deg);
 }
-.tool-row.failed .tool-verb,
+/* A failed call reads like its siblings: the verb already says "failed", only the glyph carries the colour. */
 .tool-row.failed .tool-glyph {
 	color: var(--danger);
 }
@@ -998,7 +1033,7 @@
 	color: var(--ink-3);
 }
 
-/* DFSC Simple folds consecutive thoughts and ordinary tools into one process range. */
+/* Consecutive thoughts and ordinary tools fold into one process range. */
 .process-tool-group {
 	min-width: 0;
 	margin: 4px 0;
@@ -1763,6 +1798,22 @@ button.compaction-head:focus-visible {
 	line-height: 1.6;
 	overflow-wrap: anywhere;
 	white-space: pre-wrap;
+}
+.notice-toggle {
+	margin-top: 2px;
+	padding: 0;
+	color: var(--ink-3);
+	font-size: 12px;
+	line-height: 1.6;
+	cursor: pointer;
+}
+.notice-toggle:hover {
+	color: var(--ink);
+}
+.notice-toggle:focus-visible {
+	outline: 2px solid var(--focus-border);
+	outline-offset: 2px;
+	border-radius: 2px;
 }
 .notice-markdown {
 	color: var(--ink-2);

@@ -72,11 +72,20 @@ test("completed summaries count tool kinds, not thoughts or canonical Tasks", ()
 	assert.equal(processGroupSummary(varied, zh).label, "已完成 4 项工具操作");
 });
 
-test("failed and dedicated lifecycle calls stay outside compact groups", () => {
+test("failed ordinary calls fold with their siblings and count toward the completed summary", () => {
+	const failed = { ...tool("f", "run_command", "failed"), outputSummary: "exit 128" };
+	for (const active of [false, true]) {
+		const group = onlyGroup([thought("t"), tool("r", "run_command"), failed, tool("r2", "run_command")], active);
+		assert.equal(group.running, false);
+		assert.equal(group.rows[2].item, failed);
+		assert.equal(processGroupSummary(group, zh).label, "已完成：工具调用 3 项");
+	}
+});
+
+test("dedicated lifecycle calls stay outside compact groups, failed or not", () => {
 	for (const item of [
-		tool("f", "bash", "failed"),
-		...["subagent", "workflow", "enter_plan_mode", "exit_plan_mode", "desktop_send_message", "clarify_user"].map((name) =>
-			tool(name, name),
+		...["subagent", "workflow", "enter_plan_mode", "exit_plan_mode", "desktop_send_message", "clarify_user"].flatMap(
+			(name) => [tool(name, name), tool(`${name}-failed`, name, "failed")],
 		),
 		{ ...tool("child", "extension"), children: [{ sessionId: "child", label: "Child" }] },
 		{ ...tool("workflow", "extension"), workflowRun: "run" },
@@ -139,6 +148,40 @@ test("unknown tool names are counted without using text to infer success or cate
 	const group = onlyGroup([{ ...tool("custom", "__proto__"), outputSummary: "FAILED" }]);
 	assert.equal(processGroupSummary(group, en).label, "Completed: 1 tool calls");
 	assert.equal(group.running, false);
+});
+
+test("imported unknown tool calls form a non-running group with a neutral summary", () => {
+	const items = [
+		{ ...tool("shell", "exec_command", "unknown"), imported: true },
+		...Array.from({ length: 10 }, (_, index) => ({ ...tool(`write-${index}`, "Write", "unknown"), imported: true })),
+	];
+	const before = structuredClone(items);
+	for (const active of [false, true]) {
+		const group = onlyGroup(items, active);
+		assert.equal(group.rows.length, 11);
+		assert.equal(group.running, false);
+		assert.deepEqual(group.rows.map((row) => row.index), Array.from({ length: 11 }, (_, index) => index));
+		assert.deepEqual(processGroupSummary(group, zh), { label: "工具调用 11 项", detail: "", icon: "wrench" });
+		assert.equal(processGroupSummary(group, en).label, "Recorded tool calls: 11");
+	}
+	assert.deepEqual(items, before);
+	const mixed = onlyGroup([items[0], tool("completed")]);
+	assert.equal(processGroupSummary(mixed, zh).label, "工具调用 2 项");
+});
+
+test("historical grouping does not hide native unknown calls or cross user boundaries", () => {
+	const imported = { ...tool("imported", "Write", "unknown"), imported: true };
+	const nativeUnknown = tool("native", "write", "unknown");
+	assert.ok(!("kind" in groupProcessRows([nativeUnknown], false)[0]));
+	const rows = groupProcessRows([imported, user, { ...imported, itemId: "next" }], false);
+	assert.equal(rows.length, 3);
+	assert.ok(!("kind" in rows[1]));
+	assert.equal(rows[1].item, user);
+	// A failed call is ordinary process output, imported or not: it folds with its unconfirmed siblings.
+	const failed = { ...tool("failed", "Write", "failed"), imported: true };
+	const folded = groupProcessRows([imported, failed, { ...imported, itemId: "next" }], false);
+	assert.equal(folded.length, 1);
+	assert.equal(processGroupSummary(folded[0] as ProcessGroup, zh).label, "工具调用 3 项");
 });
 
 test("regrouping a streaming turn keeps the objects of unchanged history rows and groups", () => {

@@ -17,13 +17,37 @@ function hostPlatform(): StepcodeDesktopBridge["platform"] {
 const version = process.argv.find((argument) => argument.startsWith(VERSION_ARGUMENT))?.slice(VERSION_ARGUMENT.length);
 
 const bridge: StepcodeDesktopBridge = {
+	beginTagGroupClose() {
+		// Invoke responses are untyped; the renderer validates the attempt before using it.
+		return ipcRenderer.invoke(DESKTOP_IPC.beginTagGroupClose) as ReturnType<
+			StepcodeDesktopBridge["beginTagGroupClose"]
+		>;
+	},
+	completeTagGroupClose(attemptId, outcome) {
+		return ipcRenderer.invoke(DESKTOP_IPC.completeTagGroupClose, attemptId, outcome) as Promise<boolean>;
+	},
+	readTagGroups() {
+		// Electron invoke erases response types; main validates disk data and the renderer validates the IPC result.
+		return ipcRenderer.invoke(DESKTOP_IPC.readTagGroups) as ReturnType<StepcodeDesktopBridge["readTagGroups"]>;
+	},
+	saveTagGroups(data) {
+		// This dedicated handler returns no payload and resolves only after atomic replacement.
+		return ipcRenderer.invoke(DESKTOP_IPC.saveTagGroups, data) as Promise<void>;
+	},
 	platform: hostPlatform(),
 	version: version ?? "",
+	getTheme() {
+		return ipcRenderer.invoke(DESKTOP_IPC.getTheme) as ReturnType<StepcodeDesktopBridge["getTheme"]>;
+	},
+	setTheme(theme) {
+		return ipcRenderer.invoke(DESKTOP_IPC.setTheme, theme) as Promise<void>;
+	},
 	pickDirectory(options) {
 		// Only plain strings cross the boundary; anything else is dropped here and re-validated in main.
 		const request = {
 			title: typeof options?.title === "string" ? options.title : undefined,
 			defaultPath: typeof options?.defaultPath === "string" ? options.defaultPath : undefined,
+			purpose: options?.purpose,
 		};
 		return ipcRenderer.invoke(DESKTOP_IPC.pickDirectory, request) as Promise<string | null>;
 	},

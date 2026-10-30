@@ -38,19 +38,24 @@ function messageText(message) {
 
 /**
  * The plan file the host names, so the fixture writes where plan mode allows.
- * The reminder quotes it; the `exit_plan_mode` result lists it bare.
+ * Collaboration announcements name it in the submission instruction; legacy
+ * reminders quote it and `exit_plan_mode` results list it bare.
  */
 function planPathFrom(messages) {
   for (const message of [...messages].reverse()) {
-    const match = /Plan file: (?:"((?:[^"\\]|\\.)*)"|(\S+))/u.exec(messageText(message));
+    const text = messageText(message);
+    const announced = /^- Write the plan to (.+) with write_file, revise it with edit_file,/mu.exec(text);
+    if (announced) return announced[1];
+    const match = /Plan file: (?:"((?:[^"\\]|\\.)*)"|(\S+))/u.exec(text);
     if (match) return match[1] === undefined ? match[2] : JSON.parse(`"${match[1]}"`);
   }
   return undefined;
 }
 
-/** The request-local plan-mode reminder, appended to every model request while planning. */
+/** Mode announcements are runtime instructions, not the current user/tool turn. */
 function isPlanReminder(message) {
-  return messageText(message).trimStart().startsWith("<system-reminder>Plan mode is ON.");
+  const text = messageText(message).trimStart();
+  return text.startsWith("<collaboration_mode>") || text.startsWith("<system-reminder>Plan mode is ON.");
 }
 
 /** One streamed tool call, the shape the OpenAI adapter turns into a kernel tool call. */
@@ -62,13 +67,16 @@ function toolCallDelta(name, args, id) {
  * A reply delivered in several chunks, so the page has a live assistant row — one
  * with no entry id — on screen long enough to inspect while a turn streams.
  */
-async function slowReply(input, response) {
+async function slowReply(input, response, count = 12) {
   response.writeHead(200, { "content-type": "text/event-stream" });
-  for (let index = 0; index < 12; index += 1) {
+  let closed = false;
+  response.on("close", () => { closed = true; });
+  for (let index = 0; index < count && !closed; index += 1) {
     const delta = { content: `streamed reply ${index}\n` };
     response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
+  if (closed) return;
   response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: input.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } })}\n\n`);
   response.end("data: [DONE]\n\n");
 }
@@ -112,6 +120,10 @@ export async function clarificationCompletion(request, response) {
   // no tools; they arrive after a turn, sometimes after this suite has finished,
   // so a `.find` on a missing list was an unhandled rejection in the run.
   const tools = Array.isArray(input.tools) ? input.tools : [];
+  if (tools.length && last.role === "user" && text.startsWith("child-background-stream-fixture")) {
+    await slowReply(input, response, 40);
+    return;
+  }
   // A slow reply: the page must keep one prompt field while the live row exists.
   if (tools.length && last.role === "user" && text.includes("stream-fixture")) {
     await slowReply(input, response);
@@ -136,15 +148,29 @@ export async function clarificationCompletion(request, response) {
   let delta;
   if (!tools.length) {
     delta = { content: "fixture text reply" };
+  } else if (last.role === "user" && text === "background-parent-fixture") {
+    delta = { content: "Background parent ready." };
+  } else if (last.role === "user" && text.includes("delegate-background-fixture")) {
+    delta = toolCallDelta("subagent", { agent: "explore", task: "child-background-stream-fixture", run_in_background: true, subscribe: "final" }, "background-call");
+  } else if (last.role === "user" && /(?:reply|stop)-background-fixture/u.test(text)) {
+    const lane = input.messages.map(messageText).join("\n").match(/lane_[a-f0-9]{8}/u)?.[0];
+    if (!lane) throw new Error("background fixture: missing lane id");
+    delta = toolCallDelta("agent_send", { lane_id: lane, action: text.includes("stop-background-fixture") ? "stop" : "reply", prompt: "child-background-stream-fixture supplement" }, `background-control-${input.messages.length}`);
+  } else if (last.role === "user" && text.startsWith("<agent-notification")) {
+    delta = { content: "Background result received." };
   } else if (input.messages.some((message) => messageText(message).includes("plan-fixture"))) {
     // Plan mode: write the proposal where the host says it may, then submit it
     // once. The `exit_plan_mode` result is the only message that mentions plan
     // mode itself, which is how the fixture tells the two tool results apart.
-    // The reminder trails every request, so the turn's own message is before it.
+    // Mode announcements can trail the actual turn, or survive in its history.
     const turn = [...input.messages].reverse().find((message) => !isPlanReminder(message)) ?? last;
     const turnText = messageText(turn);
-    if (turn.role === "tool" && turnText.includes("Plan mode")) {
+    const mode = [...input.messages].reverse().find(isPlanReminder);
+    const defaultMode = mode && messageText(mode).includes("# Collaboration Mode: Default");
+    if (turn.role === "tool" && /plan mode/iu.test(turnText)) {
       delta = { content: "The proposal is submitted." };
+    } else if (turn.role === "user" && defaultMode) {
+      delta = { content: "Approved plan execution started." };
     } else if (turn.role === "user") {
       const planPath = planPathFrom(input.messages);
       if (!planPath) throw new Error("plan fixture: the host named no plan file");

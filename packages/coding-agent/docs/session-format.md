@@ -2,6 +2,14 @@
 
 Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with a `type` field. Session entries form a tree structure via `id`/`parentId` fields, enabling in-place branching without creating new files.
 
+Imported history may carry optional `imported` provenance on entries. It is
+excluded from native usage totals and source model selection; historical tools
+are projected as text evidence with explicit completed, failed or unknown
+outcomes for new requests. Imported compaction attachments use provenance-marked
+`custom_message` entries (`stepcode.imported-compaction-attachments`) so images
+and captions survive context projection without adding source user turns.
+See [offline session import](session-import.md).
+
 ## File Location
 
 ```

@@ -167,8 +167,9 @@ export async function submitFeedback(): Promise<void> {
 			...(feedback.draft ? { token: feedback.draft.token } : {}),
 		});
 		closeFeedback();
-		// Legacy used the default (danger) toast tone here too.
-		showError(result.message || t("feedbackSubmitted"));
+		// The neutral tone: a filed report is a confirmation, and the danger
+		// toast reads as a failure.
+		showError(result.message || t("feedbackSubmitted"), false);
 	} catch (error) {
 		const message = errorMessage(error);
 		// The prepared evidence expired or was cleared (a fork, a `/new`). The

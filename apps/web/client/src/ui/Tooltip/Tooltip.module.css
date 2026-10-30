@@ -47,3 +47,18 @@
 :focus-visible + .root {
 	display: block;
 }
+
+/*
+ * Placement "right": beside the anchor, its top edge on the anchor's top
+ * (`span-bottom` grows downward from there). Near the window bottom it grows
+ * upward instead (`flip-block`); with no room on the right it moves left
+ * (`flip-inline`, which also mirrors the gap margin).
+ */
+.right {
+	position-area: right span-bottom;
+	position-try-fallbacks:
+		flip-block,
+		flip-inline,
+		flip-block flip-inline;
+	margin: 0 0 0 8px;
+}

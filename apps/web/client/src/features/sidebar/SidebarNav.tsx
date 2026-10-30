@@ -35,12 +35,17 @@ export function BrandRow() {
 export function SidebarActions() {
 	const t = useT();
 	const midView = useAppStore((state) => state.ui.midView);
+	// The empty new-conversation page is this entry's page, as a mid view is its own entry's.
+	const onDraft = useAppStore(
+		(state) => !state.current && !state.ui.midView && !state.ui.childView && !state.ui.openingSession,
+	);
 	return (
 		<nav className="sidebar-actions" aria-label="会话操作">
 			<button
 				className="sidebar-action primary"
 				id="newSession"
 				type="button"
+				aria-current={onDraft ? "page" : undefined}
 				onClick={() => startDraft(activeCwd(), { listed: true })}
 			>
 				<Icon name="newChat" />

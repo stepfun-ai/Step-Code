@@ -36,7 +36,7 @@ needs the user's approval first; pin it to an exact version and install with `pn
 ```
 apps/web/
   AGENTS.md / CLAUDE.md
-  package.json           exports: ./server (dist/server.js), ./desktop-bridge (client contract, type-only)
+  package.json           exports: ./server (dist/server.js), ./desktop-bridge (bounded client contract + validator)
   openapi.yaml           HTTP API description; copied to dist/ by `build`
   tsconfig.json          host (src/**), emits dist/
   tsconfig.client.json   client (client/src), noEmit, DOM libs, react-jsx
@@ -92,6 +92,9 @@ apps/web/
   `@step-harness/coding-agent` and below; the client renders what the host sends.
 - **The host stays thin.** Do not put agent-loop, prompt assembly, tool or permission logic in `src/`. Call the
   coding-agent APIs; translate their events into SSE. Pending approvals go through `ApprovalBroker`.
+- Background subagent progress comes from the session-local `SUBAGENT_LANE_CHANNEL`, not `setWidget` or model notifications. Cache bounded lane snapshots for reconnects, clear them on runtime shutdown, and merge child ids and progress only into the matching parent session. Completed answers are durable `step-subagent-response` facts and remain visible after a later cancellation.
+- Agent summary rows and header counts show only `running` agents. `agent_send` controls update existing child/lane-task identities and their operation history, never add an agent row. Keep all parent tool-row links available for inspecting completed agents in the right panel.
+- Merge persisted controls and notifications in journal order, not projection order; older controls cannot overwrite a newer terminal state. Apply completed-response SSE facts directly even while live frames overtake HTTP refreshes. Validate lane bus input before caching, retain finished lanes by update time, and preserve unknown history in the header activity indicator without counting it as running.
 - **Desktop-only behaviour goes through the bridge.** Use `getDesktopBridge()` / `isDesktopHost()` from
   `platform/host.ts`, and always keep a browser fallback (e.g. folder picking: bridge, then the host's picker, then the
   in-page browser). Desktop-only CSS goes under `[data-host="desktop"]` in `styles/global.css`.
@@ -103,8 +106,20 @@ apps/web/
   prose on completion. IME, moved selections and session/workspace replacement
   invalidate picks; stale/pending candidates must not send or overwrite input.
   Escape belongs to the shell chain and closes the list without aborting a turn.
+- Main composer drafts are page-local and keyed by `state.composerDraftId`, not cwd. Each new conversation
+  gets a fresh identity even in the same folder; first-send session creation adopts that identity.
+  `state/composer-drafts.ts` scopes images and modes; `features/composer/drafts.ts` parks live rich-input nodes,
+  skills/plugins and quoted contexts between selections. Do not serialize drafts to disk or clone uploading chips
+  on navigation. Waiting uploads invalidate a submit when its editor leaves; late reads, failed sends and context
+  picks update only their originating draft. Unreachable unsaved inputs release their nodes and images after pending
+  work settles; session drafts and inputs awaiting creation/adoption remain recoverable. Inline rewrites own their
+  image attachments and navigate to a fork only after successful submission; they never consume main-input state.
 - `platform/desktop-bridge.ts` is a cross-package contract with `apps/desktop/src/preload.ts`. Change it only together
   with the desktop side (see `apps/desktop/AGENTS.md`).
+- Appearance is restored before mounting the React client. Desktop `getTheme` / `setTheme` use the profile's
+  `desktop-state.json`, not the changing server origin; a valid localStorage choice migrates only when no desktop
+  choice exists. Plain browsers retain localStorage. Keep all four choices (`system`, `light`, `dark`, `violet`),
+  persist the system selection rather than its resolved color, and report bridge failures without blocking the UI.
 
 ## Client conventions
 
@@ -138,6 +153,15 @@ apps/web/
      for icon buttons.
 7. **Accessibility.** Every `<button>` has `type`; icon-only buttons have `aria-label`. Clickable non-buttons need a
    role, `tabIndex` and a keyboard handler. Biome's a11y rules must pass.
+   - Icon-only buttons use `IconButton` (`icon` / `iconSize`, or `Icon` children for several icons), never a hand-written
+     `<button>` wrapping an `<Icon>`. Keep the feature class (`className`) tests and CSS select on; the feature CSS
+     overrides size and colour, and a feature `:hover` rule needs an ancestor class to outrank IconButton's own.
+   - Icon buttons never set the `title` attribute. Show
+     their hint with `Tooltip` (`<Tooltip content={label}>{button}</Tooltip>`); when the button opens a `Popover`,
+     put the `Tooltip` inside the `Popover` and pass `content={open ? null : label}`.
+   - Text cut by an ellipsis shows the full text in a `Tooltip`, not `title`; measure on hover
+     (`scrollWidth > clientWidth`) so untruncated text gets no hint. A list row whose label is cut wraps the whole
+     row (`placement="right"`), so hovering anywhere on it shows the card (see `features/sidebar/SessionRow.tsx`).
 8. **Inputs driven by tests.** The e2e suite sets `input.value` and dispatches a non-bubbling `input` event. React's
    `onChange` misses that; for such inputs use a native listener or `onInputCapture` on an uncontrolled input (see
    `ui/SearchInput`).
@@ -156,10 +180,10 @@ keep only the classes passed in. Read the component's doc comment before using i
 | Component | Use it for | Notes |
 |---|---|---|
 | `Button` | Text buttons; `variant` `plain` (default, native look reset), `primary` / `secondary` (dialog footer actions) | `type="button"` by default |
-| `IconButton` | Square icon-only buttons (`icon`, `iconSize`) | Always has `.icon-button`; pass `aria-label`; wrap in `Tooltip` for a hint |
+| `IconButton` | Square icon-only buttons (`icon`, `iconSize`) | Always has `.icon-button`; pass `aria-label`; wrap in `Tooltip` for a hint. Use it instead of `<button><Icon /></button>` |
 | `Icon` | Sprite icons: `<Icon name size>`; `LEGACY_ICONS` holds preset name+size pairs | Sizes `2xs xs sm md lg menu`. New icons: add a `<symbol id="i-<name>">` to `IconSprite` and the name to `ICON_NAMES` |
 | `IconSprite` | The `<symbol>` sheet every `Icon` references | Rendered once in `App.tsx`; do not render again |
-| `Tooltip` | Hover / keyboard-focus hints: `<Tooltip content={text or element}>{trigger}</Tooltip>` | Placement top, centered, shifts only at viewport edges. One child that forwards `style`, `ref` and `aria-describedby`; the hint is its next sibling (no wrapper). Empty `content` = no hint. Rendered in the top layer (manual popover), so a neighbouring panel never covers it. Can itself be a `Popover` trigger |
+| `Tooltip` | Hover / keyboard-focus hints: `<Tooltip content={text or element}>{trigger}</Tooltip>` | Placement top, centered, shifts only at viewport edges; `placement="right"` sits beside the trigger, top edges aligned (flips up / left when there is no room). One child that forwards `style`, `ref` and `aria-describedby`; the hint is its next sibling (no wrapper). Empty `content` = no hint. Rendered in the top layer (manual popover), so a neighbouring panel never covers it. Can itself be a `Popover` trigger |
 | `Modal` | Dialogs: backdrop + `section[role=dialog][aria-modal]`, toggled by `open` | `id` / `overlayClassName` on the overlay, `className` / `dialogProps` on the dialog, `labelledBy`. Escape belongs to the shell's chain unless `closeOnEscape` |
 | `Popover` | A panel or menu opened from a trigger (dropdowns, pickers, overflow menus): `<Popover content={panel} open onClose>{trigger}</Popover>` | The child is the trigger (forwards `ref` and `style`; may be a `Tooltip`); other div props go to the panel. The panel renders only while open, portaled to `body`, `--popover-gap` (4px) from the trigger: `placement` `bottom-start` (default) / `bottom-end` / `top-start` / `top-end`, or `bottom` / `top` centred on the trigger (shifted at a viewport edge), flipped when there is no room. `dismissOn`, `closeOnEscape` (refocuses the trigger) |
 | `Menu`, `MenuItem`, `MenuDivider` | Rows inside a `Popover` | `MenuItem`: `icon`, `trailing`, `danger`; pass `role="menu"` / `"menuitem"` where it is a real menu |
@@ -190,6 +214,19 @@ When to add or change one:
 
 - Every route is under `/api/v1/` (plus `/auth/*`, `/healthz`). It must pass the auth cookie and Origin checks in
   `server.ts`; the server listens on `127.0.0.1` only. Never log the launch token or the cookie secret.
+- `/api/v1/session-imports` adapts the coding-agent offline migration service.
+  Scan the Host machine, exclude archives by default, and require previewed
+  fingerprints plus explicit destination directories before importing. Close
+  the importer before the session index. Imported tools never create native
+  child-agent links, revertable file changes or running-state indicators.
+- `/api/v1/migrations` owns reviewed local session/resource migration plans and durable job presentation.
+  The coding-agent migration module owns format translation, readiness, fingerprints, consent and publication;
+  the Host only validates protocol input, explicit paths and authentication. Scan/preview can read supported resource
+  configuration and instruction text, but must not write resources, execute extensions, connect MCP or grant trust.
+  Ordinary MCP migration writes global configuration only and starts disabled. All AI rule writes, including new files,
+  require content/scope/loading-impact consent bound to the preview. Expired or changed targets require a new preview.
+  Close hides the UI; cancellation stops remaining work after the current unit settles. Keep legacy import records
+  separately readable and never dispatch their IDs through the unified job API. See `docs/desktop-migration.md`.
 - Adding or changing a route or payload: update `openapi.yaml` in the same change, update `client/src/state/types.ts`,
   and add a unit test.
 - Session snapshots and every SSE event carry `revision`, monotonic per bound session. `renderSnapshot` ignores a
@@ -211,14 +248,19 @@ When to add or change one:
   the session manager's `stepcode-web.thinking-timing` custom entries outside model context. Snapshots and agent
   envelopes project validated `thinkingTimings` by original content index. Never infer durations for unobserved
   history or start clocks from browser receipt times.
-- The main transcript uses fixed DFSC Simple process groups, not a complexity
+- The main transcript uses fixed compact process groups, not a complexity
   setting. Group consecutive thinking and ordinary tools only; singleton groups
   show the member's own disclosure without a group heading or indentation.
   Retain keyed member components and a manually opened singleton when siblings
-  arrive. Keep failed tools, approvals, retries and dedicated lifecycle calls
-  separate. Preserve original
+  arrive. Failed ordinary tools fold with their siblings and count in the
+  completed summary; their row shows the failure (verb text and glyph colour)
+  only when the group is opened. Keep approvals, retries and dedicated
+  lifecycle calls separate. Preserve original
   timeline indices for turn footers, file deliveries and search reveal. Group
   completion counts tool results, never canonical Tasks or child-agent success.
+  Imported ordinary calls with unknown outcomes may join folded groups; a group
+  containing unconfirmed results uses a neutral recorded-call summary, never a
+  completion claim. Historical tool calls cannot make a group running.
 - A subagent record is context the main agent produced, so its inspector has no prompt surface:
   the child's input is a collapsed "task message received" receipt, never a bubble or box. Do not add a
   composer, inline editor or send control to the child view. Inspection is read-only; the session is not.
@@ -232,11 +274,11 @@ When to add or change one:
   expose only validated agentId/event/status fields through `src/subagent-notification.ts`. Do not parse
   notification prose, infer per-task success from the parent tool, or add child execution controls in the inspector.
 - `features/inspector` owns the shared right rail, Summary and Context views.
-  Summary uses DFSC's independent content-height floating board with a close-only
+  Summary uses an independent content-height floating board with a close-only
   header and fixed compact width. It floats over the conversation and reserves no
   grid space; where there is room the reading column slides aside without
   narrowing. Do not wrap it in the full-height inspector chrome used by the other panels.
-  Summary's DFSC colors are scoped to that surface. Keep grid disclosures,
+  Summary's surface colors are scoped to that surface. Keep grid disclosures,
   fixed-slot completion motion and reduced-motion support; never replay a
   live completion animation for initially loaded completed history.
   Its MCP switch-shaped indicators are decorative, not configuration controls.
@@ -331,7 +373,22 @@ When to add or change one:
   "默认项目" in the composer pill and the sidebar instead of the last path segment. The host
   refuses folder-scoped requests for a folder it no longer knows (`Folder is not a known workspace`), which is what a
   draft pinned to a removed folder used to hit.
-- Session tag groups are derived, not stored: a group exists exactly as long as a listed session carries its tag
+- Session tag groups are presentation metadata, not session data: names, colours and assignments persist through
+  the dedicated `state/tag-group-persistence.ts` owner (Desktop bridge/userData; Web localStorage). Desktop recovery
+  precedes session-list pruning, failed reads never overwrite storage, and edits during loading queue after recovery.
+  Edits validate against confirmed groups plus retained unconfirmed operations, persist before publishing store changes,
+  and reject colour/name collisions. Unchanged refresh snapshots do not write. Load and save failures are independent
+  store fields displayed by the existing ErrorToast; ordinary notices still expire after 4200ms, then the durable group
+  error reappears. Only successful recovery clears the load error; only a changed full snapshot write clears the save
+  error. Failed writes retain their operations in subsequent full snapshots. Group reads have a 10s wait bound and
+  expired responses cannot publish. Session lists load immediately; recovery gates only pruning against the latest
+  successful list and current/unlisted projection, with a stale-list/prune race gate.
+  Desktop ShellEffects synchronously vetoes unload only for accepted unconfirmed operations, freezes new edits and
+  drains recovery/ordered writes through the invoke-only beginTagGroupClose/completeTagGroupClose handshake. Main
+  owns a one-time window/document-bound intention with a 10s deadline. Failure/expiry cancels close or restart and
+  releases editing without dropping operations. Manual reload has no native token and never becomes a window close.
+  Clean/loading/error pages do not start group recovery merely to close.
+  A group exists exactly as long as a listed session carries its tag
   (`state/tag-groups.ts`). Deleting a session or untagging its last member removes the group from the grouped view
   and the row's picker together, and frees its colour; clearing the filter when its group disappears keeps the
   sidebar from going blank. Never keep an empty group record for the picker to re-offer.
@@ -379,8 +436,9 @@ When to add or change one:
 - `/api/v1/settings/*` is the settings screen's own surface (MCP servers, plugins, marketplaces, skills). It reads
   and writes the user's global StepCode configuration through `@step-harness/coding-agent` — the same files
   `step mcp`, `/plugin` and the TUI resource selector use — and never project scope. Only user-scope state moves;
-  a change reaches a session when that session starts (MCP tools register at `session_start`, skills load with its
-  resources), so the client says so instead of reloading sessions. The host holds the global MCP servers from
+  changes to ordinary MCP declarations reach running sessions through the product's awaited reconciliation hooks
+  before subsequent requests; skills and prompt/context resources retain their resource-loading lifecycle. Do not
+  force a session reload to refresh display metadata. The Host holds the global MCP servers from
   startup (`createStepMcpHostWarmup`) and re-syncs them after MCP/plugin settings changes, sign-in and sign-out;
   sessions share those pooled connections. `send` waits for the session's extension startup, so a first message
   carries the MCP tools.
@@ -397,11 +455,12 @@ When to add or change one:
   `POST /api/v1/logout` is the Step sign-out (same as `step logout`: stop running
   sessions, remove the credential and account session); `POST /auth/logout` only
   expires the page cookie. Keep the launch cookie through a Step sign-out so
-  Desktop reloads into `#loginGate` without a new terminal link. A Step account
-  is optional: the gate opens only when no model can run (no Step credential
-  and `customModels: false`); the gate itself has no "Use your own models"
-  link. Signed out, the sidebar account button opens Settings > Account
-  directly (no menu), not the gate. Never remove custom providers on a
+  Desktop can browse history, configure models and use local migration without signing in. Missing model readiness
+  is presented when an ordinary prompt is sent, keeping input and attachments. Plain Web retains its explicit
+  sign-out gate. The launch cookie remains required regardless of account state; never fake configured credentials
+  to bypass model checks. A Step account
+  is optional; the existing login UI remains available from Account settings. Signed out, the sidebar account button
+  opens Settings > Account directly (no menu), not the gate. Never remove custom providers on a
   Step sign-out. No
   balance/allowance placeholders.
 - Do not depend on `process.cwd()` being the workspace; the desktop starts the server elsewhere (macOS privacy
@@ -417,8 +476,8 @@ Run from the repo root.
 | `pnpm web:watch` | Host from source plus the Vite dev server (port `STEPCODE_WEB_CLIENT_PORT`, default 5173); the launch URL opens Vite, so client edits apply by HMR. The host is not watched, so an agent editing this repo does not restart it and drop its own turn; restart the command for host or package changes, or set `STEPCODE_WEB_WATCH_HOST=1` to restart the host on every change (drops running turns). The browser opens once per run |
 | `pnpm --filter @step-harness/web dev:client` | Vite dev server with HMR, proxies to a host on `STEPCODE_WEB_PORT` (start the host first) |
 | `pnpm --filter @step-harness/web typecheck` | Host and client type check |
-| `pnpm --filter @step-harness/web test` | Host unit tests |
-| `TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/<name>.test.ts` | One unit test file (from `apps/web/`); without the tsconfig, workspace packages resolve to `dist/` and fail |
+| `pnpm --filter @step-harness/web test` | Host unit tests (`tsx --tsconfig`, so it also runs under the Windows `cmd` shell pnpm uses) |
+| `pnpm exec tsx --tsconfig ../../tsconfig.json --test test/<name>.test.ts` | One unit test file (from `apps/web/`, any shell); without the tsconfig, workspace packages resolve to `dist/` and fail. `TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test ...` is the POSIX-shell equivalent |
 | `STEPCODE_WEB_BROWSER_TEST=1 TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/browser.test.ts` | Opt-in installed-Chromium adapter acceptance against a local fixture only; no account, provider or engine download |
 | `STEPCODE_WEB_TERMINAL_TEST=1 TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/terminal.test.ts` | Opt-in real local-shell acceptance in temporary folders; no account/provider calls |
 | `pnpm --filter @step-harness/web test:e2e` | Client build + e2e in headless Chrome (`CHROME_PATH` to override; skipped without Chrome) |

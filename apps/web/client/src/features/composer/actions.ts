@@ -11,6 +11,8 @@ import {
 	FULL_ACCESS_PRESET,
 	FULL_ACCESS_RISK_CANCEL,
 } from "../../lib/permissions";
+import { isDesktopHost } from "../../platform/host";
+import { retainComposerDraftWork, updateDraftAttachments } from "../../state/composer-drafts";
 import {
 	applyQueueState,
 	countUserMessages,
@@ -33,6 +35,9 @@ import type {
 	TimelineItem,
 	UploadedFile,
 } from "../../state/types";
+import { openSettings } from "../settings/actions";
+import { modelConfigurationRequired } from "./model-readiness";
+import { draftModelSource } from "./models";
 import { commandLeadIcon, MODES, modeFromCommand } from "./modes";
 import {
 	insertCommandLead,
@@ -292,12 +297,12 @@ export function syncStagedModeLead(editor: HTMLElement): void {
  * modes are mutually exclusive); any other command appends — commands stack,
  * one input may carry several.
  */
-export function stageCommandLead(editor: HTMLElement, command: string): void {
+export function stageCommandLead(editor: HTMLElement, command: string, stageMode = true): void {
 	const name = command.replace(/^\//u, "");
 	const mode = modeFromCommand(name.replace(/:$/u, ""));
 	const meta = mode ? MODES.find((entry) => entry.id === mode) : undefined;
 	if (mode && meta) {
-		chooseMode(mode);
+		if (stageMode) chooseMode(mode);
 		// Insert the chip synchronously (see the input sync note): another mode's
 		// chip yields its place — one mode rides a message.
 		insertModeLead(editor, {
@@ -334,17 +339,17 @@ export function stageCommandAtSlashToken(editor: HTMLElement, token: SlashToken,
  * leaves the text and becomes its lead chip, so every command line shows the
  * same icon and theme from the moment it is recognizable.
  */
-export function applyLeadingCommand(editor: HTMLElement): void {
+export function applyLeadingCommand(editor: HTMLElement, stageMode = true): void {
 	const name = stripLeadingCommand(editor);
 	if (name === null) return;
-	stageCommandLead(editor, name === "ultracode" ? "ultracode:" : `/${name}`);
+	stageCommandLead(editor, name === "ultracode" ? "ultracode:" : `/${name}`, stageMode);
 }
 
 /* ── Other-session context ────────────────────────────────────────────────── */
 
 /**
  * A skill or plugin picked from `#plusMenu`, staged as one light-purple icon
- * chip above `#prompt` (ZCode-style): `prefix` commands lead the next message
+ * chip above `#prompt`: `prefix` commands lead the next message
  * (one slash command per message, so a command pick replaces the previous
  * one), `note` picks ride at its tail.
  */
@@ -366,13 +371,13 @@ export interface ContextPackage {
 	readonly block: string;
 }
 
-/** Caps the packaged transcript, ZCode's selection limits shrunk to one pick. */
+/** Caps the packaged transcript for a single context pick. */
 const SESSION_CONTEXT_MAX_CHARS = 4000;
 const SESSION_CONTEXT_MAX_MESSAGES = 20;
 
 /**
- * Package another session's conversation as a prompt tail block (ZCode's
- * `# userselect:` pattern): a heading naming the source session and a fenced
+ * Package another session's conversation as a prompt tail block:
+ * a `# userselect:` heading naming the source session and a fenced
  * transcript of its user/assistant messages, oldest first, capped. The block
  * is ordinary prompt text — editable before sending, visible in the composer.
  */
@@ -413,23 +418,30 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 /** Read each file (up to 5 MB) and stage it; oversized or unreadable files raise a toast. */
-export async function addAttachments(files: readonly File[]): Promise<void> {
-	for (const file of files) {
-		if (file.size > MAX_ATTACHMENT_BYTES) {
-			showError(t("attachmentTooLarge"));
-			continue;
+export async function addAttachments(files: readonly File[], stage?: (attachment: Attachment) => void): Promise<void> {
+	const owner = getState().composerDraftId;
+	const release = stage ? () => {} : retainComposerDraftWork(owner);
+	try {
+		for (const file of files) {
+			if (file.size > MAX_ATTACHMENT_BYTES) {
+				showError(t("attachmentTooLarge"));
+				continue;
+			}
+			try {
+				const attachment: Attachment = {
+					name: file.name,
+					mimeType: file.type || "application/octet-stream",
+					data: await readFileAsBase64(file),
+					kind: file.type.startsWith("image/") ? "image" : "text",
+				};
+				if (stage) stage(attachment);
+				else updateDraftAttachments(owner, (attachments) => [...attachments, attachment]);
+			} catch (error) {
+				showError((error instanceof Error && error.message) || t("attachmentUnreadable"));
+			}
 		}
-		try {
-			const attachment: Attachment = {
-				name: file.name,
-				mimeType: file.type || "application/octet-stream",
-				data: await readFileAsBase64(file),
-				kind: file.type.startsWith("image/") ? "image" : "text",
-			};
-			setState((state) => ({ attachments: [...state.attachments, attachment] }));
-		} catch (error) {
-			showError((error instanceof Error && error.message) || t("attachmentUnreadable"));
-		}
+	} finally {
+		release();
 	}
 }
 
@@ -470,6 +482,16 @@ export async function sendMessage(text: string, files: readonly PromptFile[] = [
 	const state = getState();
 	const { attachments, timelineItems } = state;
 	const active = turnActive(state);
+	// Read-only startup and migration need no model. Block an actual ordinary prompt
+	// before clearing attachments; the caller restores its editor when false is returned.
+	if (isDesktopHost() && !active && !text.startsWith("/")) {
+		const source = state.current ?? draftModelSource(state.draftModels, state.draftModel, state.draftThinking);
+		if (modelConfigurationRequired(source)) {
+			openSettings("models");
+			showError(t("modelConfigurationNeeded"), false);
+			return false;
+		}
+	}
 	// A queued or steered message waits for the turn, so only a new turn gets
 	// the immediate message and thinking indicator.
 	const images = attachments.filter((attachment) => attachment.kind === "image");
@@ -505,10 +527,11 @@ export async function sendMessage(text: string, files: readonly PromptFile[] = [
 		// A slash command journals no user message: the host echoes it as a
 		// command row through the snapshot, so pull the snapshot once the
 		// command has run (commands that drive no turn push no other event).
-		if (text.startsWith("/")) void refreshCurrent();
+		if (text.startsWith("/") && getState().composerDraftId === state.composerDraftId) void refreshCurrent();
 		return true;
 	} catch (error) {
-		setState({ attachments, pendingTurn: null });
+		updateDraftAttachments(state.composerDraftId, (newer) => [...attachments, ...newer]);
+		if (getState().composerDraftId === state.composerDraftId) setState({ pendingTurn: null });
 		if (steering && state.current) setSteering(state.current.id, steering);
 		showError(errorMessage(error));
 		return false;

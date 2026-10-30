@@ -16,13 +16,15 @@ import {
 	refreshWorkspaces,
 } from "../../state/session";
 import { type AppState, getState, setUi, useAppStore } from "../../state/store";
+import { handleTagGroupBeforeUnload } from "../../state/tag-group-persistence";
 import { answerSelection, answerTextInput, pendingSelection, pendingTextInput } from "../composer/actions";
 import { openTree, setPreviewOpen } from "../files/actions";
+import { handleMigrationEscape } from "../migration/actions";
 import { closeTopmostSettingsLayer } from "../settings/actions";
 import { closeSearch, closeWorkspaceMenu, openSearch } from "../sidebar/actions";
 import { toggleTerminalDock } from "../terminal/actions";
 import { requestVoiceStop, voiceRecording } from "../voice/actions";
-import { chooseWorkspaceFolder, closeWorkspaceRemoval } from "../workspace/actions";
+import { chooseWorkspaceFolder, closeWorkspaceBrowser, closeWorkspaceRemoval } from "../workspace/actions";
 import { closeLogoutConfirm, confirmLogout, toggleSidebar, watchSystemTheme } from "./actions";
 
 /**
@@ -57,7 +59,8 @@ function handleEscape(): void {
 	else if (ui.changesMenu) setUi({ changesMenu: null });
 	else if (ui.rightPanelMenu) setUi({ rightPanelMenu: false });
 	else if (ui.searchOpen) closeSearch();
-	else if (ui.workspaceBrowserOpen) setUi({ workspaceBrowserOpen: false });
+	else if (ui.workspaceBrowserOpen) closeWorkspaceBrowser();
+	else if (handleMigrationEscape()) return;
 	else if (closeTopmostSettingsLayer()) return;
 	else if (ui.workspacePopoverOpen) setUi({ workspacePopoverOpen: false });
 	else if (ui.branchCreateOpen) setUi({ branchCreateOpen: false });
@@ -140,7 +143,13 @@ const BACKGROUND_STATUS_POLL_MS = 2000;
 /** One focus can fire `focus` and `visibilitychange` back to back; read the lists once. */
 const LIST_REFRESH_MIN_INTERVAL_MS = 1000;
 
+export function watchTagGroupUnload(): () => void {
+	window.addEventListener("beforeunload", handleTagGroupBeforeUnload);
+	return () => window.removeEventListener("beforeunload", handleTagGroupBeforeUnload);
+}
+
 export function ShellEffects() {
+	useEffect(() => watchTagGroupUnload(), []);
 	useEffect(() => {
 		document.addEventListener("keydown", handleKeydown);
 		return () => document.removeEventListener("keydown", handleKeydown);

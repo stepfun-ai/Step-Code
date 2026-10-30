@@ -19,6 +19,7 @@ import {
 	removePlugin,
 	SettingsError,
 	saveMcpServer,
+	saveMcpServerPatch,
 	setMcpServerEnabled,
 	setSkillEnabled,
 } from "../src/settings.ts";
@@ -48,6 +49,13 @@ async function rejectsWith(promise: Promise<unknown> | (() => unknown), status: 
 		async () => (typeof promise === "function" ? promise() : promise),
 		(error: unknown) => error instanceof SettingsError && error.status === status,
 	);
+}
+
+async function storedServer(name: string) {
+	const config = parse(await readFile(join(home, ".stepcode", "config.toml"), "utf8"));
+	const servers = config.mcp_servers;
+	assert.ok(servers && typeof servers === "object" && !Array.isArray(servers));
+	return parseMcpServerConfig(Object.entries(servers).find(([key]) => key === name)?.[1]);
 }
 
 async function writePlugin(id: string, manifest: Record<string, unknown>): Promise<string> {
@@ -92,7 +100,7 @@ test("replacing a server keeps the tool lists, env headers and OAuth it was give
 
 	saveMcpServer("guarded", { command: "node" }, { replace: false });
 	saveMcpServer("guarded", { ...config }, { replace: true });
-	const saved = (await listMcpServers()).find((server) => server.name === "guarded")?.config;
+	const saved = await storedServer("guarded");
 	assert.deepEqual(saved?.enabled_tools, ["read"]);
 	assert.deepEqual(saved?.disabled_tools, ["write"]);
 	assert.deepEqual(saved?.env_http_headers, { "X-Key": "MCP_KEY" });
@@ -106,7 +114,7 @@ test("a server's shared flag is accepted and kept when the form edits it without
 	saveMcpServer("browser", { command: "node", shared: false }, { replace: false });
 	// The settings form has no sharing switch, so its edit carries no `shared`.
 	saveMcpServer("browser", { command: "node", args: ["server.js"] }, { replace: true });
-	const saved = (await listMcpServers()).find((server) => server.name === "browser")?.config;
+	const saved = await storedServer("browser");
 	assert.equal(saved?.shared, false);
 	assert.deepEqual(saved?.args, ["server.js"]);
 	deleteMcpServer("browser");
@@ -134,6 +142,96 @@ test("user MCP servers are added, replaced, switched off and deleted in config.t
 	deleteMcpServer("files");
 	assert.equal((await listMcpServers()).some((server) => server.name === "files"), false);
 	await rejectsWith(() => deleteMcpServer("files"), 404);
+});
+
+test("safe MCP list and patches keep secrets and empty restrictions without storing masks", async () => {
+	const original = {
+		url: "https://fixture.invalid/mcp?token=fixture-url-secret",
+		http_headers: { Authorization: "fixture-header-secret" },
+		oauth: { client_id: "fixture-id", client_secret: "fixture-oauth-secret" },
+		env_http_headers: { "X-Key": "FIXTURE_KEY" },
+		enabled_tools: [],
+		disabled_tools: ["write"],
+		shared: false,
+		enabled: false,
+	};
+	saveMcpServer("safe-view", original, { replace: false });
+	try {
+		const view = (await listMcpServers()).find((server) => server.name === "safe-view");
+		assert.ok(view?.revision);
+		assert.equal(view.transport, "http");
+		assert.deepEqual(view.config?.enabled_tools, []);
+		assert.deepEqual(view.protectedFields, ["url", "http_headers", "oauth"]);
+		assert.doesNotMatch(JSON.stringify(view), /fixture-(url|header|oauth)-secret/u);
+		assert.equal(view.config?.url, undefined);
+		saveMcpServerPatch("safe-view", {
+			revision: view.revision,
+			fields: { url: { operation: "keep" }, tool_timeout_sec: { operation: "set", value: 42 } },
+		});
+		assert.deepEqual(await storedServer("safe-view"), { ...original, tool_timeout_sec: 42 });
+		await rejectsWith(() => saveMcpServerPatch("safe-view", { revision: view.revision, fields: {} }), 409);
+		const current = (await listMcpServers()).find((server) => server.name === "safe-view");
+		saveMcpServerPatch("safe-view", {
+			revision: current?.revision,
+			fields: {
+				http_headers: { operation: "remove" },
+				oauth: { operation: "set", value: { client_secret: "fixture-replacement-secret" } },
+			},
+		});
+		const saved = await storedServer("safe-view");
+		assert.equal(saved.http_headers, undefined);
+		assert.equal(saved.oauth?.client_secret, "fixture-replacement-secret");
+		assert.deepEqual(saved.enabled_tools, []);
+		assert.equal(saved.shared, false);
+		assert.doesNotMatch(await readFile(join(home, ".stepcode", "config.toml"), "utf8"), /\*\*\*/u);
+	} finally {
+		deleteMcpServer("safe-view");
+	}
+});
+
+test("stdio LIST hides executable fields and invalid patches leave disabled restrictions intact", async () => {
+	saveMcpServer("stdio-safe", { command: "fixture-command-secret", args: ["fixture-arg-secret"], cwd: "/fixture-cwd-secret", env: { KEY: "fixture-env-secret" }, enabled: false, enabled_tools: [] }, { replace: false });
+	try {
+		const view = (await listMcpServers()).find((server) => server.name === "stdio-safe");
+		assert.ok(view?.revision);
+		assert.equal(view.transport, "stdio");
+		assert.deepEqual(view.protectedFields, ["command", "args", "cwd", "env"]);
+		assert.doesNotMatch(JSON.stringify(view), /fixture-(command|arg|cwd|env)-secret/u);
+		for (const [field, value] of [["enabled", "false"], ["cwd", 42], ["tool_timeout_sec", null], ["enabled_tools", null]]) {
+			await rejectsWith(() => saveMcpServerPatch("stdio-safe", { revision: view.revision, fields: { [String(field)]: { operation: "set", value } } }), 400);
+		}
+		assert.equal((await storedServer("stdio-safe")).enabled, false);
+		assert.deepEqual((await storedServer("stdio-safe")).enabled_tools, []);
+		assert.throws(() => saveMcpServerPatch("stdio-safe", { revision: view.revision, fields: { env: { operation: "set", value: { "fixture-secret-key": 42 } } } }),
+			(error: unknown) => error instanceof SettingsError && !error.message.includes("fixture-secret-key"));
+		saveMcpServerPatch("stdio-safe", { revision: view.revision, fields: { env: { operation: "remove" }, enabled_tools: { operation: "remove" } } });
+		const saved = await storedServer("stdio-safe");
+		assert.equal(saved.env, undefined);
+		assert.equal(saved.enabled_tools, undefined);
+		assert.equal(saved.command, "fixture-command-secret");
+	} finally {
+		deleteMcpServer("stdio-safe");
+	}
+});
+
+test("transport patch requires explicit removals and never silently drops restrictions", async () => {
+	saveMcpServer("transport-patch", { command: "fixture-node", env: { KEY: "fixture-secret" }, enabled_tools: [] }, { replace: false });
+	try {
+		const view = (await listMcpServers()).find((server) => server.name === "transport-patch");
+		await rejectsWith(() => saveMcpServerPatch("transport-patch", {
+			revision: view?.revision,
+			fields: { command: { operation: "remove" }, url: { operation: "set", value: "https://fixture.invalid/mcp" } },
+		}), 400);
+		assert.equal((await storedServer("transport-patch")).env?.KEY, "fixture-secret");
+		saveMcpServerPatch("transport-patch", {
+			revision: view?.revision,
+			fields: { command: { operation: "remove" }, env: { operation: "remove" }, url: { operation: "set", value: "https://fixture.invalid/mcp" } },
+		});
+		assert.deepEqual(await storedServer("transport-patch"), { url: "https://fixture.invalid/mcp", enabled_tools: [] });
+		await rejectsWith(() => saveMcpServerPatch("missing-patch", { revision: view?.revision, fields: {} }), 404);
+	} finally {
+		deleteMcpServer("transport-patch");
+	}
 });
 
 test("a plugin server is switched off by an override entry that is removed again on re-enable", async () => {

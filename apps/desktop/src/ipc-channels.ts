@@ -5,10 +5,16 @@
  * main-process code (dialog, shell, ipcMain are unavailable there).
  */
 export const DESKTOP_IPC = {
+	beginTagGroupClose: "stepcode-desktop:begin-tag-group-close",
+	completeTagGroupClose: "stepcode-desktop:complete-tag-group-close",
+	readTagGroups: "stepcode-desktop:read-tag-groups",
+	saveTagGroups: "stepcode-desktop:save-tag-groups",
 	pickDirectory: "stepcode-desktop:pick-directory",
 	openExternal: "stepcode-desktop:open-external",
 	revealPath: "stepcode-desktop:reveal-path",
 	defaultBrowser: "stepcode-desktop:default-browser",
+	getTheme: "stepcode-desktop:get-theme",
+	setTheme: "stepcode-desktop:set-theme",
 } as const;
 
 /** Argument the main process passes to the preload so the bridge can report the app version synchronously. */

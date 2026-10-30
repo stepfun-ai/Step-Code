@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { slashGroups, slashSections, slashTokenAt } from "../client/src/features/composer/slash-groups.ts";
 import type { TranslateFn } from "../client/src/i18n/index.ts";
 
@@ -76,4 +77,21 @@ test("slashes inside words, paths and URLs do not open the menu", () => {
 	assert.equal(slashTokenAt("\ufffc/x", 3), null);
 	// The caret has left the word.
 	assert.equal(slashTokenAt("fix /commit it", 14), null);
+});
+
+test("every command the menu lists is painted as a command in composer.css", () => {
+	// The menu's command group is emphasised — ink and a bold `/name` — while
+	// plugin commands and skills stay in the muted secondary colour. A command
+	// kind that misses the rule renders gray among black entries, which is how
+	// `/feedback` (its own kind, because it opens the dialog rather than
+	// inserting text) looked before it joined the selector.
+	const css = readFileSync(new URL("../client/src/features/composer/composer.css", import.meta.url), "utf8");
+	const kinds = [...new Set(slashGroups("", SKILLS, t, []).commands.map((item) => item.kind))];
+	assert.ok(kinds.includes("command"), "the built-in commands lost their kind");
+	for (const kind of kinds) {
+		assert.ok(
+			css.includes(`.slash-item.${kind} .slash-item-title`),
+			`composer.css has no command-title rule for slash-item kind "${kind}"`,
+		);
+	}
 });

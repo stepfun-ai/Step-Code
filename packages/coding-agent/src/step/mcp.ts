@@ -12,7 +12,7 @@ import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelc
 import type { AgentToolResult } from "@step-harness/agent-core";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
-import { readGlobalStepConfig } from "./config-toml.ts";
+import { readGlobalStepConfig, readStepConfig, resolveStepConfigPath } from "./config-toml.ts";
 import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
 import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
@@ -26,6 +26,7 @@ import {
 	readStepPluginManifest,
 	type StepPluginProvision,
 } from "./plugins.ts";
+import { redactSecretString } from "./secret-redaction.ts";
 import { ensureStepPageReady, isManagedStepPageCommand } from "./steppage-provision.ts";
 import { STEPCODE_VERSION } from "./version.ts";
 
@@ -33,6 +34,8 @@ export { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 
 const MCP_STARTUP_TIMEOUT_SEC = 30;
 const MCP_CALL_TIMEOUT_SEC = 300;
+/** Stderr kept from a stdio server while it starts; enough for a launcher's error block. */
+const MCP_STARTUP_STDERR_CHARS = 2_000;
 const CLIENT_INFO = { name: "step-harness", version: STEPCODE_VERSION.value } as const;
 /** Joins a plugin id to the server name it declares, e.g. `context7__context7`. */
 const PLUGIN_SERVER_SEPARATOR = "__";
@@ -728,15 +731,40 @@ function disabledGlobalServerNames(): string[] {
 		.map(([name]) => name);
 }
 
+/** Project-declared MCP servers. An unreadable project config must not take MCP down with it. */
+function readProjectMcpServers(cwd: string): Record<string, unknown> {
+	try {
+		return readStepConfig(resolveStepConfigPath(process.env, cwd)).mcp_servers ?? {};
+	} catch {
+		return {};
+	}
+}
+
 export async function discoverStepMcpServers(cwd: string, projectTrusted: boolean): Promise<DiscoveredServer[]> {
 	const roots = [defaultStepPluginsDir(process.env)];
 	if (projectTrusted) roots.push(defaultStepPluginsDir(process.env, { cwd, project: true }));
 	const result: DiscoveredServer[] = [];
 	const globalServers = new Map<string, DiscoveredServer>();
 	const seen = new Set<string>();
+	// A trusted project may declare its own servers; they take precedence over the global
+	// ones by name, including turning one off. Nothing read them before, so this is additive.
+	if (projectTrusted && cwd) {
+		for (const [name, declaration] of Object.entries(readProjectMcpServers(cwd))) {
+			if (!isRecord(declaration)) continue;
+			seen.add(name);
+			if (declaration.enabled === false || !hasTransport(declaration)) continue;
+			const normalized = normalizeDeclaration(declaration);
+			if (typeof normalized.command !== "string" && typeof normalized.url !== "string") continue;
+			const server = { name, declaration: normalized };
+			result.push(server);
+			globalServers.set(name, server);
+		}
+	}
 	const config = readGlobalStepConfig(process.env);
 	for (const [name, declaration] of Object.entries(config.mcp_servers ?? {})) {
 		if (!isRecord(declaration)) continue;
+		// A project declaration already claimed this name, so the global one yields.
+		if (seen.has(name)) continue;
 		if (declaration.enabled === false) {
 			seen.add(name);
 			continue;
@@ -1009,6 +1037,7 @@ export async function connectStepMcpServer(
 	const timeout = timeoutMs(input.declaration.startup_timeout_sec, MCP_STARTUP_TIMEOUT_SEC);
 	const callTimeoutMs = timeoutMs(input.declaration.tool_timeout_sec, MCP_CALL_TIMEOUT_SEC);
 	let transport: StdioClientTransport | StreamableHTTPClientTransport;
+	let startupStderr: StartupStderr | undefined;
 	if (input.declaration.command) {
 		const env = resolveStepMcpEnvironment(input.declaration.env);
 		let command = input.declaration.command;
@@ -1026,7 +1055,7 @@ export async function connectStepMcpServer(
 			env,
 			stderr: "pipe",
 		});
-		transport.stderr?.on("data", () => undefined);
+		startupStderr = captureStartupStderr(transport);
 	} else if (input.declaration.url) {
 		const headers = resolveHttpHeaders(input.declaration);
 		transport = new StreamableHTTPClientTransport(new URL(input.declaration.url), {
@@ -1055,6 +1084,7 @@ export async function connectStepMcpServer(
 		await client.connect(transport, { timeout, signal });
 		const tools = await listAllMcpTools(client, signal, timeout);
 		signal.throwIfAborted();
+		startupStderr?.stop();
 		return {
 			name: input.name,
 			client,
@@ -1065,11 +1095,62 @@ export async function connectStepMcpServer(
 			callTimeoutMs,
 		};
 	} catch (error) {
+		// Closing first lets the child's final stderr chunks arrive before the tail is read.
 		await closeStepMcpServer({ client, transport });
-		throw error;
+		startupStderr?.stop();
+		const stderr = startupStderr?.text() ?? "";
+		// A caller-requested abort keeps its own reason; nobody reports it as a start failure.
+		if (!stderr || abortSignal?.aborted) throw error;
+		throw new StepMcpStartError(error, stderr);
 	} finally {
 		signal.removeEventListener("abort", closeOnAbort);
 	}
+}
+
+/**
+ * A stdio server that failed to start, with the tail of what it wrote to
+ * stderr. The protocol error alone ("MCP connection closed") hides why a
+ * launcher such as `npx` exited, for example a registry rejecting its token.
+ * `cause` is the original transport error, which failure classification reads.
+ */
+export class StepMcpStartError extends Error {
+	readonly stderr: string;
+
+	constructor(cause: unknown, stderr: string) {
+		super(cause instanceof Error ? cause.message : String(cause), { cause });
+		this.name = "StepMcpStartError";
+		this.stderr = stderr;
+	}
+}
+
+interface StartupStderr {
+	/** Stop collecting; the stream is still drained so the child never blocks on a full pipe. */
+	stop(): void;
+	text(): string;
+}
+
+/** Keep a bounded tail of a stdio server's stderr until it finishes starting. */
+function captureStartupStderr(transport: StdioClientTransport): StartupStderr {
+	let tail = "";
+	let truncated = false;
+	let collecting = true;
+	transport.stderr?.on("data", (chunk: Buffer | string) => {
+		if (!collecting) return;
+		tail = `${tail}${chunk.toString()}`;
+		if (tail.length > MCP_STARTUP_STDERR_CHARS) {
+			tail = tail.slice(-MCP_STARTUP_STDERR_CHARS);
+			truncated = true;
+		}
+	});
+	return {
+		stop: () => {
+			collecting = false;
+		},
+		text: () => {
+			const text = tail.trim();
+			return text && truncated ? `…${text}` : text;
+		},
+	};
 }
 
 /**
@@ -1140,11 +1221,9 @@ export function describeMcpStartFailure(input: {
 	error: unknown;
 	env?: NodeJS.ProcessEnv;
 }): string {
-	const detail = input.error instanceof Error ? input.error.message : String(input.error);
-	if (
-		input.error instanceof UnauthorizedError ||
-		(input.error instanceof StreamableHTTPError && input.error.code === 401)
-	) {
+	const error = input.error instanceof StepMcpStartError ? input.error.cause : input.error;
+	const detail = (error instanceof Error ? error.message : String(error)) + formatServerStderr(input.error);
+	if (error instanceof UnauthorizedError || (error instanceof StreamableHTTPError && error.code === 401)) {
 		// Print the bare server name, not the `<pluginId>__<serverName>` form the
 		// runtime publishes: the qualifier is an implementation detail of how
 		// plugin servers are namespaced, and `login` accepts either spelling.
@@ -1152,12 +1231,22 @@ export function describeMcpStartFailure(input: {
 		const quoted = /^[\w.-]+$/u.test(bare) ? bare : `'${bare.replace(/'/gu, "'\\''")}'`;
 		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${quoted}, then start a new session or restart Step.`;
 	}
-	if (!isMissingExecutable(input.error)) return `MCP server '${input.name}' could not start: ${detail}`;
+	if (!isMissingExecutable(error)) return `MCP server '${input.name}' could not start: ${detail}`;
 	const install = input.provision ? provisionInstallCommand(input.provision, input.env ?? process.env) : undefined;
 	const remedy = install
 		? `Install it with: ${install}, then start a new session or restart Step.`
 		: "Install it, then start a new session or restart Step.";
-	return `MCP server '${input.name}' could not start: '${input.command}' is not installed or not on PATH. ${remedy}`;
+	return `MCP server '${input.name}' could not start: '${input.command}' is not installed or not on PATH. ${remedy}${formatServerStderr(input.error)}`;
+}
+
+/**
+ * The server's own startup output, appended to the failure. Redacted because
+ * the message is shown in the UI and may be persisted; launchers echo URLs,
+ * arguments and environment that can carry credentials.
+ */
+function formatServerStderr(error: unknown): string {
+	if (!(error instanceof StepMcpStartError)) return "";
+	return `\nServer stderr:\n${redactSecretString(error.stderr)}`;
 }
 
 /** A spawn that failed because the executable is absent, rather than because the server misbehaved. */

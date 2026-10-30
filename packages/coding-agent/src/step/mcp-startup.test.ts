@@ -30,7 +30,17 @@ const config = vi.hoisted(() => ({ value: {} as StepConfigDocument }));
 const builtin = vi.hoisted(() => ({ enabled: false, disabledUser: false }));
 const preinstall = vi.hoisted(() => vi.fn<() => Promise<{ installed: []; warnings: string[] }>>());
 const readiness = vi.hoisted(() => vi.fn<(input: { signal?: AbortSignal }) => Promise<StepPageReadiness>>());
-vi.mock("./config-toml.ts", () => ({ readGlobalStepConfig: () => config.value }));
+const projectConfigs = vi.hoisted(() => ({ value: {} as Record<string, { mcp_servers?: Record<string, unknown> }> }));
+vi.mock("./config-toml.ts", () => ({
+	readGlobalStepConfig: () => config.value,
+	readStepConfig: (path: string) => {
+		const found = projectConfigs.value[path];
+		if (!found) throw new Error(`ENOENT: ${path}`);
+		return found;
+	},
+	resolveStepConfigPath: (_env: unknown, cwd?: string) =>
+		cwd ? `${cwd}/.stepcode/config.toml` : "/global/config.toml",
+}));
 const pluginMocks = vi.hoisted(() => ({
 	dirs: [] as string[],
 	manifests: new Map<string, unknown>(),
@@ -379,6 +389,45 @@ test("expands header templates and reports a variable with no fallback", () => {
 	delete process.env.STEP_TEST_PRESENT;
 });
 
+test("a trusted project may declare its own MCP servers", async () => {
+	config.value = {};
+	projectConfigs.value = {
+		"/proj/.stepcode/config.toml": { mcp_servers: { local: { command: "local-server" } } },
+	};
+	const discovered = await discoverStepMcpServers("/proj", true);
+	expect(discovered.map((s) => s.name)).toEqual(["local"]);
+	expect(discovered[0]?.declaration.command).toBe("local-server");
+});
+
+test("a project declaration overrides the global one, including turning it off", async () => {
+	config.value = { mcp_servers: { shared: { command: "global-server" }, off: { command: "global-off" } } };
+	projectConfigs.value = {
+		"/proj/.stepcode/config.toml": {
+			mcp_servers: { shared: { command: "project-server" }, off: { enabled: false } },
+		},
+	};
+	const discovered = await discoverStepMcpServers("/proj", true);
+	const names = discovered.map((s) => s.name);
+	expect(names).toEqual(["shared"]);
+	expect(discovered.find((s) => s.name === "shared")?.declaration.command).toBe("project-server");
+});
+
+test("an untrusted project contributes no ordinary MCP servers", async () => {
+	config.value = { mcp_servers: { global: { command: "global-server" } } };
+	projectConfigs.value = {
+		"/proj/.stepcode/config.toml": { mcp_servers: { local: { command: "local-server" } } },
+	};
+	const discovered = await discoverStepMcpServers("/proj", false);
+	expect(discovered.map((s) => s.name)).toEqual(["global"]);
+});
+
+test("a broken project config leaves global discovery working", async () => {
+	config.value = { mcp_servers: { global: { command: "global-server" } } };
+	projectConfigs.value = {};
+	const discovered = await discoverStepMcpServers("/proj", true);
+	expect(discovered.map((s) => s.name)).toEqual(["global"]);
+});
+
 test("a plugin stdio server runs from the plugin root unless it names an absolute cwd", async () => {
 	const dir = "/mock-plugins/local";
 	pluginMocks.dirs = [dir];
@@ -439,6 +488,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 	await harness.start();
 	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(1));
 	expect(getStepMcpStatuses()).toContainEqual({ name: "local__probe", status: "connected", toolCount: 1 });
+});
+
+test("a stdio server that exits during startup reports what it wrote to stderr", async () => {
+	// The shape of `npx` failing on a registry: an error block, then exit.
+	const script = `process.stderr.write("npm error code E401\\nnpm error Incorrect or missing password.\\n"); process.exit(1);`;
+	config.value = { mcp_servers: { launcher: { command: process.execPath, args: ["-e", script] } } };
+	const harness = await setup("tui");
+	await harness.start();
+	await vi.waitFor(() => expect(harness.notify).toHaveBeenCalled());
+	const [message, level] = harness.notify.mock.calls[0] as [string, string];
+	expect(level).toBe("warning");
+	expect(message).toMatch(/^MCP server 'launcher' could not start: .+\nServer stderr:\nnpm error code E401\n/u);
+	expect(message).toContain("npm error Incorrect or missing password.");
+	expect(getStepMcpStatuses()).toContainEqual({ name: "launcher", status: "failed", toolCount: 0, error: message });
 });
 
 test("resolves a plugin whose mcpServers points at a sibling .mcp.json", async () => {

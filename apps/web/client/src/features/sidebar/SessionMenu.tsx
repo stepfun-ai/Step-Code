@@ -2,6 +2,7 @@ import { useT } from "../../i18n";
 import { runSessionAction, type SessionAction } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
+import { Icon } from "../../ui";
 import { closeSessionMenu, toggleSessionPin } from "./actions";
 
 /**
@@ -38,15 +39,19 @@ export function SessionMenu({
 					toggleSessionPin(session.id);
 				}}
 			>
+				<Icon name={pinned ? "pinFilled" : "pin"} size="sm" />
 				{pinned ? translate("unpinSession") : translate("pinSession")}
 			</button>
 			<button type="button" data-action="rename" onClick={() => run("rename")}>
+				<Icon name="pencil" size="sm" />
 				{translate("rename")}
 			</button>
 			<button type="button" data-action="archive" onClick={() => run("archive")}>
+				<Icon name={session.archived ? "undo" : "archive"} size="sm" />
 				{session.archived ? translate("restore") : translate("archive")}
 			</button>
 			<button className="danger" type="button" data-action="delete" onClick={() => run("delete")}>
+				<Icon name="trash" size="sm" />
 				{translate("delete")}
 			</button>
 		</>

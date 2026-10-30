@@ -82,9 +82,9 @@ export const ToolRow = memo(function ToolRow({
 	const call = callPath(item.args, cwd);
 	const shown = call.shown;
 	// Only a file opens in the preview; a search or list path is usually a folder.
-	const openable = FILE_KINDS.has(toolKind(item)) ? call.openable : null;
+	const openable = !item.imported && FILE_KINDS.has(toolKind(item)) ? call.openable : null;
 	const copyValue = toolKind(item) === "bash" ? (item.args?.command ?? "") : output;
-	const card = toolKind(item) === "edit" || toolKind(item) === "write";
+	const card = !item.imported && (toolKind(item) === "edit" || toolKind(item) === "write");
 	if (!readOnly && item.toolName === "subagent" && item.subagentTasks?.length && item.state !== "failed") {
 		return <SubagentLane item={item} />;
 	}
@@ -119,7 +119,8 @@ export const ToolRow = memo(function ToolRow({
 					<span className="tool-dot" aria-hidden="true">
 						·
 					</span>
-					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph. */}
+					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph,
+					    so a failed call folded into a process group stays as quiet as its siblings. */}
 					{stale ? <span className="tool-failed">{t("toolInterrupted")}</span> : null}
 					<RowSubject item={item} path={shown} openable={openable} />
 					{item.change?.patch ? <DiffStatRow item={item} /> : null}

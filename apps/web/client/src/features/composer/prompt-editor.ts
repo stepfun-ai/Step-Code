@@ -367,7 +367,7 @@ export function insertFileChip(
 	name: string,
 	upload: Promise<UploadedFile>,
 	onFail: (error: unknown) => void,
-): void {
+): Promise<void> {
 	nextChipKey += 1;
 	const key = String(nextChipKey);
 	const chip = createChip(name, key);
@@ -396,11 +396,15 @@ export function insertFileChip(
 		)
 		.finally(() => pendingUploads.delete(key));
 	pendingUploads.set(key, settled);
+	return settled;
 }
 
 /** Resolve once every chip inserted so far has its upload id or has been removed. */
-export async function waitForUploads(): Promise<void> {
-	await Promise.all(pendingUploads.values());
+export async function waitForUploads(root?: HTMLElement): Promise<void> {
+	const keys = root
+		? [...root.querySelectorAll<HTMLElement>(".prompt-file")].map((chip) => chip.dataset.uploadKey)
+		: [...pendingUploads.keys()];
+	await Promise.all(keys.map((key) => (key ? pendingUploads.get(key) : undefined)));
 }
 
 /* ── Markdown formatting ─────────────────────────────────────────────────── */
@@ -798,5 +802,19 @@ export function snapshotPrompt(root: HTMLElement): Node[] {
 
 export function restorePrompt(root: HTMLElement, nodes: readonly Node[]): void {
 	root.replaceChildren(...nodes);
-	placeCaretAtEnd(root);
+	if (root.isConnected && document.activeElement === root) placeCaretAtEnd(root);
+}
+
+/** Restore a failed send without discarding later typing or stacking two staged modes. */
+export function restoreFailedPrompt(root: HTMLElement, nodes: readonly Node[]): void {
+	const restored = document.createElement("div");
+	restored.replaceChildren(...nodes);
+	const newerMode = root.querySelector<HTMLElement>(`.${MODE_LEAD_CLASS}`);
+	const lead: Node[] = [];
+	if (newerMode) {
+		lead.push(newerMode, document.createTextNode(" "));
+		removeModeLead(restored);
+		removeModeLead(root);
+	}
+	restorePrompt(root, [...lead, ...restored.childNodes, ...root.childNodes]);
 }

@@ -6,7 +6,8 @@
 import { t } from "../../i18n";
 import type { Locale } from "../../i18n/messages";
 import { api, errorMessage } from "../../lib/api";
-import { STORAGE_KEYS, writeStorage } from "../../lib/storage";
+import { readStorage, STORAGE_KEYS, writeStorage } from "../../lib/storage";
+import { getDesktopBridge } from "../../platform/host";
 import { closeStream, showError } from "../../state/session";
 import { getState, setState, setUi, type ThemeChoice } from "../../state/store";
 import type { LoginReport } from "../../state/types";
@@ -43,7 +44,30 @@ export function applyTheme(theme: string, persist = true): void {
 	const next: ThemeChoice = THEMES.includes(theme as ThemeChoice) ? (theme as ThemeChoice) : "system";
 	setState({ theme: next });
 	document.documentElement.dataset.theme = resolvedTheme(next);
-	if (persist) writeStorage(STORAGE_KEYS.theme, next);
+	if (persist) {
+		writeStorage(STORAGE_KEYS.theme, next);
+		const bridge = getDesktopBridge();
+		if (bridge) void bridge.setTheme(next).catch(() => showError(t("themeSaveFailed")));
+	}
+}
+
+/** Restore profile appearance before rendering; browser storage is only the desktop migration fallback. */
+export async function restoreDesktopTheme(): Promise<void> {
+	const bridge = getDesktopBridge();
+	if (!bridge) return;
+	try {
+		const saved = await bridge.getTheme();
+		if (saved !== null) {
+			applyTheme(saved, false);
+			writeStorage(STORAGE_KEYS.theme, saved);
+		} else {
+			const stored = readStorage(STORAGE_KEYS.theme);
+			if (stored !== null && THEMES.includes(stored as ThemeChoice)) applyTheme(stored);
+		}
+	} catch {
+		// Keep the already applied local choice and still render the page when IPC is unavailable.
+		showError(t("themeRestoreFailed"));
+	}
 }
 
 /**

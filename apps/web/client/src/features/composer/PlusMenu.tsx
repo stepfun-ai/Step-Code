@@ -3,7 +3,7 @@
  * that used to sit in the control row or only in Settings: staging attachments,
  * the session modes (goal / plan, single-select, moved here from `#modeMenu`;
  * see `PICKABLE_MODES` for why a mode may be hidden), and three entries with
- * ZCode-style secondary panels — plugins,
+ * searchable secondary panels — plugins,
  * skills and other sessions' context. The permission preset stays a sibling
  * button, not an entry here.
  *
@@ -27,8 +27,9 @@ type SubKey = "plugins" | "skills" | "sessions";
 
 const SUB_ENTRIES: ReadonlyArray<{ key: SubKey; labelKey: string; icon: IconName }> = [
 	{ key: "plugins", labelKey: "settingsPlugins", icon: "puzzle" },
-	{ key: "skills", labelKey: "slashSkills", icon: "wand" },
-	{ key: "sessions", labelKey: "otherSessionContext", icon: "layers" },
+	// The wrench is the skill mark everywhere: the panel's rows, the staged chip and the sent badge.
+	{ key: "skills", labelKey: "slashSkills", icon: "wrench" },
+	{ key: "sessions", labelKey: "otherSessionContext", icon: "conversation" },
 ];
 
 export interface PlusMenuProps extends ComposerMenuProps {

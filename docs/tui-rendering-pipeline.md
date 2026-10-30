@@ -115,6 +115,70 @@
 
 容器层之上没有脏标记：组件靠"返回同一个数组实例"表达"我没变"，靠 `invalidate()` 丢弃自己的缓存。产品侧大量使用后者（主题切换、语法高亮加载完成时全树 `invalidate`）。
 
+### 4.1 块级数学 tokenizer 的扫描成本
+
+`Markdown` 为块级数学（`$$…$$`、`\[…\]`）注册了一个 Marked block 扩展（`LATEX_MARKDOWN_EXTENSIONS` 的 `latexBlock`）。Marked 只在**即将进入 paragraph / text 之前**才收集 block 扩展的 `start()`：space、code、heading、hr、blockquote、list、html、def、table、lheading 命中时根本不会调用它。调用时传入的是 `src.slice(1)`，即**尚未消费的剩余源文本**。所以一次全文正则的代价是 `O(段落数 × 剩余长度)`，而不是 `O(块数 × 长度)`；标题、围栏、表格、分隔线不触发。
+
+多数文档根本不含块级数学，所以该判据先做子串检查（`includes("$$")` / `includes("\\[")`），只有可能匹配时才跑正则。语义不变：正则能匹配的字符串必然包含这两个子串之一，短路不会漏判；子串检查的误判（例如围栏代码里的 `\[`）只是多跑一次正则。落点是 `components/markdown-stream.ts` 的 `findBlockMathStart`，tokenizer 的 `start()` 与流式渲染的 hazard 扫描共用它，因此"两处字面量必须同步"这个静默失败点不存在。
+
+注意这**不是**把扫描消掉：短路后每个段落边界仍会扫一遍剩余文本，只是常数更小。本机 146 KB 混合消息、120 列、120 B/delta 的流式模拟里，这项短路把累计耗时从 12 340 ms 降到 9 845 ms（约 1.3 倍）。回归门禁用确定性的正则调用计数（`test/markdown-block-math.test.ts`），不依赖实际耗时。
+
+### 4.2 认证前缀：流式增量渲染
+
+流式回复每个 delta 都调用一次 `Markdown.setText`。整篇重 lex、重渲染、重换行让累计成本按消息长度的平方增长，所以 `Markdown` 保留"已经确定终结"的块的行，只重算可变尾部（`renderContent` / `renderFrom`）。这不是"留最后一块"的启发式：只有能证明"从这里以全新 Lexer 重启，与渲染全文等价"的位置才会被冻结。
+
+保留的状态（`packages/tui/src/components/markdown.ts`）：
+
+- `stableSourceEnd`：已认证前缀的长度（归一化后的 UTF-16 偏移；tab 展开是逐字符替换，前缀关系保持）。
+- `stablePaddedLines`：前缀的最终行（已加上左右 margin、背景、右侧补白），直接参与拼接。
+- `stableNoWrap`：前缀里围栏代码行的 pre-wrap 文本。换行阶段的 no-wrap 判定按**行文本**而不是来源，所以这些行必须继续参与后续帧的判定。
+- `stableWrappedProseRows`：前缀里被**软换行**过的散文行文本。它是"未来影响过去"的唯一入口，见下。
+- `guard`：前缀留给尾部的解析事实——块级数学是否出现、是否有未闭合的行首 `[`、inline `<a …>` 与 `<pre|code|kbd|script>` 的嵌套深度。
+- `previousSource` / `layoutWidth`：判断这一帧是不是同一份文档的追加，以及宽度是否变化。
+
+认证条件（`findCertifiedCut`）：候选必须紧跟一个**顶层 `space` token**（Marked 会把单个换行折进前一个 token，所以顶层 `space` 一定覆盖一个真实空行），且它后面的 token 是"见证块"——列 0 开始、首物理行已结束的 paragraph 或 heading。list、blockquote、table、围栏、缩进代码都不能当见证：它们可以跨空行继续吞入，把候选点之前的块重新解释（list 合并与序号重排、table 加行改列宽、`    a\n\n    b` 仍是同一个缩进代码块）。返回最靠右的候选；没有候选就不推进，尾部仍由 canonical Lexer 完整解释并显示所有不完整行。
+
+必须整篇重算的情形分三类，混为一谈会把"有未闭合围栏"实现成"每帧全文渲染"，直接吃掉代码占比高的收益：
+
+- **粘性（直到文本被替换）**：任何行首块级数学 opener（pending latex token 会重剪它前面的段落）、任意 reference definition（`tokens.links` 非空，定义对所有块可见）。
+- **本帧重算一次**：宽度、padding、主题或 `invalidate()` 变化；文本被替换而不是追加；`message_end` 的流式/终态切换。
+- **只重算尾部**：没有新的证书、未闭合的 label 或 inline 标签、持续的 list/table/缩进代码/quote、open 或 EOF 临时围栏、token raw 无法精确重建（Marked 会规范化部分行尾空白，此时本帧不推进偏移，但不必把整份文档标记为粘性）。
+
+`nowrapLines` 的语义没有改：它仍然是文档级的行文本集合，围栏代码行让**同文本**的散文行变成硬裁剪。增量路径用两件事保持等价：尾部渲染前用 `stableNoWrap` 播种，尾部散文行因此照旧被裁剪；而尾部新出现的代码行一旦与 `stableWrappedProseRows` 撞文本，就说明已冻结的散文行本该被裁剪，这一帧整篇重渲（`collidesWithStableRows`）。被裁剪过的行不进 `stableWrappedProseRows`——集合只会增长，裁剪是不可逆的。
+
+`renderDirtyStart` 报告"相对上一帧输出可能变化的最早行"，复用前缀时等于 `paddingY + 上一帧的前缀行数`，整篇重算时是 0（上下 padding 行内容相同，但换主题时它们的底色也会变，不能假定可复用），交回 `Container.render` 做前缀复用。返回的数组每帧都是新数组，已发出的数组不会被就地修改。
+
+正确性门禁在 `test/markdown-stream-prefix.test.ts`：每个前缀、多种宽度，与"新建实例"的冷渲染逐字节比较，覆盖 35 份针对上述构造的对抗 fixture、仓库文档抽样、以及 200 份固定种子的块结构组合。`test/markdown-stream-work.test.ts` 断言工作量而不是耗时：60 KB 混合文档流式渲染只把约两倍文档长度的源码交给 lexer，文档翻倍时 lex/渲染/换行的计数不超过 2.5 倍；块级数学、reference definition、无空行段落、代码行撞文本这些情形分别断言"从不复用前缀"且输出仍与冷渲染一致。
+
+实测（本机，120 列，120 B/delta，累计耗时含每帧完整管线）：
+
+| 场景 | 现状（每帧新建实例） | 增量渲染 |
+| --- | --- | --- |
+| 60 KB 散文 | 1 437 ms | 18 ms（约 79 倍） |
+| 60 KB 表格 | 2 095 ms | 52 ms（约 40 倍） |
+| 60 KB 50% 代码 | 462 ms | 13 ms（约 35 倍） |
+| 60 KB 单个超长段落（无可认证点） | 403 ms | 411 ms（无收益，输出正确） |
+| 146 KB 混合 | 12 340 ms | 275 ms（约 45 倍） |
+
+调用方必须复用同一个 `Markdown` 实例，否则实例级状态随组件一起消失；`AssistantMessageComponent` 因此按内容种类保留实例并只调 `setText`（`markdownSlots`）。每帧仍要做一次指针复制拼出扁平数组，以及主屏/全屏自己的差分；这两项是独立成本，不随前缀复用消失。Step 呈现的包装层（`step-message.ts` 的 `renderNativeRun`：`hideCompleteFences`、空行折叠、`trimOuterRows`）同样每帧扫一遍全部 native 行，那部分成本不受这里影响，需要单独处理。
+
+`invalidate()` 同时清掉 `defaultStylePrefix`。它是从主题派生的 ANSI 前缀，会在每个"在样式内结束"的行内片段之后重新拼一次；主题切换若只清缓存而留着它，旧主题的转义就会拼进新输出——当新主题不再应用该样式时（例如关掉粗体）会直接显示错。第 8 节的 `setIncrementalRenderDisabled(true)` 对这里同样生效：置位后渲染整篇且不保留前缀（`renderContent` 开头），否则那个"强制全量路径做字节级等价校验"的开关在 Markdown 内部形同虚设。
+
+**语法高亮按主题实例 + 语法版本 + `(lang, source)` 记忆化**（`cachedHighlight`，`packages/coding-agent/src/theme/theme.ts`）。渲染器把主题当纯函数用，自己无法去重，所以只要一帧里重渲了某个已完成代码块，高亮就整块重跑：认证前缀之外的路径（块级数学、reference definition）每帧重渲整篇，而认证路径的可变尾块里若含围栏也会每帧重渲。实测 40 KB、120 列、120 B/delta，用产品主题和真实 highlight.js：块级数学文档 1 154 ms → 211 ms（5.5 倍），reference definition 1 206 ms → 237 ms（5.1 倍），含一个围栏的散文 29 ms → 9 ms（3.2 倍）；**纯散文只有 1.15 倍**——不含围栏的文档本来就不调用高亮，缓存对它无用，这不是本改动的收益来源。
+
+三个键成分都不能省：
+
+- **主题实例**：导出的 `theme` 是 Proxy、身份不变，直接用它做键会把上一个主题的颜色永久留给下一个；键取 `setGlobalTheme` 存进 `Symbol.for` 槽的真实实例。这个识别只覆盖本模块的 Proxy，跨模块实例传入的 Proxy 会被当作普通对象——仓库内没有这种调用。
+- **语法版本**（`highlightGrammarRevision`）：`highlight.js` 的子语言解析走同一个注册表，同一段 `javascript` 里的 HTML 模板只有 XML 语法加载完成后才会上色，所以 `(lang, source)` 不足以标识结果。启动时 `loadAllHighlightLanguages()` 完成后版本自增，旧键自动失效。
+- **language + source**：同一段文本按 TypeScript 和按 JSON 高亮结果不同。
+
+其它约束：
+
+- **只在第二次请求时写入**。仍在流式增长的围栏每个 delta 都是一个新键，且这些前缀之后不会再被请求；把它们存下来会用一个代码块的几百个中间态占满预算（实测单个 56 KB 围栏 33 MiB）并把真正可复用的已完成块挤出去。已完成块会重复请求同一键，因此第二次命中才落盘。
+- **按 payload 预算淘汰**（4 MiB/主题，FIFO）而不是条目数；单条源码超过 64 Ki（UTF-16 code unit，不是字节）不保留，避免 read/write 工具把整文件钉在缓存里。
+- **永远返回副本**：`core/tools/write.ts` 会在流式写入时持有并修改返回数组。
+- 两个入口（`highlightCode` 与 markdown 主题的 `highlightCode`）共用一份缓存，因此失败兜底也统一成 `fg("mdCodeBlock", …)`；否则同一键的结果取决于谁先跑。
+
 ## 5. 主屏差分渲染（regular）
 
 `TuiMainScreen.doRender`（`tui-main-screen.ts:329-750`）每帧的完整顺序：

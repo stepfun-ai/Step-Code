@@ -10,9 +10,15 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import type { DesktopBrowserInfo } from "@step-harness/web/desktop-bridge";
 import { app, type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
+import { parseDirectoryPickOptions, recordDirectoryPick } from "./directory-pick-policy.ts";
 import { DESKTOP_IPC } from "./ipc-channels.ts";
+import { type DesktopStateStore, isDesktopThemeChoice } from "./state.ts";
+import type { TagGroupCloseOwner } from "./tag-group-close.ts";
 
 export interface DesktopIpcOptions {
+	readonly groupClose: Pick<TagGroupCloseOwner, "begin" | "complete">;
+	/** Profile state shared with window bounds, workspace and group persistence. */
+	readonly state: Pick<DesktopStateStore, "theme" | "update" | "readTagGroups" | "saveTagGroups">;
 	/** The window allowed to call the bridge, if one is open. */
 	readonly getWindow: () => BrowserWindow | undefined;
 	/** Origin of the running web server, e.g. `http://127.0.0.1:51234`; undefined while it is down. */
@@ -60,31 +66,64 @@ function existingDirectory(path: string | undefined): string | undefined {
 
 /** Register the bridge handlers once for the application lifetime. */
 export function installDesktopIpc(options: DesktopIpcOptions): void {
+	ipcMain.handle(DESKTOP_IPC.getTheme, (event) => {
+		trustedWindow(event, options);
+		return options.state.theme();
+	});
+	ipcMain.handle(DESKTOP_IPC.setTheme, (event, raw: unknown) => {
+		trustedWindow(event, options);
+		if (!isDesktopThemeChoice(raw)) throw new Error("setTheme expects a valid theme choice");
+		if (!options.state.update({ theme: raw })) throw new Error("Could not persist desktop theme");
+	});
+	ipcMain.handle(DESKTOP_IPC.beginTagGroupClose, (event) => options.groupClose.begin(trustedWindow(event, options)));
+	ipcMain.handle(DESKTOP_IPC.completeTagGroupClose, (event, id: unknown, outcome: unknown) => {
+		const window = trustedWindow(event, options);
+		if (typeof id !== "string" || id.length === 0 || id.length > 128 || (outcome !== "saved" && outcome !== "failed"))
+			throw new Error("Invalid group close completion");
+		return options.groupClose.complete(window, id, outcome);
+	});
+	ipcMain.handle(DESKTOP_IPC.readTagGroups, (event) => {
+		trustedWindow(event, options);
+		return options.state.readTagGroups();
+	});
+	ipcMain.handle(DESKTOP_IPC.saveTagGroups, (event, raw: unknown) => {
+		trustedWindow(event, options);
+		options.state.saveTagGroups(raw);
+	});
 	// One folder dialog per window: a second request joins the open one instead of stacking.
-	const pending = new WeakMap<BrowserWindow, Promise<string | null>>();
+	const pending = new WeakMap<
+		BrowserWindow,
+		{
+			purpose: "workspace" | "resource";
+			result: Promise<string | null>;
+		}
+	>();
 
 	ipcMain.handle(DESKTOP_IPC.pickDirectory, (event, raw: unknown) => {
 		const window = trustedWindow(event, options);
+		const request = parseDirectoryPickOptions(raw);
 		const existing = pending.get(window);
-		if (existing !== undefined) return existing;
-		const request = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+		if (existing !== undefined) {
+			if (existing.purpose !== request.purpose)
+				throw new Error("A directory picker with a different purpose is already open");
+			return existing.result;
+		}
 		if (window.isMinimized()) window.restore();
 		window.focus();
 		const result = dialog
 			.showOpenDialog(window, {
 				title: optionalString(request.title),
 				defaultPath: existingDirectory(optionalString(request.defaultPath)),
-				properties: ["openDirectory", "createDirectory"],
+				properties: request.purpose === "resource" ? ["openDirectory"] : ["openDirectory", "createDirectory"],
 			})
 			.then(({ canceled, filePaths }) => {
 				const picked = canceled || window.isDestroyed() ? null : (filePaths[0] ?? null);
-				if (picked !== null) options.onDirectoryPicked(picked);
-				return picked;
+				return recordDirectoryPick(request, picked, options.onDirectoryPicked);
 			})
 			.finally(() => {
 				pending.delete(window);
 			});
-		pending.set(window, result);
+		pending.set(window, { purpose: request.purpose, result });
 		return result;
 	});
 

@@ -24,7 +24,7 @@ import {
 } from "node:fs/promises"
 import { createServer as createHttpServer } from "node:http"
 import { createServer } from "node:net"
-import { homedir, tmpdir } from "node:os"
+import { tmpdir } from "node:os"
 import { delimiter, dirname, join } from "node:path"
 import { after, before, test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -241,6 +241,103 @@ const until = async (probe, label, timeout = 8000) => {
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 };
+const migrationPost = async (path, action) => {
+  const originalFetch = window.fetch;
+  let result;
+  let observed = false;
+  window.fetch = async (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const response = await originalFetch(input, init);
+    if (url.origin === location.origin && url.pathname === '/api/v1/migrations' + path && init?.method === 'POST') {
+      result = { status: response.status, body: await response.clone().json(), request: JSON.parse(init.body) };
+      observed = true;
+    }
+    return response;
+  };
+  try {
+    await action();
+    await until(() => observed, 'migration POST ' + path);
+    return result;
+  } finally {
+    window.fetch = originalFetch;
+  }
+};
+const migrationRead = async (path = '') => {
+  const response = await fetch('/api/v1/migrations' + path);
+  if (!response.ok) throw new Error('Migration read failed: ' + response.status);
+  return response.json();
+};
+const migrationFooter = () => $$('#migrationModal .migration-dialog-foot button');
+const migrationOpen = async () => {
+  if ($('#migrationModal') && !$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
+  if ($('#settingsView').hidden) $('#settingsButton').click();
+  $('[data-settings-page="migration"]').click();
+  await until(() => $('#migrationPage .migration-category-list button'), 'migration Settings entry');
+  $('#migrationPage .migration-category-list button').click();
+  await until(() => !$('#migrationModal').hidden && $('#migrationScanButton'), 'explicit scan invitation');
+};
+const migrationScan = async () => {
+  const result = await migrationPost('/scan', () => $('#migrationScanButton').click());
+  if (result.status !== 200) throw new Error('Scan failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-list'), 'scan rendered');
+  return result.body;
+};
+const migrationExpand = (row) => {
+  const group = row.closest('.migration-group');
+  if (group && group.querySelector('.migration-group-items')?.hidden) group.querySelector('.migration-group-toggle').click();
+};
+const migrationPreview = async (item) => {
+  const row = $('[data-candidate-id="' + item.id + '"]');
+  if (!row || row.querySelector('input').disabled) throw new Error('Candidate not selectable: ' + item.name);
+  migrationExpand(row);
+  const result = await migrationPost('/preview', () => row.querySelector('.migration-row-title').click());
+  // A failed preview must stay observable in the panel, so callers assert on it themselves.
+  if (result.status === 200)
+    await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
+  return result.body;
+};
+const migrationSelect = async (item) => {
+  const row = $('[data-candidate-id="' + item.id + '"]');
+  await migrationPreview(item);
+  // Selecting re-reviews the same request, so the reviewed snapshot is the one the plan must freeze.
+  const selected = await migrationPost('/preview', () => row.querySelector('input').click());
+  if (selected.status !== 200) throw new Error('Selection preview failed: ' + JSON.stringify(selected.body));
+  await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
+  if (!row.querySelector('input').checked) throw new Error('Explicit selection lost');
+  for (const input of $$('.migration-preview .migration-check input')) if (!input.checked) input.click();
+  return selected.body;
+};
+const migrationToChecklist = async () => {
+  for (let i = 0; i < 4 && !$('.migration-final-plan'); i++) {
+    await until(() => $('#migrationNextStep') && !$('#migrationNextStep').disabled, 'next step ready');
+    $('#migrationNextStep').click();
+    await until(() => $('.migration-final-plan') || $('.migration-list'), 'step advanced');
+  }
+  await until(() => $('.migration-final-plan'), 'final plan reached');
+};
+const migrationPlan = async () => {
+  // A failed plan attempt leaves the review stage open, so return to the category first.
+  if ($('.migration-final-plan')) { $$('#migrationModal .migration-dialog-foot button')[0].click(); await until(() => $('.migration-list'), 'back to selection'); }
+  await until(() => $('#migrationNextStep') && !$('#migrationNextStep').disabled, 'selected previews ready');
+  const result = await migrationPost('/plans', migrationToChecklist);
+  if (result.status !== 200) throw new Error('Plan failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-final-plan'), 'immutable final review');
+  return result.body;
+};
+const migrationStart = async () => {
+  const result = await migrationPost('', () => $('#migrationStartPlan').click());
+  if (result.status !== 202) throw new Error('Start failed: ' + JSON.stringify(result.body));
+  const job = await until(async () => {
+    const job = await migrationRead('/' + result.body.id);
+    return ['completed', 'cancelled', 'interrupted'].includes(job.status) ? job : null;
+  }, 'durable terminal job');
+  await until(() => $('[data-result-count="pending"] dd')?.textContent === '0', 'terminal job UI');
+  for (const status of ['imported', 'skipped', 'failed']) {
+    if (Number($('[data-result-count="' + status + '"] dd').textContent) !== job.items.filter(item => item.status === status).length)
+      throw new Error('UI count disagrees with durable job: ' + status);
+  }
+  return job;
+};
 const treeRows = () => $$("#fileTreeBody .file-row").map((row) => row.dataset.path);
 const treeRow = (path) => $$("#fileTreeBody .file-row").find((row) => row.dataset.path === path);
 const projects = () => $$("#projectGroups .project-group").map((group) => group.dataset.cwd);
@@ -273,6 +370,7 @@ before(async () => {
   await mkdir(join(workspace, "src", "deep"), { recursive: true })
   await mkdir(join(workspace, "docs"), { recursive: true })
   await mkdir(join(extra, "lib"), { recursive: true })
+  await mkdir(join(base, "scan-home"), { recursive: true })
   await writeFile(
     join(workspace, "README.md"),
     "# Title\n\nSome **bold** text.\n",
@@ -374,6 +472,10 @@ before(async () => {
     cwd: webRoot,
     env: {
       ...process.env,
+      HOME: join(base, "scan-home"),
+      USERPROFILE: join(base, "scan-home"),
+      CODEX_HOME: join(base, "migration-codex"),
+      CLAUDE_CONFIG_DIR: join(base, "migration-claude"),
       TSX_TSCONFIG_PATH: join(webRoot, "..", "..", "tsconfig.json"),
       STEPCODE_WEB_PORT: String(port),
       STEPCODE_WEB_CWD: workspace,
@@ -1607,7 +1709,9 @@ test("a subagent's write asks for approval and runs in the child, not the main s
         asked.push({ tool: approval.toolName, content: approval.message });
         await fetch(base + "/approvals/decision", { method: "POST", headers: json, body: JSON.stringify({ id: approval.id, verdict: "approve_for_session" }) });
       }
-      return value.status === "completed" ? value : null;
+      const delegatedResult = value.entries?.some(entry => entry.message?.role === "toolResult" && entry.message.toolName === "subagent");
+      // POST accepts the prompt before its turn starts; a previous/initial completed state is not this turn's completion.
+      return value.status === "completed" && delegatedResult ? value : null;
     }, "the delegated write settles", 180000);
     const calls = [];
     for (const entry of snapshot.entries) {
@@ -1628,6 +1732,58 @@ test("a subagent's write asks for approval and runs in the child, not the main s
   assert.deepEqual(report.calls, ["subagent"]);
   assert.equal(report.resultError, false, report.resultText);
   assert.equal(await readFile(join(workspace, "src", "sub.txt"), "utf8"), "hello\n");
+});
+
+test("background subagent output is live beside an idle parent and completed answers survive stopping a supplement", { skip }, async () => {
+  const id = await browser.run(`
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    await fetch("/api/v1/sessions/" + session.id + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "background-parent-fixture" }) });
+    await until(async () => (await (await fetch("/api/v1/sessions/" + session.id)).json()).status === "completed", "parent persisted");
+    return session.id;
+  `);
+  await browser.goto(`${origin}/`);
+  const live = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${id}"]'), "background parent");
+    row.click();
+    await until(() => row.classList.contains("active"), "selected parent");
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-background-fixture" }) });
+    const lane = await until(() => $('.lane-row[data-subagent-tool-id="tool-background-call"]'), "background lane");
+    lane.click();
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "live-only child text", 180000);
+    const snapshot = await (await fetch(base)).json();
+    return { parentStatus: snapshot.status, childId: snapshot.subagentLanes?.[0]?.details.results[0]?.sessionId, live: $(".subagent-live-progress").textContent, composer: Boolean($("#prompt")) };
+  `);
+  assert.equal(live.parentStatus, "completed");
+  assert.match(live.childId, /^subagent-/u);
+  assert.match(live.live, /streamed reply/u);
+  assert.equal(live.composer, true);
+  if (process.env.STEP_E2E_SUBAGENT_SCREENSHOT) {
+    const screenshot = await browser.send("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.STEP_E2E_SUBAGENT_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
+  }
+  const stopped = await browser.run(`
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await until(async () => {
+      const value = await (await fetch(base)).json();
+      return value.subagentLanes?.[0]?.status === "completed" && value.status === "completed" && value.entries.some((entry) => entry.customType === "step-subagent-response");
+    }, "first child report completed", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "reply-background-fixture" }) });
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "supplement is live", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "stop-background-fixture" }) });
+    await until(async () => (await (await fetch(base)).json()).subagentLanes?.[0]?.status === "aborted", "supplement stopped", 180000);
+    await until(() => $(".subagent-completed-output")?.textContent.includes("streamed reply 39"), "retained first report");
+    const value = await (await fetch(base)).json();
+    return { status: value.subagentLanes[0].status, completed: value.entries.filter((entry) => entry.customType === "step-subagent-response").length, output: $(".subagent-completed-output").textContent,
+      agentRows: $$(".sb-agent-row").length, controls: $$(".subagent-controls details").length };
+  `);
+  assert.equal(stopped.status, "aborted");
+  assert.equal(stopped.completed, 1);
+  assert.match(stopped.output, /streamed reply 39/u);
+  assert.equal(stopped.controls, 2);
+  assert.equal(stopped.agentRows, 0);
 });
 
 test("denying an approval never executes the command", { skip }, async () => {
@@ -2265,7 +2421,7 @@ test("workspaces with chats can be removed through the dialog, retained after re
   // the host's default folder. The page lists it as "默认项目" instead of leaving
   // an empty project list: the user still needs a target for the next
   // conversation, and it must not be the deleted folder.
-  const fallback = await realpath(homedir());
+  const fallback = await realpath(join(base, "scan-home"));
   assert.deepEqual(reloaded, { projects: [fallback], name: "默认项目", session: before.session });
   assert.ok(existsSync(join(workspace, "README.md")));
   await browser.run(`
@@ -2488,6 +2644,52 @@ test("a group stops being offered once its last session drops it", { skip }, asy
     withoutGroup: ["无分类"],
     colourFree: true,
   })
+})
+
+test("tag group metadata survives browser reload and its last-member removal survives another reload", { skip }, async () => {
+  const sessionId = "e2e-persisted-tag-session"
+  const now = new Date().toISOString()
+  const dir = join(base, "agent", "sessions", "--e2e-persisted-tag--")
+  await mkdir(dir, { recursive: true })
+  const entries = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "persisted-tag-user", parentId: null, timestamp: now,
+      message: { role: "user", content: "group persistence fixture", timestamp: Date.now() } },
+  ]
+  await writeFile(join(dir, `${sessionId}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "persisted group picker");
+    picker.querySelector("[data-new-tag='teal']").click();
+    const input = await until(() => $("#tagNameInput"), "persisted group name");
+    input.value = "Reload group";
+    $("#tagNameConfirm").click();
+    await until(() => !$("#tagPicker"), "created group");
+  `)
+  await browser.goto(`${origin}/`)
+  const restored = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "restored group picker");
+    const name = picker.querySelector("[data-tag='teal']")?.textContent;
+    const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
+    picker.querySelector("[data-tag='teal']").click();
+    await until(() => !$("#tagPicker"), "removed restored tag");
+    return { name, tag: stored.tags.find(([id]) => id === "${sessionId}") };
+  `)
+  assert.deepEqual(restored, { name: "Reload group", tag: [sessionId, "teal"] })
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "untagged group picker");
+    const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return removed;
+  `)
+  assert.equal(removed, true)
 })
 
 test("conversation search finds message content written outside the page and opens the matching message", { skip }, async () => {
@@ -2965,7 +3167,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
   assert.equal(seen.rejected.laneState, "failed", "a refused dispatch is not a failed lane")
   assert.match(seen.rejected.laneText, /rejected audit/)
   assert.equal(seen.rejected.summaryUnknownHasAttempt, false, "a refused dispatch is recorded as status unknown")
-  assert.match(seen.rejected.summaryFailed.join(" | "), /rejected audit/)
+  assert.deepEqual(seen.rejected.summaryFailed, [], "the activity summary excludes settled failures; the parent row keeps navigation")
   assert.deepEqual(seen.rejected.panel, {
     error: "Invalid parameters. Provide exactly one mode.",
     status: "已失败",
@@ -3041,7 +3243,10 @@ test("plan mode's proposal keeps its review card after a reload and its approval
     const stripHidden = $("#planStrip").hidden;
     $("#planApprove").click();
     await until(() => !$("#planApprove"), "card settles after the decision");
-    await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed", "approval turn settles");
+    await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/${id}")).json();
+      return value.status === "completed" && $$(".message.user").some(node => node.textContent.includes("同意执行"));
+    }, "this approval turn settles and its decision is rendered");
     return {
       contents,
       approve,
@@ -3711,7 +3916,7 @@ test(
       assert.deepEqual(seen.pinned.rows, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
       assert.deepEqual(seen.pinned.pins, ["e2e-arrange-second"])
       assert.equal(seen.pinned.marked, "true")
-      assert.equal(seen.pinned.label, "已置顶")
+      assert.equal(seen.pinned.label, "取消置顶")
       assert.equal((seen.pinned.order ?? []).length, 0, "a pin must not arrange anything")
       assert.equal(seen.ontoIndicator, "none", "a pinned row shows no drop indicator")
       assert.deepEqual(seen.fixedBlock, {
@@ -3924,4 +4129,453 @@ test("the ＋ menu offers goal and plan, but not ultracode", { skip }, async () 
 		return { modes, ultracode: Boolean(plus.querySelector(".control-option--ultraloop")) };
 	`)
   assert.deepEqual(seen, { modes: ["control-option--goal", "control-option--plan"], ultracode: false })
+})
+
+test("session migration imports reviewed snapshots while sources continue writing", { skip }, async () => {
+  const codexRoot = join(base, "migration-codex")
+  const claudeRoot = join(base, "migration-claude", "projects")
+  await mkdir(join(codexRoot, "sessions"), { recursive: true })
+  await mkdir(join(codexRoot, "archived_sessions"), { recursive: true })
+  await mkdir(claudeRoot, { recursive: true })
+  const timestamp = "2026-10-22T00:00:00.000Z"
+  const sourcePath = join(codexRoot, "sessions", "rollout-migration.jsonl")
+  const input = [
+    { type: "session_meta", timestamp, payload: { id: "migration-codex", cwd: workspace, cli_version: "0.163.0-alpha.11", history_mode: "paginated" } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<user_query>Migration acceptance quokkabridge</user_query>" }] } },
+    { type: "response_item", timestamp, payload: { type: "function_call", call_id: "migration-tool", name: "exec_command", arguments: '{"cmd":"never execute this historical call"}' } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, input)
+  // An unreadable archive must not even produce a scan/parse failure by default.
+  await writeFile(join(codexRoot, "archived_sessions", "rollout-archive.jsonl"), "{")
+  await writeFile(join(claudeRoot, "migration-claude.jsonl"), [
+    { type: "user", uuid: "cc-user", parentUuid: null, sessionId: "migration-claude", cwd: workspace, timestamp, message: { content: "<user_query>Claude migration acceptance</user_query>" } },
+    { type: "assistant", uuid: "cc-assistant", parentUuid: "cc-user", sessionId: "migration-claude", timestamp, message: { content: [{ type: "text", text: "Historical CC reply" }] } },
+  ].map(JSON.stringify).join("\n") + "\n")
+  const claudePath = join(claudeRoot, "migration-claude.jsonl")
+  const claudeInput = await readFile(claudePath, "utf8")
+  const scanned = await browser.run(`
+    await migrationOpen();
+    if ($('#importCustomToggle, #importCustomPath, #importIncludeArchived')) throw new Error('Arbitrary source roots or archive controls exposed');
+    const scan = await migrationScan();
+    const sessions = scan.candidates.filter(item => item.kind === 'sessions');
+    if (sessions.length !== 2) throw new Error('Expected two active native-format sessions: ' + JSON.stringify(sessions));
+    if (sessions.some(item => item.sourcePath.includes('archived_sessions'))) throw new Error('Archive scanned by default');
+    if ($$('[data-candidate-id] > input').some(input => input.checked)) throw new Error('Scan silently selected candidates');
+    for (const key of ['customRoot', 'codexRoot', 'claudeRoot', 'workbuddyRoot', 'qoderRoot']) {
+      const response = await fetch('/api/v1/migrations/scan', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({[key]: '/must-not-scan'}) });
+      if (response.status !== 400) throw new Error('Custom source override accepted: ' + key);
+    }
+    // Workspace groups stay collapsed until the user opens one, so expand before counting rows.
+    for (const toggle of $$('.migration-group-toggle')) if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+    // The list keeps only source filtering (matching the prototype); no search field.
+    if ($('.migration-list input[type="search"]')) throw new Error('Migration list must not expose a search field');
+    const sourceTabs = $$('.migration-list > div[aria-label] button');
+    sourceTabs[sourceTabs.length - 1].click();
+    await until(() => $$('.migration-row').length === 1, 'source filter');
+    sourceTabs[0].click();
+    await until(() => $$('.migration-row').length === 2, 'cleared source filter');
+    const previews = [];
+    for (const item of [...sessions].sort((a, b) => a.source.localeCompare(b.source))) previews.push(await migrationSelect(item));
+    const codex = previews.find(preview => preview.candidate.source === 'codex');
+    if (!codex.sourceText.includes('Migration acceptance')) throw new Error('Reviewed snapshot content missing');
+    if (!codex.warnings.length || !$('.migration-preview .migration-diagnostics li')) throw new Error('Historical compatibility warning hidden');
+    for (const preview of previews) {
+      if (preview.target.scope.kind !== 'project' || preview.target.scope.cwd !== ${JSON.stringify(workspace)}) throw new Error('Session destination must be explicit project');
+    }
+    window.reviewedMigrationPreviews = previews;
+    return sessions.map(item => item.source).sort();
+  `)
+  assert.deepEqual(scanned, ["claude-code", "codex"])
+  assert.equal(await readFile(sourcePath, "utf8"), input)
+  const updatedInput = input + [
+    { type: "event_msg", timestamp, payload: { type: "token_count", info: {} } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Unreviewed source append" }] } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, updatedInput)
+  const imported = await browser.run(`
+    const before = (await migrationRead()).jobs.length;
+    const plan = await migrationPlan();
+    if ((await migrationRead()).jobs.length !== before) throw new Error('Review started a job without explicit Start');
+    if (plan.items.length !== 2 || plan.items.some(item => !window.reviewedMigrationPreviews.some(preview => preview.id === item.id && preview.fingerprint === item.fingerprint)))
+      throw new Error('Final review did not use frozen previews');
+    const job = await migrationStart();
+    if (job.items.length !== 2 || job.items.some(item => item.status !== 'imported')) throw new Error('Native source import failed: ' + JSON.stringify(job));
+    window.realMigrationJob = job;
+    const sessions = (await (await fetch('/api/v1/sessions')).json()).sessions;
+    const codexItem = job.items.find(item => item.source === 'codex');
+    const codex = sessions.find(session => session.id === codexItem.sessionId && session.name.startsWith('[codex]'));
+    if (!codex) throw new Error('Codex import missing from native index');
+    const snapshot = await (await fetch('/api/v1/sessions/' + codex.id)).json();
+    if (!snapshot.entries.some(entry => entry.imported)) throw new Error('Source provenance lost');
+    const entries = JSON.stringify(snapshot.entries);
+    if (entries.includes('Unreviewed source append')) throw new Error('Imported unreviewed content');
+    if (!entries.includes('never execute this historical call')) throw new Error('Historical call discarded');
+    const claudeItem = job.items.find(item => item.source === 'claude-code');
+    const claudeSnapshot = await (await fetch('/api/v1/sessions/' + claudeItem.sessionId)).json();
+    if (!claudeSnapshot.entries.some(entry => entry.imported) || !JSON.stringify(claudeSnapshot.entries).includes('Historical CC reply'))
+      throw new Error('Claude native history or provenance lost');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === claudeItem.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'Claude migration acceptance', 'opened native Claude message');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    const nativeJobRow = await until(() => $$('.migration-history-row').find(row => row.querySelector('code')?.textContent === job.createdAt), 'return to native job history');
+    nativeJobRow.querySelector('button').click();
+    await until(() => $$('.migration-job-item').length === 2 && !$('#migrationModal').hidden, 'reattach native job');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === codexItem.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && document.body.textContent.includes('Migration acceptance quokkabridge'), 'opened native import');
+    if (!$('#authBanner').hidden || !$('#errorToast').hidden) throw new Error('Successful local navigation disturbed authentication');
+    if ($('[data-tool-state="running"]') || $('[data-tool-state="completed"]')) throw new Error('Unconfirmed historical call acquired an execution outcome');
+    return { id: codex.id, hasUnknown: !!$('[data-tool-state="unknown"]') };
+  `)
+  assert.equal(imported.hasUnknown, true)
+  assert.equal(await readFile(sourcePath, "utf8"), updatedInput)
+  assert.equal(await readFile(claudePath, "utf8"), claudeInput)
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => document.body.textContent.includes('Migration acceptance quokkabridge'), 'reopened after refresh');`)
+  assert.equal(await browser.run(`
+    const result = await (await fetch('/api/v1/search?q=quokkabridge')).json();
+    return result.hits.some(hit => hit.sessionId === ${JSON.stringify(imported.id)});
+  `), true)
+  await browser.run(`
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    await until(() => $$('.migration-history-row').length === 1, 'persisted unified job');
+    const jobs = (await migrationRead()).jobs;
+    if (jobs.length !== 1 || jobs[0].items.length !== 2 || jobs[0].items.some(item => item.status !== 'imported')) throw new Error('Persisted job lost real outcomes');
+    $('#settingsBack').click();
+  `)
+})
+
+test("session migration failures are visible and preserve truthful job state", { skip }, async () => {
+  await browser.run(`
+    await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated page');
+    if ($('#settingsView').hidden) $('#settingsButton').click();
+    $('[data-settings-page="general"]').click();
+    await until(() => !$('#migrationPage'), 'migration Settings unmounted');
+    const originalFetch = window.fetch;
+    const path = '/api/v1/migrations';
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 600000).toISOString();
+    const expiredId = 'migration-fixture-expired-session';
+    const scope = { kind: 'project', cwd: ${JSON.stringify(workspace)} };
+    const candidate = (id, source, name) => ({ id, source, name, kind: 'sessions',
+      sourcePath: '/fixture/' + id + '.jsonl', sourceScope: scope, holding: 'external',
+      readiness: 'ready', needsMigration: true, diagnostics: [], sourceSessionId: id, modified: createdAt });
+    const healthy = candidate('healthy', 'codex', 'Healthy migration fixture');
+    const broken = candidate('broken', 'qoder', 'Broken migration fixture');
+    const target = { scope, path: '/fixture/native-sessions', name: healthy.name };
+    const preview = item => ({ id: 'preview-' + item.id, candidate: item, fingerprint: 'frozen-' + item.id,
+      expiresAt, target: { ...target, name: item.name }, action: 'import', allowedActions: ['import', 'skip'],
+      sourceText: item.name + ' reviewed content', requiredAcknowledgements: [],
+      warnings: [{ code: 'unsupported_content', count: 73519 }], blockers: [], activation: 'history' });
+    const result = (item, status, extra = {}) => ({ id: 'result-' + item.id, candidateId: item.id,
+      kind: 'sessions', source: item.source, name: item.name, sourceScope: scope,
+      requestedTarget: { ...target, name: item.name }, action: 'import', status,
+      diagnostics: [], activation: 'history', ...extra });
+    const saved = { id: 'saved', createdAt, revision: 1, status: 'completed', items: [
+      result(candidate('saved-candidate', 'claude-code', 'Saved migration fixture'), 'imported', { sessionId: expiredId, actualTarget: target }),
+      result(candidate('persisted-failed', 'qoder', 'Failed saved fixture'), 'failed', { diagnostics: [{ code: 'session-import-failed' }] }),
+    ] };
+    let history = [saved];
+    let scanFailure = false, historyFailure = false, previewFailure = true, malformedPreview = false;
+    let planFailure = true, startFailure = true, pollFailure = true;
+    let running;
+    const calls = { history: 0, scan: 0, previews: [], plans: [], starts: [], cancel: 0, poll: 0, open: 0 };
+    const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const failure = stage => response({ error: 'fixture-' + stage, code: 'fixture-' + stage }, 503);
+    window.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+      if (url.origin !== location.origin) return originalFetch(input, init);
+      if (url.pathname === '/api/v1/sessions/' + expiredId && method === 'GET') { calls.open++; return failure('open'); }
+      if (url.pathname !== path && !url.pathname.startsWith(path + '/')) return originalFetch(input, init);
+      if (url.pathname === path && method === 'GET') { calls.history++; return historyFailure ? failure('history') : response({ jobs: history }); }
+      if (url.pathname === path + '/scan' && method === 'POST') {
+        calls.scan++;
+        return scanFailure ? failure('scan') : response({ candidates: [healthy, broken], truncated: false,
+          sources: [{ kind: 'sessions', source: 'claude-code', scope: { kind: 'global' }, path: '/fixture/claude',
+            status: 'error', diagnostics: [{ code: 'session-scan-failed' }] }] });
+      }
+      if (url.pathname === path + '/preview' && method === 'POST') {
+        const { candidateId } = JSON.parse(init.body); calls.previews.push(candidateId);
+        if (candidateId === broken.id && previewFailure) return failure('preview');
+        const value = preview(candidateId === healthy.id ? healthy : broken);
+        return response(malformedPreview ? { ...value, candidate: { ...value.candidate, readiness: 'invented' } } : value);
+      }
+      if (url.pathname === path + '/plans' && method === 'POST') {
+        const request = JSON.parse(init.body); calls.plans.push(request);
+        if (planFailure) return failure('plan');
+        return response({ id: 'fixture-plan', digest: 'immutable-digest', expiresAt,
+          items: request.selections.map(selection => preview(selection.previewId === 'preview-healthy' ? healthy : broken)) });
+      }
+      if (url.pathname === path && method === 'POST') {
+        calls.starts.push(JSON.parse(init.body));
+        if (startFailure) return failure('start');
+        running = { id: 'fixture-running', createdAt, revision: 2, status: 'running', items: [result(healthy, 'pending')] };
+        history = [running, saved]; return response(running, 202);
+      }
+      if (url.pathname === path + '/fixture-running/cancel' && method === 'POST') { calls.cancel++; return failure('cancel'); }
+      if (url.pathname === path + '/fixture-running' && method === 'GET') { calls.poll++; return pollFailure ? failure('poll') : response(running); }
+      throw new Error('Unexpected migration fixture request: ' + method + ' ' + url.pathname);
+    };
+    try {
+      const settle = async () => { await new Promise(resolve => setTimeout(resolve, 100)); };
+      const visibleError = async (selector, code) => {
+        const label = {
+          'invalid-response': '服务返回的迁移数据不符合接口，未应用此响应。',
+          'session-open-failed': '无法打开已迁入会话，请重试；迁移结果没有被更改。',
+        }[code] ?? code;
+        await until(() => $(selector)?.textContent.includes(label), 'visible ' + code);
+        if ($(selector).getBoundingClientRect().height === 0) throw new Error('Error hidden: ' + code);
+        if (!$('#authBanner').hidden) throw new Error('Migration error changed authentication');
+      };
+      const refresh = async () => {
+        const before = calls.history;
+        $('.migration-history > header button').click();
+        await until(() => calls.history > before && !$('.migration-history > header button').disabled, 'history read settled');
+      };
+      await migrationOpen();
+      // Entering the first category scans that kind once; navigation must never preview or start a job.
+      if (calls.previews.length || calls.starts.length) throw new Error('Settings navigation previewed or started migration');
+      const scansAfterOpen = calls.scan;
+      $('#migrationModal .migration-dialog-head button').click();
+      await until(() => $('.migration-history-row'), 'saved history loaded');
+      historyFailure = true;
+      await refresh();
+      await visibleError('#migrationPage [role="alert"]', 'fixture-history');
+      if ($$('.migration-history-row').length !== 1) throw new Error('Failed history read discarded last known saved job');
+      if (calls.scan !== scansAfterOpen) throw new Error('History failure triggered scan');
+      historyFailure = false;
+      await refresh();
+      await migrationOpen();
+      scanFailure = true;
+      const failedScan = await migrationPost('/scan', () => $('#migrationScanButton').click());
+      if (failedScan.status !== 503) throw new Error('Failed scan not surfaced');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-scan');
+      if (!$('[data-candidate-id="healthy"]')) throw new Error('Failed rescan discarded the last good list');
+      scanFailure = false;
+      await migrationScan();
+      $('.migration-source-locations summary').click();
+      if (!$('[data-scan-status="error"]').textContent.includes('/fixture/claude')) throw new Error('Partial source failure hidden');
+      const brokenRow = $('[data-candidate-id="broken"]');
+      await migrationPreview(broken);
+      brokenRow.querySelector('input').click();
+      await visibleError('.migration-preview [role="alert"]', 'fixture-preview');
+      await migrationToChecklist();
+      if (!$('#migrationStartPlan').disabled) throw new Error('Failed selected preview remains submittable');
+      $$('#migrationModal .migration-dialog-foot button')[0].click();
+      await until(() => $('.migration-list'), 'back to selection');
+      if (!$('[data-candidate-id="healthy"]')) throw new Error('Partial failure removed healthy candidate');
+      previewFailure = false;
+      malformedPreview = true;
+      await migrationPost('/preview', () => $('#migrationRefreshPreview').click());
+      await visibleError('.migration-preview [role="alert"]', 'invalid-response');
+      await migrationToChecklist();
+      if (!$('#migrationStartPlan').disabled) throw new Error('Invalid DTO passed review readiness');
+      $$('#migrationModal .migration-dialog-foot button')[0].click();
+      await until(() => $('.migration-list'), 'back to selection');
+      malformedPreview = false;
+      // Re-query: earlier renders replaced the row node, so a stale reference would silently do nothing.
+      $('[data-candidate-id="broken"]').querySelector('input').click();
+      const healthyPreview = await migrationSelect(healthy);
+      if (!$('.migration-preview .migration-diagnostics').textContent.includes('73519')) throw new Error('Compatibility warning count hidden');
+      const failedPlan = await migrationPost('/plans', migrationToChecklist);
+      if (failedPlan.status !== 503) throw new Error('Failed plan not surfaced');
+      // The review list stays reachable so the failure is visible; it must not become submittable.
+      if (!$('#migrationStartPlan').disabled) throw new Error('Failed plan left a submittable review');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-plan');
+      if (calls.starts.length) throw new Error('Plan failure started job');
+      planFailure = false;
+      const plan = await migrationPlan();
+      if (plan.items.length !== 1 || plan.items[0].id !== healthyPreview.id || calls.plans.at(-1).selections.length !== 1)
+        throw new Error('Plan included unselected or failed candidate');
+      const failedStart = await migrationPost('', () => $('#migrationStartPlan').click());
+      if (failedStart.status !== 503 || $('.migration-job')) throw new Error('Failed start fabricated running job');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-start');
+      await settle();
+      if (calls.starts.length !== 1 || calls.cancel) throw new Error('Uncertain start automatically retried');
+      if (!$('.migration-final-plan') || $('#migrationStartPlan').disabled) throw new Error('Explicit retry lost frozen plan');
+      startFailure = false;
+      await migrationPost('', () => $('#migrationStartPlan').click());
+      await until(() => calls.poll >= 2, 'failed read polling with backoff');
+      await visibleError('.migration-job [role="alert"]', 'fixture-poll');
+      const stillRunning = () => {
+        if (!$('.migration-job > header button') || $('[data-result-count="pending"] dd').textContent !== '1' || $('[data-result-count="imported"] dd').textContent !== '0')
+          throw new Error('Uncertain job fabricated terminal state or import outcome');
+        if ($$('.migration-job-item button').length) throw new Error('Pending result offered successful session');
+      };
+      stillRunning();
+      // Stopping a running job asks first, then cancels the remaining items.
+      const cancel = await migrationPost('/fixture-running/cancel', async () => {
+        $('.migration-job > header button').click();
+        await until(() => !$('#migrationCloseConfirm')?.hidden, 'close confirmation');
+        const buttons = $$('#migrationCloseConfirm button');
+        buttons[buttons.length - 1].click();
+      });
+      if (cancel.status !== 503) throw new Error('Cancel failure not injected');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-cancel');
+      stillRunning();
+      const starts = calls.starts;
+      if (starts.length !== 2 || starts[0].planId !== 'fixture-plan' || starts[0].digest !== 'immutable-digest' || !starts[0].idempotencyKey ||
+        JSON.stringify(starts[0]) !== JSON.stringify(starts[1])) throw new Error('Explicit start retry changed frozen plan or idempotency key');
+      // A stale read must not downgrade the last known running revision to completion.
+      running = { ...running, revision: 1, status: 'completed', items: [result(healthy, 'failed')] };
+      pollFailure = false;
+      const priorPoll = calls.poll;
+      await until(() => calls.poll > priorPoll && !$('.migration-job [role="alert"]'), 'poll read recovered');
+      stillRunning();
+      running = { ...running, revision: 3, status: 'completed', items: [result(healthy, 'failed', { diagnostics: [{ code: 'session-import-failed' }] })] };
+      history = [running, saved];
+      await until(() => $('[data-item-status="failed"]'), 'truthful failed result');
+      if ($('[data-item-status="failed"] button') || $('.migration-job > header button') || $('[data-result-count="failed"] dd').textContent !== '1')
+        throw new Error('Failed result masquerades as imported or still cancellable');
+      if (!$('[data-item-status="failed"] .migration-diagnostics li')) throw new Error('Persisted item diagnostic hidden');
+      await settle();
+      if (calls.starts.length !== 2 || calls.cancel !== 1) throw new Error('Mutation automatically retried during read recovery');
+      $('#migrationModal .migration-dialog-head button').click();
+      await refresh();
+      if ($$('.migration-history-row').length !== 2) throw new Error('Saved history lost during failures');
+      const savedRow = $$('.migration-history-row')[1];
+      savedRow.querySelector('button').click();
+      await until(() => $$('.migration-job-item').length === 2, 'saved job reattached');
+      if ($('[data-item-status="failed"] button')) throw new Error('Saved failure offers imported session');
+      $('[data-item-status="imported"] button').click();
+      await until(() => calls.open === 1, 'expired imported session open attempted');
+      await visibleError('#migrationModal [role="alert"]', 'session-open-failed');
+      if ($('#migrationModal').hidden || $('#settingsView').hidden) throw new Error('Failed open claimed successful navigation');
+    } finally {
+      if (!$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
+      $('[data-settings-page="general"]').click();
+      await until(() => !$('#migrationPage'), 'fixture reader unmounted');
+      window.fetch = originalFetch;
+      if (!$('#settingsView').hidden) $('#settingsBack').click();
+    }
+  `)
+  // Session-open errors are visible, but dismissing the wizard must not change auth or the conversation.
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated reload after fixture');`)
+})
+
+test("WorkBuddy and Qoder sessions are identified and imported through the migration UI", { skip }, async () => {
+  const root = join(base, "scan-home")
+  const workbuddyRoot = join(root, ".workbuddy", "projects")
+  const qoderRoot = join(root, ".qoder", "projects")
+  await mkdir(workbuddyRoot, { recursive: true })
+  await mkdir(qoderRoot, { recursive: true })
+  const timestamp = "2026-10-26T00:00:00.000Z"
+  await writeFile(join(workbuddyRoot, "workbuddy.jsonl"), [
+    { type: "session-meta", sessionId: "wb-ui" },
+    { type: "message", id: "wb-u", sessionId: "wb-ui", cwd: workspace, role: "user", timestamp, content: [{ type: "input_text", text: "<user_query>WorkBuddy fixture</user_query>" }] },
+    { type: "ai-title", sessionId: "wb-ui", aiTitle: "WorkBuddy fixture" },
+  ].map(JSON.stringify).join("\n") + "\n")
+  await writeFile(join(qoderRoot, "qoder.jsonl"), [
+    { type: "workspace-directories", sessionId: "q-ui" },
+    { type: "user", sessionId: "q-ui", cwd: workspace, uuid: "q-u", parentUuid: null, timestamp, message: { role: "user", content: "<user_query>Qoder fixture</user_query>" } },
+    { type: "active-leaf", sessionId: "q-ui", leafUuid: "q-u" },
+  ].map(JSON.stringify).join("\n") + "\n")
+  const sourceFiles = [join(workbuddyRoot, "workbuddy.jsonl"), join(qoderRoot, "qoder.jsonl")]
+  const before = await Promise.all(sourceFiles.map(path => readFile(path, "utf8")))
+  const imported = await browser.run(`
+    await migrationOpen();
+    const scan = await migrationScan();
+    const sources = scan.candidates.filter(item => item.kind === 'sessions' && ['workbuddy', 'qoder'].includes(item.source));
+    if (sources.length !== 2 || new Set(sources.map(item => item.source)).size !== 2) throw new Error('Native source identification lost');
+    if (!sources.find(item => item.source === 'workbuddy').name.includes('WorkBuddy fixture')) throw new Error('Native title metadata lost');
+    for (const item of sources) {
+      const row = $('[data-candidate-id="' + item.id + '"]');
+      if (!row.textContent.includes(item.source === 'workbuddy' ? 'WorkBuddy' : 'Qoder')) throw new Error('Source label missing');
+      const preview = await migrationSelect(item);
+      if (!preview.sourceText.includes(item.source === 'workbuddy' ? 'WorkBuddy fixture' : 'Qoder fixture')) throw new Error('Native content not reviewed');
+      if (preview.blockers.length) throw new Error('Native valid source rejected');
+    }
+    const plan = await migrationPlan();
+    if (plan.items.length !== 2 || plan.items.some(item => !['workbuddy', 'qoder'].includes(item.candidate.source))) throw new Error('Plan leaked other source selections');
+    const job = await migrationStart();
+    if (job.items.length !== 2 || job.items.some(item => item.status !== 'imported')) throw new Error('Native import failed: ' + JSON.stringify(job));
+    for (const item of job.items) {
+      const snapshot = await (await fetch('/api/v1/sessions/' + item.sessionId)).json();
+      const entries = JSON.stringify(snapshot.entries);
+      if (entries.includes('<user_query>')) throw new Error('User wrapper leaked into native entries');
+      if (!snapshot.entries.some(entry => entry.imported) || !entries.includes(item.source === 'workbuddy' ? 'WorkBuddy fixture' : 'Qoder fixture'))
+        throw new Error('Imported source provenance or real message lost');
+    }
+    const qoder = job.items.find(item => item.source === 'qoder');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === qoder.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'Qoder fixture', 'opened native Qoder message');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    const sourceJobRow = await until(() => $$('.migration-history-row').find(row => row.querySelector('code')?.textContent === job.createdAt), 'return to current imported job');
+    sourceJobRow.querySelector('button').click();
+    await until(() => $$('.migration-job-item').length === 2 && !$('#migrationModal').hidden, 'reattach current source job');
+    const workbuddy = job.items.find(item => item.source === 'workbuddy');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === workbuddy.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'WorkBuddy fixture', 'clean imported user message');
+    if (!$('#authBanner').hidden || !$('#errorToast').hidden) throw new Error('Successful imported navigation is not quiet');
+    return job.items.map(item => ({ source: item.source, status: item.status }));
+  `)
+  assert.deepEqual(imported.sort((a, b) => a.source.localeCompare(b.source)), [{ source: "qoder", status: "imported" }, { source: "workbuddy", status: "imported" }])
+  assert.deepEqual(await Promise.all(sourceFiles.map(path => readFile(path, "utf8"))), before)
+})
+
+test("new conversation offers a lightweight shortcut to session migration", { skip }, async () => {
+  await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
+  const report = await browser.run(`
+    if (!$("#settingsView").hidden) $("#settingsBack").click();
+    await until(() => $("#newSession"), "new conversation");
+    $("#newSession").click();
+    const link = await until(() => $("#emptySessionImport"), "empty import shortcut");
+    return { text: link.textContent.trim(), title: $("#stream .empty-title")?.textContent, mark: !!$("#stream .empty-mark .icon") };
+  `)
+  assert.equal(report.text, "从其他AI应用导入会话")
+  assert.equal(report.title, "今天想推进什么？")
+  assert.equal(report.mark, true)
+  const qaDir = process.env.STEPCODE_WEB_QA_DIR
+  if (qaDir) await mkdir(qaDir, { recursive: true })
+  try {
+    for (const width of [1280, 390]) {
+      await browser.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false })
+      if (width === 390) await browser.run(`
+        $('#sidebarToggle').click();
+        await until(() => $('.app').classList.contains('sidebar-hidden'), 'sidebar collapsed for narrow layout');
+      `)
+      const layout = await browser.run(`
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const mark = $('#stream .empty-mark').getBoundingClientRect();
+        const title = $('#stream .empty-title').getBoundingClientRect();
+        const column = $('#stream .stream-inner').getBoundingClientRect();
+        const button = $('#emptySessionImport').getBoundingClientRect();
+        const centre = column.left + column.width / 2;
+        return {
+          headingCentreDelta: Math.abs((mark.left + title.right) / 2 - centre),
+          buttonCentreDelta: Math.abs(button.left + button.width / 2 - centre),
+          belowHeading: button.top >= Math.max(mark.bottom, title.bottom) + 8,
+          buttonFits: button.left >= column.left && button.right <= column.right,
+          hasSubtitle: !!$('#emptySessionImport small'),
+          horizontalOverflow: $('#stream').scrollWidth > $('#stream').clientWidth
+        };
+      `)
+      assert.ok(layout.headingCentreDelta < 2, JSON.stringify({ width, ...layout }))
+      assert.ok(layout.buttonCentreDelta < 2, JSON.stringify({ width, ...layout }))
+      assert.equal(layout.belowHeading, true, JSON.stringify({ width, ...layout }))
+      assert.equal(layout.buttonFits, true, JSON.stringify({ width, ...layout }))
+      assert.equal(layout.hasSubtitle, false)
+      assert.equal(layout.horizontalOverflow, false, JSON.stringify({ width, ...layout }))
+      if (qaDir) {
+        const shot = await browser.send("Page.captureScreenshot", { format: "png" })
+        await writeFile(join(qaDir, `empty-migration-${width}.png`), Buffer.from(shot.data, "base64"))
+      }
+    }
+    await browser.run(`
+      $('#emptySessionImport').click();
+      await until(() => !$('#settingsView').hidden && $('[data-page="migration"]'), 'migration settings');
+      if (!$('#migrationPage .migration-category-list button') || !$('[data-settings-page="migration"]').classList.contains('active')) throw new Error('Migration Settings entry did not open');
+      if (!$('#migrationModal').hidden) throw new Error('Lightweight shortcut must not bypass the Settings entry or explicit scan');
+      $('#settingsBack').click();
+    `)
+  } finally {
+    await browser.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false })
+    await browser.run(`if ($('.app').classList.contains('sidebar-hidden')) $('#sidebarShow').click();`)
+    await browser.send("Emulation.setEmulatedMedia", { features: [] })
+  }
+  if (qaDir) console.log(`Empty migration layout screenshots: ${qaDir}`)
 })
