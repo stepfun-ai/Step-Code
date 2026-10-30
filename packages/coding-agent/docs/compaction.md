@@ -297,11 +297,12 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 ```
 [User]: What they said
-[Assistant thinking]: Internal reasoning
 [Assistant]: Response text
 [Assistant tool calls]: read(path="foo.ts"); edit(path="bar.ts", ...)
 [Tool result]: Output from tool
 ```
+
+Provider thinking blocks are omitted from this view; the stored messages keep them.
 
 This prevents the model from treating it as a conversation to continue.
 
@@ -364,7 +365,6 @@ pi.on("session_before_compact", async (event, ctx) => {
   );
   // Returns:
   // [User]: message text
-  // [Assistant thinking]: thinking content
   // [Assistant]: response text
   // [Assistant tool calls]: read(path="..."); bash(command="...")
   // [Tool result]: output text
