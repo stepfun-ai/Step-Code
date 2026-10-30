@@ -584,8 +584,8 @@ with its icon: on Desktop the system default browser with its OS icon (macOS
 and Windows), in Web a new tab of the browser showing the page, detected from  
 its user agent and Client Hints (Chrome, Safari, Edge and Firefox get bundled  
 brand marks; other or unknown browsers a generic glyph). PDF  
-cards keep the system-browser action only, because headless Chromium does not  
-render PDF. Both browsers load the page from the Host's site preview  
+cards keep the system-browser action only, because the embedded browser has  
+no PDF viewer (Desktop guests run without plugins). Both browsers load the page from the Host's site preview  
 (`POST /api/v1/workspace/site`, `apps/web/src/site-preview.ts`): a separate  
 loopback origin that serves one known workspace under an unguessable token,  
 GET/HEAD only, with workspace containment and no directory listings, so a  
@@ -990,100 +990,78 @@ or package is changed.
 
 ## Embedded browser
 
-The Browser inspector uses a host-owned Chromium process controlled through  
-`playwright-core`. This is streamed webpage rendering and input forwarding,  
-not a native Electron WebContentsView. The dependency includes no browser\
-binary. Install compatible Chrome, Edge or Chromium, or set  
-`STEPCODE_WEB_BROWSER_PATH` to its executable. Detection covers common Windows,  
-macOS and Linux locations; only Windows Chrome has been exercised locally.  
-The engine starts on the first explicit tab creation, not on inspector open.
+The Browser inspector shows pages drawn by Chromium itself; there is no
+Host-side browser engine, screenshot stream or input forwarding, and
+`playwright-core` is not a runtime dependency. Pages animate, scroll and take
+input at the display's own rate and pixel density, with native keyboard,
+input-method, clipboard and context-menu behaviour.
 
-Tabs and cookies belong to an isolated, temporary browser context, never a  
-personal browser profile. They survive inspector hiding and Web page reloads  
-while the Host lives. Closing a tab destroys that page. Normal Host shutdown  
-closes its owned browser; restarting the Host starts with no browser tabs or  
-site cookies. This does not terminate unrelated browsers or external servers.  
-Crash recovery and durable site-profile persistence are not implemented.
+| Host | Surface | Owner of policy |
+| --- | --- | --- |
+| StepCode Desktop | One Electron `<webview>` per tab | Desktop main process (`apps/desktop/src/browser-guests.ts`) |
+| Plain browser (Web) | One sandboxed `<iframe>` per tab | The client (`features/browser`) and the Host's framing headers |
 
-`/api/v1/browser/*` uses the existing HttpOnly cookie and Origin checks. One  
-page at a time owns a 15-second input lease; polling every five seconds renews  
-it. The page's sessionStorage client id allows refresh to rotate the token,  
-and a late old-page release cannot remove its replacement. A competing page  
-gets 409 rather than silently moving another page's tabs or viewport. The  
-attached frame stream is the page's own connection, so it keeps control past  
-the lease deadline: a sleeping window, a stalled renderer or a busy Host can  
-outlast the heartbeat interval, and frames resume when the page does. Requests,  
-competing pages and the expiry timer share that one rule, so a request served  
-before the timer runs gets the same answer. A page whose stream closed keeps  
-control only until the deadline. Closing or hiding the inspector releases  
-input/stream ownership, not tabs.
+The client chooses the webview when the Desktop bridge offers `browserGuest`
+and the iframe otherwise (including an older Desktop build).
 
-A duplicated browser tab copies sessionStorage, so two live pages can share a  
-client id. The newer page takes control as a refresh would, and the displaced  
-page receives a `replaced` event before its stream ends; it shows the busy  
-message and does not reconnect by itself, so the two pages never take control  
-from each other in a loop. A connection counts as established only once its  
-frame stream opens. A lost or unopened stream, network errors and three  
-consecutive missed heartbeats reconnect with 1, 2, 4, 8 and 8 second backoff;  
-the retry budget is restored only after the connection stays up for ten  
-seconds, so a stream that opens and drops at once stops after five retries. A  
-competing page (409), a stopping Host and a displaced page wait for the manual  
-Reconnect control.  
-Initial reads, command replies, heartbeat reads and SSE snapshots share one  
-revision gate per connection. Duplicate/older revisions and replies arriving  
-after connection close cannot replace current state.
+**Desktop.** Each tab reserves a one-time lease from the main process and
+renders `<webview src="about:blank#<lease>">` in the lease's partition. The
+main process refuses any webview without an unused lease issued to that
+window, replaces the guest's preferences with a fixed sandbox (no Node, no
+preload, context isolation, web security, dialogs disabled, no referrer) and
+binds the lease when the inert start page is ready. All guests share one
+in-memory partition: no StepCode cookie, storage or permission reaches it,
+and it is gone when the app quits. Permission, device and screen-capture
+requests are denied and downloads cancelled with a notice. The partition's
+request filter refuses the StepCode Host port on every hostname, embedded
+credentials and non-network schemes other than `about:`, `data:` and `blob:`;
+main frames navigate to http(s) only. Native windows are never created: one
+http(s) popup within 1.5 seconds of a click or key press in its page becomes a
+panel tab, and other popups are dropped. While a page has focus, Cmd (macOS)
+or Ctrl with R, L, T or W is kept from the page and from the application menu
+and handled by the panel (reload the tab, focus the address bar, new tab,
+close tab), so Cmd+R never reloads the StepCode window. A user can still choose
+files for an upload in the native file chooser.
 
-HTTP(S) navigation, back/forward, reload/stop, twelve tabs, popup tabs and  
-50-200% reflow zoom are connected. Navigation errors remain visible on the tab.  
-A popup becomes a tab only right after a click or key press in its opener (one  
-per gesture); popups a page opens on its own are closed. Tab selection changes  
-the remote frame source. The surface resizes with the  
-inspector, including its expanded view. Chromium renders the site, so  
-X-Frame-Options and site CSP are not removed or bypassed. Permissions are denied,  
-service workers blocked, and StepCode Host/client ports blocked across HTTP(S)  
-and WebSocket requests, including subresources and hostname aliases. No raw  
-debugging endpoint or arbitrary evaluation route is exposed.
+**Web.** Each tab is an iframe with
+`sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"`
+and no referrer: a page cannot navigate the StepCode page, download or open
+modal dialogs; popups open as tabs of the user's own browser. A cross-origin
+frame hides its address, title and history, so the surface keeps the history of
+the navigations it started (address bar, back, forward, reload). A later
+`load` means the page moved by itself: the address bar keeps the last known
+address with a notice, and the next Back returns there. Tabs are labelled
+with the page's host. Many sites refuse to be framed (`X-Frame-Options`, CSP
+`frame-ancestors`); the frame cannot report that, so remote pages carry a hint
+to use the external-open control. Framing protection is never stripped.
 
-A private, authenticated loopback proxy owned by this browser checks actual  
-HTTP destinations and HTTPS tunnel ports, including every redirect hop,  
-popup startup and worker requests. Chromium's implicit loopback bypass is  
-disabled. Proxy credentials are ephemeral and stripped before forwarding;  
-the proxy refuses connections to its own port and closes with the browser,  
-including startup failure. It forwards directly to the destination; chaining  
-an operating-system or corporate upstream proxy is not implemented.
+**Addresses.** The address bar completes a bare host with `https://`, or
+`http://` for this machine (`localhost:5173`), and accepts http(s) without
+embedded credentials only. It refuses the port the StepCode page is served
+from on any loopback name. Independently, the Host sends
+`Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`
+on every response, so no frame can become same-origin with the client and lift
+its sandbox. The Host's existing `Sec-Fetch-Site` and `SameSite=Strict` cookie
+rules keep framed pages from using the page cookie.
 
-Frames are JPEG over authenticated SSE. Each frame reports the page viewport  
-and the captured surface separately: headless windows are at least 500px wide,  
-so in a narrower panel the client scales the surface until the page area fills  
-it. The host ACKs Chromium frames locally,  
-caps delivery at about 60 fps (Chromium's own screencast rate; a lower cap makes  
-animated pages stutter) and keeps at most one newest scheduled frame. A blocked  
-response drops frames and keeps only the newest metadata; the client keeps  
-one decoding image plus one pending latest frame. Input is serialized and  
-bounded (48 client / 64 host operations). Pointer moves and wheel deltas are  
-coalesced for one 40 ms frame in the order they happened: Chromium needs about  
-two frames per wheel dispatch, so a fast trackpad would otherwise fill the  
-queue and lose scroll distance. Wheels are summed only when they scroll the  
-same way within 16 CSS pixels of where the batch started: a wheel elsewhere may  
-reach another scroll container, and up-then-down at a scroll boundary still  
-scrolls down. A wheel replaces an earlier pending move because the Host moves  
-the remote pointer to the wheel first; a later move is sent after the wheel.  
-Hidden inspectors disconnect the stream instead of decoding background frames.
+**Previews.** Workspace previews (`src/site-preview.ts`) are addressed as
+`http://localhost:<port>/...` although the server listens on 127.0.0.1. The
+client is served from 127.0.0.1, and a page on another port of the same host
+is same-site: measured in Chrome, a busy same-site iframe shared the client's
+renderer process and dropped the conversation UI from 60 to about 25 fps,
+while the same page from `localhost` ran in its own process and left the UI at
+60 fps. A loopback dev server typed as `127.0.0.1:<port>` is still same-site.
 
-Mouse clicks/dragging, wheel, editing/navigation keys, text paste and committed  
-Chinese composition text are forwarded. Copy selection reads selected text in  
-the main document or focused non-password input and writes it to the outer  
-browser clipboard only on an explicit action. Cross-origin iframe selection,  
-rich clipboard, native context menus, file upload/download, audio transport,  
-web permissions and a remote accessibility tree are not implemented. File  
-chooser attempts and downloads are cancelled with visible notices; JS dialogs  
-are dismissed with a notice. Video may appear as sampled frames, not smooth  
-media playback. Automated Chinese composition commits are covered; physical  
-IME candidate-window ergonomics still need manual acceptance.
+**Tabs.** The panel keeps up to twelve tabs. They belong to the page:
+addresses, titles and zoom (50-200%) are kept in sessionStorage, validated
+when read, and reopened after a page reload. Hiding the panel keeps the pages
+mounted; no page is created before the panel has been shown. Closing a tab
+destroys its page (Desktop releases its lease). Back, forward, reload, stop
+(Desktop), zoom and the external-open control act on the active tab.
 
-The inspector's external-open control is an explicit separate action, not the  
-browser implementation. Browser storage and navigation have no connection to  
-Agent model context, tool execution or the user's provider credentials.
+Browser storage and navigation have no connection to Agent model context, tool
+execution or the user's provider credentials. Agents cannot drive the
+embedded browser.
 
 ## Composer performance
 

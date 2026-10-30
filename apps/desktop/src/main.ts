@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, type BrowserWindow, shell } from "electron";
+import { DesktopBrowserGuests } from "./browser-guests.ts";
 import { installDesktopIpc } from "./ipc.ts";
 import { installApplicationMenu } from "./menu.ts";
 import { addBundledNodeToPath } from "./node-environment.ts";
@@ -86,6 +87,14 @@ async function main(): Promise<void> {
 			app.quit();
 		});
 	};
+	// Embedded-browser guests may not reach the Host on any hostname; its port is read on every request,
+	// so a restarted server on a new port is covered too.
+	const browserGuests = new DesktopBrowserGuests(() => {
+		const origin = server?.origin;
+		if (origin === undefined) return [];
+		const url = new URL(origin);
+		return [Number(url.port || (url.protocol === "https:" ? 443 : 80))];
+	});
 
 	const showError = (title: string, detail: string): void => {
 		console.error(`[desktop] ${title}\n${detail}`);
@@ -237,6 +246,7 @@ async function main(): Promise<void> {
 			version: app.getVersion(),
 			state,
 			getServerOrigin: () => server?.origin,
+			browserGuests,
 		});
 		window = created;
 		created.once("ready-to-show", () => {
@@ -291,6 +301,7 @@ async function main(): Promise<void> {
 		getWindow: () => window,
 		getServerOrigin: () => server?.origin,
 		onDirectoryPicked: (path) => state.update({ lastWorkspace: path }),
+		browserGuests,
 	});
 	installApplicationMenu({
 		restartServer: () => void restartServer(),

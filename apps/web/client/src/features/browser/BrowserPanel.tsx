@@ -1,287 +1,234 @@
-import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
-import { ApiError, errorMessage } from "../../lib/api";
-import { writeClipboard } from "../../lib/clipboard";
-import { isMacPlatform } from "../../lib/format";
+import { getDesktopBridge } from "../../platform/host";
 import { useAppStore } from "../../state/store";
-import type { EmbeddedBrowserFrame, EmbeddedBrowserSnapshot } from "../../state/types";
 import { Button, Icon, IconButton, type IconName, Tooltip } from "../../ui";
+import { openInSystemBrowser } from "./actions";
 import {
-	BrowserConnection,
-	BrowserDisconnect,
-	type BrowserPointerMove,
-	browserKeyRoute,
-	browserRetryable,
-} from "./actions";
+	addressLabel,
+	browserAddress,
+	clampZoom,
+	isLocalAddress,
+	MAX_BROWSER_TABS,
+	MAX_BROWSER_ZOOM,
+	MIN_BROWSER_ZOOM,
+	readStoredTabs,
+	type StoredBrowserTab,
+} from "./address";
+import { type BrowserSurfaceHandle, FrameSurface, type SurfaceState, WebviewSurface } from "./surfaces";
 
-const EMPTY: EmbeddedBrowserSnapshot = { revision: 0, activeId: null, tabs: [] };
-/** Backoff for an unexpected stream drop; a manual Reconnect starts over. */
-const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 8000];
+const STORAGE_KEY = "stepcode-browser-tabs";
+
+interface PanelTab extends StoredBrowserTab {
+	/** The address the page loads when its surface mounts (the stored one, or the one it was opened with). */
+	readonly initialUrl: string;
+	readonly loading: boolean;
+	readonly canGoBack: boolean;
+	readonly canGoForward: boolean;
+	readonly urlKnown: boolean;
+	readonly error?: string;
+	readonly notice?: "download" | "popup" | "navigation" | "invalid";
+	/** Desktop only: the guest lease, which main-process events name. */
+	readonly lease?: string;
+}
+
+function newTab(url = "", stored?: StoredBrowserTab): PanelTab {
+	return {
+		id: stored?.id ?? crypto.randomUUID(),
+		url: stored?.url ?? url,
+		title: stored?.title ?? "",
+		zoom: stored?.zoom ?? 1,
+		initialUrl: stored?.url ?? url,
+		loading: false,
+		canGoBack: false,
+		canGoForward: false,
+		urlKnown: true,
+	};
+}
+
+function readTabs(): { activeId: string | null; tabs: PanelTab[] } {
+	let raw: string | null = null;
+	try {
+		raw = sessionStorage.getItem(STORAGE_KEY);
+	} catch {
+		// Storage can be disabled; the panel then starts empty on every load.
+	}
+	const stored = readStoredTabs(raw, window.location.origin);
+	return { activeId: stored.activeId, tabs: stored.tabs.map((tab) => newTab("", tab)) };
+}
+
 /**
- * A connection must stay up this long before its retry budget is restored. A stream that opens and
- * drops at once is not healthy: resetting on every open would retry it every second forever.
+ * The embedded browser. Desktop renders each tab as an Electron `<webview>` the main process approved; a plain
+ * browser renders a sandboxed iframe. Either way Chromium draws the page itself: there is no Host-side engine,
+ * screenshot stream or input forwarding. Tabs are this page's own and survive a reload through
+ * sessionStorage; a hidden panel keeps its pages mounted, and pages are created only once it was shown.
  */
-const HEALTHY_AFTER_MS = 10_000;
-
 export function BrowserPanel({ open }: { open: boolean }) {
 	const t = useT();
-	const [snapshot, setSnapshot] = useState(EMPTY);
-	const [error, setError] = useState("");
-	/*
-	 * The host refuses a second page with 409, and tells a displaced duplicate page it was replaced; say
-	 * so in the UI language instead of echoing its English.
-	 */
-	const failureText = (failure: unknown) =>
-		(failure instanceof ApiError && failure.status === 409) ||
-		(failure instanceof BrowserDisconnect && failure.reason === "replaced")
-			? t("browserBusy")
-			: errorMessage(failure);
-	const [ready, setReady] = useState(false);
-	const [retry, setRetry] = useState(0);
-	const [frame, setFrame] = useState<EmbeddedBrowserFrame>();
+	const bridge = getDesktopBridge();
+	// An older Desktop build without the webview lease falls back to the iframe.
+	const desktop = bridge !== undefined && typeof bridge.browserGuest === "function" ? bridge : undefined;
+	const [state, setState] = useState(readTabs);
+	const [shown, setShown] = useState(open);
 	const [address, setAddress] = useState("");
-	const connection = useRef<BrowserConnection>(null);
-	/**
-	 * The connection that finished connecting. `ready` still reads true from the previous connection in the
-	 * render that reopens the panel, while the new one has no control token yet and drops what it is sent.
-	 */
-	const connected = useRef<BrowserConnection>(null);
-	const attempts = useRef(0);
-	const surface = useRef<HTMLDivElement>(null);
-	const input = useRef<HTMLTextAreaElement>(null);
+	const handles = useRef(new Map<string, BrowserSurfaceHandle>());
 	const addressInput = useRef<HTMLInputElement>(null);
-	const composing = useRef(false);
-	const clicks = useRef({ at: 0, x: 0, y: 0, button: 0, count: 1 });
-	const active = snapshot.tabs.find((tab) => tab.id === snapshot.activeId);
-	const activeId = active?.id;
-	const openRequest = useAppStore((state) => state.ui.browserOpenRequest);
+	const openRequest = useAppStore((store) => store.ui.browserOpenRequest);
 	const handledRequest = useRef(0);
-	const tabs = useRef(snapshot.tabs);
-	tabs.current = snapshot.tabs;
+	const latest = useRef(state);
+	latest.current = state;
+	const active = state.tabs.find((tab) => tab.id === state.activeId);
+	const activeId = active?.id;
+
 	useEffect(() => {
-		setAddress(active?.url === "about:blank" ? "" : (active?.url ?? ""));
+		if (open) setShown(true);
+	}, [open]);
+	useEffect(() => {
+		setAddress(active?.url ?? "");
 	}, [active?.url]);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: retry deliberately recreates the transport.
 	useEffect(() => {
-		if (!open) return;
-		let disposed = false;
-		let retryTimer: ReturnType<typeof setTimeout> | undefined;
-		let healthyTimer: ReturnType<typeof setTimeout> | undefined;
-		let decoding = false;
-		let latest: EmbeddedBrowserFrame | undefined;
-		const display = async (value: EmbeddedBrowserFrame) => {
-			latest = value;
-			if (decoding) return;
-			decoding = true;
-			try {
-				while (latest && !disposed) {
-					const next = latest;
-					latest = undefined;
-					const image = new Image();
-					image.src = `data:image/jpeg;base64,${next.data}`;
-					await image.decode();
-					if (!disposed) setFrame(next);
-				}
-			} catch (failure) {
-				if (!disposed) setError(failureText(failure));
-			} finally {
-				decoding = false;
-			}
+		const stored = {
+			activeId: state.activeId,
+			tabs: state.tabs.map(({ id, url, title, zoom }) => ({ id, url, title, zoom })),
 		};
-		// A lost stream (a stalled renderer, a Host restart) reconnects by itself with backoff. A competing
-		// page, a displaced duplicate page and a stopping Host keep the manual Reconnect button instead,
-		// so two pages never take control from each other in a loop.
-		const reconnect = (failure: unknown) => {
-			if (disposed || retryTimer || !browserRetryable(failure)) return;
-			const attempt = attempts.current;
-			if (attempt >= RECONNECT_DELAYS_MS.length) return;
-			attempts.current = attempt + 1;
-			retryTimer = setTimeout(() => {
-				retryTimer = undefined;
-				setRetry((value) => value + 1);
-			}, RECONNECT_DELAYS_MS[attempt]);
-		};
-		const client = new BrowserConnection(
-			(value) => {
-				if (!disposed) setSnapshot(value);
-			},
-			(value) => {
-				void display(value);
-			},
-			(failure, disconnected) => {
-				if (disposed) return;
-				setError(failureText(failure));
-				if (disconnected) {
-					clearTimeout(healthyTimer);
-					if (connected.current === client) connected.current = null;
-					setReady(false);
-					reconnect(failure);
-				}
-			},
-		);
-		connection.current = client;
-		setReady(false);
-		setError("");
-		void client
-			.connect()
-			.then(() => {
-				if (disposed) return;
-				connected.current = client;
-				setReady(true);
-				healthyTimer = setTimeout(() => {
-					attempts.current = 0;
-				}, HEALTHY_AFTER_MS);
-			})
-			.catch((failure: unknown) => {
-				if (disposed) return;
-				setError(failureText(failure));
-				client.close();
-				reconnect(failure);
-			});
-		return () => {
-			disposed = true;
-			clearTimeout(retryTimer);
-			clearTimeout(healthyTimer);
-			client.close();
-			connection.current = null;
-			if (connected.current === client) connected.current = null;
-		};
-	}, [open, retry]);
-	// Another feature asked for a page (a delivered file's preview): reuse a tab already on it, reloaded so a
-	// rewritten file shows its new content, or open a new one. Each request is handled once, once connected.
-	useEffect(() => {
-		const client = connected.current;
-		if (!open || !ready || !client || !openRequest || openRequest.seq <= handledRequest.current) return;
-		handledRequest.current = openRequest.seq;
-		setError("");
-		const existing = tabs.current.find((tab) => tab.url === openRequest.url);
-		if (existing) {
-			client.send(`/tabs/${existing.id}/select`);
-			client.send(`/tabs/${existing.id}/action`, { action: "reload" });
-		} else client.send("/tabs", { url: openRequest.url });
-	}, [open, ready, openRequest]);
-	useEffect(() => {
-		const element = surface.current;
-		if (!open || !ready || !element) return;
-		let timer: ReturnType<typeof setTimeout>;
-		const observer = new ResizeObserver(() => {
-			clearTimeout(timer);
-			timer = setTimeout(() => {
-				const rect = element.getBoundingClientRect();
-				if (rect.width && rect.height)
-					connection.current?.send("/viewport", {
-						width: Math.min(1600, Math.max(160, Math.round(rect.width))),
-						height: Math.min(1200, Math.max(120, Math.round(rect.height))),
-					});
-			}, 100);
-		});
-		observer.observe(element);
-		return () => {
-			clearTimeout(timer);
-			observer.disconnect();
-		};
-	}, [open, ready]);
-	const action = (name: string, value?: unknown) => {
-		if (activeId) connection.current?.send(`/tabs/${activeId}/action`, { action: name, value });
-	};
-	const sendInput = (event: unknown) => {
-		if (!activeId || !ready) return;
-		connection.current?.send(`/tabs/${activeId}/input`, event);
-	};
-	const moveInput = (event: BrowserPointerMove) => {
-		if (!activeId || !ready) return;
-		connection.current?.move(`/tabs/${activeId}/input`, event);
-	};
-	const copy = () => {
-		if (!activeId) return;
-		void connection.current
-			?.selection(activeId)
-			.then(writeClipboard)
-			.catch((failure: unknown) => setError(failureText(failure)));
-	};
-	const point = (x: number, y: number) => {
-		const rect = surface.current?.getBoundingClientRect();
-		if (!rect || !frame) return { x: 0, y: 0 };
-		return {
-			x: Math.max(0, Math.min(frame.width - 1, ((x - rect.left) / rect.width) * frame.width)),
-			y: Math.max(0, Math.min(frame.height - 1, ((y - rect.top) / rect.height) * frame.height)),
-		};
-	};
-	const pointer = (event: PointerEvent<HTMLDivElement>, phase: "down" | "move" | "up") => {
-		if (!frame || frame.tabId !== activeId || !ready) return;
-		if (phase === "down") {
-			const previous = clicks.current;
-			clicks.current = {
-				at: Date.now(),
-				x: event.clientX,
-				y: event.clientY,
-				button: event.button,
-				count:
-					Date.now() - previous.at < 500 &&
-					Math.hypot(event.clientX - previous.x, event.clientY - previous.y) < 4 &&
-					event.button === previous.button
-						? (previous.count % 3) + 1
-						: 1,
-			};
-			event.preventDefault();
-			event.currentTarget.setPointerCapture(event.pointerId);
-			if (input.current) {
-				const rect = event.currentTarget.getBoundingClientRect();
-				input.current.style.left = `${Math.max(0, event.clientX - rect.left)}px`;
-				input.current.style.top = `${Math.max(0, event.clientY - rect.top)}px`;
-				input.current.focus({ preventScroll: true });
-			}
+		try {
+			sessionStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+		} catch {
+			// Best effort: without storage a reload starts with no tabs, which is still a working panel.
 		}
-		const position = point(event.clientX, event.clientY);
-		const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
-		if (phase === "move") moveInput({ kind: "pointer", phase, ...position, button, clicks: clicks.current.count });
-		else sendInput({ kind: "pointer", phase, ...position, button, clicks: clicks.current.count });
-	};
-	const key = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-		event.stopPropagation();
-		if (event.nativeEvent.isComposing || composing.current || event.key === "Process") return;
-		const route = browserKeyRoute(
-			{
-				key: event.key,
-				altKey: event.altKey,
-				ctrlKey: event.ctrlKey,
-				metaKey: event.metaKey,
-				shiftKey: event.shiftKey,
-				altGraph: event.getModifierState("AltGraph"),
-			},
-			isMacPlatform(),
-		);
-		if (route.kind === "native") return;
-		event.preventDefault();
-		if (route.kind === "copy") copy();
-		else if (route.kind === "key") sendInput(route);
-	};
+	}, [state]);
+
+	const update = useCallback((id: string, change: Partial<PanelTab>) => {
+		setState((current) => ({
+			...current,
+			tabs: current.tabs.map((tab) => (tab.id === id ? { ...tab, ...change } : tab)),
+		}));
+	}, []);
+	const surfaceState = useCallback(
+		(id: string, observed: SurfaceState) => {
+			const { error, ...rest } = observed;
+			update(id, error === undefined ? rest : { ...rest, error: error ?? undefined });
+		},
+		[update],
+	);
+	const openTab = useCallback(
+		(url = "") => {
+			const current = latest.current;
+			if (current.tabs.length >= MAX_BROWSER_TABS) {
+				if (current.activeId) update(current.activeId, { notice: "popup" });
+				return;
+			}
+			const tab = newTab(url);
+			setState({ activeId: tab.id, tabs: [...current.tabs, tab] });
+			setShown(true);
+		},
+		[update],
+	);
+	const closeTab = useCallback((id: string) => {
+		setState((current) => {
+			const index = current.tabs.findIndex((tab) => tab.id === id);
+			const tabs = current.tabs.filter((tab) => tab.id !== id);
+			const activeId =
+				current.activeId === id ? (tabs[Math.min(index, tabs.length - 1)]?.id ?? null) : current.activeId;
+			return { activeId, tabs };
+		});
+	}, []);
+	/** Load an address in the active tab, or a new one when there is none. */
+	const go = useCallback(
+		(raw: string) => {
+			const target = browserAddress(raw, window.location.origin);
+			const current = latest.current;
+			const tab = current.tabs.find((entry) => entry.id === current.activeId);
+			if (!target.ok) {
+				if (tab) update(tab.id, { notice: target.reason === "invalid" ? "invalid" : "navigation" });
+				return;
+			}
+			const handle = tab ? handles.current.get(tab.id) : undefined;
+			if (!tab || !handle) {
+				openTab(target.url);
+				return;
+			}
+			update(tab.id, { notice: undefined, error: undefined, url: target.url, title: "" });
+			handle.navigate(target.url);
+		},
+		[openTab, update],
+	);
+	const shortcut = useCallback(
+		(key: "r" | "l" | "t" | "w") => {
+			const id = latest.current.activeId;
+			if (key === "l") addressInput.current?.focus();
+			if (key === "t") openTab();
+			if (key === "w" && id) closeTab(id);
+			if (key === "r" && id) handles.current.get(id)?.reload();
+		},
+		[closeTab, openTab],
+	);
+
+	// Another feature asked for a page (a delivered file's preview): reuse a tab already on it, reloaded so a
+	// rewritten file shows its new content, or open a new one. Each request is handled once.
+	useEffect(() => {
+		if (!openRequest || openRequest.seq <= handledRequest.current) return;
+		handledRequest.current = openRequest.seq;
+		const existing = latest.current.tabs.find((tab) => tab.url === openRequest.url);
+		if (existing) {
+			setState((current) => ({ ...current, activeId: existing.id }));
+			handles.current.get(existing.id)?.reload();
+		} else openTab(openRequest.url);
+	}, [openRequest, openTab]);
+
+	// Desktop pages report popups, cancelled downloads and panel shortcuts through the main process.
+	useEffect(() => {
+		if (!desktop) return;
+		return desktop.onBrowserEvent((event) => {
+			const tab = latest.current.tabs.find((entry) => entry.lease === event.lease);
+			if (!tab) return;
+			if (event.type === "popup") {
+				const target = browserAddress(event.url, window.location.origin);
+				if (target.ok) openTab(target.url);
+			} else if (event.type === "download") update(tab.id, { notice: "download" });
+			else shortcut(event.key);
+		});
+	}, [desktop, openTab, shortcut, update]);
+
 	const control = (icon: IconName, label: string, onClick: () => void, disabled = false) => (
 		<Tooltip content={t(label)}>
-			<IconButton icon={icon} aria-label={t(label)} onClick={onClick} disabled={!ready || disabled} />
+			<IconButton icon={icon} aria-label={t(label)} onClick={onClick} disabled={disabled} />
 		</Tooltip>
 	);
+	const handle = activeId ? handles.current.get(activeId) : undefined;
+	const zoom = (value: number) => {
+		if (activeId) update(activeId, { zoom: clampZoom(value) });
+	};
+	const external = active?.url.startsWith("http") ? active.url : "";
+	const status = !active
+		? ""
+		: active.loading
+			? t("browserLoading")
+			: !active.urlKnown
+				? t("browserAddressUnknown")
+				: !desktop && active.url && !isLocalAddress(active.url)
+					? t("browserFramingHint")
+					: "";
+
 	return (
 		<section
 			className="embedded-browser"
 			hidden={!open}
 			aria-label={t("browserTitle")}
+			data-browser-surface={desktop ? "webview" : "iframe"}
 			onKeyDownCapture={(event) => {
 				if (!(event.ctrlKey || event.metaKey) || event.nativeEvent.isComposing) return;
 				// AltGr (Ctrl+Alt on Windows) prints characters; it is never a panel shortcut.
-				if (event.altKey || event.getModifierState("AltGraph")) return;
-				const shortcut = event.key.toLowerCase();
-				if (!["l", "t", "w", "r"].includes(shortcut)) return;
+				if (event.altKey || event.shiftKey || event.getModifierState("AltGraph")) return;
+				const key = event.key.toLowerCase();
+				if (key !== "l" && key !== "t" && key !== "w" && key !== "r") return;
 				event.preventDefault();
 				event.stopPropagation();
-				if (shortcut === "l") addressInput.current?.focus();
-				if (shortcut === "t" && ready) connection.current?.send("/tabs", {});
-				if (shortcut === "w" && activeId) connection.current?.send(`/tabs/${activeId}`, undefined, "DELETE");
-				if (shortcut === "r") action("reload");
+				shortcut(key);
 			}}
 		>
 			<div className="browser-tabs" role="tablist" aria-label={t("browserTabs")}>
-				{snapshot.tabs.map((tab) => (
+				{state.tabs.map((tab) => (
 					<div
 						className={`browser-tab${activeId === tab.id ? " is-active" : ""}${tab.loading ? " is-loading" : ""}`}
 						key={tab.id}
@@ -289,42 +236,35 @@ export function BrowserPanel({ open }: { open: boolean }) {
 						<Button
 							role="tab"
 							aria-selected={activeId === tab.id}
-							onClick={() => connection.current?.send(`/tabs/${tab.id}/select`)}
-							disabled={!ready}
+							onClick={() => setState((current) => ({ ...current, activeId: tab.id }))}
 						>
 							<Icon name={tab.loading ? "loaderCircle" : "globe"} size="xs" />
-							<span>{tab.title || (tab.url === "about:blank" ? t("browserNewTab") : tab.url)}</span>
+							<span>{tab.title || (tab.url ? addressLabel(tab.url) : t("browserNewTab"))}</span>
 						</Button>
 						<Tooltip content={t("closeTab")}>
 							<IconButton
 								icon="closeSm"
 								aria-label={`${t("closeTab")} ${tab.title || t("browserNewTab")}`}
-								disabled={!ready}
-								onClick={() => connection.current?.send(`/tabs/${tab.id}`, undefined, "DELETE")}
+								onClick={() => closeTab(tab.id)}
 							/>
 						</Tooltip>
 					</div>
 				))}
-				{control("plus", "browserNewTab", () => connection.current?.send("/tabs", {}), snapshot.tabs.length >= 12)}
+				{control("plus", "browserNewTab", () => openTab(), state.tabs.length >= MAX_BROWSER_TABS)}
 			</div>
 			<form
 				className="browser-navigation"
 				onSubmit={(event) => {
 					event.preventDefault();
-					setError("");
-					if (activeId) action("navigate", address);
-					else connection.current?.send("/tabs", { url: address });
+					go(address);
 				}}
 			>
 				<div className="browser-nav-buttons">
-					{control("chevronLeft", "browserBack", () => action("back"), !active?.canGoBack)}
-					{control("chevronRight", "browserForward", () => action("forward"), !active?.canGoForward)}
-					{control(
-						active?.loading ? "stop" : "refresh",
-						active?.loading ? "stopRun" : "reload",
-						() => action(active?.loading ? "stop" : "reload"),
-						!active,
-					)}
+					{control("chevronLeft", "browserBack", () => handle?.back(), !active?.canGoBack)}
+					{control("chevronRight", "browserForward", () => handle?.forward(), !active?.canGoForward)}
+					{active?.loading && handle?.stop
+						? control("stop", "browserStop", () => handle.stop?.())
+						: control("refresh", "reload", () => handle?.reload(), !active?.url)}
 				</div>
 				<input
 					ref={addressInput}
@@ -333,122 +273,68 @@ export function BrowserPanel({ open }: { open: boolean }) {
 					placeholder={t("browserAddress")}
 					value={address}
 					onChange={(event) => setAddress(event.target.value)}
-					disabled={!ready}
 					onFocus={(event) => event.currentTarget.select()}
 					spellCheck={false}
 					autoComplete="off"
 				/>
 				<Tooltip content={t("go")}>
-					<IconButton
-						type="submit"
-						icon="chevronRight"
-						aria-label={t("go")}
-						disabled={!ready || !address.trim()}
-					/>
+					<IconButton type="submit" icon="chevronRight" aria-label={t("go")} disabled={!address.trim()} />
 				</Tooltip>
 			</form>
-			{error ? (
+			{active?.error ? (
 				<div className="browser-error" role="alert">
-					<span>{error}</span>
-					<Tooltip content={t("browserReconnect")}>
-						<IconButton
-							icon="refresh"
-							aria-label={t("browserReconnect")}
-							onClick={() => {
-								attempts.current = 0;
-								setRetry((value) => value + 1);
-							}}
-						/>
+					<span>{active.error}</span>
+					<Tooltip content={t("reload")}>
+						<IconButton icon="refresh" aria-label={t("reload")} onClick={() => handle?.reload()} />
 					</Tooltip>
 				</div>
 			) : null}
-			{active?.error ? (
-				<p className="browser-error" role="alert">
-					{active.error}
-				</p>
-			) : null}
 			{active?.notice ? <output className="browser-notice">{t(`browserNotice.${active.notice}`)}</output> : null}
-			<div
-				ref={surface}
-				className="browser-surface"
-				role="application"
-				aria-label={t("browserPage")}
-				onPointerDown={(event) => pointer(event, "down")}
-				onPointerMove={(event) => pointer(event, "move")}
-				onPointerUp={(event) => pointer(event, "up")}
-				onPointerCancel={(event) => pointer(event, "up")}
-				onContextMenu={(event) => event.preventDefault()}
-				onWheel={(event) => {
-					event.stopPropagation();
-					if (!activeId || !ready) return;
-					connection.current?.wheel(`/tabs/${activeId}/input`, {
-						...point(event.clientX, event.clientY),
-						deltaX: Math.max(-4000, Math.min(4000, event.deltaX)),
-						deltaY: Math.max(-4000, Math.min(4000, event.deltaY)),
-					});
-				}}
-			>
-				{frame && frame.tabId === activeId && active?.url !== "about:blank" ? (
-					<img
-						className="browser-frame"
-						// Scale the captured surface so only its page area fills the panel; the unused strip
-						// of a window wider than the viewport falls outside and is clipped.
-						style={{
-							width: `${((frame.surfaceWidth ?? frame.width) / frame.width) * 100}%`,
-							height: `${((frame.surfaceHeight ?? frame.height) / frame.height) * 100}%`,
-						}}
-						src={`data:image/jpeg;base64,${frame.data}`}
-						alt={active?.title || t("browserPage")}
-						draggable={false}
-					/>
-				) : (
+			<div className="browser-surface" role="presentation">
+				{shown
+					? state.tabs.map((tab) => {
+							const props = {
+								initialUrl: tab.initialUrl,
+								zoom: tab.zoom,
+								active: tab.id === activeId,
+								label: tab.title || t("browserPage"),
+								onState: (observed: SurfaceState) => surfaceState(tab.id, observed),
+								onHandle: (value: BrowserSurfaceHandle | null) => {
+									if (value) handles.current.set(tab.id, value);
+									else handles.current.delete(tab.id);
+								},
+							};
+							return desktop ? (
+								<WebviewSurface
+									key={tab.id}
+									{...props}
+									bridge={desktop}
+									onLease={(lease) => update(tab.id, { lease })}
+								/>
+							) : (
+								<FrameSurface key={tab.id} {...props} />
+							);
+						})
+					: null}
+				{!active?.url ? (
 					<div className="browser-empty">
 						<Icon name="globe" size="lg" />
-						<span>{t(ready ? "browserNewTab" : error ? "browserNotConnected" : "browserConnecting")}</span>
+						<span>{t("browserNewTab")}</span>
 					</div>
-				)}
-				<textarea
-					ref={input}
-					className="browser-input"
-					aria-label={t("browserPageInput")}
-					tabIndex={activeId && ready ? 0 : -1}
-					autoCapitalize="off"
-					autoCorrect="off"
-					spellCheck={false}
-					onKeyDown={key}
-					onKeyUp={(event) => event.stopPropagation()}
-					onCompositionStart={() => {
-						composing.current = true;
-					}}
-					onCompositionEnd={(event) => {
-						composing.current = false;
-						if (event.data) sendInput({ kind: "text", text: event.data });
-						event.currentTarget.value = "";
-					}}
-					onInputCapture={(event) => {
-						if (!composing.current) {
-							const text = event.currentTarget.value;
-							event.currentTarget.value = "";
-							if (text) sendInput({ kind: "text", text });
-						}
-					}}
-				/>
+				) : null}
 			</div>
 			<footer className="browser-footer">
-				<output>
-					{t(ready ? (active?.loading ? "browserLoading" : "browserConnected") : "browserDisconnected")}
-				</output>
-				{control("copy", "browserCopySelection", copy, !active)}
+				<output>{status}</output>
 				{control(
 					"circleMinus",
 					"browserZoomOut",
-					() => action("zoom", Math.max(0.5, (active?.zoom ?? 1) - 0.1)),
-					!active || active.zoom <= 0.5,
+					() => zoom((active?.zoom ?? 1) - 0.1),
+					!active || active.zoom <= MIN_BROWSER_ZOOM,
 				)}
 				<Button
 					className="browser-zoom"
-					disabled={!ready || !active}
-					onClick={() => action("zoom", 1)}
+					disabled={!active}
+					onClick={() => zoom(1)}
 					aria-label={t("browserZoomReset")}
 				>
 					{Math.round((active?.zoom ?? 1) * 100)}%
@@ -456,17 +342,10 @@ export function BrowserPanel({ open }: { open: boolean }) {
 				{control(
 					"plus",
 					"browserZoomIn",
-					() => action("zoom", Math.min(2, (active?.zoom ?? 1) + 0.1)),
-					!active || active.zoom >= 2,
+					() => zoom((active?.zoom ?? 1) + 0.1),
+					!active || active.zoom >= MAX_BROWSER_ZOOM,
 				)}
-				{control(
-					"openExternal",
-					"browserExternal",
-					() => {
-						if (active?.url.startsWith("http")) window.open(active.url, "_blank", "noopener,noreferrer");
-					},
-					!active?.url.startsWith("http"),
-				)}
+				{control("openExternal", "browserExternal", () => openInSystemBrowser(external), !external)}
 			</footer>
 		</section>
 	);

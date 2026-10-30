@@ -6,12 +6,23 @@
  * process checks that it comes from the window's top frame on the server origin.
  */
 
-import type { StepcodeDesktopBridge } from "@step-harness/web/desktop-bridge";
-import { contextBridge, ipcRenderer } from "electron";
+import type { DesktopBrowserEvent, StepcodeDesktopBridge } from "@step-harness/web/desktop-bridge";
+import { contextBridge, type IpcRendererEvent, ipcRenderer } from "electron";
 import { DESKTOP_IPC, VERSION_ARGUMENT } from "./ipc-channels.ts";
 
 function hostPlatform(): StepcodeDesktopBridge["platform"] {
 	return process.platform === "darwin" || process.platform === "win32" ? process.platform : "linux";
+}
+
+/** A copy of a main-process browser event with only its known fields, or undefined when malformed. */
+function browserEvent(payload: unknown): DesktopBrowserEvent | undefined {
+	if (typeof payload !== "object" || payload === null) return undefined;
+	const { type, lease, url, key } = payload as Record<string, unknown>;
+	if (typeof lease !== "string") return undefined;
+	if (type === "popup" && typeof url === "string") return { type, lease, url };
+	if (type === "download") return { type, lease };
+	if (type === "shortcut" && (key === "r" || key === "l" || key === "t" || key === "w")) return { type, lease, key };
+	return undefined;
 }
 
 const version = process.argv.find((argument) => argument.startsWith(VERSION_ARGUMENT))?.slice(VERSION_ARGUMENT.length);
@@ -59,6 +70,24 @@ const bridge: StepcodeDesktopBridge = {
 	},
 	defaultBrowser() {
 		return ipcRenderer.invoke(DESKTOP_IPC.defaultBrowser) as ReturnType<StepcodeDesktopBridge["defaultBrowser"]>;
+	},
+	browserGuest() {
+		return ipcRenderer.invoke(DESKTOP_IPC.browserGuest) as ReturnType<StepcodeDesktopBridge["browserGuest"]>;
+	},
+	releaseBrowserGuest(lease) {
+		return ipcRenderer.invoke(DESKTOP_IPC.releaseBrowserGuest, String(lease)) as Promise<void>;
+	},
+	onBrowserEvent(listener) {
+		// The one main-to-page channel. Only the fixed channel is subscribed, and only well-formed events
+		// reach the page; the IpcRendererEvent itself (with its sender) never crosses the context bridge.
+		const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+			const event = browserEvent(payload);
+			if (event !== undefined) listener(event);
+		};
+		ipcRenderer.on(DESKTOP_IPC.browserEvent, handler);
+		return () => {
+			ipcRenderer.off(DESKTOP_IPC.browserEvent, handler);
+		};
 	},
 };
 

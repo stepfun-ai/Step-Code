@@ -15,6 +15,10 @@ export const DESKTOP_IPC = {
 	defaultBrowser: "stepcode-desktop:default-browser",
 	getTheme: "stepcode-desktop:get-theme",
 	setTheme: "stepcode-desktop:set-theme",
+	browserGuest: "stepcode-desktop:browser-guest",
+	releaseBrowserGuest: "stepcode-desktop:release-browser-guest",
+	/** Main to page only: validated embedded-browser events (`DesktopBrowserEvent`). */
+	browserEvent: "stepcode-desktop:browser-event",
 } as const;
 
 /** Argument the main process passes to the preload so the bridge can report the app version synchronously. */

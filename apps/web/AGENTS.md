@@ -26,9 +26,9 @@ A change to the client is a change to the desktop app. Check both hosts when it 
 | Highlighting (file preview), i18n | In-house (`features/files/highlight.ts`, `i18n/`) | No libraries |
 | Types | TypeScript strict, `erasableSyntaxOnly`, `verbatimModuleSyntax` | Type-checked by `tsgo` (both tsconfigs) |
 | Lint / format | Biome (root `biome.json`) | Tabs, indent width 3, line width 120, double quotes, semicolons |
-| Tests | `node:test` + `tsx` (unit), headless Chrome over CDP (e2e) | No Jest, Vitest or Playwright Test runner; the browser adapter itself uses playwright-core |
+| Tests | `node:test` + `tsx` (unit), headless Chrome over CDP (e2e) | No Jest, Vitest or Playwright Test runner; some e2e suites drive Chrome with playwright-core (dev dependency) |
 
-The runtime dependencies are `react`, `react-dom`, `playwright-core`, `node-pty`, `@xterm/xterm`, `@xterm/addon-fit`, the Markdown stack (`streamdown`, `@streamdown/cjk`, `@streamdown/code`, `@streamdown/math`, `@streamdown/mermaid`, `katex`, and `mdast-util-from-markdown`, `mdast-util-gfm`, `micromark-extension-gfm` for `markdownFileReferences`) and the workspace `@step-harness/coding-agent`. Adding any dependency
+The runtime dependencies are `react`, `react-dom`, `node-pty`, `@xterm/xterm`, `@xterm/addon-fit`, the Markdown stack (`streamdown`, `@streamdown/cjk`, `@streamdown/code`, `@streamdown/math`, `@streamdown/mermaid`, `katex`, and `mdast-util-from-markdown`, `mdast-util-gfm`, `micromark-extension-gfm` for `markdownFileReferences`) and the workspace `@step-harness/coding-agent`. Adding any dependency
 needs the user's approval first; pin it to an exact version and install with `pnpm install --ignore-scripts`.
 
 ## Directory layout
@@ -48,9 +48,6 @@ apps/web/
     workspaces.ts        workspace registry (newest first)
     files.ts             workspace file tree / read / search / @path completion
     auth.ts, login.ts    cookie secret, launch-token exchange, credential status, desktop sign-in
-    browser.ts           isolated Chromium ownership, leased controller, bounded frames and input
-    browser-routes.ts, browser-policy.ts  authenticated browser HTTP/SSE adapter and input/URL policy
-    browser-proxy.ts     private authenticated network boundary for redirect-safe port blocking
     terminal.ts          bounded host-owned terminal sessions and process cleanup
     terminal-process.ts  isolated node-pty helper; native failures must not crash the Host
     terminal-cleanup.ts  owned process discovery: POSIX session/group/tty, Windows identity-validated descendants
@@ -316,25 +313,21 @@ When to add or change one:
   repair is restoring the exec bit of node-pty's published macOS spawn-helper.
   POSIX cleanup kills the shell's session, process group and controlling-tty
   members, never the Host or helper.
-  `features/browser` uses the authenticated host-owned Chromium adapter in
-  `src/browser.ts` / `browser-routes.ts`, not a Desktop bridge or iframe.
-  Hiding releases its stream/controller but keeps tabs. Refresh rotates a
-  leased controller token; late cleanup must not release its replacement.
-  Coalesce pointer moves and wheel deltas per frame in event order: a fast
-  trackpad must keep its scroll distance instead of filling the input queue,
-  but never sum wheels at different places or in opposite directions. An
-  attached frame stream keeps control past the lease deadline, and requests,
-  competing pages and the expiry timer must use the same rule. A same-id
-  replacement sends `replaced` to the displaced stream, which must not
-  reconnect by itself. Only a lost stream reconnects with backoff; restore the
-  retry budget after a healthy connection, not when connect resolves.
-  Keep frame/input queues bounded and block host/client ports for subresources
-  and WebSockets too. The browser-owned authenticated loopback proxy checks
-  connection destinations across redirects and tunnels; keep loopback bypass
-  disabled, strip proxy credentials upstream, and await proxy shutdown.
-  All client snapshot sources share one monotonic revision gate per connection.
-  Never attach a personal profile, expose arbitrary CDP,
-  download a browser automatically or disable its sandbox.
+  `features/browser` lets Chromium draw pages itself; there is no Host-side
+  engine, screenshot stream or input forwarding. Desktop renders each tab as
+  an Electron `<webview>` reserved through the bridge (`browserGuest`): the
+  main process owns its lease, sandbox, partition, request and popup policy
+  (`apps/desktop/AGENTS.md`). A plain browser (or a Desktop build without
+  `browserGuest`) renders a sandboxed iframe: no top navigation, downloads or
+  modals; the surface keeps its own history, and a later `load` marks the
+  address unknown instead of guessing it. `address.ts` refuses non-http(s),
+  embedded credentials and the client's own port on any loopback name; the
+  Host sends `frame-ancestors 'none'` / `X-Frame-Options: DENY` on every
+  response, so a frame can never become same-origin with the client. Tabs
+  belong to the page (sessionStorage, validated on read); hiding the panel
+  keeps pages mounted, and no page is created before the panel was shown.
+  Never inject scripts or preloads into visited pages, strip a site's framing
+  protection, or bring back a Host-owned browser.
 - File delivery recognition is a frontend projection, not a persisted or
   filesystem-verified registry. Settled turns collect local Markdown links
   and supported structured successful write/edit outputs; inline basenames
@@ -356,6 +349,9 @@ When to add or change one:
   browsers load them from `src/site-preview.ts`, a separate token-scoped
   loopback origin, never the Host's. Keep that origin separate and the Host's
   `Sec-Fetch-Site` same-site/cross-site refusal in `WebAuth.authorize`.
+  Preview URLs name `localhost`, not `127.0.0.1`: a different site from the
+  client, so the Web iframe gets its own renderer process instead of sharing
+  the conversation UI's main thread.
   Markdown opens rendered; preview links resolve relative to that document.
   Preview file tabs belong to the session that opened them
   (`features/files/session-scope.ts`): switching sessions stashes them in page
@@ -419,8 +415,6 @@ When to add or change one:
   `STEPCODE_WEB_PUBLIC_DIR` (client directory), `STEPCODE_WEB_AUTH_SECRET`, `STEPCODE_WEB_OPEN` (below),
   `STEPCODE_WEB_CLIENT_PORT` (the launch URL points at this port instead of the host's; `web:watch` sets it to the
   Vite dev server, default 5173).
-  `STEPCODE_WEB_BROWSER_PATH` optionally names an installed Chrome/Edge/Chromium executable.
-  The browser adapter detects common locations otherwise and reports missing engines without installing one.
   `STEPCODE_STEPGO_IMPORT=0` disables the one-time import of a local stepgo launcher's providers and key into
   `models.json` / `auth.json` that runs before the host listens (`src/stepgo-import.ts`, `docs/stepcode-web.md`);
   hosts started by tests must set it, because they inherit the developer's HOME.
@@ -478,7 +472,6 @@ Run from the repo root.
 | `pnpm --filter @step-harness/web typecheck` | Host and client type check |
 | `pnpm --filter @step-harness/web test` | Host unit tests (`tsx --tsconfig`, so it also runs under the Windows `cmd` shell pnpm uses) |
 | `pnpm exec tsx --tsconfig ../../tsconfig.json --test test/<name>.test.ts` | One unit test file (from `apps/web/`, any shell); without the tsconfig, workspace packages resolve to `dist/` and fail. `TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test ...` is the POSIX-shell equivalent |
-| `STEPCODE_WEB_BROWSER_TEST=1 TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/browser.test.ts` | Opt-in installed-Chromium adapter acceptance against a local fixture only; no account, provider or engine download |
 | `STEPCODE_WEB_TERMINAL_TEST=1 TSX_TSCONFIG_PATH=../../tsconfig.json node --import tsx --test test/terminal.test.ts` | Opt-in real local-shell acceptance in temporary folders; no account/provider calls |
 | `pnpm --filter @step-harness/web test:e2e` | Client build + e2e in headless Chrome (`CHROME_PATH` to override; skipped without Chrome) |
 | `pnpm run check` | Required before handing back any code change: Biome, guards, type checks, web unit tests, web runtime, browser smoke, desktop type check |

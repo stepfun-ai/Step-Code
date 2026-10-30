@@ -66,34 +66,6 @@ export interface VoiceStatus {
 	readonly keySource?: "environment" | "auth.json";
 }
 
-/** Host-wide embedded-browser projection, independent of model sessions. */
-export interface EmbeddedBrowserTab {
-	readonly id: string;
-	readonly title: string;
-	readonly url: string;
-	readonly loading: boolean;
-	readonly canGoBack: boolean;
-	readonly canGoForward: boolean;
-	readonly zoom: number;
-	readonly error?: string;
-	readonly notice?: "download" | "upload" | "dialog" | "popup" | "navigation";
-}
-export interface EmbeddedBrowserSnapshot {
-	readonly revision: number;
-	readonly activeId: string | null;
-	readonly tabs: readonly EmbeddedBrowserTab[];
-}
-export interface EmbeddedBrowserFrame {
-	readonly tabId: string;
-	/** The page's CSS viewport; pointer coordinates use this space. */
-	readonly width: number;
-	readonly height: number;
-	/** The whole captured image; the page is its top-left `width` x `height`. Older hosts omit it. */
-	readonly surfaceWidth?: number;
-	readonly surfaceHeight?: number;
-	readonly data: string;
-}
-
 export type SessionStatus = "idle" | "running" | "waiting" | "completed" | "failed";
 
 export interface ModelRef {

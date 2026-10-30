@@ -25,6 +25,10 @@ What the shell adds on top of the browser version:
   workspace or offering directory creation. Omitted purpose keeps ordinary workspace-picking behaviour.
   First-use migration does not require account sign-in; Settings keeps the same migration entry. See
   [migration boundaries and confirmation](../../docs/desktop-migration.md).
+- The embedded browser renders each tab as an Electron `<webview>`, drawn by Chromium directly in the window
+  (`browserGuest` / `releaseBrowserGuest` / `onBrowserEvent`). The main process issues a one-time lease per tab,
+  refuses any other webview, fixes the guest's sandbox and keeps it in an in-memory partition that never reaches the
+  StepCode Host port. A plain browser uses a sandboxed iframe instead (see `docs/stepcode-web.md`).
 - The user's login-shell environment (macOS / Linux GUI launches), so the agent's bash tool finds the same `git`,
   `node`, Homebrew tools, etc. as in a terminal. On macOS/Linux, a private `node` wrapper also makes Electron's
   bundled Node available when no system `node` is on PATH, including to StepPage's installer and MCP launcher.
@@ -44,13 +48,17 @@ Electron main (src/main.ts)
  │          <server>/stepcode-release.json replace any inherited STEPCODE_* build identity
  │     stdout "Local: http://127.0.0.1:<port>/#token=<launch token>"  ──▶ parsed (redacted in the log)
  │     stdout/stderr ──▶ <logs>/web-server.log
- ├─ window.ts ── BrowserWindow (contextIsolation, sandbox, no nodeIntegration)
+ ├─ window.ts ── BrowserWindow (contextIsolation, sandbox, no nodeIntegration, webviewTag for leased guests only)
  │     loads http://127.0.0.1:<port>/#token=<token>; the client exchanges it for its auth cookie
  │     navigation pinned to that origin; other http(s) links ──▶ system browser
+ ├─ browser-guests.ts ── <webview> leases + attach checks; guest partition "stepcode-browser" (in memory):
+ │     permissions/downloads denied, Host port blocked, http(s) main frames, popups ──▶ panel tabs,
+ │     Cmd/Ctrl+R/L/T/W in a guest ──▶ panel (not the app menu)
  ├─ preload.ts (dist/preload.cjs) ── contextBridge ──▶ window.stepcodeDesktop
  │     beginTagGroupClose / completeTagGroupClose ──▶ tag-group-close.ts (native intention + document gate)
  └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser / getTheme / setTheme / readTagGroups / saveTagGroups
-       (only from the window's top frame on the server origin)
+       / browserGuest / releaseBrowserGuest (only from the window's top frame on the server origin);
+       browserEvent is main ──▶ page only
 ```
 
 On quit, the renderer first drains accepted pending group edits. Only after the actual window closes does the server
@@ -67,7 +75,7 @@ unexpected Host exit attempts that page but a dirty renderer can veto replacemen
 | `pnpm --filter @step-harness/desktop dev` | Bundle the desktop and launch; builds the web app only if its output is missing. |
 | `pnpm --filter @step-harness/desktop build` | esbuild: `src/main.ts` → `dist/main.js` (ESM), `src/preload.ts` → `dist/preload.cjs`. |
 | `pnpm --filter @step-harness/desktop typecheck` | `tsgo --noEmit` (source and tests). |
-| `pnpm --filter @step-harness/desktop test` | Offline Node-environment, hosted-child and release-envelope regressions. |
+| `pnpm --filter @step-harness/desktop test` | Offline Node-environment, hosted-child, release-envelope and embedded-browser guest-policy regressions. |
 
 The packages the server imports (`@step-harness/coding-agent` and below) must be built (`pnpm build` at the root).
 
