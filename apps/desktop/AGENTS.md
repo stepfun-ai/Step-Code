@@ -45,6 +45,8 @@ apps/desktop/
     server-host.ts       resolve server entry, pick a free loopback port, spawn, parse the #token banner, log, stop
     release-envelope.ts  validate the packaged stepcode-release.json and map it to the server's identity environment
     window.ts            BrowserWindow options, navigation pinning, external links, macOS inset title bar
+    browser-guests.ts    embedded-browser <webview> leases, attach checks, guest session/navigation/popup policy
+    browser-guest-policy.ts  pure guest URL, request, lease and shortcut rules (unit-tested without Electron)
     preload.ts           contextBridge -> window.stepcodeDesktop (implements the web contract)
     ipc.ts               ipcMain handlers + sender validation
     ipc-channels.ts      channel names shared by preload and main
@@ -59,12 +61,24 @@ apps/desktop/
 
 ## Security rules (do not relax)
 
-- `BrowserWindow` keeps `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, `webSecurity: true`,
-  `webviewTag: false`.
+- `BrowserWindow` keeps `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, `webSecurity: true`.
+  `webviewTag: true` exists only for the embedded browser and only on the main window, under these conditions
+  (`src/browser-guests.ts`):
+  - A webview attaches only with an unused lease the main process issued to that window (`about:blank#<lease>`,
+    matching partition); every other attachment, and any webview inside a guest, is refused.
+  - `will-attach-webview` drops all requested preferences and sets the fixed guest sandbox (no Node, context
+    isolation, sandbox, web security, no preload, no plugins, dialogs disabled, no referrer).
+  - Guests share one in-memory partition (no `persist:`), never the default session: no StepCode cookie,
+    storage or permission reaches them. Permissions, device access, screen capture and downloads are denied.
+  - The partition's request filter refuses the Host port on every hostname, embedded credentials and non-network
+    schemes other than `about:`, `data:`, `blob:`; main-frame navigation is http(s) only.
+  - Native windows are denied; one http(s) popup per click or key press becomes a panel tab via `onBrowserEvent`.
 - The window may only navigate within the server origin (`http://127.0.0.1:<port>`). Other http(s) links open in the
   system browser; every other scheme is refused.
 - The preload exposes only the functions of `StepcodeDesktopBridge`, each a single `ipcRenderer.invoke` on a named
-  channel. Never expose `ipcRenderer`, `require`, `fs`, `shell` or a generic "invoke any channel" helper.
+  channel. The one exception is `onBrowserEvent`, which subscribes to the single `browserEvent` channel, forwards
+  only validated `DesktopBrowserEvent` fields and returns its unsubscribe function. Never expose `ipcRenderer`,
+  `require`, `fs`, `shell`, the `IpcRendererEvent` or a generic "invoke / listen on any channel" helper.
 - Every `ipcMain.handle` validates the sender (top frame, server origin) through the existing check in `ipc.ts` and
   validates its arguments (types, absolute paths, http(s) only for `openExternal`).
 - The server listens on loopback only. The launch token is redacted in logs; never print it or write it to disk.

@@ -45,7 +45,8 @@ test("a workspace file is served with its relative assets under one unguessable 
 	const { root, server, cleanup } = await site();
 	try {
 		const page = await server.url(root, "game/index.html");
-		assert.match(page, /^http:\/\/127\.0\.0\.1:\d+\/[\w-]{32}\/game\/index\.html$/);
+		// `localhost`, a different site from the client's 127.0.0.1: an embedded preview gets its own process.
+		assert.match(page, /^http:\/\/localhost:\d+\/[\w-]{32}\/game\/index\.html$/);
 		const response = await fetch(page);
 		assert.equal(response.status, 200);
 		assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");

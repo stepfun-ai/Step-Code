@@ -10,6 +10,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import type { DesktopBrowserInfo } from "@step-harness/web/desktop-bridge";
 import { app, type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
+import type { DesktopBrowserGuests } from "./browser-guests.ts";
 import { DESKTOP_IPC } from "./ipc-channels.ts";
 
 export interface DesktopIpcOptions {
@@ -19,6 +20,8 @@ export interface DesktopIpcOptions {
 	readonly getServerOrigin: () => string | undefined;
 	/** Called with every folder the user picks, so the next launch can start there. */
 	readonly onDirectoryPicked: (path: string) => void;
+	/** Lease owner for the embedded browser's `<webview>` guests. */
+	readonly browserGuests: DesktopBrowserGuests;
 }
 
 function trustedWindow(event: IpcMainInvokeEvent, options: DesktopIpcOptions): BrowserWindow {
@@ -122,6 +125,16 @@ export function installDesktopIpc(options: DesktopIpcOptions): void {
 				throw error;
 			});
 		return defaultBrowser;
+	});
+
+	ipcMain.handle(DESKTOP_IPC.browserGuest, (event) => {
+		const window = trustedWindow(event, options);
+		return options.browserGuests.acquire(window.webContents);
+	});
+
+	ipcMain.handle(DESKTOP_IPC.releaseBrowserGuest, async (event, raw: unknown) => {
+		const window = trustedWindow(event, options);
+		await options.browserGuests.release(window.webContents, raw);
 	});
 
 	ipcMain.handle(DESKTOP_IPC.revealPath, (event, raw: unknown) => {
